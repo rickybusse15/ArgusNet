@@ -1,23 +1,68 @@
+# ----------------------
 # Python
+# ----------------------
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
 dist/
 build/
 *.egg-info/
-.venv/
 
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# ----------------------
 # Rust
+# ----------------------
 target/
+Cargo.lock
 
+# ----------------------
 # Generated outputs
+# ----------------------
 *.csv
+*.log
+*.tmp
+
+# simulation / replay outputs
 replay.json
+replay_*.json
+*_replay.json
+*_large.json
+
+# large datasets
+*.dataset.json
+*.sim.json
+
+# terrain / generated scenes
 scene_packages/
 scenes/
+data/
+outputs/
+replays/
 
+# ----------------------
+# Large binary assets
+# ----------------------
+*.glb
+*.gltf
+*.bin
+*.fbx
+*.obj
+
+# ----------------------
 # OS / IDE
+# ----------------------
 .DS_Store
 .playwright-cli/
+.vscode/
+.idea/
