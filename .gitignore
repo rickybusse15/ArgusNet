@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.venv/
+
+# Rust
+target/
+
+# Generated outputs
+*.csv
+replay.json
+scene_packages/
+scenes/
+
+# OS / IDE
+.DS_Store
+.playwright-cli/

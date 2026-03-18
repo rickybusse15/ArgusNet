@@ -1,0 +1,89 @@
+{
+  "style_version": "smartstyle-v1",
+  "layers": [
+    {
+      "id": "terrain-base",
+      "semantic_kind": "terrain",
+      "color_rgba": [
+        0.6549019607843137,
+        0.7098039215686275,
+        0.5450980392156862,
+        1.0
+      ],
+      "opacity": 1.0,
+      "elevation_mode": "terrain-draped",
+      "draw_order": 0,
+      "default_visibility": true
+    },
+    {
+      "id": "vegetation",
+      "semantic_kind": "landcover",
+      "color_rgba": [
+        0.7176470588235294,
+        0.8313725490196079,
+        0.5490196078431373,
+        0.6
+      ],
+      "opacity": 0.6,
+      "elevation_mode": "extruded",
+      "draw_order": 31,
+      "default_visibility": true
+    },
+    {
+      "id": "buildings",
+      "semantic_kind": "buildings",
+      "color_rgba": [
+        0.9607843137254902,
+        0.9372549019607843,
+        0.8941176470588236,
+        0.95
+      ],
+      "opacity": 0.95,
+      "elevation_mode": "extruded",
+      "draw_order": 30,
+      "default_visibility": true
+    },
+    {
+      "id": "tracks",
+      "semantic_kind": "tracks",
+      "color_rgba": [
+        1.0,
+        0.6039215686274509,
+        0.30196078431372547,
+        1.0
+      ],
+      "opacity": 1.0,
+      "elevation_mode": "runtime",
+      "draw_order": 100,
+      "default_visibility": true
+    },
+    {
+      "id": "truths",
+      "semantic_kind": "truths",
+      "color_rgba": [
+        0.30196078431372547,
+        0.8352941176470589,
+        0.9058823529411765,
+        1.0
+      ],
+      "opacity": 1.0,
+      "elevation_mode": "runtime",
+      "draw_order": 101,
+      "default_visibility": true
+    },
+    {
+      "id": "nodes",
+      "semantic_kind": "nodes",
+      "color_rgba": [
+        0.9529411764705882,
+        0.9411764705882353,
+        0.6470588235294118,
+        1.0
+      ],
+      "opacity": 1.0,
+      "elevation_mode": "runtime",
+      "draw_order": 102,
+      "default_visibility": true
+    }
+  ]
+}

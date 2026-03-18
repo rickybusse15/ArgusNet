@@ -1,0 +1,59 @@
+{
+  "format_version": "smartscene-v1",
+  "scene_id": "civilian-observation-regional-mixed-mixed",
+  "bounds_xy_m": {
+    "x_min_m": -2160.0,
+    "x_max_m": 2160.0,
+    "y_min_m": -1980.0,
+    "y_max_m": 2160.0
+  },
+  "runtime_crs": {
+    "source_crs_id": "local-enu",
+    "runtime_crs_id": "local-enu",
+    "origin_geodetic": {
+      "lat_deg": null,
+      "lon_deg": null,
+      "h_m": null
+    },
+    "xy_units": "meters",
+    "z_datum": "local"
+  },
+  "source_crs_id": "local-enu",
+  "layers": [
+    {
+      "id": "terrain-base",
+      "kind": "terrain",
+      "semantic_kind": "terrain",
+      "asset_path": "terrain/terrain-base.glb",
+      "style_id": "terrain-base"
+    },
+    {
+      "id": "vegetation",
+      "kind": "overlay",
+      "semantic_kind": "landcover",
+      "asset_path": "overlays/vegetation.glb",
+      "style_id": "vegetation"
+    },
+    {
+      "id": "buildings",
+      "kind": "overlay",
+      "semantic_kind": "buildings",
+      "asset_path": "overlays/buildings.glb",
+      "style_id": "buildings"
+    }
+  ],
+  "replay": {
+    "path": "replay/replay.json"
+  },
+  "metadata": {
+    "environment": "metadata/environment.json",
+    "style": "metadata/style.json"
+  },
+  "build": {
+    "generated_at_utc": "2026-03-15T18:21:40.652791+00:00",
+    "source_kind": "synthetic",
+    "tool": "smart_tracker.scene.build_scene_from_replay",
+    "replay_source": "test-replay.json",
+    "environment_bundle": null
+  }
+}

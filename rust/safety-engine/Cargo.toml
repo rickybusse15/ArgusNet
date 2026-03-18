@@ -1,0 +1,13 @@
+[package]
+name = "safety-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nalgebra.workspace = true
+serde.workspace = true
+terrain-engine = { path = "../terrain-engine" }
+
+[dev-dependencies]
+serde_json.workspace = true

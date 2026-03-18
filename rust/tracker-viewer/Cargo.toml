@@ -1,0 +1,22 @@
+[package]
+name = "tracker-viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "tracker_viewer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "smart-tracker-viewer"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bevy = "0.15.3"
+bevy_egui = "0.31.1"
+image = { version = "0.25", default-features = false, features = ["png"] }

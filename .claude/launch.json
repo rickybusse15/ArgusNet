@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "tracking-daemon",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "tracker-server", "--bin", "smart-trackerd", "--", "serve", "--listen", "127.0.0.1:50051"],
+      "port": 50051
+    },
+    {
+      "name": "legacy-viewer",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "smart_tracker", "viewer", "--replay", "replay.json", "--legacy", "--port", "8765"],
+      "port": 8765
+    }
+  ]
+}

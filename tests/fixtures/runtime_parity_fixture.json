@@ -1,0 +1,1275 @@
+{
+  "tracker_config": {
+    "min_observations": 2,
+    "max_stale_steps": 2,
+    "retain_history": false,
+    "min_confidence": 0.3,
+    "max_bearing_std_rad": 0.08,
+    "max_timestamp_skew_s": 1.5,
+    "min_intersection_angle_deg": 2.5
+  },
+  "requests": [
+    {
+      "timestamp_s": 0.0,
+      "node_states": [
+        {
+          "node_id": "ground-a",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0
+        },
+        {
+          "node_id": "ground-b",
+          "position": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0
+        },
+        {
+          "node_id": "drone-c",
+          "position": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": true,
+          "timestamp_s": 0.0,
+          "health": 1.0
+        }
+      ],
+      "observations": [
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-a",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.7214620740853009,
+            0.6012183950710841,
+            0.34355336861204805
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-a",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            -0.8211476259064322,
+            0.4955201190814677,
+            0.2831543537608387
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "drone-c",
+          "target_id": "asset-a",
+          "origin": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "direction": [
+            0.040580392030799856,
+            -0.9130588206929968,
+            -0.40580392030799856
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-b",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.9179789598577317,
+            0.34819891580810514,
+            0.18992668134987553
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-b",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            -0.8587538611150073,
+            0.4498234510602419,
+            0.24535824603285922
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "drone-c",
+          "target_id": "asset-b",
+          "origin": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "direction": [
+            0.26916687204956063,
+            -0.8673154766041399,
+            -0.41870402318820543
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "asset-a",
+          "position": [
+            42.0,
+            35.0,
+            20.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 0.0
+        },
+        {
+          "target_id": "asset-b",
+          "position": [
+            58.0,
+            22.0,
+            12.0
+          ],
+          "velocity": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 0.0
+        }
+      ]
+    },
+    {
+      "timestamp_s": 1.0,
+      "node_states": [],
+      "observations": [
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-a",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.7334789216144022,
+            0.5901554541725075,
+            0.33723168809857573
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 1.0,
+          "confidence": 0.7
+        },
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-a",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.7334789216144022,
+            0.5901554541725075,
+            0.33723168809857573
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 1.0,
+          "confidence": 0.95
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-a",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            -0.8140458284554246,
+            0.5042761769192896,
+            0.2881578153824512
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 1.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ghost-node",
+          "target_id": "asset-b",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.9154338244367413,
+            0.3533253357475142,
+            0.192722910407735
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 1.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-b",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            -0.8639835073711103,
+            0.44203807353870755,
+            0.24111167647565868
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 1.0,
+          "confidence": 0.1
+        },
+        {
+          "node_id": "drone-c",
+          "target_id": "asset-b",
+          "origin": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "direction": [
+            0.25521383116292545,
+            -0.870729541614687,
+            -0.420352192503642
+          ],
+          "bearing_std_rad": 0.2,
+          "timestamp_s": 1.0,
+          "confidence": 1.0
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "asset-a",
+          "position": [
+            43.5,
+            35.0,
+            20.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 1.0
+        },
+        {
+          "target_id": "asset-b",
+          "position": [
+            57.0,
+            22.0,
+            12.0
+          ],
+          "velocity": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 1.0
+        }
+      ]
+    },
+    {
+      "timestamp_s": 2.0,
+      "node_states": [],
+      "observations": [],
+      "truths": [
+        {
+          "target_id": "asset-a",
+          "position": [
+            45.0,
+            35.0,
+            20.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 2.0
+        },
+        {
+          "target_id": "asset-b",
+          "position": [
+            56.0,
+            22.0,
+            12.0
+          ],
+          "velocity": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 2.0
+        }
+      ]
+    }
+  ],
+  "responses": [
+    {
+      "timestamp_s": 0.0,
+      "nodes": [
+        {
+          "node_id": "drone-c",
+          "position": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": true,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        },
+        {
+          "node_id": "ground-a",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        },
+        {
+          "node_id": "ground-b",
+          "position": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        }
+      ],
+      "observations": [
+        {
+          "node_id": "drone-c",
+          "target_id": "asset-a",
+          "origin": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "direction": [
+            0.040580392030799856,
+            -0.9130588206929968,
+            -0.40580392030799856
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-a",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.7214620740853009,
+            0.6012183950710841,
+            0.34355336861204805
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-a",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            -0.8211476259064322,
+            0.4955201190814677,
+            0.2831543537608387
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "drone-c",
+          "target_id": "asset-b",
+          "origin": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "direction": [
+            0.26916687204956063,
+            -0.8673154766041399,
+            -0.41870402318820543
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-b",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.9179789598577317,
+            0.34819891580810514,
+            0.18992668134987553
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-b",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            -0.8587538611150073,
+            0.4498234510602419,
+            0.24535824603285922
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 0.0,
+          "confidence": 1.0
+        }
+      ],
+      "rejected_observations": [],
+      "tracks": [
+        {
+          "track_id": "asset-a",
+          "timestamp_s": 0.0,
+          "position": [
+            42.00000000000002,
+            35.00000000000001,
+            20.000000000000007
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "covariance": [
+            25.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            25.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            25.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            400.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            400.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            400.0
+          ],
+          "measurement_std_m": 1.0,
+          "update_count": 1,
+          "stale_steps": 0,
+          "lifecycle_state": "tentative",
+          "quality_score": 0.5
+        },
+        {
+          "track_id": "asset-b",
+          "timestamp_s": 0.0,
+          "position": [
+            58.00000000000001,
+            21.99999999999999,
+            11.999999999999995
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "covariance": [
+            25.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            25.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            25.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            400.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            400.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            400.0
+          ],
+          "measurement_std_m": 1.0,
+          "update_count": 1,
+          "stale_steps": 0,
+          "lifecycle_state": "tentative",
+          "quality_score": 0.5
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "asset-a",
+          "position": [
+            42.0,
+            35.0,
+            20.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 0.0
+        },
+        {
+          "target_id": "asset-b",
+          "position": [
+            58.0,
+            22.0,
+            12.0
+          ],
+          "velocity": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 0.0
+        }
+      ],
+      "metrics": {
+        "mean_error_m": 1.871991347475466e-14,
+        "max_error_m": 2.3566036520288945e-14,
+        "active_track_count": 2,
+        "observation_count": 6,
+        "accepted_observation_count": 6,
+        "rejected_observation_count": 0,
+        "mean_measurement_std_m": 1.0,
+        "track_errors_m": {
+          "asset-a": 2.3566036520288945e-14,
+          "asset-b": 1.3873790429220374e-14
+        },
+        "rejection_counts": {},
+        "accepted_observations_by_target": {
+          "asset-a": 3,
+          "asset-b": 3
+        },
+        "rejected_observations_by_target": {}
+      },
+      "generation_rejections": [],
+      "launch_events": []
+    },
+    {
+      "timestamp_s": 1.0,
+      "nodes": [
+        {
+          "node_id": "drone-c",
+          "position": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": true,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        },
+        {
+          "node_id": "ground-a",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        },
+        {
+          "node_id": "ground-b",
+          "position": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        }
+      ],
+      "observations": [
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-a",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            0.7334789216144022,
+            0.5901554541725075,
+            0.33723168809857573
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 1.0,
+          "confidence": 0.95
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-a",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            -0.8140458284554246,
+            0.5042761769192896,
+            0.2881578153824512
+          ],
+          "bearing_std_rad": 0.002,
+          "timestamp_s": 1.0,
+          "confidence": 1.0
+        }
+      ],
+      "rejected_observations": [
+        {
+          "node_id": "ghost-node",
+          "target_id": "asset-b",
+          "timestamp_s": 1.0,
+          "reason": "unknown_node",
+          "detail": "Node state was not available for this frame.",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "attempted_point": null,
+          "closest_point": null,
+          "blocker_type": "",
+          "first_hit_range_m": null
+        },
+        {
+          "node_id": "ground-b",
+          "target_id": "asset-b",
+          "timestamp_s": 1.0,
+          "reason": "low_confidence",
+          "detail": "Confidence 0.100 is below minimum 0.300.",
+          "origin": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "attempted_point": null,
+          "closest_point": null,
+          "blocker_type": "",
+          "first_hit_range_m": null
+        },
+        {
+          "node_id": "drone-c",
+          "target_id": "asset-b",
+          "timestamp_s": 1.0,
+          "reason": "bearing_noise_too_high",
+          "detail": "bearing_std_rad 0.2000 exceeds limit 0.0800.",
+          "origin": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "attempted_point": null,
+          "closest_point": null,
+          "blocker_type": "",
+          "first_hit_range_m": null
+        },
+        {
+          "node_id": "ground-a",
+          "target_id": "asset-a",
+          "timestamp_s": 1.0,
+          "reason": "duplicate_node_observation",
+          "detail": "Replaced by higher-scoring observation from same node.",
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "attempted_point": null,
+          "closest_point": null,
+          "blocker_type": "",
+          "first_hit_range_m": null
+        }
+      ],
+      "tracks": [
+        {
+          "track_id": "asset-a",
+          "timestamp_s": 1.0,
+          "position": [
+            43.496606212216584,
+            35.0000000000022,
+            20.000000000001254
+          ],
+          "velocity": [
+            1.4660079218962505,
+            2.1527666442383223e-12,
+            1.22568432903828e-12
+          ],
+          "covariance": [
+            0.9977374748244029,
+            0.0,
+            0.0,
+            0.9773386206300916,
+            8.85856831971564e-21,
+            5.4546968352051966e-21,
+            0.0,
+            0.9977374748110565,
+            0.0,
+            0.0,
+            0.9773386145975143,
+            0.0,
+            0.0,
+            0.0,
+            0.9977374748110565,
+            0.0,
+            0.0,
+            0.9773386145975143,
+            0.9773386206300916,
+            0.0,
+            0.0,
+            41.7570565248014,
+            4.004072880602236e-18,
+            2.4655229695686387e-18,
+            8.85856831971564e-21,
+            0.9773386145975143,
+            0.0,
+            4.004072880602236e-18,
+            41.75705379807642,
+            3.620509500811851e-30,
+            5.4546968352051966e-21,
+            0.0,
+            0.9773386145975143,
+            2.4655229695686387e-18,
+            3.620509500811851e-30,
+            41.75705379807642
+          ],
+          "measurement_std_m": 1.0,
+          "update_count": 2,
+          "stale_steps": 0,
+          "lifecycle_state": "tentative",
+          "quality_score": 1.0
+        },
+        {
+          "track_id": "asset-b",
+          "timestamp_s": 1.0,
+          "position": [
+            58.0,
+            21.999999999999986,
+            11.999999999999995
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "covariance": [
+            430.275,
+            0.0,
+            0.0,
+            410.55,
+            0.0,
+            0.0,
+            0.0,
+            430.275,
+            0.0,
+            0.0,
+            410.55,
+            0.0,
+            0.0,
+            0.0,
+            430.275,
+            0.0,
+            0.0,
+            410.55,
+            410.55,
+            0.0,
+            0.0,
+            421.1,
+            0.0,
+            0.0,
+            0.0,
+            410.55,
+            0.0,
+            0.0,
+            421.1,
+            0.0,
+            0.0,
+            0.0,
+            410.55,
+            0.0,
+            0.0,
+            421.1
+          ],
+          "measurement_std_m": 1.0,
+          "update_count": 1,
+          "stale_steps": 1,
+          "lifecycle_state": "tentative",
+          "quality_score": 0.5
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "asset-a",
+          "position": [
+            43.5,
+            35.0,
+            20.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 1.0
+        },
+        {
+          "target_id": "asset-b",
+          "position": [
+            57.0,
+            22.0,
+            12.0
+          ],
+          "velocity": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 1.0
+        }
+      ],
+      "metrics": {
+        "mean_error_m": 0.5016968938917081,
+        "max_error_m": 1.0,
+        "active_track_count": 2,
+        "observation_count": 2,
+        "accepted_observation_count": 2,
+        "rejected_observation_count": 4,
+        "mean_measurement_std_m": 1.0,
+        "track_errors_m": {
+          "asset-a": 0.0033937877834162578,
+          "asset-b": 1.0
+        },
+        "rejection_counts": {
+          "bearing_noise_too_high": 1,
+          "duplicate_node_observation": 1,
+          "low_confidence": 1,
+          "unknown_node": 1
+        },
+        "accepted_observations_by_target": {
+          "asset-a": 2
+        },
+        "rejected_observations_by_target": {
+          "asset-a": 1,
+          "asset-b": 3
+        }
+      },
+      "generation_rejections": [],
+      "launch_events": []
+    },
+    {
+      "timestamp_s": 2.0,
+      "nodes": [
+        {
+          "node_id": "drone-c",
+          "position": [
+            40.0,
+            80.0,
+            40.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": true,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        },
+        {
+          "node_id": "ground-a",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        },
+        {
+          "node_id": "ground-b",
+          "position": [
+            100.0,
+            0.0,
+            0.0
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.0,
+          "health": 1.0,
+          "sensor_type": "optical",
+          "fov_half_angle_deg": 180.0,
+          "max_range_m": 0.0
+        }
+      ],
+      "observations": [],
+      "rejected_observations": [],
+      "tracks": [
+        {
+          "track_id": "asset-a",
+          "timestamp_s": 2.0,
+          "position": [
+            44.96261688215696,
+            35.000000000004356,
+            20.00000000000248
+          ],
+          "velocity": [
+            1.4660106638740542,
+            2.1527706707093026e-12,
+            1.2256868083529641e-12
+          ],
+          "covariance": [
+            57.83316888944552,
+            0.0,
+            -1.6854453459274164e-19,
+            70.47322484136656,
+            3.6332433363312334e-20,
+            2.237183279843448e-20,
+            0.0,
+            57.83316886464883,
+            0.0,
+            0.0,
+            70.47322481662462,
+            0.0,
+            -1.6854453459274164e-19,
+            0.0,
+            57.83316886464883,
+            -1.6817247160182096e-19,
+            -2.4695370464019436e-31,
+            70.47322481662462,
+            70.47322484136656,
+            0.0,
+            -1.6817247160182096e-19,
+            98.7228579658213,
+            3.6252229315841656e-20,
+            2.2322446853875548e-20,
+            3.6332433363312334e-20,
+            70.47322481662462,
+            -2.4695370464019436e-31,
+            3.6252229315841656e-20,
+            98.72285794113398,
+            3.277950840989463e-32,
+            2.237183279843448e-20,
+            0.0,
+            70.47322481662462,
+            2.2322446853875548e-20,
+            3.277950840989463e-32,
+            98.72285794113398
+          ],
+          "measurement_std_m": 1.0,
+          "update_count": 2,
+          "stale_steps": 1,
+          "lifecycle_state": "tentative",
+          "quality_score": 0.6666666666666666
+        },
+        {
+          "track_id": "asset-b",
+          "timestamp_s": 2.0,
+          "position": [
+            58.0,
+            21.99999999999999,
+            11.999999999999995
+          ],
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "covariance": [
+            1680.0875,
+            0.0,
+            0.0,
+            844.07,
+            0.0,
+            0.0,
+            0.0,
+            1680.0875,
+            1.4956802762990387e-30,
+            0.0,
+            844.07,
+            0.0,
+            0.0,
+            1.4956802762990387e-30,
+            1680.0875,
+            0.0,
+            0.0,
+            844.07,
+            844.07,
+            0.0,
+            0.0,
+            444.07000000000005,
+            0.0,
+            0.0,
+            0.0,
+            844.07,
+            0.0,
+            0.0,
+            444.07000000000005,
+            0.0,
+            0.0,
+            0.0,
+            844.07,
+            0.0,
+            0.0,
+            444.07000000000005
+          ],
+          "measurement_std_m": 1.0,
+          "update_count": 1,
+          "stale_steps": 2,
+          "lifecycle_state": "tentative",
+          "quality_score": 0.3333333333333333
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "asset-a",
+          "position": [
+            45.0,
+            35.0,
+            20.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 2.0
+        },
+        {
+          "target_id": "asset-b",
+          "position": [
+            56.0,
+            22.0,
+            12.0
+          ],
+          "velocity": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "timestamp_s": 2.0
+        }
+      ],
+      "metrics": {
+        "mean_error_m": 1.018691558921521,
+        "max_error_m": 2.0,
+        "active_track_count": 2,
+        "observation_count": 0,
+        "accepted_observation_count": 0,
+        "rejected_observation_count": 0,
+        "mean_measurement_std_m": 1.0,
+        "track_errors_m": {
+          "asset-a": 0.03738311784304216,
+          "asset-b": 2.0
+        },
+        "rejection_counts": {},
+        "accepted_observations_by_target": {},
+        "rejected_observations_by_target": {}
+      },
+      "generation_rejections": [],
+      "launch_events": []
+    }
+  ]
+}

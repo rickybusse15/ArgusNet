@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-trajectory-tracker"
+version = "0.2.0"
+description = "Civilian 3D sensor fusion and visualization platform"
+requires-python = ">=3.9"
+dependencies = [
+    "grpcio>=1.78,<2.0",
+    "numpy>=2.0,<3.0",
+    "protobuf>=6.31.1,<7.0",
+    "pyproj>=3.6,<4.0",
+    "tifffile>=2025.1,<2027.0",
+]
+
+[project.optional-dependencies]
+live = ["paho-mqtt>=2.0"]
+export = ["mcap-protobuf-support>=0.5", "fiona>=1.9,<2.0"]
+dev = [
+    "ruff>=0.3",
+    "mypy>=1.9",
+    "pytest>=8.0",
+    "pytest-timeout>=2.3",
+    "pre-commit>=3.6",
+]
+
+[project.scripts]
+smart-tracker = "smart_tracker.cli:main"
+smart-tracker-sim = "smart_tracker.sim:main"
+smart-tracker-export = "smart_tracker.export:main"
+smart-tracker-build-scene = "smart_tracker.scene_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------- Ruff ----------
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+
+# ---------- mypy ----------
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+# ---------- pytest ----------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
