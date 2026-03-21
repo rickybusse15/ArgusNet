@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "smart-trajectory-tracker"
 version = "0.2.0"
-description = "Civilian 3D sensor fusion and visualization platform"
+description = "Simulation-first world-modeling platform for aerial mapping, inspection, and localization research"
 requires-python = ">=3.9"
 dependencies = [
     "grpcio>=1.78,<2.0",
