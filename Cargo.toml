@@ -2,10 +2,10 @@
 members = [
   "rust/terrain-engine",
   "rust/safety-engine",
-  "rust/tracker-core",
-  "rust/tracker-proto",
-  "rust/tracker-server",
-  "rust/tracker-viewer",
+  "rust/argusnet-core",
+  "rust/argusnet-proto",
+  "rust/argusnet-server",
+  "rust/argusnet-viewer",
 ]
 resolver = "2"
 

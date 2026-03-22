@@ -1,15 +1,15 @@
 [package]
-name = "tracker-viewer"
+name = "argusnet-viewer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "tracker_viewer"
+name = "argusnet_viewer"
 path = "src/lib.rs"
 
 [[bin]]
-name = "smart-tracker-viewer"
+name = "argusnet-viewer"
 path = "src/main.rs"
 
 [dependencies]

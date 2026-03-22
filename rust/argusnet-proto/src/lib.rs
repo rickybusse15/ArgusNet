@@ -1,10 +1,10 @@
-use tracker_core::{
+use argusnet_core::{
     AssociationMode, BearingObservation, Matrix6, NodeHealthSnapshot, NodeState,
     ObservationRejection, PlatformFrame, PlatformMetrics, TrackState, TrackerConfig, TruthState,
 };
 
 pub mod pb {
-    tonic::include_proto!("smarttracker.v1");
+    tonic::include_proto!("argusnet.v1");
 }
 
 fn vec3_to_pb(value: nalgebra::Vector3<f64>) -> pb::Vector3 {
@@ -438,7 +438,7 @@ pub fn frame_from_pb(frame: pb::PlatformFrame) -> Result<PlatformFrame, String> 
 mod tests {
     use super::*;
     use nalgebra::Vector3;
-    use tracker_core::PlatformMetrics;
+    use argusnet_core::PlatformMetrics;
 
     #[test]
     fn rejection_round_trip_preserves_optional_geometry() {

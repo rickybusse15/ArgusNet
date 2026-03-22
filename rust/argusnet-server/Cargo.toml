@@ -1,11 +1,11 @@
 [package]
-name = "tracker-server"
+name = "argusnet-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "smart-trackerd"
+name = "argusnetd"
 path = "src/main.rs"
 
 [dependencies]
@@ -18,5 +18,5 @@ serde_yaml.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
-tracker-core = { path = "../tracker-core" }
-tracker-proto = { path = "../tracker-proto" }
+argusnet-core = { path = "../argusnet-core" }
+argusnet-proto = { path = "../argusnet-proto" }

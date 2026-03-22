@@ -10,9 +10,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tonic::{transport::Server, Request, Response, Status};
-use tracker_core::{PlatformFrame, TrackerConfig, TrackingEngine};
-use tracker_proto::pb::tracker_service_server::{TrackerService, TrackerServiceServer};
-use tracker_proto::pb::{
+use argusnet_core::{PlatformFrame, TrackerConfig, TrackingEngine};
+use argusnet_proto::pb::world_model_service_server::{WorldModelService, WorldModelServiceServer};
+use argusnet_proto::pb::{
     GetConfigRequest, GetConfigResponse, HealthRequest, HealthResponse, IngestFrameRequest,
     IngestFrameResponse, LatestFrameRequest, LatestFrameResponse, ResetRequest, ResetResponse,
 };
@@ -136,9 +136,9 @@ impl PartialTrackerConfig {
         }
         if let Some(value) = self.data_association_mode {
             config.data_association_mode = match value.to_lowercase().as_str() {
-                "gnn" => tracker_core::AssociationMode::GNN,
-                "jpda" => tracker_core::AssociationMode::JPDA,
-                _ => tracker_core::AssociationMode::Labeled,
+                "gnn" => argusnet_core::AssociationMode::GNN,
+                "jpda" => argusnet_core::AssociationMode::JPDA,
+                _ => argusnet_core::AssociationMode::Labeled,
             };
         }
         if let Some(value) = self.cv_process_accel_std {
@@ -318,9 +318,9 @@ fn convert_request(
 ) -> Result<
     (
         f64,
-        Vec<tracker_core::NodeState>,
-        Vec<tracker_core::BearingObservation>,
-        Vec<tracker_core::TruthState>,
+        Vec<argusnet_core::NodeState>,
+        Vec<argusnet_core::BearingObservation>,
+        Vec<argusnet_core::TruthState>,
     ),
     Status,
 > {
@@ -328,19 +328,19 @@ fn convert_request(
     let node_states = request
         .node_states
         .into_iter()
-        .map(tracker_proto::node_state_from_pb)
+        .map(argusnet_proto::node_state_from_pb)
         .collect::<Result<Vec<_>, _>>()
         .map_err(invalid_argument)?;
     let observations = request
         .observations
         .into_iter()
-        .map(tracker_proto::observation_from_pb)
+        .map(argusnet_proto::observation_from_pb)
         .collect::<Result<Vec<_>, _>>()
         .map_err(invalid_argument)?;
     let truths = request
         .truths
         .into_iter()
-        .map(tracker_proto::truth_from_pb)
+        .map(argusnet_proto::truth_from_pb)
         .collect::<Result<Vec<_>, _>>()
         .map_err(invalid_argument)?;
     Ok((timestamp_s, node_states, observations, truths))
@@ -348,7 +348,7 @@ fn convert_request(
 
 fn frame_response(frame: PlatformFrame) -> IngestFrameResponse {
     IngestFrameResponse {
-        frame: Some(tracker_proto::frame_to_pb(frame)),
+        frame: Some(argusnet_proto::frame_to_pb(frame)),
     }
 }
 
@@ -381,7 +381,7 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                         frame: engine
                             .latest_frame()
                             .cloned()
-                            .map(tracker_proto::frame_to_pb),
+                            .map(argusnet_proto::frame_to_pb),
                     });
                     let _ = response.send(reply);
                 }
@@ -391,7 +391,7 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                 }
                 EngineCommand::GetConfig { response } => {
                     let reply = Ok(GetConfigResponse {
-                        config: Some(tracker_proto::tracker_config_to_pb(engine.config())),
+                        config: Some(argusnet_proto::tracker_config_to_pb(engine.config())),
                     });
                     let _ = response.send(reply);
                 }
@@ -406,7 +406,7 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                         processed_frame_count,
                         node_health: health_snapshots
                             .iter()
-                            .map(tracker_proto::node_health_to_pb)
+                            .map(argusnet_proto::node_health_to_pb)
                             .collect(),
                         mean_frame_rate_hz: engine.mean_frame_rate_hz(),
                         mean_ingest_latency_s: if processed_frame_count > 0 {
@@ -432,7 +432,7 @@ struct GrpcTrackerService {
 }
 
 #[tonic::async_trait]
-impl TrackerService for GrpcTrackerService {
+impl WorldModelService for GrpcTrackerService {
     async fn ingest_frame(
         &self,
         request: Request<IngestFrameRequest>,
@@ -514,7 +514,7 @@ pub async fn serve(args: ServeArgs) -> Result<()> {
         .map_err(|error| anyhow!("invalid listen address {}: {error}", args.listen))?;
 
     Server::builder()
-        .add_service(TrackerServiceServer::new(service))
+        .add_service(WorldModelServiceServer::new(service))
         .serve(address)
         .await?;
     Ok(())

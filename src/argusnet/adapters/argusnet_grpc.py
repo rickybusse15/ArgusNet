@@ -15,7 +15,7 @@ import warnings
 import grpc
 import numpy as np
 
-from smarttracker.v1 import tracker_pb2, tracker_pb2_grpc
+from argusnet.v1 import world_model_pb2 as tracker_pb2, world_model_pb2_grpc as tracker_pb2_grpc
 
 from argusnet.core.types import (
     BearingObservation,
@@ -403,7 +403,7 @@ class TrackingService:
                 stacklevel=2,
             )
         self._channel = grpc.insecure_channel(self.endpoint, options=_GRPC_CHANNEL_OPTIONS)
-        self._stub = tracker_pb2_grpc.TrackerServiceStub(self._channel)
+        self._stub = tracker_pb2_grpc.WorldModelServiceStub(self._channel)
         self._finalizer = weakref.finalize(
             self,
             _cleanup_service_resources,
@@ -426,7 +426,7 @@ class TrackingService:
     def _spawn_local_daemon(self, daemon_path: Optional[str]) -> str:
         endpoint = self._allocate_endpoint()
         host, port = endpoint.split(":")
-        self._owned_tempdir = tempfile.TemporaryDirectory(prefix="smart-trackerd-")
+        self._owned_tempdir = tempfile.TemporaryDirectory(prefix="argusnetd-")
         config_path = Path(self._owned_tempdir.name) / "tracker-config.yaml"
         log_path = Path(self._owned_tempdir.name) / "tracker.log"
         config_path.write_text(self._render_tracker_config_yaml(self.config), encoding="utf-8")
@@ -486,21 +486,24 @@ class TrackingService:
         if daemon_path:
             return [daemon_path]
 
-        env_daemon = shutil.which("smart-trackerd")
+        env_daemon = shutil.which("argusnetd") or shutil.which("smart-trackerd")
         if env_daemon:
             return [env_daemon]
 
-        debug_binary = repo_root / "target" / "debug" / "smart-trackerd"
-        if not debug_binary.exists():
+        debug_binary = repo_root / "target" / "debug" / "argusnetd"
+        legacy_binary = repo_root / "target" / "debug" / "smart-trackerd"
+        if not debug_binary.exists() and not legacy_binary.exists():
             cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
-            print("Building smart-trackerd (this may take a minute on first run)...")
+            print("Building argusnetd (this may take a minute on first run)...")
             subprocess.run(
-                [cargo, "build", "--manifest-path", str(repo_root / "Cargo.toml"), "-p", "tracker-server"],
+                [cargo, "build", "--manifest-path", str(repo_root / "Cargo.toml"), "-p", "argusnet-server"],
                 cwd=repo_root,
                 check=True,
             )
         if debug_binary.exists():
             return [str(debug_binary)]
+        if legacy_binary.exists():
+            return [str(legacy_binary)]
 
         cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
         return [
@@ -509,9 +512,9 @@ class TrackingService:
             "--manifest-path",
             str(repo_root / "Cargo.toml"),
             "-p",
-            "tracker-server",
+            "argusnet-server",
             "--bin",
-            "smart-trackerd",
+            "argusnetd",
             "--",
         ]
 
@@ -521,7 +524,7 @@ class TrackingService:
         while time.time() < deadline:
             if self._owned_process is not None and self._owned_process.poll() is not None:
                 raise RuntimeError(
-                    f"smart-trackerd exited early with code {self._owned_process.returncode}."
+                    f"argusnetd exited early with code {self._owned_process.returncode}."
                 )
             try:
                 self._stub.Health(tracker_pb2.HealthRequest(), timeout=0.5)
@@ -529,7 +532,7 @@ class TrackingService:
             except Exception as error:  # pragma: no cover - retry path depends on startup timing.
                 last_error = error
                 time.sleep(0.1)
-        raise RuntimeError(f"Timed out waiting for smart-trackerd at {self.endpoint}: {last_error}")
+        raise RuntimeError(f"Timed out waiting for argusnetd at {self.endpoint}: {last_error}")
 
     def close(self) -> None:
         if self._finalizer.alive:

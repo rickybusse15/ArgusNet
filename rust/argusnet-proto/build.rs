@@ -7,7 +7,7 @@ fn main() {
         .parent()
         .and_then(|path| path.parent())
         .expect("repo root");
-    let proto_file = repo_root.join("proto/smarttracker/v1/tracker.proto");
+    let proto_file = repo_root.join("proto/argusnet/v1/world_model.proto");
     let proto_root = repo_root.join("proto");
     tonic_prost_build::configure()
         .build_server(true)
