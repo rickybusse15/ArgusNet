@@ -25,7 +25,8 @@ pub struct RuntimeOverlayVisibility {
     pub zones: bool,
     pub fov_cones: bool,
     pub radar_rings: bool,
-    pub launch_lines: bool,
+    pub coverage_overlay: bool,
+    pub inspection_events: bool,
 }
 
 impl Default for RuntimeOverlayVisibility {
@@ -39,7 +40,8 @@ impl Default for RuntimeOverlayVisibility {
             zones: true,
             fov_cones: false,
             radar_rings: true,
-            launch_lines: true,
+            coverage_overlay: false,
+            inspection_events: true,
         }
     }
 }
@@ -151,7 +153,7 @@ impl Default for SimulationRunner {
             clean_terrain: false,
             platform_preset: "baseline".into(),
             target_motion: "mixed".into(),
-            drone_mode: "follow".into(),
+            drone_mode: "inspect".into(),
             target_count: 2,
             drone_count: 4,
             ground_stations: 7,

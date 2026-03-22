@@ -20,6 +20,9 @@ use crate::state::{
 };
 use crate::ui::viewer_ui_system;
 
+/// Maximum number of historical positions kept in a trail.
+const TRAIL_MAX_POINTS: usize = 32;
+
 /// Active simulation subprocess — inserted as a resource while running.
 #[derive(Resource)]
 struct SimulationProcess {
@@ -472,17 +475,62 @@ fn draw_runtime_overlays_system(
     replay_state: Res<ReplayState>,
     markers: Res<CurrentRuntimeMarkers>,
     runtime_visibility: Res<RuntimeOverlayVisibility>,
+    mission_zones: Res<LoadedMissionZones>,
 ) {
+    // Compute altitude range across all current markers for color normalization.
+    let alt_min = markers.markers.iter().map(|m| m.position.z).fold(f32::INFINITY, f32::min);
+    let alt_max = markers.markers.iter().map(|m| m.position.z).fold(f32::NEG_INFINITY, f32::max);
+    let alt_span = (alt_max - alt_min).max(1.0);
+
+    // Retrieve measurement_std_m for each track from the current frame.
+    let frame_tracks: Vec<(String, f32)> = replay_state
+        .current_frame()
+        .map(|f| f.tracks.iter().map(|t| (t.track_id.clone(), t.measurement_std_m)).collect())
+        .unwrap_or_default();
+
     for marker in &markers.markers {
         if !is_marker_visible(marker, &runtime_visibility) {
             continue;
         }
 
-        let color = marker_color(marker.kind, &scene_package);
-        draw_marker(&mut gizmos, marker, color);
-        let trail_points = replay_state.trail_points(marker, 24);
-        for segment in trail_points.windows(2) {
-            gizmos.line(segment[0], segment[1], color);
+        // Item 5: pick color based on measurement_std_m for track markers.
+        let base_color = marker_color(marker.kind, &scene_package);
+        let (draw_color, radius_scale) = if marker.kind == crate::replay::MarkerKind::Track {
+            let std_m = frame_tracks
+                .iter()
+                .find(|(id, _)| id == &marker.label)
+                .map(|(_, s)| *s)
+                .unwrap_or(0.0);
+            let conf_color = if std_m < 5.0 {
+                Color::srgba(0.2, 0.9, 0.2, 1.0) // green
+            } else if std_m < 20.0 {
+                Color::srgba(0.95, 0.85, 0.1, 1.0) // yellow
+            } else if std_m < 50.0 {
+                Color::srgba(0.95, 0.5, 0.1, 1.0) // orange
+            } else {
+                Color::srgba(0.95, 0.15, 0.15, 1.0) // red
+            };
+            let scale = 1.0 + std_m.min(50.0) / 50.0;
+            (conf_color, scale)
+        } else {
+            (base_color, 1.0)
+        };
+        draw_marker_scaled(&mut gizmos, marker, draw_color, radius_scale);
+
+        // Item 15: trail with alpha fading and altitude-based hue coloring.
+        let trail_points = replay_state.trail_points(marker, TRAIL_MAX_POINTS);
+        let n = trail_points.len();
+        for (seg_idx, segment) in trail_points.windows(2).enumerate() {
+            // t goes from 0 (oldest segment) to 1 (newest segment).
+            let t = if n > 2 { seg_idx as f32 / (n - 2) as f32 } else { 1.0 };
+            let alpha = 0.1 + 0.9 * t;
+            // Use midpoint altitude for hue
+            let mid_z = (segment[0].z + segment[1].z) * 0.5;
+            let norm_alt = ((mid_z - alt_min) / alt_span).clamp(0.0, 1.0);
+            // blue (hue=240) at low alt → red (hue=0) at high alt
+            let hue = 240.0 * (1.0 - norm_alt);
+            let trail_color = Color::hsla(hue, 1.0, 0.55, alpha);
+            gizmos.line(segment[0], segment[1], trail_color);
         }
     }
 
@@ -510,6 +558,48 @@ fn draw_runtime_overlays_system(
             for rej in &frame.rejected_observations {
                 let pos = tracker_rejection_position(frame, rej);
                 draw_rejection_marker(&mut gizmos, pos, rejection_marker_style(rej, false));
+            }
+        }
+
+        // Item 6: Inspection event spatial rendering — draw zone circles colored by
+        // coverage fraction and brightened when the zone has an active inspection event.
+        if runtime_visibility.inspection_events && !mission_zones.zones.is_empty() {
+            // Build a map of zone_id -> latest coverage_fraction for this frame.
+            let mut zone_coverage: std::collections::HashMap<&str, f32> =
+                std::collections::HashMap::new();
+            let mut active_zone_ids: std::collections::HashSet<&str> =
+                std::collections::HashSet::new();
+            for ev in &frame.inspection_events {
+                zone_coverage
+                    .entry(ev.zone_id.as_str())
+                    .and_modify(|f| *f = f.max(ev.zone_coverage_fraction))
+                    .or_insert(ev.zone_coverage_fraction);
+                active_zone_ids.insert(ev.zone_id.as_str());
+            }
+
+            let zone_ring_segs: u32 = 32;
+            for zone in &mission_zones.zones {
+                let coverage = zone_coverage
+                    .get(zone.zone_id.as_str())
+                    .copied()
+                    .unwrap_or(0.0);
+                let is_active = active_zone_ids.contains(zone.zone_id.as_str());
+                // Coverage-based hue: red (0°) = 0% → green (120°) = 100%
+                let alpha = if is_active { 1.0_f32 } else { 0.4_f32 };
+                let hue = coverage.clamp(0.0, 1.0) * 120.0;
+                let zone_color = Color::hsla(hue, 1.0, 0.5, alpha);
+
+                let cx = zone.center[0];
+                let cy = zone.center[1];
+                let cz = zone.center[2];
+                let r = zone.radius_m;
+                for i in 0..zone_ring_segs {
+                    let a0 = std::f32::consts::TAU * i as f32 / zone_ring_segs as f32;
+                    let a1 = std::f32::consts::TAU * (i + 1) as f32 / zone_ring_segs as f32;
+                    let p0 = Vec3::new(cx + a0.cos() * r, cy + a0.sin() * r, cz);
+                    let p1 = Vec3::new(cx + a1.cos() * r, cy + a1.sin() * r, cz);
+                    gizmos.line(p0, p1, zone_color);
+                }
             }
         }
     }
@@ -713,12 +803,13 @@ fn pick_runtime_marker_system(
     }
 }
 
-fn draw_marker(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color) {
-    let radius = match marker.kind {
+fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color, scale: f32) {
+    let base_radius = match marker.kind {
         MarkerKind::Track => 12.0,
         MarkerKind::Truth => 10.0,
         MarkerKind::Node => 8.0,
     };
+    let radius = base_radius * scale;
     gizmos.line(
         marker.position - Vec3::X * radius,
         marker.position + Vec3::X * radius,
@@ -808,27 +899,60 @@ fn draw_sensor_overlays_system(
         // FOV cones for optical drones
         if runtime_visibility.fov_cones && node.sensor_type == "optical" {
             if let Some(fov_half) = node.fov_half_angle_deg {
-                if fov_half < 179.0 && vel.length_squared() > 0.25 {
-                    let fov_color = Color::srgba(0.95, 0.75, 0.2, 0.4);
-                    let cone_length = node.max_range_m.unwrap_or(400.0).min(300.0);
-                    let half_rad = fov_half.to_radians();
+                let fov_color = Color::srgba(0.95, 0.75, 0.2, 0.4);
+                let cone_length = node.max_range_m.unwrap_or(400.0).min(1500.0);
+                let half_rad = fov_half.to_radians();
+
+                // Omnidirectional sensor: draw a detection dome in multiple azimuth planes
+                if half_rad >= std::f32::consts::PI - 0.05 {
+                    let dome_radius = cone_length;
+                    let ring_segs = 24;
+                    // Horizontal ring at node altitude
+                    for i in 0..ring_segs {
+                        let a0 = std::f32::consts::TAU * i as f32 / ring_segs as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / ring_segs as f32;
+                        let p0 = pos + Vec3::new(a0.cos() * dome_radius, a0.sin() * dome_radius, 0.0);
+                        let p1 = pos + Vec3::new(a1.cos() * dome_radius, a1.sin() * dome_radius, 0.0);
+                        gizmos.line(p0, p1, fov_color);
+                    }
+                    // Four vertical great-circle arcs
+                    let vert_segs = 16;
+                    for plane in 0..4 {
+                        let az = std::f32::consts::TAU * plane as f32 / 4.0;
+                        let axis = Vec3::new(az.cos(), az.sin(), 0.0);
+                        let perp = Vec3::new(-az.sin(), az.cos(), 0.0);
+                        for i in 0..vert_segs {
+                            let el0 = std::f32::consts::PI * i as f32 / vert_segs as f32 - std::f32::consts::FRAC_PI_2;
+                            let el1 = std::f32::consts::PI * (i + 1) as f32 / vert_segs as f32 - std::f32::consts::FRAC_PI_2;
+                            let _ = perp; // used indirectly via axis below
+                            let p0 = pos + (axis * el0.cos() + Vec3::Z * el0.sin()) * dome_radius;
+                            let p1 = pos + (axis * el1.cos() + Vec3::Z * el1.sin()) * dome_radius;
+                            gizmos.line(p0, p1, fov_color);
+                        }
+                    }
+                } else if vel.length_squared() > 0.25 {
                     let radius_at_tip = cone_length * half_rad.tan();
                     let look = vel.normalize();
                     // Build a local frame from the look direction
-                    let right = look.cross(Vec3::Z).normalize_or_zero();
+                    let right = if look.cross(Vec3::Z).length_squared() > 1e-6 {
+                        look.cross(Vec3::Z).normalize()
+                    } else {
+                        Vec3::X
+                    };
                     let up = right.cross(look).normalize_or_zero();
                     let tip_center = pos + look * cone_length;
-                    let segments = 16;
-                    for i in 0..segments {
-                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
-                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                    // Smooth cone rim: 24 segments
+                    let rim_segs = 24;
+                    for i in 0..rim_segs {
+                        let a0 = std::f32::consts::TAU * i as f32 / rim_segs as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / rim_segs as f32;
                         let p0 = tip_center + (right * a0.cos() + up * a0.sin()) * radius_at_tip;
                         let p1 = tip_center + (right * a1.cos() + up * a1.sin()) * radius_at_tip;
                         gizmos.line(p0, p1, fov_color);
                     }
-                    // Four edge lines from origin to cone boundary
-                    for i in 0..4 {
-                        let a = std::f32::consts::TAU * i as f32 / 4.0;
+                    // 12 edge lines from origin to cone boundary (was 4)
+                    for i in 0..12 {
+                        let a = std::f32::consts::TAU * i as f32 / 12.0;
                         let edge = tip_center + (right * a.cos() + up * a.sin()) * radius_at_tip;
                         gizmos.line(pos, edge, fov_color);
                     }
@@ -837,37 +961,6 @@ fn draw_sensor_overlays_system(
         }
     }
 
-    // Launch lines — vertical cyan line from station to climbing drone
-    if runtime_visibility.launch_lines {
-        for event in &frame.launch_events {
-            // Find the drone node to get its current position
-            if let Some(drone) = frame.nodes.iter().find(|n| n.node_id == event.drone_id) {
-                // Find the station to get its position
-                if let Some(station) = frame.nodes.iter().find(|n| n.node_id == event.station_id) {
-                    let station_pos = Vec3::from_array(station.position);
-                    let drone_pos = Vec3::from_array(drone.position);
-                    let elapsed = frame.timestamp_s - event.launch_time_s;
-                    if elapsed >= 0.0 && elapsed < event.climb_duration_s {
-                        let launch_color = Color::srgba(0.2, 0.9, 0.95, 0.7);
-                        gizmos.line(station_pos, drone_pos, launch_color);
-                        // Small upward arrow at drone
-                        let arrow_size = 8.0;
-                        gizmos.line(drone_pos, drone_pos + Vec3::Z * arrow_size, launch_color);
-                        gizmos.line(
-                            drone_pos + Vec3::Z * arrow_size,
-                            drone_pos + Vec3::Z * arrow_size * 0.7 + Vec3::X * arrow_size * 0.3,
-                            launch_color,
-                        );
-                        gizmos.line(
-                            drone_pos + Vec3::Z * arrow_size,
-                            drone_pos + Vec3::Z * arrow_size * 0.7 - Vec3::X * arrow_size * 0.3,
-                            launch_color,
-                        );
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Spawns a Python simulation subprocess when the user clicks "Run Simulation".
@@ -1342,8 +1435,10 @@ mod tests {
             observations: Vec::new(),
             rejected_observations: Vec::new(),
             generation_rejections: Vec::new(),
-            launch_events: Vec::new(),
             metrics: FrameMetrics::default(),
+            mapping_state: None,
+            localization_state: None,
+            inspection_events: Vec::new(),
         };
 
         let rejection = RejectedObservation {

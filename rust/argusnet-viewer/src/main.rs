@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use tracker_viewer::{render_headless, CameraPreset, HeadlessRenderOptions};
+use argusnet_viewer::{render_headless, CameraPreset, HeadlessRenderOptions};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -49,5 +49,5 @@ fn main() -> Result<()> {
             },
         );
     }
-    tracker_viewer::run(args.scene)
+    argusnet_viewer::run(args.scene)
 }

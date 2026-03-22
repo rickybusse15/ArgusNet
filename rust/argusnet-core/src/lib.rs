@@ -2,6 +2,7 @@ pub mod association;
 
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::collections::{BTreeMap, HashMap};
 
 pub type Matrix6 = SMatrix<f64, 6, 6>;
@@ -454,6 +455,7 @@ impl KalmanTrack3D {
         }
     }
 
+    #[inline]
     fn predict(&mut self, timestamp_s: f64) {
         let dt = timestamp_s - self.timestamp_s;
         if dt <= 0.0 {
@@ -496,6 +498,7 @@ impl KalmanTrack3D {
         self.timestamp_s = timestamp_s;
     }
 
+    #[inline]
     fn update_position(
         &mut self,
         position: Vector3<f64>,
@@ -598,6 +601,7 @@ impl CoordinatedTurnTrack3D {
         }
     }
 
+    #[inline]
     fn predict(&mut self, timestamp_s: f64) {
         let dt = timestamp_s - self.timestamp_s;
         if dt <= 0.0 {
@@ -655,6 +659,7 @@ impl CoordinatedTurnTrack3D {
         self.timestamp_s = timestamp_s;
     }
 
+    #[inline]
     fn update_position(
         &mut self,
         position: Vector3<f64>,
@@ -903,6 +908,7 @@ impl IMMTrack3D {
     }
 }
 
+#[inline]
 fn gaussian_likelihood(innovation: &Vector3<f64>, covariance: &Matrix3<f64>) -> f64 {
     covariance
         .cholesky()
@@ -1109,6 +1115,8 @@ pub struct TrackingEngine {
     node_health: HashMap<String, NodeHealthTracker>,
     frame_timestamps: Vec<f64>,
     next_track_index: u64,
+    /// Scratch HashMap reused across frames to avoid per-cluster allocation in deduplicate_cluster.
+    dedup_scratch: HashMap<String, BearingObservation>,
 }
 
 impl TrackingEngine {
@@ -1126,6 +1134,7 @@ impl TrackingEngine {
             node_health: HashMap::new(),
             frame_timestamps: Vec::new(),
             next_track_index: 0,
+            dedup_scratch: HashMap::new(),
         })
     }
 
@@ -1144,6 +1153,7 @@ impl TrackingEngine {
         self.node_health.clear();
         self.frame_timestamps.clear();
         self.next_track_index = 0;
+        self.dedup_scratch.clear();
     }
 
     pub fn node_health_snapshot(&self, current_timestamp_s: f64) -> Vec<NodeHealthSnapshot> {
@@ -1221,7 +1231,9 @@ impl TrackingEngine {
         let updated_track_set = updated_track_ids
             .into_iter()
             .collect::<std::collections::HashSet<_>>();
-        let existing_track_ids = self.tracks.keys().cloned().collect::<Vec<_>>();
+        let n_tracks = self.tracks.len();
+        let mut existing_track_ids = Vec::with_capacity(n_tracks);
+        existing_track_ids.extend(self.tracks.keys().cloned());
         for track_id in existing_track_ids {
             if updated_track_set.contains(&track_id) {
                 continue;
@@ -1239,19 +1251,21 @@ impl TrackingEngine {
             }
         }
 
-        let mut track_ids = self.tracks.keys().cloned().collect::<Vec<_>>();
+        let mut track_ids = Vec::with_capacity(self.tracks.len());
+        track_ids.extend(self.tracks.keys().cloned());
         track_ids.sort();
-        let track_states = track_ids
-            .iter()
-            .filter_map(|track_id| self.tracks.get(track_id).map(ManagedTrack::snapshot))
-            .collect::<Vec<_>>();
+        let mut track_states = Vec::with_capacity(track_ids.len());
+        track_states.extend(
+            track_ids
+                .iter()
+                .filter_map(|track_id| self.tracks.get(track_id).map(ManagedTrack::snapshot)),
+        );
 
-        let mut node_ids = self.nodes.keys().cloned().collect::<Vec<_>>();
+        let mut node_ids = Vec::with_capacity(self.nodes.len());
+        node_ids.extend(self.nodes.keys().cloned());
         node_ids.sort();
-        let nodes = node_ids
-            .iter()
-            .filter_map(|node_id| self.nodes.get(node_id).cloned())
-            .collect::<Vec<_>>();
+        let mut nodes = Vec::with_capacity(node_ids.len());
+        nodes.extend(node_ids.iter().filter_map(|node_id| self.nodes.get(node_id).cloned()));
 
         // Update per-node health trackers
         for obs in &accepted_observations {
@@ -1303,7 +1317,7 @@ impl TrackingEngine {
         timestamp_s: f64,
         prefiltered_observations: Vec<BearingObservation>,
         rejections: &mut Vec<ObservationRejection>,
-    ) -> (Vec<BearingObservation>, Vec<String>) {
+    ) -> (Vec<BearingObservation>, SmallVec<[String; 8]>) {
         let mut grouped_observations: HashMap<String, Vec<BearingObservation>> = HashMap::new();
         for observation in prefiltered_observations {
             grouped_observations
@@ -1313,7 +1327,7 @@ impl TrackingEngine {
         }
 
         let mut accepted_observations = Vec::new();
-        let mut updated_track_ids: Vec<String> = Vec::new();
+        let mut updated_track_ids: SmallVec<[String; 8]> = SmallVec::new();
         let mut sorted_track_ids = grouped_observations.keys().cloned().collect::<Vec<_>>();
         sorted_track_ids.sort();
 
@@ -1392,14 +1406,14 @@ impl TrackingEngine {
         timestamp_s: f64,
         prefiltered_observations: Vec<BearingObservation>,
         rejections: &mut Vec<ObservationRejection>,
-    ) -> (Vec<BearingObservation>, Vec<String>) {
+    ) -> (Vec<BearingObservation>, SmallVec<[String; 8]>) {
         use crate::association::{cluster_observations, GNNAssociator, TrackAssignment};
 
         let clusters = cluster_observations(
             &prefiltered_observations,
             self.config.cluster_distance_threshold_m,
         );
-        let mut valid_clusters = Vec::new();
+        let mut valid_clusters = Vec::with_capacity(clusters.len());
         for cluster in clusters {
             let (deduped, dup_rejections) = self.deduplicate_cluster(cluster);
             rejections.extend(dup_rejections);
@@ -1434,7 +1448,7 @@ impl TrackingEngine {
         let assignments = associator.associate(&self.tracks, &valid_clusters, timestamp_s);
 
         let mut accepted_observations = Vec::new();
-        let mut updated_track_ids = Vec::new();
+        let mut updated_track_ids: SmallVec<[String; 8]> = SmallVec::new();
 
         for assignment in assignments {
             let cluster = &valid_clusters[assignment.cluster_index];
@@ -1487,14 +1501,14 @@ impl TrackingEngine {
         timestamp_s: f64,
         prefiltered_observations: Vec<BearingObservation>,
         rejections: &mut Vec<ObservationRejection>,
-    ) -> (Vec<BearingObservation>, Vec<String>) {
+    ) -> (Vec<BearingObservation>, SmallVec<[String; 8]>) {
         use crate::association::{cluster_observations, JPDAAssociator};
 
         let clusters = cluster_observations(
             &prefiltered_observations,
             self.config.cluster_distance_threshold_m,
         );
-        let mut valid_clusters = Vec::new();
+        let mut valid_clusters = Vec::with_capacity(clusters.len());
         for cluster in clusters {
             let (deduped, dup_rejections) = self.deduplicate_cluster(cluster);
             rejections.extend(dup_rejections);
@@ -1535,7 +1549,7 @@ impl TrackingEngine {
             accepted_observations.extend(cluster.iter().cloned());
         }
 
-        let mut updated_track_ids = Vec::new();
+        let mut updated_track_ids: SmallVec<[String; 8]> = SmallVec::new();
         for update in result.track_updates {
             if let Some(track) = self.tracks.get_mut(&update.track_id) {
                 track.predict(timestamp_s);
@@ -1655,10 +1669,12 @@ impl TrackingEngine {
     }
 
     fn deduplicate_cluster(
-        &self,
+        &mut self,
         cluster: Vec<BearingObservation>,
     ) -> (Vec<BearingObservation>, Vec<ObservationRejection>) {
-        let mut selected: HashMap<String, BearingObservation> = HashMap::new();
+        // Reuse the scratch HashMap to avoid a per-cluster allocation.
+        let selected = &mut self.dedup_scratch;
+        selected.clear();
         let mut rejections = Vec::new();
 
         for observation in cluster {
@@ -1774,7 +1790,7 @@ pub fn infer_measurement_std(
         return Err("At least one observation is required.".to_string());
     }
 
-    let mut per_node_std = Vec::new();
+    let mut per_node_std: SmallVec<[f64; 8]> = SmallVec::new();
     for observation in observations {
         let range_m = (estimate - observation.origin).norm();
         per_node_std.push((range_m * observation.bearing_std_rad).max(1.0));
@@ -1845,11 +1861,10 @@ fn build_metrics(
             .or_insert(0) += 1;
     }
 
-    let measurement_stds = tracks
-        .iter()
-        .map(|track| track.measurement_std_m)
-        .collect::<Vec<_>>();
-    let error_values = errors.values().copied().collect::<Vec<_>>();
+    let mut measurement_stds = Vec::with_capacity(tracks.len());
+    measurement_stds.extend(tracks.iter().map(|track| track.measurement_std_m));
+    let mut error_values = Vec::with_capacity(errors.len());
+    error_values.extend(errors.values().copied());
 
     let accepted_count = observations.len() as u32;
     let rejected_count = rejections.len() as u32;

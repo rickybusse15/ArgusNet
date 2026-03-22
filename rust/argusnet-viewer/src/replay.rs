@@ -181,9 +181,13 @@ pub struct ReplayFrame {
     #[serde(default)]
     pub generation_rejections: Vec<RejectedObservation>,
     #[serde(default)]
-    pub launch_events: Vec<LaunchEvent>,
-    #[serde(default)]
     pub metrics: FrameMetrics,
+    #[serde(default)]
+    pub mapping_state: Option<MappingState>,
+    #[serde(default)]
+    pub localization_state: Option<LocalizationState>,
+    #[serde(default)]
+    pub inspection_events: Vec<InspectionEvent>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -230,20 +234,6 @@ fn default_health() -> f32 {
 
 fn default_sensor_type() -> String {
     "optical".into()
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LaunchEvent {
-    pub drone_id: String,
-    pub station_id: String,
-    pub target_id: String,
-    pub launch_time_s: f32,
-    #[serde(default = "default_climb_duration")]
-    pub climb_duration_s: f32,
-}
-
-fn default_climb_duration() -> f32 {
-    8.0
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -304,6 +294,38 @@ pub struct FrameMetrics {
     pub rejection_counts: HashMap<String, u32>,
     #[serde(default)]
     pub track_errors_m: HashMap<String, f32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MappingState {
+    #[serde(default)]
+    pub coverage_fraction: f32,
+    #[serde(default)]
+    pub covered_cells: u32,
+    #[serde(default)]
+    pub total_cells: u32,
+    #[serde(default)]
+    pub mean_revisits: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LocalizationState {
+    #[serde(default)]
+    pub active_localizations: u32,
+    #[serde(default)]
+    pub mean_position_std_m: f32,
+    #[serde(default)]
+    pub mean_observation_confidence: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct InspectionEvent {
+    pub zone_id: String,
+    pub node_id: String,
+    pub event_type: String,
+    pub timestamp_s: f32,
+    #[serde(default)]
+    pub zone_coverage_fraction: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -572,19 +594,24 @@ mod tests {
     }
 
     #[test]
-    fn launch_event_deserializes() {
+    fn mapping_localization_inspection_deserializes() {
         let document: ReplayDocument = serde_json::from_value(json!({
-            "frames": [{
-                "timestamp_s": 5.0,
-                "tracks": [], "truths": [], "nodes": [],
-                "launch_events": [{"drone_id": "drone-north", "station_id": "ground-alpha",
-                                   "target_id": "asset-hawk", "launch_time_s": 5.0}]
+            "frames": [{"timestamp_s": 1.0, "tracks": [], "truths": [], "nodes": [],
+                "mapping_state": {"coverage_fraction": 0.42, "covered_cells": 10,
+                                  "total_cells": 24, "mean_revisits": 1.5},
+                "localization_state": {"active_localizations": 2,
+                                       "mean_position_std_m": 12.3,
+                                       "mean_observation_confidence": 0.85},
+                "inspection_events": [{"zone_id": "z0", "node_id": "d0",
+                                       "event_type": "entered", "timestamp_s": 1.0,
+                                       "zone_coverage_fraction": 0.05}]
             }]
         }))
         .unwrap();
-        assert_eq!(document.frames[0].launch_events.len(), 1);
-        assert_eq!(document.frames[0].launch_events[0].drone_id, "drone-north");
-        assert!((document.frames[0].launch_events[0].climb_duration_s - 8.0).abs() < 1e-3);
+        let f = &document.frames[0];
+        assert!((f.mapping_state.as_ref().unwrap().coverage_fraction - 0.42).abs() < 1e-4);
+        assert_eq!(f.inspection_events[0].event_type, "entered");
+        assert_eq!(f.localization_state.as_ref().unwrap().active_localizations, 2);
     }
 
     #[test]

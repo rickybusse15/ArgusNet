@@ -24,6 +24,7 @@ class NodeState:
     sensor_type: str = "optical"
     fov_half_angle_deg: float = 180.0
     max_range_m: float = 0.0
+    battery_fraction: float = 1.0  # 0.0 (empty) → 1.0 (full); -1.0 = not applicable
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,30 @@ class PlatformMetrics:
 
 
 @dataclass(frozen=True)
+class MappingState:
+    coverage_fraction: float       # 0.0–1.0 fraction of grid cells observed
+    covered_cells: int
+    total_cells: int
+    mean_revisits: float
+
+
+@dataclass(frozen=True)
+class LocalizationState:
+    active_localizations: int
+    mean_position_std_m: float
+    mean_observation_confidence: float
+
+
+@dataclass(frozen=True)
+class InspectionEvent:
+    zone_id: str
+    node_id: str
+    event_type: str                # "entered" | "coverage_updated" | "exited"
+    timestamp_s: float
+    zone_coverage_fraction: float
+
+
+@dataclass(frozen=True)
 class PlatformFrame:
     timestamp_s: float
     nodes: List[NodeState]
@@ -98,7 +123,9 @@ class PlatformFrame:
     truths: List[TruthState]
     metrics: PlatformMetrics
     generation_rejections: List[ObservationRejection] = field(default_factory=list)
-    launch_events: List[LaunchEvent] = field(default_factory=list)
+    mapping_state: Optional[MappingState] = None
+    localization_state: Optional[LocalizationState] = None
+    inspection_events: List[InspectionEvent] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -122,15 +149,6 @@ class HealthReport:
     mean_ingest_latency_s: float = 0.0
     active_node_count: int = 0
     stale_node_count: int = 0
-
-
-@dataclass(frozen=True)
-class LaunchEvent:
-    drone_id: str
-    station_id: str
-    target_id: str
-    launch_time_s: float
-    climb_duration_s: float = 8.0
 
 
 ZONE_TYPE_SURVEILLANCE = "surveillance"

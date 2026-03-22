@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
+use egui_plot::{Line, Plot, PlotPoints};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
 use crate::replay::ReplayState;
@@ -34,7 +35,7 @@ const TERRAIN_PRESETS: &[&str] = &[
 ];
 const PLATFORM_PRESETS: &[&str] = &["baseline", "wide_area"];
 const MOTION_PRESETS: &[&str] = &["sinusoid", "racetrack", "waypoint_patrol", "mixed"];
-const DRONE_MODES: &[&str] = &["follow", "search", "mixed"];
+const DRONE_MODES: &[&str] = &["inspect", "search", "mixed"];
 
 /// Stale step threshold: nodes/tracks exceeding this are flagged in alerts.
 const STALE_THRESHOLD: u32 = 5;
@@ -77,6 +78,12 @@ pub fn viewer_ui_system(
 
                     section_tracking_metrics(ui, &frame_metrics);
                     ui.separator();
+
+                    section_mapping_status(ui, &replay_state);
+
+                    section_localization_status(ui, &replay_state);
+
+                    section_inspection_events(ui, &replay_state);
 
                     section_node_summary(ui, &replay_state);
 
@@ -318,6 +325,28 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
     {
         replay_state.playing = false;
         replay_state.step_to(frame_value as usize);
+    }
+
+    // Item 13: Timeline sparkline — observations/frame across all frames.
+    if let Some(ref document) = replay_state.document {
+        let points: PlotPoints = document
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(i, f)| [i as f64, f.metrics.observation_count as f64])
+            .collect();
+        let line = Line::new(points);
+        Plot::new("obs_sparkline")
+            .height(60.0)
+            .allow_zoom(false)
+            .allow_drag(false)
+            .allow_scroll(false)
+            .show_axes([false, true])
+            .label_formatter(|_, _| String::new())
+            .show(ui, |plot_ui| {
+                plot_ui.line(line);
+            });
+        ui.label("Observations/frame");
     }
 }
 
@@ -730,6 +759,82 @@ enum AlertLevel {
 }
 
 // ---------------------------------------------------------------------------
+// Section: Mapping Status
+// ---------------------------------------------------------------------------
+
+fn section_mapping_status(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(ref ms) = frame.mapping_state else {
+        return;
+    };
+    ui.collapsing("Mapping", |ui| {
+        kv_row(ui, "Coverage", &format!("{:.1}%", ms.coverage_fraction * 100.0));
+        kv_row(ui, "Covered cells", &ms.covered_cells.to_string());
+        kv_row(ui, "Total cells", &ms.total_cells.to_string());
+        kv_row(ui, "Mean revisits", &format!("{:.2}", ms.mean_revisits));
+    });
+    ui.separator();
+}
+
+// ---------------------------------------------------------------------------
+// Section: Localization Status
+// ---------------------------------------------------------------------------
+
+fn section_localization_status(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(ref ls) = frame.localization_state else {
+        return;
+    };
+    ui.collapsing("Localization", |ui| {
+        kv_row(ui, "Active tracks", &ls.active_localizations.to_string());
+        kv_row(ui, "Mean pos. std.", &format!("{:.1} m", ls.mean_position_std_m));
+        kv_row(ui, "Mean confidence", &format!("{:.2}", ls.mean_observation_confidence));
+    });
+    ui.separator();
+}
+
+// ---------------------------------------------------------------------------
+// Section: Inspection Events
+// ---------------------------------------------------------------------------
+
+fn section_inspection_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    if frame.inspection_events.is_empty() {
+        return;
+    }
+    let count = frame.inspection_events.len();
+    ui.collapsing(format!("Inspection Events ({count})"), |ui| {
+        let limit = 20;
+        for (i, ev) in frame.inspection_events.iter().enumerate() {
+            if i >= limit {
+                ui.label(format!("  ... and {} more", count - limit));
+                break;
+            }
+            let icon = match ev.event_type.as_str() {
+                "entered" => "\u{25b6}",
+                "exited" => "\u{25c0}",
+                _ => "\u{25cf}",
+            };
+            ui.label(format!(
+                "  {} {} in {} ({:.0}%) t={:.1}s",
+                icon,
+                ev.node_id,
+                ev.zone_id,
+                ev.zone_coverage_fraction * 100.0,
+                ev.timestamp_s,
+            ));
+        }
+    });
+    ui.separator();
+}
+
+// ---------------------------------------------------------------------------
 // Section: Current Frame Events
 // ---------------------------------------------------------------------------
 
@@ -738,11 +843,10 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
         return;
     };
 
-    let launch_count = frame.launch_events.len();
     let gen_rej_count = frame.generation_rejections.len();
     let tracker_rej_count = frame.rejected_observations.len();
     let obs_count = frame.observations.len();
-    let total_events = launch_count + gen_rej_count + tracker_rej_count;
+    let total_events = gen_rej_count + tracker_rej_count;
 
     if total_events == 0 && obs_count == 0 {
         return;
@@ -750,26 +854,6 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
 
     let header = format!("Frame Events ({total_events})");
     ui.collapsing(header, |ui| {
-        // Launch events
-        if !frame.launch_events.is_empty() {
-            ui.label(format!("Launches ({launch_count}):"));
-            // Cap displayed events to prevent unbounded rendering
-            let display_limit = 20;
-            for (i, event) in frame.launch_events.iter().enumerate() {
-                if i >= display_limit {
-                    ui.label(format!(
-                        "  ... and {} more",
-                        launch_count - display_limit
-                    ));
-                    break;
-                }
-                ui.label(format!(
-                    "  {} from {} -> {} at t={:.1}s",
-                    event.drone_id, event.station_id, event.target_id, event.launch_time_s
-                ));
-            }
-        }
-
         // Generation rejections
         if !frame.generation_rejections.is_empty() {
             ui.collapsing(
@@ -877,7 +961,8 @@ fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.zones, "Mission Zones");
         ui.checkbox(&mut runtime_visibility.fov_cones, "FOV Cones");
         ui.checkbox(&mut runtime_visibility.radar_rings, "Radar Rings");
-        ui.checkbox(&mut runtime_visibility.launch_lines, "Launch Lines");
+        ui.checkbox(&mut runtime_visibility.coverage_overlay, "Coverage Overlay");
+        ui.checkbox(&mut runtime_visibility.inspection_events, "Inspection Events");
     });
 }
 

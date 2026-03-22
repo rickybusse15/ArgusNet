@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 nalgebra.workspace = true
 serde.workspace = true
+smallvec = { version = "1", features = ["union"] }

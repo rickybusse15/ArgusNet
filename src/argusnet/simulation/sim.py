@@ -27,7 +27,9 @@ from argusnet.world.environment import (
 )
 from argusnet.core.types import (
     BearingObservation,
-    LaunchEvent,
+    InspectionEvent,
+    LocalizationState,
+    MappingState,
     MissionZone,
     NodeState,
     ObservationRejection,
@@ -39,6 +41,8 @@ from argusnet.core.types import (
     ZONE_TYPE_SURVEILLANCE,
     vec3,
 )
+from argusnet.mapping.coverage import CoverageMap
+from argusnet.mapping.occupancy import GridBounds
 from argusnet.core.config import (
     DEFAULT_MAP_PRESET_SCALES,
     DEFAULT_PLATFORM_PRESETS,
@@ -49,6 +53,7 @@ from argusnet.core.config import (
     SimulationConstants,
     TargetTrajectoryConfig,
 )
+from argusnet.planning.battery import BatteryModel, BatteryState
 from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
 from argusnet.evaluation.replay import ReplayDocument, build_replay_document, write_replay_document
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel, detection_probability as sensor_detection_probability
@@ -77,7 +82,7 @@ REJECT_OBJECT_OCCLUSION = REJECT_BUILDING_OCCLUSION
 # SimulationConstants so existing imports keep working.
 MAP_PRESET_SCALES = dict(DEFAULT_MAP_PRESET_SCALES)
 TARGET_MOTION_PRESETS = set(BEHAVIOR_PRESETS)
-DRONE_MODE_PRESETS = {"follow", "search", "mixed"}
+DRONE_MODE_PRESETS = {"inspect", "search", "mixed"}
 TERRAIN_PRESET_CHOICES = frozenset({"default", *KNOWN_TERRAIN_PRESETS})
 PLATFORM_PRESET_CHOICES = frozenset({"baseline", "wide_area"})
 
@@ -85,13 +90,6 @@ DEFAULT_SIM_DURATION_S = _DEFAULT_CONSTANTS.dynamics.default_duration_s
 DEFAULT_SIM_DT_S = _DEFAULT_CONSTANTS.dynamics.default_dt_s
 DEFAULT_SIM_STEPS = int(math.ceil(DEFAULT_SIM_DURATION_S / DEFAULT_SIM_DT_S)) + 1
 AERIAL_TARGET_MIN_AGL_M = _DEFAULT_CONSTANTS.dynamics.aerial_target_min_agl_m
-INTERCEPTOR_SEARCH_MIN_AGL_M = _DEFAULT_CONSTANTS.dynamics.interceptor_search_min_agl_m
-INTERCEPTOR_FOLLOW_MIN_AGL_M = _DEFAULT_CONSTANTS.dynamics.interceptor_follow_min_agl_m
-INTERCEPTOR_FOLLOW_RADIUS_M = _DEFAULT_CONSTANTS.dynamics.interceptor_follow_radius_m
-INTERCEPTOR_FOLLOW_ALTITUDE_OFFSET_M = _DEFAULT_CONSTANTS.dynamics.interceptor_follow_altitude_offset_m
-INTERCEPTOR_FOLLOW_LEAD_S = _DEFAULT_CONSTANTS.dynamics.interceptor_follow_lead_s
-INTERCEPTOR_FOLLOW_CANDIDATE_COUNT = _DEFAULT_CONSTANTS.dynamics.interceptor_follow_candidate_count
-INTERCEPTOR_FOLLOW_ROTATION_RATE_RAD_S = _DEFAULT_CONSTANTS.dynamics.interceptor_follow_rotation_rate_rad_s
 GROUND_CONTACT_TOP_PAD_M = _DEFAULT_CONSTANTS.dynamics.ground_contact_top_pad_m
 METRICS_CSV_FIELDS = [
     "time_s",
@@ -2427,7 +2425,7 @@ def target_motion_sequence(target_motion_preset: str, count: int) -> List[str]:
 
 def drone_mode_sequence(drone_mode_preset: str, count: int) -> List[str]:
     if drone_mode_preset == "mixed":
-        return ["follow" if index % 2 == 0 else "search" for index in range(count)]
+        return ["inspect" if index % 2 == 0 else "search" for index in range(count)]
     return [drone_mode_preset] * count
 
 
@@ -2444,6 +2442,7 @@ def _apply_weather_adjustments(
     velocity: np.ndarray,
     *,
     timestamp_s: float,
+    dt_s: float = 1.0,
     weather: Optional[WeatherModel],
     terrain: Optional[object],
     map_bounds_m: Optional[Mapping[str, float]],
@@ -2466,8 +2465,10 @@ def _apply_weather_adjustments(
     speed_penalty = weather.flight_speed_penalty(altitude_m)
     adjusted_velocity[:2] = adjusted_velocity[:2] * speed_penalty
 
+    # Apply wind as a velocity-based drift over one timestep (not cumulative with
+    # absolute time — that was a bug causing drift to grow linearly forever).
     wind = weather.wind.wind_at(altitude_m, timestamp_s)
-    adjusted_position[:2] += wind[:2] * max(timestamp_s, 0.0) * 0.08 * wind_scale
+    adjusted_position[:2] += wind[:2] * dt_s * wind_scale
 
     if map_bounds_m is not None:
         adjusted_position[:2] = clamp_to_bounds(adjusted_position[:2], map_bounds_m, margin_m=1.0)
@@ -2485,6 +2486,7 @@ class WeatherAdjustedTrajectory:
     map_bounds_m: Optional[Mapping[str, float]]
     min_agl_m: float
     wind_scale: float = 0.35
+    dt_s: float = 1.0
 
     def __call__(self, timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
         position, velocity = self.trajectory(timestamp_s)
@@ -2492,6 +2494,7 @@ class WeatherAdjustedTrajectory:
             position,
             velocity,
             timestamp_s=timestamp_s,
+            dt_s=self.dt_s,
             weather=self.weather,
             terrain=self.terrain,
             map_bounds_m=self.map_bounds_m,
@@ -3043,14 +3046,14 @@ def build_default_scenario(
     # -----------------------------------------------------------------------
     # Cooperative slot assignment
     # Role is determined by drone_mode:
-    #   "follow"  → interceptor  (directly dispatched to engage a known target)
-    #   "search"  → tracker      (searches first, then orbits wide to localise)
+    #   "inspect" → interceptor  (orbits and inspects a located asset)
+    #   "search"  → tracker      (lawnmower search to map/locate assets)
     # Within each role-group, drones targeting the same asset spread
     # evenly around the standoff circle so sensor baselines are maximised.
     # -----------------------------------------------------------------------
     _n_drones = len(drone_specs)
     _drone_role_list: List[str] = [
-        "interceptor" if drone_modes[i] == "follow" else "tracker"
+        "interceptor" if drone_modes[i] == "inspect" else "tracker"
         for i in range(_n_drones)
     ]
 
@@ -3104,7 +3107,7 @@ def build_default_scenario(
         assigned_station_id = ground_specs[assigned_station_idx]["node_id"]
         station_pos = _station_positions[assigned_station_id]
 
-        if drone_mode == "follow":
+        if drone_mode == "inspect":
             raw_trajectory = follow_path(
                 target_trajectory=target_by_id[target_id].trajectory,
                 environment=environment,
@@ -3745,16 +3748,81 @@ def run_simulation(
     generation_rejected_by_target: Counter[str] = Counter()
     generation_attempted_count = 0
     adaptive_drone_controllers = list(scenario.adaptive_drone_controllers.values())
-    _launch_controllers = dict(scenario.launchable_controllers)
-    # Index: station_id -> list of launchable drone controllers assigned to it
-    _station_to_drones: Dict[str, List[LaunchableTrajectoryController]] = {}
-    for ctrl in _launch_controllers.values():
-        sid = ctrl.assigned_station_id
-        _station_to_drones.setdefault(sid, []).append(ctrl)
+
+    # Auto-launch all drones at t=0 so they begin their operational trajectories
+    # immediately (the old radar-triggered launch system has been removed).
+    for drone_id, ctrl in scenario.launchable_controllers.items():
+        if hasattr(ctrl, "trigger_launch") and not ctrl.launched:
+            target_id = scenario.drone_target_assignments.get(drone_id, "")
+            ctrl.trigger_launch(0.0, target_id)
+
+    # --- Mapping / localization / inspection tracking state ---
+    _coverage_bounds = GridBounds(
+        x_min_m=float(scenario.map_bounds_m["x_min_m"]),
+        x_max_m=float(scenario.map_bounds_m["x_max_m"]),
+        y_min_m=float(scenario.map_bounds_m["y_min_m"]),
+        y_max_m=float(scenario.map_bounds_m["y_max_m"]),
+        resolution_m=50.0,
+    )
+    _coverage_map = CoverageMap(_coverage_bounds)
+    _FOOTPRINT_RADIUS_M = 120.0
+    _zone_coverage_maps: Dict[str, CoverageMap] = {
+        zone.zone_id: CoverageMap(_coverage_bounds)
+        for zone in scenario.mission_zones
+    }
+    _node_zone_membership: Dict[str, set] = {}  # node_id -> set of active zone_ids
+
+    # --- Battery model ---
+    # One BatteryModel and BatteryState per mobile drone.  Energy is consumed
+    # each step based on movement distance; the state starts at full capacity.
+    _battery_model = BatteryModel()
+    _battery_states: Dict[str, BatteryState] = {}
+    _battery_prev_positions: Dict[str, Optional[np.ndarray]] = {}
+    _battery_low_warned: set = set()
+    for node in scenario.nodes:
+        if node.is_mobile:
+            _battery_states[node.node_id] = BatteryState(
+                remaining_wh=_battery_model.capacity_wh,
+                timestamp_s=0.0,
+            )
+            _battery_prev_positions[node.node_id] = None
 
     for step in range(simulation_config.steps):
         timestamp_s = step * simulation_config.dt_s
         node_states = scenario.node_states(timestamp_s)
+
+        # --- Battery consumption per drone per step ---
+        for ns in node_states:
+            if not ns.is_mobile or ns.node_id not in _battery_states:
+                continue
+            prev_pos = _battery_prev_positions[ns.node_id]
+            if prev_pos is not None:
+                cost_wh = _battery_model.segment_cost_wh(prev_pos, ns.position)
+                _battery_states[ns.node_id] = _battery_states[ns.node_id].consume(cost_wh)
+                remaining = _battery_states[ns.node_id].remaining_wh
+                frac = remaining / _battery_model.capacity_wh
+                if frac <= _battery_model.reserve_fraction and ns.node_id not in _battery_low_warned:
+                    _battery_low_warned.add(ns.node_id)
+                    import warnings
+                    warnings.warn(
+                        f"[Battery] {ns.node_id} at {frac*100:.1f}% — at reserve threshold",
+                        stacklevel=1,
+                    )
+            _battery_prev_positions[ns.node_id] = np.array(ns.position, dtype=float)
+
+        # Enrich node_states with current battery fractions (frozen → replace).
+        node_states = [
+            replace(
+                ns,
+                battery_fraction=float(
+                    _battery_states[ns.node_id].remaining_wh / _battery_model.capacity_wh
+                )
+                if ns.node_id in _battery_states
+                else -1.0,
+            )
+            for ns in node_states
+        ]
+
         truths = scenario.truths(timestamp_s)
         observation_batch = build_observations(
             rng=rng,
@@ -3774,34 +3842,6 @@ def run_simulation(
         generation_accepted_by_target.update(observation_batch.accepted_by_target)
         generation_rejected_by_target.update(observation_batch.rejected_by_target)
 
-        # --- Drone launch trigger ---
-        # Ground stations that detect a target within 80% of their max_range
-        # trigger an unlaunched drone assigned to that station.
-        step_launch_events: List[LaunchEvent] = []
-        for node in scenario.nodes:
-            if node.sensor_type != "radar" or node.is_mobile:
-                continue
-            station_state = node.state(timestamp_s)
-            drones_at_station = _station_to_drones.get(node.node_id, [])
-            for truth in truths:
-                range_m = float(np.linalg.norm(truth.position - station_state.position))
-                if range_m < node.max_range_m * scenario.constants.sensor.launch_detection_range_fraction:
-                    for ctrl in drones_at_station:
-                        if not ctrl.launched:
-                            ctrl.trigger_launch(timestamp_s, truth.target_id)
-                            # Find drone_id by reverse lookup
-                            drone_id = next(
-                                (did for did, c in _launch_controllers.items() if c is ctrl),
-                                "unknown",
-                            )
-                            step_launch_events.append(LaunchEvent(
-                                drone_id=drone_id,
-                                station_id=node.node_id,
-                                target_id=truth.target_id,
-                                launch_time_s=timestamp_s,
-                            ))
-                            break  # one launch per detection per step
-
         frame = service.ingest_frame(
             timestamp_s=timestamp_s,
             node_states=node_states,
@@ -3811,6 +3851,78 @@ def run_simulation(
         for controller in adaptive_drone_controllers:
             if hasattr(controller, "update_from_frame"):
                 controller.update_from_frame(frame, observation_batch)
+
+        # --- Mapping coverage ---
+        mobile_states = [ns for ns in node_states if ns.is_mobile]
+        for ns in mobile_states:
+            _coverage_map.mark_circular(
+                center_xy=(float(ns.position[0]), float(ns.position[1])),
+                radius_m=_FOOTPRINT_RADIUS_M,
+            )
+        cov = _coverage_map.stats
+        step_mapping_state = MappingState(
+            coverage_fraction=cov.coverage_fraction,
+            covered_cells=cov.covered_cells,
+            total_cells=cov.total_cells,
+            mean_revisits=cov.mean_revisits,
+        )
+
+        # --- Localization quality (derived from track covariances) ---
+        step_localization_state: Optional[LocalizationState] = None
+        if frame.tracks:
+            pos_stds: List[float] = []
+            confidences: List[float] = []
+            for track in frame.tracks:
+                if track.covariance is not None:
+                    flat = np.asarray(track.covariance).flatten()
+                    if flat.size == 36:
+                        pos_stds.append(float(np.mean(np.sqrt(flat[[0, 7, 14]]))))
+            for obs in observation_batch.observations:
+                confidences.append(obs.confidence)
+            step_localization_state = LocalizationState(
+                active_localizations=len(frame.tracks),
+                mean_position_std_m=float(np.mean(pos_stds)) if pos_stds else 0.0,
+                mean_observation_confidence=float(np.mean(confidences)) if confidences else 0.0,
+            )
+
+        # --- Inspection events (zone entry / coverage_updated / exit) ---
+        step_inspection_events: List[InspectionEvent] = []
+        for zone in scenario.mission_zones:
+            zmap = _zone_coverage_maps[zone.zone_id]
+            zcenter = np.array([zone.center[0], zone.center[1]], dtype=float)
+            for ns in mobile_states:
+                node_xy = np.array([ns.position[0], ns.position[1]], dtype=float)
+                inside = float(np.linalg.norm(node_xy - zcenter)) <= zone.radius_m
+                was_inside = zone.zone_id in _node_zone_membership.get(ns.node_id, set())
+                if inside:
+                    zmap.mark_circular(
+                        center_xy=(float(ns.position[0]), float(ns.position[1])),
+                        radius_m=_FOOTPRINT_RADIUS_M,
+                    )
+                zcov = zmap.stats.coverage_fraction
+                if inside and not was_inside:
+                    # Exclusion-zone entry is a violation, not a normal entry.
+                    event_type = (
+                        "violation"
+                        if zone.zone_type == ZONE_TYPE_EXCLUSION
+                        else "entered"
+                    )
+                    _node_zone_membership.setdefault(ns.node_id, set()).add(zone.zone_id)
+                elif not inside and was_inside:
+                    event_type = "exited"
+                    _node_zone_membership[ns.node_id].discard(zone.zone_id)
+                elif inside:
+                    event_type = "coverage_updated"
+                else:
+                    continue
+                step_inspection_events.append(InspectionEvent(
+                    zone_id=zone.zone_id,
+                    node_id=ns.node_id,
+                    event_type=event_type,
+                    timestamp_s=timestamp_s,
+                    zone_coverage_fraction=zcov,
+                ))
+
         frame = PlatformFrame(
             timestamp_s=frame.timestamp_s,
             # Preserve the scenario-authored sensor metadata in replay frames.
@@ -3821,7 +3933,9 @@ def run_simulation(
             truths=frame.truths,
             metrics=frame.metrics,
             generation_rejections=observation_batch.generation_rejections,
-            launch_events=step_launch_events,
+            mapping_state=step_mapping_state,
+            localization_state=step_localization_state,
+            inspection_events=step_inspection_events,
         )
         frames.append(frame)
         rows, errors = _build_metrics_rows(frame, truths, observation_batch)
@@ -3888,6 +4002,119 @@ def build_replay_document_from_result(result: SimulationResult) -> ReplayDocumen
     )
 
 
+# ---------------------------------------------------------------------------
+# Compact-replay helpers
+# ---------------------------------------------------------------------------
+
+# Indices of diagonal elements for a 6x6 covariance stored as a 36-element
+# flat list: positions (0,0),(1,1),(2,2),(3,3),(4,4),(5,5).
+_COV6_DIAG_INDICES: List[int] = [0, 7, 14, 21, 28, 35]
+# Same for a 3x3 (9-element flat list).
+_COV3_DIAG_INDICES: List[int] = [0, 4, 8]
+
+
+def _compact_frame(frame_dict: Dict[str, object]) -> Dict[str, object]:
+    """Return a copy of *frame_dict* with debug fields omitted and precision reduced.
+
+    Applied when ``--compact`` is active:
+
+    * ``generation_rejections`` key is dropped.
+    * ``rejected_observations`` key is dropped.
+    * Covariance arrays are reduced to their diagonal elements only.
+    * Position values are rounded to 2 decimal places.
+    * Velocity and bearing values are rounded to 4 decimal places.
+    """
+    out: Dict[str, object] = {}
+    for key, value in frame_dict.items():
+        if key in ("generation_rejections", "rejected_observations"):
+            continue
+        if key == "tracks" and isinstance(value, list):
+            compact_tracks = []
+            for track in value:
+                if not isinstance(track, dict):
+                    compact_tracks.append(track)
+                    continue
+                t: Dict[str, object] = {}
+                for tk, tv in track.items():
+                    if tk == "covariance" and isinstance(tv, list):
+                        n = len(tv)
+                        if n == 36:
+                            tv = [tv[i] for i in _COV6_DIAG_INDICES]
+                        elif n == 9:
+                            tv = [tv[i] for i in _COV3_DIAG_INDICES]
+                    if tk == "position" and isinstance(tv, list):
+                        tv = [round(float(v), 2) for v in tv]
+                    elif tk == "velocity" and isinstance(tv, list):
+                        tv = [round(float(v), 4) for v in tv]
+                    t[tk] = tv
+                compact_tracks.append(t)
+            out[key] = compact_tracks
+        elif key == "nodes" and isinstance(value, list):
+            compact_nodes = []
+            for node in value:
+                if not isinstance(node, dict):
+                    compact_nodes.append(node)
+                    continue
+                nd: Dict[str, object] = {}
+                for nk, nv in node.items():
+                    if nk == "position" and isinstance(nv, list):
+                        nv = [round(float(v), 2) for v in nv]
+                    elif nk == "velocity" and isinstance(nv, list):
+                        nv = [round(float(v), 4) for v in nv]
+                    nd[nk] = nv
+                compact_nodes.append(nd)
+            out[key] = compact_nodes
+        elif key == "observations" and isinstance(value, list):
+            compact_obs = []
+            for obs in value:
+                if not isinstance(obs, dict):
+                    compact_obs.append(obs)
+                    continue
+                ob: Dict[str, object] = {}
+                for ok, ov in obs.items():
+                    if ok == "position" and isinstance(ov, list):
+                        ov = [round(float(v), 2) for v in ov]
+                    elif ok in ("bearing_rad", "bearing_std_rad") and isinstance(ov, (int, float)):
+                        ov = round(float(ov), 4)
+                    ob[ok] = ov
+                compact_obs.append(ob)
+            out[key] = compact_obs
+        else:
+            out[key] = value
+    return out
+
+
+def _build_compact_replay_document(
+    result: SimulationResult,
+    replay_subsample: int = 1,
+    compact: bool = False,
+) -> ReplayDocument:
+    """Build a replay document with optional subsampling and compact mode."""
+    all_frames = result.frames
+    total = len(all_frames)
+
+    if replay_subsample > 1 and total > 0:
+        # Always include first and last frame; include every Nth in between.
+        indices = set(range(0, total, replay_subsample))
+        indices.add(total - 1)
+        frames_to_use = [all_frames[i] for i in sorted(indices)]
+    else:
+        frames_to_use = list(all_frames)
+
+    doc = build_replay_document(
+        frames_to_use,
+        scenario_name=result.scenario_name,
+        dt_s=result.simulation_config.dt_s,
+        seed=result.simulation_config.seed,
+        extra_meta=result.replay_metadata,
+    )
+
+    if compact and isinstance(doc.get("frames"), list):
+        doc["frames"] = [_compact_frame(f) for f in doc["frames"]]  # type: ignore[arg-type]
+
+    return doc
+
+
 def simulate(
     steps: Optional[int],
     dt: float,
@@ -3906,6 +4133,8 @@ def simulate(
     target_count: int = 2,
     drone_count: int = 2,
     constants: SimulationConstants = _DEFAULT_CONSTANTS,
+    compact: bool = False,
+    replay_subsample: int = 1,
 ) -> SimulationResult:
     if steps is not None:
         simulation_config = SimulationConfig(steps=steps, dt_s=dt, seed=seed)
@@ -3943,7 +4172,14 @@ def simulate(
         print(f"CSV written to {csv_path}")
 
     if replay_path:
-        replay_document = build_replay_document_from_result(result)
+        if compact or replay_subsample > 1:
+            replay_document = _build_compact_replay_document(
+                result,
+                replay_subsample=replay_subsample,
+                compact=compact,
+            )
+        else:
+            replay_document = build_replay_document_from_result(result)
         write_replay_document(replay_path, replay_document)
         print(f"Replay written to {replay_path}")
 
@@ -4063,6 +4299,8 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     )
     parser.add_argument("--csv", dest="csv_path", default=None, action=_TrackProvidedAction, help="Optional per-track metrics CSV.")
     parser.add_argument("--replay", dest="replay_path", default="replay.json", action=_TrackProvidedAction, help="Replay JSON output.")
+    parser.add_argument("--compact", action="store_true", default=False, help="Write compact replay (omit debug fields, reduce precision).")
+    parser.add_argument("--replay-subsample", type=int, default=1, metavar="N", help="Write every Nth frame to replay (1=all frames).")
     return parser
 
 
@@ -4112,6 +4350,8 @@ def run_from_args(args: argparse.Namespace) -> None:
         target_count=args.target_count,
         drone_count=args.drone_count,
         constants=constants,
+        compact=getattr(args, "compact", False),
+        replay_subsample=getattr(args, "replay_subsample", 1),
     )
 
 

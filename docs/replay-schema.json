@@ -393,33 +393,38 @@
         }
       }
     },
-    "launch_event": {
-      "type": "object",
-      "description": "Record of a drone launch event.",
-      "required": ["drone_id", "station_id", "target_id", "launch_time_s"],
+    "mapping_state": {
+      "type": ["object", "null"],
+      "description": "Cumulative sensor coverage metrics at this simulation step.",
       "additionalProperties": true,
       "properties": {
-        "drone_id": {
-          "type": "string",
-          "description": "Identifier of the launched drone."
-        },
-        "station_id": {
-          "type": "string",
-          "description": "Identifier of the launch station."
-        },
-        "target_id": {
-          "type": "string",
-          "description": "Identifier of the target the drone was launched to intercept."
-        },
-        "launch_time_s": {
-          "type": "number",
-          "description": "Simulation time of the launch in seconds."
-        },
-        "climb_duration_s": {
-          "type": "number",
-          "description": "Duration of the climb phase in seconds.",
-          "minimum": 0
-        }
+        "coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+        "covered_cells": {"type": "integer", "minimum": 0},
+        "total_cells": {"type": "integer", "minimum": 0},
+        "mean_revisits": {"type": "number", "minimum": 0}
+      }
+    },
+    "localization_state": {
+      "type": ["object", "null"],
+      "description": "Aggregated localization quality across active tracks.",
+      "additionalProperties": true,
+      "properties": {
+        "active_localizations": {"type": "integer", "minimum": 0},
+        "mean_position_std_m": {"type": "number", "minimum": 0},
+        "mean_observation_confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "inspection_event": {
+      "type": "object",
+      "description": "Record of a mobile node entering, updating coverage in, or exiting a mission zone.",
+      "required": ["zone_id", "node_id", "event_type", "timestamp_s"],
+      "additionalProperties": true,
+      "properties": {
+        "zone_id": {"type": "string"},
+        "node_id": {"type": "string"},
+        "event_type": {"type": "string", "enum": ["entered", "coverage_updated", "exited"]},
+        "timestamp_s": {"type": "number"},
+        "zone_coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1}
       }
     },
     "platform_metrics": {
@@ -549,11 +554,17 @@
             "$ref": "#/definitions/observation_rejection"
           }
         },
-        "launch_events": {
+        "mapping_state": {
+          "$ref": "#/definitions/mapping_state"
+        },
+        "localization_state": {
+          "$ref": "#/definitions/localization_state"
+        },
+        "inspection_events": {
           "type": "array",
-          "description": "Drone launch events that occurred during this frame.",
+          "description": "Zone-entry, coverage-update, and exit events for mobile nodes this frame.",
           "items": {
-            "$ref": "#/definitions/launch_event"
+            "$ref": "#/definitions/inspection_event"
           }
         }
       }

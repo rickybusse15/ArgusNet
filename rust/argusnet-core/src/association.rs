@@ -1,6 +1,7 @@
 //! Data association helpers for unlabeled multi-target tracking.
 
 use nalgebra::{Matrix3, Vector3};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 use crate::{fuse_bearing_cluster, BearingObservation, ManagedTrack};
@@ -225,26 +226,25 @@ impl JPDAAssociator {
     }
 }
 
-fn sorted_track_ids(tracks: &HashMap<String, ManagedTrack>) -> Vec<String> {
-    let mut track_ids: Vec<String> = tracks.keys().cloned().collect();
+fn sorted_track_ids(tracks: &HashMap<String, ManagedTrack>) -> SmallVec<[String; 8]> {
+    let mut track_ids: SmallVec<[String; 8]> = tracks.keys().cloned().collect();
     track_ids.sort();
     track_ids
 }
 
 fn cluster_estimates(clusters: &[Vec<BearingObservation>]) -> Vec<ClusterEstimate> {
-    clusters
-        .iter()
-        .enumerate()
-        .filter_map(|(cluster_index, cluster)| {
-            fuse_bearing_cluster(cluster).ok().map(|estimate| ClusterEstimate {
-                cluster_index,
-                position: estimate.position,
-                measurement_std_m: estimate.measurement_std_m,
-            })
+    let mut result = Vec::with_capacity(clusters.len());
+    result.extend(clusters.iter().enumerate().filter_map(|(cluster_index, cluster)| {
+        fuse_bearing_cluster(cluster).ok().map(|estimate| ClusterEstimate {
+            cluster_index,
+            position: estimate.position,
+            measurement_std_m: estimate.measurement_std_m,
         })
-        .collect()
+    }));
+    result
 }
 
+#[inline]
 fn mahalanobis_cost(
     track: &ManagedTrack,
     position: &Vector3<f64>,
@@ -274,14 +274,16 @@ pub fn cluster_observations(
         .iter()
         .all(|observation| !observation.target_id.is_empty() && observation.target_id != "unknown");
     if has_labels {
-        let mut groups: HashMap<String, Vec<BearingObservation>> = HashMap::new();
+        let mut groups: HashMap<String, Vec<BearingObservation>> =
+            HashMap::with_capacity(observations.len());
         for observation in observations {
             groups
                 .entry(observation.target_id.clone())
                 .or_default()
                 .push(observation.clone());
         }
-        let mut keys: Vec<String> = groups.keys().cloned().collect();
+        let mut keys: Vec<String> = Vec::with_capacity(groups.len());
+        keys.extend(groups.keys().cloned());
         keys.sort();
         return keys
             .into_iter()
