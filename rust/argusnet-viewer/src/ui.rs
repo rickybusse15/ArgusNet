@@ -6,8 +6,8 @@ use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
 use crate::replay::ReplayState;
 use crate::schema::ScenePackage;
 use crate::state::{
-    CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, RuntimeOverlayVisibility,
-    SelectionState, SimulationRunner, ZoneFocus, ZoneOverlapModel,
+    CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MissionOverlaySettings,
+    RuntimeOverlayVisibility, SelectionState, SimulationRunner, ZoneFocus, ZoneOverlapModel,
 };
 
 const MAP_PRESETS: &[&str] = &[
@@ -48,6 +48,7 @@ pub fn viewer_ui_system(
     mut replay_state: ResMut<ReplayState>,
     mut layer_visibility: ResMut<LayerVisibilityState>,
     mut runtime_visibility: ResMut<RuntimeOverlayVisibility>,
+    mut mission_overlay: ResMut<MissionOverlaySettings>,
     selection: Res<SelectionState>,
     frame_metrics: Res<CurrentFrameMetrics>,
     mission_zones: Res<LoadedMissionZones>,
@@ -68,6 +69,9 @@ pub fn viewer_ui_system(
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
                     section_scene_header(ui, &scene_package, &mission_zones);
+                    ui.separator();
+
+                    section_mission_progress(ui, &replay_state);
                     ui.separator();
 
                     section_scenario(ui, supports_hot_swap, &mut sim_runner);
@@ -99,7 +103,7 @@ pub fn viewer_ui_system(
                     section_layers(ui, &scene_package, &mut layer_visibility);
                     ui.separator();
 
-                    section_runtime_overlays(ui, &mut runtime_visibility);
+                    section_runtime_overlays(ui, &mut runtime_visibility, &mut mission_overlay);
                     ui.separator();
 
                     section_mission_zones(
@@ -239,6 +243,105 @@ fn section_scenario(
 
         if let Some(error) = &sim_runner.error {
             ui.colored_label(egui::Color32::RED, error);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section: Mission Progress
+// ---------------------------------------------------------------------------
+
+fn section_mission_progress(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(ref ms) = frame.scan_mission_state else {
+        return;
+    };
+
+    ui.collapsing("Mission Progress", |ui| {
+        // Phase label with color
+        let (phase_label, phase_color) = match ms.phase.as_str() {
+            "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
+            "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
+            "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
+            "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
+            other => (other, egui::Color32::GRAY),
+        };
+
+        if ms.phase == "complete" {
+            ui.colored_label(phase_color, format!("Phase: \u{2713} {}", phase_label));
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("Phase:");
+                ui.colored_label(phase_color, phase_label);
+            });
+        }
+
+        // Scanning phase: coverage bar
+        if ms.phase == "scanning" {
+            let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
+            let threshold = ms.scan_coverage_threshold.clamp(0.0, 1.0);
+            ui.add(
+                egui::ProgressBar::new(frac)
+                    .text(format!(
+                        "{:.0}% \u{2192} {:.0}%",
+                        frac * 100.0,
+                        threshold * 100.0
+                    ))
+                    .fill(egui::Color32::from_rgb(60, 100, 200)),
+            );
+        }
+
+        // Localizing phase: per-drone estimates
+        if ms.phase == "localizing" {
+            if ms.localization_estimates.is_empty() {
+                ui.label("No localization estimates yet.");
+            } else {
+                for est in &ms.localization_estimates {
+                    ui.label(format!(
+                        "{}: {:.0}% conf \u{00b1}{:.0} m",
+                        est.drone_id,
+                        est.confidence * 100.0,
+                        est.position_std_m
+                    ));
+                }
+            }
+        }
+
+        // Inspecting phase: POI list
+        if ms.phase == "inspecting" {
+            let total = ms.total_poi_count.max(1);
+            let done = ms.completed_poi_count;
+            let poi_frac = done as f32 / total as f32;
+            ui.add(
+                egui::ProgressBar::new(poi_frac)
+                    .text(format!("{} / {} complete", done, total))
+                    .fill(egui::Color32::from_rgb(200, 100, 30)),
+            );
+
+            for poi in &ms.poi_statuses {
+                let (icon, color) = match poi.status.as_str() {
+                    "complete" => ("\u{2713}", egui::Color32::from_rgb(60, 200, 80)),
+                    "active" => ("\u{27f3}", egui::Color32::from_rgb(255, 200, 60)),
+                    _ => ("\u{25cb}", egui::Color32::GRAY),
+                };
+                ui.horizontal(|ui| {
+                    ui.colored_label(color, icon);
+                    let drone_suffix = poi
+                        .assigned_drone_id
+                        .as_deref()
+                        .map(|d| format!("  ({})", d))
+                        .unwrap_or_default();
+                    ui.label(format!("[{}]{}", poi.poi_id, drone_suffix));
+                });
+            }
+        }
+
+        // Always show coverage fraction when available
+        if ms.phase != "scanning" && ms.scan_coverage_fraction > 0.0 {
+            let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
+            kv_row(ui, "Scan coverage", &format!("{:.1}%", frac * 100.0));
         }
     });
 }
@@ -948,6 +1051,7 @@ fn section_layers(
 fn section_runtime_overlays(
     ui: &mut egui::Ui,
     runtime_visibility: &mut RuntimeOverlayVisibility,
+    mission_overlay: &mut MissionOverlaySettings,
 ) {
     ui.collapsing("Runtime Overlays", |ui| {
         ui.checkbox(&mut runtime_visibility.tracks, "Tracks");
@@ -963,6 +1067,11 @@ fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.radar_rings, "Radar Rings");
         ui.checkbox(&mut runtime_visibility.coverage_overlay, "Coverage Overlay");
         ui.checkbox(&mut runtime_visibility.inspection_events, "Inspection Events");
+        ui.separator();
+        ui.label("Mission overlays:");
+        ui.checkbox(&mut mission_overlay.show_scan_grid, "Coverage grid");
+        ui.checkbox(&mut mission_overlay.show_poi_markers, "POI markers");
+        ui.checkbox(&mut mission_overlay.show_loc_ellipses, "Localization ellipses");
     });
 }
 

@@ -28,12 +28,17 @@ from argusnet.world.environment import (
 from argusnet.core.types import (
     BearingObservation,
     InspectionEvent,
+    LocalizationEstimate,
     LocalizationState,
+    MapFeature,
     MappingState,
     MissionZone,
     NodeState,
     ObservationRejection,
     PlatformFrame,
+    POIStatus,
+    InspectionPOI,
+    ScanMissionState,
     TruthState,
     ZONE_TYPE_EXCLUSION,
     ZONE_TYPE_OBJECTIVE,
@@ -41,6 +46,9 @@ from argusnet.core.types import (
     ZONE_TYPE_SURVEILLANCE,
     vec3,
 )
+from argusnet.mapping.world_map import WorldMap
+from argusnet.localization.engine import GridLocalizer, LocalizationConfig
+from argusnet.planning.poi import POIManager
 from argusnet.mapping.coverage import CoverageMap
 from argusnet.mapping.occupancy import GridBounds
 from argusnet.core.config import (
@@ -176,8 +184,11 @@ class ScenarioOptions:
     clean_terrain: bool = False
     platform_preset: str = "baseline"
     ground_station_count: int = 7
-    target_count: int = 2
+    target_count: int = 0
     drone_count: int = 2
+    mission_mode: str = "scan_map_inspect"          # "scan_map_inspect" | "target_tracking"
+    scan_coverage_threshold: float = 0.70            # fraction to trigger LOCALIZING phase
+    poi_count: int = 3                                # auto-generated POIs in scan_map_inspect mode
 
     def __post_init__(self) -> None:
         if self.map_preset not in MAP_PRESET_SCALES:
@@ -194,10 +205,12 @@ class ScenarioOptions:
             raise ValueError(f"platform_preset must be one of {sorted(PLATFORM_PRESET_CHOICES)}.")
         if self.ground_station_count <= 0:
             raise ValueError("ground_station_count must be greater than 0.")
-        if self.target_count <= 0:
-            raise ValueError("target_count must be greater than 0.")
+        if self.target_count < 0:
+            raise ValueError("target_count must be non-negative.")
         if self.drone_count <= 0:
             raise ValueError("drone_count must be greater than 0.")
+        if self.mission_mode not in {"scan_map_inspect", "target_tracking"}:
+            raise ValueError("mission_mode must be 'scan_map_inspect' or 'target_tracking'.")
 
 
 @dataclass(frozen=True)
@@ -242,8 +255,7 @@ class ScenarioDefinition:
             raise ValueError("scenario_name must be non-empty.")
         if not self.nodes:
             raise ValueError("ScenarioDefinition requires at least one node.")
-        if not self.targets:
-            raise ValueError("ScenarioDefinition requires at least one target.")
+        # targets may be empty in scan_map_inspect mode (no live targets to track)
         if self.map_bounds_m:
             required_keys = ("x_min_m", "x_max_m", "y_min_m", "y_max_m")
             for key in required_keys:
@@ -2274,13 +2286,18 @@ def build_patrol_waypoints(
     return np.vstack([clamp_to_bounds(point, bounds, margin_m=margin_m) for point in waypoints])
 
 
-def build_lawnmower_waypoints(bounds: Mapping[str, float], lane_spacing_m: float) -> np.ndarray:
+def build_lawnmower_waypoints(
+    bounds: Mapping[str, float],
+    lane_spacing_m: float,
+    inset_fraction: float = 0.2,
+) -> np.ndarray:
     span_x_m = bounds["x_max_m"] - bounds["x_min_m"]
     span_y_m = bounds["y_max_m"] - bounds["y_min_m"]
-    x_min_m = bounds["x_min_m"] + span_x_m * 0.2
-    x_max_m = bounds["x_max_m"] - span_x_m * 0.2
-    y_min_m = bounds["y_min_m"] + span_y_m * 0.2
-    y_max_m = bounds["y_max_m"] - span_y_m * 0.2
+    inset = float(inset_fraction)
+    x_min_m = bounds["x_min_m"] + span_x_m * inset
+    x_max_m = bounds["x_max_m"] - span_x_m * inset
+    y_min_m = bounds["y_min_m"] + span_y_m * inset
+    y_max_m = bounds["y_max_m"] - span_y_m * inset
     if x_max_m <= x_min_m or y_max_m <= y_min_m:
         center_x_m = (bounds["x_min_m"] + bounds["x_max_m"]) * 0.5
         center_y_m = (bounds["y_min_m"] + bounds["y_max_m"]) * 0.5
@@ -2324,8 +2341,9 @@ def search_path(
     environment: Optional[EnvironmentModel] = None,
     planner: Optional[PathPlanner2D] = None,
     min_agl_m: float = 18.0,
+    inset_fraction: float = 0.2,
 ) -> TrajectoryFn:
-    waypoints = build_lawnmower_waypoints(sector_bounds, lane_spacing_m=lane_spacing_m)
+    waypoints = build_lawnmower_waypoints(sector_bounds, lane_spacing_m=lane_spacing_m, inset_fraction=inset_fraction)
     if planner is not None:
         route = planner.route_waypoints(
             waypoints,
@@ -3043,96 +3061,215 @@ def build_default_scenario(
     adaptive_drone_controllers: Dict[str, ObservationTriggeredFollowController] = {}
     launchable_controllers: Dict[str, LaunchableTrajectoryController] = {}
 
-    # -----------------------------------------------------------------------
-    # Cooperative slot assignment
-    # Role is determined by drone_mode:
-    #   "inspect" → interceptor  (orbits and inspects a located asset)
-    #   "search"  → tracker      (lawnmower search to map/locate assets)
-    # Within each role-group, drones targeting the same asset spread
-    # evenly around the standoff circle so sensor baselines are maximised.
-    # -----------------------------------------------------------------------
-    _n_drones = len(drone_specs)
-    _drone_role_list: List[str] = [
-        "interceptor" if drone_modes[i] == "inspect" else "tracker"
-        for i in range(_n_drones)
-    ]
+    if active_options.mission_mode == "target_tracking":
+        # -----------------------------------------------------------------------
+        # Cooperative slot assignment (target_tracking mode)
+        # Role is determined by drone_mode:
+        #   "inspect" → interceptor  (orbits and inspects a located asset)
+        #   "search"  → tracker      (lawnmower search to map/locate assets)
+        # Within each role-group, drones targeting the same asset spread
+        # evenly around the standoff circle so sensor baselines are maximised.
+        # -----------------------------------------------------------------------
+        _n_drones = len(drone_specs)
+        _drone_role_list: List[str] = [
+            "interceptor" if drone_modes[i] == "inspect" else "tracker"
+            for i in range(_n_drones)
+        ]
 
-    # First pass: count how many drones of each role target each asset
-    _tracker_total: Dict[str, int] = {}
-    _interceptor_total: Dict[str, int] = {}
-    for index in range(_n_drones):
-        _tid = target_ids[index % len(target_ids)]
-        if _drone_role_list[index] == "tracker":
-            _tracker_total[_tid] = _tracker_total.get(_tid, 0) + 1
-        else:
-            _interceptor_total[_tid] = _interceptor_total.get(_tid, 0) + 1
+        # First pass: count how many drones of each role target each asset
+        _tracker_total: Dict[str, int] = {}
+        _interceptor_total: Dict[str, int] = {}
+        if target_ids:
+            for index in range(_n_drones):
+                _tid = target_ids[index % len(target_ids)]
+                if _drone_role_list[index] == "tracker":
+                    _tracker_total[_tid] = _tracker_total.get(_tid, 0) + 1
+                else:
+                    _interceptor_total[_tid] = _interceptor_total.get(_tid, 0) + 1
 
-    # Running slot counters (incremented as we assign)
-    _tracker_slots: Dict[str, int] = {}
-    _interceptor_slots: Dict[str, int] = {}
+        # Running slot counters (incremented as we assign)
+        _tracker_slots: Dict[str, int] = {}
+        _interceptor_slots: Dict[str, int] = {}
 
-    for index, spec in enumerate(drone_specs):
-        node_id = spec["node_id"]
-        drone_mode = drone_modes[index]
-        target_id = target_ids[index % len(target_ids)]
-        role = _drone_role_list[index]
-        drone_assignments[node_id] = drone_mode
-        drone_target_assignments[node_id] = target_id
-        drone_roles_map[node_id] = role
+        for index, spec in enumerate(drone_specs):
+            node_id = spec["node_id"]
+            drone_mode = drone_modes[index]
+            target_id = target_ids[index % len(target_ids)] if target_ids else ""
+            role = _drone_role_list[index]
+            drone_assignments[node_id] = drone_mode
+            drone_target_assignments[node_id] = target_id
+            drone_roles_map[node_id] = role
 
-        # Assign cooperative slot for this drone's role on this target
-        if role == "tracker":
-            slot_index = _tracker_slots.get(target_id, 0)
-            _tracker_slots[target_id] = slot_index + 1
-            slot_count = _tracker_total.get(target_id, 1)
-            standoff_r = dynamics_cfg.tracker_standoff_radius_m
-            alt_offset = dynamics_cfg.tracker_altitude_offset_m
-            min_agl = dynamics_cfg.tracker_follow_min_agl_m
-            rot_rate = dynamics_cfg.tracker_rotation_rate_rad_s
-            lead_s = dynamics_cfg.tracker_lead_s
-            cand_count = dynamics_cfg.tracker_candidate_count
-        else:  # interceptor
-            slot_index = _interceptor_slots.get(target_id, 0)
-            _interceptor_slots[target_id] = slot_index + 1
-            slot_count = _interceptor_total.get(target_id, 1)
-            standoff_r = dynamics_cfg.interceptor_follow_radius_m
-            alt_offset = dynamics_cfg.interceptor_follow_altitude_offset_m
-            min_agl = dynamics_cfg.interceptor_follow_min_agl_m
-            rot_rate = dynamics_cfg.interceptor_follow_rotation_rate_rad_s
-            lead_s = dynamics_cfg.interceptor_follow_lead_s
-            cand_count = dynamics_cfg.interceptor_follow_candidate_count
+            # Assign cooperative slot for this drone's role on this target
+            if role == "tracker":
+                slot_index = _tracker_slots.get(target_id, 0)
+                _tracker_slots[target_id] = slot_index + 1
+                slot_count = _tracker_total.get(target_id, 1)
+                standoff_r = dynamics_cfg.tracker_standoff_radius_m
+                alt_offset = dynamics_cfg.tracker_altitude_offset_m
+                min_agl = dynamics_cfg.tracker_follow_min_agl_m
+                rot_rate = dynamics_cfg.tracker_rotation_rate_rad_s
+                lead_s = dynamics_cfg.tracker_lead_s
+                cand_count = dynamics_cfg.tracker_candidate_count
+            else:  # interceptor
+                slot_index = _interceptor_slots.get(target_id, 0)
+                _interceptor_slots[target_id] = slot_index + 1
+                slot_count = _interceptor_total.get(target_id, 1)
+                standoff_r = dynamics_cfg.interceptor_follow_radius_m
+                alt_offset = dynamics_cfg.interceptor_follow_altitude_offset_m
+                min_agl = dynamics_cfg.interceptor_follow_min_agl_m
+                rot_rate = dynamics_cfg.interceptor_follow_rotation_rate_rad_s
+                lead_s = dynamics_cfg.interceptor_follow_lead_s
+                cand_count = dynamics_cfg.interceptor_follow_candidate_count
 
-        # Assign this drone to a ground station (round-robin)
-        assigned_station_idx = index % len(ground_specs)
-        assigned_station_id = ground_specs[assigned_station_idx]["node_id"]
-        station_pos = _station_positions[assigned_station_id]
+            # Assign this drone to a ground station (round-robin)
+            assigned_station_idx = index % len(ground_specs)
+            assigned_station_id = ground_specs[assigned_station_idx]["node_id"]
+            station_pos = _station_positions[assigned_station_id]
 
-        if drone_mode == "inspect":
-            raw_trajectory = follow_path(
-                target_trajectory=target_by_id[target_id].trajectory,
-                environment=environment,
+            if drone_mode == "inspect":
+                raw_trajectory = follow_path(
+                    target_trajectory=target_by_id[target_id].trajectory,
+                    environment=environment,
+                    map_bounds_m=map_bounds_m,
+                    base_agl_m=spec["base_agl_m"],
+                    vertical_amplitude_m=spec["vertical_amplitude_m"],
+                    vertical_frequency_rad_s=spec["vertical_frequency_rad_s"],
+                    standoff_radius_m=standoff_r,
+                    map_scale=scale,
+                    max_speed_mps=platform_profile.follow_speed_cap_mps,
+                    phase=float(rng.uniform(0.0, math.tau)),
+                    lead_s=lead_s,
+                    candidate_count=cand_count,
+                    rotation_rate_rad_s=rot_rate,
+                    planner=None,
+                    min_agl_m=min_agl,
+                    target_altitude_offset_m=alt_offset,
+                    max_accel_mps2=dynamics_cfg.drone_max_accel_mps2,
+                    drone_role=role,
+                    slot_index=slot_index,
+                    slot_count=slot_count,
+                )
+            else:
+                search_trajectory = search_path(
+                    sector_bounds=search_sector_by_index[index],
+                    terrain=terrain_layer,
+                    base_agl_m=spec["base_agl_m"],
+                    vertical_amplitude_m=spec["vertical_amplitude_m"],
+                    vertical_frequency_rad_s=spec["vertical_frequency_rad_s"],
+                    lane_spacing_m=dynamics_cfg.drone_search_lane_spacing_scale * scale,
+                    speed_mps=spec["search_speed_mps"],
+                    phase=float(rng.uniform(0.0, math.tau)),
+                    environment=environment,
+                    planner=planner,
+                    min_agl_m=dynamics_cfg.interceptor_search_min_agl_m,
+                )
+                follow_trajectory = follow_path(
+                    target_trajectory=target_by_id[target_id].trajectory,
+                    environment=environment,
+                    map_bounds_m=map_bounds_m,
+                    base_agl_m=spec["base_agl_m"],
+                    vertical_amplitude_m=spec["vertical_amplitude_m"],
+                    vertical_frequency_rad_s=spec["vertical_frequency_rad_s"],
+                    standoff_radius_m=standoff_r,
+                    map_scale=scale,
+                    max_speed_mps=platform_profile.follow_speed_cap_mps,
+                    phase=float(rng.uniform(0.0, math.tau)),
+                    lead_s=lead_s,
+                    candidate_count=cand_count,
+                    rotation_rate_rad_s=rot_rate,
+                    planner=None,
+                    min_agl_m=min_agl,
+                    target_altitude_offset_m=alt_offset,
+                    max_accel_mps2=dynamics_cfg.drone_max_accel_mps2,
+                    drone_role=role,
+                    slot_index=slot_index,
+                    slot_count=slot_count,
+                )
+                obs_controller = ObservationTriggeredFollowController(
+                    node_id=node_id,
+                    search_trajectory=search_trajectory,
+                    follow_trajectory=follow_trajectory,
+                    preferred_target_id=target_id,
+                )
+                adaptive_drone_controllers[node_id] = obs_controller
+                raw_trajectory = obs_controller
+
+            # Wrap in launch controller — drones start grounded at their station
+            launch_ctrl = LaunchableTrajectoryController(
+                station_position=station_pos.copy(),
+                operational_trajectory=raw_trajectory,
+                climb_duration_s=dynamics_cfg.launch_climb_duration_s,
+                operational_altitude_agl=spec["base_agl_m"],
+                weather=active_weather,
+                terrain=terrain_layer,
                 map_bounds_m=map_bounds_m,
-                base_agl_m=spec["base_agl_m"],
-                vertical_amplitude_m=spec["vertical_amplitude_m"],
-                vertical_frequency_rad_s=spec["vertical_frequency_rad_s"],
-                standoff_radius_m=standoff_r,
-                map_scale=scale,
-                max_speed_mps=platform_profile.follow_speed_cap_mps,
-                phase=float(rng.uniform(0.0, math.tau)),
-                lead_s=lead_s,
-                candidate_count=cand_count,
-                rotation_rate_rad_s=rot_rate,
-                planner=None,
-                min_agl_m=min_agl,
-                target_altitude_offset_m=alt_offset,
-                max_accel_mps2=dynamics_cfg.drone_max_accel_mps2,
-                drone_role=role,
-                slot_index=slot_index,
-                slot_count=slot_count,
+                min_operational_agl_m=min(
+                    dynamics_cfg.interceptor_search_min_agl_m,
+                    dynamics_cfg.interceptor_follow_min_agl_m,
+                ),
+                assigned_station_id=assigned_station_id,
             )
-        else:
-            search_trajectory = search_path(
-                sector_bounds=search_sector_by_index[index],
+            launchable_controllers[node_id] = launch_ctrl
+
+            nodes.append(
+                SimNode(
+                    node_id=node_id,
+                    is_mobile=True,
+                    bearing_std_rad=spec["bearing_std_rad"],
+                    dropout_probability=spec["dropout_probability"],
+                    max_range_m=spec["max_range_m"],
+                    trajectory=launch_ctrl,
+                    sensor_type=sensor_cfg.drone_sensor_type,
+                    fov_half_angle_deg=sensor_cfg.drone_fov_half_angle_deg,
+                )
+            )
+
+    else:
+        # -----------------------------------------------------------------------
+        # scan_map_inspect mode: all drones fly lawnmower, no target following
+        # Split map into one sector per drone so coverage is maximised.
+        # Sectors are assigned so that each drone's station falls within its
+        # sector — we pre-compute station positions, sort drones by station x,
+        # then assign sectors left-to-right.
+        # -----------------------------------------------------------------------
+        all_sectors = split_bounds_along_x(map_bounds_m, len(drone_specs))
+
+        # Pre-compute (drone_index, station_x) so we can sort by station x.
+        _drone_station_x: List[Tuple[int, float]] = []
+        for _di, _spec in enumerate(drone_specs):
+            _si = _di % len(ground_specs)
+            _sid = ground_specs[_si]["node_id"]
+            _sx = float(_station_positions[_sid][0])
+            _drone_station_x.append((_di, _sx))
+        # Sort by x so sector 0 (westmost) goes to the westernmost drone, etc.
+        _drone_station_x.sort(key=lambda t: t[1])
+        # Map drone_index -> sector_index
+        _drone_to_sector: Dict[int, int] = {
+            drone_idx: sector_idx
+            for sector_idx, (drone_idx, _) in enumerate(_drone_station_x)
+        }
+
+        for index, spec in enumerate(drone_specs):
+            node_id = spec["node_id"]
+            drone_assignments[node_id] = "search"
+            drone_target_assignments[node_id] = ""
+            drone_roles_map[node_id] = "tracker"
+
+            assigned_station_idx = index % len(ground_specs)
+            assigned_station_id = ground_specs[assigned_station_idx]["node_id"]
+            station_pos = _station_positions[assigned_station_id]
+
+            # Use the sector that matches this drone's station position.
+            sector_index = _drone_to_sector[index]
+
+            # Scan mode: full-sector lawnmower, no target following.
+            # Use inset_fraction=0.0 so the full sector is covered (rather than
+            # the default 20% edge inset used in target-tracking search patterns).
+            # planner=None: skip route_waypoints which collapses the 20-point
+            # lawnmower into a 2-point path and can cross sector boundaries.
+            raw_trajectory = search_path(
+                sector_bounds=all_sectors[sector_index],
                 terrain=terrain_layer,
                 base_agl_m=spec["base_agl_m"],
                 vertical_amplitude_m=spec["vertical_amplitude_m"],
@@ -3141,69 +3278,40 @@ def build_default_scenario(
                 speed_mps=spec["search_speed_mps"],
                 phase=float(rng.uniform(0.0, math.tau)),
                 environment=environment,
-                planner=planner,
-                min_agl_m=dynamics_cfg.interceptor_search_min_agl_m,
-            )
-            follow_trajectory = follow_path(
-                target_trajectory=target_by_id[target_id].trajectory,
-                environment=environment,
-                map_bounds_m=map_bounds_m,
-                base_agl_m=spec["base_agl_m"],
-                vertical_amplitude_m=spec["vertical_amplitude_m"],
-                vertical_frequency_rad_s=spec["vertical_frequency_rad_s"],
-                standoff_radius_m=standoff_r,
-                map_scale=scale,
-                max_speed_mps=platform_profile.follow_speed_cap_mps,
-                phase=float(rng.uniform(0.0, math.tau)),
-                lead_s=lead_s,
-                candidate_count=cand_count,
-                rotation_rate_rad_s=rot_rate,
                 planner=None,
-                min_agl_m=min_agl,
-                target_altitude_offset_m=alt_offset,
-                max_accel_mps2=dynamics_cfg.drone_max_accel_mps2,
-                drone_role=role,
-                slot_index=slot_index,
-                slot_count=slot_count,
+                min_agl_m=dynamics_cfg.interceptor_search_min_agl_m,
+                inset_fraction=0.0,
             )
-            obs_controller = ObservationTriggeredFollowController(
-                node_id=node_id,
-                search_trajectory=search_trajectory,
-                follow_trajectory=follow_trajectory,
-                preferred_target_id=target_id,
-            )
-            adaptive_drone_controllers[node_id] = obs_controller
-            raw_trajectory = obs_controller
 
-        # Wrap in launch controller — drones start grounded at their station
-        launch_ctrl = LaunchableTrajectoryController(
-            station_position=station_pos.copy(),
-            operational_trajectory=raw_trajectory,
-            climb_duration_s=dynamics_cfg.launch_climb_duration_s,
-            operational_altitude_agl=spec["base_agl_m"],
-            weather=active_weather,
-            terrain=terrain_layer,
-            map_bounds_m=map_bounds_m,
-            min_operational_agl_m=min(
-                dynamics_cfg.interceptor_search_min_agl_m,
-                dynamics_cfg.interceptor_follow_min_agl_m,
-            ),
-            assigned_station_id=assigned_station_id,
-        )
-        launchable_controllers[node_id] = launch_ctrl
-
-        nodes.append(
-            SimNode(
-                node_id=node_id,
-                is_mobile=True,
-                bearing_std_rad=spec["bearing_std_rad"],
-                dropout_probability=spec["dropout_probability"],
-                max_range_m=spec["max_range_m"],
-                trajectory=launch_ctrl,
-                sensor_type=sensor_cfg.drone_sensor_type,
-                fov_half_angle_deg=sensor_cfg.drone_fov_half_angle_deg,
+            # Wrap in launch controller — drones start grounded at their station
+            launch_ctrl = LaunchableTrajectoryController(
+                station_position=station_pos.copy(),
+                operational_trajectory=raw_trajectory,
+                climb_duration_s=dynamics_cfg.launch_climb_duration_s,
+                operational_altitude_agl=spec["base_agl_m"],
+                weather=active_weather,
+                terrain=terrain_layer,
+                map_bounds_m=map_bounds_m,
+                min_operational_agl_m=min(
+                    dynamics_cfg.interceptor_search_min_agl_m,
+                    dynamics_cfg.interceptor_follow_min_agl_m,
+                ),
+                assigned_station_id=assigned_station_id,
             )
-        )
+            launchable_controllers[node_id] = launch_ctrl
+
+            nodes.append(
+                SimNode(
+                    node_id=node_id,
+                    is_mobile=True,
+                    bearing_std_rad=spec["bearing_std_rad"],
+                    dropout_probability=spec["dropout_probability"],
+                    max_range_m=spec["max_range_m"],
+                    trajectory=launch_ctrl,
+                    sensor_type=sensor_cfg.drone_sensor_type,
+                    fov_half_angle_deg=sensor_cfg.drone_fov_half_angle_deg,
+                )
+            )
 
     mission_zones = generate_mission_zones(
         map_bounds_m,
@@ -3729,6 +3837,25 @@ def _build_replay_metadata(
     }
 
 
+def _generate_poi_positions(
+    map_bounds_m: Mapping[str, float],
+    count: int,
+    seed: int = 0,
+) -> List[np.ndarray]:
+    """Generate POI positions spread across the map (grid-like, slightly randomised)."""
+    rng = np.random.default_rng(seed + 999)
+    x_min, x_max = float(map_bounds_m["x_min_m"]), float(map_bounds_m["x_max_m"])
+    y_min, y_max = float(map_bounds_m["y_min_m"]), float(map_bounds_m["y_max_m"])
+    margin = (x_max - x_min) * 0.15
+    positions = []
+    for i in range(count):
+        x = rng.uniform(x_min + margin, x_max - margin)
+        y = rng.uniform(y_min + margin, y_max - margin)
+        z = 80.0  # inspection altitude AGL
+        positions.append(np.array([x, y, z], dtype=float))
+    return positions
+
+
 def run_simulation(
     scenario: ScenarioDefinition,
     simulation_config: SimulationConfig,
@@ -3765,7 +3892,12 @@ def run_simulation(
         resolution_m=50.0,
     )
     _coverage_map = CoverageMap(_coverage_bounds)
-    _FOOTPRINT_RADIUS_M = 120.0
+    # Auto-scale footprint so each drone covers ~5 % of the map per pass,
+    # giving meaningful coverage dynamics regardless of map preset.
+    _n_mobile = sum(1 for _n in scenario.nodes if _n.is_mobile) or 1
+    _target_cells = max(5, int(0.05 * _coverage_bounds.nx * _coverage_bounds.ny / _n_mobile))
+    _r_cells = max(1, int(math.ceil(math.sqrt(_target_cells / math.pi))))
+    _FOOTPRINT_RADIUS_M = max(50.0, float(_r_cells) * _coverage_bounds.resolution_m)
     _zone_coverage_maps: Dict[str, CoverageMap] = {
         zone.zone_id: CoverageMap(_coverage_bounds)
         for zone in scenario.mission_zones
@@ -3775,7 +3907,13 @@ def run_simulation(
     # --- Battery model ---
     # One BatteryModel and BatteryState per mobile drone.  Energy is consumed
     # each step based on movement distance; the state starts at full capacity.
-    _battery_model = BatteryModel()
+    # cruise_speed_m_per_s is set to match the actual drone search speed so
+    # energy cost is proportional to real flight time, not assumed slow speed.
+    _battery_model = BatteryModel(
+        capacity_wh=500.0,
+        cruise_speed_m_per_s=28.0,
+        climb_speed_m_per_s=5.0,
+    )
     _battery_states: Dict[str, BatteryState] = {}
     _battery_prev_positions: Dict[str, Optional[np.ndarray]] = {}
     _battery_low_warned: set = set()
@@ -3786,6 +3924,54 @@ def run_simulation(
                 timestamp_s=0.0,
             )
             _battery_prev_positions[node.node_id] = None
+
+    # -----------------------------------------------------------------------
+    # Scan / Map / Localize / Inspect mission state machine
+    # -----------------------------------------------------------------------
+    _mission_mode = getattr(scenario.options, "mission_mode", "scan_map_inspect")
+    _scan_threshold = getattr(scenario.options, "scan_coverage_threshold", 0.70)
+    _poi_count_cfg = getattr(scenario.options, "poi_count", 3)
+    _scan_phase = "scanning"
+    _phase_started_at_s = 0.0
+
+    # WorldMap wraps the existing coverage map and adds terrain height tracking.
+    _world_map = WorldMap(_coverage_bounds)
+
+    # GridLocalizer estimates drone self-pose against the built coverage map.
+    _grid_localizer = GridLocalizer()
+    _loc_estimates: List[LocalizationEstimate] = []
+    _loc_confidence_threshold = 0.65
+
+    # Auto-generate POIs spread across the map interior.
+    def _make_poi_positions(bounds: Dict, count: int, seed: int) -> List[np.ndarray]:
+        rng2 = np.random.default_rng(seed + 999)
+        x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
+        y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
+        margin_x = (x_max - x_min) * 0.15
+        margin_y = (y_max - y_min) * 0.15
+        return [
+            np.array([
+                float(rng2.uniform(x_min + margin_x, x_max - margin_x)),
+                float(rng2.uniform(y_min + margin_y, y_max - margin_y)),
+                80.0,
+            ], dtype=float)
+            for _ in range(count)
+        ]
+
+    _poi_positions = _make_poi_positions(
+        dict(scenario.map_bounds_m), _poi_count_cfg, simulation_config.seed
+    )
+    _pois = [
+        InspectionPOI(
+            poi_id=f"poi-{i:02d}",
+            name=f"Site {chr(65 + i % 26)}",
+            position=pos,
+            priority=_poi_count_cfg - i,
+            required_dwell_s=15.0,
+        )
+        for i, pos in enumerate(_poi_positions)
+    ]
+    _poi_manager = POIManager(_pois)
 
     for step in range(simulation_config.steps):
         timestamp_s = step * simulation_config.dt_s
@@ -3867,6 +4053,75 @@ def run_simulation(
             mean_revisits=cov.mean_revisits,
         )
 
+        # --- WorldMap scan accumulation + phase state machine ---
+        if _mission_mode == "scan_map_inspect":
+            for ns in mobile_states:
+                terrain_h = 0.0
+                if scenario.terrain is not None:
+                    try:
+                        terrain_h = float(scenario.terrain.height_at(
+                            float(ns.position[0]), float(ns.position[1])
+                        ))
+                    except Exception:
+                        pass
+                _world_map.add_scan_observation(
+                    drone_position=np.array(ns.position, dtype=float),
+                    terrain_height=terrain_h,
+                    footprint_radius_m=_FOOTPRINT_RADIUS_M,
+                )
+
+            scan_frac = _world_map.coverage_fraction
+
+            if _scan_phase == "scanning" and scan_frac >= _scan_threshold:
+                _scan_phase = "localizing"
+                _phase_started_at_s = timestamp_s
+
+            elif _scan_phase == "localizing":
+                _loc_estimates = []
+                for ns in mobile_states:
+                    spd = float(np.linalg.norm(ns.velocity[:2]))
+                    heading = float(np.arctan2(float(ns.velocity[1]), float(ns.velocity[0]))) if spd > 0.1 else 0.0
+                    est = _grid_localizer.update(
+                        drone_id=ns.node_id,
+                        nominal_position=np.array(ns.position, dtype=float),
+                        heading_rad=heading,
+                        coverage_map=_world_map.coverage_map,
+                        footprint_radius_m=_FOOTPRINT_RADIUS_M,
+                        timestamp_s=timestamp_s,
+                    )
+                    _loc_estimates.append(est)
+                if mobile_states and all(
+                    e.confidence >= _loc_confidence_threshold for e in _loc_estimates
+                ):
+                    _scan_phase = "inspecting"
+                    _phase_started_at_s = timestamp_s
+
+            elif _scan_phase == "inspecting":
+                for ns in mobile_states:
+                    batt = _battery_states.get(ns.node_id)
+                    batt_frac = (batt.remaining_wh / _battery_model.capacity_wh if batt else 1.0)
+                    _poi_manager.assign_nearest(ns.node_id, np.array(ns.position, dtype=float), batt_frac)
+                    _poi_manager.accumulate_dwell(ns.node_id, np.array(ns.position, dtype=float), simulation_config.dt_s)
+                _poi_manager.check_completions(timestamp_s)
+                if _poi_manager.all_complete:
+                    _scan_phase = "complete"
+                    _phase_started_at_s = timestamp_s
+        else:
+            scan_frac = cov.coverage_fraction
+
+        step_scan_mission_state: Optional[ScanMissionState] = None
+        if _mission_mode == "scan_map_inspect":
+            step_scan_mission_state = ScanMissionState(
+                phase=_scan_phase,
+                scan_coverage_fraction=scan_frac,
+                scan_coverage_threshold=_scan_threshold,
+                localization_estimates=list(_loc_estimates),
+                poi_statuses=_poi_manager.statuses,
+                completed_poi_count=_poi_manager.completed_count,
+                total_poi_count=_poi_manager.total_count,
+                phase_started_at_s=_phase_started_at_s,
+            )
+
         # --- Localization quality (derived from track covariances) ---
         step_localization_state: Optional[LocalizationState] = None
         if frame.tracks:
@@ -3936,6 +4191,7 @@ def run_simulation(
             mapping_state=step_mapping_state,
             localization_state=step_localization_state,
             inspection_events=step_inspection_events,
+            scan_mission_state=step_scan_mission_state,
         )
         frames.append(frame)
         rows, errors = _build_metrics_rows(frame, truths, observation_batch)
@@ -4130,11 +4386,14 @@ def simulate(
     clean_terrain: bool = False,
     platform_preset: str = "baseline",
     ground_stations: int = 7,
-    target_count: int = 2,
+    target_count: int = 0,
     drone_count: int = 2,
     constants: SimulationConstants = _DEFAULT_CONSTANTS,
     compact: bool = False,
     replay_subsample: int = 1,
+    mission_mode: str = "scan_map_inspect",
+    scan_coverage_threshold: float = 0.70,
+    poi_count: int = 3,
 ) -> SimulationResult:
     if steps is not None:
         simulation_config = SimulationConfig(steps=steps, dt_s=dt, seed=seed)
@@ -4154,6 +4413,9 @@ def simulate(
             ground_station_count=ground_stations,
             target_count=target_count,
             drone_count=drone_count,
+            mission_mode=mission_mode,
+            scan_coverage_threshold=scan_coverage_threshold,
+            poi_count=poi_count,
         ),
         seed=seed,
         constants=constants,
@@ -4281,7 +4543,7 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Named kinematics and range preset for targets and sensors.",
     )
     parser.add_argument("--ground-stations", type=int, default=7, action=_TrackProvidedAction, help="Number of fixed ground stations to place.")
-    parser.add_argument("--target-count", type=int, default=2, action=_TrackProvidedAction, help="Number of targets to simulate.")
+    parser.add_argument("--target-count", type=int, default=0, action=_TrackProvidedAction, dest="target_count", help="Number of targets to simulate (default 0 in scan_map_inspect mode).")
     parser.add_argument("--drone-count", type=int, default=2, action=_TrackProvidedAction, help="Number of mobile drones to simulate.")
     parser.add_argument(
         "--target-motion",
@@ -4301,6 +4563,14 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument("--replay", dest="replay_path", default="replay.json", action=_TrackProvidedAction, help="Replay JSON output.")
     parser.add_argument("--compact", action="store_true", default=False, help="Write compact replay (omit debug fields, reduce precision).")
     parser.add_argument("--replay-subsample", type=int, default=1, metavar="N", help="Write every Nth frame to replay (1=all frames).")
+    parser.add_argument("--mission-mode", dest="mission_mode",
+                        choices=["scan_map_inspect", "target_tracking"],
+                        default="scan_map_inspect",
+                        help="Mission mode: scan_map_inspect (default) or target_tracking (legacy).")
+    parser.add_argument("--scan-threshold", dest="scan_coverage_threshold", type=float, default=0.70,
+                        help="Coverage fraction (0-1) to trigger LOCALIZING phase (default: 0.70).")
+    parser.add_argument("--poi-count", dest="poi_count", type=int, default=3,
+                        help="Number of auto-generated POIs in scan_map_inspect mode (default: 3).")
     return parser
 
 
@@ -4352,6 +4622,9 @@ def run_from_args(args: argparse.Namespace) -> None:
         constants=constants,
         compact=getattr(args, "compact", False),
         replay_subsample=getattr(args, "replay_subsample", 1),
+        mission_mode=getattr(args, "mission_mode", "scan_map_inspect"),
+        scan_coverage_threshold=getattr(args, "scan_coverage_threshold", 0.70),
+        poi_count=getattr(args, "poi_count", 3),
     )
 
 

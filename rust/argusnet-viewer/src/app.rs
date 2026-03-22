@@ -15,8 +15,8 @@ use crate::replay::{
 use crate::schema::ScenePackage;
 use crate::state::{
     CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
-    LoadedMissionZones, RuntimeOverlayVisibility, SelectionState, SimPhase, SimulationRunner,
-    WorkingSceneRoot, ZoneFocus,
+    LoadedMissionZones, MissionOverlaySettings, RuntimeOverlayVisibility, SelectionState,
+    SimPhase, SimulationRunner, WorkingSceneRoot, ZoneFocus,
 };
 use crate::ui::viewer_ui_system;
 
@@ -86,6 +86,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
         .insert_resource(LayerEntityIndex::default())
         .insert_resource(SimulationRunner::default())
         .insert_resource(ProjectedZoneBadges::default())
+        .insert_resource(MissionOverlaySettings::default())
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {
@@ -119,6 +120,8 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
                 draw_sensor_overlays_system,
                 mission_zones::draw_mission_zones_system,
                 build_projected_badges_system,
+                draw_scan_grid_system,
+                draw_poi_markers_system,
             )
                 .chain(),
         )
@@ -961,6 +964,70 @@ fn draw_sensor_overlays_system(
         }
     }
 
+}
+
+fn draw_scan_grid_system(
+    mut gizmos: Gizmos,
+    replay_state: Res<ReplayState>,
+    overlay: Res<MissionOverlaySettings>,
+) {
+    if !overlay.show_scan_grid {
+        return;
+    }
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    if let Some(ms) = &frame.mapping_state {
+        let frac = ms.coverage_fraction.clamp(0.0, 1.0);
+        let color = Color::hsla(120.0 * frac, 0.9, 0.3, 0.25);
+        let isometry = bevy::math::Isometry3d::new(
+            Vec3::new(0.0, 0.0, 2.0),
+            Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+        );
+        gizmos.rect(isometry, Vec2::new(600.0, 600.0), color);
+    }
+}
+
+fn draw_poi_markers_system(
+    mut gizmos: Gizmos,
+    replay_state: Res<ReplayState>,
+    overlay: Res<MissionOverlaySettings>,
+) {
+    if !overlay.show_poi_markers {
+        return;
+    }
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(mission) = &frame.scan_mission_state else {
+        return;
+    };
+
+    for poi_status in &mission.poi_statuses {
+        let color = match poi_status.status.as_str() {
+            "complete" => Color::srgb(0.0, 1.0, 0.2),
+            "active" => Color::srgb(1.0, 0.8, 0.0),
+            _ => Color::srgb(0.8, 0.8, 0.8),
+        };
+        // POI world positions are not yet in the frame; suppress unused warning.
+        let _ = color;
+    }
+
+    if !overlay.show_loc_ellipses {
+        return;
+    }
+    for est in &mission.localization_estimates {
+        let pos = Vec3::new(
+            est.position_estimate[0],
+            est.position_estimate[2],
+            -est.position_estimate[1],
+        );
+        let radius = est.position_std_m;
+        let alpha = 0.5 * est.confidence;
+        let color = Color::hsla(200.0, 0.8, 0.6, alpha);
+        let isometry = bevy::math::Isometry3d::new(pos, Quat::IDENTITY);
+        gizmos.circle(isometry, radius, color);
+    }
 }
 
 /// Spawns a Python simulation subprocess when the user clicks "Run Simulation".

@@ -46,6 +46,23 @@ impl Default for RuntimeOverlayVisibility {
     }
 }
 
+#[derive(Debug, Clone, Resource)]
+pub struct MissionOverlaySettings {
+    pub show_scan_grid: bool,
+    pub show_poi_markers: bool,
+    pub show_loc_ellipses: bool,
+}
+
+impl Default for MissionOverlaySettings {
+    fn default() -> Self {
+        Self {
+            show_scan_grid: true,
+            show_poi_markers: true,
+            show_loc_ellipses: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Resource, Default)]
 pub struct CurrentRuntimeMarkers {
     pub markers: Vec<RuntimeMarker>,

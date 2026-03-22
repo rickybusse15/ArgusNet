@@ -126,6 +126,7 @@ class PlatformFrame:
     mapping_state: Optional[MappingState] = None
     localization_state: Optional[LocalizationState] = None
     inspection_events: List[InspectionEvent] = field(default_factory=list)
+    scan_mission_state: Optional["ScanMissionState"] = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,64 @@ class MissionZone:
             raise ValueError(f"zone_type must be one of {sorted(ZONE_TYPES)}, got {self.zone_type!r}")
         if self.radius_m <= 0:
             raise ValueError("radius_m must be positive.")
+
+
+# --- Scan / Map / Localize / Inspect mission types ---
+
+@dataclass(frozen=True)
+class MapFeature:
+    """A detected feature in the world map (terrain peak, building edge, etc.)."""
+    feature_id: str
+    position: Vector3
+    feature_type: str          # "terrain_peak" | "building_edge" | "elevation_keypoint"
+    height_m: float = 0.0
+    confidence: float = 1.0
+
+
+@dataclass(frozen=True)
+class InspectionPOI:
+    """A Point of Interest to be inspected after the scanning phase."""
+    poi_id: str
+    name: str
+    position: Vector3
+    priority: int = 1          # higher = more urgent; used by POIManager for ordering
+    required_dwell_s: float = 15.0
+    sensor_modality: str = "optical"   # "optical" | "thermal" | "any"
+
+
+@dataclass(frozen=True)
+class POIStatus:
+    """Runtime status of one InspectionPOI."""
+    poi_id: str
+    status: str                # "pending" | "active" | "complete"
+    assigned_drone_id: Optional[str] = None
+    arrival_time_s: Optional[float] = None
+    completion_time_s: Optional[float] = None
+    dwell_accumulated_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class LocalizationEstimate:
+    """Drone self-localization estimate derived from map matching."""
+    drone_id: str
+    timestamp_s: float
+    position_estimate: Vector3
+    heading_rad: float
+    position_std_m: float      # 1-sigma position uncertainty
+    confidence: float          # 0.0 (no match) -> 1.0 (perfect match)
+
+
+@dataclass(frozen=True)
+class ScanMissionState:
+    """Top-level mission state serialised into every replay frame."""
+    phase: str                          # "scanning" | "localizing" | "inspecting" | "complete"
+    scan_coverage_fraction: float       # 0->1, fraction of map area covered
+    scan_coverage_threshold: float      # target fraction to trigger phase transition
+    localization_estimates: List[LocalizationEstimate]
+    poi_statuses: List[POIStatus]
+    completed_poi_count: int
+    total_poi_count: int
+    phase_started_at_s: float = 0.0     # sim timestamp when current phase began
 
 
 def to_jsonable(value: Any) -> Any:

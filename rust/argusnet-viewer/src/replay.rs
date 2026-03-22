@@ -188,6 +188,41 @@ pub struct ReplayFrame {
     pub localization_state: Option<LocalizationState>,
     #[serde(default)]
     pub inspection_events: Vec<InspectionEvent>,
+    #[serde(default)]
+    pub scan_mission_state: Option<ScanMissionState>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ScanMissionState {
+    pub phase: String,
+    pub scan_coverage_fraction: f32,
+    pub scan_coverage_threshold: f32,
+    pub localization_estimates: Vec<LocalizationEstimate>,
+    pub poi_statuses: Vec<PoiStatus>,
+    pub completed_poi_count: usize,
+    pub total_poi_count: usize,
+    #[serde(default)]
+    pub phase_started_at_s: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LocalizationEstimate {
+    pub drone_id: String,
+    pub timestamp_s: f32,
+    pub position_estimate: [f32; 3],
+    pub heading_rad: f32,
+    pub position_std_m: f32,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PoiStatus {
+    pub poi_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub assigned_drone_id: Option<String>,
+    #[serde(default)]
+    pub dwell_accumulated_s: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
