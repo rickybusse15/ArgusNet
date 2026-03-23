@@ -703,7 +703,9 @@
         "rejected_observations_by_target": {}
       },
       "generation_rejections": [],
-      "launch_events": []
+      "mapping_state": null,
+      "localization_state": null,
+      "inspection_events": []
     },
     {
       "timestamp_s": 1.0,
@@ -1041,7 +1043,9 @@
         }
       },
       "generation_rejections": [],
-      "launch_events": []
+      "mapping_state": null,
+      "localization_state": null,
+      "inspection_events": []
     },
     {
       "timestamp_s": 2.0,
@@ -1269,7 +1273,9 @@
         "rejected_observations_by_target": {}
       },
       "generation_rejections": [],
-      "launch_events": []
+      "mapping_state": null,
+      "localization_state": null,
+      "inspection_events": []
     }
   ]
 }

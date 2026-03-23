@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "smart-trajectory-tracker"
-version = "0.2.0"
-description = "Civilian 3D sensor fusion and visualization platform"
+name = "argusnet"
+version = "1.0.0"
+description = "World models for autonomous aerial mapping, inspection, localization, and spatial memory"
 requires-python = ">=3.9"
 dependencies = [
     "grpcio>=1.78,<2.0",
@@ -27,6 +27,11 @@ dev = [
 ]
 
 [project.scripts]
+argusnet = "argusnet.cli.main:main"
+argusnet-sim = "argusnet.simulation.sim:main"
+argusnet-export = "argusnet.evaluation.export:main"
+argusnet-build-scene = "argusnet.cli.scene:main"
+# Legacy aliases (backward compat)
 smart-tracker = "smart_tracker.cli:main"
 smart-tracker-sim = "smart_tracker.sim:main"
 smart-tracker-export = "smart_tracker.export:main"

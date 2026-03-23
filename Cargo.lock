@@ -262,6 +262,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-core"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "argusnet-proto"
+version = "0.1.0"
+dependencies = [
+ "argusnet-core",
+ "nalgebra",
+ "prost",
+ "prost-types",
+ "protoc-bin-vendored",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "argusnet-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argusnet-core",
+ "argusnet-proto",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+]
+
+[[package]]
+name = "argusnet-viewer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "bevy_egui",
+ "clap",
+ "egui_plot",
+ "image",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2152,6 +2206,17 @@ dependencies = [
  "emath",
  "epaint",
  "nohash-hasher",
+]
+
+[[package]]
+name = "egui_plot"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8dca4871c15d51aadb79534dcf51a8189e5de3426ee7b465eb7db9a0a81ea67"
+dependencies = [
+ "ahash",
+ "egui",
+ "emath",
 ]
 
 [[package]]
@@ -5608,58 +5673,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "tracker-core"
-version = "0.1.0"
-dependencies = [
- "nalgebra",
- "serde",
-]
-
-[[package]]
-name = "tracker-proto"
-version = "0.1.0"
-dependencies = [
- "nalgebra",
- "prost",
- "prost-types",
- "protoc-bin-vendored",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tracker-core",
-]
-
-[[package]]
-name = "tracker-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
- "tokio-stream",
- "tonic",
- "tracker-core",
- "tracker-proto",
-]
-
-[[package]]
-name = "tracker-viewer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bevy",
- "bevy_egui",
- "clap",
- "image",
- "serde",
- "serde_json",
 ]
 
 [[package]]

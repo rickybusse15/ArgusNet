@@ -1,15 +1,3 @@
-from __future__ import annotations
-
-import sys
-from typing import Optional, Sequence
-
-from .cli import main as cli_main
-
-
-def main(argv: Optional[Sequence[str]] = None) -> None:
-    forwarded = list(sys.argv[1:] if argv is None else argv)
-    cli_main(["build-scene", *forwarded])
-
-
-if __name__ == "__main__":
-    main()
+"""Backward-compatibility shim — imports from argusnet.cli.scene."""
+from argusnet.cli.scene import *  # noqa: F401, F403
+from argusnet.cli.scene import main

@@ -1,0 +1,22 @@
+[package]
+name = "argusnet-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "argusnetd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+argusnet-core = { path = "../argusnet-core" }
+argusnet-proto = { path = "../argusnet-proto" }

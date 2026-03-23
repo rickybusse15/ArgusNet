@@ -58,7 +58,9 @@ def _minimal_valid_replay_document() -> dict:
                     "rejected_observations_by_target": {},
                 },
                 "generation_rejections": [],
-                "launch_events": [],
+                "mapping_state": None,
+                "localization_state": None,
+                "inspection_events": [],
             }
         ],
     }

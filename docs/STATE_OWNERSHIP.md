@@ -171,16 +171,42 @@ identifier but no active geodetic projection is wired up for simulation.
 
 ---
 
-### 2.12 Launch Events
+### 2.12 Mapping State
 
 | Attribute | Value |
 |-----------|-------|
-| **Defined in** | `src/smart_tracker/models.py` — `LaunchEvent` (line 127) |
+| **Defined in** | `src/argusnet/core/types.py` — `MappingState` |
 | **Owner** | Python |
-| **Writers** | `sim.py` `LaunchController` generates events when a target enters launch-detection range |
-| **Readers** | Serialised to replay JSON `frames[*].launch_events`; Rust viewer renders launch lines |
-| **Cross-boundary** | Not in gRPC proto.  Rust tracking engine is unaware of drone launches. |
-| **Timing** | One event per launch per simulation step. |
+| **Writers** | `sim.py` `run_simulation` — increments `CoverageMap` per mobile node footprint each step |
+| **Readers** | Serialised to replay JSON `frames[*].mapping_state`; Rust viewer shows coverage % in Mapping panel |
+| **Cross-boundary** | Not in gRPC proto. |
+| **Timing** | One `MappingState` per frame (cumulative, not per-step delta). |
+
+---
+
+### 2.12b Localization State
+
+| Attribute | Value |
+|-----------|-------|
+| **Defined in** | `src/argusnet/core/types.py` — `LocalizationState` |
+| **Owner** | Python |
+| **Writers** | `sim.py` `run_simulation` — derived from active track covariances and observation confidences |
+| **Readers** | Serialised to replay JSON `frames[*].localization_state`; Rust viewer shows in Localization panel |
+| **Cross-boundary** | Not in gRPC proto. |
+| **Timing** | One `LocalizationState` per frame when active tracks exist; `null` otherwise. |
+
+---
+
+### 2.12c Inspection Events
+
+| Attribute | Value |
+|-----------|-------|
+| **Defined in** | `src/argusnet/core/types.py` — `InspectionEvent` |
+| **Owner** | Python |
+| **Writers** | `sim.py` `run_simulation` — generated when mobile nodes enter/exit mission zone radii |
+| **Readers** | Serialised to replay JSON `frames[*].inspection_events`; Rust viewer shows in Inspection Events panel |
+| **Cross-boundary** | Not in gRPC proto. |
+| **Timing** | Zero or more events per frame, one per (node, zone) boundary crossing or coverage update. |
 
 ---
 
