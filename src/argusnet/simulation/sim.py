@@ -3903,6 +3903,11 @@ def run_simulation(
         for zone in scenario.mission_zones
     }
     _node_zone_membership: Dict[str, set] = {}  # node_id -> set of active zone_ids
+    # Track previously covered cells so we can emit per-frame deltas for the
+    # viewer's LiDAR reconstruction.  Starts as all-zeros (nothing covered).
+    _prev_coverage_count_grid: np.ndarray = np.zeros(
+        (_coverage_bounds.nx, _coverage_bounds.ny), dtype=np.int32
+    )
 
     # --- Battery model ---
     # One BatteryModel and BatteryState per mobile drone.  Energy is consumed
@@ -4111,6 +4116,24 @@ def run_simulation(
 
         step_scan_mission_state: Optional[ScanMissionState] = None
         if _mission_mode == "scan_map_inspect":
+            # Compute delta: which cells were newly covered this step?
+            _curr_grid = _coverage_map.count_grid          # (nx, ny) int32
+            _new_mask = (_curr_grid > 0) & (_prev_coverage_count_grid == 0)
+            _newly_covered: List[Tuple[float, float, float]] = []
+            if _new_mask.any():
+                _ii, _jj = np.where(_new_mask)
+                _b = _coverage_bounds
+                for _ci, _cj in zip(_ii.tolist(), _jj.tolist()):
+                    _cx, _cy = _b.ij_to_xy(int(_ci), int(_cj))
+                    _th = 0.0
+                    try:
+                        _th = float(scenario.terrain.height_at(float(_cx), float(_cy)))
+                    except Exception:
+                        pass
+                    _newly_covered.append((round(_cx, 1), round(_cy, 1), round(_th, 1)))
+            # Advance the previous grid snapshot
+            _prev_coverage_count_grid = _curr_grid.copy()
+
             step_scan_mission_state = ScanMissionState(
                 phase=_scan_phase,
                 scan_coverage_fraction=scan_frac,
@@ -4120,6 +4143,7 @@ def run_simulation(
                 completed_poi_count=_poi_manager.completed_count,
                 total_poi_count=_poi_manager.total_count,
                 phase_started_at_s=_phase_started_at_s,
+                newly_scanned_cells=tuple(_newly_covered),
             )
 
         # --- Localization quality (derived from track covariances) ---

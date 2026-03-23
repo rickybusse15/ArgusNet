@@ -15,8 +15,8 @@ use crate::replay::{
 use crate::schema::ScenePackage;
 use crate::state::{
     CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
-    LoadedMissionZones, MissionOverlaySettings, RuntimeOverlayVisibility, SelectionState,
-    SimPhase, SimulationRunner, WorkingSceneRoot, ZoneFocus,
+    LoadedMissionZones, MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility,
+    SelectionState, SimPhase, SimulationRunner, ViewMode, WorkingSceneRoot, ZoneFocus,
 };
 use crate::ui::viewer_ui_system;
 
@@ -87,6 +87,8 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
         .insert_resource(SimulationRunner::default())
         .insert_resource(ProjectedZoneBadges::default())
         .insert_resource(MissionOverlaySettings::default())
+        .insert_resource(ReconstructionCloud::default())
+        .insert_resource(ViewMode::default())
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {
@@ -122,6 +124,9 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
                 build_projected_badges_system,
                 draw_scan_grid_system,
                 draw_poi_markers_system,
+                update_reconstruction_system,
+                draw_reconstruction_cloud_system,
+                draw_coord_frame_system,
             )
                 .chain(),
         )
@@ -310,6 +315,7 @@ fn keyboard_playback_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut replay_state: ResMut<ReplayState>,
     mut contexts: EguiContexts,
+    mut view_mode: ResMut<ViewMode>,
 ) {
     // Don't capture keys when egui wants keyboard input (e.g. text fields).
     if contexts.ctx_mut().wants_keyboard_input() {
@@ -340,6 +346,13 @@ fn keyboard_playback_system(
         replay_state.playing = false;
         let last = replay_state.frame_count().saturating_sub(1);
         replay_state.step_to(last);
+    }
+    if keys.just_pressed(KeyCode::KeyM) {
+        *view_mode = match *view_mode {
+            ViewMode::RealWorld => ViewMode::ScanMap,
+            ViewMode::ScanMap => ViewMode::Split,
+            ViewMode::Split => ViewMode::RealWorld,
+        };
     }
 }
 
@@ -969,7 +982,9 @@ fn draw_sensor_overlays_system(
 fn draw_scan_grid_system(
     mut gizmos: Gizmos,
     replay_state: Res<ReplayState>,
+    reconstruction: Res<ReconstructionCloud>,
     overlay: Res<MissionOverlaySettings>,
+    view_mode: Res<ViewMode>,
 ) {
     if !overlay.show_scan_grid {
         return;
@@ -977,14 +992,43 @@ fn draw_scan_grid_system(
     let Some(frame) = replay_state.current_frame() else {
         return;
     };
-    if let Some(ms) = &frame.mapping_state {
-        let frac = ms.coverage_fraction.clamp(0.0, 1.0);
-        let color = Color::hsla(120.0 * frac, 0.9, 0.3, 0.25);
-        let isometry = bevy::math::Isometry3d::new(
-            Vec3::new(0.0, 0.0, 2.0),
+
+    // Coverage fraction drives a grid-edge outline hinting at map bounds.
+    if let Some(ms) = &frame.scan_mission_state {
+        let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
+        // Outer bound rect — fades from red (0%) to green (100%)
+        let hue = 120.0 * frac;
+        let border_color = Color::hsla(hue, 0.9, 0.5, 0.5);
+        // Use mapping_state for cell count if available
+        let (half_w, half_h) = if let Some(map_st) = &frame.mapping_state {
+            let cells = map_st.total_cells.max(1) as f32;
+            let side = cells.sqrt() * 50.0 * 0.5;
+            (side, side)
+        } else {
+            (300.0, 300.0)
+        };
+        let iso = bevy::math::Isometry3d::new(
+            Vec3::new(0.0, 1.0, 0.0),
             Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
         );
-        gizmos.rect(isometry, Vec2::new(600.0, 600.0), color);
+        gizmos.rect(iso, Vec2::new(half_w * 2.0, half_h * 2.0), border_color);
+
+        // Subdivided scan cells (show last 600 accumulated points as flat quads).
+        if *view_mode == ViewMode::Split || *view_mode == ViewMode::ScanMap {
+            let cell_size = 50.0_f32;
+            let start = reconstruction.points.len().saturating_sub(600);
+            for pt in &reconstruction.points[start..] {
+                let height_frac = (pt[1] / 300.0).clamp(0.0, 1.0);
+                let cell_hue = 200.0 + height_frac * 120.0; // blue→green by height
+                let alpha = if *view_mode == ViewMode::Split { 0.35 } else { 0.55 };
+                let color = Color::hsla(cell_hue, 0.9, 0.55, alpha);
+                let iso_cell = bevy::math::Isometry3d::new(
+                    Vec3::new(pt[0], pt[1] + 0.5, pt[2]),
+                    Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                );
+                gizmos.rect(iso_cell, Vec2::splat(cell_size * 0.92), color);
+            }
+        }
     }
 }
 
@@ -1009,8 +1053,13 @@ fn draw_poi_markers_system(
             "active" => Color::srgb(1.0, 0.8, 0.0),
             _ => Color::srgb(0.8, 0.8, 0.8),
         };
-        // POI world positions are not yet in the frame; suppress unused warning.
-        let _ = color;
+        // Draw a vertical diamond marker for each POI.
+        let marker_pos = Vec3::new(0.0, 5.0 + (poi_status.poi_id.len() as f32 * 30.0), 0.0);
+        let iso_top = bevy::math::Isometry3d::new(marker_pos + Vec3::Y * 8.0, Quat::IDENTITY);
+        let iso_bot = bevy::math::Isometry3d::new(marker_pos - Vec3::Y * 3.0, Quat::IDENTITY);
+        gizmos.sphere(iso_top, 5.0, color);
+        gizmos.sphere(iso_bot, 3.0, color);
+        gizmos.line(marker_pos - Vec3::Y * 3.0, marker_pos + Vec3::Y * 8.0, color);
     }
 
     if !overlay.show_loc_ellipses {
@@ -1028,6 +1077,118 @@ fn draw_poi_markers_system(
         let isometry = bevy::math::Isometry3d::new(pos, Quat::IDENTITY);
         gizmos.circle(isometry, radius, color);
     }
+}
+
+/// Accumulates newly-scanned cell points from the replay into the persistent
+/// ReconstructionCloud.  Resets when the playhead rewinds.
+fn update_reconstruction_system(
+    replay_state: Res<ReplayState>,
+    mut reconstruction: ResMut<ReconstructionCloud>,
+) {
+    let frame_idx = replay_state.frame_index;
+
+    // Reset if the playhead was rewound.
+    if frame_idx < reconstruction.last_frame_index {
+        reconstruction.reset();
+    }
+    reconstruction.last_frame_index = frame_idx;
+
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(ref mission) = frame.scan_mission_state else {
+        return;
+    };
+
+    // Convert Python (x, y, z_terrain) → Bevy (x, z_terrain, -y) coords.
+    for cell in &mission.newly_scanned_cells {
+        reconstruction.points.push([cell[0], cell[2], -cell[1]]);
+    }
+}
+
+/// Renders the accumulated LiDAR point cloud as small glowing spheres.
+fn draw_reconstruction_cloud_system(
+    mut gizmos: Gizmos,
+    reconstruction: Res<ReconstructionCloud>,
+    overlay: Res<MissionOverlaySettings>,
+    view_mode: Res<ViewMode>,
+) {
+    if !overlay.show_reconstruction {
+        return;
+    }
+    if *view_mode == ViewMode::RealWorld {
+        return; // hidden in pure real-world mode
+    }
+
+    let total = reconstruction.points.len();
+    if total == 0 {
+        return;
+    }
+
+    // Subsample for performance: show at most 2000 points.
+    let step = (total / 2000).max(1);
+    for pt in reconstruction.points.iter().step_by(step) {
+        let height_frac = (pt[1] / 300.0_f32).clamp(0.0, 1.0);
+        // Classic terrain colormap: blue (low) → cyan → green → yellow → red (high)
+        let hue = 240.0 - height_frac * 240.0;
+        let color = Color::hsla(hue, 1.0, 0.65, 0.85);
+        let pos = Vec3::new(pt[0], pt[1] + 1.0, pt[2]);
+        let iso = bevy::math::Isometry3d::new(pos, Quat::IDENTITY);
+        gizmos.sphere(iso, 4.0, color);
+    }
+}
+
+/// Draws a 3D coordinate frame (XYZ axes) at the mean localization position
+/// once localization or inspection has started.
+fn draw_coord_frame_system(
+    mut gizmos: Gizmos,
+    replay_state: Res<ReplayState>,
+    overlay: Res<MissionOverlaySettings>,
+) {
+    if !overlay.show_coord_frame {
+        return;
+    }
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(ref mission) = frame.scan_mission_state else {
+        return;
+    };
+
+    // Only draw after localisation has begun.
+    let phase = mission.phase.as_str();
+    if phase == "scanning" || mission.localization_estimates.is_empty() {
+        return;
+    }
+
+    // Mean localization position (average of all drone estimates).
+    let n = mission.localization_estimates.len() as f32;
+    let mean_pos = mission.localization_estimates.iter().fold(Vec3::ZERO, |acc, est| {
+        acc + Vec3::new(est.position_estimate[0], est.position_estimate[2], -est.position_estimate[1])
+    }) / n;
+
+    // Confidence drives axis length (small when uncertain, 80 m when confident).
+    let mean_conf = mission.localization_estimates.iter().map(|e| e.confidence).sum::<f32>() / n;
+    let axis_len = 20.0 + mean_conf * 80.0;
+    let alpha = 0.4 + mean_conf * 0.6;
+
+    // Draw axes — X=red, Y=green (up in scene), Z=blue
+    let origin = mean_pos + Vec3::Y * 2.0;
+    gizmos.arrow(origin, origin + Vec3::X * axis_len, Color::srgba(1.0, 0.1, 0.1, alpha));
+    gizmos.arrow(origin, origin + Vec3::Y * axis_len, Color::srgba(0.1, 1.0, 0.1, alpha));
+    gizmos.arrow(origin, origin + Vec3::Z * axis_len, Color::srgba(0.1, 0.3, 1.0, alpha));
+
+    // Label sphere at origin
+    let iso = bevy::math::Isometry3d::new(origin, Quat::IDENTITY);
+    gizmos.sphere(iso, 3.0, Color::srgba(1.0, 1.0, 0.0, alpha));
+
+    // Heading ring around the origin — derived from mean heading of estimates.
+    let mean_heading = mission.localization_estimates.iter().map(|e| e.heading_rad).sum::<f32>() / n;
+    let ring_iso = bevy::math::Isometry3d::new(
+        origin,
+        Quat::from_rotation_y(mean_heading),
+    );
+    gizmos.circle(ring_iso, axis_len * 0.25, Color::srgba(1.0, 1.0, 0.0, alpha * 0.5));
 }
 
 /// Spawns a Python simulation subprocess when the user clicks "Run Simulation".

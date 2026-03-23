@@ -51,6 +51,8 @@ pub struct MissionOverlaySettings {
     pub show_scan_grid: bool,
     pub show_poi_markers: bool,
     pub show_loc_ellipses: bool,
+    pub show_reconstruction: bool,
+    pub show_coord_frame: bool,
 }
 
 impl Default for MissionOverlaySettings {
@@ -59,8 +61,39 @@ impl Default for MissionOverlaySettings {
             show_scan_grid: true,
             show_poi_markers: true,
             show_loc_ellipses: true,
+            show_reconstruction: true,
+            show_coord_frame: true,
         }
     }
+}
+
+/// Persistent reconstruction cloud — accumulated by the viewer as the
+/// replay plays back.  Reset when the replay is restarted or reloaded.
+#[derive(Debug, Clone, Resource, Default)]
+pub struct ReconstructionCloud {
+    /// Accumulated scan points: [x_m, terrain_height_m, -y_m] in Bevy coords.
+    pub points: Vec<[f32; 3]>,
+    /// Last replay frame index processed (used to reset on rewind).
+    pub last_frame_index: usize,
+}
+
+impl ReconstructionCloud {
+    pub fn reset(&mut self) {
+        self.points.clear();
+        self.last_frame_index = 0;
+    }
+}
+
+/// Which rendering layer the viewer shows.
+#[derive(Debug, Clone, PartialEq, Eq, Resource, Default)]
+pub enum ViewMode {
+    /// Show the real terrain GLB (default).
+    #[default]
+    RealWorld,
+    /// Hide terrain, show the accumulated LiDAR reconstruction only.
+    ScanMap,
+    /// Show terrain + reconstruction overlay simultaneously.
+    Split,
 }
 
 #[derive(Debug, Clone, Resource, Default)]

@@ -231,6 +231,10 @@ class ScanMissionState:
     completed_poi_count: int
     total_poi_count: int
     phase_started_at_s: float = 0.0     # sim timestamp when current phase began
+    # Per-frame delta: newly covered cell centres as (x_m, y_m, terrain_height_m).
+    # The viewer accumulates these into a persistent LiDAR-style point cloud as
+    # the replay plays back, producing a real-time map reconstruction.
+    newly_scanned_cells: tuple = ()     # Tuple[Tuple[float,float,float], ...]
 
 
 def to_jsonable(value: Any) -> Any:

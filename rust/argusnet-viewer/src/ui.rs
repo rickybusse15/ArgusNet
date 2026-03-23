@@ -7,7 +7,7 @@ use crate::replay::ReplayState;
 use crate::schema::ScenePackage;
 use crate::state::{
     CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MissionOverlaySettings,
-    RuntimeOverlayVisibility, SelectionState, SimulationRunner, ZoneFocus, ZoneOverlapModel,
+    RuntimeOverlayVisibility, SelectionState, SimulationRunner, ViewMode, ZoneFocus, ZoneOverlapModel,
 };
 
 const MAP_PRESETS: &[&str] = &[
@@ -49,6 +49,7 @@ pub fn viewer_ui_system(
     mut layer_visibility: ResMut<LayerVisibilityState>,
     mut runtime_visibility: ResMut<RuntimeOverlayVisibility>,
     mut mission_overlay: ResMut<MissionOverlaySettings>,
+    mut view_mode: ResMut<ViewMode>,
     selection: Res<SelectionState>,
     frame_metrics: Res<CurrentFrameMetrics>,
     mission_zones: Res<LoadedMissionZones>,
@@ -71,7 +72,7 @@ pub fn viewer_ui_system(
                     section_scene_header(ui, &scene_package, &mission_zones);
                     ui.separator();
 
-                    section_mission_progress(ui, &replay_state);
+                    section_mission_progress(ui, &replay_state, &mut view_mode, &mission_overlay);
                     ui.separator();
 
                     section_scenario(ui, supports_hot_swap, &mut sim_runner);
@@ -251,7 +252,13 @@ fn section_scenario(
 // Section: Mission Progress
 // ---------------------------------------------------------------------------
 
-fn section_mission_progress(ui: &mut egui::Ui, replay_state: &ReplayState) {
+fn section_mission_progress(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    view_mode: &mut ViewMode,
+    overlay: &MissionOverlaySettings,
+) {
+    let _ = overlay; // may be used for future overlay toggles in this section
     let Some(frame) = replay_state.current_frame() else {
         return;
     };
@@ -260,8 +267,34 @@ fn section_mission_progress(ui: &mut egui::Ui, replay_state: &ReplayState) {
     };
 
     ui.collapsing("Mission Progress", |ui| {
+        // View mode toggle
+        ui.horizontal(|ui| {
+            ui.label("View:");
+            if ui.selectable_label(*view_mode == ViewMode::RealWorld, "\u{1f30d} Real").clicked() {
+                *view_mode = ViewMode::RealWorld;
+            }
+            if ui.selectable_label(*view_mode == ViewMode::ScanMap, "\u{1f4e1} Scan Map").clicked() {
+                *view_mode = ViewMode::ScanMap;
+            }
+            if ui.selectable_label(*view_mode == ViewMode::Split, "\u{229e} Split").clicked() {
+                *view_mode = ViewMode::Split;
+            }
+        });
+        ui.separator();
+
+        // Reconstruction quality
+        let recon_frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
+        if recon_frac > 0.0 {
+            ui.add(
+                egui::ProgressBar::new(recon_frac)
+                    .text(format!("Map built: {:.0}%", recon_frac * 100.0))
+                    .fill(egui::Color32::from_rgb(20, 120, 180)),
+            );
+        }
+
         // Phase label with color
-        let (phase_label, phase_color) = match ms.phase.as_str() {
+        let phase = ms.phase.as_str();
+        let (phase_label, phase_color) = match phase {
             "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
             "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
             "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
@@ -306,6 +339,25 @@ fn section_mission_progress(ui: &mut egui::Ui, replay_state: &ReplayState) {
                         est.position_std_m
                     ));
                 }
+            }
+        }
+
+        // Coordinate frame status
+        if phase == "localizing" || phase == "inspecting" {
+            if let Some(est) = ms.localization_estimates.first() {
+                let mean_conf = ms.localization_estimates.iter()
+                    .map(|e| e.confidence).sum::<f32>()
+                    / ms.localization_estimates.len().max(1) as f32;
+                let frame_alpha = (mean_conf * 100.0) as u8;
+                ui.horizontal(|ui| {
+                    ui.label("Coord frame:");
+                    ui.colored_label(
+                        egui::Color32::from_rgba_unmultiplied(255, 220, 30, frame_alpha.max(60)),
+                        format!("XYZ @ ({:.0},{:.0}) {:.0}% conf",
+                            est.position_estimate[0], est.position_estimate[1],
+                            mean_conf * 100.0),
+                    );
+                });
             }
         }
 
