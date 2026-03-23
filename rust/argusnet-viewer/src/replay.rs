@@ -203,8 +203,10 @@ pub struct ScanMissionState {
     pub total_poi_count: usize,
     #[serde(default)]
     pub phase_started_at_s: f32,
+    /// Flat array of (x, y, terrain_height) triples from Python.
+    /// Python's to_jsonable() flattens tuple-of-tuples into a single Vec<f32>.
     #[serde(default)]
-    pub newly_scanned_cells: Vec<[f32; 3]>,
+    pub newly_scanned_cells: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

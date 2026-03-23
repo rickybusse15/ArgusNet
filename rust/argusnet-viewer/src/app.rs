@@ -996,10 +996,10 @@ fn draw_scan_grid_system(
     // Coverage fraction drives a grid-edge outline hinting at map bounds.
     if let Some(ms) = &frame.scan_mission_state {
         let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
-        // Outer bound rect — fades from red (0%) to green (100%)
+        // Outer bound rect — fades from red (0%) to green (100%).
+        // Z-up: ground plane is XY; Quat::IDENTITY gives a flat horizontal rect.
         let hue = 120.0 * frac;
         let border_color = Color::hsla(hue, 0.9, 0.5, 0.5);
-        // Use mapping_state for cell count if available
         let (half_w, half_h) = if let Some(map_st) = &frame.mapping_state {
             let cells = map_st.total_cells.max(1) as f32;
             let side = cells.sqrt() * 50.0 * 0.5;
@@ -1007,24 +1007,26 @@ fn draw_scan_grid_system(
         } else {
             (300.0, 300.0)
         };
+        // Place 1 m above Z=0 so it sits just above the lowest terrain.
         let iso = bevy::math::Isometry3d::new(
-            Vec3::new(0.0, 1.0, 0.0),
-            Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+            Vec3::new(0.0, 0.0, 1.0),
+            Quat::IDENTITY,
         );
         gizmos.rect(iso, Vec2::new(half_w * 2.0, half_h * 2.0), border_color);
 
-        // Subdivided scan cells (show last 600 accumulated points as flat quads).
+        // Subdivided scan cells (show all accumulated points as flat ground quads).
+        // Z-up: pt = [east, north, terrain_height]; height is pt[2].
         if *view_mode == ViewMode::Split || *view_mode == ViewMode::ScanMap {
             let cell_size = 50.0_f32;
-            let start = reconstruction.points.len().saturating_sub(600);
-            for pt in &reconstruction.points[start..] {
-                let height_frac = (pt[1] / 300.0).clamp(0.0, 1.0);
+            for pt in reconstruction.points.iter() {
+                let height_frac = (pt[2] / 300.0).clamp(0.0, 1.0);
                 let cell_hue = 200.0 + height_frac * 120.0; // blue→green by height
                 let alpha = if *view_mode == ViewMode::Split { 0.35 } else { 0.55 };
                 let color = Color::hsla(cell_hue, 0.9, 0.55, alpha);
+                // Place cell 0.5 m above terrain surface; Quat::IDENTITY = flat in XY.
                 let iso_cell = bevy::math::Isometry3d::new(
-                    Vec3::new(pt[0], pt[1] + 0.5, pt[2]),
-                    Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                    Vec3::new(pt[0], pt[1], pt[2] + 0.5),
+                    Quat::IDENTITY,
                 );
                 gizmos.rect(iso_cell, Vec2::splat(cell_size * 0.92), color);
             }
@@ -1100,9 +1102,10 @@ fn update_reconstruction_system(
         return;
     };
 
-    // Convert Python (x, y, z_terrain) → Bevy (x, z_terrain, -y) coords.
-    for cell in &mission.newly_scanned_cells {
-        reconstruction.points.push([cell[0], cell[2], -cell[1]]);
+    // Python emits a flat [x0,y0,h0, x1,y1,h1, ...] array; chunk into triples.
+    // Viewer is Z-up: Python (x=east, y=north, h=terrain_height) maps directly.
+    for triple in mission.newly_scanned_cells.chunks_exact(3) {
+        reconstruction.points.push([triple[0], triple[1], triple[2]]);
     }
 }
 
@@ -1128,11 +1131,12 @@ fn draw_reconstruction_cloud_system(
     // Subsample for performance: show at most 2000 points.
     let step = (total / 2000).max(1);
     for pt in reconstruction.points.iter().step_by(step) {
-        let height_frac = (pt[1] / 300.0_f32).clamp(0.0, 1.0);
+        // Z-up: pt = [east, north, terrain_height]; height is pt[2].
+        let height_frac = (pt[2] / 300.0_f32).clamp(0.0, 1.0);
         // Classic terrain colormap: blue (low) → cyan → green → yellow → red (high)
         let hue = 240.0 - height_frac * 240.0;
         let color = Color::hsla(hue, 1.0, 0.65, 0.85);
-        let pos = Vec3::new(pt[0], pt[1] + 1.0, pt[2]);
+        let pos = Vec3::new(pt[0], pt[1], pt[2] + 1.0);
         let iso = bevy::math::Isometry3d::new(pos, Quat::IDENTITY);
         gizmos.sphere(iso, 4.0, color);
     }
@@ -1162,9 +1166,10 @@ fn draw_coord_frame_system(
     }
 
     // Mean localization position (average of all drone estimates).
+    // Z-up: position_estimate = [east, north, altitude]; map directly.
     let n = mission.localization_estimates.len() as f32;
     let mean_pos = mission.localization_estimates.iter().fold(Vec3::ZERO, |acc, est| {
-        acc + Vec3::new(est.position_estimate[0], est.position_estimate[2], -est.position_estimate[1])
+        acc + Vec3::new(est.position_estimate[0], est.position_estimate[1], est.position_estimate[2])
     }) / n;
 
     // Confidence drives axis length (small when uncertain, 80 m when confident).
@@ -1172,8 +1177,8 @@ fn draw_coord_frame_system(
     let axis_len = 20.0 + mean_conf * 80.0;
     let alpha = 0.4 + mean_conf * 0.6;
 
-    // Draw axes — X=red, Y=green (up in scene), Z=blue
-    let origin = mean_pos + Vec3::Y * 2.0;
+    // Draw axes — X=red (east), Y=green (north), Z=blue (up in Z-up scene)
+    let origin = mean_pos + Vec3::Z * 2.0;
     gizmos.arrow(origin, origin + Vec3::X * axis_len, Color::srgba(1.0, 0.1, 0.1, alpha));
     gizmos.arrow(origin, origin + Vec3::Y * axis_len, Color::srgba(0.1, 1.0, 0.1, alpha));
     gizmos.arrow(origin, origin + Vec3::Z * axis_len, Color::srgba(0.1, 0.3, 1.0, alpha));
@@ -1182,11 +1187,11 @@ fn draw_coord_frame_system(
     let iso = bevy::math::Isometry3d::new(origin, Quat::IDENTITY);
     gizmos.sphere(iso, 3.0, Color::srgba(1.0, 1.0, 0.0, alpha));
 
-    // Heading ring around the origin — derived from mean heading of estimates.
+    // Heading ring around the origin — rotates around Z (up) in Z-up system.
     let mean_heading = mission.localization_estimates.iter().map(|e| e.heading_rad).sum::<f32>() / n;
     let ring_iso = bevy::math::Isometry3d::new(
         origin,
-        Quat::from_rotation_y(mean_heading),
+        Quat::from_rotation_z(mean_heading),
     );
     gizmos.circle(ring_iso, axis_len * 0.25, Color::srgba(1.0, 1.0, 0.0, alpha * 0.5));
 }
