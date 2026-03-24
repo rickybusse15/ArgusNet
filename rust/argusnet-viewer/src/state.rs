@@ -27,6 +27,8 @@ pub struct RuntimeOverlayVisibility {
     pub radar_rings: bool,
     pub coverage_overlay: bool,
     pub inspection_events: bool,
+    pub launch_lines: bool,
+    pub show_covariance_ellipsoids: bool,
 }
 
 impl Default for RuntimeOverlayVisibility {
@@ -42,6 +44,8 @@ impl Default for RuntimeOverlayVisibility {
             radar_rings: true,
             coverage_overlay: false,
             inspection_events: true,
+            launch_lines: true,
+            show_covariance_ellipsoids: false,
         }
     }
 }
@@ -69,18 +73,31 @@ impl Default for MissionOverlaySettings {
 
 /// Persistent reconstruction cloud — accumulated by the viewer as the
 /// replay plays back.  Reset when the replay is restarted or reloaded.
-#[derive(Debug, Clone, Resource, Default)]
+#[derive(Debug, Clone, Resource)]
 pub struct ReconstructionCloud {
-    /// Accumulated scan points: [x_m, terrain_height_m, -y_m] in Bevy coords.
+    /// Accumulated scan points: [x_m, y_m, terrain_height_m] in world coords.
     pub points: Vec<[f32; 3]>,
     /// Last replay frame index processed (used to reset on rewind).
     pub last_frame_index: usize,
+    /// True when points changed since last GPU mesh upload.
+    pub dirty: bool,
+}
+
+impl Default for ReconstructionCloud {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            last_frame_index: 0,
+            dirty: false,
+        }
+    }
 }
 
 impl ReconstructionCloud {
     pub fn reset(&mut self) {
         self.points.clear();
         self.last_frame_index = 0;
+        self.dirty = true;
     }
 }
 
@@ -183,6 +200,7 @@ pub struct SimulationRunner {
     pub terrain_preset: String,
     pub clean_terrain: bool,
     pub platform_preset: String,
+    pub mission_mode: String,
     pub target_motion: String,
     pub drone_mode: String,
     pub target_count: u32,
@@ -190,6 +208,8 @@ pub struct SimulationRunner {
     pub ground_stations: u32,
     pub duration_s: f32,
     pub seed: i64,
+    pub scan_coverage_threshold: f32,
+    pub poi_count: u32,
 }
 
 impl Default for SimulationRunner {
@@ -202,13 +222,16 @@ impl Default for SimulationRunner {
             terrain_preset: "military_compound".into(),
             clean_terrain: false,
             platform_preset: "baseline".into(),
+            mission_mode: "scan_map_inspect".into(),
             target_motion: "mixed".into(),
             drone_mode: "inspect".into(),
-            target_count: 2,
+            target_count: 0,
             drone_count: 4,
             ground_stations: 7,
             duration_s: 180.0,
             seed: 7,
+            scan_coverage_threshold: 0.70,
+            poi_count: 3,
         }
     }
 }

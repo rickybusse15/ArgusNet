@@ -380,6 +380,9 @@ pub struct RuntimeMarker {
     pub label: String,
     pub position: Vec3,
     pub velocity: Vec3,
+    /// For `Node` markers: whether this node is a mobile platform (drone).
+    /// `None` for tracks and truths.
+    pub is_mobile: Option<bool>,
 }
 
 #[derive(Debug, Clone, Resource)]
@@ -475,6 +478,7 @@ impl ReplayState {
                 label: track.track_id.clone(),
                 position: Vec3::from_array(track.position),
                 velocity: Vec3::from_array(track.velocity),
+                is_mobile: None,
             });
         }
         for truth in &frame.truths {
@@ -483,6 +487,7 @@ impl ReplayState {
                 label: truth.target_id.clone(),
                 position: Vec3::from_array(truth.position),
                 velocity: Vec3::from_array(truth.velocity),
+                is_mobile: None,
             });
         }
         for node in &frame.nodes {
@@ -491,6 +496,7 @@ impl ReplayState {
                 label: node.node_id.clone(),
                 position: Vec3::from_array(node.position),
                 velocity: Vec3::from_array(node.velocity),
+                is_mobile: Some(node.is_mobile),
             });
         }
         markers
@@ -562,6 +568,80 @@ impl TryFrom<Value> for ReplayDocument {
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         serde_json::from_value(value)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Live-stream conversions (feature = "live-stream")
+//
+// These From impls allow the viewer to accept frames directly from the gRPC
+// server without a JSON round-trip.  They are compiled only when the
+// `live-stream` feature is enabled to avoid pulling tonic/prost into default
+// builds.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "live-stream")]
+mod live_stream {
+    use argusnet_proto::pb;
+
+    use super::{NodeState, TrackState, TruthState};
+
+    impl From<pb::TrackState> for TrackState {
+        fn from(t: pb::TrackState) -> Self {
+            let pos = t.position.unwrap_or_default();
+            let vel = t.velocity.unwrap_or_default();
+            let covariance = if t.covariance_row_major.is_empty() {
+                None
+            } else {
+                Some(t.covariance_row_major)
+            };
+            TrackState {
+                track_id: t.track_id,
+                position: [pos.x_m as f32, pos.y_m as f32, pos.z_m as f32],
+                velocity: [vel.x_m as f32, vel.y_m as f32, vel.z_m as f32],
+                measurement_std_m: t.measurement_std_m,
+                update_count: t.update_count,
+                stale_steps: t.stale_steps,
+                covariance,
+            }
+        }
+    }
+
+    impl From<pb::TruthState> for TruthState {
+        fn from(t: pb::TruthState) -> Self {
+            let pos = t.position.unwrap_or_default();
+            let vel = t.velocity.unwrap_or_default();
+            TruthState {
+                target_id: t.target_id,
+                position: [pos.x_m as f32, pos.y_m as f32, pos.z_m as f32],
+                velocity: [vel.x_m as f32, vel.y_m as f32, vel.z_m as f32],
+            }
+        }
+    }
+
+    impl From<pb::NodeState> for NodeState {
+        fn from(n: pb::NodeState) -> Self {
+            let pos = n.position.unwrap_or_default();
+            let vel = n.velocity.unwrap_or_default();
+            NodeState {
+                node_id: n.node_id,
+                position: [pos.x_m as f32, pos.y_m as f32, pos.z_m as f32],
+                velocity: [vel.x_m as f32, vel.y_m as f32, vel.z_m as f32],
+                is_mobile: n.is_mobile,
+                health: n.health,
+                sensor_type: n.sensor_type,
+                fov_half_angle_deg: if n.fov_half_angle_deg == 0.0 {
+                    None
+                } else {
+                    Some(n.fov_half_angle_deg)
+                },
+                max_range_m: if n.max_range_m == 0.0 {
+                    None
+                } else {
+                    Some(n.max_range_m)
+                },
+            }
+        }
     }
 }
 

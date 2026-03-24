@@ -4,8 +4,8 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracker_proto::pb::tracker_service_client::TrackerServiceClient;
-use tracker_proto::pb::{
+use argusnet_proto::pb::world_model_service_client::WorldModelServiceClient;
+use argusnet_proto::pb::{
     BearingObservation, GetConfigRequest, HealthRequest, IngestFrameRequest, LatestFrameRequest,
     NodeState, ResetRequest, TruthState, Vector3,
 };
@@ -46,6 +46,9 @@ fn node_from_json(value: &Value) -> NodeState {
         is_mobile: value["is_mobile"].as_bool().expect("is_mobile"),
         timestamp_s: value["timestamp_s"].as_f64().expect("timestamp_s"),
         health: value["health"].as_f64().expect("health"),
+        sensor_type: value["sensor_type"].as_str().unwrap_or("").to_string(),
+        fov_half_angle_deg: value["fov_half_angle_deg"].as_f64().unwrap_or(0.0),
+        max_range_m: value["max_range_m"].as_f64().unwrap_or(0.0),
     }
 }
 
@@ -98,7 +101,7 @@ fn vector_to_json(value: &Vector3) -> Value {
     json!([value.x_m, value.y_m, value.z_m])
 }
 
-fn message_metrics_to_json(metrics: &tracker_proto::pb::PlatformMetrics) -> Value {
+fn message_metrics_to_json(metrics: &argusnet_proto::pb::PlatformMetrics) -> Value {
     json!({
         "mean_error_m": metrics.mean_error_m,
         "max_error_m": metrics.max_error_m,
@@ -114,7 +117,7 @@ fn message_metrics_to_json(metrics: &tracker_proto::pb::PlatformMetrics) -> Valu
     })
 }
 
-fn frame_to_json(frame: &tracker_proto::pb::PlatformFrame) -> Value {
+fn frame_to_json(frame: &argusnet_proto::pb::PlatformFrame) -> Value {
     let nodes = frame
         .nodes
         .iter()
@@ -294,7 +297,7 @@ async fn grpc_daemon_matches_golden_fixture_and_streaming() {
     .expect("write config");
 
     let address = allocate_endpoint();
-    let server_handle = tokio::spawn(tracker_server::serve(tracker_server::ServeArgs {
+    let server_handle = tokio::spawn(argusnet_server::serve(argusnet_server::ServeArgs {
         listen: address.clone(),
         config: Some(config_path.clone()),
         min_observations: None,
@@ -322,7 +325,7 @@ async fn grpc_daemon_matches_golden_fixture_and_streaming() {
     }));
 
     let mut client = loop {
-        match TrackerServiceClient::connect(format!("http://{address}")).await {
+        match WorldModelServiceClient::connect(format!("http://{address}")).await {
             Ok(client) => break client,
             Err(_) => sleep(Duration::from_millis(100)).await,
         }

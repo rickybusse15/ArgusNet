@@ -34,7 +34,7 @@ PROJECT_DEPENDENCY_MODULES = frozenset(
 )
 
 PYTHON_DEPENDENCY_INSTALL_HINT = (
-    "Smart Tracker requires Python dependencies (`numpy`, `grpcio`, `protobuf`, `pyproj`, and `tifffile`). "
+    "ArgusNet requires Python dependencies (`numpy`, `grpcio`, `protobuf`, `pyproj`, and `tifffile`). "
     "Install project dependencies with `python3 -m pip install --user -e .`."
 )
 
@@ -117,8 +117,8 @@ def _iter_with_progress(
 
 def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="smart-tracker",
-        description="Run the Smart Trajectory Tracker simulator, scene compiler, and exporters.",
+        prog="argusnet",
+        description="Run the ArgusNet simulator, scene compiler, and exporters.",
     )
     _add_logging_args(parser)
     subparsers = parser.add_subparsers(dest="command")
@@ -147,8 +147,8 @@ def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
     source_group.add_argument("--mqtt-broker", default=None, help="MQTT broker hostname (live ingestion).")
     source_group.add_argument("--replay-file", default=None, help="Path to replay.json for file-based replay ingestion.")
     ingest_parser.add_argument("--mqtt-port", type=int, default=1883, help="MQTT broker port (default: 1883).")
-    ingest_parser.add_argument("--observation-topic", default="smart_tracker/observations", help="MQTT topic for observations.")
-    ingest_parser.add_argument("--node-topic", default="smart_tracker/nodes", help="MQTT topic for node states.")
+    ingest_parser.add_argument("--observation-topic", default="argusnet/observations", help="MQTT topic for observations.")
+    ingest_parser.add_argument("--node-topic", default="argusnet/nodes", help="MQTT topic for node states.")
     ingest_parser.add_argument("--replay-speed", type=float, default=1.0, help="Playback speed multiplier for --replay-file (default: 1.0; 0 = as fast as possible).")
     ingest_parser.add_argument("--replay-loop", action="store_true", help="Loop replay file continuously.")
     ingest_parser.add_argument("--enu-origin", required=True, help="ENU origin as 'lat,lon,alt' (degrees, meters).")
@@ -386,7 +386,7 @@ def _run_validate_replay(args: argparse.Namespace) -> None:
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Error: {replay_path} is not valid JSON: {exc}")
 
-    from smart_tracker.replay import validate_replay_document
+    from argusnet.evaluation.replay import validate_replay_document
     try:
         validate_replay_document(document)
     except ValueError as exc:
@@ -569,7 +569,7 @@ def _run_ingest(args: argparse.Namespace) -> None:
     finally:
         adapter.stop()
         if args.replay_output and replay_frames:
-            from smart_tracker.replay import build_replay_document, write_replay_document
+            from argusnet.evaluation.replay import build_replay_document, write_replay_document
             doc = build_replay_document(
                 replay_frames,
                 scenario_name="live-ingest" if not args.replay_file else "file-replay",
@@ -583,8 +583,8 @@ def _run_ingest(args: argparse.Namespace) -> None:
 
 
 def _run_export(args: argparse.Namespace) -> None:
-    from smart_tracker.export import export_replay_format
-    from smart_tracker.replay import load_replay_document
+    from argusnet.evaluation.export import export_replay_format
+    from argusnet.evaluation.replay import load_replay_document
 
     enu_origin = _parse_enu_origin(args.enu_origin)
     replay_doc = load_replay_document(args.replay)
@@ -615,8 +615,8 @@ def _run_export(args: argparse.Namespace) -> None:
 
 
 def _run_batch_export(args: argparse.Namespace) -> None:
-    from smart_tracker.export import EXPORT_FORMATS, export_replay_format, suggested_output_path
-    from smart_tracker.replay import load_replay_document
+    from argusnet.evaluation.export import EXPORT_FORMATS, export_replay_format, suggested_output_path
+    from argusnet.evaluation.replay import load_replay_document
 
     enu_origin = _parse_enu_origin(args.enu_origin)
     replay_doc = load_replay_document(args.replay)

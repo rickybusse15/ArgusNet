@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{Line, Plot, PlotPoints, VLine};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
 use crate::replay::ReplayState;
@@ -10,6 +10,7 @@ use crate::state::{
     RuntimeOverlayVisibility, SelectionState, SimulationRunner, ViewMode, ZoneFocus, ZoneOverlapModel,
 };
 
+const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
 const MAP_PRESETS: &[&str] = &[
     "small",
     "medium",
@@ -56,6 +57,7 @@ pub fn viewer_ui_system(
     mut zone_overlap_model: ResMut<ZoneOverlapModel>,
     mut sim_runner: ResMut<SimulationRunner>,
     projected_badges: Res<ProjectedZoneBadges>,
+    diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
 ) {
     let context = contexts.ctx_mut();
     let supports_hot_swap = scene_package.is_synthetic_source();
@@ -69,7 +71,7 @@ pub fn viewer_ui_system(
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    section_scene_header(ui, &scene_package, &mission_zones);
+                    section_scene_header(ui, &scene_package, &mission_zones, &replay_state);
                     ui.separator();
 
                     section_mission_progress(ui, &replay_state, &mut view_mode, &mission_overlay);
@@ -79,6 +81,9 @@ pub fn viewer_ui_system(
                     ui.separator();
 
                     section_playback(ui, &mut replay_state);
+                    ui.separator();
+
+                    section_performance(ui, &replay_state, &diagnostics);
                     ui.separator();
 
                     section_tracking_metrics(ui, &frame_metrics);
@@ -119,6 +124,9 @@ pub fn viewer_ui_system(
 
     // --- Screen-space zone badges (viewport overlay) ---
     draw_zone_badges(context, &projected_badges);
+
+    // --- Mission phase HUD badge (top of 3D viewport) ---
+    draw_mission_phase_hud(context, &replay_state);
 }
 
 // ---------------------------------------------------------------------------
@@ -129,8 +137,9 @@ fn section_scene_header(
     ui: &mut egui::Ui,
     scene_package: &ScenePackage,
     mission_zones: &LoadedMissionZones,
+    replay_state: &ReplayState,
 ) {
-    ui.heading("Smart Tracker Viewer");
+    ui.heading("ArgusNet Viewer");
     ui.label(format!("Scene: {}", scene_package.manifest.scene_id));
     ui.label(format!("CRS: {}", scene_package.manifest.source_crs_id));
 
@@ -151,6 +160,24 @@ fn section_scene_header(
             mesh.cols, mesh.rows
         ));
     }
+
+    // Inline mission phase + coverage summary (always visible without opening any section).
+    if let Some(frame) = replay_state.current_frame() {
+        if let Some(ref ms) = frame.scan_mission_state {
+            let pct = (ms.scan_coverage_fraction * 100.0).min(100.0);
+            let (phase_label, phase_color) = match ms.phase.as_str() {
+                "scanning"   => ("SCANNING",   egui::Color32::from_rgb(80, 140, 255)),
+                "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
+                "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
+                "complete"   => ("COMPLETE",   egui::Color32::from_rgb(60, 200, 80)),
+                other        => (other,        egui::Color32::GRAY),
+            };
+            ui.horizontal(|ui| {
+                ui.colored_label(phase_color, format!("\u{25cf} {}", phase_label));
+                ui.label(format!("  {:.0}% covered", pct));
+            });
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +195,10 @@ fn section_scenario(
         }
 
         ui.add_enabled_ui(supports_hot_swap && !sim_runner.is_busy(), |ui| {
+            combo_box(ui, "Mission Mode", &sim_runner.mission_mode.clone(), MISSION_MODES, |v| {
+                sim_runner.mission_mode = v.to_string();
+            });
+            ui.separator();
             combo_box(ui, "Map", &sim_runner.map_preset.clone(), MAP_PRESETS, |v| {
                 sim_runner.map_preset = v.to_string();
             });
@@ -193,28 +224,6 @@ fn section_scenario(
                     sim_runner.platform_preset = v.to_string();
                 },
             );
-            combo_box(
-                ui,
-                "Target Motion",
-                &sim_runner.target_motion.clone(),
-                MOTION_PRESETS,
-                |v| {
-                    sim_runner.target_motion = v.to_string();
-                },
-            );
-            combo_box(
-                ui,
-                "Drone Mode",
-                &sim_runner.drone_mode.clone(),
-                DRONE_MODES,
-                |v| {
-                    sim_runner.drone_mode = v.to_string();
-                },
-            );
-
-            ui.add(
-                egui::Slider::new(&mut sim_runner.target_count, 1..=8).text("Targets"),
-            );
             ui.add(
                 egui::Slider::new(&mut sim_runner.drone_count, 1..=8).text("Drones"),
             );
@@ -228,6 +237,45 @@ fn section_scenario(
                     .step_by(10.0),
             );
             ui.add(egui::Slider::new(&mut sim_runner.seed, 0..=999).text("Seed"));
+
+            // Mission-mode-specific parameters
+            if sim_runner.mission_mode == "scan_map_inspect" {
+                ui.separator();
+                ui.label("Scan / Map / Inspect");
+                ui.add(
+                    egui::Slider::new(&mut sim_runner.scan_coverage_threshold, 0.3..=0.95)
+                        .text("Scan threshold")
+                        .step_by(0.05),
+                );
+                ui.add(
+                    egui::Slider::new(&mut sim_runner.poi_count, 1..=10).text("POI count"),
+                );
+            } else {
+                // target_tracking mode — show target-centric controls
+                ui.separator();
+                ui.label("Target Tracking");
+                combo_box(
+                    ui,
+                    "Target Motion",
+                    &sim_runner.target_motion.clone(),
+                    MOTION_PRESETS,
+                    |v| {
+                        sim_runner.target_motion = v.to_string();
+                    },
+                );
+                combo_box(
+                    ui,
+                    "Drone Mode",
+                    &sim_runner.drone_mode.clone(),
+                    DRONE_MODES,
+                    |v| {
+                        sim_runner.drone_mode = v.to_string();
+                    },
+                );
+                ui.add(
+                    egui::Slider::new(&mut sim_runner.target_count, 1..=8).text("Targets"),
+                );
+            }
         });
 
         if sim_runner.is_busy() {
@@ -266,7 +314,9 @@ fn section_mission_progress(
         return;
     };
 
-    ui.collapsing("Mission Progress", |ui| {
+    egui::CollapsingHeader::new("Mission Progress")
+        .default_open(true)
+        .show(ui, |ui| {
         // View mode toggle
         ui.horizontal(|ui| {
             ui.label("View:");
@@ -467,7 +517,7 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
     });
 
     ui.add(
-        egui::Slider::new(&mut replay_state.playback_speed, 0.25..=4.0)
+        egui::Slider::new(&mut replay_state.playback_speed, 0.25..=64.0)
             .text("Speed")
             .step_by(0.25),
     );
@@ -482,7 +532,7 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
         replay_state.step_to(frame_value as usize);
     }
 
-    // Item 13: Timeline sparkline — observations/frame across all frames.
+    // Timeline sparkline — observations/frame with phase-transition vertical lines.
     if let Some(ref document) = replay_state.document {
         let points: PlotPoints = document
             .frames
@@ -491,6 +541,24 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
             .map(|(i, f)| [i as f64, f.metrics.observation_count as f64])
             .collect();
         let line = Line::new(points);
+
+        // Collect phase transition frame indices.
+        let mut phase_transitions: Vec<(usize, String)> = Vec::new();
+        let mut last_phase = String::new();
+        for (i, frame) in document.frames.iter().enumerate() {
+            if let Some(ref ms) = frame.scan_mission_state {
+                if ms.phase != last_phase {
+                    if i > 0 {
+                        phase_transitions.push((i, ms.phase.clone()));
+                    }
+                    last_phase = ms.phase.clone();
+                }
+            }
+        }
+
+        // Current-frame cursor line.
+        let current_frame = replay_state.frame_index as f64;
+
         Plot::new("obs_sparkline")
             .height(60.0)
             .allow_zoom(false)
@@ -500,9 +568,84 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
             .label_formatter(|_, _| String::new())
             .show(ui, |plot_ui| {
                 plot_ui.line(line);
+                // Phase transition markers.
+                for (frame_idx, phase) in &phase_transitions {
+                    let color = match phase.as_str() {
+                        "localizing" => egui::Color32::from_rgba_unmultiplied(255, 210, 60, 200),
+                        "inspecting" => egui::Color32::from_rgba_unmultiplied(255, 140, 40, 200),
+                        "complete"   => egui::Color32::from_rgba_unmultiplied(60, 200, 80, 200),
+                        _            => egui::Color32::from_rgba_unmultiplied(120, 120, 120, 150),
+                    };
+                    plot_ui.vline(VLine::new(*frame_idx as f64).color(color).width(2.0));
+                }
+                // Current playhead.
+                plot_ui.vline(
+                    VLine::new(current_frame)
+                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180))
+                        .width(1.5),
+                );
             });
-        ui.label("Observations/frame");
+        // Phase legend below sparkline.
+        if !phase_transitions.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label("Phases:");
+                for (_, phase) in &phase_transitions {
+                    let color = match phase.as_str() {
+                        "localizing" => egui::Color32::from_rgb(255, 210, 60),
+                        "inspecting" => egui::Color32::from_rgb(255, 140, 40),
+                        "complete"   => egui::Color32::from_rgb(60, 200, 80),
+                        _            => egui::Color32::GRAY,
+                    };
+                    ui.colored_label(color, format!("▎{}", phase));
+                }
+            });
+        } else {
+            ui.label("Observations/frame");
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Section: Performance
+// ---------------------------------------------------------------------------
+
+fn section_performance(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    diagnostics: &bevy::diagnostic::DiagnosticsStore,
+) {
+    ui.collapsing("Performance", |ui| {
+        // FPS
+        use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
+        if let Some(fps) = diagnostics
+            .get(&FrameTimeDiagnosticsPlugin::FPS)
+            .and_then(|d| d.smoothed())
+        {
+            ui.label(format!("FPS: {:.1}", fps));
+        } else {
+            ui.label("FPS: --");
+        }
+        if let Some(frame_time) = diagnostics
+            .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
+            .and_then(|d| d.smoothed())
+        {
+            ui.label(format!("Frame time: {:.2} ms", frame_time));
+        }
+        // Replay stats
+        let frame_count = replay_state.frame_count();
+        ui.label(format!("Replay frames: {}", frame_count));
+        if frame_count > 0 {
+            let current = replay_state.frame_index;
+            let pct = current as f32 / frame_count as f32 * 100.0;
+            ui.label(format!(
+                "Frame: {}/{} ({:.0}%)",
+                current + 1, frame_count, pct
+            ));
+            let ts = replay_state.current_timestamp_s();
+            let speed = replay_state.playback_speed;
+            ui.label(format!("Timestamp: {:.1} s  Speed: {:.1}×", ts, speed));
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -924,7 +1067,9 @@ fn section_mapping_status(ui: &mut egui::Ui, replay_state: &ReplayState) {
     let Some(ref ms) = frame.mapping_state else {
         return;
     };
-    ui.collapsing("Mapping", |ui| {
+    egui::CollapsingHeader::new("Mapping")
+        .default_open(true)
+        .show(ui, |ui| {
         kv_row(ui, "Coverage", &format!("{:.1}%", ms.coverage_fraction * 100.0));
         kv_row(ui, "Covered cells", &ms.covered_cells.to_string());
         kv_row(ui, "Total cells", &ms.total_cells.to_string());
@@ -944,7 +1089,9 @@ fn section_localization_status(ui: &mut egui::Ui, replay_state: &ReplayState) {
     let Some(ref ls) = frame.localization_state else {
         return;
     };
-    ui.collapsing("Localization", |ui| {
+    egui::CollapsingHeader::new("Localization")
+        .default_open(true)
+        .show(ui, |ui| {
         kv_row(ui, "Active tracks", &ls.active_localizations.to_string());
         kv_row(ui, "Mean pos. std.", &format!("{:.1} m", ls.mean_position_std_m));
         kv_row(ui, "Mean confidence", &format!("{:.2}", ls.mean_observation_confidence));
@@ -964,7 +1111,9 @@ fn section_inspection_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
         return;
     }
     let count = frame.inspection_events.len();
-    ui.collapsing(format!("Inspection Events ({count})"), |ui| {
+    egui::CollapsingHeader::new(format!("Inspection Events ({count})"))
+        .default_open(true)
+        .show(ui, |ui| {
         let limit = 20;
         for (i, ev) in frame.inspection_events.iter().enumerate() {
             if i >= limit {
@@ -1119,6 +1268,8 @@ fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.radar_rings, "Radar Rings");
         ui.checkbox(&mut runtime_visibility.coverage_overlay, "Coverage Overlay");
         ui.checkbox(&mut runtime_visibility.inspection_events, "Inspection Events");
+        ui.checkbox(&mut runtime_visibility.launch_lines, "Launch Lines");
+        ui.checkbox(&mut runtime_visibility.show_covariance_ellipsoids, "Covariance Ellipsoids");
         ui.separator();
         ui.label("Mission overlays:");
         ui.checkbox(&mut mission_overlay.show_scan_grid, "Coverage grid");
@@ -1241,6 +1392,8 @@ fn section_keyboard_shortcuts(ui: &mut egui::Ui) {
         ui.label("Right       Next frame");
         ui.label("Home        First frame");
         ui.label("End         Last frame");
+        ui.label("M           Cycle view mode");
+        ui.label("R           Reset camera");
         ui.label("Right-drag  Orbit camera");
         ui.label("Mid-drag    Pan camera");
         ui.label("Scroll      Zoom");
@@ -1295,6 +1448,80 @@ fn draw_zone_badges(context: &egui::Context, projected_badges: &ProjectedZoneBad
                     cx += chip_text.len() as f32 * 7.0 + 4.0;
                 }
             }
+        });
+}
+
+// ---------------------------------------------------------------------------
+// Mission Phase HUD
+// ---------------------------------------------------------------------------
+
+/// Draws a colored badge in the top-left of the 3D viewport showing the
+/// current mission phase and key metric.
+fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(ref ms) = frame.scan_mission_state else {
+        return;
+    };
+
+    let (badge_text, badge_color) = match ms.phase.as_str() {
+        "scanning" => {
+            let pct = (ms.scan_coverage_fraction * 100.0) as u32;
+            (
+                format!("\u{25a6} SCANNING  {}%", pct),
+                egui::Color32::from_rgb(80, 140, 255),
+            )
+        }
+        "localizing" => (
+            "\u{25ce} LOCALIZING".to_string(),
+            egui::Color32::from_rgb(255, 210, 60),
+        ),
+        "inspecting" => {
+            let done = ms.completed_poi_count;
+            let total = ms.total_poi_count.max(1);
+            (
+                format!("\u{25cf} INSPECTING  {}/{}", done, total),
+                egui::Color32::from_rgb(255, 140, 40),
+            )
+        }
+        "complete" => (
+            "\u{2713} COMPLETE".to_string(),
+            egui::Color32::from_rgb(60, 200, 80),
+        ),
+        other => (other.to_ascii_uppercase(), egui::Color32::GRAY),
+    };
+
+    // Position just to the right of the 320 px side panel, near the top.
+    egui::Area::new(egui::Id::new("phase_hud"))
+        .fixed_pos(egui::pos2(330.0, 8.0))
+        .order(egui::Order::Foreground)
+        .show(context, |ui| {
+            let galley = ui.painter().layout_no_wrap(
+                badge_text.clone(),
+                egui::FontId::proportional(14.0),
+                badge_color,
+            );
+            let text_size = galley.size();
+            let pad = egui::vec2(10.0, 5.0);
+            let rect = egui::Rect::from_min_size(
+                ui.next_widget_position(),
+                text_size + pad * 2.0,
+            );
+            ui.allocate_rect(rect, egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(
+                rect,
+                5.0,
+                egui::Color32::from_rgba_unmultiplied(10, 12, 18, 200),
+            );
+            painter.text(
+                rect.left_center() + egui::vec2(pad.x, 0.0),
+                egui::Align2::LEFT_CENTER,
+                &badge_text,
+                egui::FontId::proportional(14.0),
+                badge_color,
+            );
         });
 }
 

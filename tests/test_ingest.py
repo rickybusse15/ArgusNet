@@ -7,8 +7,8 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.coordinates import ENUOrigin, wgs84_to_enu
-from smart_tracker.ingest import (
+from argusnet.core.frames import ENUOrigin, wgs84_to_enu
+from argusnet.sensing.ingestion.frame_stream import (
     MQTTIngestionAdapter,
     parse_mqtt_node_state,
     parse_mqtt_observation,
@@ -136,8 +136,8 @@ class TestParseMQTTNodeState(unittest.TestCase):
 class TestMQTTAdapterConstruction(unittest.TestCase):
     def test_default_topics(self):
         adapter = MQTTIngestionAdapter(broker="localhost")
-        self.assertEqual(adapter.observation_topic, "smart_tracker/observations")
-        self.assertEqual(adapter.node_topic, "smart_tracker/nodes")
+        self.assertEqual(adapter.observation_topic, "argusnet/observations")
+        self.assertEqual(adapter.node_topic, "argusnet/nodes")
         self.assertEqual(adapter.port, 1883)
 
     def test_flush_empty(self):

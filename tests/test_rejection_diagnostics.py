@@ -13,7 +13,7 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.models import (
+from argusnet.core.types import (
     BearingObservation,
     NodeState,
     TruthState,
@@ -21,8 +21,8 @@ from smart_tracker.models import (
     PlatformFrame,
     vec3,
 )
-from smart_tracker.service import TrackerConfig, TrackingService
-from smart_tracker.environment import (
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+from argusnet.world.environment import (
     Bounds2D,
     TerrainLayer,
     EnvironmentModel,

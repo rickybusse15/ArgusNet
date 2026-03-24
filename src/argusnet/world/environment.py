@@ -450,8 +450,8 @@ class TerrainLayer:
         }
 
     def viewer_mesh(self, max_dimension: int = 128) -> Dict[str, object]:
-        cols = max(2, min(max_dimension, int(math.ceil(self.bounds_xy_m.width_m / self.base_resolution_m / 4.0))))
-        rows = max(2, min(max_dimension, int(math.ceil(self.bounds_xy_m.height_m / self.base_resolution_m / 4.0))))
+        cols = max(2, min(max_dimension, int(math.ceil(self.bounds_xy_m.width_m / self.base_resolution_m))))
+        rows = max(2, min(max_dimension, int(math.ceil(self.bounds_xy_m.height_m / self.base_resolution_m))))
         x_values = np.linspace(self.bounds_xy_m.x_min_m, self.bounds_xy_m.x_max_m, num=cols, dtype=float)
         y_values = np.linspace(self.bounds_xy_m.y_min_m, self.bounds_xy_m.y_max_m, num=rows, dtype=float)
         heights = [[self.height_at(float(x_m), float(y_m)) for x_m in x_values] for y_m in y_values]

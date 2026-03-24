@@ -6,7 +6,7 @@ comment describing what it controls and its units.
 
 Usage::
 
-    from smart_tracker.config import SimulationConstants
+    from argusnet.core.config import SimulationConstants
 
     # Use defaults (identical to the original hardcoded values)
     constants = SimulationConstants.default()

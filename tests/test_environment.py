@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import tifffile
 
-from smart_tracker.environment import (
+from argusnet.world.environment import (
     Bounds2D,
     BuildingPrism,
     EnvironmentCRS,
@@ -21,7 +21,7 @@ from smart_tracker.environment import (
     load_environment_bundle,
     write_environment_bundle,
 )
-from smart_tracker.terrain import TerrainModel
+from argusnet.world.terrain import TerrainModel
 
 
 class TerrainLayerTest(unittest.TestCase):

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from smart_tracker.environment import (
+from argusnet.world.environment import (
     Bounds2D,
     TerrainLayer,
     EnvironmentModel,
@@ -21,7 +21,7 @@ from smart_tracker.environment import (
     LandCoverLayer,
     CylinderObstacle,
 )
-from smart_tracker.models import (
+from argusnet.core.types import (
     MissionZone,
     BearingObservation,
     NodeState,
@@ -31,7 +31,7 @@ from smart_tracker.models import (
     ZONE_TYPE_EXCLUSION,
     ZONE_TYPE_OBJECTIVE,
 )
-from smart_tracker.service import TrackerConfig, TrackingService
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 
 
 def create_terrain_environment() -> EnvironmentModel:

@@ -1,4 +1,4 @@
-"""evaluation.py — Evaluation harness for Smart Trajectory Tracker.
+"""evaluation.py — Evaluation harness for ArgusNet.
 
 Implements the evaluation model defined in docs/SCENARIOS.md, Section 1.
 The main entry point is ``evaluate_replay()``, which takes a replay document
@@ -7,7 +7,7 @@ The main entry point is ``evaluate_replay()``, which takes a replay document
 
 Usage::
 
-    from smart_tracker.evaluation import evaluate_replay, check_pass_fail
+    from argusnet.evaluation import evaluate_replay, check_pass_fail
 
     report = evaluate_replay(replay_doc, "baseline_small_1t", "surveillance", 0.1, 42)
     report = check_pass_fail(report)

@@ -6,7 +6,7 @@ use argusnet_viewer::{render_headless, CameraPreset, HeadlessRenderOptions};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "smart-tracker-viewer",
+    name = "argusnet-viewer",
     about = "Open a smartscene-v1 package in the native viewer."
 )]
 struct Args {

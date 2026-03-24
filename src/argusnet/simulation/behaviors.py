@@ -7,7 +7,7 @@ engine.  Each callable accepts a time in seconds and returns a
 
 Typical usage::
 
-    from smart_tracker.behaviors import build_target_trajectory, LoiterBehavior
+    from argusnet.simulation.behaviors import build_target_trajectory, LoiterBehavior
 
     traj = build_target_trajectory("loiter", bounds, altitude_m=150.0,
                                     speed_mps=25.0, seed=42)

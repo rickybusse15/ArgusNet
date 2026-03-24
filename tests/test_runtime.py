@@ -7,8 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from smart_tracker import TrackerConfig, TrackingService
-from smart_tracker.models import BearingObservation, NodeState, TruthState
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+from argusnet.core.types import BearingObservation, NodeState, TruthState
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "runtime_parity_fixture.json"

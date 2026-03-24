@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from smart_tracker.scene import _build_obstacle_meshes, build_scene_from_gis, build_scene_from_replay, load_scene_manifest
+from argusnet.world.scene_loader import _build_obstacle_meshes, build_scene_from_gis, build_scene_from_replay, load_scene_manifest
 
 try:
     import tifffile

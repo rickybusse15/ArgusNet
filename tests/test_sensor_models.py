@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.sensor_models import (
+from argusnet.sensing.models.noise import (
     SensorBiasDrift,
     SensorErrorConfig,
     SensorModel,

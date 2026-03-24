@@ -4,9 +4,9 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.environment import Bounds2D, ObstacleLayer
-from smart_tracker.obstacles import BuildingPrism, CylinderObstacle, WallSegment
-from smart_tracker.planning import PathPlanner2D, PlannerConfig
+from argusnet.world.environment import Bounds2D, ObstacleLayer
+from argusnet.world.obstacles import BuildingPrism, CylinderObstacle, WallSegment
+from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
 
 
 class PathPlannerTest(unittest.TestCase):

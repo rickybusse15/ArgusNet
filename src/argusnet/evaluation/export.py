@@ -370,7 +370,7 @@ def export_foxglove(
         writer.start()
 
         schema_id = writer.register_schema(
-            name="smart_tracker.TrackPositions",
+            name="argusnet.TrackPositions",
             encoding="jsonschema",
             data=json.dumps({
                 "type": "object",
@@ -394,7 +394,7 @@ def export_foxglove(
 
         channel_id = writer.register_channel(
             schema_id=schema_id,
-            topic="/smart_tracker/tracks",
+            topic="/argusnet/tracks",
             message_encoding="json",
         )
 
@@ -548,7 +548,7 @@ def export_kmz(
     """Export KML content as a single-document KMZ archive."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="smart-tracker-kmz-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="argusnet-kmz-") as temp_dir:
         kml_path = Path(temp_dir) / "doc.kml"
         export_kml(
             replay_document,
@@ -623,7 +623,7 @@ def export_gpx(
     gpx = ET.Element(
         "gpx",
         version="1.1",
-        creator="smart-tracker",
+        creator="argusnet",
         xmlns=_GPX_NS,
     )
 
@@ -1089,12 +1089,12 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """CLI entry point for ``smart-tracker-export``."""
+    """CLI entry point for ``argusnet-export``."""
     import argparse
     from .cli import _parse_enu_origin
     from .replay import load_replay_document
 
-    parser = argparse.ArgumentParser(prog="smart-tracker-export", description="Export replay data.")
+    parser = argparse.ArgumentParser(prog="argusnet-export", description="Export replay data.")
     parser.add_argument("--replay", required=True, help="Path to replay JSON.")
     parser.add_argument("--format", required=True, choices=list(EXPORT_FORMATS))
     parser.add_argument("--enu-origin", required=True, help="ENU origin as 'lat,lon,alt'.")

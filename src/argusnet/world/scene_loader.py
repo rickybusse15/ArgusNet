@@ -392,7 +392,7 @@ def build_scene_from_replay(
         environment_path="metadata/environment.json",
         style_path="metadata/style.json",
         provenance={
-            "tool": "smart_tracker.scene.build_scene_from_replay",
+            "tool": "argusnet.world.scene_loader.build_scene_from_replay",
             "replay_source": str(replay) if not isinstance(replay, Mapping) else "<in-memory>",
             "environment_bundle": None if environment_bundle is None else str(environment_bundle),
         },
@@ -554,7 +554,7 @@ def build_scene_from_gis(
         environment_path="metadata/environment.json",
         style_path="metadata/style.json",
         provenance={
-            "tool": "smart_tracker.scene.build_scene_from_gis",
+            "tool": "argusnet.world.scene_loader.build_scene_from_gis",
             "dem_path": str(dem_path),
             "overlay_paths": {key: [str(path) for path in value] for key, value in (overlay_paths or {}).items()},
         },

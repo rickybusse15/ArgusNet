@@ -4,10 +4,10 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.environment import Bounds2D, EnvironmentCRS, EnvironmentModel, LandCoverLayer, ObstacleLayer, TerrainLayer
-from smart_tracker.obstacles import BuildingPrism, CylinderObstacle, ForestStand, OrientedBox, WallSegment, _point_in_polygon
-from smart_tracker.planning import PathPlanner2D
-from smart_tracker.sim import collision_aware_position
+from argusnet.world.environment import Bounds2D, EnvironmentCRS, EnvironmentModel, LandCoverLayer, ObstacleLayer, TerrainLayer
+from argusnet.world.obstacles import BuildingPrism, CylinderObstacle, ForestStand, OrientedBox, WallSegment, _point_in_polygon
+from argusnet.planning.planner_base import PathPlanner2D
+from argusnet.simulation.sim import collision_aware_position
 
 
 class ObstacleCollisionTest(unittest.TestCase):

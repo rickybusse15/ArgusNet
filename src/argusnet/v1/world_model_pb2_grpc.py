@@ -64,6 +64,11 @@ class WorldModelServiceStub(object):
                 request_serializer=argusnet_dot_v1_dot_world__model__pb2.HealthRequest.SerializeToString,
                 response_deserializer=argusnet_dot_v1_dot_world__model__pb2.HealthResponse.FromString,
                 _registered_method=True)
+        self.MissionStatus = channel.unary_unary(
+                '/argusnet.v1.WorldModelService/MissionStatus',
+                request_serializer=argusnet_dot_v1_dot_world__model__pb2.MissionStatusRequest.SerializeToString,
+                response_deserializer=argusnet_dot_v1_dot_world__model__pb2.MissionStatusResponse.FromString,
+                _registered_method=True)
 
 
 class WorldModelServiceServicer(object):
@@ -105,6 +110,12 @@ class WorldModelServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def MissionStatus(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_WorldModelServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -137,6 +148,11 @@ def add_WorldModelServiceServicer_to_server(servicer, server):
                     servicer.Health,
                     request_deserializer=argusnet_dot_v1_dot_world__model__pb2.HealthRequest.FromString,
                     response_serializer=argusnet_dot_v1_dot_world__model__pb2.HealthResponse.SerializeToString,
+            ),
+            'MissionStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.MissionStatus,
+                    request_deserializer=argusnet_dot_v1_dot_world__model__pb2.MissionStatusRequest.FromString,
+                    response_serializer=argusnet_dot_v1_dot_world__model__pb2.MissionStatusResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -301,6 +317,33 @@ class WorldModelService(object):
             '/argusnet.v1.WorldModelService/Health',
             argusnet_dot_v1_dot_world__model__pb2.HealthRequest.SerializeToString,
             argusnet_dot_v1_dot_world__model__pb2.HealthResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MissionStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/argusnet.v1.WorldModelService/MissionStatus',
+            argusnet_dot_v1_dot_world__model__pb2.MissionStatusRequest.SerializeToString,
+            argusnet_dot_v1_dot_world__model__pb2.MissionStatusResponse.FromString,
             options,
             channel_credentials,
             insecure,

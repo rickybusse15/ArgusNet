@@ -234,6 +234,38 @@ def write_replay_document(path: str, document: ReplayDocument) -> None:
         json.dump(document, handle, indent=2)
 
 
+def write_streaming_replay_document(
+    jsonl_path: "Path",
+    output_path: "Path",
+    meta: Dict[str, object],
+    summary: Dict[str, object],
+) -> None:
+    """Assemble a replay JSON from a JSONL frame file without loading all frames.
+
+    Each line of *jsonl_path* must be a complete JSON object representing one
+    ``PlatformFrame``.  The resulting file is a standard replay document that
+    the viewer and other tools can read normally.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as out:
+        out.write('{"meta": ')
+        json.dump(meta, out)
+        out.write(', "summary": ')
+        json.dump(summary, out)
+        out.write(', "frames": [\n')
+        first = True
+        with open(jsonl_path, "r", encoding="utf-8") as src:
+            for raw_line in src:
+                line = raw_line.rstrip()
+                if not line:
+                    continue
+                if not first:
+                    out.write(',\n')
+                out.write(line)
+                first = False
+        out.write('\n]}')
+
+
 def load_replay_document(path: str) -> ReplayDocument:
     with open(path, "r", encoding="utf-8") as handle:
         document = json.load(handle)

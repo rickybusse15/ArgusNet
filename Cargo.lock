@@ -306,6 +306,7 @@ name = "argusnet-viewer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argusnet-proto",
  "bevy",
  "bevy_egui",
  "clap",

@@ -152,8 +152,8 @@ class MQTTIngestionAdapter:
 
     broker: str
     port: int = 1883
-    observation_topic: str = "smart_tracker/observations"
-    node_topic: str = "smart_tracker/nodes"
+    observation_topic: str = "argusnet/observations"
+    node_topic: str = "argusnet/nodes"
     enu_origin: ENUOrigin = field(default_factory=lambda: ENUOrigin(0.0, 0.0, 0.0))
 
     _client: Any = field(default=None, init=False, repr=False)
@@ -248,7 +248,7 @@ class FileReplayIngestionAdapter:
     buffer; :meth:`flush_pending` drains that buffer on the caller's schedule.
 
     Args:
-        replay_path: Path to the ``replay.json`` produced by ``smart-tracker sim``.
+        replay_path: Path to the ``replay.json`` produced by ``argusnet sim``.
         speed: Playback rate multiplier (default 1.0 = real-time, 0 = as fast
                as possible).
         loop: If ``True``, restart playback when the file is exhausted.
@@ -369,7 +369,7 @@ class LiveIngestionRunner:
 
     Args:
         adapter: A started :class:`MQTTIngestionAdapter` (or compatible).
-        service: An already-connected :class:`~smart_tracker.service.TrackingService`.
+        service: An already-connected :class:`~argusnet.adapters.argusnet_grpc.ArgusNetGrpcAdapter`.
         frame_interval_s: How often to flush and ingest a frame (seconds).
         replay_frames: If provided, frames are appended here for replay export.
     """

@@ -5,9 +5,9 @@ import os
 import tempfile
 import unittest
 
-from smart_tracker.models import BearingObservation, NodeState, TruthState, vec3
-from smart_tracker.replay import build_replay_document, load_replay_document, validate_replay_document
-from smart_tracker.service import TrackerConfig, TrackingService
+from argusnet.core.types import BearingObservation, NodeState, TruthState, vec3
+from argusnet.evaluation.replay import build_replay_document, load_replay_document, validate_replay_document
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 
 
 class ReplayDocumentTest(unittest.TestCase):

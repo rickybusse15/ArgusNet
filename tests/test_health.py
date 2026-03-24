@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from smart_tracker.models import HealthReport, NodeHealthMetrics
+from argusnet.core.types import HealthReport, NodeHealthMetrics
 
 
 class TestNodeHealthMetrics(unittest.TestCase):

@@ -47,9 +47,6 @@ class TerrainFeature:
     def height_contribution(self, x_m: float, y_m: float) -> float:
         raise NotImplementedError
 
-    def scaled(self, scale: float) -> "TerrainFeature":
-        raise NotImplementedError
-
     def to_metadata(self) -> Dict[str, object]:
         raise NotImplementedError
 
@@ -84,16 +81,6 @@ class MountainRange(TerrainFeature):
             contribution += amplitude * math.exp(-0.5 * along_delta * along_delta)
         return contribution * ridge_envelope
 
-    def scaled(self, scale: float) -> "MountainRange":
-        return MountainRange(
-            start_xy=self.start_xy * scale,
-            end_xy=self.end_xy * scale,
-            peak_elevation_m=self.peak_elevation_m,
-            width_m=self.width_m * scale,
-            peak_count=self.peak_count,
-            roughness=self.roughness,
-        )
-
     def to_metadata(self) -> Dict[str, object]:
         return {
             "kind": "mountain-range-v1",
@@ -122,14 +109,6 @@ class Valley(TerrainFeature):
         _, _, cross = _segment_frame(point_xy, self.start_xy, self.end_xy)
         normalized = cross / max(self.width_m, 1.0)
         return -self.depth_m * math.exp(-0.5 * normalized * normalized)
-
-    def scaled(self, scale: float) -> "Valley":
-        return Valley(
-            start_xy=self.start_xy * scale,
-            end_xy=self.end_xy * scale,
-            depth_m=self.depth_m,
-            width_m=self.width_m * scale,
-        )
 
     def to_metadata(self) -> Dict[str, object]:
         return {
@@ -193,14 +172,6 @@ class RidgeLine(TerrainFeature):
         normalized = cross / max(self.width_m, 1.0)
         return self.peak_elevation_m * math.exp(-0.5 * normalized * normalized)
 
-    def scaled(self, scale: float) -> "RidgeLine":
-        return RidgeLine(
-            start_xy=self.start_xy * scale,
-            end_xy=self.end_xy * scale,
-            peak_elevation_m=self.peak_elevation_m,
-            width_m=self.width_m * scale,
-        )
-
     def to_metadata(self) -> Dict[str, object]:
         return {
             "kind": "ridgeline-v1",
@@ -262,16 +233,6 @@ class NoiseLayer(TerrainFeature):
             amp *= self.persistence
         return total * self.amplitude_m
 
-    def scaled(self, scale: float) -> "NoiseLayer":
-        return NoiseLayer(
-            seed=self.seed,
-            amplitude_m=self.amplitude_m,
-            base_wavelength_m=self.base_wavelength_m * scale,
-            octaves=self.octaves,
-            persistence=self.persistence,
-            lacunarity=self.lacunarity,
-        )
-
     def to_metadata(self) -> Dict[str, object]:
         return {
             "kind": "noise-layer-v1",
@@ -281,53 +242,6 @@ class NoiseLayer(TerrainFeature):
             "octaves": self.octaves,
             "persistence": self.persistence,
             "lacunarity": self.lacunarity,
-        }
-
-
-@dataclass(frozen=True)
-class River(TerrainFeature):
-    """Sinuous water channel carved along a polyline centerline."""
-
-    control_points: Tuple[np.ndarray, ...]
-    width_m: float
-    depth_m: float
-    bank_slope: float = 4.0
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "control_points",
-            tuple(_as_xy(p) for p in self.control_points),
-        )
-
-    def height_contribution(self, x_m: float, y_m: float) -> float:
-        point_xy = np.array([x_m, y_m], dtype=float)
-        min_cross = float("inf")
-        for i in range(len(self.control_points) - 1):
-            _, _, cross = _segment_frame(
-                point_xy, self.control_points[i], self.control_points[i + 1]
-            )
-            if cross < min_cross:
-                min_cross = cross
-        half_w = max(self.width_m * 0.5, 1.0)
-        normalized = min_cross / half_w
-        return -self.depth_m * math.exp(-0.5 * normalized ** self.bank_slope)
-
-    def scaled(self, scale: float) -> "River":
-        return River(
-            control_points=tuple(p * scale for p in self.control_points),
-            width_m=self.width_m * scale,
-            depth_m=self.depth_m,
-            bank_slope=self.bank_slope,
-        )
-
-    def to_metadata(self) -> Dict[str, object]:
-        return {
-            "kind": "river-v1",
-            "control_points": [p.tolist() for p in self.control_points],
-            "width_m": self.width_m,
-            "depth_m": self.depth_m,
-            "bank_slope": self.bank_slope,
         }
 
 
@@ -409,28 +323,6 @@ class TerrainModel:
         """Slope magnitude in radians at the given point."""
         gx, gy = self.gradient_at(x_m, y_m, delta_m)
         return math.atan(math.sqrt(gx * gx + gy * gy))
-
-    def scaled(self, scale: float) -> "TerrainModel":
-        return TerrainModel(
-            ground_plane_m=self.ground_plane_m,
-            base_elevation_m=self.base_elevation_m,
-            slope_x_m_per_m=self.slope_x_m_per_m,
-            slope_y_m_per_m=self.slope_y_m_per_m,
-            wave_amplitude_m=self.wave_amplitude_m,
-            wave_length_x_m=self.wave_length_x_m * scale,
-            wave_length_y_m=self.wave_length_y_m * scale,
-            wave_phase_x_rad=self.wave_phase_x_rad,
-            wave_phase_y_rad=self.wave_phase_y_rad,
-            ridge_amplitude_m=self.ridge_amplitude_m,
-            ridge_center_x_m=self.ridge_center_x_m * scale,
-            ridge_center_y_m=self.ridge_center_y_m * scale,
-            ridge_radius_m=self.ridge_radius_m * scale,
-            basin_depth_m=self.basin_depth_m,
-            basin_center_x_m=self.basin_center_x_m * scale,
-            basin_center_y_m=self.basin_center_y_m * scale,
-            basin_radius_m=self.basin_radius_m * scale,
-            features=tuple(feature.scaled(scale) for feature in self.features),
-        )
 
     def to_metadata(self) -> Dict[str, object]:
         return {
@@ -828,10 +720,10 @@ def river_valley_terrain(scale: float) -> TerrainModel:
 def mountain_pass_terrain(scale: float) -> TerrainModel:
     return TerrainModel(
         ground_plane_m=0.0,
-        base_elevation_m=80.0,
+        base_elevation_m=40.0,
         slope_x_m_per_m=0.008,
         slope_y_m_per_m=-0.004,
-        wave_amplitude_m=25.0,
+        wave_amplitude_m=18.0,
         wave_length_x_m=220.0 * scale,
         wave_length_y_m=190.0 * scale,
         ridge_amplitude_m=40.0,
@@ -847,7 +739,7 @@ def mountain_pass_terrain(scale: float) -> TerrainModel:
             MountainRange(
                 start_xy=np.array([-380.0, 140.0], dtype=float) * scale,
                 end_xy=np.array([350.0, 200.0], dtype=float) * scale,
-                peak_elevation_m=550.0,
+                peak_elevation_m=180.0,
                 width_m=100.0 * scale,
                 peak_count=6,
                 roughness=0.85,
@@ -856,7 +748,7 @@ def mountain_pass_terrain(scale: float) -> TerrainModel:
             MountainRange(
                 start_xy=np.array([-350.0, -200.0], dtype=float) * scale,
                 end_xy=np.array([380.0, -140.0], dtype=float) * scale,
-                peak_elevation_m=550.0,
+                peak_elevation_m=180.0,
                 width_m=100.0 * scale,
                 peak_count=6,
                 roughness=0.80,
@@ -865,21 +757,15 @@ def mountain_pass_terrain(scale: float) -> TerrainModel:
             Valley(
                 start_xy=np.array([-400.0, 0.0], dtype=float) * scale,
                 end_xy=np.array([400.0, 0.0], dtype=float) * scale,
-                depth_m=100.0,
+                depth_m=60.0,
                 width_m=70.0 * scale,
             ),
-            # River snaking through the valley
-            River(
-                control_points=(
-                    np.array([-380.0, 10.0], dtype=float) * scale,
-                    np.array([-180.0, -25.0], dtype=float) * scale,
-                    np.array([0.0, 20.0], dtype=float) * scale,
-                    np.array([200.0, -15.0], dtype=float) * scale,
-                    np.array([380.0, 5.0], dtype=float) * scale,
-                ),
-                width_m=35.0 * scale,
-                depth_m=18.0,
-                bank_slope=4.0,
+            # Creek channel through the valley floor
+            Valley(
+                start_xy=np.array([-380.0, 10.0], dtype=float) * scale,
+                end_xy=np.array([380.0, 5.0], dtype=float) * scale,
+                depth_m=8.0,
+                width_m=20.0 * scale,
             ),
             # Saddle ridge crossing the pass
             RidgeLine(
@@ -889,12 +775,13 @@ def mountain_pass_terrain(scale: float) -> TerrainModel:
                 width_m=50.0 * scale,
             ),
             # Fractal roughness
-            NoiseLayer(seed=202, amplitude_m=40.0, base_wavelength_m=60.0 * scale),
+            NoiseLayer(seed=202, amplitude_m=18.0, base_wavelength_m=60.0 * scale),
         ),
     )
 
 
 TERRAIN_PRESET_BUILDERS = {
+    "default": rolling_highlands_terrain,
     "alpine": alpine_terrain,
     "coastal": coastal_terrain,
     "urban_flat": urban_flat_terrain,
