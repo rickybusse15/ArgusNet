@@ -143,7 +143,7 @@ impl DronePhysicalLimits {
         }
     }
 
-    /// Factory: tracker-role drone (wider orbit, longer endurance, larger standoff).
+    /// Factory: argusnet-role drone (wider orbit, longer endurance, larger standoff).
     pub fn tracker_default() -> Self {
         Self {
             max_speed_mps: 35.0,

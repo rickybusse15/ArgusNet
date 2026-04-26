@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from argusnet.mapping.semantics import SemanticMap
 
 import numpy as np
 
@@ -83,6 +86,39 @@ class WorldModel:
 
     def is_free(self, x: float, y: float) -> bool:
         return self.occupancy.is_free(x, y)
+
+    def fuse_semantic_into_occupancy(
+        self,
+        semantic_map: "SemanticMap",
+        building_confidence_threshold: float = 0.7,
+    ) -> int:
+        """Fuse semantic labels into occupancy and elevation constraints.
+
+        For BUILDING cells with confidence > threshold: force occupied.
+        For WATER cells: clear occupancy (surface is free, but enforces no-fly zone).
+
+        Returns the number of cells updated.
+        """
+        from argusnet.mapping.semantics import SemanticLabel
+        updated = 0
+        for r in range(semantic_map.rows):
+            for c in range(semantic_map.cols):
+                cell = semantic_map._cells[r][c]
+                if cell.total_observations == 0:
+                    continue
+                x, y = semantic_map.cell_center(r, c)
+                label = cell.dominant_label
+                conf = cell.confidence
+                if label == int(SemanticLabel.BUILDING) and conf >= building_confidence_threshold:
+                    # Force the corresponding occupancy cell to occupied
+                    elev = self.elevation.at_point(x, y)
+                    self.occupancy.mark_occupied(x, y, height_m=elev + 10.0)  # 10m building height default
+                    updated += 1
+                elif label == int(SemanticLabel.WATER):
+                    # Water surface is free, but should be noted
+                    self.occupancy.mark_free(x, y)
+                    updated += 1
+        return updated
 
     # ------------------------------------------------------------------
     # Serialisation (lightweight — arrays as npy blobs)

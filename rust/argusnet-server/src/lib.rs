@@ -14,13 +14,14 @@ use argusnet_core::{PlatformFrame, TrackerConfig, TrackingEngine};
 use argusnet_proto::pb::world_model_service_server::{WorldModelService, WorldModelServiceServer};
 use argusnet_proto::pb::{
     GetConfigRequest, GetConfigResponse, HealthRequest, HealthResponse, IngestFrameRequest,
-    IngestFrameResponse, LatestFrameRequest, LatestFrameResponse, ResetRequest, ResetResponse,
+    IngestFrameResponse, LatestFrameRequest, LatestFrameResponse, MissionStatusRequest,
+    MissionStatusResponse, ResetRequest, ResetResponse,
 };
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "smart-trackerd",
-    about = "Rust tracking runtime for Smart Trajectory Tracker."
+    name = "argusnetd",
+    about = "ArgusNet Rust tracking daemon."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -247,6 +248,10 @@ enum EngineCommand {
     Health {
         response: oneshot::Sender<Result<HealthResponse, Status>>,
     },
+    MissionStatus {
+        scenario_name: String,
+        response: oneshot::Sender<Result<MissionStatusResponse, Status>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -302,6 +307,19 @@ impl EngineHandle {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(EngineCommand::Health { response: tx })
+            .await
+            .map_err(|_| Status::unavailable("tracking engine is unavailable"))?;
+        rx.await
+            .map_err(|_| Status::unavailable("tracking engine stopped"))?
+    }
+
+    async fn mission_status(&self, scenario_name: String) -> Result<MissionStatusResponse, Status> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(EngineCommand::MissionStatus {
+                scenario_name,
+                response: tx,
+            })
             .await
             .map_err(|_| Status::unavailable("tracking engine is unavailable"))?;
         rx.await
@@ -419,6 +437,24 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                     });
                     let _ = response.send(reply);
                 }
+                EngineCommand::MissionStatus { scenario_name, response } => {
+                    let latest = engine.latest_frame();
+                    let elapsed_s = latest.map_or(0.0, |f| f.timestamp_s);
+                    let active_track_count = latest
+                        .map_or(0, |f| f.metrics.active_track_count);
+                    let active_track_ids: Vec<String> = latest
+                        .map(|f| f.tracks.iter().map(|t| t.track_id.clone()).collect())
+                        .unwrap_or_default();
+                    let reply = Ok(MissionStatusResponse {
+                        scenario_name,
+                        elapsed_s,
+                        active_track_count,
+                        active_zone_count: 0,  // zones pushed from Python, not stored server-side
+                        zones: vec![],
+                        active_track_ids,
+                    });
+                    let _ = response.send(reply);
+                }
             }
         }
     });
@@ -502,6 +538,14 @@ impl WorldModelService for GrpcTrackerService {
     ) -> Result<Response<HealthResponse>, Status> {
         Ok(Response::new(self.engine.health().await?))
     }
+
+    async fn mission_status(
+        &self,
+        request: Request<MissionStatusRequest>,
+    ) -> Result<Response<MissionStatusResponse>, Status> {
+        let scenario_name = request.into_inner().scenario_name;
+        Ok(Response::new(self.engine.mission_status(scenario_name).await?))
+    }
 }
 
 pub async fn serve(args: ServeArgs) -> Result<()> {
@@ -533,7 +577,7 @@ mod tests {
 
     #[test]
     fn yaml_config_is_loaded_and_cli_overrides_it() {
-        let path = std::env::temp_dir().join("smart-trackerd-config-test.yaml");
+        let path = std::env::temp_dir().join("argusnetd-config-test.yaml");
         fs::write(
             &path,
             "min_observations: 3\nmax_stale_steps: 4\nmin_confidence: 0.4\n",

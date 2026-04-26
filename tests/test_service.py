@@ -9,21 +9,14 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-import smart_tracker.cli as cli_module
-from smart_tracker import (
-    ScenarioDefinition,
-    ScenarioOptions,
-    SimulationConfig,
-    SimulationConstants,
-    TrackerConfig,
-    TrackingService,
-    build_default_scenario,
-    run_simulation,
-)
-from smart_tracker.environment import LandCoverClass
-from smart_tracker.models import BearingObservation, NodeState, TruthState, to_jsonable, vec3
-from smart_tracker.replay import load_replay_document
-from smart_tracker.sim import (
+import argusnet.cli.main as cli_module
+from argusnet.simulation.sim import ScenarioDefinition, ScenarioOptions, SimulationConfig, build_default_scenario, run_simulation
+from argusnet.core.config import SimulationConstants
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+from argusnet.world.environment import LandCoverClass
+from argusnet.core.types import BearingObservation, NodeState, TruthState, to_jsonable, vec3
+from argusnet.evaluation.replay import load_replay_document
+from argusnet.simulation.sim import (
     AERIAL_TARGET_MIN_AGL_M,
     GROUND_CONTACT_TOP_PAD_M,
     INTERCEPTOR_FOLLOW_ALTITUDE_OFFSET_M,
@@ -34,7 +27,7 @@ from smart_tracker.sim import (
     build_replay_document_from_result,
     simulate,
 )
-from smart_tracker.terrain import TerrainModel
+from argusnet.world.terrain import TerrainModel
 
 
 def bearing(
@@ -730,7 +723,7 @@ class TestJPDAMode(unittest.TestCase):
         self.assertEqual("jpda", self.service.config.data_association_mode)
 
     def test_jpda_ingest_frame_returns_platform_frame(self) -> None:
-        from smart_tracker.models import PlatformFrame
+        from argusnet.core.types import PlatformFrame
         nodes = [
             NodeState("gs-a", vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, 0.0),
             NodeState("gs-b", vec3(200.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, 0.0),
@@ -795,7 +788,7 @@ class TestTrackStream(unittest.TestCase):
         self.assertEqual(4, len(frames))
 
     def test_track_stream_frames_are_platform_frames(self) -> None:
-        from smart_tracker.models import PlatformFrame
+        from argusnet.core.types import PlatformFrame
         for frame in self.service.track_stream(self._frame_inputs(steps=2)):
             self.assertIsInstance(frame, PlatformFrame)
 

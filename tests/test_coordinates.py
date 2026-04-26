@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.coordinates import (
+from argusnet.core.frames import (
     ENUOrigin,
     ecef_to_enu,
     ecef_to_wgs84,

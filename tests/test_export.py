@@ -11,8 +11,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from smart_tracker.coordinates import ENUOrigin
-from smart_tracker.export import (
+from argusnet.core.frames import ENUOrigin
+from argusnet.evaluation.export import (
     export_czml,
     export_foxglove,
     export_geojson,

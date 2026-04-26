@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from smart_tracker.environment import LandCoverClass, SeasonalVariation
-from smart_tracker.visibility import SensorVisibilityModel
+from argusnet.world.environment import LandCoverClass, SeasonalVariation
+from argusnet.world.visibility import SensorVisibilityModel
 
 
 class TestLandCoverClassEnum(unittest.TestCase):

@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from smart_tracker.cli import (
+from argusnet.cli.main import (
     ALL_COMMANDS,
     COMMAND_DUMP_CONFIG,
     COMMAND_INFO,
@@ -203,7 +203,7 @@ class TestBuildParser(unittest.TestCase):
 class TestValidateReplay(unittest.TestCase):
     def test_valid_replay(self):
         """A valid replay document should pass validation via the CLI function."""
-        from smart_tracker.cli import _run_validate_replay
+        from argusnet.cli.main import _run_validate_replay
         import argparse
 
         doc = _minimal_valid_replay_document()
@@ -220,7 +220,7 @@ class TestValidateReplay(unittest.TestCase):
             os.unlink(path)
 
     def test_invalid_replay_missing_frames(self):
-        from smart_tracker.cli import _run_validate_replay
+        from argusnet.cli.main import _run_validate_replay
         import argparse
 
         doc = {"meta": {"dt_s": 0.25}}
@@ -237,7 +237,7 @@ class TestValidateReplay(unittest.TestCase):
             os.unlink(path)
 
     def test_invalid_replay_missing_required_frame_fields(self):
-        from smart_tracker.cli import _run_validate_replay
+        from argusnet.cli.main import _run_validate_replay
         import argparse
 
         doc = _minimal_valid_replay_document()
@@ -255,7 +255,7 @@ class TestValidateReplay(unittest.TestCase):
             os.unlink(path)
 
     def test_missing_file(self):
-        from smart_tracker.cli import _run_validate_replay
+        from argusnet.cli.main import _run_validate_replay
         import argparse
 
         args = argparse.Namespace(path="/tmp/nonexistent_replay_12345.json", verbose=False, quiet=False)
@@ -265,7 +265,7 @@ class TestValidateReplay(unittest.TestCase):
 
 class TestValidateScene(unittest.TestCase):
     def test_valid_scene(self):
-        from smart_tracker.cli import _run_validate_scene
+        from argusnet.cli.main import _run_validate_scene
         import argparse
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -274,7 +274,7 @@ class TestValidateScene(unittest.TestCase):
             _run_validate_scene(args)  # should not raise
 
     def test_valid_scene_legacy_manifest_filename(self):
-        from smart_tracker.cli import _run_validate_scene
+        from argusnet.cli.main import _run_validate_scene
         import argparse
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -283,7 +283,7 @@ class TestValidateScene(unittest.TestCase):
             _run_validate_scene(args)  # should not raise
 
     def test_missing_manifest(self):
-        from smart_tracker.cli import _run_validate_scene
+        from argusnet.cli.main import _run_validate_scene
         import argparse
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -292,7 +292,7 @@ class TestValidateScene(unittest.TestCase):
                 _run_validate_scene(args)
 
     def test_not_a_directory(self):
-        from smart_tracker.cli import _run_validate_scene
+        from argusnet.cli.main import _run_validate_scene
         import argparse
 
         args = argparse.Namespace(path="/tmp/nonexistent_dir_12345", verbose=False, quiet=False)
@@ -300,7 +300,7 @@ class TestValidateScene(unittest.TestCase):
             _run_validate_scene(args)
 
     def test_missing_layer_asset(self):
-        from smart_tracker.cli import _run_validate_scene
+        from argusnet.cli.main import _run_validate_scene
         import argparse
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -310,7 +310,7 @@ class TestValidateScene(unittest.TestCase):
                 _run_validate_scene(args)
 
     def test_missing_metadata_files(self):
-        from smart_tracker.cli import _run_validate_scene
+        from argusnet.cli.main import _run_validate_scene
         import argparse
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -320,7 +320,7 @@ class TestValidateScene(unittest.TestCase):
                 _run_validate_scene(args)
 
     def test_invalid_manifest_shape(self):
-        from smart_tracker.cli import _run_validate_scene
+        from argusnet.cli.main import _run_validate_scene
         import argparse
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -335,7 +335,7 @@ class TestValidateScene(unittest.TestCase):
 
 class TestInfoCommand(unittest.TestCase):
     def test_info_output(self):
-        from smart_tracker.cli import _run_info
+        from argusnet.cli.main import _run_info
         import argparse
         import io
         from contextlib import redirect_stdout
@@ -380,7 +380,7 @@ class TestInfoCommand(unittest.TestCase):
 
 class TestDumpConfig(unittest.TestCase):
     def test_dump_config_json_stdout(self):
-        from smart_tracker.cli import _run_dump_config
+        from argusnet.cli.main import _run_dump_config
         import argparse
         import io
         from contextlib import redirect_stdout
@@ -395,7 +395,7 @@ class TestDumpConfig(unittest.TestCase):
         self.assertIn("dynamics", parsed)
 
     def test_dump_config_to_file(self):
-        from smart_tracker.cli import _run_dump_config
+        from argusnet.cli.main import _run_dump_config
         import argparse
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:

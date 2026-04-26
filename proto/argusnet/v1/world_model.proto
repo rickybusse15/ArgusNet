@@ -41,6 +41,9 @@ message NodeState {
   bool is_mobile = 4;
   double timestamp_s = 5;
   double health = 6;
+  string sensor_type = 7;       // e.g. "optical", "thermal", "radar"
+  double fov_half_angle_deg = 8; // 0 = unset (use platform default 180)
+  double max_range_m = 9;        // 0 = unset (use platform default unlimited)
 }
 
 message BearingObservation {
@@ -166,6 +169,37 @@ message HealthResponse {
   uint32 stale_node_count = 8;
 }
 
+// ---------------------------------------------------------------------------
+// Mission zone messages (Phase 6.2)
+// ---------------------------------------------------------------------------
+
+message MissionZone {
+  string zone_id = 1;
+  string zone_type = 2;   // "exclusion", "objective", "patrol", "surveillance"
+  Vector3 center = 3;
+  double radius_m = 4;
+  int32 priority = 5;
+  string label = 6;
+}
+
+message MissionZoneUpdate {
+  repeated MissionZone zones = 1;
+  double timestamp_s = 2;
+}
+
+message MissionStatusRequest {
+  string scenario_name = 1;
+}
+
+message MissionStatusResponse {
+  string scenario_name = 1;
+  double elapsed_s = 2;
+  uint32 active_track_count = 3;
+  uint32 active_zone_count = 4;
+  repeated MissionZone zones = 5;
+  repeated string active_track_ids = 6;
+}
+
 service WorldModelService {
   rpc IngestFrame(IngestFrameRequest) returns (IngestFrameResponse);
   rpc TrackStream(stream IngestFrameRequest) returns (stream IngestFrameResponse);
@@ -173,4 +207,5 @@ service WorldModelService {
   rpc Reset(ResetRequest) returns (ResetResponse);
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
+  rpc MissionStatus(MissionStatusRequest) returns (MissionStatusResponse);
 }

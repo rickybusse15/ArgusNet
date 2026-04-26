@@ -19,7 +19,7 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.weather import (
+from argusnet.world.weather import (
     AtmosphericConditions,
     CloudLayer,
     KNOWN_WEATHER_PRESETS,

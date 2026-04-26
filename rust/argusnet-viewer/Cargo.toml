@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "argusnet-viewer"
 path = "src/main.rs"
 
+[features]
+# Enables live gRPC frame ingestion from argusnet-server (future streaming path).
+live-stream = ["dep:argusnet-proto"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
@@ -21,3 +25,4 @@ bevy = "0.15.3"
 bevy_egui = "0.31.1"
 egui_plot = "0.29"
 image = { version = "0.25", default-features = false, features = ["png"] }
+argusnet-proto = { path = "../argusnet-proto", optional = true }

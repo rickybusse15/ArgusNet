@@ -566,6 +566,87 @@
           "items": {
             "$ref": "#/definitions/inspection_event"
           }
+        },
+        "scan_mission_state": {
+          "$ref": "#/definitions/scan_mission_state"
+        }
+      }
+    },
+    "scan_mission_state": {
+      "type": ["object", "null"],
+      "description": "State of the three-phase ISR mission (scanning → localizing → inspecting) at this frame. Present only in scan_map_inspect missions.",
+      "additionalProperties": true,
+      "properties": {
+        "phase": {
+          "type": "string",
+          "description": "Current mission phase.",
+          "enum": ["scanning", "localizing", "inspecting", "complete"]
+        },
+        "scan_coverage_fraction": {
+          "type": "number",
+          "description": "Fraction of the map grid that has been scanned (0.0–1.0).",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "scan_coverage_threshold": {
+          "type": "number",
+          "description": "Coverage fraction that must be reached before transitioning to the localizing phase.",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "phase_started_at_s": {
+          "type": "number",
+          "description": "Simulation timestamp (seconds) when the current phase began."
+        },
+        "newly_scanned_cells": {
+          "type": "array",
+          "description": "Flat array of (x_m, y_m, terrain_height_m) triples for cells newly covered this frame. The viewer accumulates these into a persistent point cloud.",
+          "items": {"type": "number"}
+        },
+        "localization_estimates": {
+          "type": "array",
+          "description": "Per-drone localization estimates during the localizing phase.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "drone_id": {"type": "string"},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "position_std_m": {"type": "number", "minimum": 0}
+            }
+          }
+        },
+        "localization_timed_out": {
+          "type": "boolean",
+          "description": "True if any drone's localization phase advanced via timeout rather than genuine convergence. Team-level flag: does not identify which specific drone(s) timed out.",
+          "default": false
+        },
+        "coordinator_drone_id": {
+          "type": ["string", "null"],
+          "description": "Node ID of the elected mission coordinator drone (highest battery fraction at election time). Null if no coordinator has been elected yet.",
+          "default": null
+        },
+        "poi_statuses": {
+          "type": "array",
+          "description": "Status of each Point of Interest in the inspection phase.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "poi_id": {"type": "string"},
+              "status": {"type": "string", "enum": ["pending", "active", "complete"]}
+            }
+          }
+        },
+        "completed_poi_count": {
+          "type": "integer",
+          "description": "Number of POIs that have been fully inspected.",
+          "minimum": 0
+        },
+        "total_poi_count": {
+          "type": "integer",
+          "description": "Total number of POIs in this mission.",
+          "minimum": 0
         }
       }
     }

@@ -339,7 +339,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("tracker-viewer-headless-{suffix}"));
+        let root = std::env::temp_dir().join(format!("argusnet-headless-{suffix}"));
         fs::create_dir_all(root.join("metadata")).unwrap();
         fs::write(
             root.join("scene_manifest.json"),

@@ -161,10 +161,18 @@ pub fn node_state_to_pb(node: NodeState) -> pb::NodeState {
         is_mobile: node.is_mobile,
         timestamp_s: node.timestamp_s,
         health: node.health,
+        // Sensor fields are not carried in the core tracker struct;
+        // default to optical/omnidirectional when round-tripping via gRPC.
+        sensor_type: "optical".to_string(),
+        fov_half_angle_deg: 180.0,
+        max_range_m: 0.0,
     }
 }
 
 pub fn node_state_from_pb(node: pb::NodeState) -> Result<NodeState, String> {
+    // sensor_type / fov_half_angle_deg / max_range_m are not stored in the
+    // core NodeState (the tracker doesn't need them).  They pass through the
+    // Python adapter and are written into the replay JSON separately.
     Ok(NodeState {
         node_id: node.node_id,
         position: vec3_from_pb(node.position, "node.position")?,
@@ -258,7 +266,7 @@ pub fn track_to_pb(track: TrackState) -> pb::TrackState {
         lifecycle_state: track.lifecycle_state,
         quality_score: track.quality_score,
         // FusedTrack extension fields — populated with defaults until
-        // tracker-core produces them.
+        // argusnet-core produces them.
         acceleration_mps2: vec![0.0, 0.0, 0.0],
         confidence: track.quality_score.unwrap_or(0.0),
         mode_probability_cv: 1.0,

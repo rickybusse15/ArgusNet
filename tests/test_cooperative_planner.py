@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from smart_tracker.cooperative_planner import (
+from argusnet.planning.coverage import (
     ROLE_CORRIDOR_WATCHER,
     ROLE_PRIMARY_OBSERVER,
     ROLE_PRIORITY,

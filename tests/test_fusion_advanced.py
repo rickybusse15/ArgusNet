@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.fusion import (
+from argusnet.localization.state import (
     AdaptiveFilterConfig,
     CoordinatedTurnTrack3D,
     IMMTrack3D,

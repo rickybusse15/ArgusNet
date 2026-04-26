@@ -1,4 +1,4 @@
-"""Tests for the mission generation module (smart_tracker.mission_gen).
+"""Tests for the mission generation module (argusnet.planning.inspection).
 
 Covers data class validation, defaults, frozen enforcement, difficulty scaling,
 tag generation, template factories, and the generate_mission pipeline.
@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from smart_tracker.config import SimulationConstants
-from smart_tracker.mission_gen import (
+from argusnet.core.config import SimulationConstants
+from argusnet.planning.inspection import (
     MissionTiming, MissionConstraints, MissionSpec, ObjectiveCondition,
     MissionObjective, FlightCorridor, ValidityReport, GeneratedMission,
     apply_difficulty_scaling, surveillance_template, intercept_template,
@@ -310,15 +310,15 @@ class TestGenerateMission(unittest.TestCase):
         kw["mission_type"] = mission_type
         spec = MissionSpec(**kw)
         stub = _make_stub_scenario(spec.target_count, spec.drone_count, spec.ground_station_count)
-        with patch("smart_tracker.sim.build_default_scenario", return_value=stub), \
-             patch("smart_tracker.sim.ScenarioOptions"):
+        with patch("argusnet.simulation.sim.build_default_scenario", return_value=stub), \
+             patch("argusnet.simulation.sim.ScenarioOptions"):
             return generate_mission(spec)
 
     def _gen_from_template(self, factory, **kw):
         spec = factory(**kw)
         stub = _make_stub_scenario(spec.target_count, spec.drone_count, spec.ground_station_count)
-        with patch("smart_tracker.sim.build_default_scenario", return_value=stub), \
-             patch("smart_tracker.sim.ScenarioOptions"):
+        with patch("argusnet.simulation.sim.build_default_scenario", return_value=stub), \
+             patch("argusnet.simulation.sim.ScenarioOptions"):
             return generate_mission(spec)
 
     def test_surveillance_structure(self) -> None:

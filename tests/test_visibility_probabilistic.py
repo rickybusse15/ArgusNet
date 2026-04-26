@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from smart_tracker.environment import (
+from argusnet.world.environment import (
     DetectionResult,
     EnvironmentQuery,
     SensorVisibilityModel,
@@ -26,7 +26,7 @@ from smart_tracker.environment import (
     free_space_path_loss,
     identify_dominant_loss,
 )
-from smart_tracker.weather import (
+from argusnet.world.weather import (
     AtmosphericConditions,
     PrecipitationModel,
     WeatherModel,

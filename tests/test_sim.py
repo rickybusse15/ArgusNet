@@ -4,10 +4,10 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.environment import Bounds2D, EnvironmentCRS, EnvironmentModel, LandCoverLayer, ObstacleLayer, TerrainLayer
-from smart_tracker.models import PlatformFrame, PlatformMetrics, TruthState
-from smart_tracker.sensor_models import SensorErrorConfig, SensorModel
-from smart_tracker.sim import (
+from argusnet.world.environment import Bounds2D, EnvironmentCRS, EnvironmentModel, LandCoverLayer, ObstacleLayer, TerrainLayer
+from argusnet.core.types import PlatformFrame, PlatformMetrics, TruthState
+from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
+from argusnet.simulation.sim import (
     REJECT_OBJECT_OCCLUSION,
     REJECT_OUT_OF_COVERAGE,
     ObservationBatch,
@@ -16,8 +16,8 @@ from smart_tracker.sim import (
     build_observations,
     orbital_path,
 )
-from smart_tracker.terrain import OccludingObject, TerrainModel
-from smart_tracker.weather import weather_from_preset
+from argusnet.world.terrain import OccludingObject, TerrainModel
+from argusnet.world.weather import weather_from_preset
 
 
 class SimulationEnvironmentTest(unittest.TestCase):

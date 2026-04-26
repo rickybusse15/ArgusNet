@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
+from pathlib import Path
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -44,11 +46,14 @@ from argusnet.core.types import (
     ZONE_TYPE_OBJECTIVE,
     ZONE_TYPE_PATROL,
     ZONE_TYPE_SURVEILLANCE,
+    to_jsonable,
     vec3,
 )
 from argusnet.mapping.world_map import WorldMap
 from argusnet.localization.engine import GridLocalizer, LocalizationConfig
-from argusnet.planning.poi import POIManager
+from argusnet.planning.poi import POIManager, POIAssignmentContext
+from argusnet.planning.frontier import FrontierPlanner, ClaimedCells
+from argusnet.planning.coordination import CoordinationManager, CoordinationPolicy, SharedMissionState
 from argusnet.mapping.coverage import CoverageMap
 from argusnet.mapping.occupancy import GridBounds
 from argusnet.core.config import (
@@ -69,6 +74,19 @@ from argusnet.sensing.models.noise import atmospheric_attenuation as sensor_atmo
 from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 from argusnet.world.terrain import KNOWN_TERRAIN_PRESETS, OccludingObject, TerrainModel, terrain_model_from_preset, xy_bounds
 from argusnet.world.weather import KNOWN_WEATHER_PRESETS, WeatherModel, weather_from_preset
+from argusnet.core.frames import ENUOrigin
+from argusnet.localization.vio import EKFVIO, VisualFeature
+from argusnet.sensing.imu import IMUMeasurement
+
+# NOTE: Controller class extraction is planned for Phase 0.1.
+# Classes FollowPathController, ObservationTriggeredFollowController, and
+# LaunchableTrajectoryController will be moved to controllers.py in a future
+# refactor when full test coverage exists.
+# Extraction is deferred because the controllers directly call module-level
+# helpers (compose_air_state, collision_aware_position, advance_along_polyline,
+# clamp_to_bounds, within_bounds, _apply_weather_adjustments) that are
+# defined later in this file, which would create a circular import if
+# controllers.py tried to import them back from sim.py.
 
 # Default constants instance — used when no explicit config is supplied.
 _DEFAULT_CONSTANTS = SimulationConstants.default()
@@ -135,6 +153,25 @@ class SimNode:
 
     def state(self, timestamp_s: float) -> NodeState:
         position, velocity = self.trajectory(timestamp_s)
+        # Phase 2.4 VIO wiring point: after computing position/velocity from the
+        # trajectory, a VIO backend could be updated here using synthetic features
+        # derived from the ground-truth position.  The pattern would be:
+        #
+        #   if hasattr(self, '_vio_backend') and self._vio_backend is not None:
+        #       from argusnet.localization.vio import VisualFeature
+        #       synthetic_features = [
+        #           VisualFeature(feature_id=i, u=float(i * 30), v=float(i * 20))
+        #           for i in range(10)
+        #       ]
+        #       vio_state = self._vio_backend.process_image(
+        #           synthetic_features, timestamp_s=timestamp_s
+        #       )
+        #       # vio_state would then be written to a vio_states dict keyed by
+        #       # self.node_id for use in replay metadata or sensor fusion.
+        #
+        # Full wiring requires ScenarioDefinition to carry a vio_states mapping
+        # and the run_simulation loop to pass it into each SimNode; deferred to
+        # Phase 2.4 when the drone-update pattern is finalized.
         return NodeState(
             node_id=self.node_id,
             position=position,
@@ -232,6 +269,8 @@ class ScenarioDefinition:
     adaptive_drone_controllers: Mapping[str, object] = field(default_factory=dict)
     launchable_controllers: Mapping[str, object] = field(default_factory=dict)
     mission_zones: Tuple[MissionZone, ...] = ()
+    enu_origin: Optional[ENUOrigin] = None
+    use_vio_position: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nodes", tuple(self.nodes))
@@ -354,6 +393,10 @@ class SimulationResult:
     metrics_rows: List[dict]
     summary: Dict[str, object]
     replay_metadata: Dict[str, object] = field(default_factory=dict)
+    # Per-step VIO estimates for each mobile node: [{node_id: {"position": [...], "covariance_trace": float}}, ...]
+    vio_estimates_per_frame: List[Dict[str, object]] = field(default_factory=list)
+    # Path to JSONL file when run with streaming_output_path; None otherwise.
+    streaming_jsonl_path: Optional[Path] = None
 
 
 @dataclass
@@ -385,6 +428,7 @@ class FollowPathController:
     drone_role: str = "interceptor"   # "tracker" | "interceptor"
     slot_index: int = 0               # which angular slot (0-based)
     slot_count: int = 1               # total slots / drones on this target
+    mission_zones: Tuple[MissionZone, ...] = ()
     _state: Dict[str, object] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -647,6 +691,32 @@ class FollowPathController:
                         if blended_speed > max_speed_mps + 1e-6:
                             xy_velocity = xy_velocity / blended_speed * max_speed_mps
 
+        # --- Phase 6.1: Waypoint-level exclusion zone rerouting ---
+        # Push chosen_xy outside any exclusion zone *before* computing 3-D
+        # position.  This is an early reroute pass; a second hard-boundary
+        # enforcement is applied to the final 3-D position below.
+        # Other zone types (surveillance, patrol, objective) are soft hints
+        # handled by the planner and are not enforced here.
+        for zone in self.mission_zones:
+            if zone.zone_type != ZONE_TYPE_EXCLUSION:
+                continue
+            zone_center_xy = np.asarray(zone.center[:2], dtype=float)
+            wp_xy = np.asarray(chosen_xy[:2], dtype=float)
+            offset = wp_xy - zone_center_xy
+            dist = float(np.linalg.norm(offset))
+            if dist < zone.radius_m:
+                # Nudge waypoint to just outside the zone boundary (10 % margin).
+                if dist < 1e-6:
+                    # Chosen_xy is exactly at the zone centre — push in +x.
+                    offset = np.array([1.0, 0.0], dtype=float)
+                    dist = 1.0
+                push_dir = offset / dist
+                chosen_xy = zone_center_xy + push_dir * (zone.radius_m * 1.1)
+                # Correct velocity direction so drone moves along the rerouted path.
+                vel_norm = float(np.linalg.norm(xy_velocity))
+                if vel_norm > 1e-6:
+                    xy_velocity = push_dir * vel_norm
+
         # Altitude computation — terrain-following or standard oscillation.
         if self.terrain_following:
             raw_terrain_z = terrain.height_at(float(chosen_xy[0]), float(chosen_xy[1]))
@@ -690,6 +760,26 @@ class FollowPathController:
             min_agl_m=self.min_agl_m,
             obstacle_layer=self.environment.obstacles,
         )
+        # --- Mission zone enforcement (exclusion zones only) ---
+        # Exclusion zones are hard no-fly boundaries; other zone types
+        # (surveillance, patrol, objective) are soft planning hints.
+        for zone in self.mission_zones:
+            if zone.zone_type != "exclusion":
+                continue
+            zone_center_xy = np.asarray(zone.center[:2], dtype=float)
+            pos_xy = position[:2]
+            offset = pos_xy - zone_center_xy
+            dist = float(np.linalg.norm(offset))
+            if dist < zone.radius_m:
+                if dist < 1e-6:
+                    offset = np.array([1.0, 0.0])
+                    dist = 1.0
+                push_dir = offset / dist
+                position[:2] = zone_center_xy + push_dir * (zone.radius_m + 1.0)
+                # Zero out velocity component toward zone centre
+                inward_speed = float(np.dot(velocity[:2], -push_dir))
+                if inward_speed > 0:
+                    velocity[:2] = velocity[:2] + inward_speed * push_dir
         state["last_timestamp"] = float(timestamp_s)
         state["last_xy"] = position[:2].copy()
         state["last_direction_xy"] = np.asarray(xy_velocity[:2], dtype=float).copy()
@@ -1527,10 +1617,6 @@ def map_bounds_for_scale(scale: float, constants: SimulationConstants = _DEFAULT
         "y_min_m": dyn.map_bounds_y_min_m * scale,
         "y_max_m": dyn.map_bounds_y_max_m * scale,
     }
-
-
-def scaled_terrain_model(scale: float) -> TerrainModel:
-    return TerrainModel.default().scaled(scale)
 
 
 def map_bounds_object(bounds: Mapping[str, float]) -> Bounds2D:
@@ -2409,6 +2495,7 @@ def follow_path(
     drone_role: str = "interceptor",
     slot_index: int = 0,
     slot_count: int = 1,
+    mission_zones: Tuple[MissionZone, ...] = (),
 ) -> TrajectoryFn:
     return FollowPathController(
         target_trajectory=target_trajectory,
@@ -2434,6 +2521,7 @@ def follow_path(
         drone_role=drone_role,
         slot_index=slot_index,
         slot_count=slot_count,
+        mission_zones=mission_zones,
     )
 
 
@@ -2928,11 +3016,7 @@ def build_default_scenario(
     active_weather = weather_from_preset(active_options.weather_preset)
     scale = map_scale_for_preset(active_options.map_preset)
     platform_profile = platform_profile_for_preset(active_options.platform_preset)
-    terrain = (
-        scaled_terrain_model(scale)
-        if active_options.terrain_preset == "default"
-        else terrain_model_from_preset(active_options.terrain_preset, scale)
-    )
+    terrain = terrain_model_from_preset(active_options.terrain_preset, scale)
     map_bounds_m = map_bounds_for_scale(scale, constants=constants)
     environment = build_default_environment(
         scale,
@@ -3343,6 +3427,7 @@ def build_default_scenario(
         adaptive_drone_controllers=adaptive_drone_controllers,
         launchable_controllers=launchable_controllers,
         mission_zones=tuple(mission_zones),
+        enu_origin=ENUOrigin(latitude_deg=37.7749, longitude_deg=-122.4194, altitude_m=0.0),
     )
 
 
@@ -3577,7 +3662,22 @@ def build_observations(
                 sensor_model.config,
                 atmospheric_transmittance=sensor_transmittance,
             )
-            combined_pd = max(0.0, min(1.0, detection.p_d * sensor_pd))
+            # --- Cloud layer attenuation ---
+            cloud_factor = 1.0
+            if weather is not None and weather.cloud_layers:
+                observer_alt = float(node_state.position[2])
+                target_alt = float(truth.position[2])
+                for cloud in weather.cloud_layers:
+                    if cloud.obscures_los(observer_alt, target_alt):
+                        # Full occlusion — detection impossible
+                        cloud_factor = 0.0
+                        break
+                    # Partial coverage reduces detection probability
+                    low_alt = min(observer_alt, target_alt)
+                    high_alt = max(observer_alt, target_alt)
+                    if low_alt < cloud.top_altitude_m and high_alt > cloud.base_altitude_m:
+                        cloud_factor *= max(1.0 - cloud.coverage * 0.7, 0.05)
+            combined_pd = max(0.0, min(1.0, detection.p_d * sensor_pd * cloud_factor))
             if pair_rng.random() > combined_pd:
                 reason = (
                     REJECT_VEGETATION_OCCLUSION
@@ -3661,6 +3761,21 @@ def build_observations(
                     confidence=confidence,
                 )
             )
+            # Thermal sensor observation (for thermal/IR sensor nodes)
+            if getattr(node_state, 'sensor_type', node.sensor_type) in ('thermal', 'lwir', 'mwir', 'ir'):
+                _thermal_bearing_std = effective_bearing_std * 1.3
+                _thermal_direction = noisy_unit_vector(pair_rng, line_of_sight, _thermal_bearing_std)
+                observations.append(
+                    BearingObservation(
+                        node_id=node.node_id,
+                        target_id=truth.target_id,
+                        origin=node_state.position,
+                        direction=_thermal_direction,
+                        bearing_std_rad=_thermal_bearing_std,
+                        timestamp_s=timestamp_s,
+                        confidence=confidence * 0.9,
+                    )
+                )
             accepted_by_target[truth.target_id] += 1
             accepted_by_node_target[(node.node_id, truth.target_id)] += 1
 
@@ -3683,6 +3798,32 @@ def build_observations(
                     confidence=min(clutter.confidence, sensor_cfg.confidence_floor * 0.9),
                 )
             )
+
+        # Generate false alarm (clutter) observations from sensor_error_config
+        sensor_error_config = sensor_model.config
+        if (hasattr(sensor_error_config, 'false_alarm_rate_per_scan')
+                and sensor_error_config.false_alarm_rate_per_scan > 0):
+            n_clutter = int(clutter_rng.poisson(sensor_error_config.false_alarm_rate_per_scan))
+            for clutter_idx in range(n_clutter):
+                clutter_bearing_noise = getattr(
+                    sensor_error_config, 'clutter_bearing_std_rad', 0.05
+                )
+                random_az = clutter_rng.uniform(-math.pi, math.pi)
+                random_el = clutter_rng.uniform(0.0, math.pi / 3)  # 0-60 deg elevation
+                clutter_dir = np.array([
+                    math.cos(random_el) * math.cos(random_az),
+                    math.cos(random_el) * math.sin(random_az),
+                    math.sin(random_el),
+                ])
+                observations.append(BearingObservation(
+                    node_id=node_state.node_id,
+                    target_id=f"clutter-{clutter_idx}",
+                    origin=node_state.position,
+                    direction=tuple(clutter_dir),
+                    bearing_std_rad=clutter_bearing_noise,
+                    timestamp_s=timestamp_s,
+                    confidence=0.3,
+                ))
 
     return ObservationBatch(
         observations=observations,
@@ -3819,6 +3960,15 @@ def _build_replay_metadata(
             }
             for z in scenario.mission_zones
         ],
+        "enu_origin": (
+            {
+                "latitude_deg": scenario.enu_origin.latitude_deg,
+                "longitude_deg": scenario.enu_origin.longitude_deg,
+                "altitude_m": scenario.enu_origin.altitude_m,
+            }
+            if scenario.enu_origin is not None
+            else None
+        ),
         "requested_duration_s": float(requested_duration_s),
         "actual_duration_s": float(simulation_config.actual_duration_s),
         "target_motion_assignments": dict(sorted(scenario.target_motion_assignments.items())),
@@ -3860,6 +4010,8 @@ def run_simulation(
     scenario: ScenarioDefinition,
     simulation_config: SimulationConfig,
     tracker_config: Optional[TrackerConfig] = None,
+    streaming_output_path: Optional[Path] = None,
+    max_frames_in_memory: int = 500,
 ) -> SimulationResult:
     active_tracker_config = tracker_config or TrackerConfig()
     scenario.reset_runtime_state()
@@ -3868,6 +4020,7 @@ def run_simulation(
     service = TrackingService(config=active_tracker_config, retain_history=True)
 
     frames: List[PlatformFrame] = []
+    _total_frame_count: int = 0  # tracks count even when frames[] is a rolling window
     metrics_rows: List[dict] = []
     per_track_errors: List[float] = []
     generation_rejection_counts: Counter[str] = Counter()
@@ -3943,28 +4096,63 @@ def run_simulation(
     _world_map = WorldMap(_coverage_bounds)
 
     # GridLocalizer estimates drone self-pose against the built coverage map.
-    _grid_localizer = GridLocalizer()
+    _grid_localizer = GridLocalizer(LocalizationConfig())
     _loc_estimates: List[LocalizationEstimate] = []
     _loc_confidence_threshold = 0.65
+    _loc_timed_out: bool = False
+
+    # Frontier planner + claimed-cell tracking for gap-fill gate.
+    _frontier_planner = FrontierPlanner()
+    _claimed_cells = ClaimedCells()
+
+    # Coordination manager (coordinator election, formation offsets, RF latency).
+    _coord_policy = CoordinationPolicy()
+    _coord_manager = CoordinationManager(_coord_policy)
+    _shared_state = SharedMissionState()
+    _coordinator_elected = False
+
+    # Inspection flags.
+    _poi_rescored = False
+    # Tracks which poi_id each drone is flying toward (to detect new assignments).
+    _drone_poi_assignments: Dict[str, str] = {}
+    # Per-drone goto-hover trajectory overrides while inspecting a POI.
+    _poi_trajectories: Dict[str, TrajectoryFn] = {}
 
     # Auto-generate POIs spread across the map interior.
-    def _make_poi_positions(bounds: Dict, count: int, seed: int) -> List[np.ndarray]:
+    # Each POI is placed at a valid drone-accessible altitude above the terrain
+    # and rejected if it falls inside an obstacle at hover height.
+    _POI_HOVER_AGL_M = 40.0  # metres above ground the drone hovers while dwelling
+
+    def _make_poi_positions(
+        bounds: Dict, count: int, seed: int,
+        terrain=None, obstacles=None,
+    ) -> List[np.ndarray]:
         rng2 = np.random.default_rng(seed + 999)
         x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
         y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
         margin_x = (x_max - x_min) * 0.15
         margin_y = (y_max - y_min) * 0.15
-        return [
-            np.array([
-                float(rng2.uniform(x_min + margin_x, x_max - margin_x)),
-                float(rng2.uniform(y_min + margin_y, y_max - margin_y)),
-                80.0,
-            ], dtype=float)
-            for _ in range(count)
-        ]
+        positions: List[np.ndarray] = []
+        for _ in range(count):
+            for _attempt in range(200):
+                x = float(rng2.uniform(x_min + margin_x, x_max - margin_x))
+                y = float(rng2.uniform(y_min + margin_y, y_max - margin_y))
+                terrain_h = float(terrain.height_at(x, y)) if terrain is not None else 0.0
+                z = terrain_h + _POI_HOVER_AGL_M
+                # Reject if an obstacle blocks the hover position.
+                if obstacles is not None and obstacles.point_collides(x, y, z):
+                    continue
+                positions.append(np.array([x, y, z], dtype=float))
+                break
+            else:
+                # Fallback: last sampled position even if slightly inside an obstacle.
+                positions.append(np.array([x, y, z], dtype=float))  # type: ignore[possibly-undefined]
+        return positions
 
     _poi_positions = _make_poi_positions(
-        dict(scenario.map_bounds_m), _poi_count_cfg, simulation_config.seed
+        dict(scenario.map_bounds_m), _poi_count_cfg, simulation_config.seed,
+        terrain=scenario.terrain,
+        obstacles=getattr(scenario.environment, "obstacles", None),
     )
     _pois = [
         InspectionPOI(
@@ -3977,6 +4165,29 @@ def run_simulation(
         for i, pos in enumerate(_poi_positions)
     ]
     _poi_manager = POIManager(_pois)
+
+    # Open streaming file if requested.
+    _stream_file = None
+    if streaming_output_path is not None:
+        streaming_output_path = Path(streaming_output_path)
+        streaming_output_path.parent.mkdir(parents=True, exist_ok=True)
+        _stream_file = streaming_output_path.open("w", encoding="utf-8")
+
+    # --- VIO backends ---
+    # One EKFVIO per mobile node; ground-station nodes don't need odometry.
+    _vio_backends: Dict[str, EKFVIO] = {}
+    _vio_prev_positions: Dict[str, np.ndarray] = {}
+    _vio_prev_velocities: Dict[str, np.ndarray] = {}
+    _vio_estimates_per_frame: List[Dict[str, object]] = []
+    _vio_feature_ids = list(range(10))  # stable feature IDs for inter-frame matching
+    for node in scenario.nodes:
+        if node.is_mobile:
+            vio = EKFVIO()
+            pos0, vel0 = node.trajectory(0.0)
+            vio.initialize(pos0, timestamp_s=0.0)
+            _vio_backends[node.node_id] = vio
+            _vio_prev_positions[node.node_id] = np.asarray(pos0, dtype=float)
+            _vio_prev_velocities[node.node_id] = np.asarray(vel0, dtype=float)
 
     for step in range(simulation_config.steps):
         timestamp_s = step * simulation_config.dt_s
@@ -4014,7 +4225,80 @@ def run_simulation(
             for ns in node_states
         ]
 
+        # Override positions/velocities for drones redirected to a POI.
+        if _poi_trajectories:
+            overridden = []
+            for ns in node_states:
+                traj_fn = _poi_trajectories.get(ns.node_id)
+                if traj_fn is not None:
+                    pos_ov, vel_ov = traj_fn(timestamp_s)
+                    ns = replace(ns, position=list(pos_ov), velocity=list(vel_ov))
+                overridden.append(ns)
+            node_states = overridden
+
         truths = scenario.truths(timestamp_s)
+
+        # --- VIO update (Phase 2.4) ---
+        # Run EKFVIO for each mobile node using synthetic IMU + features derived
+        # from the ground-truth trajectory.  Must happen before ingest_frame so
+        # that use_vio_position can substitute positions into the tracker request.
+        step_vio: Dict[str, object] = {}
+        dt_s = simulation_config.dt_s
+        _vio_positions_this_step: Dict[str, np.ndarray] = {}
+        for node in scenario.nodes:
+            if not node.is_mobile:
+                continue
+            vio_backend = _vio_backends.get(node.node_id)
+            if vio_backend is None:
+                continue
+            cur_pos, cur_vel = node.trajectory(timestamp_s)
+            cur_pos = np.asarray(cur_pos, dtype=float)
+            cur_vel = np.asarray(cur_vel, dtype=float)
+            prev_vel = _vio_prev_velocities.get(node.node_id, np.zeros(3))
+            # Synthesize IMU: accel from velocity derivative, zero angular rate
+            synth_accel = (cur_vel - prev_vel) / max(dt_s, 1e-6)
+            imu_meas = IMUMeasurement(
+                angular_velocity=np.zeros(3),
+                linear_acceleration=synth_accel,
+                timestamp_s=timestamp_s,
+            )
+            vio_backend.process_imu(imu_meas)
+            # Synthetic features: stable IDs ensure inter-frame matching
+            synth_features = [
+                VisualFeature(feature_id=fid, u=float(fid * 30), v=float(fid * 20))
+                for fid in _vio_feature_ids
+            ]
+            vio_state = vio_backend.process_image(synth_features, timestamp_s=timestamp_s)
+            if vio_state is not None:
+                cov_trace = (
+                    float(np.trace(vio_state.covariance[6:9, 6:9]))
+                    if vio_state.covariance is not None
+                    else None
+                )
+                step_vio[node.node_id] = {
+                    "position": vio_state.position.tolist(),
+                    "velocity": vio_state.velocity.tolist(),
+                    "covariance_pos_trace": cov_trace,
+                }
+                _vio_positions_this_step[node.node_id] = vio_state.position
+            _vio_prev_positions[node.node_id] = cur_pos
+            _vio_prev_velocities[node.node_id] = cur_vel
+        _vio_estimates_per_frame.append(step_vio)
+
+        # Phase 4.2: when use_vio_position is True, replace each mobile node's
+        # reported position with the VIO estimate so the tracker sees drifted
+        # positions rather than ground truth.
+        if scenario.use_vio_position and _vio_positions_this_step:
+            node_states = [
+                replace(
+                    ns,
+                    position=_vio_positions_this_step[ns.node_id],
+                )
+                if (ns.node_id in _vio_positions_this_step)
+                else ns
+                for ns in node_states
+            ]
+
         observation_batch = build_observations(
             rng=rng,
             nodes=scenario.nodes,
@@ -4077,11 +4361,10 @@ def run_simulation(
 
             scan_frac = _world_map.coverage_fraction
 
-            if _scan_phase == "scanning" and scan_frac >= _scan_threshold:
-                _scan_phase = "localizing"
-                _phase_started_at_s = timestamp_s
-
-            elif _scan_phase == "localizing":
+            # Localization runs every step from the start, building fidelity
+            # progressively as the coverage map fills in.  Confidence starts
+            # near 0 at low coverage and rises naturally as more area is scanned.
+            if _scan_phase in ("scanning", "localizing"):
                 _loc_estimates = []
                 for ns in mobile_states:
                     spd = float(np.linalg.norm(ns.velocity[:2]))
@@ -4095,6 +4378,39 @@ def run_simulation(
                         timestamp_s=timestamp_s,
                     )
                     _loc_estimates.append(est)
+                if _grid_localizer.any_timed_out:
+                    _loc_timed_out = True
+
+            if _scan_phase == "scanning":
+                # Coordinator election (once). No re-election on coordinator failure because
+                # drone failure is not modelled — drones run for the full mission duration.
+                if not _coordinator_elected and mobile_states:
+                    drone_ids = [ns.node_id for ns in mobile_states]
+                    _shared_state.coordinator_id = _coord_manager.elect_coordinator(
+                        drone_ids, _battery_states, _battery_model.capacity_wh
+                    )
+                    _coordinator_elected = True
+
+                if scan_frac >= _scan_threshold:
+                    # Gap-fill gate: only transition if enclosed interior holes
+                    # are below the minimum fraction threshold.
+                    _gap_cells = _frontier_planner.find_gap_cells(_world_map.coverage_map)
+                    _total_cells = max(_world_map.coverage_map.bounds.nx * _world_map.coverage_map.bounds.ny, 1)
+                    if len(_gap_cells) / _total_cells < _frontier_planner.cfg.gap_fill_min_fraction:
+                        # If localization already converged during scanning,
+                        # skip the localizing phase entirely.
+                        loc_converged = (not mobile_states) or all(
+                            e.confidence >= _loc_confidence_threshold for e in _loc_estimates
+                        )
+                        if loc_converged:
+                            _scan_phase = "inspecting"
+                        else:
+                            _scan_phase = "localizing"
+                        _phase_started_at_s = timestamp_s
+
+            elif _scan_phase == "localizing":
+                if _grid_localizer.any_timed_out:
+                    _loc_timed_out = True
                 if mobile_states and all(
                     e.confidence >= _loc_confidence_threshold for e in _loc_estimates
                 ):
@@ -4102,12 +4418,79 @@ def run_simulation(
                     _phase_started_at_s = timestamp_s
 
             elif _scan_phase == "inspecting":
+                # Rescore POIs once using the scan map at phase entry.
+                if not _poi_rescored:
+                    _poi_manager.rescore_from_map(_world_map)
+                    _poi_rescored = True
+
+                drone_ids_unassigned = []
                 for ns in mobile_states:
                     batt = _battery_states.get(ns.node_id)
-                    batt_frac = (batt.remaining_wh / _battery_model.capacity_wh if batt else 1.0)
-                    _poi_manager.assign_nearest(ns.node_id, np.array(ns.position, dtype=float), batt_frac)
+                    batt_remaining = batt.remaining_wh if batt else _battery_model.capacity_wh
+                    batt_frac = batt_remaining / _battery_model.capacity_wh
+                    ctx = POIAssignmentContext(
+                        drone_id=ns.node_id,
+                        drone_pos=np.array(ns.position, dtype=float),
+                        battery_remaining_wh=batt_remaining,
+                        battery_capacity_wh=_battery_model.capacity_wh,
+                        timestamp_s=timestamp_s,
+                    )
+                    assigned = _poi_manager.assign_energy_aware(ctx)
+                    if assigned is None and _poi_manager.assignment_for(ns.node_id) is None:
+                        drone_ids_unassigned.append(ns.node_id)
+                    # Redirect drone trajectory to its POI when first assigned.
+                    active_poi_id = _poi_manager.assignment_for(ns.node_id)
+                    if active_poi_id and active_poi_id != _drone_poi_assignments.get(ns.node_id):
+                        _drone_poi_assignments[ns.node_id] = active_poi_id
+                        poi_obj = _poi_manager._pois[active_poi_id]
+                        start_pos = np.array(ns.position, dtype=float)
+                        tgt_xy = np.array(poi_obj.position[:2], dtype=float)
+                        tgt_z = float(poi_obj.position[2])
+                        t0 = float(timestamp_s)
+                        dist_m = float(np.linalg.norm(tgt_xy - start_pos[:2]))
+                        t_arrive = t0 + dist_m / 28.0
+
+                        def _make_goto_hover(sp, txy, tz, ts, ta):
+                            def _traj(t):
+                                if t >= ta:
+                                    return np.array([txy[0], txy[1], tz]), np.zeros(3)
+                                frac = (t - ts) / max(ta - ts, 1e-9)
+                                frac = max(0.0, min(1.0, frac))
+                                pos = np.array([
+                                    sp[0] + frac * (txy[0] - sp[0]),
+                                    sp[1] + frac * (txy[1] - sp[1]),
+                                    sp[2] + frac * (tz - sp[2]),
+                                ])
+                                dt_inv = 1.0 / max(ta - ts, 1e-9)
+                                vel = np.array([txy[0]-sp[0], txy[1]-sp[1], tz-sp[2]]) * dt_inv
+                                return pos, vel
+                            return _traj
+
+                        _poi_trajectories[ns.node_id] = _make_goto_hover(
+                            start_pos, tgt_xy, tgt_z, t0, t_arrive
+                        )
+                    # Handoff: if this drone is low and has an active POI, find a fresh drone.
+                    if batt_frac < 0.30:
+                        poi_id = _poi_manager.assignment_for(ns.node_id)
+                        if poi_id is not None:
+                            for other_ns in mobile_states:
+                                other_batt = _battery_states.get(other_ns.node_id)
+                                other_frac = (other_batt.remaining_wh / _battery_model.capacity_wh if other_batt else 1.0)
+                                if other_ns.node_id != ns.node_id and other_frac > 0.50 and _poi_manager.assignment_for(other_ns.node_id) is None:
+                                    _poi_manager.trigger_handoff(ns.node_id, other_ns.node_id)
+                                    break
                     _poi_manager.accumulate_dwell(ns.node_id, np.array(ns.position, dtype=float), simulation_config.dt_s)
-                _poi_manager.check_completions(timestamp_s)
+                # Team assignment: if one POI remains and multiple drones are free.
+                pending_pois = [p for p in _poi_manager.statuses if p.status == "pending"]
+                if len(pending_pois) == 1 and len(drone_ids_unassigned) > 1:
+                    _poi_manager.request_team_assign(pending_pois[0].poi_id, drone_ids_unassigned[1])
+                newly_completed = _poi_manager.check_completions(timestamp_s)
+                # When a POI completes, clear the redirect so the drone can be reassigned.
+                for done_poi_id in newly_completed:
+                    for did, pid in list(_drone_poi_assignments.items()):
+                        if pid == done_poi_id:
+                            del _drone_poi_assignments[did]
+                            _poi_trajectories.pop(did, None)
                 if _poi_manager.all_complete:
                     _scan_phase = "complete"
                     _phase_started_at_s = timestamp_s
@@ -4144,6 +4527,8 @@ def run_simulation(
                 total_poi_count=_poi_manager.total_count,
                 phase_started_at_s=_phase_started_at_s,
                 newly_scanned_cells=tuple(_newly_covered),
+                localization_timed_out=_loc_timed_out,
+                coordinator_drone_id=_shared_state.coordinator_id,
             )
 
         # --- Localization quality (derived from track covariances) ---
@@ -4217,10 +4602,20 @@ def run_simulation(
             inspection_events=step_inspection_events,
             scan_mission_state=step_scan_mission_state,
         )
+
         frames.append(frame)
+        _total_frame_count += 1
+        if _stream_file is not None:
+            _stream_file.write(json.dumps(to_jsonable(frame), separators=(",", ":")) + "\n")
+            # Keep only a rolling window in memory when streaming.
+            if len(frames) > max_frames_in_memory:
+                frames.pop(0)
         rows, errors = _build_metrics_rows(frame, truths, observation_batch)
         metrics_rows.extend(rows)
         per_track_errors.extend(errors)
+
+    if _stream_file is not None:
+        _stream_file.close()
 
     summary = _build_simulation_summary(
         frames=frames,
@@ -4230,6 +4625,10 @@ def run_simulation(
         generation_accepted_by_target=generation_accepted_by_target,
         generation_rejected_by_target=generation_rejected_by_target,
     )
+    # When streaming, `frames` is a rolling window; correct the total count.
+    if _total_frame_count != len(frames):
+        summary = {**summary, "frame_count": _total_frame_count}
+
     replay_metadata = _build_replay_metadata(
         frames=frames,
         scenario=scenario,
@@ -4237,6 +4636,9 @@ def run_simulation(
         tracker_config=active_tracker_config,
         summary=summary,
     )
+    # Include VIO node IDs in replay metadata summary for discoverability.
+    replay_metadata["vio_tracked_nodes"] = sorted(_vio_backends.keys())
+
     return SimulationResult(
         scenario_name=scenario.scenario_name,
         simulation_config=simulation_config,
@@ -4245,6 +4647,8 @@ def run_simulation(
         metrics_rows=metrics_rows,
         summary=summary,
         replay_metadata=replay_metadata,
+        vio_estimates_per_frame=_vio_estimates_per_frame,
+        streaming_jsonl_path=streaming_output_path,
     )
 
 
@@ -4418,6 +4822,8 @@ def simulate(
     mission_mode: str = "scan_map_inspect",
     scan_coverage_threshold: float = 0.70,
     poi_count: int = 3,
+    streaming: bool = False,
+    max_frames_in_memory: int = 500,
 ) -> SimulationResult:
     if steps is not None:
         simulation_config = SimulationConfig(steps=steps, dt_s=dt, seed=seed)
@@ -4444,10 +4850,17 @@ def simulate(
         seed=seed,
         constants=constants,
     )
+    # Derive streaming JSONL path alongside the replay output.
+    streaming_jsonl_path: Optional[Path] = None
+    if streaming and replay_path:
+        streaming_jsonl_path = Path(replay_path).with_suffix(".frames.jsonl")
+
     result = run_simulation(
         scenario=scenario,
         simulation_config=simulation_config,
         tracker_config=DEFAULT_SIMULATION_TRACKER_CONFIG,
+        streaming_output_path=streaming_jsonl_path,
+        max_frames_in_memory=max_frames_in_memory,
     )
 
     for line in build_simulation_report_lines(result):
@@ -4458,16 +4871,29 @@ def simulate(
         print(f"CSV written to {csv_path}")
 
     if replay_path:
-        if compact or replay_subsample > 1:
+        if streaming_jsonl_path is not None and streaming_jsonl_path.exists():
+            # Assemble replay from the JSONL file without loading all frames.
+            from argusnet.evaluation.replay import write_streaming_replay_document
+            write_streaming_replay_document(
+                jsonl_path=streaming_jsonl_path,
+                output_path=Path(replay_path),
+                meta=result.replay_metadata,
+                summary=result.summary,
+            )
+            streaming_jsonl_path.unlink(missing_ok=True)
+            print(f"Replay written to {replay_path} (streamed)")
+        elif compact or replay_subsample > 1:
             replay_document = _build_compact_replay_document(
                 result,
                 replay_subsample=replay_subsample,
                 compact=compact,
             )
+            write_replay_document(replay_path, replay_document)
+            print(f"Replay written to {replay_path}")
         else:
             replay_document = build_replay_document_from_result(result)
-        write_replay_document(replay_path, replay_document)
-        print(f"Replay written to {replay_path}")
+            write_replay_document(replay_path, replay_document)
+            print(f"Replay written to {replay_path}")
 
     return result
 
@@ -4595,6 +5021,23 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
                         help="Coverage fraction (0-1) to trigger LOCALIZING phase (default: 0.70).")
     parser.add_argument("--poi-count", dest="poi_count", type=int, default=3,
                         help="Number of auto-generated POIs in scan_map_inspect mode (default: 3).")
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        default=False,
+        help=(
+            "Write frames to a temporary JSONL file during the run instead of buffering "
+            "all frames in RAM.  Enables long-duration runs (>10 min) without excessive "
+            "memory usage.  The final replay.json is assembled from the JSONL on completion."
+        ),
+    )
+    parser.add_argument(
+        "--max-frames-in-memory",
+        type=int,
+        default=500,
+        dest="max_frames_in_memory",
+        help="Rolling in-memory frame window when --streaming is active (default: 500).",
+    )
     return parser
 
 
@@ -4649,6 +5092,8 @@ def run_from_args(args: argparse.Namespace) -> None:
         mission_mode=getattr(args, "mission_mode", "scan_map_inspect"),
         scan_coverage_threshold=getattr(args, "scan_coverage_threshold", 0.70),
         poi_count=getattr(args, "poi_count", 3),
+        streaming=getattr(args, "streaming", False),
+        max_frames_in_memory=getattr(args, "max_frames_in_memory", 500),
     )
 
 

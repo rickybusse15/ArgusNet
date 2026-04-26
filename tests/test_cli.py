@@ -3,13 +3,13 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-import smart_tracker.cli as cli
+import argusnet.cli.main as cli
 
 
 class CliImportBehaviorTest(unittest.TestCase):
     def test_build_scene_args_parse_without_sim_runtime_import(self) -> None:
         with patch(
-            "smart_tracker.cli._import_sim_module",
+            "argusnet.cli.main._import_sim_module",
             side_effect=RuntimeError(cli.PYTHON_DEPENDENCY_INSTALL_HINT),
         ):
             args = cli.parse_args(["build-scene", "--replay", "demo.json", "--output", "scene-out"])
@@ -20,7 +20,7 @@ class CliImportBehaviorTest(unittest.TestCase):
 
     def test_sim_main_exits_with_clear_dependency_hint(self) -> None:
         with patch(
-            "smart_tracker.cli._import_sim_module",
+            "argusnet.cli.main._import_sim_module",
             side_effect=RuntimeError(
                 "Simulation requires the Python dependency `numpy`. "
                 + cli.PYTHON_DEPENDENCY_INSTALL_HINT
@@ -34,7 +34,7 @@ class CliImportBehaviorTest(unittest.TestCase):
 
     def test_build_scene_main_dispatches_to_scene_module(self) -> None:
         scene_module = unittest.mock.Mock()
-        with patch("smart_tracker.cli._import_scene_module", return_value=scene_module):
+        with patch("argusnet.cli.main._import_scene_module", return_value=scene_module):
             cli.main(["build-scene", "--replay", "demo.json", "--output", "scene-out"])
 
         scene_module.build_scene_package.assert_called_once()
@@ -60,7 +60,7 @@ class CliImportBehaviorTest(unittest.TestCase):
     def test_export_shapefile_requires_directory_output(self) -> None:
         replay_module = unittest.mock.Mock()
         replay_module.load_replay_document.return_value = {"meta": {}, "frames": []}
-        with patch.dict("sys.modules", {"smart_tracker.replay": replay_module}):
+        with patch.dict("sys.modules", {"argusnet.evaluation.replay": replay_module}):
             with self.assertRaises(SystemExit) as context:
                 cli.main(
                     [

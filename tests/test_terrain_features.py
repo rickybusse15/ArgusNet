@@ -14,7 +14,7 @@ import numpy as np
 
 import math
 
-from smart_tracker.environment import (
+from argusnet.world.environment import (
     Bounds2D,
     LandCoverClass,
     LandCoverLayer,
@@ -24,8 +24,8 @@ from smart_tracker.environment import (
     ObstacleLayer,
     CylinderObstacle,
 )
-from smart_tracker.terrain import alpine_terrain, TerrainModel
-from smart_tracker.models import (
+from argusnet.world.terrain import alpine_terrain, TerrainModel
+from argusnet.core.types import (
     MissionZone,
     BearingObservation,
     NodeState,

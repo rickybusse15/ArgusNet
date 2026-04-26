@@ -7,8 +7,8 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-from smart_tracker.coordinates import ENUOrigin
-from smart_tracker.export import export_kml, export_gpx
+from argusnet.core.frames import ENUOrigin
+from argusnet.evaluation.export import export_kml, export_gpx
 
 
 _KML_NS = "http://www.opengis.net/kml/2.2"

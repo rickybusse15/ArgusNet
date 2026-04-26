@@ -235,6 +235,10 @@ class ScanMissionState:
     # The viewer accumulates these into a persistent LiDAR-style point cloud as
     # the replay plays back, producing a real-time map reconstruction.
     newly_scanned_cells: tuple = ()     # Tuple[Tuple[float,float,float], ...]
+    # Team-level flag: True if *any* drone advanced via timeout rather than convergence.
+    # Does not identify which specific drone(s) timed out vs. genuinely converged.
+    localization_timed_out: bool = False
+    coordinator_drone_id: Optional[str] = None  # elected by highest battery fraction (one-shot)
 
 
 def to_jsonable(value: Any) -> Any:

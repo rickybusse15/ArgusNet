@@ -6,7 +6,7 @@ contract, replanning triggers, and deconfliction rules described in
 
 Typical usage::
 
-    from smart_tracker.cooperative_planner import (
+    from argusnet.planning.coverage import (
         CooperativePlanner,
         PlanningObjectives,
         ROLE_PRIMARY_OBSERVER,

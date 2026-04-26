@@ -206,6 +206,9 @@ def _node_to_proto(node: NodeState) -> tracker_pb2.NodeState:
         is_mobile=bool(node.is_mobile),
         timestamp_s=float(node.timestamp_s),
         health=float(node.health),
+        sensor_type=str(getattr(node, "sensor_type", "optical") or "optical"),
+        fov_half_angle_deg=float(getattr(node, "fov_half_angle_deg", 180.0) or 180.0),
+        max_range_m=float(getattr(node, "max_range_m", 0.0)),
     )
 
 
@@ -217,6 +220,9 @@ def _node_from_proto(node: tracker_pb2.NodeState) -> NodeState:
         is_mobile=bool(node.is_mobile),
         timestamp_s=float(node.timestamp_s),
         health=float(node.health),
+        sensor_type=str(node.sensor_type) if node.sensor_type else "optical",
+        fov_half_angle_deg=float(node.fov_half_angle_deg) if node.fov_half_angle_deg else 180.0,
+        max_range_m=float(node.max_range_m),
     )
 
 
@@ -486,13 +492,12 @@ class TrackingService:
         if daemon_path:
             return [daemon_path]
 
-        env_daemon = shutil.which("argusnetd") or shutil.which("smart-trackerd")
+        env_daemon = shutil.which("argusnetd")
         if env_daemon:
             return [env_daemon]
 
         debug_binary = repo_root / "target" / "debug" / "argusnetd"
-        legacy_binary = repo_root / "target" / "debug" / "smart-trackerd"
-        if not debug_binary.exists() and not legacy_binary.exists():
+        if not debug_binary.exists():
             cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
             print("Building argusnetd (this may take a minute on first run)...")
             subprocess.run(
@@ -502,8 +507,6 @@ class TrackingService:
             )
         if debug_binary.exists():
             return [str(debug_binary)]
-        if legacy_binary.exists():
-            return [str(legacy_binary)]
 
         cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
         return [

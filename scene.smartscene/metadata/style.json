@@ -16,20 +16,6 @@
       "default_visibility": true
     },
     {
-      "id": "vegetation",
-      "semantic_kind": "landcover",
-      "color_rgba": [
-        0.7176470588235294,
-        0.8313725490196079,
-        0.5490196078431373,
-        0.6
-      ],
-      "opacity": 0.6,
-      "elevation_mode": "extruded",
-      "draw_order": 31,
-      "default_visibility": true
-    },
-    {
       "id": "buildings",
       "semantic_kind": "buildings",
       "color_rgba": [
@@ -41,6 +27,20 @@
       "opacity": 0.45,
       "elevation_mode": "extruded",
       "draw_order": 30,
+      "default_visibility": true
+    },
+    {
+      "id": "walls",
+      "semantic_kind": "buildings",
+      "color_rgba": [
+        0.8235294117647058,
+        0.8470588235294118,
+        0.8745098039215686,
+        0.5
+      ],
+      "opacity": 0.5,
+      "elevation_mode": "extruded",
+      "draw_order": 32,
       "default_visibility": true
     },
     {

@@ -23,6 +23,20 @@ use crate::ui::viewer_ui_system;
 /// Maximum number of historical positions kept in a trail.
 const TRAIL_MAX_POINTS: usize = 32;
 
+/// Marker component on the persistent GPU line-list mesh used to render the
+/// LiDAR reconstruction point cloud.  Rebuilt only when the cloud is dirty.
+#[derive(Component)]
+struct ReconstructionMeshMarker;
+
+/// Stores the initial camera orbit parameters so the R key can snap back.
+#[derive(Resource, Clone)]
+struct CameraHomePosition {
+    yaw: f32,
+    pitch: f32,
+    radius: f32,
+    focus: Vec3,
+}
+
 /// Active simulation subprocess — inserted as a resource while running.
 #[derive(Resource)]
 struct SimulationProcess {
@@ -97,16 +111,17 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
                 })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: "Smart Tracker Viewer".into(),
+                        title: "ArgusNet Viewer".into(),
                         resolution: (1440.0, 920.0).into(),
                         ..default()
                     }),
                     ..default()
                 }),
         )
+        .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin)
         .add_plugins(EguiPlugin)
         .add_plugins(OrbitCameraPlugin)
-        .add_systems(Startup, setup_world)
+        .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
         .add_systems(
             Update,
             (
@@ -125,7 +140,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
                 draw_scan_grid_system,
                 draw_poi_markers_system,
                 update_reconstruction_system,
-                draw_reconstruction_cloud_system,
+                maintain_reconstruction_mesh_system,
                 draw_coord_frame_system,
             )
                 .chain(),
@@ -152,6 +167,12 @@ fn setup_world(
     );
     let eye = orbit.eye_position();
     let focus = orbit.focus;
+    commands.insert_resource(CameraHomePosition {
+        yaw: orbit.yaw,
+        pitch: orbit.pitch,
+        radius: orbit.radius,
+        focus: orbit.focus,
+    });
 
     commands.insert_resource(AmbientLight {
         color: Color::srgb(0.95, 0.96, 0.98),
@@ -224,7 +245,7 @@ fn create_working_asset_root() -> Result<PathBuf> {
         .unwrap_or_default()
         .as_nanos();
     let root = std::env::temp_dir().join(format!(
-        "smart-tracker-viewer-{}-{suffix}",
+        "argusnet-viewer-{}-{suffix}",
         std::process::id()
     ));
     fs::create_dir_all(&root)
@@ -316,11 +337,24 @@ fn keyboard_playback_system(
     mut replay_state: ResMut<ReplayState>,
     mut contexts: EguiContexts,
     mut view_mode: ResMut<ViewMode>,
+    home: Res<CameraHomePosition>,
+    mut camera_query: Query<&mut OrbitCamera>,
 ) {
     // Don't capture keys when egui wants keyboard input (e.g. text fields).
     if contexts.ctx_mut().wants_keyboard_input() {
         return;
     }
+
+    // R: reset camera to home position (works even with no replay loaded).
+    if keys.just_pressed(KeyCode::KeyR) {
+        for mut cam in &mut camera_query {
+            cam.yaw = home.yaw;
+            cam.pitch = home.pitch;
+            cam.radius = home.radius;
+            cam.focus = home.focus;
+        }
+    }
+
     if replay_state.frame_count() == 0 {
         return;
     }
@@ -619,6 +653,90 @@ fn draw_runtime_overlays_system(
             }
         }
     }
+
+    // Covariance ellipsoids — draw 3 axis-aligned circles per track
+    if runtime_visibility.show_covariance_ellipsoids {
+        if let Some(frame) = replay_state.current_frame() {
+            let ell_color = Color::srgba(0.9, 0.65, 0.1, 0.55);
+            let k = 2.45_f64; // 95% confidence factor
+            let segments = 20;
+            for track in &frame.tracks {
+                if let Some(cov) = &track.covariance {
+                    let diag = crate::ui::covariance_diagonal(cov);
+                    let rx = ((diag[0].max(0.0)).sqrt() * k) as f32;
+                    let ry = ((diag[1].max(0.0)).sqrt() * k) as f32;
+                    let rz = ((diag[2].max(0.0)).sqrt() * k) as f32;
+                    let center = Vec3::from_array(track.position);
+                    // XY-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(a0.cos() * rx, a0.sin() * ry, 0.0);
+                        let p1 = center + Vec3::new(a1.cos() * rx, a1.sin() * ry, 0.0);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                    // XZ-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(a0.cos() * rx, 0.0, a0.sin() * rz);
+                        let p1 = center + Vec3::new(a1.cos() * rx, 0.0, a1.sin() * rz);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                    // YZ-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(0.0, a0.cos() * ry, a0.sin() * rz);
+                        let p1 = center + Vec3::new(0.0, a1.cos() * ry, a1.sin() * rz);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                }
+            }
+        }
+    }
+
+    // Covariance ellipsoids — draw 3 axis-aligned circles per track
+    if runtime_visibility.show_covariance_ellipsoids {
+        if let Some(frame) = replay_state.current_frame() {
+            let ell_color = Color::srgba(0.9, 0.65, 0.1, 0.55);
+            let k = 2.45_f64; // 95% confidence factor
+            let segments = 20;
+            for track in &frame.tracks {
+                if let Some(cov) = &track.covariance {
+                    let diag = crate::ui::covariance_diagonal(cov);
+                    let rx = ((diag[0].max(0.0)).sqrt() * k) as f32;
+                    let ry = ((diag[1].max(0.0)).sqrt() * k) as f32;
+                    let rz = ((diag[2].max(0.0)).sqrt() * k) as f32;
+                    let center = Vec3::from_array(track.position);
+                    // XY-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(a0.cos() * rx, a0.sin() * ry, 0.0);
+                        let p1 = center + Vec3::new(a1.cos() * rx, a1.sin() * ry, 0.0);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                    // XZ-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(a0.cos() * rx, 0.0, a0.sin() * rz);
+                        let p1 = center + Vec3::new(a1.cos() * rx, 0.0, a1.sin() * rz);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                    // YZ-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(0.0, a0.cos() * ry, a0.sin() * rz);
+                        let p1 = center + Vec3::new(0.0, a1.cos() * ry, a1.sin() * rz);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn find_node_position_opt(frame: &crate::replay::ReplayFrame, node_id: &str) -> Option<Vec3> {
@@ -825,27 +943,61 @@ fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color,
         MarkerKind::Truth => 10.0,
         MarkerKind::Node => 8.0,
     };
-    let radius = base_radius * scale;
-    gizmos.line(
-        marker.position - Vec3::X * radius,
-        marker.position + Vec3::X * radius,
-        color,
-    );
-    gizmos.line(
-        marker.position - Vec3::Y * radius,
-        marker.position + Vec3::Y * radius,
-        color,
-    );
-    gizmos.line(
-        marker.position - Vec3::Z * (radius * 0.6),
-        marker.position + Vec3::Z * (radius * 0.6),
-        color,
-    );
+    let r = base_radius * scale;
+    let pos = marker.position;
 
+    match marker.kind {
+        MarkerKind::Track => {
+            // Cross (+) glyph
+            gizmos.line(pos - Vec3::X * r, pos + Vec3::X * r, color);
+            gizmos.line(pos - Vec3::Y * r, pos + Vec3::Y * r, color);
+            gizmos.line(pos - Vec3::Z * (r * 0.6), pos + Vec3::Z * (r * 0.6), color);
+        }
+        MarkerKind::Truth => {
+            // Circle ring (12 segments) — ground-truth target
+            let segs = 12u32;
+            for i in 0..segs {
+                let a0 = std::f32::consts::TAU * i as f32 / segs as f32;
+                let a1 = std::f32::consts::TAU * (i + 1) as f32 / segs as f32;
+                let p0 = pos + Vec3::new(a0.cos() * r, a0.sin() * r, 0.0);
+                let p1 = pos + Vec3::new(a1.cos() * r, a1.sin() * r, 0.0);
+                gizmos.line(p0, p1, color);
+            }
+            // Vertical tick
+            gizmos.line(pos - Vec3::Z * (r * 0.5), pos + Vec3::Z * (r * 0.5), color);
+        }
+        MarkerKind::Node => {
+            if marker.is_mobile == Some(true) {
+                // Diamond glyph for mobile drones
+                let top    = pos + Vec3::Y * r;
+                let right  = pos + Vec3::X * r;
+                let bottom = pos - Vec3::Y * r;
+                let left   = pos - Vec3::X * r;
+                gizmos.line(top, right, color);
+                gizmos.line(right, bottom, color);
+                gizmos.line(bottom, left, color);
+                gizmos.line(left, top, color);
+                // Vertical spine for altitude context
+                gizmos.line(pos - Vec3::Z * (r * 0.5), pos + Vec3::Z * r, color);
+            } else {
+                // Square bracket glyph for static ground sensors
+                let a = pos + Vec3::new(-r, -r, 0.0);
+                let b = pos + Vec3::new( r, -r, 0.0);
+                let c = pos + Vec3::new( r,  r, 0.0);
+                let d = pos + Vec3::new(-r,  r, 0.0);
+                gizmos.line(a, b, color);
+                gizmos.line(b, c, color);
+                gizmos.line(c, d, color);
+                gizmos.line(d, a, color);
+            }
+        }
+    }
+
+    // Velocity vector (all types)
     if marker.velocity.length_squared() > 0.0 {
         gizmos.line(
-            marker.position,
-            marker.position + marker.velocity.clamp_length_max(60.0) * 0.25,
+            pos,
+            pos + marker.velocity.clamp_length_max(60.0) * 0.25,
             color,
         );
     }
@@ -882,6 +1034,7 @@ fn draw_sensor_overlays_system(
     replay_state: Res<ReplayState>,
     runtime_visibility: Res<RuntimeOverlayVisibility>,
     scene_package: Res<crate::schema::ScenePackage>,
+    mission_zones: Res<LoadedMissionZones>,
 ) {
     let Some(frame) = replay_state.current_frame() else {
         return;
@@ -905,8 +1058,10 @@ fn draw_sensor_overlays_system(
                     let Some([c0, c1]) = mission_zones::clip_segment_to_bounds(raw_p0, raw_p1, bounds) else {
                         continue;
                     };
-                    let p0 = Vec3::new(c0[0], c0[1], pos.z);
-                    let p1 = Vec3::new(c1[0], c1[1], pos.z);
+                    let z0 = mission_zones.terrain_mesh.as_ref().and_then(|m| m.sample_height(c0[0], c0[1])).unwrap_or(pos.z) + 1.5;
+                    let z1 = mission_zones.terrain_mesh.as_ref().and_then(|m| m.sample_height(c1[0], c1[1])).unwrap_or(pos.z) + 1.5;
+                    let p0 = Vec3::new(c0[0], c0[1], z0);
+                    let p1 = Vec3::new(c1[0], c1[1], z1);
                     gizmos.line(p0, p1, ring_color);
                 }
             }
@@ -982,9 +1137,10 @@ fn draw_sensor_overlays_system(
 fn draw_scan_grid_system(
     mut gizmos: Gizmos,
     replay_state: Res<ReplayState>,
-    reconstruction: Res<ReconstructionCloud>,
+    _reconstruction: Res<ReconstructionCloud>,
     overlay: Res<MissionOverlaySettings>,
-    view_mode: Res<ViewMode>,
+    _view_mode: Res<ViewMode>,
+    scene_package: Res<ScenePackage>,
 ) {
     if !overlay.show_scan_grid {
         return;
@@ -1000,37 +1156,22 @@ fn draw_scan_grid_system(
         // Z-up: ground plane is XY; Quat::IDENTITY gives a flat horizontal rect.
         let hue = 120.0 * frac;
         let border_color = Color::hsla(hue, 0.9, 0.5, 0.5);
-        let (half_w, half_h) = if let Some(map_st) = &frame.mapping_state {
-            let cells = map_st.total_cells.max(1) as f32;
-            let side = cells.sqrt() * 50.0 * 0.5;
-            (side, side)
-        } else {
-            (300.0, 300.0)
-        };
-        // Place 1 m above Z=0 so it sits just above the lowest terrain.
+        let b = &scene_package.environment.bounds_xy_m;
+        let cx = (b.x_min_m + b.x_max_m) * 0.5;
+        let cy = (b.y_min_m + b.y_max_m) * 0.5;
+        let width = b.x_max_m - b.x_min_m;
+        let height = b.y_max_m - b.y_min_m;
+        let ground_z = scene_package.environment.terrain_summary.as_ref()
+            .and_then(|s| s.min_height_m)
+            .unwrap_or(0.0);
         let iso = bevy::math::Isometry3d::new(
-            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(cx, cy, ground_z + 2.0),
             Quat::IDENTITY,
         );
-        gizmos.rect(iso, Vec2::new(half_w * 2.0, half_h * 2.0), border_color);
+        gizmos.rect(iso, Vec2::new(width, height), border_color);
 
-        // Subdivided scan cells (show all accumulated points as flat ground quads).
-        // Z-up: pt = [east, north, terrain_height]; height is pt[2].
-        if *view_mode == ViewMode::Split || *view_mode == ViewMode::ScanMap {
-            let cell_size = 50.0_f32;
-            for pt in reconstruction.points.iter() {
-                let height_frac = (pt[2] / 300.0).clamp(0.0, 1.0);
-                let cell_hue = 200.0 + height_frac * 120.0; // blue→green by height
-                let alpha = if *view_mode == ViewMode::Split { 0.35 } else { 0.55 };
-                let color = Color::hsla(cell_hue, 0.9, 0.55, alpha);
-                // Place cell 0.5 m above terrain surface; Quat::IDENTITY = flat in XY.
-                let iso_cell = bevy::math::Isometry3d::new(
-                    Vec3::new(pt[0], pt[1], pt[2] + 0.5),
-                    Quat::IDENTITY,
-                );
-                gizmos.rect(iso_cell, Vec2::splat(cell_size * 0.92), color);
-            }
-        }
+        // The scan cell point cloud is rendered as a GPU mesh by
+        // maintain_reconstruction_mesh_system; no per-point gizmo work needed here.
     }
 }
 
@@ -1104,41 +1245,129 @@ fn update_reconstruction_system(
 
     // Python emits a flat [x0,y0,h0, x1,y1,h1, ...] array; chunk into triples.
     // Viewer is Z-up: Python (x=east, y=north, h=terrain_height) maps directly.
+    let prev_len = reconstruction.points.len();
     for triple in mission.newly_scanned_cells.chunks_exact(3) {
         reconstruction.points.push([triple[0], triple[1], triple[2]]);
     }
+    if reconstruction.points.len() > prev_len {
+        reconstruction.dirty = true;
+    }
 }
 
-/// Renders the accumulated LiDAR point cloud as small glowing spheres.
-fn draw_reconstruction_cloud_system(
-    mut gizmos: Gizmos,
-    reconstruction: Res<ReconstructionCloud>,
+/// Spawns the persistent GPU line-list mesh used for the reconstruction cloud.
+/// Called once at startup; the mesh geometry is empty until `maintain_reconstruction_mesh_system`
+/// fills it.
+fn setup_reconstruction_mesh(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    use bevy::render::mesh::PrimitiveTopology;
+    use bevy::render::render_asset::RenderAssetUsages;
+
+    // Initialise with a degenerate triangle so the GPU allocator never encounters
+    // a zero-vertex buffer (Bevy's MeshAllocator panics on divide-by-zero).
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   vec![[0.0_f32, 0.0, 1.0]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    vec![[0.0_f32; 4]; 3]);
+
+    // Semi-transparent scan-coverage overlay: teal tint, additive-friendly alpha.
+    let mat = StandardMaterial {
+        base_color: bevy::color::Color::srgba(0.25, 0.85, 0.65, 0.45),
+        alpha_mode: AlphaMode::Blend,
+        double_sided: true,
+        cull_mode: None,
+        unlit: true,
+        ..default()
+    };
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(mat)),
+        Visibility::Hidden,
+        ReconstructionMeshMarker,
+    ));
+}
+
+/// Maintains the GPU triangle-mesh for the scan-coverage overlay.
+/// Each scanned 50 m grid cell is drawn as a flat quad (2 triangles) sitting
+/// 1 m above the terrain surface so it is never z-fought by the ground mesh.
+/// Updates visibility every frame (cheap), rebuilds geometry only when `dirty`.
+fn maintain_reconstruction_mesh_system(
+    mut reconstruction: ResMut<ReconstructionCloud>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mesh_q: Query<(&Mesh3d, &mut Visibility), With<ReconstructionMeshMarker>>,
     overlay: Res<MissionOverlaySettings>,
     view_mode: Res<ViewMode>,
 ) {
-    if !overlay.show_reconstruction {
-        return;
-    }
-    if *view_mode == ViewMode::RealWorld {
-        return; // hidden in pure real-world mode
+    let should_show = overlay.show_reconstruction && *view_mode != ViewMode::RealWorld;
+
+    // Collect handles and update visibility in one pass.
+    let mut handles: Vec<Handle<Mesh>> = Vec::new();
+    for (mesh_3d, mut vis) in &mut mesh_q {
+        *vis = if should_show { Visibility::Visible } else { Visibility::Hidden };
+        if reconstruction.dirty && should_show {
+            handles.push(mesh_3d.0.clone());
+        }
     }
 
-    let total = reconstruction.points.len();
-    if total == 0 {
+    if !reconstruction.dirty {
+        return;
+    }
+    // Always clear dirty to prevent unbounded re-queuing; skip GPU upload when hidden.
+    reconstruction.dirty = false;
+    if !should_show {
         return;
     }
 
-    // Subsample for performance: show at most 2000 points.
-    let step = (total / 2000).max(1);
-    for pt in reconstruction.points.iter().step_by(step) {
-        // Z-up: pt = [east, north, terrain_height]; height is pt[2].
-        let height_frac = (pt[2] / 300.0_f32).clamp(0.0, 1.0);
-        // Classic terrain colormap: blue (low) → cyan → green → yellow → red (high)
-        let hue = 240.0 - height_frac * 240.0;
-        let color = Color::hsla(hue, 1.0, 0.65, 0.85);
-        let pos = Vec3::new(pt[0], pt[1], pt[2] + 1.0);
-        let iso = bevy::math::Isometry3d::new(pos, Quat::IDENTITY);
-        gizmos.sphere(iso, 4.0, color);
+    // Half-size of a grid cell (50 m resolution → 25 m half-extent).
+    // Tiles are inset by 1 m per edge to leave a visible grid gap.
+    const HALF: f32 = 24.0;
+    // Lift slightly above terrain so tiles never z-fight the ground mesh.
+    const Z_LIFT: f32 = 0.8;
+    // Up normal for all vertices in Z-up space.
+    const NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
+
+    let n = reconstruction.points.len();
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
+    let mut normals:   Vec<[f32; 3]> = Vec::with_capacity(n * 4);
+    let mut colors:    Vec<[f32; 4]> = Vec::with_capacity(n * 4);
+    let mut indices:   Vec<u32>      = Vec::with_capacity(n * 6);
+
+    for pt in &reconstruction.points {
+        // Terrain-height-based colour: blue (sea level) → green → yellow → red (high).
+        let h = (pt[2] / 200.0_f32).clamp(0.0, 1.0);
+        let hue = 200.0 - h * 160.0;   // 200° (cyan-blue) → 40° (orange) as altitude rises
+        let lin = LinearRgba::from(Color::hsla(hue, 0.85, 0.60, 0.55));
+        let rgba = [lin.red, lin.green, lin.blue, lin.alpha];
+
+        let base = positions.len() as u32;
+        let z = pt[2] + Z_LIFT;
+        // Quad corners (CCW from below → correct winding for Z-up top face).
+        positions.push([pt[0] - HALF, pt[1] - HALF, z]);
+        positions.push([pt[0] + HALF, pt[1] - HALF, z]);
+        positions.push([pt[0] + HALF, pt[1] + HALF, z]);
+        positions.push([pt[0] - HALF, pt[1] + HALF, z]);
+        for _ in 0..4 { normals.push(NORMAL); colors.push(rgba); }
+        // Two CCW triangles.
+        indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+    }
+
+    // Degenerate fallback so MeshAllocator never sees an empty buffer.
+    if positions.is_empty() {
+        positions = vec![[0.0; 3]; 3];
+        normals   = vec![[0.0, 0.0, 1.0]; 3];
+        colors    = vec![[0.0; 4]; 3];
+        indices   = vec![0, 1, 2];
+    }
+
+    for handle in handles {
+        if let Some(mesh) = meshes.get_mut(&handle) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   normals.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors.clone());
+            mesh.insert_indices(bevy::render::mesh::Indices::U32(indices.clone()));
+        }
     }
 }
 
@@ -1245,6 +1474,10 @@ fn spawn_simulation_system(
 }
 
 fn simulation_python() -> String {
+    if let Ok(p) = std::env::var("ARGUSNET_PYTHON") {
+        return p;
+    }
+    // Legacy env var name kept for backward compatibility.
     if let Ok(p) = std::env::var("SMART_TRACKER_PYTHON") {
         return p;
     }
@@ -1272,7 +1505,7 @@ fn spawn_simulation_child(
 ) -> Result<Child> {
     let mut args = vec![
         "-m".to_string(),
-        "smart_tracker".to_string(),
+        "argusnet".to_string(),
         "sim".to_string(),
         "--map-preset".to_string(),
         sim_runner.map_preset.clone(),
@@ -1280,12 +1513,8 @@ fn spawn_simulation_child(
         sim_runner.terrain_preset.clone(),
         "--platform-preset".to_string(),
         sim_runner.platform_preset.clone(),
-        "--target-motion".to_string(),
-        sim_runner.target_motion.clone(),
-        "--drone-mode".to_string(),
-        sim_runner.drone_mode.clone(),
-        "--target-count".to_string(),
-        sim_runner.target_count.to_string(),
+        "--mission-mode".to_string(),
+        sim_runner.mission_mode.clone(),
         "--drone-count".to_string(),
         sim_runner.drone_count.to_string(),
         "--ground-stations".to_string(),
@@ -1300,13 +1529,27 @@ fn spawn_simulation_child(
     if sim_runner.clean_terrain {
         args.push("--clean-terrain".to_string());
     }
+    if sim_runner.mission_mode == "scan_map_inspect" {
+        args.push("--scan-threshold".to_string());
+        args.push(format!("{:.2}", sim_runner.scan_coverage_threshold));
+        args.push("--poi-count".to_string());
+        args.push(sim_runner.poi_count.to_string());
+    } else {
+        // target_tracking: pass target-centric args
+        args.push("--target-motion".to_string());
+        args.push(sim_runner.target_motion.clone());
+        args.push("--drone-mode".to_string());
+        args.push(sim_runner.drone_mode.clone());
+        args.push("--target-count".to_string());
+        args.push(sim_runner.target_count.to_string());
+    }
 
     std::process::Command::new(python)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("failed to spawn smart_tracker sim")
+        .context("failed to spawn argusnet sim")
 }
 
 fn spawn_build_scene_child(python: &str, replay_path: &Path, output_root: &Path) -> Result<Child> {
@@ -1322,7 +1565,7 @@ fn spawn_build_scene_child(python: &str, replay_path: &Path, output_root: &Path)
     std::process::Command::new(python)
         .args([
             "-m",
-            "smart_tracker",
+            "argusnet",
             "build-scene",
             "--replay",
             &replay_path.to_string_lossy(),
@@ -1332,7 +1575,7 @@ fn spawn_build_scene_child(python: &str, replay_path: &Path, output_root: &Path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("failed to spawn smart_tracker build-scene")
+        .context("failed to spawn argusnet build-scene")
 }
 
 fn read_process_error(child: &mut Child, fallback: &str) -> String {
@@ -1367,6 +1610,7 @@ fn poll_simulation_system(
     mut selection: ResMut<SelectionState>,
     mut current_markers: ResMut<CurrentRuntimeMarkers>,
     mut frame_metrics: ResMut<CurrentFrameMetrics>,
+    mut reconstruction: ResMut<ReconstructionCloud>,
     asset_server: Res<AssetServer>,
     mut camera_query: Query<(&mut OrbitCamera, &mut Transform), With<MainCamera>>,
 ) {
@@ -1414,7 +1658,10 @@ fn poll_simulation_system(
                             &process.next_scene_root,
                         );
                         match reload_result {
-                            Ok(()) => sim_runner.finish(),
+                            Ok(()) => {
+                                reconstruction.reset();
+                                sim_runner.finish();
+                            }
                             Err(err) => sim_runner.fail(err.to_string()),
                         }
                         commands.remove_resource::<SimulationProcess>();
@@ -1794,7 +2041,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let temp_root = std::env::temp_dir().join(format!("tracker-viewer-reload-bundle-{suffix}"));
+        let temp_root = std::env::temp_dir().join(format!("argusnet-reload-bundle-{suffix}"));
         let current_root = temp_root.join("current");
         let next_root = temp_root.join("next");
 

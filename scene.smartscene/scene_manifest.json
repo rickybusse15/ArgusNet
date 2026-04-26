@@ -1,11 +1,11 @@
 {
   "format_version": "smartscene-v1",
-  "scene_id": "civilian-observation-medium-mixed-mixed",
+  "scene_id": "civilian-observation-regional-mixed-mixed",
   "bounds_xy_m": {
-    "x_min_m": -630.0,
-    "x_max_m": 630.0,
-    "y_min_m": -577.5,
-    "y_max_m": 630.0
+    "x_min_m": -2160.0,
+    "x_max_m": 2160.0,
+    "y_min_m": -1980.0,
+    "y_max_m": 2160.0
   },
   "runtime_crs": {
     "source_crs_id": "local-enu",
@@ -28,18 +28,18 @@
       "style_id": "terrain-base"
     },
     {
-      "id": "vegetation",
-      "kind": "overlay",
-      "semantic_kind": "landcover",
-      "asset_path": "overlays/vegetation.glb",
-      "style_id": "vegetation"
-    },
-    {
       "id": "buildings",
       "kind": "overlay",
       "semantic_kind": "buildings",
       "asset_path": "overlays/buildings.glb",
       "style_id": "buildings"
+    },
+    {
+      "id": "walls",
+      "kind": "overlay",
+      "semantic_kind": "buildings",
+      "asset_path": "overlays/walls.glb",
+      "style_id": "walls"
     }
   ],
   "replay": {
@@ -50,10 +50,10 @@
     "style": "metadata/style.json"
   },
   "build": {
-    "generated_at_utc": "2026-03-16T01:36:40.477745+00:00",
+    "generated_at_utc": "2026-03-23T22:11:15.304102+00:00",
     "source_kind": "synthetic",
-    "tool": "smart_tracker.scene.build_scene_from_replay",
-    "replay_source": "replay.json",
+    "tool": "argusnet.world.scene_loader.build_scene_from_replay",
+    "replay_source": "/tmp/argusnet_phase3.json",
     "environment_bundle": null
   }
 }

@@ -173,7 +173,7 @@ def write_glb(path: str | Path, mesh: SimpleMesh, *, name: str) -> None:
     index_accessor = len(accessors) - 1
 
     gltf = {
-        "asset": {"version": "2.0", "generator": "smart_tracker.scene"},
+        "asset": {"version": "2.0", "generator": "argusnet.world.scene"},
         "scene": 0,
         "scenes": [{"nodes": [0], "name": name}],
         "nodes": [{"mesh": 0, "name": name}],

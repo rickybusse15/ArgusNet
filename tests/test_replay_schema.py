@@ -7,7 +7,7 @@ import json
 import unittest
 from pathlib import Path
 
-from smart_tracker.replay import _SCHEMA_PATH, validate_replay_with_schema
+from argusnet.evaluation.replay import _SCHEMA_PATH, validate_replay_with_schema
 
 
 def _minimal_valid_document() -> dict:
@@ -265,7 +265,7 @@ class TestFallbackValidation(unittest.TestCase):
     """Test the manual fallback path directly, regardless of jsonschema availability."""
 
     def test_manual_fallback_catches_missing_meta(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         del doc["meta"]
@@ -274,7 +274,7 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(any("meta" in e for e in errors))
 
     def test_manual_fallback_catches_missing_frames(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         del doc["frames"]
@@ -283,7 +283,7 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(any("frames" in e for e in errors))
 
     def test_manual_fallback_catches_empty_frames(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["frames"] = []
@@ -291,7 +291,7 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(len(errors) > 0)
 
     def test_manual_fallback_catches_wrong_meta_type(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["meta"] = "bad"
@@ -299,7 +299,7 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(len(errors) > 0)
 
     def test_manual_fallback_catches_wrong_dt_s_type(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["meta"]["dt_s"] = "bad"
@@ -307,7 +307,7 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(len(errors) > 0)
 
     def test_manual_fallback_catches_negative_dt_s(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["meta"]["dt_s"] = -1.0
@@ -315,14 +315,14 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(len(errors) > 0)
 
     def test_manual_fallback_passes_valid_document(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         errors = _manual_schema_validation(doc, schema)
         self.assertEqual(errors, [])
 
     def test_manual_fallback_allows_extra_fields(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["custom_extension"] = True
@@ -331,7 +331,7 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def test_manual_fallback_catches_missing_dt_s(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         del doc["meta"]["dt_s"]
@@ -340,7 +340,7 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(any("dt_s" in e for e in errors))
 
     def test_manual_fallback_catches_frame_missing_required_fields(self) -> None:
-        from smart_tracker.replay import _load_replay_schema, _manual_schema_validation
+        from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["frames"] = [{"timestamp_s": 0.0}]  # missing most required frame fields

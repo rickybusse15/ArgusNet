@@ -61,6 +61,7 @@ class GNSSINSFusion:
 
         self._q_pos = process_noise_pos
         self._q_vel = process_noise_vel
+        self._last_innovation_mag: float = 0.0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -77,12 +78,14 @@ class GNSSINSFusion:
         F[2, 5] = dt
         self._x = F @ self._x
 
-        # Process noise (simple additive)
+        # Process noise (simple additive) with adaptive scaling from last innovation
+        adaptive_scale = 1.0 + self._last_innovation_mag * 0.5
         Q = np.zeros((6, 6))
         q4 = self._q_pos * dt * dt
         q_v = self._q_vel * dt
         Q[0, 0] = Q[1, 1] = Q[2, 2] = q4
         Q[3, 3] = Q[4, 4] = Q[5, 5] = q_v
+        Q *= adaptive_scale
         self._P = F @ self._P @ F.T + Q
 
     def update_gnss(self, measurement: GNSSMeasurement) -> None:
@@ -96,12 +99,13 @@ class GNSSINSFusion:
         H = np.zeros((3, 6))
         H[0, 0] = H[1, 1] = H[2, 2] = 1.0
 
-        h_sigma = measurement.h_sigma_m
-        v_sigma = measurement.v_sigma_m
+        h_sigma = max(measurement.h_sigma_m, 0.1)
+        v_sigma = max(measurement.v_sigma_m, 0.1)
         R = np.diag([h_sigma ** 2, h_sigma ** 2, v_sigma ** 2])
 
         z = np.asarray(measurement.position, dtype=float)
         y = z - H @ self._x  # innovation
+        self._last_innovation_mag = float(np.linalg.norm(y))
         S = H @ self._P @ H.T + R
         K = self._P @ H.T @ np.linalg.inv(S)  # Kalman gain
 

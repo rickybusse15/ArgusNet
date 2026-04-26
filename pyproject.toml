@@ -31,11 +31,6 @@ argusnet = "argusnet.cli.main:main"
 argusnet-sim = "argusnet.simulation.sim:main"
 argusnet-export = "argusnet.evaluation.export:main"
 argusnet-build-scene = "argusnet.cli.scene:main"
-# Legacy aliases (backward compat)
-smart-tracker = "smart_tracker.cli:main"
-smart-tracker-sim = "smart_tracker.sim:main"
-smart-tracker-export = "smart_tracker.export:main"
-smart-tracker-build-scene = "smart_tracker.scene_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

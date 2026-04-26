@@ -124,6 +124,31 @@ class ElevationMap:
             return self._default
         return self._patch.at(x_m, y_m)
 
+    def at_point_with_uncertainty(self, x_m: float, y_m: float) -> Tuple[float, float]:
+        """Return (elevation_m, std_m) with local terrain roughness as uncertainty.
+
+        The std_m is derived from the variance of the four surrounding grid cells.
+        For flat terrain or when no grid is available, std_m = 0.1 m.
+        """
+        if self._patch is None:
+            return self._default, 0.1
+
+        xi = np.searchsorted(self._patch.x_m, x_m, side="right") - 1
+        yi = np.searchsorted(self._patch.y_m, y_m, side="right") - 1
+        xi = int(np.clip(xi, 0, len(self._patch.x_m) - 2))
+        yi = int(np.clip(yi, 0, len(self._patch.y_m) - 2))
+
+        z00 = self._patch.z_m[yi, xi]
+        z10 = self._patch.z_m[min(yi + 1, self._patch.z_m.shape[0] - 1), xi]
+        z01 = self._patch.z_m[yi, min(xi + 1, self._patch.z_m.shape[1] - 1)]
+        z11 = self._patch.z_m[min(yi + 1, self._patch.z_m.shape[0] - 1), min(xi + 1, self._patch.z_m.shape[1] - 1)]
+
+        surrounding = [z00, z10, z01, z11]
+        std_m = float(np.std(surrounding))
+        std_m = max(std_m, 0.05)  # minimum 5cm uncertainty
+
+        return self.at_point(x_m, y_m), std_m
+
     def at_xy(self, xy: np.ndarray) -> float:
         """Accept a (2,) or (3,) ENU array."""
         return self.at_point(float(xy[0]), float(xy[1]))

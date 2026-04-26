@@ -277,3 +277,137 @@ A drone inside or within `PlannerConfig.drone_clearance_m` of an exclusion zone 
 is immediately rerouted. `PathPlanner2D` treats exclusion zones as hard obstacles by
 adding them to `ObstacleLayer` as `CylinderObstacle` primitives with radius
 `MissionZone.radius_m`.
+
+---
+
+## 6. Frontier-Based Coverage Planning (Phase 3 ISR)
+
+Used in `scan_map_inspect` missions. Implementation: `src/argusnet/planning/frontier.py`.
+
+### 6.1 FrontierConfig
+
+```
+FrontierConfig
+  distance_weight:          float  # Weight on -distance term in cell score (default 1.0)
+  coverage_gradient_weight: float  # Weight on local coverage gradient (default 1.0;
+                                   # ramps 0→1 between 25%–75% overall coverage to
+                                   # prevent drone clustering during early scanning)
+  exclusion_radius_m:       float  # Radius around a drone's claimed cell that other
+                                   # drones will not target (default 120 m)
+  gap_fill_min_fraction:    float  # Maximum fraction of total grid cells that may be
+                                   # enclosed interior holes before phase transition is
+                                   # allowed (default 0.02 = 2 %)
+```
+
+### 6.2 Cell Selection Algorithm
+
+`FrontierPlanner.select_frontier_cell(drone_id, position_m, coverage_map, claimed_cells)`
+returns the uncovered grid cell that maximises:
+
+```
+score = -distance_weight × dist_m + gradient_weight × coverage_gradient
+```
+
+where `coverage_gradient` is the local coverage density in a neighbourhood around the
+candidate cell. If all candidates are within the exclusion radius of other drones' claimed
+cells, the exclusion radius is ignored and the search retries without it.
+
+### 6.3 Gap-Fill Gate
+
+Before transitioning from `scanning` to `localizing`, the simulation checks that enclosed
+interior holes in the coverage map are below `gap_fill_min_fraction` of total cells.
+
+`FrontierPlanner.find_gap_cells(coverage_map)` uses `scipy.ndimage.binary_fill_holes` to
+identify fully enclosed uncovered regions (holes completely surrounded by covered cells).
+The gate prevents declaring coverage complete when a pocket of uncovered terrain remains
+inside the mapped perimeter — a situation that would cause misleading localization results.
+
+---
+
+## 7. Multi-Drone Coordination (Phase 3 ISR)
+
+Used in `scan_map_inspect` missions. Implementation: `src/argusnet/planning/coordination.py`.
+
+### 7.1 CoordinationPolicy
+
+```
+CoordinationPolicy
+  elect_coordinator:      bool   # Enable battery-based coordinator election (default True)
+  message_latency_steps:  int    # Simulated RF latency in steps; 0 = instant (default 0)
+  formation_mode:         str    # "none" | "line_abreast" | "v_formation" (default "none")
+  formation_spacing_m:    float  # Lateral spacing between drones in formation (default 80 m)
+```
+
+### 7.2 Coordinator Election
+
+`CoordinationManager.elect_coordinator(drone_ids, battery_states, capacity_wh)` returns the
+drone with the highest battery fraction at the time of election. Election is one-shot: the
+coordinator is elected once at the start of the `scanning` phase and is not re-elected
+because drone failure is not modelled.
+
+### 7.3 RF Latency Simulation
+
+When `message_latency_steps > 0`, claimed-cell updates and POI assignments are queued in
+`SharedMissionState.pending_messages` and delivered only after `message_latency_steps`
+have elapsed. `CoordinationManager.flush_messages(shared_state, current_step)` is called
+each frame to apply due messages. This simulates the effect of RF communication delay on
+cooperative coverage planning.
+
+### 7.4 Formation Offsets
+
+`CoordinationManager.formation_offsets(drone_ids, lead_heading_rad, policy)` returns a
+`Dict[str, np.ndarray]` of per-drone XY offsets from the lead position.
+
+- **`line_abreast`**: drones are spaced perpendicular to the lead heading, alternating
+  left and right: `offset = perp × (sign × rank × spacing_m)`.
+- **`v_formation`**: drones trail behind the lead and spread laterally:
+  `offset = -fwd × (rank × spacing × 0.5) + perp × (sign × rank × spacing × 0.5)`.
+
+---
+
+## 8. Energy-Aware POI Assignment (Phase 3 ISR)
+
+Used in `scan_map_inspect` missions. Implementation: `src/argusnet/planning/poi.py`.
+
+### 8.1 POIAssignmentContext
+
+```
+POIAssignmentContext
+  drone_id:           str
+  position_m:         np.ndarray   # Current 3D ENU position
+  battery_wh:         float        # Remaining energy in watt-hours
+  capacity_wh:        float        # Total battery capacity
+  cruise_speed_mps:   float        # Nominal cruise speed for travel cost estimation
+  reserve_fraction:   float        # Minimum battery fraction to retain (default 0.10)
+```
+
+### 8.2 Assignment Strategies
+
+`POIManager.assign_nearest(drone_id, position_m)` — original greedy assignment, kept for
+backward compatibility.
+
+`POIManager.assign_energy_aware(context)` — selects the POI that maximises:
+
+```
+score = effective_priority × 10 - travel_cost_wh / usable_wh
+```
+
+where `travel_cost_wh = distance_m / cruise_speed_mps × power_w` and
+`usable_wh = battery_wh - reserve_fraction × capacity_wh`. Priority dominates; energy is
+a tiebreaker. A POI is skipped if the drone cannot afford to reach it within its energy
+budget.
+
+### 8.3 Handoff and Team Assignment
+
+`POIManager.trigger_handoff(from_drone_id, to_drone_id)` transfers an active POI from one
+drone to another, preserving accumulated dwell time.
+
+`POIManager.request_team_assign(drone_id, poi_id)` adds a second drone to help dwell on
+the same POI. Both drones credit the same POI, effectively halving the remaining dwell time
+needed.
+
+### 8.4 Coverage-Based Rescoring
+
+`POIManager.rescore_from_map(coverage_map)` boosts the priority of POIs located in
+poorly-covered grid regions by +3, directing inspection effort toward areas that received
+less scanning attention.

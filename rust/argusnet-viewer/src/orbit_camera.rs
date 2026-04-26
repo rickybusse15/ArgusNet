@@ -39,7 +39,7 @@ impl OrbitCamera {
             focus: Vec3::new(center[0], center[1], (ground + peak) * 0.5),
             radius: (diagonal * 1.05).clamp(40.0, diagonal * 5.0),
             yaw: 0.85,
-            pitch: 0.72,
+            pitch: 1.30,
             min_radius: 40.0,
             max_radius: diagonal * 5.0,
         }

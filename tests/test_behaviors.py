@@ -19,7 +19,7 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.behaviors import (
+from argusnet.simulation.behaviors import (
     BEHAVIOR_PRESETS,
     CompositeTrajectory,
     EvasiveBehavior,

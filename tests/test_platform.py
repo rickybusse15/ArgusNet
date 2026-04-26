@@ -4,8 +4,8 @@ import unittest
 
 import numpy as np
 
-from smart_tracker.models import BearingObservation, NodeState, TruthState, vec3
-from smart_tracker.service import TrackerConfig, TrackingService
+from argusnet.core.types import BearingObservation, NodeState, TruthState, vec3
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 
 
 def bearing(

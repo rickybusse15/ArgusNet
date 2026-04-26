@@ -1,4 +1,4 @@
-"""Tests for the evaluation harness (smart_tracker.evaluation).
+"""Tests for the evaluation harness (argusnet.evaluation.metrics).
 
 Covers metric computation functions, the full evaluate_replay pipeline,
 pass/fail checking, serialisation round-trips, and edge cases.
@@ -11,7 +11,7 @@ from typing import Dict, List
 import numpy as np
 import pytest
 
-from smart_tracker.evaluation import (
+from argusnet.evaluation.metrics import (
     DEFAULT_THRESHOLDS,
     EvaluationReport,
     check_pass_fail,
