@@ -288,7 +288,9 @@
             "wall_occlusion",
             "vegetation_occlusion",
             "out_of_coverage",
-            "outside_fov"
+            "outside_fov",
+            "low_confidence",
+            "bearing_noise_too_high"
           ]
         },
         "detail": {
@@ -422,7 +424,7 @@
       "properties": {
         "zone_id": {"type": "string"},
         "node_id": {"type": "string"},
-        "event_type": {"type": "string", "enum": ["entered", "coverage_updated", "exited"]},
+        "event_type": {"type": "string", "enum": ["entered", "coverage_updated", "exited", "violation"]},
         "timestamp_s": {"type": "number"},
         "zone_coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1}
       }
