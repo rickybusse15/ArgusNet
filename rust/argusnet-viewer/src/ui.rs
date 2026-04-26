@@ -361,6 +361,14 @@ fn section_mission_progress(
             });
         }
 
+        // Coordinator drone label (shown when a coordinator has been elected).
+        if let Some(ref coord_id) = ms.coordinator_drone_id {
+            ui.horizontal(|ui| {
+                ui.label("Coordinator:");
+                ui.colored_label(egui::Color32::from_rgb(180, 220, 255), coord_id.as_str());
+            });
+        }
+
         // Scanning phase: coverage bar
         if ms.phase == "scanning" {
             let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
@@ -389,6 +397,14 @@ fn section_mission_progress(
                         est.position_std_m
                     ));
                 }
+            }
+            if ms.localization_timed_out {
+                ui.horizontal(|ui| {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 180, 60),
+                        "\u{26a0} (timeout \u{2014} forced convergence)",
+                    );
+                });
             }
         }
 

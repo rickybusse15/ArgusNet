@@ -207,6 +207,12 @@ pub struct ScanMissionState {
     /// Python's to_jsonable() flattens tuple-of-tuples into a single Vec<f32>.
     #[serde(default)]
     pub newly_scanned_cells: Vec<f32>,
+    /// True when the localizing phase advanced via timeout rather than convergence.
+    #[serde(default)]
+    pub localization_timed_out: bool,
+    /// The drone_id elected as mission coordinator, if any.
+    #[serde(default)]
+    pub coordinator_drone_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

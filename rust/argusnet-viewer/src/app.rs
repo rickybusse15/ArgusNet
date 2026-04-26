@@ -695,6 +695,48 @@ fn draw_runtime_overlays_system(
             }
         }
     }
+
+    // Covariance ellipsoids — draw 3 axis-aligned circles per track
+    if runtime_visibility.show_covariance_ellipsoids {
+        if let Some(frame) = replay_state.current_frame() {
+            let ell_color = Color::srgba(0.9, 0.65, 0.1, 0.55);
+            let k = 2.45_f64; // 95% confidence factor
+            let segments = 20;
+            for track in &frame.tracks {
+                if let Some(cov) = &track.covariance {
+                    let diag = crate::ui::covariance_diagonal(cov);
+                    let rx = ((diag[0].max(0.0)).sqrt() * k) as f32;
+                    let ry = ((diag[1].max(0.0)).sqrt() * k) as f32;
+                    let rz = ((diag[2].max(0.0)).sqrt() * k) as f32;
+                    let center = Vec3::from_array(track.position);
+                    // XY-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(a0.cos() * rx, a0.sin() * ry, 0.0);
+                        let p1 = center + Vec3::new(a1.cos() * rx, a1.sin() * ry, 0.0);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                    // XZ-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(a0.cos() * rx, 0.0, a0.sin() * rz);
+                        let p1 = center + Vec3::new(a1.cos() * rx, 0.0, a1.sin() * rz);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                    // YZ-plane ring
+                    for i in 0..segments {
+                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
+                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
+                        let p0 = center + Vec3::new(0.0, a0.cos() * ry, a0.sin() * rz);
+                        let p1 = center + Vec3::new(0.0, a1.cos() * ry, a1.sin() * rz);
+                        gizmos.line(p0, p1, ell_color);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn find_node_position_opt(frame: &crate::replay::ReplayFrame, node_id: &str) -> Option<Vec3> {
@@ -1098,6 +1140,7 @@ fn draw_scan_grid_system(
     _reconstruction: Res<ReconstructionCloud>,
     overlay: Res<MissionOverlaySettings>,
     _view_mode: Res<ViewMode>,
+    scene_package: Res<ScenePackage>,
 ) {
     if !overlay.show_scan_grid {
         return;
@@ -1113,19 +1156,19 @@ fn draw_scan_grid_system(
         // Z-up: ground plane is XY; Quat::IDENTITY gives a flat horizontal rect.
         let hue = 120.0 * frac;
         let border_color = Color::hsla(hue, 0.9, 0.5, 0.5);
-        let (half_w, half_h) = if let Some(map_st) = &frame.mapping_state {
-            let cells = map_st.total_cells.max(1) as f32;
-            let side = cells.sqrt() * 50.0 * 0.5;
-            (side, side)
-        } else {
-            (300.0, 300.0)
-        };
-        // Place 1 m above Z=0 so it sits just above the lowest terrain.
+        let b = &scene_package.environment.bounds_xy_m;
+        let cx = (b.x_min_m + b.x_max_m) * 0.5;
+        let cy = (b.y_min_m + b.y_max_m) * 0.5;
+        let width = b.x_max_m - b.x_min_m;
+        let height = b.y_max_m - b.y_min_m;
+        let ground_z = scene_package.environment.terrain_summary.as_ref()
+            .and_then(|s| s.min_height_m)
+            .unwrap_or(0.0);
         let iso = bevy::math::Isometry3d::new(
-            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(cx, cy, ground_z + 2.0),
             Quat::IDENTITY,
         );
-        gizmos.rect(iso, Vec2::new(half_w * 2.0, half_h * 2.0), border_color);
+        gizmos.rect(iso, Vec2::new(width, height), border_color);
 
         // The scan cell point cloud is rendered as a GPU mesh by
         // maintain_reconstruction_mesh_system; no per-point gizmo work needed here.
@@ -1222,11 +1265,20 @@ fn setup_reconstruction_mesh(
     use bevy::render::mesh::PrimitiveTopology;
     use bevy::render::render_asset::RenderAssetUsages;
 
-    let mesh = Mesh::new(PrimitiveTopology::LineList, RenderAssetUsages::default());
+    // Initialise with a degenerate triangle so the GPU allocator never encounters
+    // a zero-vertex buffer (Bevy's MeshAllocator panics on divide-by-zero).
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   vec![[0.0_f32, 0.0, 1.0]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    vec![[0.0_f32; 4]; 3]);
+
+    // Semi-transparent scan-coverage overlay: teal tint, additive-friendly alpha.
     let mat = StandardMaterial {
-        unlit: true,
+        base_color: bevy::color::Color::srgba(0.25, 0.85, 0.65, 0.45),
+        alpha_mode: AlphaMode::Blend,
         double_sided: true,
         cull_mode: None,
+        unlit: true,
         ..default()
     };
     commands.spawn((
@@ -1237,7 +1289,9 @@ fn setup_reconstruction_mesh(
     ));
 }
 
-/// Maintains the GPU line-list mesh for the reconstruction cloud.
+/// Maintains the GPU triangle-mesh for the scan-coverage overlay.
+/// Each scanned 50 m grid cell is drawn as a flat quad (2 triangles) sitting
+/// 1 m above the terrain surface so it is never z-fought by the ground mesh.
 /// Updates visibility every frame (cheap), rebuilds geometry only when `dirty`.
 fn maintain_reconstruction_mesh_system(
     mut reconstruction: ResMut<ReconstructionCloud>,
@@ -1252,7 +1306,7 @@ fn maintain_reconstruction_mesh_system(
     let mut handles: Vec<Handle<Mesh>> = Vec::new();
     for (mesh_3d, mut vis) in &mut mesh_q {
         *vis = if should_show { Visibility::Visible } else { Visibility::Hidden };
-        if reconstruction.dirty {
+        if reconstruction.dirty && should_show {
             handles.push(mesh_3d.0.clone());
         }
     }
@@ -1260,39 +1314,59 @@ fn maintain_reconstruction_mesh_system(
     if !reconstruction.dirty {
         return;
     }
+    // Always clear dirty to prevent unbounded re-queuing; skip GPU upload when hidden.
     reconstruction.dirty = false;
-
-    let n = reconstruction.points.len();
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 2);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(n * 2);
-
-    for pt in &reconstruction.points {
-        let h = (pt[2] / 300.0_f32).clamp(0.0, 1.0);
-        // Blue (low) → cyan → green → yellow → red (high)
-        let hue = 240.0 - h * 240.0;
-        let lin = LinearRgba::from(Color::hsla(hue, 1.0, 0.65, 0.85));
-        let rgba = [lin.red, lin.green, lin.blue, lin.alpha];
-        // Short vertical line segment at each scanned terrain point.
-        positions.push([pt[0], pt[1], pt[2]]);
-        positions.push([pt[0], pt[1], pt[2] + 2.0]);
-        colors.push(rgba);
-        colors.push(rgba);
+    if !should_show {
+        return;
     }
 
-    // When the cloud is empty, insert a zero-length degenerate segment rather
-    // than removing the attributes entirely.  Bevy's MeshAllocator panics with
-    // a divide-by-zero when it allocates a slab for a zero-vertex buffer.
-    let (upload_positions, upload_colors): (Vec<[f32; 3]>, Vec<[f32; 4]>) = if positions.is_empty()
-    {
-        (vec![[0.0; 3]; 2], vec![[0.0; 4]; 2])
-    } else {
-        (positions, colors)
-    };
+    // Half-size of a grid cell (50 m resolution → 25 m half-extent).
+    // Tiles are inset by 1 m per edge to leave a visible grid gap.
+    const HALF: f32 = 24.0;
+    // Lift slightly above terrain so tiles never z-fight the ground mesh.
+    const Z_LIFT: f32 = 0.8;
+    // Up normal for all vertices in Z-up space.
+    const NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
+
+    let n = reconstruction.points.len();
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
+    let mut normals:   Vec<[f32; 3]> = Vec::with_capacity(n * 4);
+    let mut colors:    Vec<[f32; 4]> = Vec::with_capacity(n * 4);
+    let mut indices:   Vec<u32>      = Vec::with_capacity(n * 6);
+
+    for pt in &reconstruction.points {
+        // Terrain-height-based colour: blue (sea level) → green → yellow → red (high).
+        let h = (pt[2] / 200.0_f32).clamp(0.0, 1.0);
+        let hue = 200.0 - h * 160.0;   // 200° (cyan-blue) → 40° (orange) as altitude rises
+        let lin = LinearRgba::from(Color::hsla(hue, 0.85, 0.60, 0.55));
+        let rgba = [lin.red, lin.green, lin.blue, lin.alpha];
+
+        let base = positions.len() as u32;
+        let z = pt[2] + Z_LIFT;
+        // Quad corners (CCW from below → correct winding for Z-up top face).
+        positions.push([pt[0] - HALF, pt[1] - HALF, z]);
+        positions.push([pt[0] + HALF, pt[1] - HALF, z]);
+        positions.push([pt[0] + HALF, pt[1] + HALF, z]);
+        positions.push([pt[0] - HALF, pt[1] + HALF, z]);
+        for _ in 0..4 { normals.push(NORMAL); colors.push(rgba); }
+        // Two CCW triangles.
+        indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+    }
+
+    // Degenerate fallback so MeshAllocator never sees an empty buffer.
+    if positions.is_empty() {
+        positions = vec![[0.0; 3]; 3];
+        normals   = vec![[0.0, 0.0, 1.0]; 3];
+        colors    = vec![[0.0; 4]; 3];
+        indices   = vec![0, 1, 2];
+    }
 
     for handle in handles {
         if let Some(mesh) = meshes.get_mut(&handle) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, upload_positions.clone());
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, upload_colors.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   normals.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors.clone());
+            mesh.insert_indices(bevy::render::mesh::Indices::U32(indices.clone()));
         }
     }
 }
@@ -1536,6 +1610,7 @@ fn poll_simulation_system(
     mut selection: ResMut<SelectionState>,
     mut current_markers: ResMut<CurrentRuntimeMarkers>,
     mut frame_metrics: ResMut<CurrentFrameMetrics>,
+    mut reconstruction: ResMut<ReconstructionCloud>,
     asset_server: Res<AssetServer>,
     mut camera_query: Query<(&mut OrbitCamera, &mut Transform), With<MainCamera>>,
 ) {
@@ -1583,7 +1658,10 @@ fn poll_simulation_system(
                             &process.next_scene_root,
                         );
                         match reload_result {
-                            Ok(()) => sim_runner.finish(),
+                            Ok(()) => {
+                                reconstruction.reset();
+                                sim_runner.finish();
+                            }
                             Err(err) => sim_runner.fail(err.to_string()),
                         }
                         commands.remove_resource::<SimulationProcess>();

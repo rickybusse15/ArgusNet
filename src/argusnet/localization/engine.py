@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -22,7 +22,9 @@ class LocalizationConfig:
     particle_count: int = 200           # number of particles
     convergence_threshold_m: float = 15.0  # std below which we call it converged
     min_coverage_to_localize: float = 0.15  # need at least 15% map coverage
-    confidence_decay: float = 0.85     # carry-over confidence between steps
+    confidence_decay: float = 0.50     # carry-over confidence between steps
+    annealing_rate: float = 0.02       # per-step fractional radius shrink
+    localization_timeout_steps: int = 200  # steps before forced convergence; 0 = disabled
 
 
 class GridLocalizer:
@@ -42,6 +44,8 @@ class GridLocalizer:
     def __init__(self, config: Optional[LocalizationConfig] = None) -> None:
         self.config = config or LocalizationConfig()
         self._estimates: Dict[str, LocalizationEstimate] = {}
+        self._step_counts: Dict[str, int] = {}
+        self._timed_out: Set[str] = set()
         self._rng = np.random.default_rng(42)
 
     def update(
@@ -70,6 +74,10 @@ class GridLocalizer:
         stats = coverage_map.stats
         coverage_fraction = stats.coverage_fraction
 
+        # Track per-drone step count (skip early-return).
+        self._step_counts[drone_id] = self._step_counts.get(drone_id, 0) + 1
+        step = self._step_counts[drone_id]
+
         # Not enough map to localize against yet.
         if coverage_fraction < cfg.min_coverage_to_localize:
             est = LocalizationEstimate(
@@ -83,8 +91,9 @@ class GridLocalizer:
             self._estimates[drone_id] = est
             return est
 
-        # Scatter particles around nominal position.
-        scale = cfg.search_radius_m * max(0.1, 1.0 - coverage_fraction)
+        # Scatter particles around nominal position with annealing.
+        annealing_factor = max(0.05, (1.0 - cfg.annealing_rate) ** step)
+        scale = cfg.search_radius_m * max(0.1, 1.0 - coverage_fraction) * annealing_factor
         offsets = self._rng.normal(0.0, scale, size=(cfg.particle_count, 2))
         positions = np.array(nominal_position[:2], dtype=float) + offsets
 
@@ -119,6 +128,11 @@ class GridLocalizer:
         else:
             confidence = base_conf
 
+        # Timeout path: force confidence = 1.0 after enough steps.
+        if cfg.localization_timeout_steps > 0 and step >= cfg.localization_timeout_steps:
+            self._timed_out.add(drone_id)
+            confidence = 1.0
+
         est = LocalizationEstimate(
             drone_id=drone_id,
             timestamp_s=timestamp_s,
@@ -129,6 +143,46 @@ class GridLocalizer:
         )
         self._estimates[drone_id] = est
         return est
+
+    @property
+    def any_timed_out(self) -> bool:
+        """True if any drone reached the timeout step limit."""
+        return bool(self._timed_out)
+
+    def fuse_estimates(self, drone_ids: List[str]) -> Optional[LocalizationEstimate]:
+        """Inverse-variance weighted fusion of converged drone estimates.
+
+        Only considers estimates whose ``position_std_m`` is below half the
+        search radius (i.e. reasonably converged).  Returns None if no
+        suitable estimates exist.
+        """
+        half_radius = self.config.search_radius_m * 0.5
+        candidates = [
+            self._estimates[did]
+            for did in drone_ids
+            if did in self._estimates and self._estimates[did].position_std_m < half_radius
+        ]
+        if not candidates:
+            return None
+
+        stds = np.array([c.position_std_m for c in candidates], dtype=float)
+        vars_ = stds ** 2
+        weights = 1.0 / np.maximum(vars_, 1e-6)
+        weights /= weights.sum()
+
+        positions = np.array([c.position_estimate for c in candidates], dtype=float)
+        fused_pos = (positions * weights[:, None]).sum(axis=0)
+        fused_std = float(np.sqrt(1.0 / (1.0 / np.maximum(vars_, 1e-6)).sum()))
+        fused_conf = float(np.clip((weights * np.array([c.confidence for c in candidates])).sum(), 0.0, 1.0))
+        ref = candidates[0]
+        return LocalizationEstimate(
+            drone_id="fused",
+            timestamp_s=ref.timestamp_s,
+            position_estimate=fused_pos,
+            heading_rad=ref.heading_rad,
+            position_std_m=fused_std,
+            confidence=fused_conf,
+        )
 
     def _score_position(
         self,
@@ -156,8 +210,12 @@ class GridLocalizer:
     def reset(self, drone_id: Optional[str] = None) -> None:
         if drone_id is None:
             self._estimates.clear()
+            self._step_counts.clear()
+            self._timed_out.clear()
         else:
             self._estimates.pop(drone_id, None)
+            self._step_counts.pop(drone_id, None)
+            self._timed_out.discard(drone_id)
 
     def all_estimates(self) -> List[LocalizationEstimate]:
         return list(self._estimates.values())

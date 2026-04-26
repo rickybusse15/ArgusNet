@@ -51,7 +51,9 @@ from argusnet.core.types import (
 )
 from argusnet.mapping.world_map import WorldMap
 from argusnet.localization.engine import GridLocalizer, LocalizationConfig
-from argusnet.planning.poi import POIManager
+from argusnet.planning.poi import POIManager, POIAssignmentContext
+from argusnet.planning.frontier import FrontierPlanner, ClaimedCells
+from argusnet.planning.coordination import CoordinationManager, CoordinationPolicy, SharedMissionState
 from argusnet.mapping.coverage import CoverageMap
 from argusnet.mapping.occupancy import GridBounds
 from argusnet.core.config import (
@@ -4094,28 +4096,63 @@ def run_simulation(
     _world_map = WorldMap(_coverage_bounds)
 
     # GridLocalizer estimates drone self-pose against the built coverage map.
-    _grid_localizer = GridLocalizer()
+    _grid_localizer = GridLocalizer(LocalizationConfig())
     _loc_estimates: List[LocalizationEstimate] = []
     _loc_confidence_threshold = 0.65
+    _loc_timed_out: bool = False
+
+    # Frontier planner + claimed-cell tracking for gap-fill gate.
+    _frontier_planner = FrontierPlanner()
+    _claimed_cells = ClaimedCells()
+
+    # Coordination manager (coordinator election, formation offsets, RF latency).
+    _coord_policy = CoordinationPolicy()
+    _coord_manager = CoordinationManager(_coord_policy)
+    _shared_state = SharedMissionState()
+    _coordinator_elected = False
+
+    # Inspection flags.
+    _poi_rescored = False
+    # Tracks which poi_id each drone is flying toward (to detect new assignments).
+    _drone_poi_assignments: Dict[str, str] = {}
+    # Per-drone goto-hover trajectory overrides while inspecting a POI.
+    _poi_trajectories: Dict[str, TrajectoryFn] = {}
 
     # Auto-generate POIs spread across the map interior.
-    def _make_poi_positions(bounds: Dict, count: int, seed: int) -> List[np.ndarray]:
+    # Each POI is placed at a valid drone-accessible altitude above the terrain
+    # and rejected if it falls inside an obstacle at hover height.
+    _POI_HOVER_AGL_M = 40.0  # metres above ground the drone hovers while dwelling
+
+    def _make_poi_positions(
+        bounds: Dict, count: int, seed: int,
+        terrain=None, obstacles=None,
+    ) -> List[np.ndarray]:
         rng2 = np.random.default_rng(seed + 999)
         x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
         y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
         margin_x = (x_max - x_min) * 0.15
         margin_y = (y_max - y_min) * 0.15
-        return [
-            np.array([
-                float(rng2.uniform(x_min + margin_x, x_max - margin_x)),
-                float(rng2.uniform(y_min + margin_y, y_max - margin_y)),
-                80.0,
-            ], dtype=float)
-            for _ in range(count)
-        ]
+        positions: List[np.ndarray] = []
+        for _ in range(count):
+            for _attempt in range(200):
+                x = float(rng2.uniform(x_min + margin_x, x_max - margin_x))
+                y = float(rng2.uniform(y_min + margin_y, y_max - margin_y))
+                terrain_h = float(terrain.height_at(x, y)) if terrain is not None else 0.0
+                z = terrain_h + _POI_HOVER_AGL_M
+                # Reject if an obstacle blocks the hover position.
+                if obstacles is not None and obstacles.point_collides(x, y, z):
+                    continue
+                positions.append(np.array([x, y, z], dtype=float))
+                break
+            else:
+                # Fallback: last sampled position even if slightly inside an obstacle.
+                positions.append(np.array([x, y, z], dtype=float))  # type: ignore[possibly-undefined]
+        return positions
 
     _poi_positions = _make_poi_positions(
-        dict(scenario.map_bounds_m), _poi_count_cfg, simulation_config.seed
+        dict(scenario.map_bounds_m), _poi_count_cfg, simulation_config.seed,
+        terrain=scenario.terrain,
+        obstacles=getattr(scenario.environment, "obstacles", None),
     )
     _pois = [
         InspectionPOI(
@@ -4187,6 +4224,17 @@ def run_simulation(
             )
             for ns in node_states
         ]
+
+        # Override positions/velocities for drones redirected to a POI.
+        if _poi_trajectories:
+            overridden = []
+            for ns in node_states:
+                traj_fn = _poi_trajectories.get(ns.node_id)
+                if traj_fn is not None:
+                    pos_ov, vel_ov = traj_fn(timestamp_s)
+                    ns = replace(ns, position=list(pos_ov), velocity=list(vel_ov))
+                overridden.append(ns)
+            node_states = overridden
 
         truths = scenario.truths(timestamp_s)
 
@@ -4313,11 +4361,10 @@ def run_simulation(
 
             scan_frac = _world_map.coverage_fraction
 
-            if _scan_phase == "scanning" and scan_frac >= _scan_threshold:
-                _scan_phase = "localizing"
-                _phase_started_at_s = timestamp_s
-
-            elif _scan_phase == "localizing":
+            # Localization runs every step from the start, building fidelity
+            # progressively as the coverage map fills in.  Confidence starts
+            # near 0 at low coverage and rises naturally as more area is scanned.
+            if _scan_phase in ("scanning", "localizing"):
                 _loc_estimates = []
                 for ns in mobile_states:
                     spd = float(np.linalg.norm(ns.velocity[:2]))
@@ -4331,6 +4378,39 @@ def run_simulation(
                         timestamp_s=timestamp_s,
                     )
                     _loc_estimates.append(est)
+                if _grid_localizer.any_timed_out:
+                    _loc_timed_out = True
+
+            if _scan_phase == "scanning":
+                # Coordinator election (once). No re-election on coordinator failure because
+                # drone failure is not modelled — drones run for the full mission duration.
+                if not _coordinator_elected and mobile_states:
+                    drone_ids = [ns.node_id for ns in mobile_states]
+                    _shared_state.coordinator_id = _coord_manager.elect_coordinator(
+                        drone_ids, _battery_states, _battery_model.capacity_wh
+                    )
+                    _coordinator_elected = True
+
+                if scan_frac >= _scan_threshold:
+                    # Gap-fill gate: only transition if enclosed interior holes
+                    # are below the minimum fraction threshold.
+                    _gap_cells = _frontier_planner.find_gap_cells(_world_map.coverage_map)
+                    _total_cells = max(_world_map.coverage_map.bounds.nx * _world_map.coverage_map.bounds.ny, 1)
+                    if len(_gap_cells) / _total_cells < _frontier_planner.cfg.gap_fill_min_fraction:
+                        # If localization already converged during scanning,
+                        # skip the localizing phase entirely.
+                        loc_converged = (not mobile_states) or all(
+                            e.confidence >= _loc_confidence_threshold for e in _loc_estimates
+                        )
+                        if loc_converged:
+                            _scan_phase = "inspecting"
+                        else:
+                            _scan_phase = "localizing"
+                        _phase_started_at_s = timestamp_s
+
+            elif _scan_phase == "localizing":
+                if _grid_localizer.any_timed_out:
+                    _loc_timed_out = True
                 if mobile_states and all(
                     e.confidence >= _loc_confidence_threshold for e in _loc_estimates
                 ):
@@ -4338,12 +4418,79 @@ def run_simulation(
                     _phase_started_at_s = timestamp_s
 
             elif _scan_phase == "inspecting":
+                # Rescore POIs once using the scan map at phase entry.
+                if not _poi_rescored:
+                    _poi_manager.rescore_from_map(_world_map)
+                    _poi_rescored = True
+
+                drone_ids_unassigned = []
                 for ns in mobile_states:
                     batt = _battery_states.get(ns.node_id)
-                    batt_frac = (batt.remaining_wh / _battery_model.capacity_wh if batt else 1.0)
-                    _poi_manager.assign_nearest(ns.node_id, np.array(ns.position, dtype=float), batt_frac)
+                    batt_remaining = batt.remaining_wh if batt else _battery_model.capacity_wh
+                    batt_frac = batt_remaining / _battery_model.capacity_wh
+                    ctx = POIAssignmentContext(
+                        drone_id=ns.node_id,
+                        drone_pos=np.array(ns.position, dtype=float),
+                        battery_remaining_wh=batt_remaining,
+                        battery_capacity_wh=_battery_model.capacity_wh,
+                        timestamp_s=timestamp_s,
+                    )
+                    assigned = _poi_manager.assign_energy_aware(ctx)
+                    if assigned is None and _poi_manager.assignment_for(ns.node_id) is None:
+                        drone_ids_unassigned.append(ns.node_id)
+                    # Redirect drone trajectory to its POI when first assigned.
+                    active_poi_id = _poi_manager.assignment_for(ns.node_id)
+                    if active_poi_id and active_poi_id != _drone_poi_assignments.get(ns.node_id):
+                        _drone_poi_assignments[ns.node_id] = active_poi_id
+                        poi_obj = _poi_manager._pois[active_poi_id]
+                        start_pos = np.array(ns.position, dtype=float)
+                        tgt_xy = np.array(poi_obj.position[:2], dtype=float)
+                        tgt_z = float(poi_obj.position[2])
+                        t0 = float(timestamp_s)
+                        dist_m = float(np.linalg.norm(tgt_xy - start_pos[:2]))
+                        t_arrive = t0 + dist_m / 28.0
+
+                        def _make_goto_hover(sp, txy, tz, ts, ta):
+                            def _traj(t):
+                                if t >= ta:
+                                    return np.array([txy[0], txy[1], tz]), np.zeros(3)
+                                frac = (t - ts) / max(ta - ts, 1e-9)
+                                frac = max(0.0, min(1.0, frac))
+                                pos = np.array([
+                                    sp[0] + frac * (txy[0] - sp[0]),
+                                    sp[1] + frac * (txy[1] - sp[1]),
+                                    sp[2] + frac * (tz - sp[2]),
+                                ])
+                                dt_inv = 1.0 / max(ta - ts, 1e-9)
+                                vel = np.array([txy[0]-sp[0], txy[1]-sp[1], tz-sp[2]]) * dt_inv
+                                return pos, vel
+                            return _traj
+
+                        _poi_trajectories[ns.node_id] = _make_goto_hover(
+                            start_pos, tgt_xy, tgt_z, t0, t_arrive
+                        )
+                    # Handoff: if this drone is low and has an active POI, find a fresh drone.
+                    if batt_frac < 0.30:
+                        poi_id = _poi_manager.assignment_for(ns.node_id)
+                        if poi_id is not None:
+                            for other_ns in mobile_states:
+                                other_batt = _battery_states.get(other_ns.node_id)
+                                other_frac = (other_batt.remaining_wh / _battery_model.capacity_wh if other_batt else 1.0)
+                                if other_ns.node_id != ns.node_id and other_frac > 0.50 and _poi_manager.assignment_for(other_ns.node_id) is None:
+                                    _poi_manager.trigger_handoff(ns.node_id, other_ns.node_id)
+                                    break
                     _poi_manager.accumulate_dwell(ns.node_id, np.array(ns.position, dtype=float), simulation_config.dt_s)
-                _poi_manager.check_completions(timestamp_s)
+                # Team assignment: if one POI remains and multiple drones are free.
+                pending_pois = [p for p in _poi_manager.statuses if p.status == "pending"]
+                if len(pending_pois) == 1 and len(drone_ids_unassigned) > 1:
+                    _poi_manager.request_team_assign(pending_pois[0].poi_id, drone_ids_unassigned[1])
+                newly_completed = _poi_manager.check_completions(timestamp_s)
+                # When a POI completes, clear the redirect so the drone can be reassigned.
+                for done_poi_id in newly_completed:
+                    for did, pid in list(_drone_poi_assignments.items()):
+                        if pid == done_poi_id:
+                            del _drone_poi_assignments[did]
+                            _poi_trajectories.pop(did, None)
                 if _poi_manager.all_complete:
                     _scan_phase = "complete"
                     _phase_started_at_s = timestamp_s
@@ -4380,6 +4527,8 @@ def run_simulation(
                 total_poi_count=_poi_manager.total_count,
                 phase_started_at_s=_phase_started_at_s,
                 newly_scanned_cells=tuple(_newly_covered),
+                localization_timed_out=_loc_timed_out,
+                coordinator_drone_id=_shared_state.coordinator_id,
             )
 
         # --- Localization quality (derived from track covariances) ---

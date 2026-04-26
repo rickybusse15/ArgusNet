@@ -312,6 +312,7 @@ dependencies = [
  "clap",
  "egui_plot",
  "image",
+ "nalgebra",
  "serde",
  "serde_json",
 ]
