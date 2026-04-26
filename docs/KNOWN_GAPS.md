@@ -81,7 +81,7 @@ Covers: mission zone definitions, objectives, rules of engagement, drone assignm
 
 ### 1.4 Planning Subsystem
 
-Covers: 2D path planning, obstacle avoidance, drone routing.
+Covers: 2D path planning, obstacle avoidance, drone routing, coverage planning, multi-drone coordination.
 
 | Component | Status | Current Location |
 |-----------|--------|-----------------|
@@ -92,6 +92,9 @@ Covers: 2D path planning, obstacle avoidance, drone routing.
 | Cooperative orbit geometry (multi-drone slots) | **Exists** | `sim.py` `FollowPathController` `slot_index` / `slot_count` |
 | Terrain-following flight mode | **Exists** | `sim.py` `FollowPathController.terrain_following` |
 | Lawnmower search pattern | **Exists** | `sim.py` (search drone path generation) |
+| Frontier-based coverage planner (gap-fill, gradient scoring) | **Exists** | `src/argusnet/planning/frontier.py` `FrontierPlanner` |
+| Multi-drone coordinator (election, RF latency, formations) | **Exists** | `src/argusnet/planning/coordination.py` `CoordinationManager` |
+| Energy-aware POI assignment (handoff, team dwell, rescoring) | **Exists** | `src/argusnet/planning/poi.py` `POIManager.assign_energy_aware()` |
 | 3D path planning (altitude-aware) | **Absent** | Planner is 2D only; altitude is handled separately by AGL logic |
 | Dynamic obstacle avoidance (other drones) | **Absent** | — |
 | Mission-zone-aware routing | **Absent** | Planner does not know about `MissionZone` |

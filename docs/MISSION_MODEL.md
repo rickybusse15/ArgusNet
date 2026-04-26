@@ -233,7 +233,52 @@ fully determines the scenario.
 
 ---
 
-## 6. Scenario Taxonomy and Tagging
+## 6. Three-Phase ISR Mission (`scan_map_inspect`)
+
+The `scan_map_inspect` mission mode runs a state machine with four phases:
+`scanning → localizing → inspecting → complete`. This section documents the transition
+conditions and associated design decisions.
+
+### 6.1 Phase Transitions
+
+```
+scanning  →  localizing    when: scan_coverage_fraction >= scan_coverage_threshold
+                                  AND gap_fill_fraction < gap_fill_min_fraction
+                                  AND NOT all drones already converged
+                                  (if already converged: skip to inspecting directly)
+
+localizing  →  inspecting  when: all(drone.confidence >= loc_confidence_threshold)
+                                  OR any drone triggers localization timeout
+
+inspecting  →  complete    when: all POIs reach status "complete"
+```
+
+**Gap-fill gate** (`gap_fill_min_fraction`, default 2 %): even after reaching the coverage
+threshold, the transition is blocked if more than 2 % of grid cells are enclosed interior
+holes (fully surrounded by covered cells). This prevents declaring coverage complete when
+a pocket of terrain remains inside the mapped perimeter, which would corrupt localization.
+See `FrontierPlanner.find_gap_cells()` in `src/argusnet/planning/frontier.py`.
+
+**Localization timeout**: if any drone has not converged after `LocalizationConfig.timeout_steps`
+(default 200 steps ≈ 50 s at dt=0.25 s), its confidence is forced to 1.0 so the mission
+can proceed. The `localization_timed_out` field in `ScanMissionState` is set to `True` when
+this occurs. This is a **team-level flag** — it indicates that at least one drone advanced
+via timeout rather than genuine convergence, but does not identify which drone(s).
+
+Forced convergence is acceptable because: (a) the localization estimate is still used for
+POI assignment and does not require sub-metre accuracy; (b) indefinite blocking on
+localization convergence would stall the mission if a drone's coverage contribution is poor.
+
+### 6.2 Coordinator Election
+
+One drone is elected coordinator at the start of the `scanning` phase using the highest
+battery-fraction criterion (see `CoordinationManager.elect_coordinator()` in
+`src/argusnet/planning/coordination.py`). Election is one-shot; no re-election occurs
+because drone failure is not modelled in the current simulation.
+
+---
+
+## 7. Scenario Taxonomy and Tagging
 
 Tags are free-form strings stored in `MissionSpec.tags` and propagated to the replay metadata.
 The following canonical prefixes are reserved:

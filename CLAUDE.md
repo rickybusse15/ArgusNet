@@ -51,6 +51,3 @@ python3 -m pytest tests/ -q         # Python tests
 | Scene packaging | `src/argusnet/world/scene_loader.py`, `_glb.py` |
 | Viewer | `rust/argusnet-viewer/src/` |
 
-## Multi-agent coordination
-
-See `AGENT_TEAM.md` for the multi-agent execution team protocol (Manager/Worker/Critical Reviewer structure).
