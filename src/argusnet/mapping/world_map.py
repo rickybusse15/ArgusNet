@@ -4,10 +4,10 @@ During the scan phase each drone's sensor footprint is registered here.
 After sufficient coverage the map can be queried for feature points that
 are used by the localization engine.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -75,7 +75,7 @@ class WorldMap:
             return
         gi, gj = np.meshgrid(i_range, j_range, indexing="ij")
         dist_sq = (gi - ci) ** 2 + (gj - cj) ** 2
-        mask = dist_sq <= r_cells ** 2
+        mask = dist_sq <= r_cells**2
         np.add.at(self._height_sum, (gi[mask], gj[mask]), terrain_height)
         np.add.at(self._height_count, (gi[mask], gj[mask]), 1)
         self._scan_count += 1
@@ -106,7 +106,7 @@ class WorldMap:
             )
         return result
 
-    def coverage_in_region(self, center_xy: Tuple[float, float], radius_m: float) -> float:
+    def coverage_in_region(self, center_xy: tuple[float, float], radius_m: float) -> float:
         """Fraction of cells within radius that have been visited at least once."""
         b = self.bounds
         ci = int((center_xy[0] - b.x_min_m) / b.resolution_m)
@@ -118,7 +118,7 @@ class WorldMap:
             return 0.0
         gi, gj = np.meshgrid(i_range, j_range, indexing="ij")
         dist_sq = (gi - ci) ** 2 + (gj - cj) ** 2
-        mask = dist_sq <= r_cells ** 2
+        mask = dist_sq <= r_cells**2
         # count_grid returns a copy with shape (nx, ny).
         counts = self._coverage.count_grid
         patch = counts[gi[mask], gj[mask]]
@@ -126,7 +126,7 @@ class WorldMap:
             return 0.0
         return float((patch > 0).mean())
 
-    def extract_features(self, max_features: int = 50) -> List[dict]:
+    def extract_features(self, max_features: int = 50) -> list[dict]:
         """Extract local terrain height maxima as map features.
 
         Returns a list of dicts (JSON-serialisable) with keys:
@@ -134,7 +134,7 @@ class WorldMap:
         """
         hgrid = self.mean_height_grid  # shape (nx, ny)
         b = self.bounds
-        features: List[dict] = []
+        features: list[dict] = []
 
         valid = np.isfinite(hgrid)
         if not valid.any():
@@ -149,7 +149,7 @@ class WorldMap:
             for jj in range(ny):
                 if not valid[ii, jj]:
                     continue
-                neighbourhood = padded[ii:ii + 3, jj:jj + 3]
+                neighbourhood = padded[ii : ii + 3, jj : jj + 3]
                 local_max = np.nanmax(neighbourhood)
                 if hgrid[ii, jj] >= local_max:
                     candidate_is.append(ii)
@@ -171,13 +171,15 @@ class WorldMap:
             h = float(hgrid[ii, jj])
             visits = int(counts[ii, jj])
             confidence = min(1.0, visits / 5.0)
-            features.append({
-                "feature_id": f"feat_{rank:04d}",
-                "position": [round(x_m, 2), round(y_m, 2), round(h, 2)],
-                "feature_type": "terrain_peak",
-                "height_m": round(h, 2),
-                "confidence": round(confidence, 3),
-            })
+            features.append(
+                {
+                    "feature_id": f"feat_{rank:04d}",
+                    "position": [round(x_m, 2), round(y_m, 2), round(h, 2)],
+                    "feature_type": "terrain_peak",
+                    "height_m": round(h, 2),
+                    "confidence": round(confidence, 3),
+                }
+            )
 
         return features
 

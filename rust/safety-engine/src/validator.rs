@@ -36,11 +36,17 @@ pub enum ConstraintViolation {
     SpeedBelowMinimum { commanded_mps: f64, limit_mps: f64 },
 
     /// Horizontal or vertical acceleration exceeds the platform limit.
-    AccelerationExceeded { commanded_mps2: f64, limit_mps2: f64 },
+    AccelerationExceeded {
+        commanded_mps2: f64,
+        limit_mps2: f64,
+    },
 
     /// The commanded turn geometry would require a tighter radius than the
     /// platform can sustain at the current speed.
-    TurnRadiusTooTight { commanded_radius_m: f64, min_radius_m: f64 },
+    TurnRadiusTooTight {
+        commanded_radius_m: f64,
+        min_radius_m: f64,
+    },
 
     /// The commanded vertical velocity upward exceeds the climb rate limit.
     ClimbRateExceeded { commanded_mps: f64, limit_mps: f64 },
@@ -291,7 +297,10 @@ mod tests {
     use terrain_engine::{FlatTerrain, TerrainBounds};
 
     fn make_flat() -> FlatTerrain {
-        FlatTerrain::new(0.0, TerrainBounds::new(-10000.0, 10000.0, -10000.0, 10000.0, 0.0, 0.0))
+        FlatTerrain::new(
+            0.0,
+            TerrainBounds::new(-10000.0, 10000.0, -10000.0, 10000.0, 0.0, 0.0),
+        )
     }
 
     fn nominal_state() -> DroneCommandedState {
@@ -299,7 +308,7 @@ mod tests {
             position_m: [0.0, 0.0, 100.0], // 100 m AGL on flat terrain
             velocity_mps: [10.0, 0.0, 0.0],
             acceleration_mps2: [0.0, 0.0, 0.0],
-            gimbal_pitch_rad: 0.5,  // within 80° limit
+            gimbal_pitch_rad: 0.5, // within 80° limit
             gimbal_yaw_offset_rad: 0.0,
         }
     }
@@ -308,14 +317,7 @@ mod tests {
     fn valid_state_passes() {
         let limits = DronePhysicalLimits::interceptor_default();
         let terrain = make_flat();
-        let result = validate_constraints(
-            &limits,
-            &nominal_state(),
-            &terrain,
-            &[],
-            0.50,
-            -60.0,
-        );
+        let result = validate_constraints(&limits, &nominal_state(), &terrain, &[], 0.50, -60.0);
         assert!(result.is_ok(), "expected Ok but got {result:?}");
     }
 
@@ -326,8 +328,7 @@ mod tests {
         // Place drone at 10 m AGL — below the 30 m minimum for interceptor.
         let mut state = nominal_state();
         state.position_m[2] = 10.0;
-        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0)
-            .unwrap_err();
+        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0).unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::TerrainClearanceViolation { .. }),
             "wrong violation: {err:?}"
@@ -341,8 +342,7 @@ mod tests {
         // Place drone at 600 m AGL — above the 500 m ceiling.
         let mut state = nominal_state();
         state.position_m[2] = 600.0;
-        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0)
-            .unwrap_err();
+        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0).unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::AltitudeCeilingExceeded { .. }),
             "wrong violation: {err:?}"
@@ -356,8 +356,7 @@ mod tests {
         let mut state = nominal_state();
         // 50 m/s exceeds the 42 m/s limit.
         state.velocity_mps = [50.0, 0.0, 0.0];
-        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0)
-            .unwrap_err();
+        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0).unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::SpeedAboveMaximum { .. }),
             "wrong violation: {err:?}"
@@ -369,15 +368,8 @@ mod tests {
         let limits = DronePhysicalLimits::interceptor_default();
         let terrain = make_flat();
         // 10% reserve < 20% minimum.
-        let err = validate_constraints(
-            &limits,
-            &nominal_state(),
-            &terrain,
-            &[],
-            0.10,
-            -60.0,
-        )
-        .unwrap_err();
+        let err = validate_constraints(&limits, &nominal_state(), &terrain, &[], 0.10, -60.0)
+            .unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::EnergyReserveLow { .. }),
             "wrong violation: {err:?}"
@@ -389,15 +381,8 @@ mod tests {
         let limits = DronePhysicalLimits::interceptor_default();
         let terrain = make_flat();
         // -95 dBm < -85 dBm threshold.
-        let err = validate_constraints(
-            &limits,
-            &nominal_state(),
-            &terrain,
-            &[],
-            0.50,
-            -95.0,
-        )
-        .unwrap_err();
+        let err = validate_constraints(&limits, &nominal_state(), &terrain, &[], 0.50, -95.0)
+            .unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::CommsTooWeak { .. }),
             "wrong violation: {err:?}"
@@ -413,15 +398,8 @@ mod tests {
             drone_id: "peer-1".to_string(),
             position_m: [5.0, 0.0, 100.0],
         }];
-        let err = validate_constraints(
-            &limits,
-            &nominal_state(),
-            &terrain,
-            &peers,
-            0.50,
-            -60.0,
-        )
-        .unwrap_err();
+        let err = validate_constraints(&limits, &nominal_state(), &terrain, &peers, 0.50, -60.0)
+            .unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::DroneSeparationViolation { .. }),
             "wrong violation: {err:?}"
@@ -435,8 +413,7 @@ mod tests {
         // 2.0 rad yaw > 90° (1.571 rad) limit.
         let mut state = nominal_state();
         state.gimbal_yaw_offset_rad = 2.0;
-        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0)
-            .unwrap_err();
+        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0).unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::GimbalOutOfRange { .. }),
             "wrong violation: {err:?}"
@@ -450,8 +427,7 @@ mod tests {
         // 10 m/s climb > 8 m/s limit.
         let mut state = nominal_state();
         state.velocity_mps = [0.0, 0.0, 10.0];
-        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0)
-            .unwrap_err();
+        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0).unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::ClimbRateExceeded { .. }),
             "wrong violation: {err:?}"
@@ -465,8 +441,7 @@ mod tests {
         // -7 m/s descent > 5 m/s descent limit.
         let mut state = nominal_state();
         state.velocity_mps = [0.0, 0.0, -7.0];
-        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0)
-            .unwrap_err();
+        let err = validate_constraints(&limits, &state, &terrain, &[], 0.50, -60.0).unwrap_err();
         assert!(
             matches!(err, ConstraintViolation::DescentRateExceeded { .. }),
             "wrong violation: {err:?}"

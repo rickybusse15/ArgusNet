@@ -4,7 +4,6 @@ import unittest
 
 import numpy as np
 
-from argusnet.world.environment import Bounds2D, EnvironmentCRS, EnvironmentModel, LandCoverLayer, ObstacleLayer, TerrainLayer
 from argusnet.core.types import PlatformFrame, PlatformMetrics, TruthState
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
 from argusnet.simulation.sim import (
@@ -15,6 +14,14 @@ from argusnet.simulation.sim import (
     SimNode,
     build_observations,
     orbital_path,
+)
+from argusnet.world.environment import (
+    Bounds2D,
+    EnvironmentCRS,
+    EnvironmentModel,
+    LandCoverLayer,
+    ObstacleLayer,
+    TerrainLayer,
 )
 from argusnet.world.terrain import OccludingObject, TerrainModel
 from argusnet.world.weather import weather_from_preset
@@ -37,7 +44,10 @@ class SimulationEnvironmentTest(unittest.TestCase):
             bearing_std_rad=0.002,
             dropout_probability=0.0,
             max_range_m=500.0,
-            trajectory=lambda _: (np.array([0.0, 0.0, 10.0], dtype=float), np.zeros(3, dtype=float)),
+            trajectory=lambda _: (
+                np.array([0.0, 0.0, 10.0], dtype=float),
+                np.zeros(3, dtype=float),
+            ),
         )
         truth = TruthState(
             target_id="asset-a",
@@ -103,7 +113,10 @@ class SimulationEnvironmentTest(unittest.TestCase):
             bearing_std_rad=0.002,
             dropout_probability=0.0,
             max_range_m=500.0,
-            trajectory=lambda _: (np.array([10.0, 10.0, 5.0], dtype=float), np.zeros(3, dtype=float)),
+            trajectory=lambda _: (
+                np.array([10.0, 10.0, 5.0], dtype=float),
+                np.zeros(3, dtype=float),
+            ),
         )
         truth = TruthState(
             target_id="asset-a",
@@ -160,9 +173,13 @@ class SimulationEnvironmentTest(unittest.TestCase):
                 self.seed_calls = []
 
             def __call__(self, timestamp_s: float):
-                return np.array([0.0, 0.0, 200.0], dtype=float), np.array([0.0, 0.0, 0.0], dtype=float)
+                return np.array([0.0, 0.0, 200.0], dtype=float), np.array(
+                    [0.0, 0.0, 0.0], dtype=float
+                )
 
-            def seed(self, *, position: np.ndarray, velocity: np.ndarray, timestamp_s: float) -> None:
+            def seed(
+                self, *, position: np.ndarray, velocity: np.ndarray, timestamp_s: float
+            ) -> None:
                 self.seed_calls.append((position.copy(), velocity.copy(), float(timestamp_s)))
 
             def reset_state(self) -> None:
@@ -171,7 +188,10 @@ class SimulationEnvironmentTest(unittest.TestCase):
         follow_trajectory = DummyFollowTrajectory()
         controller = ObservationTriggeredFollowController(
             node_id="drone-east",
-            search_trajectory=lambda _: (np.array([5.0, 0.0, 180.0], dtype=float), np.zeros(3, dtype=float)),
+            search_trajectory=lambda _: (
+                np.array([5.0, 0.0, 180.0], dtype=float),
+                np.zeros(3, dtype=float),
+            ),
             follow_trajectory=follow_trajectory,
             preferred_target_id="asset-a",
         )
@@ -239,7 +259,10 @@ class SimulationEnvironmentTest(unittest.TestCase):
             bearing_std_rad=0.002,
             dropout_probability=0.0,
             max_range_m=500.0,
-            trajectory=lambda _: (np.array([0.0, 0.0, 220.0], dtype=float), np.zeros(3, dtype=float)),
+            trajectory=lambda _: (
+                np.array([0.0, 0.0, 220.0], dtype=float),
+                np.zeros(3, dtype=float),
+            ),
         )
         truth = TruthState(
             target_id="asset-a",
@@ -276,7 +299,10 @@ class SimulationEnvironmentTest(unittest.TestCase):
             bearing_std_rad=0.002,
             dropout_probability=0.0,
             max_range_m=1200.0,
-            trajectory=lambda _: (np.array([0.0, 0.0, 10.0], dtype=float), np.zeros(3, dtype=float)),
+            trajectory=lambda _: (
+                np.array([0.0, 0.0, 10.0], dtype=float),
+                np.zeros(3, dtype=float),
+            ),
         )
         truth = TruthState(
             target_id="asset-a",

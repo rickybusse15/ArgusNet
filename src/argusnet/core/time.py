@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time as _time
-from typing import Optional
 
 __all__ = [
     "now_s",
@@ -25,7 +24,7 @@ def now_ms() -> float:
     return _time.time() * 1e3
 
 
-def sim_to_epoch(sim_s: float, epoch_origin_s: Optional[float] = None) -> float:
+def sim_to_epoch(sim_s: float, epoch_origin_s: float | None = None) -> float:
     """Convert simulation-relative seconds to Unix epoch seconds.
 
     If *epoch_origin_s* is None, the current wall-clock time is used as the
@@ -56,7 +55,7 @@ class TimestampedMixin:
 
     timestamp_s: float
 
-    def age_s(self, now: Optional[float] = None) -> float:
+    def age_s(self, now: float | None = None) -> float:
         """Seconds elapsed since this object's timestamp."""
         t = now if now is not None else now_s()
         return t - self.timestamp_s

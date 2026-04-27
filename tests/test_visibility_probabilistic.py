@@ -8,11 +8,11 @@ Tests cover:
 - identify_dominant_loss helper
 - compute_detection_probability via a mocked EnvironmentQuery
 """
+
 from __future__ import annotations
 
-import math
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 
@@ -30,13 +30,12 @@ from argusnet.world.weather import (
     AtmosphericConditions,
     PrecipitationModel,
     WeatherModel,
-    WindModel,
 )
-
 
 # -----------------------------------------------------------------------
 # DetectionResult dataclass
 # -----------------------------------------------------------------------
+
 
 class TestDetectionResult(unittest.TestCase):
     """DetectionResult is a frozen dataclass with the expected fields."""
@@ -81,8 +80,8 @@ class TestDetectionResult(unittest.TestCase):
 # free_space_path_loss
 # -----------------------------------------------------------------------
 
-class TestFreeSpacePathLoss(unittest.TestCase):
 
+class TestFreeSpacePathLoss(unittest.TestCase):
     def test_zero_range_gives_one(self):
         self.assertAlmostEqual(free_space_path_loss(0.0), 1.0)
 
@@ -116,8 +115,8 @@ class TestFreeSpacePathLoss(unittest.TestCase):
 # compute_weather_factor
 # -----------------------------------------------------------------------
 
-class TestComputeWeatherFactor(unittest.TestCase):
 
+class TestComputeWeatherFactor(unittest.TestCase):
     def test_no_weather_gives_one(self):
         self.assertAlmostEqual(compute_weather_factor(500.0, None), 1.0)
 
@@ -167,8 +166,8 @@ class TestComputeWeatherFactor(unittest.TestCase):
 # compute_effective_noise
 # -----------------------------------------------------------------------
 
-class TestComputeEffectiveNoise(unittest.TestCase):
 
+class TestComputeEffectiveNoise(unittest.TestCase):
     def test_at_zero_range_minimum(self):
         noise = compute_effective_noise(0.0, 1.0, None)
         self.assertGreaterEqual(noise, 1.0)
@@ -200,8 +199,8 @@ class TestComputeEffectiveNoise(unittest.TestCase):
 # identify_dominant_loss
 # -----------------------------------------------------------------------
 
-class TestIdentifyDominantLoss(unittest.TestCase):
 
+class TestIdentifyDominantLoss(unittest.TestCase):
     def test_blocked(self):
         self.assertEqual(
             identify_dominant_loss(0.8, 0.9, 0.95, is_blocked=True),
@@ -230,6 +229,7 @@ class TestIdentifyDominantLoss(unittest.TestCase):
 # -----------------------------------------------------------------------
 # compute_detection_probability via mocked EnvironmentQuery
 # -----------------------------------------------------------------------
+
 
 def _make_mock_env_query(vis_result: VisibilityResult) -> EnvironmentQuery:
     """Build a minimal EnvironmentQuery mock that returns *vis_result* from los()."""
@@ -389,8 +389,12 @@ class TestComputeDetectionProbability(unittest.TestCase):
 
         query.los.assert_called_once()
         call_kwargs = query.los.call_args
-        self.assertIs(call_kwargs.kwargs.get("sensor_profile") or call_kwargs[1].get("sensor_profile", None) or
-                      (call_kwargs[0][2] if len(call_kwargs[0]) > 2 else None), profile)
+        self.assertIs(
+            call_kwargs.kwargs.get("sensor_profile")
+            or call_kwargs[1].get("sensor_profile", None)
+            or (call_kwargs[0][2] if len(call_kwargs[0]) > 2 else None),
+            profile,
+        )
 
     def test_heavy_rain_and_long_range(self):
         """Combined weather + range gives very low P_d."""

@@ -8,11 +8,10 @@ before a GNSS update corrects accumulated drift.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
-from argusnet.core.types import Vector3, vec3
+from argusnet.core.types import Vector3
 from argusnet.sensing.imu import IMUMeasurement
 
 __all__ = [
@@ -74,7 +73,7 @@ class DeadReckoningOdometry:
     def update(
         self,
         measurement: IMUMeasurement,
-        body_to_world_R: Optional[np.ndarray] = None,
+        body_to_world_R: np.ndarray | None = None,
     ) -> OdometryState:
         """Integrate one IMU measurement and return the new state."""
         dt = measurement.timestamp_s - self._t
@@ -91,7 +90,7 @@ class DeadReckoningOdometry:
         self._t = measurement.timestamp_s
 
         # Grow covariance with time (simple linear growth heuristic)
-        s2 = self._accel_sigma ** 2
+        s2 = self._accel_sigma**2
         self._pos_cov += np.eye(3) * (s2 * dt * dt)
         self._vel_cov += np.eye(3) * (s2 * dt)
 
@@ -102,8 +101,8 @@ class DeadReckoningOdometry:
         position: Vector3,
         velocity: Vector3,
         timestamp_s: float,
-        pos_cov: Optional[np.ndarray] = None,
-        vel_cov: Optional[np.ndarray] = None,
+        pos_cov: np.ndarray | None = None,
+        vel_cov: np.ndarray | None = None,
     ) -> None:
         """Reset state, typically called after a GNSS correction."""
         self._pos = np.asarray(position, dtype=float).copy()

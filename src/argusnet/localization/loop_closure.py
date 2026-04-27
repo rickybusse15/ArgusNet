@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -19,7 +18,7 @@ class LoopClosureCandidate:
     delta_position: np.ndarray  # (3,) relative translation estimate
     delta_yaw: float
     confidence: float  # [0, 1]
-    descriptor_similarity: Optional[float] = None  # cosine similarity if descriptors available
+    descriptor_similarity: float | None = None  # cosine similarity if descriptors available
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -58,7 +57,7 @@ class LoopClosureDetector:
         self,
         query: Keyframe,
         store: KeyframeStore,
-    ) -> List[LoopClosureCandidate]:
+    ) -> list[LoopClosureCandidate]:
         """Find loop closure candidates for *query* in *store*.
 
         Spatial proximity and temporal separation are applied first.  When
@@ -86,7 +85,7 @@ class LoopClosureDetector:
             delta_yaw = float(m_yaw - q_yaw)
 
             # --- Phase 3: descriptor appearance gate ---
-            desc_sim: Optional[float] = None
+            desc_sim: float | None = None
             if query.descriptor is not None and kf.descriptor is not None:
                 sim = _cosine_similarity(
                     np.asarray(query.descriptor, dtype=float),
@@ -102,13 +101,15 @@ class LoopClosureDetector:
                 # No descriptors available — fall back to spatial-only.
                 final_confidence = spatial_confidence
 
-            candidates.append(LoopClosureCandidate(
-                query_id=query.keyframe_id,
-                match_id=kf.keyframe_id,
-                delta_position=delta,
-                delta_yaw=delta_yaw,
-                confidence=max(0.0, final_confidence),
-                descriptor_similarity=desc_sim,
-            ))
+            candidates.append(
+                LoopClosureCandidate(
+                    query_id=query.keyframe_id,
+                    match_id=kf.keyframe_id,
+                    delta_position=delta,
+                    delta_yaw=delta_yaw,
+                    confidence=max(0.0, final_confidence),
+                    descriptor_similarity=desc_sim,
+                )
+            )
         candidates.sort(key=lambda c: -c.confidence)
-        return candidates[:self.max_candidates_per_query]
+        return candidates[: self.max_candidates_per_query]

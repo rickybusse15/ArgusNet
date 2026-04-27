@@ -57,6 +57,7 @@ pub struct MissionOverlaySettings {
     pub show_loc_ellipses: bool,
     pub show_reconstruction: bool,
     pub show_coord_frame: bool,
+    pub show_egress_paths: bool,
 }
 
 impl Default for MissionOverlaySettings {
@@ -67,13 +68,14 @@ impl Default for MissionOverlaySettings {
             show_loc_ellipses: true,
             show_reconstruction: true,
             show_coord_frame: true,
+            show_egress_paths: true,
         }
     }
 }
 
 /// Persistent reconstruction cloud — accumulated by the viewer as the
 /// replay plays back.  Reset when the replay is restarted or reloaded.
-#[derive(Debug, Clone, Resource)]
+#[derive(Debug, Clone, Default, Resource)]
 pub struct ReconstructionCloud {
     /// Accumulated scan points: [x_m, y_m, terrain_height_m] in world coords.
     pub points: Vec<[f32; 3]>,
@@ -81,16 +83,6 @@ pub struct ReconstructionCloud {
     pub last_frame_index: usize,
     /// True when points changed since last GPU mesh upload.
     pub dirty: bool,
-}
-
-impl Default for ReconstructionCloud {
-    fn default() -> Self {
-        Self {
-            points: Vec::new(),
-            last_frame_index: 0,
-            dirty: false,
-        }
-    }
 }
 
 impl ReconstructionCloud {
@@ -176,19 +168,14 @@ pub struct LoadedMissionZones {
 // ---------------------------------------------------------------------------
 
 /// Phase of the simulation pipeline.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum SimPhase {
+    #[default]
     Idle,
     Simulating,
     BuildingScene,
     ReloadingScene,
     Error,
-}
-
-impl Default for SimPhase {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(Debug, Clone, Resource)]

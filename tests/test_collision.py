@@ -4,10 +4,24 @@ import unittest
 
 import numpy as np
 
-from argusnet.world.environment import Bounds2D, EnvironmentCRS, EnvironmentModel, LandCoverLayer, ObstacleLayer, TerrainLayer
-from argusnet.world.obstacles import BuildingPrism, CylinderObstacle, ForestStand, OrientedBox, WallSegment, _point_in_polygon
 from argusnet.planning.planner_base import PathPlanner2D
 from argusnet.simulation.sim import collision_aware_position
+from argusnet.world.environment import (
+    Bounds2D,
+    EnvironmentCRS,
+    EnvironmentModel,
+    LandCoverLayer,
+    ObstacleLayer,
+    TerrainLayer,
+)
+from argusnet.world.obstacles import (
+    BuildingPrism,
+    CylinderObstacle,
+    ForestStand,
+    OrientedBox,
+    WallSegment,
+    _point_in_polygon,
+)
 
 
 class ObstacleCollisionTest(unittest.TestCase):
@@ -72,8 +86,12 @@ class ObstacleCollisionTest(unittest.TestCase):
         pushed_building = self.building.push_outside_xy(20.0, 20.0)
         pushed_cylinder = self.cylinder.push_outside_xy(110.0, 20.0)
 
-        self.assertFalse(self.building.point_inside(float(pushed_building[0]), float(pushed_building[1]), 10.0))
-        self.assertFalse(self.cylinder.point_inside(float(pushed_cylinder[0]), float(pushed_cylinder[1]), 10.0))
+        self.assertFalse(
+            self.building.point_inside(float(pushed_building[0]), float(pushed_building[1]), 10.0)
+        )
+        self.assertFalse(
+            self.cylinder.point_inside(float(pushed_cylinder[0]), float(pushed_cylinder[1]), 10.0)
+        )
 
     def test_obstacle_layer_point_collides_finds_hard_blockers(self) -> None:
         bounds = Bounds2D(0.0, 200.0, 0.0, 60.0)
@@ -101,12 +119,20 @@ class ObstacleCollisionTest(unittest.TestCase):
             ),
         )
 
-        building_polygon = planner.expanded_polygon_for_primitive(self.building, planner.config.target_clearance_m)
-        cylinder_polygon = planner.expanded_polygon_for_primitive(self.cylinder, planner.config.target_clearance_m)
+        building_polygon = planner.expanded_polygon_for_primitive(
+            self.building, planner.config.target_clearance_m
+        )
+        cylinder_polygon = planner.expanded_polygon_for_primitive(
+            self.cylinder, planner.config.target_clearance_m
+        )
 
         self.assertTrue(_point_in_polygon(np.array([20.0, 20.0], dtype=float), building_polygon))
-        self.assertGreater(float(np.max(cylinder_polygon[:, 0])), self.cylinder.center_x_m + self.cylinder.radius_m)
-        self.assertLess(float(np.min(cylinder_polygon[:, 0])), self.cylinder.center_x_m - self.cylinder.radius_m)
+        self.assertGreater(
+            float(np.max(cylinder_polygon[:, 0])), self.cylinder.center_x_m + self.cylinder.radius_m
+        )
+        self.assertLess(
+            float(np.min(cylinder_polygon[:, 0])), self.cylinder.center_x_m - self.cylinder.radius_m
+        )
 
     def test_collision_aware_position_pushes_entity_outside_building(self) -> None:
         bounds = Bounds2D(0.0, 120.0, 0.0, 120.0)
@@ -164,7 +190,9 @@ class ObstacleCollisionTest(unittest.TestCase):
             ),
         )
 
-        route = planner.plan_route([20.0, 20.0], [100.0, 20.0], clearance_m=planner.config.drone_clearance_m)
+        route = planner.plan_route(
+            [20.0, 20.0], [100.0, 20.0], clearance_m=planner.config.drone_clearance_m
+        )
 
         self.assertIsNone(route)
         pushed_xy = self.building.push_outside_xy(20.0, 20.0)

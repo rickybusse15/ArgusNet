@@ -1,14 +1,14 @@
+use argusnet_proto::pb::world_model_service_client::WorldModelServiceClient;
+use argusnet_proto::pb::{
+    BearingObservation, GetConfigRequest, HealthRequest, IngestFrameRequest, LatestFrameRequest,
+    NodeState, ResetRequest, TruthState, Vector3,
+};
 use serde_json::{json, Value};
 use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
-use argusnet_proto::pb::world_model_service_client::WorldModelServiceClient;
-use argusnet_proto::pb::{
-    BearingObservation, GetConfigRequest, HealthRequest, IngestFrameRequest, LatestFrameRequest,
-    NodeState, ResetRequest, TruthState, Vector3,
-};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -231,7 +231,9 @@ fn frame_to_json(frame: &argusnet_proto::pb::PlatformFrame) -> Value {
         "tracks": tracks,
         "truths": truths,
         "metrics": message_metrics_to_json(frame.metrics.as_ref().expect("metrics")),
-        "launch_events": [],
+        "mapping_state": Value::Null,
+        "localization_state": Value::Null,
+        "inspection_events": [],
     })
 }
 

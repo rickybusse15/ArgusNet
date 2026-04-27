@@ -19,15 +19,17 @@ class CliImportBehaviorTest(unittest.TestCase):
         self.assertEqual("scene-out", args.output)
 
     def test_sim_main_exits_with_clear_dependency_hint(self) -> None:
-        with patch(
-            "argusnet.cli.main._import_sim_module",
-            side_effect=RuntimeError(
-                "Simulation requires the Python dependency `numpy`. "
-                + cli.PYTHON_DEPENDENCY_INSTALL_HINT
+        with (
+            patch(
+                "argusnet.cli.main._import_sim_module",
+                side_effect=RuntimeError(
+                    "Simulation requires the Python dependency `numpy`. "
+                    + cli.PYTHON_DEPENDENCY_INSTALL_HINT
+                ),
             ),
+            self.assertRaises(SystemExit) as context,
         ):
-            with self.assertRaises(SystemExit) as context:
-                cli.main(["sim", "--duration-s", "5"])
+            cli.main(["sim", "--duration-s", "5"])
 
         self.assertIn("python3 -m pip install --user -e .", str(context.exception))
         self.assertIn("numpy", str(context.exception))
@@ -60,21 +62,23 @@ class CliImportBehaviorTest(unittest.TestCase):
     def test_export_shapefile_requires_directory_output(self) -> None:
         replay_module = unittest.mock.Mock()
         replay_module.load_replay_document.return_value = {"meta": {}, "frames": []}
-        with patch.dict("sys.modules", {"argusnet.evaluation.replay": replay_module}):
-            with self.assertRaises(SystemExit) as context:
-                cli.main(
-                    [
-                        "export",
-                        "--replay",
-                        "demo.json",
-                        "--format",
-                        "shapefile",
-                        "--enu-origin",
-                        "47.0,8.0,400.0",
-                        "--output",
-                        "tracks.shp",
-                    ]
-                )
+        with (
+            patch.dict("sys.modules", {"argusnet.evaluation.replay": replay_module}),
+            self.assertRaises(SystemExit) as context,
+        ):
+            cli.main(
+                [
+                    "export",
+                    "--replay",
+                    "demo.json",
+                    "--format",
+                    "shapefile",
+                    "--enu-origin",
+                    "47.0,8.0,400.0",
+                    "--output",
+                    "tracks.shp",
+                ]
+            )
         self.assertIn("directory", str(context.exception))
 
 

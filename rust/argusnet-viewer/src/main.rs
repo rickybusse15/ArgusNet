@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Parser;
 use argusnet_viewer::{render_headless, CameraPreset, HeadlessRenderOptions};
+use clap::Parser;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -15,15 +15,25 @@ struct Args {
         help = "Path to a smartscene-v1 directory or scene_manifest.json file."
     )]
     scene: PathBuf,
-    #[arg(long, default_value_t = false, help = "Render without opening the interactive viewer.")]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Render without opening the interactive viewer."
+    )]
     headless: bool,
     #[arg(long, help = "Write one still PNG after scene load.")]
     output: Option<PathBuf>,
-    #[arg(long, help = "Write a deterministic PNG sequence for the replay timeline.")]
+    #[arg(
+        long,
+        help = "Write a deterministic PNG sequence for the replay timeline."
+    )]
     record_dir: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = CameraPreset::TopDown)]
     camera: CameraPreset,
-    #[arg(long, help = "Track/truth ID to focus when using follow-target camera.")]
+    #[arg(
+        long,
+        help = "Track/truth ID to focus when using follow-target camera."
+    )]
     target_id: Option<String>,
     #[arg(long, default_value_t = 1280)]
     width: u32,

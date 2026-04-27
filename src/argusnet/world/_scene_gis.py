@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
+
 from .environment import Bounds2D, EnvironmentCRS
 
 
@@ -39,7 +40,7 @@ class RasterReference:
     heights_m: np.ndarray
     x_values_m: np.ndarray
     y_values_m: np.ndarray
-    source_bounds_xy: Tuple[float, float, float, float]
+    source_bounds_xy: tuple[float, float, float, float]
     runtime_crs: EnvironmentCRS
     source_crs_id: str
 
@@ -53,8 +54,20 @@ class RasterReference:
         )
 
     def height_at(self, x_m: float, y_m: float) -> float:
-        tx = np.clip(np.interp(float(x_m), self.x_values_m, np.arange(self.x_values_m.size, dtype=np.float32)), 0.0, self.x_values_m.size - 1)
-        ty = np.clip(np.interp(float(y_m), self.y_values_m, np.arange(self.y_values_m.size, dtype=np.float32)), 0.0, self.y_values_m.size - 1)
+        tx = np.clip(
+            np.interp(
+                float(x_m), self.x_values_m, np.arange(self.x_values_m.size, dtype=np.float32)
+            ),
+            0.0,
+            self.x_values_m.size - 1,
+        )
+        ty = np.clip(
+            np.interp(
+                float(y_m), self.y_values_m, np.arange(self.y_values_m.size, dtype=np.float32)
+            ),
+            0.0,
+            self.y_values_m.size - 1,
+        )
         col = min(int(math.floor(float(tx))), self.x_values_m.size - 2)
         row = min(int(math.floor(float(ty))), self.y_values_m.size - 2)
         ax = float(tx) - col
@@ -70,11 +83,13 @@ class RasterReference:
 
 @dataclass(frozen=True)
 class GeoJSONLayer:
-    features: List[Dict[str, object]]
+    features: list[dict[str, object]]
     source_crs_id: str
 
 
-def extract_geotiff_transform(tags: Mapping[int, object]) -> Tuple[float, float, float, float, Optional[Tuple[float, ...]]]:
+def extract_geotiff_transform(
+    tags: Mapping[int, object],
+) -> tuple[float, float, float, float, tuple[float, ...] | None]:
     transform_tag = tags.get(34264)
     if transform_tag is not None:
         return 0.0, 0.0, 0.0, 0.0, tuple(float(value) for value in transform_tag.value)
@@ -82,7 +97,10 @@ def extract_geotiff_transform(tags: Mapping[int, object]) -> Tuple[float, float,
     scale_tag = tags.get(33550)
     tiepoint_tag = tags.get(33922)
     if scale_tag is None or tiepoint_tag is None:
-        raise ValueError("DEM GeoTIFF must include ModelPixelScaleTag and ModelTiepointTag or ModelTransformationTag.")
+        raise ValueError(
+            "DEM GeoTIFF must include ModelPixelScaleTag and ModelTiepointTag "
+            "or ModelTransformationTag."
+        )
     scale = tuple(float(value) for value in scale_tag.value)
     tiepoints = tuple(float(value) for value in tiepoint_tag.value)
     if len(scale) < 2 or len(tiepoints) < 6:
@@ -90,7 +108,7 @@ def extract_geotiff_transform(tags: Mapping[int, object]) -> Tuple[float, float,
     return scale[0], scale[1], tiepoints[3], tiepoints[4], None
 
 
-def _extract_nodata_value(page: object) -> Optional[float]:
+def _extract_nodata_value(page: object) -> float | None:
     nodata = getattr(page, "nodata", None)
     if nodata is not None:
         try:
@@ -149,7 +167,9 @@ def _fill_nodata(heights: np.ndarray) -> np.ndarray:
     return filled
 
 
-def project_dem_to_runtime(dem_path: str | Path, *, source_crs: Optional[str] = None) -> RasterReference:
+def project_dem_to_runtime(
+    dem_path: str | Path, *, source_crs: str | None = None
+) -> RasterReference:
     tifffile = lazy_import_tifffile()
     CRS, Transformer = lazy_import_pyproj()
 
@@ -170,12 +190,15 @@ def project_dem_to_runtime(dem_path: str | Path, *, source_crs: Optional[str] = 
                 for index in range(0, len(values), 4):
                     if index + 3 >= len(values):
                         break
-                    key_id, _, _, value_offset = values[index:index + 4]
+                    key_id, _, _, value_offset = values[index : index + 4]
                     if key_id in {2048, 3072} and value_offset:
                         source_crs_id = f"EPSG:{value_offset}"
                         break
         if source_crs_id is None:
-            raise ValueError("Could not determine source CRS from DEM. Pass --source-crs, for example EPSG:32611.")
+            raise ValueError(
+                "Could not determine source CRS from DEM. Pass --source-crs, "
+                "for example EPSG:32611."
+            )
 
     source = CRS.from_user_input(source_crs_id)
     to_wgs84 = Transformer.from_crs(source, CRS.from_epsg(4326), always_xy=True)
@@ -183,18 +206,28 @@ def project_dem_to_runtime(dem_path: str | Path, *, source_crs: Optional[str] = 
     rows, cols = heights.shape
     if transform_values is not None:
         matrix = np.asarray(transform_values, dtype=float).reshape(4, 4)
-        source_x_values = np.array([matrix[0, 0] * col + matrix[0, 3] for col in range(cols)], dtype=np.float64)
-        source_y_values = np.array([matrix[1, 1] * row + matrix[1, 3] for row in range(rows)], dtype=np.float64)
+        source_x_values = np.array(
+            [matrix[0, 0] * col + matrix[0, 3] for col in range(cols)], dtype=np.float64
+        )
+        source_y_values = np.array(
+            [matrix[1, 1] * row + matrix[1, 3] for row in range(rows)], dtype=np.float64
+        )
     else:
-        source_x_values = np.array([tie_x + (col * scale_x) for col in range(cols)], dtype=np.float64)
-        source_y_values = np.array([tie_y - (row * scale_y) for row in range(rows)], dtype=np.float64)
+        source_x_values = np.array(
+            [tie_x + (col * scale_x) for col in range(cols)], dtype=np.float64
+        )
+        source_y_values = np.array(
+            [tie_y - (row * scale_y) for row in range(rows)], dtype=np.float64
+        )
 
     x_min = float(np.min(source_x_values))
     x_max = float(np.max(source_x_values))
     y_min = float(np.min(source_y_values))
     y_max = float(np.max(source_y_values))
     lon_center, lat_center = to_wgs84.transform((x_min + x_max) * 0.5, (y_min + y_max) * 0.5)
-    origin = ENUOrigin(latitude_deg=float(lat_center), longitude_deg=float(lon_center), altitude_m=0.0)
+    origin = ENUOrigin(
+        latitude_deg=float(lat_center), longitude_deg=float(lon_center), altitude_m=0.0
+    )
 
     runtime_x_values = []
     for x_value in source_x_values:
@@ -225,11 +258,11 @@ def project_dem_to_runtime(dem_path: str | Path, *, source_crs: Optional[str] = 
     )
 
 
-def load_geojson_features(path: str | Path) -> List[Dict[str, object]]:
+def load_geojson_features(path: str | Path) -> list[dict[str, object]]:
     return load_geojson_layer(path).features
 
 
-def _extract_geojson_crs(document: Mapping[str, object]) -> Optional[str]:
+def _extract_geojson_crs(document: Mapping[str, object]) -> str | None:
     crs = document.get("crs")
     if not isinstance(crs, Mapping):
         return None
@@ -242,7 +275,9 @@ def _extract_geojson_crs(document: Mapping[str, object]) -> Optional[str]:
     return None
 
 
-def load_geojson_layer(path: str | Path, *, default_source_crs_id: Optional[str] = None) -> GeoJSONLayer:
+def load_geojson_layer(
+    path: str | Path, *, default_source_crs_id: str | None = None
+) -> GeoJSONLayer:
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     if document.get("type") == "FeatureCollection":
         features = document.get("features", [])
@@ -272,7 +307,7 @@ def geojson_geometry_to_runtime(
     *,
     source_crs_id: str,
     runtime_crs: EnvironmentCRS,
-) -> List[Tuple[str, np.ndarray]]:
+) -> list[tuple[str, np.ndarray]]:
     CRS, Transformer = lazy_import_pyproj()
     source = CRS.from_user_input(source_crs_id)
     to_wgs84 = Transformer.from_crs(source, CRS.from_epsg(4326), always_xy=True)
@@ -292,13 +327,21 @@ def geojson_geometry_to_runtime(
     if not isinstance(coordinates, list):
         return []
     if geometry_type == "Polygon":
-        return [("polygon", np.asarray([project(point) for point in coordinates[0]], dtype=np.float32))]
+        return [
+            ("polygon", np.asarray([project(point) for point in coordinates[0]], dtype=np.float32))
+        ]
     if geometry_type == "MultiPolygon":
-        return [("polygon", np.asarray([project(point) for point in polygon[0]], dtype=np.float32)) for polygon in coordinates]
+        return [
+            ("polygon", np.asarray([project(point) for point in polygon[0]], dtype=np.float32))
+            for polygon in coordinates
+        ]
     if geometry_type == "LineString":
         return [("line", np.asarray([project(point) for point in coordinates], dtype=np.float32))]
     if geometry_type == "MultiLineString":
-        return [("line", np.asarray([project(point) for point in line], dtype=np.float32)) for line in coordinates]
+        return [
+            ("line", np.asarray([project(point) for point in line], dtype=np.float32))
+            for line in coordinates
+        ]
     return []
 
 

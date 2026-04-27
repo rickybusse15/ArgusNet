@@ -7,11 +7,9 @@ more sensor footprints, and computes coverage completeness metrics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 import numpy as np
 
-from argusnet.core.types import Vector3
 from argusnet.mapping.occupancy import GridBounds
 
 __all__ = [
@@ -33,10 +31,10 @@ class CoverageStats:
 
 
 def circular_footprint(
-    center_xy: Tuple[float, float],
+    center_xy: tuple[float, float],
     radius_m: float,
     resolution_m: float,
-) -> List[Tuple[float, float]]:
+) -> list[tuple[float, float]]:
     """Return a list of (x, y) cell centres inside a circular footprint."""
     cx, cy = center_xy
     r = radius_m
@@ -45,18 +43,18 @@ def circular_footprint(
     pts = []
     for x in xs:
         for y in ys:
-            if (x - cx) ** 2 + (y - cy) ** 2 <= r ** 2:
+            if (x - cx) ** 2 + (y - cy) ** 2 <= r**2:
                 pts.append((float(x), float(y)))
     return pts
 
 
 def rectangular_footprint(
-    center_xy: Tuple[float, float],
+    center_xy: tuple[float, float],
     width_m: float,
     height_m: float,
     resolution_m: float,
     yaw_rad: float = 0.0,
-) -> List[Tuple[float, float]]:
+) -> list[tuple[float, float]]:
     """Return cell centres inside a (possibly rotated) rectangular footprint."""
     cx, cy = center_xy
     hw, hh = width_m / 2, height_m / 2
@@ -80,7 +78,7 @@ class CoverageMap:
         self.bounds = bounds
         self._count = np.zeros((bounds.nx, bounds.ny), dtype=np.int32)
 
-    def mark(self, footprint_cells: List[Tuple[float, float]]) -> None:
+    def mark(self, footprint_cells: list[tuple[float, float]]) -> None:
         """Increment the observation count for each cell in *footprint_cells*."""
         for x, y in footprint_cells:
             if (
@@ -92,7 +90,7 @@ class CoverageMap:
 
     def mark_circular(
         self,
-        center_xy: Tuple[float, float],
+        center_xy: tuple[float, float],
         radius_m: float,
     ) -> None:
         fp = circular_footprint(center_xy, radius_m, self.bounds.resolution_m)
@@ -100,14 +98,12 @@ class CoverageMap:
 
     def mark_rectangular(
         self,
-        center_xy: Tuple[float, float],
+        center_xy: tuple[float, float],
         width_m: float,
         height_m: float,
         yaw_rad: float = 0.0,
     ) -> None:
-        fp = rectangular_footprint(
-            center_xy, width_m, height_m, self.bounds.resolution_m, yaw_rad
-        )
+        fp = rectangular_footprint(center_xy, width_m, height_m, self.bounds.resolution_m, yaw_rad)
         self.mark(fp)
 
     def count_at(self, x: float, y: float) -> int:

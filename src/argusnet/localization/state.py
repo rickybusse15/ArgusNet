@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 
@@ -57,7 +57,7 @@ class KalmanTrack3D:
         position: np.ndarray,
         position_std_m: float = 30.0,
         velocity_std_mps: float = 15.0,
-    ) -> "KalmanTrack3D":
+    ) -> KalmanTrack3D:
         state = np.zeros(6, dtype=float)
         state[:3] = position
 
@@ -88,13 +88,16 @@ class KalmanTrack3D:
         dt3 = dt2 * dt
         dt4 = dt2 * dt2
 
-        process_block = np.array(
-            [
-                [dt4 / 4.0, dt3 / 2.0],
-                [dt3 / 2.0, dt2],
-            ],
-            dtype=float,
-        ) * accel_var
+        process_block = (
+            np.array(
+                [
+                    [dt4 / 4.0, dt3 / 2.0],
+                    [dt3 / 2.0, dt2],
+                ],
+                dtype=float,
+            )
+            * accel_var
+        )
 
         process_noise = np.zeros((6, 6), dtype=float)
         for axis in range(3):
@@ -118,14 +121,15 @@ class KalmanTrack3D:
         innovation_cov = (
             measurement_matrix @ self.covariance @ measurement_matrix.T + measurement_cov
         )
-        kalman_gain = np.linalg.solve(innovation_cov.T, (self.covariance @ measurement_matrix.T).T).T
+        kalman_gain = np.linalg.solve(
+            innovation_cov.T, (self.covariance @ measurement_matrix.T).T
+        ).T
 
         self.state = self.state + kalman_gain @ innovation
         identity = np.eye(6, dtype=float)
         ikh = identity - kalman_gain @ measurement_matrix
         self.covariance = (
-            ikh @ self.covariance @ ikh.T
-            + kalman_gain @ measurement_cov @ kalman_gain.T
+            ikh @ self.covariance @ ikh.T + kalman_gain @ measurement_cov @ kalman_gain.T
         )
 
     def snapshot(
@@ -147,7 +151,9 @@ class KalmanTrack3D:
         )
 
 
-def infer_measurement_std(observations: Iterable[BearingObservation], estimate: np.ndarray) -> float:
+def infer_measurement_std(
+    observations: Iterable[BearingObservation], estimate: np.ndarray
+) -> float:
     observations = list(observations)
     if not observations:
         raise ValueError("At least one observation is required.")
@@ -176,6 +182,7 @@ def fuse_bearing_cluster(observations: Iterable[BearingObservation]) -> Triangul
 # ---------------------------------------------------------------------------
 # Adaptive Kalman filter configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class AdaptiveFilterConfig:
@@ -221,14 +228,16 @@ class AdaptiveFilterConfig:
 # Coordinated-turn Kalman filter model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class CoordinatedTurnTrack3D:
     """7-state coordinated-turn model: [x, y, z, vx, vy, vz, omega].
 
     omega is the turn rate in the XY plane (rad/s).
     """
+
     timestamp_s: float
-    state: np.ndarray       # [x, y, z, vx, vy, vz, omega]
+    state: np.ndarray  # [x, y, z, vx, vy, vz, omega]
     covariance: np.ndarray  # 7×7
     accel_std: float = 8.0
     turn_rate_std: float = 0.1
@@ -238,12 +247,12 @@ class CoordinatedTurnTrack3D:
         cls,
         timestamp_s: float,
         position: np.ndarray,
-        velocity: Optional[np.ndarray] = None,
+        velocity: np.ndarray | None = None,
         position_std_m: float = 30.0,
         velocity_std_mps: float = 15.0,
         turn_rate_std: float = 0.1,
         accel_std: float = 8.0,
-    ) -> "CoordinatedTurnTrack3D":
+    ) -> CoordinatedTurnTrack3D:
         state = np.zeros(7, dtype=float)
         state[:3] = position
         if velocity is not None:
@@ -273,7 +282,7 @@ class CoordinatedTurnTrack3D:
         cv: KalmanTrack3D,
         turn_rate_std: float = 0.1,
         accel_std: float = 8.0,
-    ) -> "CoordinatedTurnTrack3D":
+    ) -> CoordinatedTurnTrack3D:
         """Convert a 6-state CV track to a 7-state CT track."""
         state = np.zeros(7, dtype=float)
         state[:6] = cv.state
@@ -374,7 +383,7 @@ class CoordinatedTurnTrack3D:
             nis = float(np.sum(innovation**2))
         return nis
 
-    def to_cv_state(self) -> Tuple[np.ndarray, np.ndarray]:
+    def to_cv_state(self) -> tuple[np.ndarray, np.ndarray]:
         """Extract 6-state (pos+vel) and 6×6 covariance for output."""
         return self.state[:6].copy(), self.covariance[:6, :6].copy()
 
@@ -401,6 +410,7 @@ class CoordinatedTurnTrack3D:
 # IMM (Interacting Multiple Model) filter
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class IMMTrack3D:
     """IMM filter combining constant-velocity and coordinated-turn models.
@@ -408,11 +418,12 @@ class IMMTrack3D:
     Automatically adapts between CV (straight flight) and CT (turning)
     based on observation consistency.
     """
+
     cv_track: KalmanTrack3D
     ct_track: CoordinatedTurnTrack3D
-    mode_probabilities: np.ndarray   # [P(CV), P(CT)]
+    mode_probabilities: np.ndarray  # [P(CV), P(CT)]
     config: AdaptiveFilterConfig
-    _innovation_history: List[float] = field(default_factory=list, init=False, repr=False)
+    _innovation_history: list[float] = field(default_factory=list, init=False, repr=False)
     _q_scale: float = field(default=1.0, init=False, repr=False)
 
     @classmethod
@@ -420,8 +431,8 @@ class IMMTrack3D:
         cls,
         timestamp_s: float,
         position: np.ndarray,
-        config: Optional[AdaptiveFilterConfig] = None,
-    ) -> "IMMTrack3D":
+        config: AdaptiveFilterConfig | None = None,
+    ) -> IMMTrack3D:
         if config is None:
             config = AdaptiveFilterConfig()
 
@@ -472,9 +483,8 @@ class IMMTrack3D:
         cv_diff = cv_state - combined_state
         ct_diff = ct_state - combined_state
 
-        return (
-            p_cv * (self.cv_track.covariance + np.outer(cv_diff, cv_diff))
-            + p_ct * (self.ct_track.covariance[:6, :6] + np.outer(ct_diff, ct_diff))
+        return p_cv * (self.cv_track.covariance + np.outer(cv_diff, cv_diff)) + p_ct * (
+            self.ct_track.covariance[:6, :6] + np.outer(ct_diff, ct_diff)
         )
 
     @property
@@ -488,10 +498,12 @@ class IMMTrack3D:
     def predict(self, timestamp_s: float) -> None:
         """Predict both models forward, including mode mixing."""
         # Mode transition matrix
-        T = np.array([
-            [1.0 - self.config.cv_to_ct_prob, self.config.cv_to_ct_prob],
-            [self.config.ct_to_cv_prob, 1.0 - self.config.ct_to_cv_prob],
-        ])
+        T = np.array(
+            [
+                [1.0 - self.config.cv_to_ct_prob, self.config.cv_to_ct_prob],
+                [self.config.ct_to_cv_prob, 1.0 - self.config.ct_to_cv_prob],
+            ]
+        )
 
         # Predicted mode probabilities
         c_bar = T.T @ self.mode_probabilities
@@ -549,7 +561,7 @@ class IMMTrack3D:
         self.cv_track.update_position(position, measurement_std_m)
 
         # --- CT model update ---
-        nis_ct = self.ct_track.update_position(position, measurement_std_m)
+        self.ct_track.update_position(position, measurement_std_m)
 
         H_ct = np.zeros((3, 7), dtype=float)
         np.fill_diagonal(H_ct[:3, :3], 1.0)
@@ -562,10 +574,12 @@ class IMMTrack3D:
             ct_likelihood = 1e-30
 
         # Update mode probabilities
-        c = np.array([
-            self.mode_probabilities[0] * max(cv_likelihood, 1e-30),
-            self.mode_probabilities[1] * max(ct_likelihood, 1e-30),
-        ])
+        c = np.array(
+            [
+                self.mode_probabilities[0] * max(cv_likelihood, 1e-30),
+                self.mode_probabilities[1] * max(ct_likelihood, 1e-30),
+            ]
+        )
         total = c.sum()
         if total > 0:
             self.mode_probabilities = c / total
@@ -577,7 +591,7 @@ class IMMTrack3D:
         nis = float(np.sum(combined_innov**2) / max(measurement_std_m**2, 1e-6))
         self._innovation_history.append(nis)
         if len(self._innovation_history) > self.config.innovation_window:
-            self._innovation_history = self._innovation_history[-self.config.innovation_window:]
+            self._innovation_history = self._innovation_history[-self.config.innovation_window :]
 
         # Adaptive Q scaling
         if len(self._innovation_history) >= 3:
@@ -666,7 +680,7 @@ class ManagedTrack:
     stale_steps: int = 0
     last_update_time_s: float = 0.0
     measurement_std_m: float = 30.0
-    _update_history: List[bool] = field(default_factory=list, init=False, repr=False)
+    _update_history: list[bool] = field(default_factory=list, init=False, repr=False)
     _quality_score: float = field(default=0.5, init=False, repr=False)
 
     @property
@@ -688,7 +702,7 @@ class ManagedTrack:
         self.measurement_std_m = measurement_std_m
         self._update_history.append(True)
         if len(self._update_history) > self.config.confirmation_n:
-            self._update_history = self._update_history[-self.config.confirmation_n:]
+            self._update_history = self._update_history[-self.config.confirmation_n :]
         self._update_lifecycle()
 
     def mark_missed(self, timestamp_s: float) -> None:
@@ -696,7 +710,7 @@ class ManagedTrack:
         self.stale_steps += 1
         self._update_history.append(False)
         if len(self._update_history) > self.config.confirmation_n:
-            self._update_history = self._update_history[-self.config.confirmation_n:]
+            self._update_history = self._update_history[-self.config.confirmation_n :]
         self._update_lifecycle()
 
         # Check coasting timeout
@@ -712,11 +726,13 @@ class ManagedTrack:
         if self.lifecycle_state == TRACK_STATE_DELETED:
             return
 
-        recent_updates = sum(self._update_history[-self.config.confirmation_n:])
+        recent_updates = sum(self._update_history[-self.config.confirmation_n :])
 
         # Quality score: fraction of recent frames with updates
         if self._update_history:
-            self._quality_score = recent_updates / min(len(self._update_history), self.config.confirmation_n)
+            self._quality_score = recent_updates / min(
+                len(self._update_history), self.config.confirmation_n
+            )
         else:
             self._quality_score = 0.5
 

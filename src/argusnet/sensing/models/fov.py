@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Tuple
 
 import numpy as np
 
+from argusnet.core.geometry import angle_between, normalize
 from argusnet.core.types import Vector3
-from argusnet.core.geometry import normalize, angle_between
 
 __all__ = [
     "FoVModel",
@@ -44,9 +43,7 @@ class FoVModel:
         """True if *range_m* is within [min_range_m, max_range_m]."""
         if range_m < self.min_range_m:
             return False
-        if self.max_range_m > 0 and range_m > self.max_range_m:
-            return False
-        return True
+        return not (self.max_range_m > 0 and range_m > self.max_range_m)
 
     def point_visible(
         self,

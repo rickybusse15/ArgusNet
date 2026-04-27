@@ -10,13 +10,12 @@ odometry provides the prediction step.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
-from argusnet.core.types import Vector3, vec3
-from argusnet.sensing.gnss import GNSSMeasurement
+from argusnet.core.types import Vector3
 from argusnet.localization.odometry import OdometryState
+from argusnet.sensing.gnss import GNSSMeasurement
 
 __all__ = [
     "GNSSFusionState",
@@ -51,10 +50,12 @@ class GNSSINSFusion:
         process_noise_pos: float = 0.01,
         process_noise_vel: float = 0.1,
     ) -> None:
-        self._x = np.concatenate([
-            np.asarray(initial_position, dtype=float),
-            np.asarray(initial_velocity, dtype=float),
-        ])
+        self._x = np.concatenate(
+            [
+                np.asarray(initial_position, dtype=float),
+                np.asarray(initial_velocity, dtype=float),
+            ]
+        )
         # Initial covariance: moderate uncertainty
         self._P = np.diag([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
         self._t = initial_timestamp_s
@@ -101,7 +102,7 @@ class GNSSINSFusion:
 
         h_sigma = max(measurement.h_sigma_m, 0.1)
         v_sigma = max(measurement.v_sigma_m, 0.1)
-        R = np.diag([h_sigma ** 2, h_sigma ** 2, v_sigma ** 2])
+        R = np.diag([h_sigma**2, h_sigma**2, v_sigma**2])
 
         z = np.asarray(measurement.position, dtype=float)
         y = z - H @ self._x  # innovation

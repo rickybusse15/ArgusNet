@@ -3,14 +3,22 @@ use bevy_egui::{egui, EguiContexts};
 use egui_plot::{Line, Plot, PlotPoints, VLine};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
-use crate::replay::ReplayState;
+use crate::replay::{EgressProgress, ReplayState};
 use crate::schema::ScenePackage;
 use crate::state::{
     CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MissionOverlaySettings,
-    RuntimeOverlayVisibility, SelectionState, SimulationRunner, ViewMode, ZoneFocus, ZoneOverlapModel,
+    RuntimeOverlayVisibility, SelectionState, SimulationRunner, ViewMode, ZoneFocus,
+    ZoneOverlapModel,
 };
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
+
+/// Distance (m) below which an egress drone is counted as "returned to home".
+///
+/// Must match the simulator's egress→complete transition threshold in
+/// `src/argusnet/simulation/sim.py` so the HUD doesn't claim full RTH while
+/// the mission is still in egress.
+pub const EGRESS_ARRIVAL_THRESHOLD_M: f32 = 15.0;
 const MAP_PRESETS: &[&str] = &[
     "small",
     "medium",
@@ -43,6 +51,7 @@ const STALE_THRESHOLD: u32 = 5;
 /// Health threshold: nodes below this fraction are flagged in alerts.
 const HEALTH_ALERT_THRESHOLD: f32 = 0.3;
 
+#[allow(clippy::too_many_arguments)]
 pub fn viewer_ui_system(
     mut contexts: EguiContexts,
     scene_package: Res<ScenePackage>,
@@ -112,11 +121,7 @@ pub fn viewer_ui_system(
                     section_runtime_overlays(ui, &mut runtime_visibility, &mut mission_overlay);
                     ui.separator();
 
-                    section_mission_zones(
-                        ui,
-                        &mission_zones,
-                        &mut zone_overlap_model,
-                    );
+                    section_mission_zones(ui, &mission_zones, &mut zone_overlap_model);
 
                     section_keyboard_shortcuts(ui);
                 });
@@ -155,10 +160,7 @@ fn section_scene_header(
         ui.label(format!("Elevation: {:.1} m to {:.1} m", min_h, max_h));
     }
     if let Some(mesh) = &mission_zones.terrain_mesh {
-        ui.label(format!(
-            "Terrain mesh: {}x{} grid",
-            mesh.cols, mesh.rows
-        ));
+        ui.label(format!("Terrain mesh: {}x{} grid", mesh.cols, mesh.rows));
     }
 
     // Inline mission phase + coverage summary (always visible without opening any section).
@@ -166,11 +168,12 @@ fn section_scene_header(
         if let Some(ref ms) = frame.scan_mission_state {
             let pct = (ms.scan_coverage_fraction * 100.0).min(100.0);
             let (phase_label, phase_color) = match ms.phase.as_str() {
-                "scanning"   => ("SCANNING",   egui::Color32::from_rgb(80, 140, 255)),
+                "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
                 "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
                 "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
-                "complete"   => ("COMPLETE",   egui::Color32::from_rgb(60, 200, 80)),
-                other        => (other,        egui::Color32::GRAY),
+                "egress" => ("EGRESS", egui::Color32::from_rgb(255, 160, 30)),
+                "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
+                other => (other, egui::Color32::GRAY),
             };
             ui.horizontal(|ui| {
                 ui.colored_label(phase_color, format!("\u{25cf} {}", phase_label));
@@ -184,24 +187,32 @@ fn section_scene_header(
 // Section: Scenario Controls
 // ---------------------------------------------------------------------------
 
-fn section_scenario(
-    ui: &mut egui::Ui,
-    supports_hot_swap: bool,
-    sim_runner: &mut SimulationRunner,
-) {
+fn section_scenario(ui: &mut egui::Ui, supports_hot_swap: bool, sim_runner: &mut SimulationRunner) {
     ui.collapsing("Scenario", |ui| {
         if !supports_hot_swap {
             ui.label("Re-simulation only for synthetic scenes.");
         }
 
         ui.add_enabled_ui(supports_hot_swap && !sim_runner.is_busy(), |ui| {
-            combo_box(ui, "Mission Mode", &sim_runner.mission_mode.clone(), MISSION_MODES, |v| {
-                sim_runner.mission_mode = v.to_string();
-            });
+            combo_box(
+                ui,
+                "Mission Mode",
+                &sim_runner.mission_mode.clone(),
+                MISSION_MODES,
+                |v| {
+                    sim_runner.mission_mode = v.to_string();
+                },
+            );
             ui.separator();
-            combo_box(ui, "Map", &sim_runner.map_preset.clone(), MAP_PRESETS, |v| {
-                sim_runner.map_preset = v.to_string();
-            });
+            combo_box(
+                ui,
+                "Map",
+                &sim_runner.map_preset.clone(),
+                MAP_PRESETS,
+                |v| {
+                    sim_runner.map_preset = v.to_string();
+                },
+            );
             combo_box(
                 ui,
                 "Terrain",
@@ -224,12 +235,9 @@ fn section_scenario(
                     sim_runner.platform_preset = v.to_string();
                 },
             );
+            ui.add(egui::Slider::new(&mut sim_runner.drone_count, 1..=8).text("Drones"));
             ui.add(
-                egui::Slider::new(&mut sim_runner.drone_count, 1..=8).text("Drones"),
-            );
-            ui.add(
-                egui::Slider::new(&mut sim_runner.ground_stations, 1..=12)
-                    .text("Ground Stations"),
+                egui::Slider::new(&mut sim_runner.ground_stations, 1..=12).text("Ground Stations"),
             );
             ui.add(
                 egui::Slider::new(&mut sim_runner.duration_s, 30.0..=600.0)
@@ -247,9 +255,7 @@ fn section_scenario(
                         .text("Scan threshold")
                         .step_by(0.05),
                 );
-                ui.add(
-                    egui::Slider::new(&mut sim_runner.poi_count, 1..=10).text("POI count"),
-                );
+                ui.add(egui::Slider::new(&mut sim_runner.poi_count, 1..=10).text("POI count"));
             } else {
                 // target_tracking mode — show target-centric controls
                 ui.separator();
@@ -272,9 +278,7 @@ fn section_scenario(
                         sim_runner.drone_mode = v.to_string();
                     },
                 );
-                ui.add(
-                    egui::Slider::new(&mut sim_runner.target_count, 1..=8).text("Targets"),
-                );
+                ui.add(egui::Slider::new(&mut sim_runner.target_count, 1..=8).text("Targets"));
             }
         });
 
@@ -317,151 +321,195 @@ fn section_mission_progress(
     egui::CollapsingHeader::new("Mission Progress")
         .default_open(true)
         .show(ui, |ui| {
-        // View mode toggle
-        ui.horizontal(|ui| {
-            ui.label("View:");
-            if ui.selectable_label(*view_mode == ViewMode::RealWorld, "\u{1f30d} Real").clicked() {
-                *view_mode = ViewMode::RealWorld;
-            }
-            if ui.selectable_label(*view_mode == ViewMode::ScanMap, "\u{1f4e1} Scan Map").clicked() {
-                *view_mode = ViewMode::ScanMap;
-            }
-            if ui.selectable_label(*view_mode == ViewMode::Split, "\u{229e} Split").clicked() {
-                *view_mode = ViewMode::Split;
-            }
-        });
-        ui.separator();
-
-        // Reconstruction quality
-        let recon_frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
-        if recon_frac > 0.0 {
-            ui.add(
-                egui::ProgressBar::new(recon_frac)
-                    .text(format!("Map built: {:.0}%", recon_frac * 100.0))
-                    .fill(egui::Color32::from_rgb(20, 120, 180)),
-            );
-        }
-
-        // Phase label with color
-        let phase = ms.phase.as_str();
-        let (phase_label, phase_color) = match phase {
-            "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
-            "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
-            "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
-            "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
-            other => (other, egui::Color32::GRAY),
-        };
-
-        if ms.phase == "complete" {
-            ui.colored_label(phase_color, format!("Phase: \u{2713} {}", phase_label));
-        } else {
+            // View mode toggle
             ui.horizontal(|ui| {
-                ui.label("Phase:");
-                ui.colored_label(phase_color, phase_label);
+                ui.label("View:");
+                if ui
+                    .selectable_label(*view_mode == ViewMode::RealWorld, "\u{1f30d} Real")
+                    .clicked()
+                {
+                    *view_mode = ViewMode::RealWorld;
+                }
+                if ui
+                    .selectable_label(*view_mode == ViewMode::ScanMap, "\u{1f4e1} Scan Map")
+                    .clicked()
+                {
+                    *view_mode = ViewMode::ScanMap;
+                }
+                if ui
+                    .selectable_label(*view_mode == ViewMode::Split, "\u{229e} Split")
+                    .clicked()
+                {
+                    *view_mode = ViewMode::Split;
+                }
             });
-        }
+            ui.separator();
 
-        // Coordinator drone label (shown when a coordinator has been elected).
-        if let Some(ref coord_id) = ms.coordinator_drone_id {
-            ui.horizontal(|ui| {
-                ui.label("Coordinator:");
-                ui.colored_label(egui::Color32::from_rgb(180, 220, 255), coord_id.as_str());
-            });
-        }
+            // Reconstruction quality
+            let recon_frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
+            if recon_frac > 0.0 {
+                ui.add(
+                    egui::ProgressBar::new(recon_frac)
+                        .text(format!("Map built: {:.0}%", recon_frac * 100.0))
+                        .fill(egui::Color32::from_rgb(20, 120, 180)),
+                );
+            }
 
-        // Scanning phase: coverage bar
-        if ms.phase == "scanning" {
-            let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
-            let threshold = ms.scan_coverage_threshold.clamp(0.0, 1.0);
-            ui.add(
-                egui::ProgressBar::new(frac)
-                    .text(format!(
-                        "{:.0}% \u{2192} {:.0}%",
-                        frac * 100.0,
-                        threshold * 100.0
-                    ))
-                    .fill(egui::Color32::from_rgb(60, 100, 200)),
-            );
-        }
+            // Phase label with color
+            let phase = ms.phase.as_str();
+            let (phase_label, phase_color) = match phase {
+                "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
+                "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
+                "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
+                "egress" => ("EGRESS", egui::Color32::from_rgb(255, 160, 30)),
+                "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
+                other => (other, egui::Color32::GRAY),
+            };
 
-        // Localizing phase: per-drone estimates
-        if ms.phase == "localizing" {
-            if ms.localization_estimates.is_empty() {
-                ui.label("No localization estimates yet.");
+            if ms.phase == "complete" {
+                ui.colored_label(phase_color, format!("Phase: \u{2713} {}", phase_label));
             } else {
-                for est in &ms.localization_estimates {
-                    ui.label(format!(
-                        "{}: {:.0}% conf \u{00b1}{:.0} m",
-                        est.drone_id,
-                        est.confidence * 100.0,
-                        est.position_std_m
-                    ));
+                ui.horizontal(|ui| {
+                    ui.label("Phase:");
+                    ui.colored_label(phase_color, phase_label);
+                });
+            }
+
+            // Coordinator drone label (shown when a coordinator has been elected).
+            if let Some(ref coord_id) = ms.coordinator_drone_id {
+                ui.horizontal(|ui| {
+                    ui.label("Coordinator:");
+                    ui.colored_label(egui::Color32::from_rgb(180, 220, 255), coord_id.as_str());
+                });
+            }
+
+            // Scanning phase: coverage bar
+            if ms.phase == "scanning" {
+                let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
+                let threshold = ms.scan_coverage_threshold.clamp(0.0, 1.0);
+                ui.add(
+                    egui::ProgressBar::new(frac)
+                        .text(format!(
+                            "{:.0}% \u{2192} {:.0}%",
+                            frac * 100.0,
+                            threshold * 100.0
+                        ))
+                        .fill(egui::Color32::from_rgb(60, 100, 200)),
+                );
+            }
+
+            // Localizing phase: per-drone estimates
+            if ms.phase == "localizing" {
+                if ms.localization_estimates.is_empty() {
+                    ui.label("No localization estimates yet.");
+                } else {
+                    for est in &ms.localization_estimates {
+                        ui.label(format!(
+                            "{}: {:.0}% conf \u{00b1}{:.0} m",
+                            est.drone_id,
+                            est.confidence * 100.0,
+                            est.position_std_m
+                        ));
+                    }
+                }
+                if ms.localization_timed_out {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 180, 60),
+                            "\u{26a0} (timeout \u{2014} forced convergence)",
+                        );
+                    });
                 }
             }
-            if ms.localization_timed_out {
-                ui.horizontal(|ui| {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(255, 180, 60),
-                        "\u{26a0} (timeout \u{2014} forced convergence)",
+
+            // Coordinate frame status
+            if phase == "localizing" || phase == "inspecting" {
+                if let Some(est) = ms.localization_estimates.first() {
+                    let mean_conf = ms
+                        .localization_estimates
+                        .iter()
+                        .map(|e| e.confidence)
+                        .sum::<f32>()
+                        / ms.localization_estimates.len().max(1) as f32;
+                    let frame_alpha = (mean_conf * 100.0) as u8;
+                    ui.horizontal(|ui| {
+                        ui.label("Coord frame:");
+                        ui.colored_label(
+                            egui::Color32::from_rgba_unmultiplied(
+                                255,
+                                220,
+                                30,
+                                frame_alpha.max(60),
+                            ),
+                            format!(
+                                "XYZ @ ({:.0},{:.0}) {:.0}% conf",
+                                est.position_estimate[0],
+                                est.position_estimate[1],
+                                mean_conf * 100.0
+                            ),
+                        );
+                    });
+                }
+            }
+
+            // Inspecting phase: POI list
+            if ms.phase == "inspecting" {
+                let total = ms.total_poi_count.max(1);
+                let done = ms.completed_poi_count;
+                let poi_frac = done as f32 / total as f32;
+                ui.add(
+                    egui::ProgressBar::new(poi_frac)
+                        .text(format!("{} / {} complete", done, total))
+                        .fill(egui::Color32::from_rgb(200, 100, 30)),
+                );
+
+                for poi in &ms.poi_statuses {
+                    let (icon, color) = match poi.status.as_str() {
+                        "complete" => ("\u{2713}", egui::Color32::from_rgb(60, 200, 80)),
+                        "active" => ("\u{27f3}", egui::Color32::from_rgb(255, 200, 60)),
+                        _ => ("\u{25cb}", egui::Color32::GRAY),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.colored_label(color, icon);
+                        let drone_suffix = poi
+                            .assigned_drone_id
+                            .as_deref()
+                            .map(|d| format!("  ({})", d))
+                            .unwrap_or_default();
+                        ui.label(format!("[{}]{}", poi.poi_id, drone_suffix));
+                    });
+                }
+            }
+
+            // Egress phase: per-drone RTH progress
+            if ms.phase == "egress" {
+                let total = ms.egress_progress.len().max(1);
+                // Match the simulator's egress-completion threshold so the HUD
+                // count agrees with the sim's phase transition (sim.py: dist_m < 15.0).
+                let arrived = egress_arrived_count(&ms.egress_progress);
+                ui.label(format!("\u{21a9} {}/{} drones RTH", arrived, total));
+                for ep in &ms.egress_progress {
+                    let max_dist = ms
+                        .egress_progress
+                        .iter()
+                        .map(|e| e.distance_to_home_m)
+                        .fold(1.0_f32, f32::max)
+                        .max(200.0);
+                    let frac = (1.0 - ep.distance_to_home_m / max_dist).clamp(0.0, 1.0);
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .text(format!("{}: {:.0} m", ep.drone_id, ep.distance_to_home_m))
+                            .fill(egui::Color32::from_rgb(255, 160, 30)),
                     );
-                });
+                }
             }
-        }
 
-        // Coordinate frame status
-        if phase == "localizing" || phase == "inspecting" {
-            if let Some(est) = ms.localization_estimates.first() {
-                let mean_conf = ms.localization_estimates.iter()
-                    .map(|e| e.confidence).sum::<f32>()
-                    / ms.localization_estimates.len().max(1) as f32;
-                let frame_alpha = (mean_conf * 100.0) as u8;
-                ui.horizontal(|ui| {
-                    ui.label("Coord frame:");
-                    ui.colored_label(
-                        egui::Color32::from_rgba_unmultiplied(255, 220, 30, frame_alpha.max(60)),
-                        format!("XYZ @ ({:.0},{:.0}) {:.0}% conf",
-                            est.position_estimate[0], est.position_estimate[1],
-                            mean_conf * 100.0),
-                    );
-                });
+            // Always show coverage fraction when available
+            if ms.phase != "scanning" && ms.scan_coverage_fraction > 0.0 {
+                let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
+                kv_row(ui, "Scan coverage", &format!("{:.1}%", frac * 100.0));
             }
-        }
-
-        // Inspecting phase: POI list
-        if ms.phase == "inspecting" {
-            let total = ms.total_poi_count.max(1);
-            let done = ms.completed_poi_count;
-            let poi_frac = done as f32 / total as f32;
-            ui.add(
-                egui::ProgressBar::new(poi_frac)
-                    .text(format!("{} / {} complete", done, total))
-                    .fill(egui::Color32::from_rgb(200, 100, 30)),
-            );
-
-            for poi in &ms.poi_statuses {
-                let (icon, color) = match poi.status.as_str() {
-                    "complete" => ("\u{2713}", egui::Color32::from_rgb(60, 200, 80)),
-                    "active" => ("\u{27f3}", egui::Color32::from_rgb(255, 200, 60)),
-                    _ => ("\u{25cb}", egui::Color32::GRAY),
-                };
-                ui.horizontal(|ui| {
-                    ui.colored_label(color, icon);
-                    let drone_suffix = poi
-                        .assigned_drone_id
-                        .as_deref()
-                        .map(|d| format!("  ({})", d))
-                        .unwrap_or_default();
-                    ui.label(format!("[{}]{}", poi.poi_id, drone_suffix));
-                });
-            }
-        }
-
-        // Always show coverage fraction when available
-        if ms.phase != "scanning" && ms.scan_coverage_fraction > 0.0 {
-            let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
-            kv_row(ui, "Scan coverage", &format!("{:.1}%", frac * 100.0));
-        }
-    });
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -589,8 +637,9 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
                     let color = match phase.as_str() {
                         "localizing" => egui::Color32::from_rgba_unmultiplied(255, 210, 60, 200),
                         "inspecting" => egui::Color32::from_rgba_unmultiplied(255, 140, 40, 200),
-                        "complete"   => egui::Color32::from_rgba_unmultiplied(60, 200, 80, 200),
-                        _            => egui::Color32::from_rgba_unmultiplied(120, 120, 120, 150),
+                        "egress" => egui::Color32::from_rgba_unmultiplied(255, 160, 30, 200),
+                        "complete" => egui::Color32::from_rgba_unmultiplied(60, 200, 80, 200),
+                        _ => egui::Color32::from_rgba_unmultiplied(120, 120, 120, 150),
                     };
                     plot_ui.vline(VLine::new(*frame_idx as f64).color(color).width(2.0));
                 }
@@ -609,8 +658,9 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
                     let color = match phase.as_str() {
                         "localizing" => egui::Color32::from_rgb(255, 210, 60),
                         "inspecting" => egui::Color32::from_rgb(255, 140, 40),
-                        "complete"   => egui::Color32::from_rgb(60, 200, 80),
-                        _            => egui::Color32::GRAY,
+                        "egress" => egui::Color32::from_rgb(255, 160, 30),
+                        "complete" => egui::Color32::from_rgb(60, 200, 80),
+                        _ => egui::Color32::GRAY,
                     };
                     ui.colored_label(color, format!("▎{}", phase));
                 }
@@ -655,7 +705,9 @@ fn section_performance(
             let pct = current as f32 / frame_count as f32 * 100.0;
             ui.label(format!(
                 "Frame: {}/{} ({:.0}%)",
-                current + 1, frame_count, pct
+                current + 1,
+                frame_count,
+                pct
             ));
             let ts = replay_state.current_timestamp_s();
             let speed = replay_state.playback_speed;
@@ -674,7 +726,11 @@ fn section_tracking_metrics(ui: &mut egui::Ui, frame_metrics: &CurrentFrameMetri
             ui.label("No metrics available.");
             return;
         };
-        kv_row(ui, "Active tracks", &format!("{}", metrics.active_track_count));
+        kv_row(
+            ui,
+            "Active tracks",
+            &format!("{}", metrics.active_track_count),
+        );
         if let Some(mean_err) = metrics.mean_error_m {
             kv_row(ui, "Mean error", &format!("{:.2} m", mean_err));
         }
@@ -686,11 +742,9 @@ fn section_tracking_metrics(ui: &mut egui::Ui, frame_metrics: &CurrentFrameMetri
             "Observations",
             &format!("{}", metrics.observation_count),
         );
-        let total_obs =
-            metrics.accepted_observation_count + metrics.rejected_observation_count;
+        let total_obs = metrics.accepted_observation_count + metrics.rejected_observation_count;
         if total_obs > 0 {
-            let accept_rate =
-                metrics.accepted_observation_count as f32 / total_obs as f32;
+            let accept_rate = metrics.accepted_observation_count as f32 / total_obs as f32;
             kv_row(
                 ui,
                 "Accepted",
@@ -701,9 +755,7 @@ fn section_tracking_metrics(ui: &mut egui::Ui, frame_metrics: &CurrentFrameMetri
                     accept_rate * 100.0
                 ),
             );
-            ui.add(
-                egui::ProgressBar::new(accept_rate).text("acceptance rate"),
-            );
+            ui.add(egui::ProgressBar::new(accept_rate).text("acceptance rate"));
         }
         if !metrics.rejection_counts.is_empty() {
             ui.collapsing("Rejection Breakdown", |ui| {
@@ -721,9 +773,7 @@ fn section_tracking_metrics(ui: &mut egui::Ui, frame_metrics: &CurrentFrameMetri
         if !metrics.track_errors_m.is_empty() {
             ui.collapsing("Per-Track Errors", |ui| {
                 let mut errors: Vec<_> = metrics.track_errors_m.iter().collect();
-                errors.sort_by(|a, b| {
-                    a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                errors.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
                 for (track_id, error) in errors {
                     ui.label(format!("  {track_id}: {error:.2} m"));
                 }
@@ -939,10 +989,7 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
             if let Some(health) = selection.selected_health {
                 ui.horizontal(|ui| {
                     ui.label("Health:");
-                    ui.colored_label(
-                        health_color(health),
-                        format!("{:.0}%", health * 100.0),
-                    );
+                    ui.colored_label(health_color(health), format!("{:.0}%", health * 100.0));
                 });
             }
             if let Some(sensor) = &selection.selected_sensor_type {
@@ -952,7 +999,11 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
                 kv_row(ui, "Mobile", if mobile { "Yes" } else { "No" });
             }
             if let Some(fov) = selection.selected_fov_half_angle_deg {
-                kv_row(ui, "FOV", &format!("{:.0}\u{00b0} (half {:.0}\u{00b0})", fov * 2.0, fov));
+                kv_row(
+                    ui,
+                    "FOV",
+                    &format!("{:.0}\u{00b0} (half {:.0}\u{00b0})", fov * 2.0, fov),
+                );
             }
             if let Some(range) = selection.selected_max_range_m {
                 kv_row(ui, "Max range", &format!("{:.0} m", range));
@@ -1022,11 +1073,10 @@ fn section_safety_alerts(ui: &mut egui::Ui, replay_state: &ReplayState) {
     }
 
     // High rejection rate
-    let total_obs = frame.metrics.accepted_observation_count
-        + frame.metrics.rejected_observation_count;
+    let total_obs =
+        frame.metrics.accepted_observation_count + frame.metrics.rejected_observation_count;
     if total_obs > 0 {
-        let reject_rate =
-            frame.metrics.rejected_observation_count as f32 / total_obs as f32;
+        let reject_rate = frame.metrics.rejected_observation_count as f32 / total_obs as f32;
         if reject_rate > 0.5 {
             alerts.push((
                 AlertLevel::Warning,
@@ -1086,11 +1136,15 @@ fn section_mapping_status(ui: &mut egui::Ui, replay_state: &ReplayState) {
     egui::CollapsingHeader::new("Mapping")
         .default_open(true)
         .show(ui, |ui| {
-        kv_row(ui, "Coverage", &format!("{:.1}%", ms.coverage_fraction * 100.0));
-        kv_row(ui, "Covered cells", &ms.covered_cells.to_string());
-        kv_row(ui, "Total cells", &ms.total_cells.to_string());
-        kv_row(ui, "Mean revisits", &format!("{:.2}", ms.mean_revisits));
-    });
+            kv_row(
+                ui,
+                "Coverage",
+                &format!("{:.1}%", ms.coverage_fraction * 100.0),
+            );
+            kv_row(ui, "Covered cells", &ms.covered_cells.to_string());
+            kv_row(ui, "Total cells", &ms.total_cells.to_string());
+            kv_row(ui, "Mean revisits", &format!("{:.2}", ms.mean_revisits));
+        });
     ui.separator();
 }
 
@@ -1108,10 +1162,18 @@ fn section_localization_status(ui: &mut egui::Ui, replay_state: &ReplayState) {
     egui::CollapsingHeader::new("Localization")
         .default_open(true)
         .show(ui, |ui| {
-        kv_row(ui, "Active tracks", &ls.active_localizations.to_string());
-        kv_row(ui, "Mean pos. std.", &format!("{:.1} m", ls.mean_position_std_m));
-        kv_row(ui, "Mean confidence", &format!("{:.2}", ls.mean_observation_confidence));
-    });
+            kv_row(ui, "Active tracks", &ls.active_localizations.to_string());
+            kv_row(
+                ui,
+                "Mean pos. std.",
+                &format!("{:.1} m", ls.mean_position_std_m),
+            );
+            kv_row(
+                ui,
+                "Mean confidence",
+                &format!("{:.2}", ls.mean_observation_confidence),
+            );
+        });
     ui.separator();
 }
 
@@ -1130,27 +1192,27 @@ fn section_inspection_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
     egui::CollapsingHeader::new(format!("Inspection Events ({count})"))
         .default_open(true)
         .show(ui, |ui| {
-        let limit = 20;
-        for (i, ev) in frame.inspection_events.iter().enumerate() {
-            if i >= limit {
-                ui.label(format!("  ... and {} more", count - limit));
-                break;
+            let limit = 20;
+            for (i, ev) in frame.inspection_events.iter().enumerate() {
+                if i >= limit {
+                    ui.label(format!("  ... and {} more", count - limit));
+                    break;
+                }
+                let icon = match ev.event_type.as_str() {
+                    "entered" => "\u{25b6}",
+                    "exited" => "\u{25c0}",
+                    _ => "\u{25cf}",
+                };
+                ui.label(format!(
+                    "  {} {} in {} ({:.0}%) t={:.1}s",
+                    icon,
+                    ev.node_id,
+                    ev.zone_id,
+                    ev.zone_coverage_fraction * 100.0,
+                    ev.timestamp_s,
+                ));
             }
-            let icon = match ev.event_type.as_str() {
-                "entered" => "\u{25b6}",
-                "exited" => "\u{25c0}",
-                _ => "\u{25cf}",
-            };
-            ui.label(format!(
-                "  {} {} in {} ({:.0}%) t={:.1}s",
-                icon,
-                ev.node_id,
-                ev.zone_id,
-                ev.zone_coverage_fraction * 100.0,
-                ev.timestamp_s,
-            ));
-        }
-    });
+        });
     ui.separator();
 }
 
@@ -1165,8 +1227,9 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
 
     let gen_rej_count = frame.generation_rejections.len();
     let tracker_rej_count = frame.rejected_observations.len();
+    let deconflict_count = frame.deconfliction_events.len();
     let obs_count = frame.observations.len();
-    let total_events = gen_rej_count + tracker_rej_count;
+    let total_events = gen_rej_count + tracker_rej_count + deconflict_count;
 
     if total_events == 0 && obs_count == 0 {
         return;
@@ -1176,48 +1239,62 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
     ui.collapsing(header, |ui| {
         // Generation rejections
         if !frame.generation_rejections.is_empty() {
-            ui.collapsing(
-                format!("Generation Rejections ({gen_rej_count})"),
-                |ui| {
-                    let display_limit = 30;
-                    for (i, rej) in frame.generation_rejections.iter().enumerate() {
-                        if i >= display_limit {
-                            ui.label(format!(
-                                "  ... and {} more",
-                                gen_rej_count - display_limit
-                            ));
-                            break;
-                        }
-                        ui.label(format!(
-                            "  {} {}->{}: {}",
-                            rej.reason, rej.node_id, rej.target_id, rej.blocker_type
-                        ));
+            ui.collapsing(format!("Generation Rejections ({gen_rej_count})"), |ui| {
+                let display_limit = 30;
+                for (i, rej) in frame.generation_rejections.iter().enumerate() {
+                    if i >= display_limit {
+                        ui.label(format!("  ... and {} more", gen_rej_count - display_limit));
+                        break;
                     }
-                },
-            );
+                    ui.label(format!(
+                        "  {} {}->{}: {}",
+                        rej.reason, rej.node_id, rej.target_id, rej.blocker_type
+                    ));
+                }
+            });
         }
 
         // Tracker rejections
         if !frame.rejected_observations.is_empty() {
-            ui.collapsing(
-                format!("Tracker Rejections ({tracker_rej_count})"),
-                |ui| {
-                    let display_limit = 30;
-                    for (i, rej) in frame.rejected_observations.iter().enumerate() {
-                        if i >= display_limit {
-                            ui.label(format!(
-                                "  ... and {} more",
-                                tracker_rej_count - display_limit
-                            ));
-                            break;
-                        }
+            ui.collapsing(format!("Tracker Rejections ({tracker_rej_count})"), |ui| {
+                let display_limit = 30;
+                for (i, rej) in frame.rejected_observations.iter().enumerate() {
+                    if i >= display_limit {
                         ui.label(format!(
-                            "  {} {}->{}: {}",
-                            rej.reason, rej.node_id, rej.target_id, rej.detail
+                            "  ... and {} more",
+                            tracker_rej_count - display_limit
                         ));
+                        break;
                     }
-                },
-            );
+                    ui.label(format!(
+                        "  {} {}->{}: {}",
+                        rej.reason, rej.node_id, rej.target_id, rej.detail
+                    ));
+                }
+            });
+        }
+
+        // Deconfliction yields
+        if !frame.deconfliction_events.is_empty() {
+            ui.collapsing(format!("Deconfliction Yields ({deconflict_count})"), |ui| {
+                let display_limit = 30;
+                for (i, ev) in frame.deconfliction_events.iter().enumerate() {
+                    if i >= display_limit {
+                        ui.label(format!(
+                            "  ... and {} more",
+                            deconflict_count - display_limit
+                        ));
+                        break;
+                    }
+                    ui.label(format!(
+                        "  {} yields to {} ({:.1} m, {})",
+                        ev.yielding_drone_id,
+                        ev.conflicting_drone_id,
+                        ev.predicted_separation_m,
+                        ev.resolution,
+                    ));
+                }
+            });
         }
 
         // Observation summary (not individual obs to save space)
@@ -1283,14 +1360,24 @@ fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.fov_cones, "FOV Cones");
         ui.checkbox(&mut runtime_visibility.radar_rings, "Radar Rings");
         ui.checkbox(&mut runtime_visibility.coverage_overlay, "Coverage Overlay");
-        ui.checkbox(&mut runtime_visibility.inspection_events, "Inspection Events");
+        ui.checkbox(
+            &mut runtime_visibility.inspection_events,
+            "Inspection Events",
+        );
         ui.checkbox(&mut runtime_visibility.launch_lines, "Launch Lines");
-        ui.checkbox(&mut runtime_visibility.show_covariance_ellipsoids, "Covariance Ellipsoids");
+        ui.checkbox(
+            &mut runtime_visibility.show_covariance_ellipsoids,
+            "Covariance Ellipsoids",
+        );
         ui.separator();
         ui.label("Mission overlays:");
         ui.checkbox(&mut mission_overlay.show_scan_grid, "Coverage grid");
         ui.checkbox(&mut mission_overlay.show_poi_markers, "POI markers");
-        ui.checkbox(&mut mission_overlay.show_loc_ellipses, "Localization ellipses");
+        ui.checkbox(
+            &mut mission_overlay.show_loc_ellipses,
+            "Localization ellipses",
+        );
+        ui.checkbox(&mut mission_overlay.show_egress_paths, "Egress paths");
     });
 }
 
@@ -1443,11 +1530,7 @@ fn draw_zone_badges(context: &egui::Context, projected_badges: &ProjectedZoneBad
                 );
                 let mut cx = pill_rect.left() + 4.0;
                 for chip in &badge.chips {
-                    let chip_text = format!(
-                        "{}{}",
-                        zone_type_letter(&chip.zone_type),
-                        chip.count
-                    );
+                    let chip_text = format!("{}{}", zone_type_letter(&chip.zone_type), chip.count);
                     let chip_color = egui::Color32::from_rgba_unmultiplied(
                         (chip.color[0] * 255.0) as u8,
                         (chip.color[1] * 255.0) as u8,
@@ -1501,6 +1584,14 @@ fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
                 egui::Color32::from_rgb(255, 140, 40),
             )
         }
+        "egress" => {
+            let arrived = egress_arrived_count(&ms.egress_progress);
+            let total = ms.egress_progress.len().max(1);
+            (
+                format!("\u{21a9} EGRESS  {}/{}", arrived, total),
+                egui::Color32::from_rgb(255, 160, 30),
+            )
+        }
         "complete" => (
             "\u{2713} COMPLETE".to_string(),
             egui::Color32::from_rgb(60, 200, 80),
@@ -1520,10 +1611,7 @@ fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
             );
             let text_size = galley.size();
             let pad = egui::vec2(10.0, 5.0);
-            let rect = egui::Rect::from_min_size(
-                ui.next_widget_position(),
-                text_size + pad * 2.0,
-            );
+            let rect = egui::Rect::from_min_size(ui.next_widget_position(), text_size + pad * 2.0);
             ui.allocate_rect(rect, egui::Sense::hover());
             let painter = ui.painter();
             painter.rect_filled(
@@ -1544,6 +1632,13 @@ fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn egress_arrived_count(egress_progress: &[EgressProgress]) -> usize {
+    egress_progress
+        .iter()
+        .filter(|progress| progress.distance_to_home_m < EGRESS_ARRIVAL_THRESHOLD_M)
+        .count()
+}
 
 /// Key-value row: label on left, strong value on right.
 fn kv_row(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -1650,8 +1745,7 @@ mod tests {
     #[test]
     fn covariance_diagonal_extracts_4x4() {
         let flat_4x4: Vec<f64> = vec![
-            1.0, 0.1, 0.0, 0.0, 0.1, 4.0, 0.0, 0.0, 0.0, 0.0, 9.0, 0.0, 0.0, 0.0,
-            0.0, 16.0,
+            1.0, 0.1, 0.0, 0.0, 0.1, 4.0, 0.0, 0.0, 0.0, 0.0, 9.0, 0.0, 0.0, 0.0, 0.0, 16.0,
         ];
         let diag = covariance_diagonal(&flat_4x4);
         assert!((diag[0] - 1.0).abs() < 1e-9);
@@ -1679,5 +1773,28 @@ mod tests {
         assert_eq!(health_color(0.9), egui::Color32::GREEN);
         assert_eq!(health_color(0.5), egui::Color32::YELLOW);
         assert_eq!(health_color(0.1), egui::Color32::RED);
+    }
+
+    #[test]
+    fn egress_arrived_count_uses_shared_threshold() {
+        let progress = vec![
+            EgressProgress {
+                drone_id: "arrived".into(),
+                distance_to_home_m: EGRESS_ARRIVAL_THRESHOLD_M - 0.1,
+                home_position: [0.0, 0.0, 0.0],
+            },
+            EgressProgress {
+                drone_id: "at-threshold".into(),
+                distance_to_home_m: EGRESS_ARRIVAL_THRESHOLD_M,
+                home_position: [0.0, 0.0, 0.0],
+            },
+            EgressProgress {
+                drone_id: "en-route".into(),
+                distance_to_home_m: EGRESS_ARRIVAL_THRESHOLD_M + 5.0,
+                home_position: [0.0, 0.0, 0.0],
+            },
+        ];
+
+        assert_eq!(egress_arrived_count(&progress), 1);
     }
 }

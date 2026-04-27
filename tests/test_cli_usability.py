@@ -21,7 +21,6 @@ from argusnet.cli.main import (
     COMMAND_VALIDATE_SCENE,
     build_parser,
     normalize_argv,
-    parse_args,
 )
 
 
@@ -112,7 +111,12 @@ def _write_scene_bundle(
 
 class TestNormalizeArgv(unittest.TestCase):
     def test_new_commands_recognized(self):
-        for cmd in (COMMAND_VALIDATE_SCENE, COMMAND_VALIDATE_REPLAY, COMMAND_INFO, COMMAND_DUMP_CONFIG):
+        for cmd in (
+            COMMAND_VALIDATE_SCENE,
+            COMMAND_VALIDATE_REPLAY,
+            COMMAND_INFO,
+            COMMAND_DUMP_CONFIG,
+        ):
             result = normalize_argv([cmd, "arg"])
             self.assertEqual(result[0], cmd)
 
@@ -160,29 +164,53 @@ class TestBuildParser(unittest.TestCase):
 
     def test_export_accepts_kml_gpx(self):
         parser = build_parser()
-        args = parser.parse_args([
-            "export", "--replay", "test.json", "--format", "kml",
-            "--enu-origin", "34.0,-118.0", "--output", "out.kml",
-        ])
+        args = parser.parse_args(
+            [
+                "export",
+                "--replay",
+                "test.json",
+                "--format",
+                "kml",
+                "--enu-origin",
+                "34.0,-118.0",
+                "--output",
+                "out.kml",
+            ]
+        )
         self.assertEqual(args.format, "kml")
 
     def test_export_time_range_arg(self):
         parser = build_parser()
-        args = parser.parse_args([
-            "export", "--replay", "test.json", "--format", "geojson",
-            "--enu-origin", "34.0,-118.0", "--output", "out.json",
-            "--time-range", "10.0,60.0",
-        ])
+        args = parser.parse_args(
+            [
+                "export",
+                "--replay",
+                "test.json",
+                "--format",
+                "geojson",
+                "--enu-origin",
+                "34.0,-118.0",
+                "--output",
+                "out.json",
+                "--time-range",
+                "10.0,60.0",
+            ]
+        )
         self.assertEqual(args.time_range, "10.0,60.0")
 
     def test_sim_accepts_config_file_and_weather_preset(self):
         parser = build_parser()
-        args = parser.parse_args([
-            "sim",
-            "--config-file", "/tmp/sim.json",
-            "--weather-preset", "fog",
-            "--target-motion", "loiter",
-        ])
+        args = parser.parse_args(
+            [
+                "sim",
+                "--config-file",
+                "/tmp/sim.json",
+                "--weather-preset",
+                "fog",
+                "--target-motion",
+                "loiter",
+            ]
+        )
         self.assertEqual(args.config_file, "/tmp/sim.json")
         self.assertEqual(args.weather_preset, "fog")
         self.assertEqual(args.target_motion, "loiter")
@@ -203,8 +231,9 @@ class TestBuildParser(unittest.TestCase):
 class TestValidateReplay(unittest.TestCase):
     def test_valid_replay(self):
         """A valid replay document should pass validation via the CLI function."""
-        from argusnet.cli.main import _run_validate_replay
         import argparse
+
+        from argusnet.cli.main import _run_validate_replay
 
         doc = _minimal_valid_replay_document()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -220,8 +249,9 @@ class TestValidateReplay(unittest.TestCase):
             os.unlink(path)
 
     def test_invalid_replay_missing_frames(self):
-        from argusnet.cli.main import _run_validate_replay
         import argparse
+
+        from argusnet.cli.main import _run_validate_replay
 
         doc = {"meta": {"dt_s": 0.25}}
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -237,8 +267,9 @@ class TestValidateReplay(unittest.TestCase):
             os.unlink(path)
 
     def test_invalid_replay_missing_required_frame_fields(self):
-        from argusnet.cli.main import _run_validate_replay
         import argparse
+
+        from argusnet.cli.main import _run_validate_replay
 
         doc = _minimal_valid_replay_document()
         doc["frames"] = [{"timestamp_s": 0.0}]
@@ -255,18 +286,22 @@ class TestValidateReplay(unittest.TestCase):
             os.unlink(path)
 
     def test_missing_file(self):
-        from argusnet.cli.main import _run_validate_replay
         import argparse
 
-        args = argparse.Namespace(path="/tmp/nonexistent_replay_12345.json", verbose=False, quiet=False)
+        from argusnet.cli.main import _run_validate_replay
+
+        args = argparse.Namespace(
+            path="/tmp/nonexistent_replay_12345.json", verbose=False, quiet=False
+        )
         with self.assertRaises(SystemExit):
             _run_validate_replay(args)
 
 
 class TestValidateScene(unittest.TestCase):
     def test_valid_scene(self):
-        from argusnet.cli.main import _run_validate_scene
         import argparse
+
+        from argusnet.cli.main import _run_validate_scene
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_scene_bundle(Path(tmpdir))
@@ -274,8 +309,9 @@ class TestValidateScene(unittest.TestCase):
             _run_validate_scene(args)  # should not raise
 
     def test_valid_scene_legacy_manifest_filename(self):
-        from argusnet.cli.main import _run_validate_scene
         import argparse
+
+        from argusnet.cli.main import _run_validate_scene
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_scene_bundle(Path(tmpdir), manifest_name="manifest.json")
@@ -283,8 +319,9 @@ class TestValidateScene(unittest.TestCase):
             _run_validate_scene(args)  # should not raise
 
     def test_missing_manifest(self):
-        from argusnet.cli.main import _run_validate_scene
         import argparse
+
+        from argusnet.cli.main import _run_validate_scene
 
         with tempfile.TemporaryDirectory() as tmpdir:
             args = argparse.Namespace(path=tmpdir, verbose=False, quiet=False)
@@ -292,16 +329,18 @@ class TestValidateScene(unittest.TestCase):
                 _run_validate_scene(args)
 
     def test_not_a_directory(self):
-        from argusnet.cli.main import _run_validate_scene
         import argparse
+
+        from argusnet.cli.main import _run_validate_scene
 
         args = argparse.Namespace(path="/tmp/nonexistent_dir_12345", verbose=False, quiet=False)
         with self.assertRaises(SystemExit):
             _run_validate_scene(args)
 
     def test_missing_layer_asset(self):
-        from argusnet.cli.main import _run_validate_scene
         import argparse
+
+        from argusnet.cli.main import _run_validate_scene
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_scene_bundle(Path(tmpdir), include_asset=False)
@@ -310,8 +349,9 @@ class TestValidateScene(unittest.TestCase):
                 _run_validate_scene(args)
 
     def test_missing_metadata_files(self):
-        from argusnet.cli.main import _run_validate_scene
         import argparse
+
+        from argusnet.cli.main import _run_validate_scene
 
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_scene_bundle(Path(tmpdir), include_metadata=False)
@@ -320,8 +360,9 @@ class TestValidateScene(unittest.TestCase):
                 _run_validate_scene(args)
 
     def test_invalid_manifest_shape(self):
-        from argusnet.cli.main import _run_validate_scene
         import argparse
+
+        from argusnet.cli.main import _run_validate_scene
 
         with tempfile.TemporaryDirectory() as tmpdir:
             (Path(tmpdir) / "scene_manifest.json").write_text(
@@ -335,10 +376,11 @@ class TestValidateScene(unittest.TestCase):
 
 class TestInfoCommand(unittest.TestCase):
     def test_info_output(self):
-        from argusnet.cli.main import _run_info
         import argparse
         import io
         from contextlib import redirect_stdout
+
+        from argusnet.cli.main import _run_info
 
         doc = {
             "meta": {
@@ -380,10 +422,11 @@ class TestInfoCommand(unittest.TestCase):
 
 class TestDumpConfig(unittest.TestCase):
     def test_dump_config_json_stdout(self):
-        from argusnet.cli.main import _run_dump_config
         import argparse
         import io
         from contextlib import redirect_stdout
+
+        from argusnet.cli.main import _run_dump_config
 
         args = argparse.Namespace(format="json", output=None, verbose=False, quiet=False)
         buf = io.StringIO()
@@ -395,8 +438,9 @@ class TestDumpConfig(unittest.TestCase):
         self.assertIn("dynamics", parsed)
 
     def test_dump_config_to_file(self):
-        from argusnet.cli.main import _run_dump_config
         import argparse
+
+        from argusnet.cli.main import _run_dump_config
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             path = f.name
@@ -404,7 +448,7 @@ class TestDumpConfig(unittest.TestCase):
         try:
             args = argparse.Namespace(format="json", output=path, verbose=False, quiet=False)
             _run_dump_config(args)
-            with open(path, "r") as f:
+            with open(path) as f:
                 parsed = json.loads(f.read())
             self.assertIn("sensor", parsed)
         finally:

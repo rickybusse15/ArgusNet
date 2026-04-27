@@ -57,14 +57,14 @@ class TestFlightEnvelope(unittest.TestCase):
     def test_min_turn_radius(self) -> None:
         env = FlightEnvelope(min_speed_mps=10.0, max_bank_angle_deg=30.0)
         g = 9.80665
-        expected = 10.0 ** 2 / (g * math.tan(math.radians(30.0)))
+        expected = 10.0**2 / (g * math.tan(math.radians(30.0)))
         self.assertAlmostEqual(env.min_turn_radius_m, expected, places=4)
 
     def test_min_turn_radius_at_speed(self) -> None:
         env = FlightEnvelope(max_bank_angle_deg=45.0)
         g = 9.80665
         speed = 25.0
-        expected = speed ** 2 / (g * math.tan(math.radians(45.0)))
+        expected = speed**2 / (g * math.tan(math.radians(45.0)))
         self.assertAlmostEqual(env.min_turn_radius_at_speed(speed), expected, places=4)
 
     def test_turn_radius_increases_with_speed(self) -> None:
@@ -127,8 +127,12 @@ class TestLoiterBehavior(unittest.TestCase):
         for t in np.linspace(0, 120, 50):
             pos, _ = self.loiter(t)
             dist_xy = math.hypot(pos[0] - self.center[0], pos[1] - self.center[1])
-            self.assertAlmostEqual(dist_xy, self.radius, delta=1.0,
-                                   msg=f"At t={t}, lateral distance {dist_xy} != radius {self.radius}")
+            self.assertAlmostEqual(
+                dist_xy,
+                self.radius,
+                delta=1.0,
+                msg=f"At t={t}, lateral distance {dist_xy} != radius {self.radius}",
+            )
 
     def test_altitude_oscillation(self) -> None:
         altitudes = [self.loiter(t)[0][2] for t in np.linspace(0, 120, 100)]
@@ -136,8 +140,9 @@ class TestLoiterBehavior(unittest.TestCase):
         self.assertLess(min(altitudes), self.center[2])
 
     def test_counterclockwise(self) -> None:
-        ccw = LoiterBehavior(center=self.center, radius_m=self.radius,
-                             speed_mps=20.0, clockwise=False)
+        ccw = LoiterBehavior(
+            center=self.center, radius_m=self.radius, speed_mps=20.0, clockwise=False
+        )
         pos0, _ = ccw(0.0)
         pos1, _ = ccw(1.0)
         _valid_trajectory_output(pos0, np.zeros(3))
@@ -180,8 +185,7 @@ class TestTransitBehavior(unittest.TestCase):
         # Just past arrival, before loiter moves too far.
         pos, _ = self.transit(arrival_t + 0.01)
         dist = float(np.linalg.norm(pos - self.waypoints[-1]))
-        self.assertLess(dist, 25.0,
-                        f"Expected to be near final waypoint, but distance is {dist}")
+        self.assertLess(dist, 25.0, f"Expected to be near final waypoint, but distance is {dist}")
 
     def test_loiter_after_completion(self) -> None:
         t_late = 200.0
@@ -204,8 +208,9 @@ class TestTransitBehavior(unittest.TestCase):
         # At 25 m/s with dt=0.1, max displacement should be ~2.5 m per step.
         # Hermite overshoot at waypoints can push this higher, so use a
         # generous threshold.
-        self.assertLess(max_jump, 25.0,
-                        f"Max position jump {max_jump} exceeds smoothness threshold.")
+        self.assertLess(
+            max_jump, 25.0, f"Max position jump {max_jump} exceeds smoothness threshold."
+        )
 
     def test_requires_at_least_two_waypoints(self) -> None:
         with self.assertRaises(ValueError):
@@ -245,8 +250,7 @@ class TestEvasiveBehavior(unittest.TestCase):
             if pos[2] < 195.0:
                 found_drop = True
                 break
-        self.assertTrue(found_drop,
-                        "Expected altitude drop during evasion but none found.")
+        self.assertTrue(found_drop, "Expected altitude drop during evasion but none found.")
 
     def test_noe_altitude(self) -> None:
         """During a fully-blended evasion the altitude should approach nap-of-earth."""
@@ -256,16 +260,16 @@ class TestEvasiveBehavior(unittest.TestCase):
             pos, _ = self.evasive(t)
             min_alt = min(min_alt, pos[2])
         # noe = terrain (50) + agl (40) = 90.  Allow some margin.
-        self.assertLess(min_alt, 150.0,
-                        f"Minimum altitude {min_alt} never approached NOE.")
+        self.assertLess(min_alt, 150.0, f"Minimum altitude {min_alt} never approached NOE.")
 
     def test_xy_unchanged(self) -> None:
         """Evasion should not change the XY track."""
         for t in [0.0, 5.0, 20.0, 50.0]:
             pos_evasive, _ = self.evasive(t)
             pos_base, _ = self.base(t)
-            np.testing.assert_allclose(pos_evasive[:2], pos_base[:2],
-                                       atol=1e-9, err_msg=f"XY mismatch at t={t}")
+            np.testing.assert_allclose(
+                pos_evasive[:2], pos_base[:2], atol=1e-9, err_msg=f"XY mismatch at t={t}"
+            )
 
 
 class TestSearchPatternBehavior(unittest.TestCase):
@@ -304,8 +308,13 @@ class TestSearchPatternBehavior(unittest.TestCase):
 
     def test_starts_at_center(self) -> None:
         center = np.array([100.0, 200.0, 150.0])
-        sp = SearchPatternBehavior(center=center, pattern="expanding_square",
-                                   leg_length_m=100.0, speed_mps=20.0, altitude_m=150.0)
+        sp = SearchPatternBehavior(
+            center=center,
+            pattern="expanding_square",
+            leg_length_m=100.0,
+            speed_mps=20.0,
+            altitude_m=150.0,
+        )
         pos, _ = sp(0.0)
         # Should be at or very near the centre at t=0.
         np.testing.assert_allclose(pos, center, atol=1.0)
@@ -317,16 +326,20 @@ class TestCompositeTrajectory(unittest.TestCase):
     def setUp(self) -> None:
         self.loiter1 = LoiterBehavior(
             center=np.array([0.0, 0.0, 100.0]),
-            radius_m=50.0, speed_mps=15.0,
+            radius_m=50.0,
+            speed_mps=15.0,
         )
         self.loiter2 = LoiterBehavior(
             center=np.array([500.0, 500.0, 120.0]),
-            radius_m=60.0, speed_mps=18.0,
+            radius_m=60.0,
+            speed_mps=18.0,
         )
-        self.composite = CompositeTrajectory(segments=[
-            (0.0, self.loiter1),
-            (30.0, self.loiter2),
-        ])
+        self.composite = CompositeTrajectory(
+            segments=[
+                (0.0, self.loiter1),
+                (30.0, self.loiter2),
+            ]
+        )
 
     def test_output_signature(self) -> None:
         pos, vel = self.composite(0.0)
@@ -407,38 +420,53 @@ class TestDeterminism(unittest.TestCase):
         for preset in sorted(BEHAVIOR_PRESETS):
             with self.subTest(preset=preset):
                 traj_a = build_target_trajectory(
-                    preset=preset, bounds=_BOUNDS,
-                    altitude_m=150.0, speed_mps=25.0, seed=77,
+                    preset=preset,
+                    bounds=_BOUNDS,
+                    altitude_m=150.0,
+                    speed_mps=25.0,
+                    seed=77,
                 )
                 traj_b = build_target_trajectory(
-                    preset=preset, bounds=_BOUNDS,
-                    altitude_m=150.0, speed_mps=25.0, seed=77,
+                    preset=preset,
+                    bounds=_BOUNDS,
+                    altitude_m=150.0,
+                    speed_mps=25.0,
+                    seed=77,
                 )
                 for t in [0.0, 10.0, 50.0]:
                     pos_a, vel_a = traj_a(t)
                     pos_b, vel_b = traj_b(t)
                     np.testing.assert_array_equal(
-                        pos_a, pos_b,
+                        pos_a,
+                        pos_b,
                         err_msg=f"Position mismatch for {preset} at t={t}",
                     )
                     np.testing.assert_array_equal(
-                        vel_a, vel_b,
+                        vel_a,
+                        vel_b,
                         err_msg=f"Velocity mismatch for {preset} at t={t}",
                     )
 
     def test_different_seed_different_output(self) -> None:
         traj_a = build_target_trajectory(
-            preset="loiter", bounds=_BOUNDS,
-            altitude_m=150.0, speed_mps=25.0, seed=1,
+            preset="loiter",
+            bounds=_BOUNDS,
+            altitude_m=150.0,
+            speed_mps=25.0,
+            seed=1,
         )
         traj_b = build_target_trajectory(
-            preset="loiter", bounds=_BOUNDS,
-            altitude_m=150.0, speed_mps=25.0, seed=999,
+            preset="loiter",
+            bounds=_BOUNDS,
+            altitude_m=150.0,
+            speed_mps=25.0,
+            seed=999,
         )
         pos_a, _ = traj_a(10.0)
         pos_b, _ = traj_b(10.0)
-        self.assertFalse(np.allclose(pos_a, pos_b),
-                         "Different seeds should produce different trajectories.")
+        self.assertFalse(
+            np.allclose(pos_a, pos_b), "Different seeds should produce different trajectories."
+        )
 
 
 if __name__ == "__main__":

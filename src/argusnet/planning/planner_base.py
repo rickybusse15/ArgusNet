@@ -3,8 +3,8 @@ from __future__ import annotations
 import heapq
 import math
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -88,16 +88,15 @@ def _expand_polygon(polygon_xy_m: np.ndarray, clearance_m: float) -> np.ndarray:
         outgoing_normal = _edge_outward_normal(current_xy, next_xy, is_ccw=is_ccw)
         offset_direction = incoming_normal + outgoing_normal
         norm = float(np.linalg.norm(offset_direction))
-        if norm <= 1.0e-9:
-            offset_direction = incoming_normal
-        else:
-            offset_direction = offset_direction / norm
+        offset_direction = incoming_normal if norm <= 1e-09 else offset_direction / norm
         scale = max(float(np.dot(offset_direction, incoming_normal)), 0.2)
         expanded[index] = current_xy + offset_direction * (clearance / scale)
     return expanded
 
 
-def _push_outside_polygon(point_xy: np.ndarray, polygon_xy_m: np.ndarray, margin_m: float) -> np.ndarray:
+def _push_outside_polygon(
+    point_xy: np.ndarray, polygon_xy_m: np.ndarray, margin_m: float
+) -> np.ndarray:
     if not _point_in_polygon(point_xy, polygon_xy_m):
         return point_xy.copy()
 
@@ -136,21 +135,27 @@ class PathPlanner2D:
         *,
         bounds_xy_m: Bounds2D,
         obstacle_layer: ObstacleLayer,
-        config: Optional[PlannerConfig] = None,
+        config: PlannerConfig | None = None,
     ) -> None:
         self.bounds_xy_m = bounds_xy_m
         self.obstacle_layer = obstacle_layer
         self.config = config or PlannerConfig()
         self._hard_primitives = tuple(
-            primitive for primitive in obstacle_layer.primitives if primitive.blocker_type in HARD_BLOCKER_TYPES
+            primitive
+            for primitive in obstacle_layer.primitives
+            if primitive.blocker_type in HARD_BLOCKER_TYPES
         )
-        self._polygon_cache: Dict[Tuple[str, float], np.ndarray] = {}
-        self._route_cache: "OrderedDict[Tuple[int, int, int, int, float], PlannerRoute]" = OrderedDict()
+        self._polygon_cache: dict[tuple[str, float], np.ndarray] = {}
+        self._route_cache: OrderedDict[tuple[int, int, int, int, float], PlannerRoute] = (
+            OrderedDict()
+        )
 
     def clear_cache(self) -> None:
         self._route_cache.clear()
 
-    def expanded_polygon_for_primitive(self, primitive: ObstaclePrimitive, clearance_m: float) -> np.ndarray:
+    def expanded_polygon_for_primitive(
+        self, primitive: ObstaclePrimitive, clearance_m: float
+    ) -> np.ndarray:
         cache_key = (primitive.primitive_id, round(float(clearance_m), 3))
         cached = self._polygon_cache.get(cache_key)
         if cached is not None:
@@ -158,7 +163,9 @@ class PathPlanner2D:
 
         if isinstance(primitive, CylinderObstacle):
             radius_m = primitive.radius_m + max(float(clearance_m), 0.0)
-            angles = np.linspace(0.0, math.tau, num=max(self.config.cylinder_vertex_count, 6), endpoint=False)
+            angles = np.linspace(
+                0.0, math.tau, num=max(self.config.cylinder_vertex_count, 6), endpoint=False
+            )
             polygon = np.column_stack(
                 [
                     primitive.center_x_m + radius_m * np.cos(angles),
@@ -179,8 +186,16 @@ class PathPlanner2D:
         margin_m = max(float(clearance_m), 0.0)
         candidate = np.array(
             [
-                np.clip(float(point_xy[0]), self.bounds_xy_m.x_min_m + margin_m, self.bounds_xy_m.x_max_m - margin_m),
-                np.clip(float(point_xy[1]), self.bounds_xy_m.y_min_m + margin_m, self.bounds_xy_m.y_max_m - margin_m),
+                np.clip(
+                    float(point_xy[0]),
+                    self.bounds_xy_m.x_min_m + margin_m,
+                    self.bounds_xy_m.x_max_m - margin_m,
+                ),
+                np.clip(
+                    float(point_xy[1]),
+                    self.bounds_xy_m.y_min_m + margin_m,
+                    self.bounds_xy_m.y_max_m - margin_m,
+                ),
             ],
             dtype=float,
         )
@@ -190,8 +205,16 @@ class PathPlanner2D:
                 return candidate
             polygon = self.expanded_polygon_for_primitive(blocker, clearance_m)
             candidate = _push_outside_polygon(candidate, polygon, margin_m=max(margin_m, 0.5))
-            candidate[0] = np.clip(candidate[0], self.bounds_xy_m.x_min_m + margin_m, self.bounds_xy_m.x_max_m - margin_m)
-            candidate[1] = np.clip(candidate[1], self.bounds_xy_m.y_min_m + margin_m, self.bounds_xy_m.y_max_m - margin_m)
+            candidate[0] = np.clip(
+                candidate[0],
+                self.bounds_xy_m.x_min_m + margin_m,
+                self.bounds_xy_m.x_max_m - margin_m,
+            )
+            candidate[1] = np.clip(
+                candidate[1],
+                self.bounds_xy_m.y_min_m + margin_m,
+                self.bounds_xy_m.y_max_m - margin_m,
+            )
         return candidate
 
     def plan_route(
@@ -200,10 +223,12 @@ class PathPlanner2D:
         goal_xy: Sequence[float],
         *,
         clearance_m: float,
-    ) -> Optional[PlannerRoute]:
+    ) -> PlannerRoute | None:
         start = np.asarray(start_xy, dtype=float).reshape(2)
         goal = np.asarray(goal_xy, dtype=float).reshape(2)
-        if not self._point_within_bounds(start, clearance_m) or not self._point_within_bounds(goal, clearance_m):
+        if not self._point_within_bounds(start, clearance_m) or not self._point_within_bounds(
+            goal, clearance_m
+        ):
             return None
         if self._blocking_primitive(start, clearance_m) is not None:
             return None
@@ -226,11 +251,14 @@ class PathPlanner2D:
             return route
 
         primitives = self._candidate_primitives(start, goal)
-        polygons = [(primitive.primitive_id, self.expanded_polygon_for_primitive(primitive, clearance_m)) for primitive in primitives]
-        nodes: List[np.ndarray] = [start, goal]
-        polygon_node_indices: List[List[int]] = []
+        polygons = [
+            (primitive.primitive_id, self.expanded_polygon_for_primitive(primitive, clearance_m))
+            for primitive in primitives
+        ]
+        nodes: list[np.ndarray] = [start, goal]
+        polygon_node_indices: list[list[int]] = []
         for _, polygon in polygons:
-            indices: List[int] = []
+            indices: list[int] = []
             for vertex in polygon:
                 nodes.append(np.asarray(vertex, dtype=float))
                 indices.append(len(nodes) - 1)
@@ -254,13 +282,15 @@ class PathPlanner2D:
         *,
         clearance_m: float,
         closed: bool = True,
-    ) -> Optional[PlannerRoute]:
+    ) -> PlannerRoute | None:
         anchors = np.asarray(anchor_points_xy, dtype=float)
         if anchors.ndim != 2 or anchors.shape[0] < 2 or anchors.shape[1] != 2:
             raise ValueError("anchor_points_xy must have shape (n, 2) with n >= 2.")
 
-        adjusted = np.vstack([self.nearest_free_point(point_xy, clearance_m) for point_xy in anchors])
-        segments: List[np.ndarray] = []
+        adjusted = np.vstack(
+            [self.nearest_free_point(point_xy, clearance_m) for point_xy in anchors]
+        )
+        segments: list[np.ndarray] = []
         skipped_segments = 0
         segment_count = len(adjusted) if closed else len(adjusted) - 1
         for index in range(segment_count):
@@ -295,21 +325,29 @@ class PathPlanner2D:
             skipped_segments=skipped_segments,
         )
 
-    def _candidate_primitives(self, start_xy: np.ndarray, goal_xy: np.ndarray) -> Tuple[ObstaclePrimitive, ...]:
-        segment_bounds = _segment_bounds(start_xy, goal_xy).padded(max(self.config.drone_clearance_m * 4.0, 80.0))
+    def _candidate_primitives(
+        self, start_xy: np.ndarray, goal_xy: np.ndarray
+    ) -> tuple[ObstaclePrimitive, ...]:
+        segment_bounds = _segment_bounds(start_xy, goal_xy).padded(
+            max(self.config.drone_clearance_m * 4.0, 80.0)
+        )
         candidates = self.obstacle_layer.query_obstacles(segment_bounds)
         hard_candidates = tuple(
             primitive for primitive in candidates if primitive.blocker_type in HARD_BLOCKER_TYPES
         )
         return hard_candidates if hard_candidates else self._hard_primitives
 
-    def _remember_route(self, cache_key: Tuple[int, int, int, int, float], route: PlannerRoute) -> None:
+    def _remember_route(
+        self, cache_key: tuple[int, int, int, int, float], route: PlannerRoute
+    ) -> None:
         self._route_cache[cache_key] = route
         self._route_cache.move_to_end(cache_key)
         while len(self._route_cache) > self.config.max_cache_entries:
             self._route_cache.popitem(last=False)
 
-    def _route_cache_key(self, start_xy: np.ndarray, goal_xy: np.ndarray, clearance_m: float) -> Tuple[int, int, int, int, float]:
+    def _route_cache_key(
+        self, start_xy: np.ndarray, goal_xy: np.ndarray, clearance_m: float
+    ) -> tuple[int, int, int, int, float]:
         snap_m = max(self.config.snap_m, 1.0)
         return (
             int(round(float(start_xy[0]) / snap_m)),
@@ -322,19 +360,29 @@ class PathPlanner2D:
     def _point_within_bounds(self, point_xy: np.ndarray, clearance_m: float) -> bool:
         margin_m = max(float(clearance_m), 0.0)
         return (
-            self.bounds_xy_m.x_min_m + margin_m <= point_xy[0] <= self.bounds_xy_m.x_max_m - margin_m
-            and self.bounds_xy_m.y_min_m + margin_m <= point_xy[1] <= self.bounds_xy_m.y_max_m - margin_m
+            self.bounds_xy_m.x_min_m + margin_m
+            <= point_xy[0]
+            <= self.bounds_xy_m.x_max_m - margin_m
+            and self.bounds_xy_m.y_min_m + margin_m
+            <= point_xy[1]
+            <= self.bounds_xy_m.y_max_m - margin_m
         )
 
-    def _blocking_primitive(self, point_xy: np.ndarray, clearance_m: float) -> Optional[ObstaclePrimitive]:
+    def _blocking_primitive(
+        self, point_xy: np.ndarray, clearance_m: float
+    ) -> ObstaclePrimitive | None:
         for primitive in self._hard_primitives:
             polygon = self.expanded_polygon_for_primitive(primitive, clearance_m)
             if _point_in_polygon(point_xy, polygon):
                 return primitive
         return None
 
-    def _segment_is_free(self, start_xy: np.ndarray, end_xy: np.ndarray, clearance_m: float) -> bool:
-        if not self._point_within_bounds(start_xy, clearance_m) or not self._point_within_bounds(end_xy, clearance_m):
+    def _segment_is_free(
+        self, start_xy: np.ndarray, end_xy: np.ndarray, clearance_m: float
+    ) -> bool:
+        if not self._point_within_bounds(start_xy, clearance_m) or not self._point_within_bounds(
+            end_xy, clearance_m
+        ):
             return False
 
         segment_bounds = _segment_bounds(start_xy, end_xy).padded(max(float(clearance_m), 0.5))
@@ -342,9 +390,13 @@ class PathPlanner2D:
             if primitive.blocker_type not in HARD_BLOCKER_TYPES:
                 continue
             polygon = self.expanded_polygon_for_primitive(primitive, clearance_m)
-            if _point_in_polygon(start_xy, polygon) and not _point_on_polygon_boundary(start_xy, polygon):
+            if _point_in_polygon(start_xy, polygon) and not _point_on_polygon_boundary(
+                start_xy, polygon
+            ):
                 return False
-            if _point_in_polygon(end_xy, polygon) and not _point_on_polygon_boundary(end_xy, polygon):
+            if _point_in_polygon(end_xy, polygon) and not _point_on_polygon_boundary(
+                end_xy, polygon
+            ):
                 return False
             intervals = _segment_polygon_intervals(start_xy, end_xy, polygon)
             if any((end_t - start_t) > 1.0e-6 for start_t, end_t in intervals):
@@ -356,8 +408,8 @@ class PathPlanner2D:
         nodes: Sequence[np.ndarray],
         polygon_node_indices: Sequence[Sequence[int]],
         clearance_m: float,
-    ) -> Dict[int, List[int]]:
-        adjacency: Dict[int, List[int]] = {index: [] for index in range(len(nodes))}
+    ) -> dict[int, list[int]]:
+        adjacency: dict[int, list[int]] = {index: [] for index in range(len(nodes))}
         for left_index in range(len(nodes)):
             for right_index in range(left_index + 1, len(nodes)):
                 start = nodes[left_index]
@@ -380,16 +432,16 @@ class PathPlanner2D:
     def _astar_path(
         self,
         nodes: Sequence[np.ndarray],
-        adjacency: Dict[int, List[int]],
-    ) -> Optional[np.ndarray]:
+        adjacency: dict[int, list[int]],
+    ) -> np.ndarray | None:
         goal_index = 1
-        queue: List[Tuple[float, float, int, int]] = []
+        queue: list[tuple[float, float, int, int]] = []
         start_state = (0, -1)
-        best_cost: Dict[Tuple[int, int], float] = {start_state: 0.0}
-        parents: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start_state: None}
+        best_cost: dict[tuple[int, int], float] = {start_state: 0.0}
+        parents: dict[tuple[int, int], tuple[int, int] | None] = {start_state: None}
         heapq.heappush(queue, (float(np.linalg.norm(nodes[goal_index] - nodes[0])), 0.0, 0, -1))
 
-        best_goal_state: Optional[Tuple[int, int]] = None
+        best_goal_state: tuple[int, int] | None = None
         best_goal_cost = float("inf")
         while queue:
             _, current_cost, current_index, previous_index = heapq.heappop(queue)
@@ -406,7 +458,9 @@ class PathPlanner2D:
                 if previous_index >= 0:
                     previous_vector = nodes[current_index] - nodes[previous_index]
                     next_vector = nodes[neighbor_index] - nodes[current_index]
-                    denom = max(float(np.linalg.norm(previous_vector) * np.linalg.norm(next_vector)), 1.0e-9)
+                    denom = max(
+                        float(np.linalg.norm(previous_vector) * np.linalg.norm(next_vector)), 1.0e-9
+                    )
                     cosine = float(np.clip(np.dot(previous_vector, next_vector) / denom, -1.0, 1.0))
                     turn_penalty = self.config.turn_penalty_m * math.acos(cosine)
                 next_cost = current_cost + edge_length + turn_penalty
@@ -416,13 +470,15 @@ class PathPlanner2D:
                 best_cost[next_state] = next_cost
                 parents[next_state] = state
                 heuristic = float(np.linalg.norm(nodes[goal_index] - nodes[neighbor_index]))
-                heapq.heappush(queue, (next_cost + heuristic, next_cost, neighbor_index, current_index))
+                heapq.heappush(
+                    queue, (next_cost + heuristic, next_cost, neighbor_index, current_index)
+                )
 
         if best_goal_state is None or best_goal_cost == float("inf"):
             return None
 
-        indices: List[int] = []
-        current_state: Optional[Tuple[int, int]] = best_goal_state
+        indices: list[int] = []
+        current_state: tuple[int, int] | None = best_goal_state
         while current_state is not None:
             indices.append(current_state[0])
             current_state = parents.get(current_state)
@@ -432,7 +488,7 @@ class PathPlanner2D:
     def _smooth_path(self, points_xy_m: np.ndarray, clearance_m: float) -> np.ndarray:
         if len(points_xy_m) <= 2:
             return points_xy_m
-        smoothed: List[np.ndarray] = [points_xy_m[0]]
+        smoothed: list[np.ndarray] = [points_xy_m[0]]
         index = 0
         while index < len(points_xy_m) - 1:
             next_index = len(points_xy_m) - 1

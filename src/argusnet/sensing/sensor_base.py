@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import numpy as np
 
@@ -39,7 +38,7 @@ class SensorBase(ABC):
         platform_pos: np.ndarray,
         target_pos: np.ndarray,
         timestamp_s: float,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Generate a noisy observation of *target_pos* from *platform_pos*.
 
         Returns a dict of measurement fields on detection, or ``None`` when the
@@ -99,6 +98,7 @@ class SensorBase(ABC):
         maintaining integration buffers or track histories) should override
         this to clear their state.
         """
+        return None
 
     def is_degraded(self, weather_visibility: float) -> bool:  # noqa: ARG002
         """Return True if the sensor is operating in a degraded mode.

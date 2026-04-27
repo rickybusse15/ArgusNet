@@ -7,13 +7,12 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
-
-import numpy as np
+from typing import Any, Protocol
 
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
-from argusnet.core.types import BearingObservation, NodeState, TruthState, vec3
+from argusnet.core.types import BearingObservation, NodeState, TruthState, Vector3, vec3
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 OnFrameCallback = Callable[
-    [float, List[NodeState], List[BearingObservation], List[TruthState]],
+    [float, list[NodeState], list[BearingObservation], list[TruthState]],
     None,
 ]
 
@@ -50,7 +49,7 @@ _REQUIRED_OBSERVATION_KEYS = frozenset(
 
 
 def parse_mqtt_observation(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     enu_origin: ENUOrigin,
 ) -> BearingObservation:
     """Convert a single MQTT JSON payload into a ``BearingObservation``.
@@ -99,7 +98,7 @@ def parse_mqtt_observation(
 
 
 def parse_mqtt_node_state(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     enu_origin: ENUOrigin,
 ) -> NodeState:
     """Convert an MQTT JSON payload into a ``NodeState``.
@@ -137,6 +136,7 @@ def parse_mqtt_node_state(
 # MQTT Ingestion Adapter
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MQTTIngestionAdapter:
     """Subscribes to MQTT topics and converts payloads into observations.
@@ -157,13 +157,11 @@ class MQTTIngestionAdapter:
     enu_origin: ENUOrigin = field(default_factory=lambda: ENUOrigin(0.0, 0.0, 0.0))
 
     _client: Any = field(default=None, init=False, repr=False)
-    _on_frame: Optional[OnFrameCallback] = field(default=None, init=False, repr=False)
-    _pending_observations: List[BearingObservation] = field(
+    _on_frame: OnFrameCallback | None = field(default=None, init=False, repr=False)
+    _pending_observations: list[BearingObservation] = field(
         default_factory=list, init=False, repr=False
     )
-    _pending_nodes: Dict[str, NodeState] = field(
-        default_factory=dict, init=False, repr=False
-    )
+    _pending_nodes: dict[str, NodeState] = field(default_factory=dict, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def start(self, on_frame: OnFrameCallback) -> None:
@@ -171,8 +169,7 @@ class MQTTIngestionAdapter:
             import paho.mqtt.client as mqtt
         except ImportError as exc:
             raise ImportError(
-                "MQTT ingestion requires 'paho-mqtt'. Install with: "
-                "pip install paho-mqtt"
+                "MQTT ingestion requires 'paho-mqtt'. Install with: pip install paho-mqtt"
             ) from exc
 
         self._on_frame = on_frame
@@ -188,10 +185,14 @@ class MQTTIngestionAdapter:
             self._client.disconnect()
             self._client = None
 
-    def _on_connect(self, client: Any, userdata: Any, flags: Any, rc: Any, properties: Any = None) -> None:
+    def _on_connect(
+        self, client: Any, userdata: Any, flags: Any, rc: Any, properties: Any = None
+    ) -> None:
         client.subscribe(self.observation_topic)
         client.subscribe(self.node_topic)
-        logger.info("MQTT connected, subscribed to %s and %s", self.observation_topic, self.node_topic)
+        logger.info(
+            "MQTT connected, subscribed to %s and %s", self.observation_topic, self.node_topic
+        )
 
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         try:
@@ -212,7 +213,7 @@ class MQTTIngestionAdapter:
         except (KeyError, ValueError, TypeError) as exc:
             logger.warning("Failed to parse MQTT payload on %s: %s", msg.topic, exc)
 
-    def flush_pending(self) -> tuple[List[NodeState], List[BearingObservation]]:
+    def flush_pending(self) -> tuple[list[NodeState], list[BearingObservation]]:
         """Remove and return buffered observations and node states."""
         with self._lock:
             nodes = list(self._pending_nodes.values())
@@ -226,7 +227,8 @@ class MQTTIngestionAdapter:
 # File Replay Ingestion Adapter
 # ---------------------------------------------------------------------------
 
-def _vec3_from_list(seq: Any, fallback: tuple = (0.0, 0.0, 0.0)) -> "Vector3":
+
+def _vec3_from_list(seq: Any, fallback: tuple = (0.0, 0.0, 0.0)) -> Vector3:
     """Convert a JSON-serialised ``[x, y, z]`` list into a ``vec3``.
 
     ``to_jsonable`` serialises ``np.ndarray`` as plain Python lists via
@@ -260,20 +262,16 @@ class FileReplayIngestionAdapter:
 
     _thread: Any = field(default=None, init=False, repr=False)
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
-    _pending_observations: List[BearingObservation] = field(
+    _pending_observations: list[BearingObservation] = field(
         default_factory=list, init=False, repr=False
     )
-    _pending_nodes: Dict[str, NodeState] = field(
-        default_factory=dict, init=False, repr=False
-    )
+    _pending_nodes: dict[str, NodeState] = field(default_factory=dict, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def start(self, on_frame: OnFrameCallback) -> None:
         """Start the background replay thread."""
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="FileReplayAdapter"
-        )
+        self._thread = threading.Thread(target=self._run, daemon=True, name="FileReplayAdapter")
         self._thread.start()
 
     def stop(self) -> None:
@@ -283,7 +281,7 @@ class FileReplayIngestionAdapter:
             self._thread.join(timeout=5.0)
             self._thread = None
 
-    def flush_pending(self) -> tuple[List[NodeState], List[BearingObservation]]:
+    def flush_pending(self) -> tuple[list[NodeState], list[BearingObservation]]:
         """Remove and return buffered node states and observations."""
         with self._lock:
             nodes = list(self._pending_nodes.values())
@@ -295,7 +293,7 @@ class FileReplayIngestionAdapter:
     def _run(self) -> None:
         import json as _json
 
-        with open(self.replay_path, "r") as fh:
+        with open(self.replay_path) as fh:
             data = _json.load(fh)
 
         frames = data.get("frames", [])
@@ -304,7 +302,7 @@ class FileReplayIngestionAdapter:
             return
 
         while not self._stop_event.is_set():
-            prev_ts: Optional[float] = None
+            prev_ts: float | None = None
             for frame_data in frames:
                 if self._stop_event.is_set():
                     return
@@ -325,24 +323,27 @@ class FileReplayIngestionAdapter:
                         self._pending_nodes[node.node_id] = node
 
                 # Parse bearing observations
-                obs_batch: List[BearingObservation] = []
+                obs_batch: list[BearingObservation] = []
                 for o in frame_data.get("observations", []):
-                    obs_batch.append(BearingObservation(
-                        node_id=str(o["node_id"]),
-                        target_id=str(o.get("target_id", "unknown")),
-                        origin=_vec3_from_list(o.get("origin", [0.0, 0.0, 0.0])),
-                        direction=_vec3_from_list(o.get("direction", [0.0, 0.0, 1.0])),
-                        bearing_std_rad=float(o.get("bearing_std_rad", 0.01)),
-                        timestamp_s=float(o.get("timestamp_s", timestamp_s)),
-                        confidence=float(o.get("confidence", 1.0)),
-                    ))
+                    obs_batch.append(
+                        BearingObservation(
+                            node_id=str(o["node_id"]),
+                            target_id=str(o.get("target_id", "unknown")),
+                            origin=_vec3_from_list(o.get("origin", [0.0, 0.0, 0.0])),
+                            direction=_vec3_from_list(o.get("direction", [0.0, 0.0, 1.0])),
+                            bearing_std_rad=float(o.get("bearing_std_rad", 0.01)),
+                            timestamp_s=float(o.get("timestamp_s", timestamp_s)),
+                            confidence=float(o.get("confidence", 1.0)),
+                        )
+                    )
                 if obs_batch:
                     with self._lock:
                         self._pending_observations.extend(obs_batch)
 
                 logger.debug(
                     "FileReplayIngestionAdapter: buffered frame t=%.3f (%d obs)",
-                    timestamp_s, len(obs_batch),
+                    timestamp_s,
+                    len(obs_batch),
                 )
 
                 # Honour inter-frame timing
@@ -360,6 +361,7 @@ class FileReplayIngestionAdapter:
 # ---------------------------------------------------------------------------
 # Live Ingestion Runner
 # ---------------------------------------------------------------------------
+
 
 class LiveIngestionRunner:
     """Orchestrates an adapter + a TrackingService for real-time ingestion.
@@ -379,7 +381,7 @@ class LiveIngestionRunner:
         adapter: MQTTIngestionAdapter,
         service: Any,  # TrackingService — avoid circular import
         frame_interval_s: float = 0.25,
-        replay_frames: Optional[list] = None,
+        replay_frames: list | None = None,
     ) -> None:
         self.adapter = adapter
         self.service = service
@@ -389,9 +391,7 @@ class LiveIngestionRunner:
 
     def run(self) -> None:
         """Block and ingest frames until :meth:`stop` is called."""
-        logger.info(
-            "LiveIngestionRunner started (frame_interval=%.3fs)", self.frame_interval_s
-        )
+        logger.info("LiveIngestionRunner started (frame_interval=%.3fs)", self.frame_interval_s)
         while not self._stop_event.is_set():
             start = time.monotonic()
             nodes, observations = self.adapter.flush_pending()

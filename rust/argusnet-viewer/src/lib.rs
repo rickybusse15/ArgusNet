@@ -7,5 +7,5 @@ pub mod schema;
 pub mod state;
 pub mod ui;
 
-pub use headless::{render_headless, CameraPreset, HeadlessRenderOptions};
 pub use app::run;
+pub use headless::{render_headless, CameraPreset, HeadlessRenderOptions};

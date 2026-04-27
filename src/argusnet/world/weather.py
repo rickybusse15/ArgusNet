@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, Tuple
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Wind
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class WindModel:
@@ -74,9 +73,7 @@ class WindModel:
 
         # Gust component (sinusoidal oscillation)
         if self.gust_period_s > 0.0 and self.gust_amplitude_mps > 0.0:
-            gust = self.gust_amplitude_mps * math.sin(
-                2.0 * math.pi * time_s / self.gust_period_s
-            )
+            gust = self.gust_amplitude_mps * math.sin(2.0 * math.pi * time_s / self.gust_period_s)
         else:
             gust = 0.0
 
@@ -96,6 +93,7 @@ class WindModel:
 # ---------------------------------------------------------------------------
 # Atmosphere
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class AtmosphericConditions:
@@ -183,6 +181,7 @@ class AtmosphericConditions:
 # Precipitation
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class PrecipitationModel:
     """Precipitation effects on visibility and sensor noise.
@@ -224,14 +223,14 @@ class PrecipitationModel:
         if self.precip_type == "rain":
             # Marshall-Palmer empirical: V ~ 1800 / R^0.6  (metres)
             # Normalise to a 10 km clear-sky visibility.
-            effective_vis = 1800.0 / max(rate ** 0.6, 0.01)
+            effective_vis = 1800.0 / max(rate**0.6, 0.01)
             return min(effective_vis / 10000.0, 1.0)
         if self.precip_type == "snow":
             # Snow reduces visibility more aggressively.
-            effective_vis = 1200.0 / max(rate ** 0.75, 0.01)
+            effective_vis = 1200.0 / max(rate**0.75, 0.01)
             return min(effective_vis / 10000.0, 1.0)
         if self.precip_type == "sleet":
-            effective_vis = 1500.0 / max(rate ** 0.65, 0.01)
+            effective_vis = 1500.0 / max(rate**0.65, 0.01)
             return min(effective_vis / 10000.0, 1.0)
         return 1.0  # pragma: no cover
 
@@ -249,17 +248,18 @@ class PrecipitationModel:
         if rate <= 0.0:
             return 1.0
         if self.precip_type == "rain":
-            return 1.0 + 0.15 * rate ** 0.5
+            return 1.0 + 0.15 * rate**0.5
         if self.precip_type == "snow":
-            return 1.0 + 0.25 * rate ** 0.5
+            return 1.0 + 0.25 * rate**0.5
         if self.precip_type == "sleet":
-            return 1.0 + 0.20 * rate ** 0.5
+            return 1.0 + 0.20 * rate**0.5
         return 1.0  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
 # Cloud layers
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class CloudLayer:
@@ -306,6 +306,7 @@ class CloudLayer:
 # Composite weather model
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class WeatherModel:
     """Complete weather state for a simulation time-step.
@@ -317,7 +318,7 @@ class WeatherModel:
     wind: WindModel = WindModel()
     atmosphere: AtmosphericConditions = AtmosphericConditions()
     precipitation: PrecipitationModel = PrecipitationModel()
-    cloud_layers: Tuple[CloudLayer, ...] = ()
+    cloud_layers: tuple[CloudLayer, ...] = ()
 
     def visibility_at_range(self, range_m: float) -> float:
         """Effective visibility probability at *range_m* metres.
@@ -387,7 +388,7 @@ class WeatherModel:
 # Presets
 # ---------------------------------------------------------------------------
 
-WEATHER_PRESETS: Dict[str, WeatherModel] = {
+WEATHER_PRESETS: dict[str, WeatherModel] = {
     "clear": WeatherModel(
         wind=WindModel(
             base_speed_mps=3.0,
@@ -420,9 +421,7 @@ WEATHER_PRESETS: Dict[str, WeatherModel] = {
             pressure_hpa=1008.0,
         ),
         precipitation=PrecipitationModel(precip_type="none", rate_mmph=0.0),
-        cloud_layers=(
-            CloudLayer(base_altitude_m=1500.0, top_altitude_m=3000.0, coverage=0.85),
-        ),
+        cloud_layers=(CloudLayer(base_altitude_m=1500.0, top_altitude_m=3000.0, coverage=0.85),),
     ),
     "light_rain": WeatherModel(
         wind=WindModel(
@@ -439,9 +438,7 @@ WEATHER_PRESETS: Dict[str, WeatherModel] = {
             pressure_hpa=1002.0,
         ),
         precipitation=PrecipitationModel(precip_type="rain", rate_mmph=2.5),
-        cloud_layers=(
-            CloudLayer(base_altitude_m=800.0, top_altitude_m=2500.0, coverage=0.95),
-        ),
+        cloud_layers=(CloudLayer(base_altitude_m=800.0, top_altitude_m=2500.0, coverage=0.95),),
     ),
     "heavy_rain": WeatherModel(
         wind=WindModel(
@@ -458,9 +455,7 @@ WEATHER_PRESETS: Dict[str, WeatherModel] = {
             pressure_hpa=995.0,
         ),
         precipitation=PrecipitationModel(precip_type="rain", rate_mmph=25.0),
-        cloud_layers=(
-            CloudLayer(base_altitude_m=400.0, top_altitude_m=2000.0, coverage=1.0),
-        ),
+        cloud_layers=(CloudLayer(base_altitude_m=400.0, top_altitude_m=2000.0, coverage=1.0),),
     ),
     "fog": WeatherModel(
         wind=WindModel(
@@ -477,9 +472,7 @@ WEATHER_PRESETS: Dict[str, WeatherModel] = {
             pressure_hpa=1015.0,
         ),
         precipitation=PrecipitationModel(precip_type="fog", rate_mmph=0.0),
-        cloud_layers=(
-            CloudLayer(base_altitude_m=0.0, top_altitude_m=300.0, coverage=1.0),
-        ),
+        cloud_layers=(CloudLayer(base_altitude_m=0.0, top_altitude_m=300.0, coverage=1.0),),
     ),
     "snow": WeatherModel(
         wind=WindModel(
@@ -496,9 +489,7 @@ WEATHER_PRESETS: Dict[str, WeatherModel] = {
             pressure_hpa=1005.0,
         ),
         precipitation=PrecipitationModel(precip_type="snow", rate_mmph=5.0),
-        cloud_layers=(
-            CloudLayer(base_altitude_m=600.0, top_altitude_m=3500.0, coverage=0.90),
-        ),
+        cloud_layers=(CloudLayer(base_altitude_m=600.0, top_altitude_m=3500.0, coverage=0.90),),
     ),
     "storm": WeatherModel(
         wind=WindModel(
@@ -546,8 +537,7 @@ def weather_from_preset(name: str) -> WeatherModel:
         return WEATHER_PRESETS[name]
     except KeyError as error:
         raise ValueError(
-            f"Unknown weather preset {name!r}. "
-            f"Available: {sorted(WEATHER_PRESETS)}"
+            f"Unknown weather preset {name!r}. Available: {sorted(WEATHER_PRESETS)}"
         ) from error
 
 

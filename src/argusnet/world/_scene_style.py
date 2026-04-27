@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List
-
+from collections.abc import Iterable
 
 STYLE_FORMAT_VERSION = "smartstyle-v1"
 
 
-def hex_to_rgba(value: str, alpha: float = 1.0) -> List[float]:
+def hex_to_rgba(value: str, alpha: float = 1.0) -> list[float]:
     encoded = value.lstrip("#")
     if len(encoded) != 6:
         raise ValueError(f"Expected a 6-digit hex color, got {value!r}")
@@ -18,7 +17,7 @@ def hex_to_rgba(value: str, alpha: float = 1.0) -> List[float]:
     ]
 
 
-def default_style() -> Dict[str, Dict[str, object]]:
+def default_style() -> dict[str, dict[str, object]]:
     return {
         "terrain-base": {
             "id": "terrain-base",
@@ -151,7 +150,7 @@ def default_style() -> Dict[str, Dict[str, object]]:
     }
 
 
-def style_document(style_ids: Iterable[str]) -> Dict[str, object]:
+def style_document(style_ids: Iterable[str]) -> dict[str, object]:
     base = default_style()
     return {
         "style_version": STYLE_FORMAT_VERSION,

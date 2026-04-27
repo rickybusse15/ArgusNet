@@ -8,7 +8,7 @@ import sys
 import tempfile
 import types
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from argusnet.core.frames import ENUOrigin
@@ -30,46 +30,54 @@ def _make_replay_doc(n_frames=4, n_tracks=2, include_obs=True, include_nodes=Tru
         t = float(i) * 0.25
         tracks = []
         for j in range(n_tracks):
-            tracks.append({
-                "track_id": f"T{j}",
-                "timestamp_s": t,
-                "position": [100.0 * j + i, 200.0 * j + i, 50.0],
-                "velocity": [1.0, 0.0, 0.0],
-                "covariance_row_major": [1.0] * 9,
-                "measurement_std_m": 5.0,
-                "update_count": i + 1,
-                "stale_steps": 0,
-            })
+            tracks.append(
+                {
+                    "track_id": f"T{j}",
+                    "timestamp_s": t,
+                    "position": [100.0 * j + i, 200.0 * j + i, 50.0],
+                    "velocity": [1.0, 0.0, 0.0],
+                    "covariance_row_major": [1.0] * 9,
+                    "measurement_std_m": 5.0,
+                    "update_count": i + 1,
+                    "stale_steps": 0,
+                }
+            )
         observations = []
         if include_obs:
-            observations.append({
-                "node_id": "N0",
-                "target_id": "T0",
-                "origin": [0.0, 0.0, 0.0],
-                "direction": [1.0, 0.0, 0.0],
-                "bearing_std_rad": 0.01,
-                "timestamp_s": t,
-                "confidence": 0.9,
-            })
+            observations.append(
+                {
+                    "node_id": "N0",
+                    "target_id": "T0",
+                    "origin": [0.0, 0.0, 0.0],
+                    "direction": [1.0, 0.0, 0.0],
+                    "bearing_std_rad": 0.01,
+                    "timestamp_s": t,
+                    "confidence": 0.9,
+                }
+            )
         nodes = []
         if include_nodes:
-            nodes.append({
-                "node_id": "N0",
-                "position": [0.0, 0.0, 0.0],
-                "velocity": [0.0, 0.0, 0.0],
-                "is_mobile": False,
+            nodes.append(
+                {
+                    "node_id": "N0",
+                    "position": [0.0, 0.0, 0.0],
+                    "velocity": [0.0, 0.0, 0.0],
+                    "is_mobile": False,
+                    "timestamp_s": t,
+                    "health": 1.0,
+                }
+            )
+        frames.append(
+            {
                 "timestamp_s": t,
-                "health": 1.0,
-            })
-        frames.append({
-            "timestamp_s": t,
-            "tracks": tracks,
-            "observations": observations,
-            "nodes": nodes,
-            "rejected_observations": [],
-            "truths": [],
-            "metrics": {},
-        })
+                "tracks": tracks,
+                "observations": observations,
+                "nodes": nodes,
+                "rejected_observations": [],
+                "truths": [],
+                "metrics": {},
+            }
+        )
     return {
         "meta": {
             "scenario_name": "test",
@@ -176,7 +184,9 @@ class TestExportGeoJSON(unittest.TestCase):
             export_geojson(doc, ORIGIN, path, start_time_s=0.25, end_time_s=0.5)
             with open(path) as f:
                 data = json.load(f)
-        line = [feature for feature in data["features"] if feature["geometry"]["type"] == "LineString"][0]
+        line = [
+            feature for feature in data["features"] if feature["geometry"]["type"] == "LineString"
+        ][0]
         self.assertEqual(len(line["geometry"]["coordinates"]), 2)
         self.assertAlmostEqual(line["properties"]["start_time_s"], 0.25)
         self.assertAlmostEqual(line["properties"]["end_time_s"], 0.5)
@@ -197,9 +207,15 @@ class TestExportGeoJSON(unittest.TestCase):
             )
             with open(path) as f:
                 data = json.load(f)
-        node_feature = [feature for feature in data["features"] if feature["properties"].get("type") == "node"][0]
+        node_feature = [
+            feature for feature in data["features"] if feature["properties"].get("type") == "node"
+        ][0]
         lon, lat, alt = node_feature["geometry"]["coordinates"]
-        expected_lat, expected_lon, expected_alt = ORIGIN.latitude_deg, ORIGIN.longitude_deg, ORIGIN.altitude_m
+        expected_lat, expected_lon, expected_alt = (
+            ORIGIN.latitude_deg,
+            ORIGIN.longitude_deg,
+            ORIGIN.altitude_m,
+        )
         self.assertNotEqual(lon, expected_lon)
         self.assertAlmostEqual(lat, expected_lat, delta=0.1)
         self.assertAlmostEqual(alt, expected_alt, delta=5.0)
@@ -289,7 +305,7 @@ class TestExportCZML(unittest.TestCase):
 
 
 class _FakeMcapWriter:
-    instances: list["_FakeMcapWriter"] = []
+    instances: list[_FakeMcapWriter] = []
 
     def __init__(self, handle):
         self.handle = handle
@@ -322,17 +338,18 @@ class TestExportFoxglove(unittest.TestCase):
         fake_mcap_writer = types.ModuleType("mcap.writer")
         fake_mcap_writer.Writer = _FakeMcapWriter
 
-        with patch.dict(sys.modules, {"mcap": fake_mcap, "mcap.writer": fake_mcap_writer}):
-            with tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "out.mcap")
-                export_foxglove(doc, ORIGIN, path, start_time_s=0.25, end_time_s=0.5)
+        with (
+            patch.dict(sys.modules, {"mcap": fake_mcap, "mcap.writer": fake_mcap_writer}),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            path = os.path.join(tmp, "out.mcap")
+            export_foxglove(doc, ORIGIN, path, start_time_s=0.25, end_time_s=0.5)
 
         writer = _FakeMcapWriter.instances[-1]
         self.assertEqual(len(writer.messages), 2)
         anchor = datetime.fromisoformat(doc["meta"]["generated_at_utc"].replace("Z", "+00:00"))
         expected_times = [
-            int((anchor + timedelta(seconds=value)).timestamp() * 1e9)
-            for value in (0.25, 0.5)
+            int((anchor + timedelta(seconds=value)).timestamp() * 1e9) for value in (0.25, 0.5)
         ]
         self.assertEqual([message["log_time"] for message in writer.messages], expected_times)
         self.assertEqual([message["publish_time"] for message in writer.messages], expected_times)

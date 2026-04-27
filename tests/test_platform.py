@@ -4,8 +4,8 @@ import unittest
 
 import numpy as np
 
-from argusnet.core.types import BearingObservation, NodeState, TruthState, vec3
 from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+from argusnet.core.types import BearingObservation, NodeState, TruthState, vec3
 
 
 def bearing(
@@ -52,7 +52,9 @@ class SensorFusionPlatformTest(unittest.TestCase):
             bearing("drone-c", "asset-b", nodes[2].position, truths[1].position, timestamp_s),
         ]
 
-        frame = platform.ingest_frame(timestamp_s, node_states=nodes, observations=observations, truths=truths)
+        frame = platform.ingest_frame(
+            timestamp_s, node_states=nodes, observations=observations, truths=truths
+        )
 
         self.assertEqual({"asset-a", "asset-b"}, {track.track_id for track in frame.tracks})
         self.assertIsNotNone(frame.metrics.mean_error_m)
@@ -90,11 +92,27 @@ class SensorFusionPlatformTest(unittest.TestCase):
             bearing("ground-a", "asset-a", nodes[0].position, truth.position, timestamp_s),
             bearing("ground-b", "asset-a", nodes[1].position, truth.position, timestamp_s),
             bearing("ghost-node", "asset-a", nodes[0].position, truth.position, timestamp_s),
-            bearing("ground-a", "asset-a", nodes[0].position, truth.position, timestamp_s, confidence=0.1),
-            bearing("ground-b", "asset-a", nodes[1].position, truth.position, timestamp_s, bearing_std_rad=0.2),
+            bearing(
+                "ground-a",
+                "asset-a",
+                nodes[0].position,
+                truth.position,
+                timestamp_s,
+                confidence=0.1,
+            ),
+            bearing(
+                "ground-b",
+                "asset-a",
+                nodes[1].position,
+                truth.position,
+                timestamp_s,
+                bearing_std_rad=0.2,
+            ),
         ]
 
-        frame = platform.ingest_frame(timestamp_s, node_states=nodes, observations=observations, truths=[truth])
+        frame = platform.ingest_frame(
+            timestamp_s, node_states=nodes, observations=observations, truths=[truth]
+        )
 
         self.assertEqual(1, len(frame.tracks))
         self.assertEqual(2, frame.metrics.accepted_observation_count)
@@ -113,11 +131,27 @@ class SensorFusionPlatformTest(unittest.TestCase):
         truth = TruthState("asset-a", vec3(51.0, 20.0, 16.0), vec3(0.0, 0.0, 0.0), timestamp_s)
 
         observations = [
-            bearing("ground-a", "asset-a", nodes[0].position, truth.position, timestamp_s, confidence=0.7),
-            bearing("ground-a", "asset-a", nodes[0].position, truth.position, timestamp_s, confidence=0.95),
+            bearing(
+                "ground-a",
+                "asset-a",
+                nodes[0].position,
+                truth.position,
+                timestamp_s,
+                confidence=0.7,
+            ),
+            bearing(
+                "ground-a",
+                "asset-a",
+                nodes[0].position,
+                truth.position,
+                timestamp_s,
+                confidence=0.95,
+            ),
             bearing("ground-b", "asset-a", nodes[1].position, truth.position, timestamp_s),
         ]
-        frame = platform.ingest_frame(timestamp_s, node_states=nodes, observations=observations, truths=[truth])
+        frame = platform.ingest_frame(
+            timestamp_s, node_states=nodes, observations=observations, truths=[truth]
+        )
 
         self.assertEqual(1, len(frame.tracks))
         self.assertEqual(2, frame.metrics.accepted_observation_count)

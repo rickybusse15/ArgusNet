@@ -6,10 +6,10 @@ import os
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from argusnet.core.frames import ENUOrigin
-from argusnet.evaluation.export import export_kml, export_gpx
-
+from argusnet.evaluation.export import export_gpx, export_kml
 
 _KML_NS = "http://www.opengis.net/kml/2.2"
 _GPX_NS = "http://www.topografix.com/GPX/1/1"
@@ -24,35 +24,41 @@ def _make_replay_doc(n_frames=4, n_tracks=2, include_nodes=True):
         t = float(i) * 0.25
         tracks = []
         for j in range(n_tracks):
-            tracks.append({
-                "track_id": f"T{j}",
-                "timestamp_s": t,
-                "position": [100.0 * j + i, 200.0 * j + i, 50.0],
-                "velocity": [1.0, 0.0, 0.0],
-                "covariance_row_major": [1.0] * 9,
-                "measurement_std_m": 5.0,
-                "update_count": i + 1,
-                "stale_steps": 0,
-            })
+            tracks.append(
+                {
+                    "track_id": f"T{j}",
+                    "timestamp_s": t,
+                    "position": [100.0 * j + i, 200.0 * j + i, 50.0],
+                    "velocity": [1.0, 0.0, 0.0],
+                    "covariance_row_major": [1.0] * 9,
+                    "measurement_std_m": 5.0,
+                    "update_count": i + 1,
+                    "stale_steps": 0,
+                }
+            )
         nodes = []
         if include_nodes:
-            nodes.append({
-                "node_id": "N0",
-                "position": [0.0, 0.0, 0.0],
-                "velocity": [0.0, 0.0, 0.0],
-                "is_mobile": False,
+            nodes.append(
+                {
+                    "node_id": "N0",
+                    "position": [0.0, 0.0, 0.0],
+                    "velocity": [0.0, 0.0, 0.0],
+                    "is_mobile": False,
+                    "timestamp_s": t,
+                    "health": 1.0,
+                }
+            )
+        frames.append(
+            {
                 "timestamp_s": t,
-                "health": 1.0,
-            })
-        frames.append({
-            "timestamp_s": t,
-            "tracks": tracks,
-            "observations": [],
-            "nodes": nodes,
-            "rejected_observations": [],
-            "truths": [],
-            "metrics": {},
-        })
+                "tracks": tracks,
+                "observations": [],
+                "nodes": nodes,
+                "rejected_observations": [],
+                "truths": [],
+                "metrics": {},
+            }
+        )
     return {
         "meta": {
             "scenario_name": "test",
@@ -118,7 +124,7 @@ class TestExportKML(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.kml")
             export_kml(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"T0", xml_content)
         self.assertIn(b"T1", xml_content)
         self.assertIn(b"LineString", xml_content)
@@ -130,7 +136,7 @@ class TestExportKML(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.kml")
             export_kml(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"TimeSpan", xml_content)
         self.assertIn(b"begin", xml_content)
         self.assertIn(b"end", xml_content)
@@ -141,7 +147,7 @@ class TestExportKML(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.kml")
             export_kml(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"2025-01-01T00:00:00+00:00", xml_content)
         self.assertIn(b"2025-01-01T00:00:00.250000+00:00", xml_content)
 
@@ -151,7 +157,7 @@ class TestExportKML(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.kml")
             export_kml(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"1970-01-01T00:00:00+00:00", xml_content)
 
     def test_kml_sensor_nodes_present(self):
@@ -160,7 +166,7 @@ class TestExportKML(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.kml")
             export_kml(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"N0", xml_content)
         self.assertIn(b"Point", xml_content)
 
@@ -170,7 +176,7 @@ class TestExportKML(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.kml")
             export_kml(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"opengis.net/kml", xml_content)
 
     def test_kml_empty_input(self):
@@ -234,7 +240,7 @@ class TestExportGPX(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.gpx")
             export_gpx(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"topografix.com/GPX/1/1", xml_content)
 
     def test_gpx_version_attribute(self):
@@ -253,7 +259,7 @@ class TestExportGPX(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.gpx")
             export_gpx(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"<trk>", xml_content)
         self.assertIn(b"<trkseg>", xml_content)
         self.assertIn(b"<trkpt", xml_content)
@@ -267,14 +273,14 @@ class TestExportGPX(unittest.TestCase):
             tree = ET.parse(path)
             root = tree.getroot()
         # ElementTree qualifies all tags with the namespace URI
-        trkpts = root.findall(".//{%s}trkpt" % _GPX_NS)
+        trkpts = root.findall(f".//{{{_GPX_NS}}}trkpt")
         self.assertGreater(len(trkpts), 0)
         for pt in trkpts:
             self.assertIn("lat", pt.attrib)
             self.assertIn("lon", pt.attrib)
             # ele and time children (namespace-qualified)
-            ele = pt.find("{%s}ele" % _GPX_NS)
-            time_el = pt.find("{%s}time" % _GPX_NS)
+            ele = pt.find(f"{{{_GPX_NS}}}ele")
+            time_el = pt.find(f"{{{_GPX_NS}}}time")
             self.assertIsNotNone(ele)
             self.assertIsNotNone(time_el)
 
@@ -284,7 +290,7 @@ class TestExportGPX(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.gpx")
             export_gpx(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"<wpt", xml_content)
         self.assertIn(b"N0", xml_content)
 
@@ -326,7 +332,7 @@ class TestExportGPX(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.gpx")
             export_gpx(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"T0", xml_content)
         self.assertIn(b"T1", xml_content)
 
@@ -336,7 +342,7 @@ class TestExportGPX(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.gpx")
             export_gpx(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"2025-01-01T00:00:00+00:00", xml_content)
         self.assertIn(b"2025-01-01T00:00:00.250000+00:00", xml_content)
 
@@ -346,7 +352,7 @@ class TestExportGPX(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.gpx")
             export_gpx(doc, ORIGIN, path)
-            xml_content = open(path, "rb").read()
+            xml_content = Path(path).read_bytes()
         self.assertIn(b"1970-01-01T00:00:00+00:00", xml_content)
 
 
@@ -364,8 +370,8 @@ class TestTimeRangeFiltering(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "out.kml")
             export_kml(doc, ORIGIN, path, start_time_s=1.0)
-            xml_content = open(path, "rb").read()
-            tree = ET.parse(path)
+            xml_content = Path(path).read_bytes()
+            ET.parse(path)
         # Should be valid XML
         self.assertIn(b"kml", xml_content)
 
@@ -392,8 +398,7 @@ class TestTimeRangeFiltering(unittest.TestCase):
             # Count trkpt elements in GPX
             gpx_tree = ET.parse(gpx_path)
             gpx_root = gpx_tree.getroot()
-            ns = {"gpx": _GPX_NS}
-            trkpts = gpx_root.findall(".//{%s}trkpt" % _GPX_NS)
+            trkpts = gpx_root.findall(f".//{{{_GPX_NS}}}trkpt")
             if not trkpts:
                 trkpts = gpx_root.findall(".//trkpt")
 

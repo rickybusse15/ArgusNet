@@ -20,11 +20,11 @@ import unittest
 import numpy as np
 
 from argusnet.world.weather import (
+    KNOWN_WEATHER_PRESETS,
+    WEATHER_PRESETS,
     AtmosphericConditions,
     CloudLayer,
-    KNOWN_WEATHER_PRESETS,
     PrecipitationModel,
-    WEATHER_PRESETS,
     WeatherModel,
     WindModel,
     weather_from_preset,
@@ -176,9 +176,7 @@ class TestAtmosphericConditions(unittest.TestCase):
     def test_refraction_zero_for_zenith(self) -> None:
         atm = AtmosphericConditions()
         # elevation > pi/2 should return 0
-        self.assertAlmostEqual(
-            atm.refraction_offset_rad(math.pi, 1000.0), 0.0
-        )
+        self.assertAlmostEqual(atm.refraction_offset_rad(math.pi, 1000.0), 0.0)
 
     def test_refraction_positive_near_horizon(self) -> None:
         atm = AtmosphericConditions()
@@ -187,9 +185,7 @@ class TestAtmosphericConditions(unittest.TestCase):
 
     def test_refraction_zero_at_zero_range(self) -> None:
         atm = AtmosphericConditions()
-        self.assertAlmostEqual(
-            atm.refraction_offset_rad(math.radians(10.0), 0.0), 0.0
-        )
+        self.assertAlmostEqual(atm.refraction_offset_rad(math.radians(10.0), 0.0), 0.0)
 
     def test_negative_range_no_attenuation(self) -> None:
         atm = AtmosphericConditions()

@@ -38,7 +38,7 @@ class LatencyModel:
     max_s: float = math.inf
     """Hard upper bound on sampled latency."""
 
-    def sample(self, rng: "np.random.Generator | None" = None) -> float:
+    def sample(self, rng: np.random.Generator | None = None) -> float:
         """Sample a latency value from the model."""
         if rng is None:
             rng = np.random.default_rng()
@@ -51,7 +51,7 @@ class LatencyModel:
 def apply_latency(
     timestamp_s: float,
     model: LatencyModel,
-    rng: "np.random.Generator | None" = None,
+    rng: np.random.Generator | None = None,
 ) -> float:
     """Return a timestamp shifted backward by a latency sample."""
     return timestamp_s - model.sample(rng)

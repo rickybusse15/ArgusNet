@@ -13,23 +13,22 @@ import unittest
 
 import numpy as np
 
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 from argusnet.core.types import (
     BearingObservation,
     NodeState,
-    TruthState,
     ObservationRejection,
-    PlatformFrame,
+    TruthState,
     vec3,
 )
-from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 from argusnet.world.environment import (
     Bounds2D,
-    TerrainLayer,
-    EnvironmentModel,
-    EnvironmentCRS,
-    ObstacleLayer,
-    LandCoverLayer,
     CylinderObstacle,
+    EnvironmentCRS,
+    EnvironmentModel,
+    LandCoverLayer,
+    ObstacleLayer,
+    TerrainLayer,
 )
 
 
@@ -83,7 +82,9 @@ class RejectionDiagnosticsIntegrationTest(unittest.TestCase):
             top_z_m=60.0,
         )
 
-        obstacles = ObstacleLayer(bounds_xy_m=self.bounds, tile_size_m=500.0, primitives=[self.building])
+        obstacles = ObstacleLayer(
+            bounds_xy_m=self.bounds, tile_size_m=500.0, primitives=[self.building]
+        )
         land_cover = LandCoverLayer.open_terrain(bounds_xy_m=self.bounds, resolution_m=500.0)
 
         self.env = EnvironmentModel(

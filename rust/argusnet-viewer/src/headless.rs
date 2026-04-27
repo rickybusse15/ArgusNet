@@ -57,7 +57,13 @@ pub fn render_headless(scene_path: impl AsRef<Path>, options: HeadlessRenderOpti
         fs::create_dir_all(record_dir)
             .with_context(|| format!("failed to create {}", record_dir.display()))?;
         for (frame_index, frame) in replay.frames.iter().enumerate() {
-            let image = render_frame(&scene_package, Some(replay), Some(frame), &options, frame_index);
+            let image = render_frame(
+                &scene_package,
+                Some(replay),
+                Some(frame),
+                &options,
+                frame_index,
+            );
             let path = record_dir.join(format!("frame_{frame_index:05}.png"));
             save_image(&path, &image)?;
         }
@@ -94,7 +100,12 @@ fn render_frame(
         options.target_id.as_deref(),
     );
 
-    draw_border(&mut image, options.width, options.height, Rgba([48, 61, 72, 255]));
+    draw_border(
+        &mut image,
+        options.width,
+        options.height,
+        Rgba([48, 61, 72, 255]),
+    );
     draw_rect_outline(
         &mut image,
         24,
@@ -119,11 +130,25 @@ fn render_frame(
 
     if let Some(frame) = frame {
         for truth in &frame.truths {
-            let (x, y) = project_point(truth.position, &view, options.camera, &scene_package.environment.bounds_xy_m, options.width, options.height);
+            let (x, y) = project_point(
+                truth.position,
+                &view,
+                options.camera,
+                &scene_package.environment.bounds_xy_m,
+                options.width,
+                options.height,
+            );
             draw_circle(&mut image, x, y, 6, Rgba([66, 148, 93, 255]));
         }
         for node in &frame.nodes {
-            let (x, y) = project_point(node.position, &view, options.camera, &scene_package.environment.bounds_xy_m, options.width, options.height);
+            let (x, y) = project_point(
+                node.position,
+                &view,
+                options.camera,
+                &scene_package.environment.bounds_xy_m,
+                options.width,
+                options.height,
+            );
             draw_square(&mut image, x, y, 7, Rgba([43, 112, 187, 255]));
         }
         for track in &frame.tracks {
@@ -132,7 +157,14 @@ fn render_frame(
             } else {
                 Rgba([227, 123, 48, 255])
             };
-            let (x, y) = project_point(track.position, &view, options.camera, &scene_package.environment.bounds_xy_m, options.width, options.height);
+            let (x, y) = project_point(
+                track.position,
+                &view,
+                options.camera,
+                &scene_package.environment.bounds_xy_m,
+                options.width,
+                options.height,
+            );
             draw_circle(&mut image, x, y, 7, color);
         }
     }
@@ -167,7 +199,12 @@ fn view_bounds(
                         .map(|truth| [truth.position[0], truth.position[1]])
                 })
         })
-        .or_else(|| frame.tracks.first().map(|track| [track.position[0], track.position[1]]));
+        .or_else(|| {
+            frame
+                .tracks
+                .first()
+                .map(|track| [track.position[0], track.position[1]])
+        });
     let Some([cx, cy]) = focus else {
         return scene_bounds.clone();
     };
@@ -198,6 +235,7 @@ fn draw_background(image: &mut RgbaImage) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_track_trails(
     image: &mut RgbaImage,
     replay: &ReplayDocument,
@@ -208,7 +246,8 @@ fn draw_track_trails(
     width: u32,
     height: u32,
 ) {
-    let mut positions: std::collections::HashMap<String, Vec<[f32; 3]>> = std::collections::HashMap::new();
+    let mut positions: std::collections::HashMap<String, Vec<[f32; 3]>> =
+        std::collections::HashMap::new();
     for frame in replay.frames.iter().take(frame_index + 1) {
         for track in &frame.tracks {
             positions
@@ -256,14 +295,7 @@ fn draw_border(image: &mut RgbaImage, width: u32, height: u32, color: Rgba<u8>) 
     draw_rect_outline(image, 0, 0, width as i32 - 1, height as i32 - 1, color);
 }
 
-fn draw_rect_outline(
-    image: &mut RgbaImage,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    color: Rgba<u8>,
-) {
+fn draw_rect_outline(image: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, color: Rgba<u8>) {
     draw_line(image, x0, y0, x1, y0, color);
     draw_line(image, x1, y0, x1, y1, color);
     draw_line(image, x1, y1, x0, y1, color);

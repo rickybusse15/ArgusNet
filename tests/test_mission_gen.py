@@ -3,6 +3,7 @@
 Covers data class validation, defaults, frozen enforcement, difficulty scaling,
 tag generation, template factories, and the generate_mission pipeline.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -14,19 +15,31 @@ import numpy as np
 
 from argusnet.core.config import SimulationConstants
 from argusnet.planning.inspection import (
-    MissionTiming, MissionConstraints, MissionSpec, ObjectiveCondition,
-    MissionObjective, FlightCorridor, ValidityReport, GeneratedMission,
-    apply_difficulty_scaling, surveillance_template, intercept_template,
-    persistent_observation_template, search_template, generate_mission,
-    validate_mission, _difficulty_band, _base_tags,
+    FlightCorridor,
+    GeneratedMission,
+    MissionConstraints,
+    MissionObjective,
+    MissionSpec,
+    MissionTiming,
+    ObjectiveCondition,
+    ValidityReport,
+    _base_tags,
+    _difficulty_band,
+    apply_difficulty_scaling,
+    generate_mission,
+    intercept_template,
+    persistent_observation_template,
+    search_template,
+    surveillance_template,
+    validate_mission,
 )
 
 # ---------------------------------------------------------------------------
 # MissionSpec validation & defaults
 # ---------------------------------------------------------------------------
 
-class TestMissionSpecValidation(unittest.TestCase):
 
+class TestMissionSpecValidation(unittest.TestCase):
     def test_difficulty_out_of_range_raises(self) -> None:
         with self.assertRaises(ValueError):
             MissionSpec(seed=1, difficulty=-0.01)
@@ -69,7 +82,6 @@ class TestMissionSpecValidation(unittest.TestCase):
 
 
 class TestMissionSpecDefaults(unittest.TestCase):
-
     def setUp(self) -> None:
         self.s = MissionSpec(seed=42)
 
@@ -93,12 +105,13 @@ class TestMissionSpecDefaults(unittest.TestCase):
         self.assertAlmostEqual(self.s.constraints.min_sensor_baseline_m, 80.0)
         self.assertAlmostEqual(self.s.constraints.max_target_covariance_m2, 500.0)
 
+
 # ---------------------------------------------------------------------------
 # Frozen dataclass enforcement
 # ---------------------------------------------------------------------------
 
-class TestFrozenDataclasses(unittest.TestCase):
 
+class TestFrozenDataclasses(unittest.TestCase):
     def test_frozen_fields(self) -> None:
         cases = [
             (MissionTiming(duration_s=60.0), "duration_s", 120.0),
@@ -109,22 +122,30 @@ class TestFrozenDataclasses(unittest.TestCase):
             (FlightCorridor(corridor_id="c0", waypoints_xy_m=[[0, 0]]), "width_m", 999.0),
         ]
         for obj, attr, val in cases:
-            with self.subTest(cls=type(obj).__name__):
-                with self.assertRaises(dataclasses.FrozenInstanceError):
-                    setattr(obj, attr, val)
+            with (
+                self.subTest(cls=type(obj).__name__),
+                self.assertRaises(dataclasses.FrozenInstanceError),
+            ):
+                setattr(obj, attr, val)
+
 
 # ---------------------------------------------------------------------------
 # ValidityReport.is_valid
 # ---------------------------------------------------------------------------
 
-class TestValidityReport(unittest.TestCase):
 
+class TestValidityReport(unittest.TestCase):
     def test_all_true_is_valid(self) -> None:
         self.assertTrue(ValidityReport().is_valid)
 
     def test_single_false_makes_invalid(self) -> None:
-        for flag in ("physically_valid", "sensor_valid", "solvable",
-                      "corridor_clear", "baseline_adequate"):
+        for flag in (
+            "physically_valid",
+            "sensor_valid",
+            "solvable",
+            "corridor_clear",
+            "baseline_adequate",
+        ):
             with self.subTest(flag=flag):
                 self.assertFalse(ValidityReport(**{flag: False}).is_valid)
 
@@ -133,12 +154,13 @@ class TestValidityReport(unittest.TestCase):
         self.assertEqual(vr.failures, ["AGL violation"])
         self.assertFalse(vr.is_valid)
 
+
 # ---------------------------------------------------------------------------
 # Difficulty scaling
 # ---------------------------------------------------------------------------
 
-class TestApplyDifficultyScaling(unittest.TestCase):
 
+class TestApplyDifficultyScaling(unittest.TestCase):
     def setUp(self) -> None:
         self.c = SimulationConstants.default()
 
@@ -154,18 +176,34 @@ class TestApplyDifficultyScaling(unittest.TestCase):
 
     def test_dropout_at_boundaries(self) -> None:
         base = self.c.sensor.ground_station_dropout_probabilities[0]
-        self.assertAlmostEqual(self._sc(0.0).sensor.ground_station_dropout_probabilities[0], base * 0.3)
-        self.assertAlmostEqual(self._sc(1.0).sensor.ground_station_dropout_probabilities[0], base * 2.5)
+        self.assertAlmostEqual(
+            self._sc(0.0).sensor.ground_station_dropout_probabilities[0], base * 0.3
+        )
+        self.assertAlmostEqual(
+            self._sc(1.0).sensor.ground_station_dropout_probabilities[0], base * 2.5
+        )
 
     def test_target_speed_scale(self) -> None:
         bp = self.c.platform_presets["baseline"]
-        self.assertAlmostEqual(self._sc(0.0).platform_presets["baseline"].target_speed_scale, bp.target_speed_scale * 0.5)
-        self.assertAlmostEqual(self._sc(1.0).platform_presets["baseline"].target_speed_scale, bp.target_speed_scale * 1.8)
+        self.assertAlmostEqual(
+            self._sc(0.0).platform_presets["baseline"].target_speed_scale,
+            bp.target_speed_scale * 0.5,
+        )
+        self.assertAlmostEqual(
+            self._sc(1.0).platform_presets["baseline"].target_speed_scale,
+            bp.target_speed_scale * 1.8,
+        )
 
     def test_drone_search_speed_scale(self) -> None:
         bp = self.c.platform_presets["baseline"]
-        self.assertAlmostEqual(self._sc(0.0).platform_presets["baseline"].drone_search_speed_scale, bp.drone_search_speed_scale * 1.2)
-        self.assertAlmostEqual(self._sc(1.0).platform_presets["baseline"].drone_search_speed_scale, bp.drone_search_speed_scale * 0.8)
+        self.assertAlmostEqual(
+            self._sc(0.0).platform_presets["baseline"].drone_search_speed_scale,
+            bp.drone_search_speed_scale * 1.2,
+        )
+        self.assertAlmostEqual(
+            self._sc(1.0).platform_presets["baseline"].drone_search_speed_scale,
+            bp.drone_search_speed_scale * 0.8,
+        )
 
     def test_drone_bearing_std_scaled(self) -> None:
         base = self.c.sensor.drone_base_bearing_std_rad
@@ -179,12 +217,13 @@ class TestApplyDifficultyScaling(unittest.TestCase):
         self.assertEqual(sc.dynamics.default_dt_s, self.c.dynamics.default_dt_s)
         self.assertEqual(sc.sensor.drone_base_max_range_m, self.c.sensor.drone_base_max_range_m)
 
+
 # ---------------------------------------------------------------------------
 # _difficulty_band
 # ---------------------------------------------------------------------------
 
-class TestDifficultyBand(unittest.TestCase):
 
+class TestDifficultyBand(unittest.TestCase):
     def test_easy(self) -> None:
         self.assertEqual(_difficulty_band(0.0), "easy")
         self.assertEqual(_difficulty_band(0.32), "easy")
@@ -198,16 +237,22 @@ class TestDifficultyBand(unittest.TestCase):
         self.assertEqual(_difficulty_band(0.67), "hard")
         self.assertEqual(_difficulty_band(1.0), "hard")
 
+
 # ---------------------------------------------------------------------------
 # _base_tags
 # ---------------------------------------------------------------------------
 
-class TestBaseTags(unittest.TestCase):
 
+class TestBaseTags(unittest.TestCase):
     def test_default_spec_tags(self) -> None:
         tags = _base_tags(MissionSpec(seed=1))
-        for t in ("type:surveillance", "terrain:alpine", "weather:clear",
-                   "diff:medium", "size:regional"):
+        for t in (
+            "type:surveillance",
+            "terrain:alpine",
+            "weather:clear",
+            "diff:medium",
+            "size:regional",
+        ):
             self.assertIn(t, tags)
 
     def test_difficulty_band_tags(self) -> None:
@@ -226,12 +271,13 @@ class TestBaseTags(unittest.TestCase):
         tags = _base_tags(MissionSpec(seed=1, tags=["type:surveillance"]))
         self.assertEqual(tags.count("type:surveillance"), 1)
 
+
 # ---------------------------------------------------------------------------
 # Template factories
 # ---------------------------------------------------------------------------
 
-class TestTemplateFactories(unittest.TestCase):
 
+class TestTemplateFactories(unittest.TestCase):
     def test_surveillance(self) -> None:
         s = surveillance_template(seed=10)
         self.assertEqual(s.mission_type, "surveillance")
@@ -265,8 +311,12 @@ class TestTemplateFactories(unittest.TestCase):
         self.assertIn("custom:beta", surveillance_template(seed=1, extra_tags=["custom:beta"]).tags)
 
     def test_all_templates_valid_specs(self) -> None:
-        for factory in (surveillance_template, intercept_template,
-                        persistent_observation_template, search_template):
+        for factory in (
+            surveillance_template,
+            intercept_template,
+            persistent_observation_template,
+            search_template,
+        ):
             s = factory(seed=42)
             self.assertIsInstance(s, MissionSpec)
             self.assertTrue(1 <= s.drone_count <= 12)
@@ -274,51 +324,69 @@ class TestTemplateFactories(unittest.TestCase):
             self.assertTrue(1 <= s.target_count <= 8)
             self.assertTrue(0.0 <= s.difficulty <= 1.0)
 
+
 # ---------------------------------------------------------------------------
 # generate_mission (with mocked scenario builder)
 # ---------------------------------------------------------------------------
 
+
 def _make_stub_scenario(target_count=2, drone_count=2, gs_count=4):
     """Lightweight stub mimicking ScenarioDefinition attributes."""
+
     class _State:
         def __init__(self, pos):
             self.position, self.max_range_m = pos, 1e9
+
     class _Node:
         def __init__(self, nid, mobile, pos):
             self.node_id, self.is_mobile, self.position = nid, mobile, pos
+
         def state(self, _t):
             return _State(self.position.copy())
+
     class _Target:
         def __init__(self, tid, pos):
             self.target_id, self._pos = tid, pos
+
         def truth_state(self, _t):
             return _State(self._pos.copy())
 
     nodes = [_Node(f"ground-{i}", False, np.array([i * 100.0, 0.0, 5.0])) for i in range(gs_count)]
-    nodes += [_Node(f"drone-{i}", True, np.array([i * 200.0, 100.0, 250.0])) for i in range(drone_count)]
-    targets = [_Target(f"target-{i}", np.array([i * 50.0, 50.0, 150.0])) for i in range(target_count)]
-    return SimpleNamespace(nodes=nodes, targets=targets, environment=None,
-                           terrain=None, map_bounds_m={"x_min_m": -2160.0, "x_max_m": 2160.0,
-                                                       "y_min_m": -1980.0, "y_max_m": 2160.0})
+    nodes += [
+        _Node(f"drone-{i}", True, np.array([i * 200.0, 100.0, 250.0])) for i in range(drone_count)
+    ]
+    targets = [
+        _Target(f"target-{i}", np.array([i * 50.0, 50.0, 150.0])) for i in range(target_count)
+    ]
+    return SimpleNamespace(
+        nodes=nodes,
+        targets=targets,
+        environment=None,
+        terrain=None,
+        map_bounds_m={"x_min_m": -2160.0, "x_max_m": 2160.0, "y_min_m": -1980.0, "y_max_m": 2160.0},
+    )
 
 
 class TestGenerateMission(unittest.TestCase):
-
     def _gen(self, mission_type="surveillance", **kw):
         kw.setdefault("seed", 7)
         kw.setdefault("difficulty", 0.3)
         kw["mission_type"] = mission_type
         spec = MissionSpec(**kw)
         stub = _make_stub_scenario(spec.target_count, spec.drone_count, spec.ground_station_count)
-        with patch("argusnet.simulation.sim.build_default_scenario", return_value=stub), \
-             patch("argusnet.simulation.sim.ScenarioOptions"):
+        with (
+            patch("argusnet.simulation.sim.build_default_scenario", return_value=stub),
+            patch("argusnet.simulation.sim.ScenarioOptions"),
+        ):
             return generate_mission(spec)
 
     def _gen_from_template(self, factory, **kw):
         spec = factory(**kw)
         stub = _make_stub_scenario(spec.target_count, spec.drone_count, spec.ground_station_count)
-        with patch("argusnet.simulation.sim.build_default_scenario", return_value=stub), \
-             patch("argusnet.simulation.sim.ScenarioOptions"):
+        with (
+            patch("argusnet.simulation.sim.build_default_scenario", return_value=stub),
+            patch("argusnet.simulation.sim.ScenarioOptions"),
+        ):
             return generate_mission(spec)
 
     def test_surveillance_structure(self) -> None:
@@ -355,22 +423,26 @@ class TestGenerateMission(unittest.TestCase):
         self.assertEqual(len(gm1.objectives), len(gm2.objectives))
         self.assertEqual(gm1.tags, gm2.tags)
 
+
 # ---------------------------------------------------------------------------
 # validate_mission with stubs
 # ---------------------------------------------------------------------------
 
-class TestValidateMission(unittest.TestCase):
 
+class TestValidateMission(unittest.TestCase):
     def test_missing_attributes_all_false(self) -> None:
         report = validate_mission(object(), MissionSpec(seed=1), [], [])
         self.assertFalse(report.is_valid)
         self.assertGreater(len(report.failures), 0)
 
     def test_unsolvable_continuity_fraction(self) -> None:
-        scenario = SimpleNamespace(nodes=[], targets=[], environment=None,
-                                   terrain=None, map_bounds_m=None)
+        scenario = SimpleNamespace(
+            nodes=[], targets=[], environment=None, terrain=None, map_bounds_m=None
+        )
         bad_obj = MissionObjective(
-            objective_id="bad", objective_type="maintain", target_ids=["t-0"],
+            objective_id="bad",
+            objective_type="maintain",
+            target_ids=["t-0"],
             success_condition=ObjectiveCondition(track_continuity_fraction=1.5),
         )
         report = validate_mission(scenario, MissionSpec(seed=1), [bad_obj], [])

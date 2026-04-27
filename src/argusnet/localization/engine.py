@@ -4,11 +4,10 @@ Uses the accumulated CoverageMap as a reference and estimates the drone's
 pose (x, y) by comparing the expected sensor footprint against coverage.
 As coverage fills in, position uncertainty decreases and confidence rises.
 """
+
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -18,12 +17,13 @@ from argusnet.core.types import LocalizationEstimate, Vector3
 @dataclass(frozen=True)
 class LocalizationConfig:
     """Parameters controlling grid localizer behaviour."""
-    search_radius_m: float = 80.0      # uncertainty radius for particle spread
-    particle_count: int = 200           # number of particles
+
+    search_radius_m: float = 80.0  # uncertainty radius for particle spread
+    particle_count: int = 200  # number of particles
     convergence_threshold_m: float = 15.0  # std below which we call it converged
     min_coverage_to_localize: float = 0.15  # need at least 15% map coverage
-    confidence_decay: float = 0.50     # carry-over confidence between steps
-    annealing_rate: float = 0.02       # per-step fractional radius shrink
+    confidence_decay: float = 0.50  # carry-over confidence between steps
+    annealing_rate: float = 0.02  # per-step fractional radius shrink
     localization_timeout_steps: int = 200  # steps before forced convergence; 0 = disabled
 
 
@@ -41,11 +41,11 @@ class GridLocalizer:
     map becomes more discriminative, so confidence increases naturally.
     """
 
-    def __init__(self, config: Optional[LocalizationConfig] = None) -> None:
+    def __init__(self, config: LocalizationConfig | None = None) -> None:
         self.config = config or LocalizationConfig()
-        self._estimates: Dict[str, LocalizationEstimate] = {}
-        self._step_counts: Dict[str, int] = {}
-        self._timed_out: Set[str] = set()
+        self._estimates: dict[str, LocalizationEstimate] = {}
+        self._step_counts: dict[str, int] = {}
+        self._timed_out: set[str] = set()
         self._rng = np.random.default_rng(42)
 
     def update(
@@ -53,7 +53,7 @@ class GridLocalizer:
         drone_id: str,
         nominal_position: Vector3,
         heading_rad: float,
-        coverage_map,          # argusnet.mapping.coverage.CoverageMap
+        coverage_map,  # argusnet.mapping.coverage.CoverageMap
         footprint_radius_m: float,
         timestamp_s: float,
     ) -> LocalizationEstimate:
@@ -99,21 +99,20 @@ class GridLocalizer:
 
         # Score each particle: how well does a footprint at that position match
         # the existing coverage map?  Higher coverage around the particle = better.
-        scores = np.array([
-            self._score_position(pos, footprint_radius_m, coverage_map)
-            for pos in positions
-        ], dtype=float)
+        scores = np.array(
+            [self._score_position(pos, footprint_radius_m, coverage_map) for pos in positions],
+            dtype=float,
+        )
 
         # Weighted mean position.
         weights = np.exp(scores - scores.max())
         weights /= weights.sum() + 1e-12
         est_xy = (positions * weights[:, None]).sum(axis=0)
-        est_position = np.array([est_xy[0], est_xy[1], float(nominal_position[2])],
-                                dtype=float)
+        est_position = np.array([est_xy[0], est_xy[1], float(nominal_position[2])], dtype=float)
 
         # Position std = weighted std of particle cloud.
         diff = positions - est_xy
-        var = (weights[:, None] * diff ** 2).sum(axis=0)
+        var = (weights[:, None] * diff**2).sum(axis=0)
         position_std = float(np.sqrt(var.mean()))
 
         # Confidence: rises as coverage fills in and std shrinks.
@@ -122,9 +121,9 @@ class GridLocalizer:
             1.0, cfg.convergence_threshold_m / max(position_std, 1.0)
         )
         if prev_conf is not None:
-            confidence = cfg.confidence_decay * prev_conf.confidence + (
-                1 - cfg.confidence_decay
-            ) * base_conf
+            confidence = (
+                cfg.confidence_decay * prev_conf.confidence + (1 - cfg.confidence_decay) * base_conf
+            )
         else:
             confidence = base_conf
 
@@ -149,7 +148,7 @@ class GridLocalizer:
         """True if any drone reached the timeout step limit."""
         return bool(self._timed_out)
 
-    def fuse_estimates(self, drone_ids: List[str]) -> Optional[LocalizationEstimate]:
+    def fuse_estimates(self, drone_ids: list[str]) -> LocalizationEstimate | None:
         """Inverse-variance weighted fusion of converged drone estimates.
 
         Only considers estimates whose ``position_std_m`` is below half the
@@ -166,14 +165,16 @@ class GridLocalizer:
             return None
 
         stds = np.array([c.position_std_m for c in candidates], dtype=float)
-        vars_ = stds ** 2
+        vars_ = stds**2
         weights = 1.0 / np.maximum(vars_, 1e-6)
         weights /= weights.sum()
 
         positions = np.array([c.position_estimate for c in candidates], dtype=float)
         fused_pos = (positions * weights[:, None]).sum(axis=0)
         fused_std = float(np.sqrt(1.0 / (1.0 / np.maximum(vars_, 1e-6)).sum()))
-        fused_conf = float(np.clip((weights * np.array([c.confidence for c in candidates])).sum(), 0.0, 1.0))
+        fused_conf = float(
+            np.clip((weights * np.array([c.confidence for c in candidates])).sum(), 0.0, 1.0)
+        )
         ref = candidates[0]
         return LocalizationEstimate(
             drone_id="fused",
@@ -203,11 +204,11 @@ class GridLocalizer:
         j0, j1 = max(0, gj - r_cells), min(ny - 1, gj + r_cells)
         if i0 >= i1 or j0 >= j1:
             return -1.0
-        grid = coverage_map.count_grid      # property: returns a copy with shape (nx, ny)
+        grid = coverage_map.count_grid  # property: returns a copy with shape (nx, ny)
         patch = grid[i0:i1, j0:j1]
         return float(np.log1p(patch.mean()))
 
-    def reset(self, drone_id: Optional[str] = None) -> None:
+    def reset(self, drone_id: str | None = None) -> None:
         if drone_id is None:
             self._estimates.clear()
             self._step_counts.clear()
@@ -217,5 +218,5 @@ class GridLocalizer:
             self._step_counts.pop(drone_id, None)
             self._timed_out.discard(drone_id)
 
-    def all_estimates(self) -> List[LocalizationEstimate]:
+    def all_estimates(self) -> list[LocalizationEstimate]:
         return list(self._estimates.values())

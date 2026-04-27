@@ -10,7 +10,6 @@ import numpy as np
 from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 from argusnet.core.types import BearingObservation, NodeState, TruthState
 
-
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "runtime_parity_fixture.json"
 
 
@@ -55,12 +54,22 @@ def _assert_json_close(test_case: unittest.TestCase, actual: Any, expected: Any)
         test_case.assertAlmostEqual(expected, float(actual), delta=5.0e-4)
         return
     if isinstance(expected, list):
-        if expected and isinstance(expected[0], (int, float)) and actual and isinstance(actual[0], list):
+        if (
+            expected
+            and isinstance(expected[0], (int, float))
+            and actual
+            and isinstance(actual[0], list)
+        ):
             actual = [value for row in actual for value in row]
-        if actual and isinstance(actual[0], (int, float)) and expected and isinstance(expected[0], list):
+        if (
+            actual
+            and isinstance(actual[0], (int, float))
+            and expected
+            and isinstance(expected[0], list)
+        ):
             expected = [value for row in expected for value in row]
         test_case.assertEqual(len(expected), len(actual))
-        for actual_item, expected_item in zip(actual, expected):
+        for actual_item, expected_item in zip(actual, expected, strict=False):
             _assert_json_close(test_case, actual_item, expected_item)
         return
     if isinstance(expected, dict):
@@ -78,11 +87,15 @@ class RustRuntimeParityTest(unittest.TestCase):
         service = TrackingService(config=config, retain_history=True)
         self.addCleanup(service.close)
 
-        for request, expected_response in zip(fixture["requests"], fixture["responses"]):
+        for request, expected_response in zip(
+            fixture["requests"], fixture["responses"], strict=False
+        ):
             frame = service.ingest_frame(
                 request["timestamp_s"],
                 node_states=[_node_from_json(node) for node in request["node_states"]],
-                observations=[_observation_from_json(observation) for observation in request["observations"]],
+                observations=[
+                    _observation_from_json(observation) for observation in request["observations"]
+                ],
                 truths=[_truth_from_json(truth) for truth in request["truths"]],
             )
 

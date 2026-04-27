@@ -188,7 +188,8 @@ impl JPDAAssociator {
             let mut weighted_std_sq = 0.0;
             let mut total_weight = 0.0;
             for (cluster_index, estimate) in cluster_estimates.iter().enumerate() {
-                let weight = likelihoods[track_index][cluster_index] / row_denominators[track_index];
+                let weight =
+                    likelihoods[track_index][cluster_index] / row_denominators[track_index];
                 if weight <= 0.0 {
                     continue;
                 }
@@ -212,7 +213,9 @@ impl JPDAAssociator {
             let max_probability = track_ids
                 .iter()
                 .enumerate()
-                .map(|(track_index, _)| likelihoods[track_index][cluster_index] / row_denominators[track_index])
+                .map(|(track_index, _)| {
+                    likelihoods[track_index][cluster_index] / row_denominators[track_index]
+                })
                 .fold(0.0_f64, f64::max);
             if max_probability < self.new_track_probability_threshold {
                 new_tracks.push(estimate);
@@ -234,13 +237,20 @@ fn sorted_track_ids(tracks: &HashMap<String, ManagedTrack>) -> SmallVec<[String;
 
 fn cluster_estimates(clusters: &[Vec<BearingObservation>]) -> Vec<ClusterEstimate> {
     let mut result = Vec::with_capacity(clusters.len());
-    result.extend(clusters.iter().enumerate().filter_map(|(cluster_index, cluster)| {
-        fuse_bearing_cluster(cluster).ok().map(|estimate| ClusterEstimate {
-            cluster_index,
-            position: estimate.position,
-            measurement_std_m: estimate.measurement_std_m,
-        })
-    }));
+    result.extend(
+        clusters
+            .iter()
+            .enumerate()
+            .filter_map(|(cluster_index, cluster)| {
+                fuse_bearing_cluster(cluster)
+                    .ok()
+                    .map(|estimate| ClusterEstimate {
+                        cluster_index,
+                        position: estimate.position,
+                        measurement_std_m: estimate.measurement_std_m,
+                    })
+            }),
+    );
     result
 }
 
@@ -366,22 +376,30 @@ fn hungarian_assignment(cost: &[Vec<f64>]) -> Vec<usize> {
         + 1.0;
 
     let mut c = vec![vec![0.0; dim]; dim];
-    for row in 0..dim {
-        for col in 0..dim {
-            c[row][col] = if row < n && col < m { cost[row][col] } else { big };
+    for (row, c_row) in c.iter_mut().enumerate().take(dim) {
+        for (col, value) in c_row.iter_mut().enumerate().take(dim) {
+            *value = if row < n && col < m {
+                cost[row][col]
+            } else {
+                big
+            };
         }
     }
 
-    for row in 0..dim {
-        let row_min = c[row].iter().copied().fold(f64::INFINITY, f64::min);
-        for col in 0..dim {
-            c[row][col] -= row_min;
+    for c_row in c.iter_mut().take(dim) {
+        let row_min = c_row.iter().copied().fold(f64::INFINITY, f64::min);
+        for value in c_row.iter_mut().take(dim) {
+            *value -= row_min;
         }
     }
     for col in 0..dim {
-        let col_min = (0..dim).map(|row| c[row][col]).fold(f64::INFINITY, f64::min);
-        for row in 0..dim {
-            c[row][col] -= col_min;
+        let col_min = c
+            .iter()
+            .take(dim)
+            .map(|row| row[col])
+            .fold(f64::INFINITY, f64::min);
+        for row in c.iter_mut().take(dim) {
+            row[col] -= col_min;
         }
     }
 
@@ -534,7 +552,9 @@ mod tests {
 
     #[test]
     fn gnn_gate_rejects_distant_track() {
-        let associator = GNNAssociator { gate_threshold: 5.0 };
+        let associator = GNNAssociator {
+            gate_threshold: 5.0,
+        };
         let target = vec3(50.0, 15.0, 10.0);
         let mut tracks = HashMap::new();
         tracks.insert(

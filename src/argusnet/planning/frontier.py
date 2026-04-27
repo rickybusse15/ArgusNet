@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from scipy.ndimage import binary_fill_holes, uniform_filter
@@ -14,6 +13,7 @@ __all__ = ["FrontierConfig", "ClaimedCells", "FrontierPlanner"]
 @dataclass(frozen=True)
 class FrontierConfig:
     """Parameters controlling frontier cell selection."""
+
     distance_weight: float = 1.0
     coverage_gradient_weight: float = 2.0
     # Scales from 0 → full between 25 % and 75 % coverage to prevent
@@ -26,31 +26,31 @@ class ClaimedCells:
     """Thin wrapper tracking which drone is heading to which grid cell."""
 
     def __init__(self) -> None:
-        self._assignment: Dict[str, Tuple[int, int]] = {}
+        self._assignment: dict[str, tuple[int, int]] = {}
 
-    def claim(self, drone_id: str, cell: Tuple[int, int]) -> None:
+    def claim(self, drone_id: str, cell: tuple[int, int]) -> None:
         self._assignment[drone_id] = cell
 
     def release(self, drone_id: str) -> None:
         self._assignment.pop(drone_id, None)
 
-    def others(self, drone_id: str) -> Set[Tuple[int, int]]:
+    def others(self, drone_id: str) -> set[tuple[int, int]]:
         return {cell for did, cell in self._assignment.items() if did != drone_id}
 
 
 class FrontierPlanner:
     """Selects frontier cells with coverage-gradient scoring."""
 
-    def __init__(self, config: Optional[FrontierConfig] = None) -> None:
+    def __init__(self, config: FrontierConfig | None = None) -> None:
         self.cfg = config or FrontierConfig()
 
     def select_frontier_cell(
         self,
-        cmap,                           # CoverageMap
-        drone_xy: np.ndarray,           # (2,) metres
+        cmap,  # CoverageMap
+        drone_xy: np.ndarray,  # (2,) metres
         claimed: ClaimedCells,
         drone_id: str,
-    ) -> Optional[Tuple[int, int]]:
+    ) -> tuple[int, int] | None:
         """Return the best uncovered grid cell for *drone_id* to fly toward.
 
         Scoring (higher is better):
@@ -62,7 +62,7 @@ class FrontierPlanner:
         area (filling holes faster).
         """
         cfg = self.cfg
-        grid = cmap.count_grid           # shape (nx, ny), int
+        grid = cmap.count_grid  # shape (nx, ny), int
         nx, ny = grid.shape
         bounds = cmap.bounds
 
@@ -78,9 +78,7 @@ class FrontierPlanner:
             r = cfg.exclusion_radius_cells
             mask = np.ones(len(ii), dtype=bool)
             for k in range(len(ii)):
-                if np.any(
-                    (np.abs(excl_i - ii[k]) <= r) & (np.abs(excl_j - jj[k]) <= r)
-                ):
+                if np.any((np.abs(excl_i - ii[k]) <= r) & (np.abs(excl_j - jj[k]) <= r)):
                     mask[k] = False
             candidates_i = ii[mask]
             candidates_j = jj[mask]
@@ -117,9 +115,7 @@ class FrontierPlanner:
         best = int(np.argmax(score))
         return (int(candidates_i[best]), int(candidates_j[best]))
 
-    def find_gap_cells(
-        self, cmap, threshold: float = 0.70
-    ) -> List[Tuple[int, int]]:
+    def find_gap_cells(self, cmap, threshold: float = 0.70) -> list[tuple[int, int]]:
         """Return ONLY enclosed interior holes in the coverage map.
 
         Uses ``scipy.ndimage.binary_fill_holes`` to distinguish enclosed
@@ -127,13 +123,13 @@ class FrontierPlanner:
         frontier cannot become enclosed until coverage is very high, so this
         returns an empty list at low coverage, letting the gap-fill gate pass.
         """
-        grid = cmap.count_grid           # shape (nx, ny)
-        covered = grid > 0               # bool mask
+        grid = cmap.count_grid  # shape (nx, ny)
+        covered = grid > 0  # bool mask
 
         # binary_fill_holes fills any background region that doesn't touch the
         # border — i.e. enclosed holes only.
         filled = binary_fill_holes(covered)
-        holes = filled & ~covered        # enclosed cells that are uncovered
+        holes = filled & ~covered  # enclosed cells that are uncovered
 
         ii, jj = np.where(holes)
         return [(int(ii[k]), int(jj[k])) for k in range(len(ii))]

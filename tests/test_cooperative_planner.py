@@ -14,21 +14,18 @@ import pytest
 from argusnet.planning.coverage import (
     ROLE_CORRIDOR_WATCHER,
     ROLE_PRIMARY_OBSERVER,
-    ROLE_PRIORITY,
     ROLE_RELAY,
     ROLE_RESERVE,
     ROLE_SECONDARY_BASELINE,
-    AltitudeProfile,
     CooperativePlanner,
-    PlannerEvent,
     PlannedTrajectory,
     PlanningObjectives,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_planner(cooldown: float = 5.0) -> CooperativePlanner:
     return CooperativePlanner(PlanningObjectives(), replan_cooldown_s=cooldown)
@@ -76,6 +73,7 @@ def _stub_terrain() -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 # Role assignment
 # ---------------------------------------------------------------------------
+
 
 class TestAssignRoles:
     def test_unknown_role_replaced_with_reserve(self):
@@ -127,6 +125,7 @@ class TestAssignRoles:
 # PlanningObjectives
 # ---------------------------------------------------------------------------
 
+
 class TestPlanningObjectives:
     def test_terrain_clearance_forced_to_one(self):
         obj = PlanningObjectives(terrain_clearance=0.0)
@@ -146,6 +145,7 @@ class TestPlanningObjectives:
 # ---------------------------------------------------------------------------
 # Deconfliction
 # ---------------------------------------------------------------------------
+
 
 class TestCheckDeconfliction:
     def test_detects_close_pair(self):
@@ -212,9 +212,16 @@ class TestCheckDeconfliction:
 # should_replan
 # ---------------------------------------------------------------------------
 
+
 class TestShouldReplan:
-    def _seed_plan(self, cp: CooperativePlanner, drone_id: str, role: str,
-                   timestamp: float, route_length: float = 100.0):
+    def _seed_plan(
+        self,
+        cp: CooperativePlanner,
+        drone_id: str,
+        role: str,
+        timestamp: float,
+        route_length: float = 100.0,
+    ):
         """Issue a plan so should_replan has state to check."""
         cp.plan_trajectory(
             drone_id=drone_id,
@@ -246,7 +253,9 @@ class TestShouldReplan:
         self._seed_plan(cp, "d0", ROLE_PRIMARY_OBSERVER, timestamp=0.0)
         # Primary threshold is 2 stale steps
         replan, reason = cp.should_replan(
-            "d0", timestamp_s=5.0, track_stale_steps=2,
+            "d0",
+            timestamp_s=5.0,
+            track_stale_steps=2,
         )
         assert replan is True
         assert reason == "track_loss"
@@ -264,8 +273,7 @@ class TestShouldReplan:
 
     def test_staleness_expiry(self):
         cp = _make_planner(cooldown=1.0)
-        self._seed_plan(cp, "d0", ROLE_PRIMARY_OBSERVER, timestamp=0.0,
-                        route_length=100.0)
+        self._seed_plan(cp, "d0", ROLE_PRIMARY_OBSERVER, timestamp=0.0, route_length=100.0)
         # compute_staleness(0, 100, 28) = 0 + max(30, 100/28*0.5) = 30.0
         # After 30s the plan is stale
         replan, reason = cp.should_replan("d0", timestamp_s=31.0)
@@ -291,26 +299,24 @@ class TestShouldReplan:
 # compute_staleness
 # ---------------------------------------------------------------------------
 
+
 class TestComputeStaleness:
     def test_formula_minimum_30s(self):
         cp = _make_planner()
         # route_length/speed*0.5 = 50/10*0.5 = 2.5 < 30, so window = 30
-        result = cp.compute_staleness(planned_at_s=10.0, route_length_m=50.0,
-                                      speed_mps=10.0)
+        result = cp.compute_staleness(planned_at_s=10.0, route_length_m=50.0, speed_mps=10.0)
         assert result == pytest.approx(40.0)
 
     def test_formula_long_route(self):
         cp = _make_planner()
         # route_length/speed*0.5 = 2000/10*0.5 = 100 > 30, so window = 100
-        result = cp.compute_staleness(planned_at_s=5.0, route_length_m=2000.0,
-                                      speed_mps=10.0)
+        result = cp.compute_staleness(planned_at_s=5.0, route_length_m=2000.0, speed_mps=10.0)
         assert result == pytest.approx(105.0)
 
     def test_zero_speed_does_not_crash(self):
         cp = _make_planner()
         # speed clamped to 1e-6 internally to avoid division by zero
-        result = cp.compute_staleness(planned_at_s=0.0, route_length_m=100.0,
-                                      speed_mps=0.0)
+        result = cp.compute_staleness(planned_at_s=0.0, route_length_m=100.0, speed_mps=0.0)
         assert np.isfinite(result)
         assert result > 0.0
 
@@ -318,6 +324,7 @@ class TestComputeStaleness:
 # ---------------------------------------------------------------------------
 # plan_trajectory
 # ---------------------------------------------------------------------------
+
 
 class TestPlanTrajectory:
     def test_successful_plan_records_event(self):
@@ -374,14 +381,24 @@ class TestPlanTrajectory:
     def test_generation_increments(self):
         cp = _make_planner()
         t1 = cp.plan_trajectory(
-            "d0", ROLE_PRIMARY_OBSERVER, np.array([100, 100, 0]),
-            np.array([0, 0, 100]), _stub_path_planner(), _stub_terrain(),
-            _stub_dynamics(), 0.0,
+            "d0",
+            ROLE_PRIMARY_OBSERVER,
+            np.array([100, 100, 0]),
+            np.array([0, 0, 100]),
+            _stub_path_planner(),
+            _stub_terrain(),
+            _stub_dynamics(),
+            0.0,
         )
         t2 = cp.plan_trajectory(
-            "d0", ROLE_PRIMARY_OBSERVER, np.array([100, 100, 0]),
-            np.array([0, 0, 100]), _stub_path_planner(), _stub_terrain(),
-            _stub_dynamics(), 5.0,
+            "d0",
+            ROLE_PRIMARY_OBSERVER,
+            np.array([100, 100, 0]),
+            np.array([0, 0, 100]),
+            _stub_path_planner(),
+            _stub_terrain(),
+            _stub_dynamics(),
+            5.0,
         )
         assert t2.generation == t1.generation + 1
 
@@ -390,14 +407,20 @@ class TestPlanTrajectory:
 # Event recording
 # ---------------------------------------------------------------------------
 
+
 class TestEventRecording:
     def test_replan_trigger_events_recorded(self):
         cp = _make_planner(cooldown=1.0)
         # Seed a plan
         cp.plan_trajectory(
-            "d0", ROLE_PRIMARY_OBSERVER, np.array([500, 500, 0]),
-            np.array([0, 0, 100]), _stub_path_planner(), _stub_terrain(),
-            _stub_dynamics(), 0.0,
+            "d0",
+            ROLE_PRIMARY_OBSERVER,
+            np.array([500, 500, 0]),
+            np.array([0, 0, 100]),
+            _stub_path_planner(),
+            _stub_terrain(),
+            _stub_dynamics(),
+            0.0,
         )
         initial_count = len(cp.events)
         cp.should_replan("d0", timestamp_s=5.0, obstacle_warning=True)

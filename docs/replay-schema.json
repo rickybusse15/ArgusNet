@@ -288,7 +288,18 @@
             "wall_occlusion",
             "vegetation_occlusion",
             "out_of_coverage",
-            "outside_fov"
+            "outside_fov",
+            "unknown_node",
+            "invalid_target_id",
+            "invalid_direction",
+            "low_confidence",
+            "invalid_bearing_std",
+            "bearing_noise_too_high",
+            "timestamp_skew",
+            "duplicate_node_observation",
+            "insufficient_cluster_observations",
+            "weak_intersection_geometry",
+            "fusion_failure"
           ]
         },
         "detail": {
@@ -422,9 +433,22 @@
       "properties": {
         "zone_id": {"type": "string"},
         "node_id": {"type": "string"},
-        "event_type": {"type": "string", "enum": ["entered", "coverage_updated", "exited"]},
+        "event_type": {"type": "string", "enum": ["entered", "coverage_updated", "exited", "violation"]},
         "timestamp_s": {"type": "number"},
         "zone_coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "deconfliction_event": {
+      "type": "object",
+      "description": "Record of a yielded position resolution between two drones predicted to violate minimum separation.",
+      "required": ["yielding_drone_id", "conflicting_drone_id", "predicted_separation_m", "resolution", "timestamp_s"],
+      "additionalProperties": true,
+      "properties": {
+        "yielding_drone_id": {"type": "string"},
+        "conflicting_drone_id": {"type": "string"},
+        "predicted_separation_m": {"type": "number", "minimum": 0},
+        "resolution": {"type": "string", "enum": ["lateral_offset", "vertical_offset", "corridor_hold"]},
+        "timestamp_s": {"type": "number"}
       }
     },
     "platform_metrics": {
@@ -567,6 +591,13 @@
             "$ref": "#/definitions/inspection_event"
           }
         },
+        "deconfliction_events": {
+          "type": "array",
+          "description": "Inter-drone yield events recorded when minimum separation would be violated this frame.",
+          "items": {
+            "$ref": "#/definitions/deconfliction_event"
+          }
+        },
         "scan_mission_state": {
           "$ref": "#/definitions/scan_mission_state"
         }
@@ -574,13 +605,13 @@
     },
     "scan_mission_state": {
       "type": ["object", "null"],
-      "description": "State of the three-phase ISR mission (scanning → localizing → inspecting) at this frame. Present only in scan_map_inspect missions.",
+      "description": "State of the four-phase ISR mission (scanning → localizing → inspecting → egress) at this frame. Present only in scan_map_inspect missions.",
       "additionalProperties": true,
       "properties": {
         "phase": {
           "type": "string",
           "description": "Current mission phase.",
-          "enum": ["scanning", "localizing", "inspecting", "complete"]
+          "enum": ["scanning", "localizing", "inspecting", "egress", "complete"]
         },
         "scan_coverage_fraction": {
           "type": "number",
@@ -634,7 +665,33 @@
             "additionalProperties": true,
             "properties": {
               "poi_id": {"type": "string"},
-              "status": {"type": "string", "enum": ["pending", "active", "complete"]}
+              "status": {"type": "string", "enum": ["pending", "active", "complete"]},
+              "position": {
+                "type": "array",
+                "description": "World-space [x_m, y_m, z_m] position of this POI.",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          }
+        },
+        "egress_progress": {
+          "type": "array",
+          "description": "Per-drone return-to-home progress. Non-empty only during the egress phase.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "drone_id": {"type": "string"},
+              "distance_to_home_m": {"type": "number", "minimum": 0},
+              "home_position": {
+                "type": "array",
+                "description": "World-space [x_m, y_m, z_m] of the drone's home station.",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3
+              }
             }
           }
         },

@@ -7,8 +7,9 @@ summary aggregation across missions.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -34,10 +35,10 @@ class MissionRecord:
     end_time_s: float = 0.0
     """Mission end timestamp (seconds)."""
 
-    keyframe_ids: List[str] = field(default_factory=list)
+    keyframe_ids: list[str] = field(default_factory=list)
     """Ordered list of keyframe IDs captured during this mission."""
 
-    flight_path: List[Vector3] = field(default_factory=list)
+    flight_path: list[Vector3] = field(default_factory=list)
     """Waypoints traversed (metres, world frame)."""
 
     total_coverage_m2: float = 0.0
@@ -46,10 +47,10 @@ class MissionRecord:
     total_distance_m: float = 0.0
     """Total distance flown (m)."""
 
-    sensor_ids: List[str] = field(default_factory=list)
+    sensor_ids: list[str] = field(default_factory=list)
     """Sensors used during the mission."""
 
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     """Arbitrary metadata (weather, operator notes, etc.)."""
 
     @property
@@ -71,7 +72,7 @@ class MissionRecord:
             self.total_distance_m += float(np.linalg.norm(curr - prev))
         self.flight_path.append(position)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "mission_id": self.mission_id,
             "start_time_s": self.start_time_s,
@@ -85,7 +86,7 @@ class MissionRecord:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> MissionRecord:
+    def from_dict(cls, data: dict[str, Any]) -> MissionRecord:
         path = data.get("flight_path", [])
         return cls(
             mission_id=data.get("mission_id", new_mission_id()),
@@ -107,7 +108,7 @@ class MissionIndex:
     """
 
     def __init__(self) -> None:
-        self._missions: Dict[str, MissionRecord] = {}
+        self._missions: dict[str, MissionRecord] = {}
 
     # ------------------------------------------------------------------
     # Mutators
@@ -117,14 +118,14 @@ class MissionIndex:
         """Register a mission record."""
         self._missions[record.mission_id] = record
 
-    def create_mission(self, mission_id: Optional[str] = None, **kwargs: Any) -> MissionRecord:
+    def create_mission(self, mission_id: str | None = None, **kwargs: Any) -> MissionRecord:
         """Create and register a new mission record."""
         mid = mission_id or new_mission_id()
         record = MissionRecord(mission_id=mid, **kwargs)
         self.add(record)
         return record
 
-    def remove(self, mission_id: str) -> Optional[MissionRecord]:
+    def remove(self, mission_id: str) -> MissionRecord | None:
         return self._missions.pop(mission_id, None)
 
     def clear(self) -> None:
@@ -134,7 +135,7 @@ class MissionIndex:
     # Queries
     # ------------------------------------------------------------------
 
-    def get(self, mission_id: str) -> Optional[MissionRecord]:
+    def get(self, mission_id: str) -> MissionRecord | None:
         return self._missions.get(mission_id)
 
     def __len__(self) -> int:
@@ -143,23 +144,19 @@ class MissionIndex:
     def __contains__(self, mission_id: str) -> bool:
         return mission_id in self._missions
 
-    def all(self) -> List[MissionRecord]:
+    def all(self) -> list[MissionRecord]:
         """Return all missions sorted by start time."""
         return sorted(self._missions.values(), key=lambda m: m.start_time_s)
 
-    def query_time_range(self, t_min: float, t_max: float) -> List[MissionRecord]:
+    def query_time_range(self, t_min: float, t_max: float) -> list[MissionRecord]:
         """Return missions overlapping the time range ``[t_min, t_max]``."""
         return [
-            m
-            for m in self._missions.values()
-            if m.start_time_s <= t_max and m.end_time_s >= t_min
+            m for m in self._missions.values() if m.start_time_s <= t_max and m.end_time_s >= t_min
         ]
 
-    def missions_with_keyframe(self, keyframe_id: str) -> List[MissionRecord]:
+    def missions_with_keyframe(self, keyframe_id: str) -> list[MissionRecord]:
         """Return missions containing a given keyframe ID."""
-        return [
-            m for m in self._missions.values() if keyframe_id in m.keyframe_ids
-        ]
+        return [m for m in self._missions.values() if keyframe_id in m.keyframe_ids]
 
     # ------------------------------------------------------------------
     # Aggregation
@@ -175,7 +172,7 @@ class MissionIndex:
     def total_keyframe_count(self) -> int:
         return sum(m.keyframe_count for m in self._missions.values())
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Return a JSON-friendly summary of the index."""
         return {
             "mission_count": len(self._missions),
@@ -189,11 +186,11 @@ class MissionIndex:
     # Serialization
     # ------------------------------------------------------------------
 
-    def to_dicts(self) -> List[Dict[str, Any]]:
+    def to_dicts(self) -> list[dict[str, Any]]:
         return [m.to_dict() for m in self.all()]
 
     @classmethod
-    def from_dicts(cls, records: Sequence[Dict[str, Any]]) -> MissionIndex:
+    def from_dicts(cls, records: Sequence[dict[str, Any]]) -> MissionIndex:
         index = cls()
         for rec in records:
             index.add(MissionRecord.from_dict(rec))

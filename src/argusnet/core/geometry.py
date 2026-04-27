@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
 
 import numpy as np
 
@@ -38,12 +37,12 @@ class BoundingBox3D:
     def size(self) -> Vector3:
         return self.max - self.min
 
-    def expand(self, margin: float) -> "BoundingBox3D":
+    def expand(self, margin: float) -> BoundingBox3D:
         m = np.array([margin, margin, margin])
         return BoundingBox3D(self.min - m, self.max + m)
 
     @classmethod
-    def from_points(cls, points: np.ndarray) -> "BoundingBox3D":
+    def from_points(cls, points: np.ndarray) -> BoundingBox3D:
         """Build from an (N, 3) array of points."""
         return cls(points.min(axis=0), points.max(axis=0))
 

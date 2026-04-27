@@ -45,7 +45,7 @@ class GNSSModel:
         """1-sigma vertical position error (metres)."""
         return self.base_cep_m * self.vdop * self._CEP_TO_SIGMA
 
-    def sample_error(self, rng: "np.random.Generator | None" = None) -> Vector3:
+    def sample_error(self, rng: np.random.Generator | None = None) -> Vector3:
         """Sample a 3-D position error vector (dx, dy, dz) in metres."""
         if rng is None:
             rng = np.random.default_rng()
@@ -78,7 +78,7 @@ def sample_gnss_position(
     true_position: Vector3,
     model: GNSSModel,
     timestamp_s: float,
-    rng: "np.random.Generator | None" = None,
+    rng: np.random.Generator | None = None,
 ) -> GNSSMeasurement:
     """Generate a noisy GNSS fix from a ground-truth position."""
     error = model.sample_error(rng)

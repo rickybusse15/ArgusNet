@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 import numpy as np
 
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
-from argusnet.core.types import NodeState, PlatformFrame, vec3
+from argusnet.core.types import NodeState, vec3
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ class TelemetryMessage:
     timestamp_s: float
     """Timestamp in simulation or UNIX seconds."""
 
-    fields: Dict[str, Any] = field(default_factory=dict)
+    fields: dict[str, Any] = field(default_factory=dict)
     """Message-specific fields."""
 
 
@@ -64,9 +63,9 @@ class TelemetryMessage:
 
 
 def parse_gps_raw_int(
-    msg: Dict[str, Any],
+    msg: dict[str, Any],
     node_id: str,
-    enu_origin: Optional[ENUOrigin] = None,
+    enu_origin: ENUOrigin | None = None,
 ) -> TelemetryMessage:
     """Parse a MAVLink ``GPS_RAW_INT`` message.
 
@@ -84,7 +83,7 @@ def parse_gps_raw_int(
     alt_m = msg.get("alt", 0) * 1e-3  # mm → m
     timestamp_s = msg.get("time_usec", 0) * 1e-6
 
-    fields: Dict[str, Any] = {
+    fields: dict[str, Any] = {
         "lat_deg": lat_deg,
         "lon_deg": lon_deg,
         "alt_m": alt_m,
@@ -107,7 +106,7 @@ def parse_gps_raw_int(
 
 
 def parse_attitude(
-    msg: Dict[str, Any],
+    msg: dict[str, Any],
     node_id: str,
 ) -> TelemetryMessage:
     """Parse a MAVLink ``ATTITUDE`` message.
@@ -133,7 +132,7 @@ def parse_attitude(
 
 
 def parse_battery_status(
-    msg: Dict[str, Any],
+    msg: dict[str, Any],
     node_id: str,
 ) -> TelemetryMessage:
     """Parse a MAVLink ``BATTERY_STATUS`` message.
@@ -163,7 +162,7 @@ def parse_battery_status(
 
 
 def parse_heartbeat(
-    msg: Dict[str, Any],
+    msg: dict[str, Any],
     node_id: str,
 ) -> TelemetryMessage:
     """Parse a MAVLink ``HEARTBEAT`` message.
@@ -197,9 +196,9 @@ class _VehicleState:
     """Internal mutable state for a single vehicle."""
 
     node_id: str
-    position: Optional[np.ndarray] = None
-    velocity: Optional[np.ndarray] = None
-    attitude_rad: Optional[np.ndarray] = None  # [roll, pitch, yaw]
+    position: np.ndarray | None = None
+    velocity: np.ndarray | None = None
+    attitude_rad: np.ndarray | None = None  # [roll, pitch, yaw]
     battery_pct: float = -1.0
     last_gps_timestamp_s: float = 0.0
     last_attitude_timestamp_s: float = 0.0
@@ -216,11 +215,11 @@ class TelemetryAggregator:
         enu_origin: Optional ENU reference for WGS84 → local conversion.
     """
 
-    def __init__(self, enu_origin: Optional[ENUOrigin] = None) -> None:
+    def __init__(self, enu_origin: ENUOrigin | None = None) -> None:
         self._enu_origin = enu_origin
-        self._vehicles: Dict[str, _VehicleState] = {}
+        self._vehicles: dict[str, _VehicleState] = {}
 
-    def update(self, msg: TelemetryMessage) -> Optional[NodeState]:
+    def update(self, msg: TelemetryMessage) -> NodeState | None:
         """Ingest a single telemetry message and return an updated
         ``NodeState`` if sufficient data is available.
         """
@@ -252,11 +251,13 @@ class TelemetryAggregator:
                     state.velocity = np.zeros(3)
 
         elif msg.msg_type == "ATTITUDE":
-            state.attitude_rad = np.array([
-                msg.fields.get("roll_rad", 0.0),
-                msg.fields.get("pitch_rad", 0.0),
-                msg.fields.get("yaw_rad", 0.0),
-            ])
+            state.attitude_rad = np.array(
+                [
+                    msg.fields.get("roll_rad", 0.0),
+                    msg.fields.get("pitch_rad", 0.0),
+                    msg.fields.get("yaw_rad", 0.0),
+                ]
+            )
             state.last_attitude_timestamp_s = msg.timestamp_s
 
         elif msg.msg_type == "BATTERY_STATUS":
@@ -281,22 +282,24 @@ class TelemetryAggregator:
             health=max(state.battery_pct / 100.0, 0.0) if state.battery_pct >= 0 else 1.0,
         )
 
-    def all_node_states(self) -> List[NodeState]:
+    def all_node_states(self) -> list[NodeState]:
         """Return the latest ``NodeState`` for every tracked vehicle."""
-        result: List[NodeState] = []
+        result: list[NodeState] = []
         for state in self._vehicles.values():
             if state.position is not None:
                 vel = state.velocity if state.velocity is not None else np.zeros(3)
-                result.append(NodeState(
-                    node_id=state.node_id,
-                    position=vec3(state.position[0], state.position[1], state.position[2]),
-                    velocity=vec3(vel[0], vel[1], vel[2]),
-                    is_mobile=True,
-                    timestamp_s=state.last_gps_timestamp_s,
-                    health=max(state.battery_pct / 100.0, 0.0)
-                    if state.battery_pct >= 0
-                    else 1.0,
-                ))
+                result.append(
+                    NodeState(
+                        node_id=state.node_id,
+                        position=vec3(state.position[0], state.position[1], state.position[2]),
+                        velocity=vec3(vel[0], vel[1], vel[2]),
+                        is_mobile=True,
+                        timestamp_s=state.last_gps_timestamp_s,
+                        health=max(state.battery_pct / 100.0, 0.0)
+                        if state.battery_pct >= 0
+                        else 1.0,
+                    )
+                )
         return result
 
     def clear(self) -> None:
@@ -316,19 +319,20 @@ class JSONTelemetryReplay:
 
     Example line::
 
-        {"msg_type": "GPS_RAW_INT", "node_id": "drone-1", "lat": 474000000, "lon": 85000000, "alt": 50000}
+        {"msg_type": "GPS_RAW_INT", "node_id": "drone-1",
+         "lat": 474000000, "lon": 85000000, "alt": 50000}
     """
 
     def __init__(
         self,
         path: str,
-        enu_origin: Optional[ENUOrigin] = None,
+        enu_origin: ENUOrigin | None = None,
     ) -> None:
         self._path = path
         self._aggregator = TelemetryAggregator(enu_origin=enu_origin)
         self._enu_origin = enu_origin
 
-    def replay(self) -> List[NodeState]:
+    def replay(self) -> list[NodeState]:
         """Read all lines and return final node states."""
         with open(self._path) as fh:
             for line in fh:

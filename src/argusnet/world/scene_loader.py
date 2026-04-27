@@ -4,18 +4,25 @@ import json
 import math
 import tempfile
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
+from argusnet.core.types import to_jsonable
+from argusnet.evaluation.replay import (
+    ReplayDocument,
+    load_replay_document,
+    validate_replay_document,
+)
+
+from ._glb import merge_meshes
 from ._scene_geometry import (
     SceneLayerMesh,
     chunked_height_grid_layers,
     height_function_from_mesh,
     mesh_from_extrusion,
-    mesh_from_height_grid,
     mesh_from_polygon,
     mesh_from_polyline,
     terrain_mesh_from_viewer_mesh,
@@ -27,12 +34,8 @@ from ._scene_gis import (
     project_dem_to_runtime,
 )
 from ._scene_style import STYLE_FORMAT_VERSION, default_style, style_document
-from ._glb import merge_meshes
 from .environment import Bounds2D, EnvironmentCRS, LandCoverClass
 from .environment_io import load_environment_bundle
-from argusnet.core.types import to_jsonable
-from argusnet.evaluation.replay import ReplayDocument, load_replay_document, validate_replay_document
-
 
 SCENE_FORMAT_VERSION = "smartscene-v1"
 GROUND_CONTACT_TOP_PAD_M = 3.0
@@ -53,11 +56,11 @@ def _normalize_scene_id(candidate: str) -> str:
     return normalized or "scene"
 
 
-def _runtime_crs_metadata(crs: EnvironmentCRS) -> Dict[str, object]:
+def _runtime_crs_metadata(crs: EnvironmentCRS) -> dict[str, object]:
     return crs.to_metadata()
 
 
-def _terrain_height_span_under_footprint(footprint: np.ndarray, height_at) -> Tuple[float, float]:
+def _terrain_height_span_under_footprint(footprint: np.ndarray, height_at) -> tuple[float, float]:
     heights = [float(height_at(float(vertex[0]), float(vertex[1]))) for vertex in footprint]
     return min(heights), max(heights)
 
@@ -66,12 +69,13 @@ def _solid_mesh_elevations(
     object_meta: Mapping[str, object],
     min_terrain_z: float,
     max_terrain_z: float,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     requested_base_z = float(object_meta.get("base_elevation_m", min_terrain_z))
     requested_top_z = float(
         object_meta.get(
             "top_elevation_m",
-            requested_base_z + max(float(object_meta.get("height_agl_m", 12.0)), GROUND_CONTACT_TOP_PAD_M),
+            requested_base_z
+            + max(float(object_meta.get("height_agl_m", 12.0)), GROUND_CONTACT_TOP_PAD_M),
         )
     )
     base_z = min(requested_base_z, min_terrain_z)
@@ -94,7 +98,9 @@ def validate_scene_manifest(document: Mapping[str, object]) -> None:
     metadata = document.get("metadata")
     if not isinstance(metadata, Mapping):
         raise ValueError("Scene manifest must include metadata.")
-    if not isinstance(metadata.get("environment"), str) or not isinstance(metadata.get("style"), str):
+    if not isinstance(metadata.get("environment"), str) or not isinstance(
+        metadata.get("style"), str
+    ):
         raise ValueError("Scene manifest metadata must include environment and style paths.")
     for layer in layers:
         if not isinstance(layer, Mapping):
@@ -105,13 +111,13 @@ def validate_scene_manifest(document: Mapping[str, object]) -> None:
             raise ValueError("Each scene manifest layer must include style_id.")
 
 
-def load_scene_manifest(path: str | Path) -> Dict[str, object]:
+def load_scene_manifest(path: str | Path) -> dict[str, object]:
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     validate_scene_manifest(document)
     return document
 
 
-def _load_replay(path_or_document: str | Path | ReplayDocument | None) -> Optional[ReplayDocument]:
+def _load_replay(path_or_document: str | Path | ReplayDocument | None) -> ReplayDocument | None:
     if path_or_document is None:
         return None
     if isinstance(path_or_document, Mapping):
@@ -120,7 +126,7 @@ def _load_replay(path_or_document: str | Path | ReplayDocument | None) -> Option
     return load_replay_document(str(path_or_document))
 
 
-def _copy_replay_document(output_dir: Path, replay_document: Optional[ReplayDocument]) -> Optional[str]:
+def _copy_replay_document(output_dir: Path, replay_document: ReplayDocument | None) -> str | None:
     if replay_document is None:
         return None
     replay_path = output_dir / "replay" / "replay.json"
@@ -135,13 +141,13 @@ def _build_manifest(
     bounds_xy_m: Bounds2D,
     runtime_crs: Mapping[str, object],
     source_crs_id: str,
-    layers: Sequence[Dict[str, object]],
-    replay_path: Optional[str],
+    layers: Sequence[dict[str, object]],
+    replay_path: str | None,
     source_kind: str,
     environment_path: str,
     style_path: str,
     provenance: Mapping[str, object],
-) -> Dict[str, object]:
+) -> dict[str, object]:
     manifest = {
         "format_version": SCENE_FORMAT_VERSION,
         "scene_id": scene_id,
@@ -219,7 +225,13 @@ def _build_obstacle_meshes(
 
     for object_meta in occluding_objects:
         blocker_type = str(object_meta.get("blocker_type", "building"))
-        layer_id = "walls" if blocker_type == "wall" else "vegetation" if blocker_type == "vegetation" else "buildings"
+        layer_id = (
+            "walls"
+            if blocker_type == "wall"
+            else "vegetation"
+            if blocker_type == "vegetation"
+            else "buildings"
+        )
         if isinstance(object_meta.get("footprint_xy_m"), list):
             footprint = np.asarray(object_meta["footprint_xy_m"], dtype=np.float32)
             min_tz, max_tz = _terrain_height_span_under_footprint(footprint, height_at)
@@ -238,7 +250,10 @@ def _build_obstacle_meshes(
             cy = float(object_meta["center_y_m"])
             perimeter_angles = np.linspace(0.0, math.tau, num=8, endpoint=False, dtype=np.float32)
             perimeter_heights = [
-                height_at(cx + (radius * float(math.cos(float(angle)))), cy + (radius * float(math.sin(float(angle)))))
+                height_at(
+                    cx + (radius * float(math.cos(float(angle)))),
+                    cy + (radius * float(math.sin(float(angle)))),
+                )
                 for angle in perimeter_angles
             ]
             perimeter_heights.append(height_at(cx, cy))
@@ -300,7 +315,10 @@ def _landcover_style_id(properties: Mapping[str, object]) -> str:
             return "landcover-forest"
         if any(token in normalized for token in ("water", "river", "lake", "stream", "wetland")):
             return "landcover-water"
-        if any(token in normalized for token in ("urban", "built", "residential", "commercial", "industrial")):
+        if any(
+            token in normalized
+            for token in ("urban", "built", "residential", "commercial", "industrial")
+        ):
             return "landcover-urban"
     return "landcover-open"
 
@@ -309,9 +327,9 @@ def build_scene_from_replay(
     replay: str | Path | ReplayDocument,
     output_dir: str | Path,
     *,
-    scene_id: Optional[str] = None,
-    environment_bundle: Optional[str | Path] = None,
-) -> Dict[str, object]:
+    scene_id: str | None = None,
+    environment_bundle: str | Path | None = None,
+) -> dict[str, object]:
     replay_document = _load_replay(replay)
     if replay_document is None:
         raise ValueError("Replay scene compilation requires a replay document.")
@@ -319,7 +337,9 @@ def build_scene_from_replay(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     meta = replay_document.get("meta", {})
-    active_scene_id = _normalize_scene_id(scene_id or str(meta.get("scenario_name", "synthetic-scene")))
+    active_scene_id = _normalize_scene_id(
+        scene_id or str(meta.get("scenario_name", "synthetic-scene"))
+    )
 
     terrain_meta = meta.get("terrain")
     if environment_bundle:
@@ -331,7 +351,9 @@ def build_scene_from_replay(
         occluding_objects = environment.obstacles.to_metadata()
     else:
         environment = None
-        bounds_xy_m = _as_bounds(meta.get("environment_bounds_m") or terrain_meta.get("xy_bounds_m"))
+        bounds_xy_m = _as_bounds(
+            meta.get("environment_bounds_m") or terrain_meta.get("xy_bounds_m")
+        )
         runtime_crs = {
             "source_crs_id": str(meta.get("crs_id", "local-synthetic")),
             "runtime_crs_id": str(meta.get("crs_id", "local-enu")),
@@ -342,7 +364,9 @@ def build_scene_from_replay(
         landcover_layers = []
         occluding_objects = list(meta.get("occluding_objects", []))
 
-    if not isinstance(terrain_meta, Mapping) or not isinstance(terrain_meta.get("viewer_mesh"), Mapping):
+    if not isinstance(terrain_meta, Mapping) or not isinstance(
+        terrain_meta.get("viewer_mesh"), Mapping
+    ):
         raise ValueError("Replay metadata does not include terrain.viewer_mesh.")
 
     terrain_mesh = terrain_mesh_from_viewer_mesh(terrain_meta["viewer_mesh"])
@@ -405,11 +429,11 @@ def build_scene_from_gis(
     dem_path: str | Path,
     output_dir: str | Path,
     *,
-    scene_id: Optional[str] = None,
-    source_crs: Optional[str] = None,
+    scene_id: str | None = None,
+    source_crs: str | None = None,
     replay: str | Path | ReplayDocument | None = None,
-    overlay_paths: Optional[Mapping[str, Sequence[str | Path]]] = None,
-) -> Dict[str, object]:
+    overlay_paths: Mapping[str, Sequence[str | Path]] | None = None,
+) -> dict[str, object]:
     raster = project_dem_to_runtime(dem_path, source_crs=source_crs)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -423,8 +447,8 @@ def build_scene_from_gis(
         y_values=raster.y_values_m,
         heights_m=raster.heights_m,
     )
-    overlay_stats: Dict[str, int] = {}
-    overlay_source_crs: Dict[str, Sequence[str]] = {}
+    overlay_stats: dict[str, int] = {}
+    overlay_source_crs: dict[str, Sequence[str]] = {}
 
     for semantic_kind, paths in (overlay_paths or {}).items():
         grouped_meshes = defaultdict(list)
@@ -441,8 +465,15 @@ def build_scene_from_gis(
                 ):
                     feature_count += 1
                     if semantic_kind == "buildings" and geometry_kind == "polygon":
-                        height_m = float(feature["properties"].get("height_m") or feature["properties"].get("height") or 24.0)
-                        base_m = float(feature["properties"].get("base_z_m") or raster.height_at(float(geometry_xy[0][0]), float(geometry_xy[0][1])))
+                        height_m = float(
+                            feature["properties"].get("height_m")
+                            or feature["properties"].get("height")
+                            or 24.0
+                        )
+                        base_m = float(
+                            feature["properties"].get("base_z_m")
+                            or raster.height_at(float(geometry_xy[0][0]), float(geometry_xy[0][1]))
+                        )
                         grouped_meshes["buildings"].append(
                             mesh_from_extrusion(
                                 geometry_xy,
@@ -556,7 +587,9 @@ def build_scene_from_gis(
         provenance={
             "tool": "argusnet.world.scene_loader.build_scene_from_gis",
             "dem_path": str(dem_path),
-            "overlay_paths": {key: [str(path) for path in value] for key, value in (overlay_paths or {}).items()},
+            "overlay_paths": {
+                key: [str(path) for path in value] for key, value in (overlay_paths or {}).items()
+            },
         },
     )
     _write_json(output_path / "scene_manifest.json", manifest)
@@ -569,10 +602,10 @@ def build_scene_package(
     replay: str | Path | ReplayDocument | None = None,
     environment_bundle: str | Path | None = None,
     dem_path: str | Path | None = None,
-    source_crs: Optional[str] = None,
-    overlay_paths: Optional[Mapping[str, Sequence[str | Path]]] = None,
-    scene_id: Optional[str] = None,
-) -> Dict[str, object]:
+    source_crs: str | None = None,
+    overlay_paths: Mapping[str, Sequence[str | Path]] | None = None,
+    scene_id: str | None = None,
+) -> dict[str, object]:
     if dem_path is not None:
         return build_scene_from_gis(
             dem_path=dem_path,

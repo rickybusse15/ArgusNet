@@ -2,28 +2,28 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any
 
 import numpy as np
 
 from argusnet.core.frames import ENUOrigin
 from argusnet.core.types import PlatformFrame, to_jsonable
 
-
-ReplayDocument = Dict[str, object]
+ReplayDocument = dict[str, object]
 
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "replay-schema.json"
 
 
-def _load_replay_schema() -> Dict[str, Any]:
+def _load_replay_schema() -> dict[str, Any]:
     """Load the JSON Schema for replay documents from the docs directory."""
     with _SCHEMA_PATH.open("r", encoding="utf-8") as fh:
         return json.load(fh)
 
 
-def validate_replay_with_schema(document: Mapping[str, Any]) -> List[str]:
+def validate_replay_with_schema(document: Mapping[str, Any]) -> list[str]:
     """Validate a replay document dict against the formal JSON Schema.
 
     Returns a list of human-readable error strings.  An empty list means the
@@ -39,7 +39,7 @@ def validate_replay_with_schema(document: Mapping[str, Any]) -> List[str]:
 
     validator_cls = jsonschema.Draft7Validator
     validator = validator_cls(schema)
-    errors: List[str] = []
+    errors: list[str] = []
     for error in sorted(validator.iter_errors(dict(document)), key=lambda e: list(e.absolute_path)):
         path = ".".join(str(p) for p in error.absolute_path) or "(root)"
         errors.append(f"{path}: {error.message}")
@@ -48,10 +48,10 @@ def validate_replay_with_schema(document: Mapping[str, Any]) -> List[str]:
 
 def _manual_schema_validation(
     document: Mapping[str, Any],
-    schema: Dict[str, Any],
-) -> List[str]:
+    schema: dict[str, Any],
+) -> list[str]:
     """Lightweight fallback validation when jsonschema is not installed."""
-    errors: List[str] = []
+    errors: list[str] = []
 
     # Top-level type check
     if not isinstance(document, Mapping):
@@ -100,7 +100,13 @@ def _manual_schema_validation(
                 # Type checks for frame fields
                 if "timestamp_s" in frame and not isinstance(frame["timestamp_s"], (int, float)):
                     errors.append(f"frames.{idx}.timestamp_s: must be a number")
-                for list_field in ("nodes", "observations", "rejected_observations", "tracks", "truths"):
+                for list_field in (
+                    "nodes",
+                    "observations",
+                    "rejected_observations",
+                    "tracks",
+                    "truths",
+                ):
                     if list_field in frame and not isinstance(frame[list_field], list):
                         errors.append(f"frames.{idx}.{list_field}: must be an array")
                 if "metrics" in frame and not isinstance(frame["metrics"], dict):
@@ -110,7 +116,7 @@ def _manual_schema_validation(
 
 
 def validate_replay_document(document: Mapping[str, object]) -> None:
-    errors: List[str] = []
+    errors: list[str] = []
     frames = document.get("frames")
     if not isinstance(frames, list) or not frames:
         errors.append("Replay document must contain a non-empty frames list.")
@@ -150,14 +156,12 @@ def build_replay_document(
     scenario_name: str,
     dt_s: float,
     seed: int,
-    extra_meta: Optional[Dict[str, object]] = None,
-    enu_origin: Optional[ENUOrigin] = None,
+    extra_meta: dict[str, object] | None = None,
+    enu_origin: ENUOrigin | None = None,
 ) -> ReplayDocument:
     frame_list = list(frames)
     errors = [
-        frame.metrics.mean_error_m
-        for frame in frame_list
-        if frame.metrics.mean_error_m is not None
+        frame.metrics.mean_error_m for frame in frame_list if frame.metrics.mean_error_m is not None
     ]
     observation_counts = [frame.metrics.observation_count for frame in frame_list]
     accepted_counts = [frame.metrics.accepted_observation_count for frame in frame_list]
@@ -167,28 +171,22 @@ def build_replay_document(
     for frame in frame_list:
         rejection_counter.update(frame.metrics.rejection_counts)
 
-    track_ids = sorted(
-        {
-            track.track_id
-            for frame in frame_list
-            for track in frame.tracks
-        }
-    )
-    node_ids = sorted(
-        {
-            node.node_id
-            for frame in frame_list
-            for node in frame.nodes
-        }
-    )
+    track_ids = sorted({track.track_id for frame in frame_list for track in frame.tracks})
+    node_ids = sorted({node.node_id for frame in frame_list for node in frame.nodes})
 
     summary = {
         "mean_error_m": float(np.mean(errors)) if errors else None,
         "peak_error_m": float(np.max(errors)) if errors else None,
-        "mean_observations_per_frame": float(np.mean(observation_counts)) if observation_counts else 0.0,
+        "mean_observations_per_frame": float(np.mean(observation_counts))
+        if observation_counts
+        else 0.0,
         "mean_active_tracks": float(np.mean(active_track_counts)) if active_track_counts else 0.0,
-        "mean_accepted_observations_per_frame": float(np.mean(accepted_counts)) if accepted_counts else 0.0,
-        "mean_rejected_observations_per_frame": float(np.mean(rejected_counts)) if rejected_counts else 0.0,
+        "mean_accepted_observations_per_frame": float(np.mean(accepted_counts))
+        if accepted_counts
+        else 0.0,
+        "mean_rejected_observations_per_frame": float(np.mean(rejected_counts))
+        if rejected_counts
+        else 0.0,
         "total_accepted_observations": int(sum(accepted_counts)),
         "total_rejected_observations": int(sum(rejected_counts)),
         "observation_rejection_rate": (
@@ -199,7 +197,7 @@ def build_replay_document(
         "rejection_counts": dict(sorted(rejection_counter.items())),
     }
 
-    meta: Dict[str, object] = {
+    meta: dict[str, object] = {
         "scenario_name": scenario_name,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "frame_count": len(frame_list),
@@ -235,10 +233,10 @@ def write_replay_document(path: str, document: ReplayDocument) -> None:
 
 
 def write_streaming_replay_document(
-    jsonl_path: "Path",
-    output_path: "Path",
-    meta: Dict[str, object],
-    summary: Dict[str, object],
+    jsonl_path: Path,
+    output_path: Path,
+    meta: dict[str, object],
+    summary: dict[str, object],
 ) -> None:
     """Assemble a replay JSON from a JSONL frame file without loading all frames.
 
@@ -254,20 +252,20 @@ def write_streaming_replay_document(
         json.dump(summary, out)
         out.write(', "frames": [\n')
         first = True
-        with open(jsonl_path, "r", encoding="utf-8") as src:
+        with open(jsonl_path, encoding="utf-8") as src:
             for raw_line in src:
                 line = raw_line.rstrip()
                 if not line:
                     continue
                 if not first:
-                    out.write(',\n')
+                    out.write(",\n")
                 out.write(line)
                 first = False
-        out.write('\n]}')
+        out.write("\n]}")
 
 
 def load_replay_document(path: str) -> ReplayDocument:
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         document = json.load(handle)
     validate_replay_document(document)
     return document

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Dict, Iterable, Mapping, Sequence, Tuple
 
 import numpy as np
 
@@ -30,7 +30,9 @@ def _as_xy(value: Sequence[float]) -> np.ndarray:
     return array
 
 
-def _segment_frame(point_xy: np.ndarray, start_xy: np.ndarray, end_xy: np.ndarray) -> Tuple[float, float, float]:
+def _segment_frame(
+    point_xy: np.ndarray, start_xy: np.ndarray, end_xy: np.ndarray
+) -> tuple[float, float, float]:
     segment = end_xy - start_xy
     length = max(float(np.linalg.norm(segment)), 1.0e-9)
     direction = segment / length
@@ -47,7 +49,7 @@ class TerrainFeature:
     def height_contribution(self, x_m: float, y_m: float) -> float:
         raise NotImplementedError
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         raise NotImplementedError
 
 
@@ -76,12 +78,14 @@ class MountainRange(TerrainFeature):
             peak_along = spacing * (peak_index + 1)
             peak_span = max(spacing * 0.9, self.width_m * 0.75, 1.0)
             roughness_phase = (peak_index + 1) * 1.618
-            amplitude = self.peak_elevation_m * (0.8 + self.roughness * 0.2 * math.sin(roughness_phase))
+            amplitude = self.peak_elevation_m * (
+                0.8 + self.roughness * 0.2 * math.sin(roughness_phase)
+            )
             along_delta = (clamped_along - peak_along) / peak_span
             contribution += amplitude * math.exp(-0.5 * along_delta * along_delta)
         return contribution * ridge_envelope
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "kind": "mountain-range-v1",
             "start_xy": self.start_xy.tolist(),
@@ -110,7 +114,7 @@ class Valley(TerrainFeature):
         normalized = cross / max(self.width_m, 1.0)
         return -self.depth_m * math.exp(-0.5 * normalized * normalized)
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "kind": "valley-v1",
             "start_xy": self.start_xy.tolist(),
@@ -135,9 +139,9 @@ class Plateau(TerrainFeature):
         distance = float(np.linalg.norm(np.array([x_m, y_m], dtype=float) - self.center_xy))
         normalized = distance / radius
         sharpness = max(self.edge_sharpness, 1.0)
-        return self.elevation_m / (1.0 + normalized ** sharpness)
+        return self.elevation_m / (1.0 + normalized**sharpness)
 
-    def scaled(self, scale: float) -> "Plateau":
+    def scaled(self, scale: float) -> Plateau:
         return Plateau(
             center_xy=self.center_xy * scale,
             radius_m=self.radius_m * scale,
@@ -145,7 +149,7 @@ class Plateau(TerrainFeature):
             edge_sharpness=self.edge_sharpness,
         )
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "kind": "plateau-v1",
             "center_xy": self.center_xy.tolist(),
@@ -172,7 +176,7 @@ class RidgeLine(TerrainFeature):
         normalized = cross / max(self.width_m, 1.0)
         return self.peak_elevation_m * math.exp(-0.5 * normalized * normalized)
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "kind": "ridgeline-v1",
             "start_xy": self.start_xy.tolist(),
@@ -226,14 +230,12 @@ class NoiseLayer(TerrainFeature):
         wavelength = max(self.base_wavelength_m, 1.0)
         amp = 1.0
         for octave in range(self.octaves):
-            total += amp * _value_noise_2d(
-                x_m / wavelength, y_m / wavelength, self.seed + octave
-            )
+            total += amp * _value_noise_2d(x_m / wavelength, y_m / wavelength, self.seed + octave)
             wavelength /= self.lacunarity
             amp *= self.persistence
         return total * self.amplitude_m
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "kind": "noise-layer-v1",
             "seed": self.seed,
@@ -264,29 +266,35 @@ class TerrainModel:
     basin_center_x_m: float = -165.0
     basin_center_y_m: float = 145.0
     basin_radius_m: float = 220.0
-    features: Tuple[TerrainFeature, ...] = ()
+    features: tuple[TerrainFeature, ...] = ()
 
     @classmethod
-    def default(cls) -> "TerrainModel":
+    def default(cls) -> TerrainModel:
         return cls()
 
     def analytic_height_at(self, x_m: float, y_m: float) -> float:
-        ridge_r2 = max(self.ridge_radius_m ** 2, 1.0)
-        basin_r2 = max(self.basin_radius_m ** 2, 1.0)
+        ridge_r2 = max(self.ridge_radius_m**2, 1.0)
+        basin_r2 = max(self.basin_radius_m**2, 1.0)
 
         x_freq = (2.0 * np.pi) / max(self.wave_length_x_m, 1.0)
         y_freq = (2.0 * np.pi) / max(self.wave_length_y_m, 1.0)
-        wave = self.wave_amplitude_m * np.sin(x_m * x_freq + self.wave_phase_x_rad) * np.cos(
-            y_m * y_freq + self.wave_phase_y_rad
+        wave = (
+            self.wave_amplitude_m
+            * np.sin(x_m * x_freq + self.wave_phase_x_rad)
+            * np.cos(y_m * y_freq + self.wave_phase_y_rad)
         )
 
         ridge_dx = x_m - self.ridge_center_x_m
         ridge_dy = y_m - self.ridge_center_y_m
-        ridge = self.ridge_amplitude_m * np.exp(-(ridge_dx * ridge_dx + ridge_dy * ridge_dy) / (2.0 * ridge_r2))
+        ridge = self.ridge_amplitude_m * np.exp(
+            -(ridge_dx * ridge_dx + ridge_dy * ridge_dy) / (2.0 * ridge_r2)
+        )
 
         basin_dx = x_m - self.basin_center_x_m
         basin_dy = y_m - self.basin_center_y_m
-        basin = self.basin_depth_m * np.exp(-(basin_dx * basin_dx + basin_dy * basin_dy) / (2.0 * basin_r2))
+        basin = self.basin_depth_m * np.exp(
+            -(basin_dx * basin_dx + basin_dy * basin_dy) / (2.0 * basin_r2)
+        )
 
         slope = x_m * self.slope_x_m_per_m + y_m * self.slope_y_m_per_m
         feature_height = sum(feature.height_contribution(x_m, y_m) for feature in self.features)
@@ -301,8 +309,12 @@ class TerrainModel:
 
     def gradient_at(self, x_m: float, y_m: float, delta_m: float = 0.5) -> np.ndarray:
         delta = max(delta_m, 0.05)
-        dz_dx = (self.height_at(x_m + delta, y_m) - self.height_at(x_m - delta, y_m)) / (2.0 * delta)
-        dz_dy = (self.height_at(x_m, y_m + delta) - self.height_at(x_m, y_m - delta)) / (2.0 * delta)
+        dz_dx = (self.height_at(x_m + delta, y_m) - self.height_at(x_m - delta, y_m)) / (
+            2.0 * delta
+        )
+        dz_dy = (self.height_at(x_m, y_m + delta) - self.height_at(x_m, y_m - delta)) / (
+            2.0 * delta
+        )
         return np.array([dz_dx, dz_dy], dtype=float)
 
     def curvature_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
@@ -324,7 +336,7 @@ class TerrainModel:
         gx, gy = self.gradient_at(x_m, y_m, delta_m)
         return math.atan(math.sqrt(gx * gx + gy * gy))
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "kind": "analytic-v2",
             "parameters": {
@@ -819,7 +831,9 @@ class OccludingObject:
     def top_elevation_m(self, terrain: TerrainModel) -> float:
         return self.base_elevation_m(terrain) + max(self.height_agl_m, 0.0)
 
-    def segment_intersects(self, origin: Sequence[float], target: Sequence[float], terrain: TerrainModel) -> bool:
+    def segment_intersects(
+        self, origin: Sequence[float], target: Sequence[float], terrain: TerrainModel
+    ) -> bool:
         origin_xy = np.asarray(origin[:2], dtype=float)
         target_xy = np.asarray(target[:2], dtype=float)
         segment_xy = target_xy - origin_xy
@@ -861,7 +875,7 @@ class OccludingObject:
         top_z = self.top_elevation_m(terrain)
         return high_z >= base_z and low_z <= top_z
 
-    def to_metadata(self, terrain: TerrainModel) -> Dict[str, object]:
+    def to_metadata(self, terrain: TerrainModel) -> dict[str, object]:
         base_elevation_m = self.base_elevation_m(terrain)
         return {
             "object_id": self.object_id,
@@ -875,7 +889,7 @@ class OccludingObject:
         }
 
 
-def xy_bounds(points: Iterable[Sequence[float]], padding_m: float = 100.0) -> Dict[str, float]:
+def xy_bounds(points: Iterable[Sequence[float]], padding_m: float = 100.0) -> dict[str, float]:
     collected = [np.asarray(point, dtype=float) for point in points]
     if not collected:
         return {"x_min_m": -300.0, "x_max_m": 300.0, "y_min_m": -300.0, "y_max_m": 300.0}
@@ -905,7 +919,6 @@ __all__ = [
     "Plateau",
     "PolygonPrism",
     "RidgeLine",
-    "River",
     "SensorVisibilityModel",
     "TerrainFeature",
     "TerrainModel",

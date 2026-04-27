@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any
 
 import numpy as np
-
 
 Vector3 = np.ndarray
 
@@ -45,11 +45,11 @@ class ObservationRejection:
     timestamp_s: float
     reason: str
     detail: str = ""
-    origin: Optional[Vector3] = None
-    attempted_point: Optional[Vector3] = None
-    closest_point: Optional[Vector3] = None
+    origin: Vector3 | None = None
+    attempted_point: Vector3 | None = None
+    closest_point: Vector3 | None = None
     blocker_type: str = ""
-    first_hit_range_m: Optional[float] = None
+    first_hit_range_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -70,28 +70,28 @@ class TrackState:
     measurement_std_m: float
     update_count: int
     stale_steps: int
-    lifecycle_state: Optional[str] = None
-    quality_score: Optional[float] = None
+    lifecycle_state: str | None = None
+    quality_score: float | None = None
 
 
 @dataclass(frozen=True)
 class PlatformMetrics:
-    mean_error_m: Optional[float]
-    max_error_m: Optional[float]
+    mean_error_m: float | None
+    max_error_m: float | None
     active_track_count: int
     observation_count: int
     accepted_observation_count: int
     rejected_observation_count: int
-    mean_measurement_std_m: Optional[float]
-    track_errors_m: Dict[str, float] = field(default_factory=dict)
-    rejection_counts: Dict[str, int] = field(default_factory=dict)
-    accepted_observations_by_target: Dict[str, int] = field(default_factory=dict)
-    rejected_observations_by_target: Dict[str, int] = field(default_factory=dict)
+    mean_measurement_std_m: float | None
+    track_errors_m: dict[str, float] = field(default_factory=dict)
+    rejection_counts: dict[str, int] = field(default_factory=dict)
+    accepted_observations_by_target: dict[str, int] = field(default_factory=dict)
+    rejected_observations_by_target: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class MappingState:
-    coverage_fraction: float       # 0.0–1.0 fraction of grid cells observed
+    coverage_fraction: float  # 0.0–1.0 fraction of grid cells observed
     covered_cells: int
     total_cells: int
     mean_revisits: float
@@ -108,25 +108,35 @@ class LocalizationState:
 class InspectionEvent:
     zone_id: str
     node_id: str
-    event_type: str                # "entered" | "coverage_updated" | "exited"
+    event_type: str  # "entered" | "coverage_updated" | "exited"
     timestamp_s: float
     zone_coverage_fraction: float
 
 
 @dataclass(frozen=True)
+class DeconflictionEvent:
+    yielding_drone_id: str
+    conflicting_drone_id: str
+    predicted_separation_m: float
+    resolution: str  # "lateral_offset" | "vertical_offset" | "corridor_hold"
+    timestamp_s: float
+
+
+@dataclass(frozen=True)
 class PlatformFrame:
     timestamp_s: float
-    nodes: List[NodeState]
-    observations: List[BearingObservation]
-    rejected_observations: List[ObservationRejection]
-    tracks: List[TrackState]
-    truths: List[TruthState]
+    nodes: list[NodeState]
+    observations: list[BearingObservation]
+    rejected_observations: list[ObservationRejection]
+    tracks: list[TrackState]
+    truths: list[TruthState]
     metrics: PlatformMetrics
-    generation_rejections: List[ObservationRejection] = field(default_factory=list)
-    mapping_state: Optional[MappingState] = None
-    localization_state: Optional[LocalizationState] = None
-    inspection_events: List[InspectionEvent] = field(default_factory=list)
-    scan_mission_state: Optional["ScanMissionState"] = None
+    generation_rejections: list[ObservationRejection] = field(default_factory=list)
+    mapping_state: MappingState | None = None
+    localization_state: LocalizationState | None = None
+    inspection_events: list[InspectionEvent] = field(default_factory=list)
+    deconfliction_events: list[DeconflictionEvent] = field(default_factory=list)
+    scan_mission_state: ScanMissionState | None = None
 
 
 @dataclass(frozen=True)
@@ -145,7 +155,7 @@ class HealthReport:
     status: str
     started_at_utc: str
     processed_frame_count: int
-    node_health: List[NodeHealthMetrics] = field(default_factory=list)
+    node_health: list[NodeHealthMetrics] = field(default_factory=list)
     mean_frame_rate_hz: float = 0.0
     mean_ingest_latency_s: float = 0.0
     active_node_count: int = 0
@@ -156,7 +166,9 @@ ZONE_TYPE_SURVEILLANCE = "surveillance"
 ZONE_TYPE_EXCLUSION = "exclusion"
 ZONE_TYPE_PATROL = "patrol"
 ZONE_TYPE_OBJECTIVE = "objective"
-ZONE_TYPES = frozenset({ZONE_TYPE_SURVEILLANCE, ZONE_TYPE_EXCLUSION, ZONE_TYPE_PATROL, ZONE_TYPE_OBJECTIVE})
+ZONE_TYPES = frozenset(
+    {ZONE_TYPE_SURVEILLANCE, ZONE_TYPE_EXCLUSION, ZONE_TYPE_PATROL, ZONE_TYPE_OBJECTIVE}
+)
 
 
 @dataclass(frozen=True)
@@ -170,19 +182,29 @@ class MissionZone:
 
     def __post_init__(self) -> None:
         if self.zone_type not in ZONE_TYPES:
-            raise ValueError(f"zone_type must be one of {sorted(ZONE_TYPES)}, got {self.zone_type!r}")
+            raise ValueError(
+                f"zone_type must be one of {sorted(ZONE_TYPES)}, got {self.zone_type!r}"
+            )
         if self.radius_m <= 0:
             raise ValueError("radius_m must be positive.")
+
+    def contains_point(self, xy: Iterable[float]) -> bool:
+        point_xy = np.asarray(tuple(xy), dtype=float)[:2]
+        center_xy = np.asarray(self.center[:2], dtype=float)
+        delta = point_xy - center_xy
+        return float(np.dot(delta, delta)) <= self.radius_m * self.radius_m
 
 
 # --- Scan / Map / Localize / Inspect mission types ---
 
+
 @dataclass(frozen=True)
 class MapFeature:
     """A detected feature in the world map (terrain peak, building edge, etc.)."""
+
     feature_id: str
     position: Vector3
-    feature_type: str          # "terrain_peak" | "building_edge" | "elevation_keypoint"
+    feature_type: str  # "terrain_peak" | "building_edge" | "elevation_keypoint"
     height_m: float = 0.0
     confidence: float = 1.0
 
@@ -190,60 +212,78 @@ class MapFeature:
 @dataclass(frozen=True)
 class InspectionPOI:
     """A Point of Interest to be inspected after the scanning phase."""
+
     poi_id: str
     name: str
     position: Vector3
-    priority: int = 1          # higher = more urgent; used by POIManager for ordering
+    priority: int = 1  # higher = more urgent; used by POIManager for ordering
     required_dwell_s: float = 15.0
-    sensor_modality: str = "optical"   # "optical" | "thermal" | "any"
+    sensor_modality: str = "optical"  # "optical" | "thermal" | "any"
 
 
 @dataclass(frozen=True)
 class POIStatus:
     """Runtime status of one InspectionPOI."""
+
     poi_id: str
-    status: str                # "pending" | "active" | "complete"
-    assigned_drone_id: Optional[str] = None
-    arrival_time_s: Optional[float] = None
-    completion_time_s: Optional[float] = None
+    status: str  # "pending" | "active" | "complete"
+    assigned_drone_id: str | None = None
+    arrival_time_s: float | None = None
+    completion_time_s: float | None = None
     dwell_accumulated_s: float = 0.0
+    position: Vector3 | None = None
+
+
+@dataclass(frozen=True)
+class EgressDroneProgress:
+    """Per-drone return-to-home progress emitted during the egress phase."""
+
+    drone_id: str
+    distance_to_home_m: float
+    home_position: Vector3
 
 
 @dataclass(frozen=True)
 class LocalizationEstimate:
     """Drone self-localization estimate derived from map matching."""
+
     drone_id: str
     timestamp_s: float
     position_estimate: Vector3
     heading_rad: float
-    position_std_m: float      # 1-sigma position uncertainty
-    confidence: float          # 0.0 (no match) -> 1.0 (perfect match)
+    position_std_m: float  # 1-sigma position uncertainty
+    confidence: float  # 0.0 (no match) -> 1.0 (perfect match)
 
 
 @dataclass(frozen=True)
 class ScanMissionState:
     """Top-level mission state serialised into every replay frame."""
-    phase: str                          # "scanning" | "localizing" | "inspecting" | "complete"
-    scan_coverage_fraction: float       # 0->1, fraction of map area covered
-    scan_coverage_threshold: float      # target fraction to trigger phase transition
-    localization_estimates: List[LocalizationEstimate]
-    poi_statuses: List[POIStatus]
+
+    phase: str  # "scanning" | "localizing" | "inspecting" | "egress" | "complete"
+    scan_coverage_fraction: float  # 0->1, fraction of map area covered
+    scan_coverage_threshold: float  # target fraction to trigger phase transition
+    localization_estimates: list[LocalizationEstimate]
+    poi_statuses: list[POIStatus]
     completed_poi_count: int
     total_poi_count: int
-    phase_started_at_s: float = 0.0     # sim timestamp when current phase began
+    phase_started_at_s: float = 0.0  # sim timestamp when current phase began
     # Per-frame delta: newly covered cell centres as (x_m, y_m, terrain_height_m).
     # The viewer accumulates these into a persistent LiDAR-style point cloud as
     # the replay plays back, producing a real-time map reconstruction.
-    newly_scanned_cells: tuple = ()     # Tuple[Tuple[float,float,float], ...]
+    newly_scanned_cells: tuple = ()  # Tuple[Tuple[float,float,float], ...]
     # Team-level flag: True if *any* drone advanced via timeout rather than convergence.
     # Does not identify which specific drone(s) timed out vs. genuinely converged.
     localization_timed_out: bool = False
-    coordinator_drone_id: Optional[str] = None  # elected by highest battery fraction (one-shot)
+    coordinator_drone_id: str | None = None  # elected by highest battery fraction (one-shot)
+    egress_progress: tuple = ()  # Tuple[EgressDroneProgress, ...]; non-empty during egress
 
 
 def to_jsonable(value: Any) -> Any:
     if is_dataclass(value):
-        return {field_info.name: to_jsonable(getattr(value, field_info.name)) for field_info in fields(value)}
+        return {
+            field_info.name: to_jsonable(getattr(value, field_info.name))
+            for field_info in fields(value)
+        }
     if isinstance(value, np.ndarray):
         if value.ndim > 1:
             return value.flatten().tolist()

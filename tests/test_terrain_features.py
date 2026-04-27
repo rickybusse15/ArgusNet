@@ -8,33 +8,28 @@ Tests cover:
 
 from __future__ import annotations
 
+import math
 import unittest
 
 import numpy as np
 
-import math
-
-from argusnet.world.environment import (
-    Bounds2D,
-    LandCoverClass,
-    LandCoverLayer,
-    TerrainLayer,
-    EnvironmentModel,
-    EnvironmentCRS,
-    ObstacleLayer,
-    CylinderObstacle,
-)
-from argusnet.world.terrain import alpine_terrain, TerrainModel
 from argusnet.core.types import (
+    ZONE_TYPE_EXCLUSION,
+    ZONE_TYPE_SURVEILLANCE,
     MissionZone,
-    BearingObservation,
-    NodeState,
-    TruthState,
     ObservationRejection,
     vec3,
-    ZONE_TYPE_SURVEILLANCE,
-    ZONE_TYPE_EXCLUSION,
 )
+from argusnet.world.environment import (
+    Bounds2D,
+    CylinderObstacle,
+    EnvironmentCRS,
+    EnvironmentModel,
+    LandCoverLayer,
+    ObstacleLayer,
+    TerrainLayer,
+)
+from argusnet.world.terrain import TerrainModel
 
 
 class TerrainHeightIntegrationTest(unittest.TestCase):
@@ -165,7 +160,7 @@ class RejectionDiagnosticsTest(unittest.TestCase):
         blocker_point = vec3(30.0, 40.0, 0.0)
 
         # Expected: sqrt(30^2 + 40^2) = 50m
-        expected_range = np.sqrt(30.0 ** 2 + 40.0 ** 2)
+        expected_range = np.sqrt(30.0**2 + 40.0**2)
 
         rejection = ObservationRejection(
             node_id="sensor-1",
@@ -452,7 +447,9 @@ class TerrainModelCurvatureTest(unittest.TestCase):
         """A Gaussian hilltop should have negative curvature (concave down)."""
         # The Laplacian of a Gaussian peak is negative: centre > neighbours.
         curvature = self.terrain.curvature_at(self.ridge_x, self.ridge_y, delta_m=5.0)
-        self.assertLess(curvature, 0.0, "Gaussian ridge peak should have negative (concave-down) curvature")
+        self.assertLess(
+            curvature, 0.0, "Gaussian ridge peak should have negative (concave-down) curvature"
+        )
 
     def test_curvature_at_flat_area_is_near_zero(self) -> None:
         """Perfectly flat terrain should have zero curvature."""
@@ -466,15 +463,17 @@ class TerrainModelCurvatureTest(unittest.TestCase):
             basin_depth_m=0.0,
         )
         curvature = flat_terrain.curvature_at(0.0, 0.0, delta_m=1.0)
-        self.assertAlmostEqual(curvature, 0.0, places=6,
-                               msg="Perfectly flat terrain should have zero curvature")
+        self.assertAlmostEqual(
+            curvature, 0.0, places=6, msg="Perfectly flat terrain should have zero curvature"
+        )
 
     def test_curvature_delta_clamped(self) -> None:
         """Passing delta_m < 0.1 should be silently clamped to 0.1."""
         c_clamped = self.terrain.curvature_at(0.0, 0.0, delta_m=0.001)
         c_explicit = self.terrain.curvature_at(0.0, 0.0, delta_m=0.1)
-        self.assertAlmostEqual(c_clamped, c_explicit, places=10,
-                               msg="sub-0.1 delta should be clamped to 0.1")
+        self.assertAlmostEqual(
+            c_clamped, c_explicit, places=10, msg="sub-0.1 delta should be clamped to 0.1"
+        )
 
     def test_slope_rad_at_returns_non_negative(self) -> None:
         """Slope magnitude must always be >= 0."""
@@ -500,15 +499,15 @@ class TerrainModelCurvatureTest(unittest.TestCase):
             basin_depth_m=0.0,
         )
         slope = flat_terrain.slope_rad_at(0.0, 0.0, delta_m=1.0)
-        self.assertAlmostEqual(slope, 0.0, places=10,
-                               msg="Slope on perfectly flat terrain should be 0 rad")
+        self.assertAlmostEqual(
+            slope, 0.0, places=10, msg="Slope on perfectly flat terrain should be 0 rad"
+        )
 
     def test_slope_rad_at_bounded_by_pi_over_2(self) -> None:
         """Slope in radians must be in [0, pi/2]."""
         for x, y in [(0.0, 0.0), (30.0, 0.0), (80.0, -60.0)]:
             slope = self.terrain.slope_rad_at(x, y, delta_m=1.0)
-            self.assertLessEqual(slope, math.pi / 2.0,
-                                 f"Slope at ({x}, {y}) exceeds pi/2")
+            self.assertLessEqual(slope, math.pi / 2.0, f"Slope at ({x}, {y}) exceeds pi/2")
 
 
 class TerrainLayerCurvatureTest(unittest.TestCase):
@@ -538,8 +537,9 @@ class TerrainLayerCurvatureTest(unittest.TestCase):
     def test_curvature_at_peak_is_negative(self) -> None:
         """The central peak of a Gaussian hill should have negative curvature."""
         curvature = self.terrain_layer.curvature_at(self.peak_x, self.peak_y, delta_m=5.0)
-        self.assertLess(curvature, 0.0,
-                        "Central peak of Gaussian hill should have negative curvature")
+        self.assertLess(
+            curvature, 0.0, "Central peak of Gaussian hill should have negative curvature"
+        )
 
     def test_curvature_at_flat_area_near_zero(self) -> None:
         """Far from the peak (near the grid edge) curvature should be near zero."""
@@ -553,14 +553,16 @@ class TerrainLayerCurvatureTest(unittest.TestCase):
             resolution_m=25.0,
         )
         curvature = flat_layer.curvature_at(50.0, 50.0, delta_m=1.0)
-        self.assertAlmostEqual(curvature, 0.0, places=6,
-                               msg="Flat terrain layer should have zero curvature")
+        self.assertAlmostEqual(
+            curvature, 0.0, places=6, msg="Flat terrain layer should have zero curvature"
+        )
 
     def test_slope_rad_at_peak_is_near_zero(self) -> None:
         """Gradient is zero at the very tip of a symmetric hill."""
         slope = self.terrain_layer.slope_rad_at(self.peak_x, self.peak_y, delta_m=2.0)
-        self.assertAlmostEqual(slope, 0.0, delta=0.15,
-                               msg="Slope at symmetric peak should be near zero")
+        self.assertAlmostEqual(
+            slope, 0.0, delta=0.15, msg="Slope at symmetric peak should be near zero"
+        )
 
     def test_slope_rad_at_flank_is_positive(self) -> None:
         """Away from the peak, slope must be positive."""
@@ -578,15 +580,15 @@ class TerrainLayerCurvatureTest(unittest.TestCase):
             resolution_m=25.0,
         )
         slope = flat_layer.slope_rad_at(50.0, 50.0, delta_m=1.0)
-        self.assertAlmostEqual(slope, 0.0, places=10,
-                               msg="Flat terrain layer should give zero slope")
+        self.assertAlmostEqual(
+            slope, 0.0, places=10, msg="Flat terrain layer should give zero slope"
+        )
 
     def test_slope_rad_returns_non_negative(self) -> None:
         """slope_rad_at must always return a value >= 0 on any terrain layer."""
         for x, y in [(0.0, 0.0), (50.0, 0.0), (-80.0, 80.0)]:
             slope = self.terrain_layer.slope_rad_at(x, y, delta_m=2.0)
-            self.assertGreaterEqual(slope, 0.0,
-                                    f"Slope at ({x}, {y}) must be non-negative")
+            self.assertGreaterEqual(slope, 0.0, f"Slope at ({x}, {y}) must be non-negative")
 
 
 if __name__ == "__main__":

@@ -89,17 +89,12 @@ pub const REJECT_INSUFFICIENT_CLUSTER: &str = "insufficient_cluster_observations
 pub const REJECT_WEAK_GEOMETRY: &str = "weak_intersection_geometry";
 pub const REJECT_FUSION_FAILURE: &str = "fusion_failure";
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum AssociationMode {
+    #[default]
     Labeled,
     GNN,
     JPDA,
-}
-
-impl Default for AssociationMode {
-    fn default() -> Self {
-        Self::Labeled
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -254,7 +249,10 @@ impl TrackerConfig {
             ("ct_turn_rate_std", self.ct_turn_rate_std),
             ("innovation_scale_factor", self.innovation_scale_factor),
             ("innovation_max_scale", self.innovation_max_scale),
-            ("chi_squared_gate_threshold", self.chi_squared_gate_threshold),
+            (
+                "chi_squared_gate_threshold",
+                self.chi_squared_gate_threshold,
+            ),
             (
                 "cluster_distance_threshold_m",
                 self.cluster_distance_threshold_m,
@@ -526,7 +524,6 @@ impl KalmanTrack3D {
             + kalman_gain * measurement_cov * kalman_gain.transpose();
         Ok(())
     }
-
 }
 
 #[derive(Clone, Debug)]
@@ -672,8 +669,8 @@ impl CoordinatedTurnTrack3D {
 
         let measurement_cov = Matrix3::identity() * measurement_std_m.powi(2);
         let innovation = position - (measurement_matrix * self.state);
-        let innovation_cov = measurement_matrix * self.covariance * measurement_matrix.transpose()
-            + measurement_cov;
+        let innovation_cov =
+            measurement_matrix * self.covariance * measurement_matrix.transpose() + measurement_cov;
         let innovation_cov_decomp = innovation_cov
             .cholesky()
             .ok_or_else(|| "innovation covariance is not positive-definite".to_string())?;
@@ -694,7 +691,8 @@ impl CoordinatedTurnTrack3D {
 
     fn as_cv_state(&self) -> (Vector6, Matrix6) {
         let mut state = Vector6::zeros();
-        state.fixed_rows_mut::<6>(0)
+        state
+            .fixed_rows_mut::<6>(0)
             .copy_from(&self.state.fixed_rows::<6>(0));
         let mut covariance = Matrix6::zeros();
         covariance.copy_from(&self.covariance.fixed_view::<6, 6>(0, 0));
@@ -721,18 +719,13 @@ impl IMMTrack3D {
         config: &TrackerConfig,
     ) -> Self {
         let adaptive = config.adaptive_filter_config();
-        let mut cv_track = KalmanTrack3D::initialize(
-            timestamp_s,
-            position,
-            position_std_m,
-            velocity_std_mps,
-        );
+        let mut cv_track =
+            KalmanTrack3D::initialize(timestamp_s, position, position_std_m, velocity_std_mps);
         cv_track.process_accel_std = adaptive.cv_accel_std;
         let mut ct_config = adaptive.clone();
         ct_config.init_position_std_m = position_std_m;
         ct_config.init_velocity_std_mps = velocity_std_mps;
-        let ct_track =
-            CoordinatedTurnTrack3D::initialize(timestamp_s, position, None, &ct_config);
+        let ct_track = CoordinatedTurnTrack3D::initialize(timestamp_s, position, None, &ct_config);
         Self {
             cv_track,
             ct_track,
@@ -837,10 +830,9 @@ impl IMMTrack3D {
         let measurement_cov = Matrix3::identity() * effective_measurement_std.powi(2);
 
         let innovation_cv = position - (measurement_matrix_cv * self.cv_track.state);
-        let innovation_cov_cv = measurement_matrix_cv
-            * self.cv_track.covariance
-            * measurement_matrix_cv.transpose()
-            + measurement_cov;
+        let innovation_cov_cv =
+            measurement_matrix_cv * self.cv_track.covariance * measurement_matrix_cv.transpose()
+                + measurement_cov;
         let cv_likelihood = gaussian_likelihood(&innovation_cv, &innovation_cov_cv);
         self.cv_track
             .update_position(position, effective_measurement_std)?;
@@ -853,10 +845,9 @@ impl IMMTrack3D {
         measurement_matrix_ct[(1, 1)] = 1.0;
         measurement_matrix_ct[(2, 2)] = 1.0;
         let innovation_ct = position - (measurement_matrix_ct * self.ct_track.state);
-        let innovation_cov_ct = measurement_matrix_ct
-            * self.ct_track.covariance
-            * measurement_matrix_ct.transpose()
-            + measurement_cov;
+        let innovation_cov_ct =
+            measurement_matrix_ct * self.ct_track.covariance * measurement_matrix_ct.transpose()
+                + measurement_cov;
         let ct_likelihood = gaussian_likelihood(&innovation_ct, &innovation_cov_ct);
 
         let posterior = [
@@ -1010,7 +1001,8 @@ impl ManagedTrack {
         measurement_std_m: f64,
         timestamp_s: f64,
     ) -> Result<(), String> {
-        self.filter_state.update_position(position, measurement_std_m)?;
+        self.filter_state
+            .update_position(position, measurement_std_m)?;
         self.measurement_std_m = measurement_std_m;
         self.update_count += 1;
         self.stale_steps = 0;
@@ -1038,10 +1030,7 @@ impl ManagedTrack {
         self.lifecycle_state != LifecycleState::Deleted
     }
 
-    pub(crate) fn predicted_measurement(
-        &self,
-        timestamp_s: f64,
-    ) -> (Vector3<f64>, Matrix3<f64>) {
+    pub(crate) fn predicted_measurement(&self, timestamp_s: f64) -> (Vector3<f64>, Matrix3<f64>) {
         let mut predicted = self.filter_state.clone();
         predicted.predict(timestamp_s);
         let covariance = predicted.covariance();
@@ -1063,7 +1052,11 @@ impl ManagedTrack {
             return;
         }
 
-        let recent_updates = self.update_history.iter().filter(|updated| **updated).count() as u32;
+        let recent_updates = self
+            .update_history
+            .iter()
+            .filter(|updated| **updated)
+            .count() as u32;
         let history_len = self.update_history.len().max(1) as f64;
         self.quality_score = recent_updates as f64 / history_len;
 
@@ -1265,7 +1258,11 @@ impl TrackingEngine {
         node_ids.extend(self.nodes.keys().cloned());
         node_ids.sort();
         let mut nodes = Vec::with_capacity(node_ids.len());
-        nodes.extend(node_ids.iter().filter_map(|node_id| self.nodes.get(node_id).cloned()));
+        nodes.extend(
+            node_ids
+                .iter()
+                .filter_map(|node_id| self.nodes.get(node_id).cloned()),
+        );
 
         // Update per-node health trackers
         for obs in &accepted_observations {
@@ -1464,7 +1461,11 @@ impl TrackingEngine {
                     if let Some(managed_track) = self.tracks.get_mut(id) {
                         managed_track.predict(timestamp_s);
                         if managed_track
-                            .update(assignment.position, assignment.measurement_std_m, timestamp_s)
+                            .update(
+                                assignment.position,
+                                assignment.measurement_std_m,
+                                timestamp_s,
+                            )
                             .is_err()
                         {
                             rejections.extend(self.reject_cluster(
@@ -1709,10 +1710,10 @@ impl TrackingEngine {
 
     fn max_pairwise_angle(&self, cluster: &[BearingObservation]) -> f64 {
         let mut max_angle = 0.0_f64;
-        for index in 0..cluster.len() {
-            let direction_a = cluster[index].direction;
-            for inner in (index + 1)..cluster.len() {
-                let direction_b = cluster[inner].direction;
+        for (index, observation_a) in cluster.iter().enumerate() {
+            let direction_a = observation_a.direction;
+            for observation_b in cluster.iter().skip(index + 1) {
+                let direction_b = observation_b.direction;
                 let dot = direction_a.dot(&direction_b).clamp(-1.0, 1.0);
                 let angle = dot.acos();
                 if angle > max_angle {

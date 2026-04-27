@@ -1,21 +1,19 @@
 from __future__ import annotations
 
+import contextlib
 import shutil
 import socket
 import subprocess
 import tempfile
 import time
+import warnings
 import weakref
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence
-
-import warnings
 
 import grpc
 import numpy as np
-
-from argusnet.v1 import world_model_pb2 as tracker_pb2, world_model_pb2_grpc as tracker_pb2_grpc
 
 from argusnet.core.types import (
     BearingObservation,
@@ -28,7 +26,8 @@ from argusnet.core.types import (
     TrackState,
     TruthState,
 )
-
+from argusnet.v1 import world_model_pb2 as tracker_pb2
+from argusnet.v1 import world_model_pb2_grpc as tracker_pb2_grpc
 
 REJECT_UNKNOWN_NODE = "unknown_node"
 REJECT_INVALID_TARGET = "invalid_target_id"
@@ -85,7 +84,10 @@ class TrackerConfig:
             raise ValueError("max_bearing_std_rad must be finite and > 0.")
         if not np.isfinite(self.max_timestamp_skew_s) or self.max_timestamp_skew_s < 0.0:
             raise ValueError("max_timestamp_skew_s must be finite and >= 0.")
-        if not np.isfinite(self.min_intersection_angle_deg) or self.min_intersection_angle_deg <= 0.0:
+        if (
+            not np.isfinite(self.min_intersection_angle_deg)
+            or self.min_intersection_angle_deg <= 0.0
+        ):
             raise ValueError("min_intersection_angle_deg must be finite and > 0.")
         if self.data_association_mode not in {"labeled", "gnn", "jpda"}:
             raise ValueError("data_association_mode must be one of labeled, gnn, jpda.")
@@ -136,7 +138,7 @@ def _vector_from_proto(vector: tracker_pb2.Vector3) -> np.ndarray:
     return np.array([vector.x_m, vector.y_m, vector.z_m], dtype=float)
 
 
-def _optional_vector_from_proto(vector: Optional[tracker_pb2.Vector3]) -> Optional[np.ndarray]:
+def _optional_vector_from_proto(vector: tracker_pb2.Vector3 | None) -> np.ndarray | None:
     if vector is None:
         return None
     return _vector_from_proto(vector)
@@ -257,7 +259,9 @@ def _rejection_from_proto(rejection: tracker_pb2.ObservationRejection) -> Observ
         timestamp_s=float(rejection.timestamp_s),
         reason=rejection.reason,
         detail=rejection.detail,
-        origin=_optional_vector_from_proto(rejection.origin if rejection.HasField("origin") else None),
+        origin=_optional_vector_from_proto(
+            rejection.origin if rejection.HasField("origin") else None
+        ),
         attempted_point=_optional_vector_from_proto(
             rejection.attempted_point if rejection.HasField("attempted_point") else None
         ),
@@ -303,7 +307,7 @@ def _track_from_proto(track: tracker_pb2.TrackState) -> TrackState:
     )
 
 
-def _optional_double(message: object, field_name: str) -> Optional[float]:
+def _optional_double(message: object, field_name: str) -> float | None:
     if hasattr(message, "HasField") and message.HasField(field_name):
         return float(getattr(message, field_name))
     return None
@@ -347,16 +351,14 @@ def _frame_from_proto(frame: tracker_pb2.PlatformFrame) -> PlatformFrame:
 
 
 def _cleanup_service_resources(
-    channel: Optional[grpc.Channel],
-    process: Optional[subprocess.Popen[str]],
-    tempdir: Optional[tempfile.TemporaryDirectory[str]],
-    log_handle: Optional[object],
+    channel: grpc.Channel | None,
+    process: subprocess.Popen[str] | None,
+    tempdir: tempfile.TemporaryDirectory[str] | None,
+    log_handle: object | None,
 ) -> None:
     if channel is not None:
-        try:
+        with contextlib.suppress(Exception):
             channel.close()
-        except Exception:
-            pass
     if process is not None and process.poll() is None:
         process.terminate()
         try:
@@ -367,32 +369,32 @@ def _cleanup_service_resources(
     if tempdir is not None:
         tempdir.cleanup()
     if log_handle is not None:
-        try:
+        with contextlib.suppress(Exception):
             log_handle.close()
-        except Exception:
-            pass
 
 
 class TrackingService:
     def __init__(
         self,
-        config: Optional[TrackerConfig] = None,
+        config: TrackerConfig | None = None,
         *,
-        retain_history: Optional[bool] = None,
-        endpoint: Optional[str] = None,
-        spawn_local: Optional[bool] = None,
-        daemon_path: Optional[str] = None,
+        retain_history: bool | None = None,
+        endpoint: str | None = None,
+        spawn_local: bool | None = None,
+        daemon_path: str | None = None,
         startup_timeout_s: float = 20.0,
     ) -> None:
         self.config = config or TrackerConfig()
-        self.retain_history = self.config.retain_history if retain_history is None else retain_history
-        self.nodes: Dict[str, NodeState] = {}
-        self.tracks: Dict[str, TrackState] = {}
-        self.history: List[PlatformFrame] = []
-        self._latest_frame: Optional[PlatformFrame] = None
-        self._owned_process: Optional[subprocess.Popen[str]] = None
-        self._owned_tempdir: Optional[tempfile.TemporaryDirectory[str]] = None
-        self._owned_log_handle: Optional[object] = None
+        self.retain_history = (
+            self.config.retain_history if retain_history is None else retain_history
+        )
+        self.nodes: dict[str, NodeState] = {}
+        self.tracks: dict[str, TrackState] = {}
+        self.history: list[PlatformFrame] = []
+        self._latest_frame: PlatformFrame | None = None
+        self._owned_process: subprocess.Popen[str] | None = None
+        self._owned_tempdir: tempfile.TemporaryDirectory[str] | None = None
+        self._owned_log_handle: object | None = None
 
         should_spawn_local = endpoint is None if spawn_local is None else spawn_local
         if should_spawn_local:
@@ -402,7 +404,12 @@ class TrackingService:
         if self.endpoint is None:
             raise ValueError("TrackingService requires an endpoint or spawn_local=True.")
 
-        if self.endpoint and not self.endpoint.startswith("127.0.0.1") and not self.endpoint.startswith("localhost") and not self.endpoint.startswith("[::1]"):
+        if (
+            self.endpoint
+            and not self.endpoint.startswith("127.0.0.1")
+            and not self.endpoint.startswith("localhost")
+            and not self.endpoint.startswith("[::1]")
+        ):
             warnings.warn(
                 f"Connecting to non-localhost endpoint {self.endpoint!r} without TLS. "
                 "Data will be transmitted in plaintext.",
@@ -420,7 +427,9 @@ class TrackingService:
         )
 
         self._wait_for_ready(startup_timeout_s)
-        remote_config = self._stub.GetConfig(tracker_pb2.GetConfigRequest(), timeout=startup_timeout_s)
+        remote_config = self._stub.GetConfig(
+            tracker_pb2.GetConfigRequest(), timeout=startup_timeout_s
+        )
         if remote_config.HasField("config"):
             self.remote_config = _tracker_config_from_proto(remote_config.config)
         else:
@@ -429,7 +438,7 @@ class TrackingService:
     def _repo_root(self) -> Path:
         return Path(__file__).resolve().parents[3]
 
-    def _spawn_local_daemon(self, daemon_path: Optional[str]) -> str:
+    def _spawn_local_daemon(self, daemon_path: str | None) -> str:
         endpoint = self._allocate_endpoint()
         host, port = endpoint.split(":")
         self._owned_tempdir = tempfile.TemporaryDirectory(prefix="argusnetd-")
@@ -487,7 +496,7 @@ class TrackingService:
             ]
         )
 
-    def _resolve_daemon_command(self, daemon_path: Optional[str]) -> list[str]:
+    def _resolve_daemon_command(self, daemon_path: str | None) -> list[str]:
         repo_root = self._repo_root()
         if daemon_path:
             return [daemon_path]
@@ -501,7 +510,14 @@ class TrackingService:
             cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
             print("Building argusnetd (this may take a minute on first run)...")
             subprocess.run(
-                [cargo, "build", "--manifest-path", str(repo_root / "Cargo.toml"), "-p", "argusnet-server"],
+                [
+                    cargo,
+                    "build",
+                    "--manifest-path",
+                    str(repo_root / "Cargo.toml"),
+                    "-p",
+                    "argusnet-server",
+                ],
                 cwd=repo_root,
                 check=True,
             )
@@ -523,7 +539,7 @@ class TrackingService:
 
     def _wait_for_ready(self, timeout_s: float) -> None:
         deadline = time.time() + timeout_s
-        last_error: Optional[BaseException] = None
+        last_error: BaseException | None = None
         while time.time() < deadline:
             if self._owned_process is not None and self._owned_process.poll() is not None:
                 raise RuntimeError(
@@ -541,24 +557,22 @@ class TrackingService:
         if self._finalizer.alive:
             self._finalizer()
 
-    def __enter__(self) -> "TrackingService":
+    def __enter__(self) -> TrackingService:
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.close()
 
     def __del__(self) -> None:  # pragma: no cover - best-effort cleanup.
-        try:
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
     def ingest_frame(
         self,
         timestamp_s: float,
-        node_states: Optional[Sequence[NodeState]] = None,
+        node_states: Sequence[NodeState] | None = None,
         observations: Iterable[BearingObservation] = (),
-        truths: Optional[Sequence[TruthState]] = None,
+        truths: Sequence[TruthState] | None = None,
     ) -> PlatformFrame:
         request = tracker_pb2.IngestFrameRequest(
             timestamp_s=float(timestamp_s),
@@ -581,7 +595,12 @@ class TrackingService:
     def track_stream(
         self,
         frames: Iterable[
-            tuple[float, Optional[Sequence[NodeState]], Iterable[BearingObservation], Optional[Sequence[TruthState]]]
+            tuple[
+                float,
+                Sequence[NodeState] | None,
+                Iterable[BearingObservation],
+                Sequence[TruthState] | None,
+            ]
         ],
     ) -> Iterator[PlatformFrame]:
         """Stream frames to the daemon and yield one PlatformFrame per input frame.
@@ -611,7 +630,7 @@ class TrackingService:
                 self.history.append(frame)
             yield frame
 
-    def latest_frame(self) -> Optional[PlatformFrame]:
+    def latest_frame(self) -> PlatformFrame | None:
         if self._latest_frame is not None:
             return self._latest_frame
         response = self._stub.LatestFrame(tracker_pb2.LatestFrameRequest())
@@ -652,6 +671,7 @@ class TrackingService:
             active_node_count=int(response.active_node_count),
             stale_node_count=int(response.stale_node_count),
         )
+
 
 # ArgusNet canonical aliases
 WorldModelConfig = TrackerConfig

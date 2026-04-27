@@ -11,7 +11,7 @@ import numpy as np
 _WGS84_A = 6_378_137.0  # semi-major axis (m)
 _WGS84_F = 1.0 / 298.257223563  # flattening
 _WGS84_B = _WGS84_A * (1.0 - _WGS84_F)  # semi-minor axis (m)
-_WGS84_E2 = 2.0 * _WGS84_F - _WGS84_F ** 2  # first eccentricity squared
+_WGS84_E2 = 2.0 * _WGS84_F - _WGS84_F**2  # first eccentricity squared
 
 
 @dataclass(frozen=True)

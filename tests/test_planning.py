@@ -4,19 +4,23 @@ import unittest
 
 import numpy as np
 
+from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
 from argusnet.world.environment import Bounds2D, ObstacleLayer
 from argusnet.world.obstacles import BuildingPrism, CylinderObstacle, WallSegment
-from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
 
 
 class PathPlannerTest(unittest.TestCase):
     def test_direct_route_stays_straight_without_obstacles(self) -> None:
         planner = PathPlanner2D(
             bounds_xy_m=Bounds2D(0.0, 200.0, 0.0, 200.0),
-            obstacle_layer=ObstacleLayer.empty(bounds_xy_m=Bounds2D(0.0, 200.0, 0.0, 200.0), tile_size_m=50.0),
+            obstacle_layer=ObstacleLayer.empty(
+                bounds_xy_m=Bounds2D(0.0, 200.0, 0.0, 200.0), tile_size_m=50.0
+            ),
         )
 
-        route = planner.plan_route([20.0, 20.0], [180.0, 160.0], clearance_m=planner.config.drone_clearance_m)
+        route = planner.plan_route(
+            [20.0, 20.0], [180.0, 160.0], clearance_m=planner.config.drone_clearance_m
+        )
 
         self.assertIsNotNone(route)
         self.assertEqual(2, route.vertex_count)
@@ -51,10 +55,14 @@ class PathPlannerTest(unittest.TestCase):
         )
         planner = PathPlanner2D(
             bounds_xy_m=bounds,
-            obstacle_layer=ObstacleLayer(bounds_xy_m=bounds, tile_size_m=55.0, primitives=(building, wall, cylinder)),
+            obstacle_layer=ObstacleLayer(
+                bounds_xy_m=bounds, tile_size_m=55.0, primitives=(building, wall, cylinder)
+            ),
         )
 
-        route = planner.plan_route([20.0, 110.0], [200.0, 110.0], clearance_m=planner.config.drone_clearance_m)
+        route = planner.plan_route(
+            [20.0, 110.0], [200.0, 110.0], clearance_m=planner.config.drone_clearance_m
+        )
 
         self.assertIsNotNone(route)
         self.assertGreater(route.vertex_count, 2)
@@ -92,20 +100,28 @@ class PathPlannerTest(unittest.TestCase):
         )
         planner = PathPlanner2D(
             bounds_xy_m=bounds,
-            obstacle_layer=ObstacleLayer(bounds_xy_m=bounds, tile_size_m=50.0, primitives=(building,)),
+            obstacle_layer=ObstacleLayer(
+                bounds_xy_m=bounds, tile_size_m=50.0, primitives=(building,)
+            ),
             config=PlannerConfig(snap_m=10.0),
         )
 
-        first = planner.plan_route([20.0, 100.0], [180.0, 100.0], clearance_m=planner.config.drone_clearance_m)
-        second = planner.plan_route([20.0, 100.0], [180.0, 100.0], clearance_m=planner.config.drone_clearance_m)
+        first = planner.plan_route(
+            [20.0, 100.0], [180.0, 100.0], clearance_m=planner.config.drone_clearance_m
+        )
+        second = planner.plan_route(
+            [20.0, 100.0], [180.0, 100.0], clearance_m=planner.config.drone_clearance_m
+        )
 
         self.assertIsNotNone(first)
         self.assertIsNotNone(second)
         self.assertFalse(first.cache_hit)
         self.assertTrue(second.cache_hit)
 
-    def assert_path_clears_obstacles(self, points_xy_m: np.ndarray, primitives: tuple[object, ...]) -> None:
-        for start_xy, end_xy in zip(points_xy_m[:-1], points_xy_m[1:]):
+    def assert_path_clears_obstacles(
+        self, points_xy_m: np.ndarray, primitives: tuple[object, ...]
+    ) -> None:
+        for start_xy, end_xy in zip(points_xy_m[:-1], points_xy_m[1:], strict=False):
             origin = np.array([start_xy[0], start_xy[1], 10.0], dtype=float)
             target = np.array([end_xy[0], end_xy[1], 10.0], dtype=float)
             for primitive in primitives:

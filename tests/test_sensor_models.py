@@ -1,4 +1,5 @@
 """Tests for sensor error models."""
+
 from __future__ import annotations
 
 import math
@@ -10,7 +11,6 @@ from argusnet.sensing.models.noise import (
     SensorBiasDrift,
     SensorErrorConfig,
     SensorModel,
-    SENSOR_ERROR_PRESETS,
     apply_bias_to_direction,
     atmospheric_attenuation,
     detection_probability,
@@ -220,10 +220,12 @@ class TestSensorModel(unittest.TestCase):
         self.assertGreater(std_far, std_near)
 
     def test_should_detect_deterministic_close_range(self):
-        model = SensorModel(config=SensorErrorConfig(
-            min_detection_probability=0.95,
-            detection_range_knee_m=5000.0,
-        ))
+        model = SensorModel(
+            config=SensorErrorConfig(
+                min_detection_probability=0.95,
+                detection_range_knee_m=5000.0,
+            )
+        )
         rng = np.random.default_rng(42)
         detections = sum(model.should_detect(rng, 100.0) for _ in range(100))
         self.assertGreaterEqual(detections, 90)
@@ -283,7 +285,7 @@ class TestDeterminism(unittest.TestCase):
         alarms2 = generate_false_alarms(rng2, pos, cfg, 0.0, "s1")
 
         self.assertEqual(len(alarms1), len(alarms2))
-        for a1, a2 in zip(alarms1, alarms2):
+        for a1, a2 in zip(alarms1, alarms2, strict=False):
             np.testing.assert_array_equal(a1.direction, a2.direction)
 
     def test_same_seed_same_bias_drift(self):

@@ -9,13 +9,12 @@ via the common :class:`VIOBackend` protocol.
 
 from __future__ import annotations
 
-import abc
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Protocol
 
 import numpy as np
 
-from argusnet.core.types import Vector3, vec3
+from argusnet.core.types import Vector3
 from argusnet.localization.transforms import SE3
 from argusnet.sensing.imu import IMUMeasurement
 
@@ -46,10 +45,10 @@ class VisualFeature:
     v: float
     """Vertical pixel coordinate."""
 
-    descriptor: Optional[np.ndarray] = None
+    descriptor: np.ndarray | None = None
     """Optional feature descriptor vector."""
 
-    depth_m: Optional[float] = None
+    depth_m: float | None = None
     """Depth from stereo or depth sensor (metres), if available."""
 
 
@@ -72,7 +71,7 @@ class VIOState:
     bias_accel: np.ndarray = field(default_factory=lambda: np.zeros(3))
     """Estimated accelerometer bias (m/s²)."""
 
-    covariance: Optional[np.ndarray] = None
+    covariance: np.ndarray | None = None
     """15×15 state covariance [rotation, velocity, position, bg, ba]."""
 
     tracked_feature_count: int = 0
@@ -109,18 +108,17 @@ class VIOBackend(Protocol):
 
     def process_image(
         self,
-        features: List[VisualFeature],
+        features: list[VisualFeature],
         timestamp_s: float,
-    ) -> Optional[VIOState]:
+    ) -> VIOState | None:
         """Process an image (as a set of features) and return updated state."""
         ...
 
-    def get_state(self) -> Optional[VIOState]:
+    def get_state(self) -> VIOState | None:
         """Return current state estimate."""
         ...
 
-    def reset(self) -> None:
-        ...
+    def reset(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +143,9 @@ class SimpleVIO:
     ) -> None:
         self._min_features = min_features
         self._feature_noise_px = feature_noise_px
-        self._state: Optional[VIOState] = None
-        self._imu_buffer: List[IMUMeasurement] = []
-        self._prev_features: Dict[int, VisualFeature] = {}
+        self._state: VIOState | None = None
+        self._imu_buffer: list[IMUMeasurement] = []
+        self._prev_features: dict[int, VisualFeature] = {}
 
     def initialize(
         self,
@@ -169,9 +167,9 @@ class SimpleVIO:
 
     def process_image(
         self,
-        features: List[VisualFeature],
+        features: list[VisualFeature],
         timestamp_s: float,
-    ) -> Optional[VIOState]:
+    ) -> VIOState | None:
         """Process features and return updated state.
 
         Returns ``None`` if the system is not initialised or if too few
@@ -197,7 +195,7 @@ class SimpleVIO:
                 continue
             accel_world = self._state.rotation @ np.asarray(imu.accel_mps2, dtype=float) + _GRAVITY
             delta_v += accel_world * imu_dt
-            delta_p += self._state.velocity * imu_dt + 0.5 * accel_world * imu_dt ** 2
+            delta_p += self._state.velocity * imu_dt + 0.5 * accel_world * imu_dt**2
             t_prev = imu.timestamp_s
         self._imu_buffer.clear()
 
@@ -224,9 +222,9 @@ class SimpleVIO:
         # Scale correction based on visual matches (crude)
         if has_visual:
             # Visual features constrain scale — reduce drift
-            scale_confidence = min(matched / (self._min_features * 2.0), 1.0)
+            min(matched / (self._min_features * 2.0), 1.0)
         else:
-            scale_confidence = 0.0
+            pass
 
         self._state = VIOState(
             pose=SE3(R=self._state.rotation.copy(), t=new_position),
@@ -238,7 +236,7 @@ class SimpleVIO:
         )
         return self._state
 
-    def get_state(self) -> Optional[VIOState]:
+    def get_state(self) -> VIOState | None:
         return self._state
 
     def reset(self) -> None:
@@ -258,11 +256,13 @@ def _rotvec_to_matrix(rvec: np.ndarray) -> np.ndarray:
     if angle < 1e-9:
         return np.eye(3)
     axis = rvec / angle
-    K = np.array([
-        [0, -axis[2], axis[1]],
-        [axis[2], 0, -axis[0]],
-        [-axis[1], axis[0], 0],
-    ])
+    K = np.array(
+        [
+            [0, -axis[2], axis[1]],
+            [axis[2], 0, -axis[0]],
+            [-axis[1], axis[0], 0],
+        ]
+    )
     return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
 
 
@@ -302,16 +302,14 @@ class EKFVIO:
         self._P: np.ndarray = np.eye(15) * 0.01
         self._timestamp_s: float = 0.0
         self._initialized: bool = False
-        self._imu_buffer: List[IMUMeasurement] = []
+        self._imu_buffer: list[IMUMeasurement] = []
         self._prev_feature_ids: set = set()
-        self._prev_features: Dict[int, "VisualFeature"] = {}  # ID → feature, for optical flow
+        self._prev_features: dict[int, VisualFeature] = {}  # ID → feature, for optical flow
 
     def initialize(self, position: Vector3, timestamp_s: float) -> None:
         self._x = np.zeros(15)
         self._x[6:9] = np.asarray(position, dtype=float)
-        self._P = np.diag(
-            [0.01] * 3 + [0.1] * 3 + [1.0] * 3 + [0.001] * 3 + [0.01] * 3
-        )
+        self._P = np.diag([0.01] * 3 + [0.1] * 3 + [1.0] * 3 + [0.001] * 3 + [0.01] * 3)
         self._timestamp_s = timestamp_s
         self._initialized = True
         self._imu_buffer.clear()
@@ -323,9 +321,9 @@ class EKFVIO:
 
     def process_image(
         self,
-        features: List[VisualFeature],
+        features: list[VisualFeature],
         timestamp_s: float,
-    ) -> Optional[VIOState]:
+    ) -> VIOState | None:
         if not self._initialized:
             return None
 
@@ -349,7 +347,7 @@ class EKFVIO:
             accel_world = R_wb @ accel_body - _GRAVITY_WORLD
 
             # Propagate state
-            self._x[6:9] = self._x[6:9] + self._x[3:6] * dt + 0.5 * accel_world * dt ** 2
+            self._x[6:9] = self._x[6:9] + self._x[3:6] * dt + 0.5 * accel_world * dt**2
             self._x[3:6] = self._x[3:6] + accel_world * dt
             self._x[0:3] = self._x[0:3] + gyro * dt
 
@@ -363,18 +361,16 @@ class EKFVIO:
             # d(vel)/d(accel_bias) = -R_wb * dt
             F[3:6, 9:12] = -R_wb * dt
             # d(pos)/d(accel_bias) = -0.5 * R_wb * dt^2
-            F[6:9, 9:12] = -0.5 * R_wb * dt ** 2
+            F[6:9, 9:12] = -0.5 * R_wb * dt**2
             # d(rot)/d(gyro_bias) = -I * dt
             F[0:3, 12:15] = -np.eye(3) * dt
 
             # Process noise Q
-            q_a = self._accel_noise_std ** 2 * dt
-            q_g = self._gyro_noise_std ** 2 * dt
-            q_ba = self._accel_bias_drift ** 2 * dt
-            q_bg = self._gyro_bias_drift ** 2 * dt
-            Q = np.diag(
-                [q_g] * 3 + [q_a] * 3 + [q_a * dt] * 3 + [q_ba] * 3 + [q_bg] * 3
-            )
+            q_a = self._accel_noise_std**2 * dt
+            q_g = self._gyro_noise_std**2 * dt
+            q_ba = self._accel_bias_drift**2 * dt
+            q_bg = self._gyro_bias_drift**2 * dt
+            Q = np.diag([q_g] * 3 + [q_a] * 3 + [q_a * dt] * 3 + [q_ba] * 3 + [q_bg] * 3)
 
             self._P = F @ self._P @ F.T + Q
             t_prev = meas.timestamp_s
@@ -388,11 +384,11 @@ class EKFVIO:
             F[7, 4] = dt
             F[8, 5] = dt
             Q = np.diag(
-                [self._gyro_noise_std ** 2 * dt] * 3
-                + [self._accel_noise_std ** 2 * dt] * 3
-                + [self._accel_noise_std ** 2 * dt ** 2] * 3
-                + [self._accel_bias_drift ** 2 * dt] * 3
-                + [self._gyro_bias_drift ** 2 * dt] * 3
+                [self._gyro_noise_std**2 * dt] * 3
+                + [self._accel_noise_std**2 * dt] * 3
+                + [self._accel_noise_std**2 * dt**2] * 3
+                + [self._accel_bias_drift**2 * dt] * 3
+                + [self._gyro_bias_drift**2 * dt] * 3
             )
             self._P = F @ self._P @ F.T + Q
 
@@ -400,7 +396,7 @@ class EKFVIO:
 
         # --- Update step via visual features ---
         # Build per-feature lookup for current frame.
-        cur_feature_map: Dict[int, VisualFeature] = {f.feature_id: f for f in features}
+        cur_feature_map: dict[int, VisualFeature] = {f.feature_id: f for f in features}
         current_ids = set(cur_feature_map.keys())
         matched_ids = current_ids & self._prev_feature_ids
 
@@ -450,9 +446,9 @@ class EKFVIO:
                 valid_ids.append(fid)
 
             if len(valid_ids) >= 2:
-                H_batch = np.array(H_rows)           # (2K, 15)
-                z_batch = np.array(z_rows)            # (2K,)
-                R_batch = r_var * np.eye(len(z_rows)) # (2K, 2K)
+                H_batch = np.array(H_rows)  # (2K, 15)
+                z_batch = np.array(z_rows)  # (2K,)
+                R_batch = r_var * np.eye(len(z_rows))  # (2K, 2K)
                 S_batch = H_batch @ self._P @ H_batch.T + R_batch
                 K_batch = self._P @ H_batch.T @ np.linalg.inv(S_batch)
                 self._x = self._x + K_batch @ z_batch
@@ -465,7 +461,7 @@ class EKFVIO:
                     y_meas = np.array([scale_factor * 0.1])
                     H = np.zeros((1, 15))
                     H[0, 8] = 1.0 / self._focal_length_px
-                    R_noise = np.array([[self._feature_noise_px ** 2 / self._focal_length_px ** 2]])
+                    R_noise = np.array([[self._feature_noise_px**2 / self._focal_length_px**2]])
                     S = H @ self._P @ H.T + R_noise
                     K = self._P @ H.T @ np.linalg.inv(S)
                     self._x = self._x + (K @ y_meas).ravel()
@@ -476,7 +472,7 @@ class EKFVIO:
             y_meas = np.array([scale_factor * 0.1])
             H = np.zeros((1, 15))
             H[0, 8] = 1.0 / self._focal_length_px
-            R_noise = np.array([[self._feature_noise_px ** 2 / self._focal_length_px ** 2]])
+            R_noise = np.array([[self._feature_noise_px**2 / self._focal_length_px**2]])
             S = H @ self._P @ H.T + R_noise
             K = self._P @ H.T @ np.linalg.inv(S)
             self._x = self._x + (K @ y_meas).ravel()
@@ -499,7 +495,7 @@ class EKFVIO:
             tracked_feature_count=matched,
         )
 
-    def get_state(self) -> Optional[VIOState]:
+    def get_state(self) -> VIOState | None:
         if not self._initialized:
             return None
         return VIOState(

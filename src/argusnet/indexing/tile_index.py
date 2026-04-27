@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from argusnet.core.ids import new_tile_id
 
@@ -30,7 +29,7 @@ class TileBounds:
     y_max: float
 
     @property
-    def center(self) -> Tuple[float, float]:
+    def center(self) -> tuple[float, float]:
         return (
             (self.x_min + self.x_max) * 0.5,
             (self.y_min + self.y_max) * 0.5,
@@ -64,7 +63,7 @@ class TileCell:
     bounds: TileBounds
     col: int
     row: int
-    keyframe_ids: Set[str] = field(default_factory=set)
+    keyframe_ids: set[str] = field(default_factory=set)
 
     @property
     def count(self) -> int:
@@ -96,9 +95,9 @@ class TileIndex:
         self._cell_width = bounds.width / self.cols
         self._cell_height = bounds.height / self.rows
         # Pre-create the grid
-        self._grid: List[List[TileCell]] = []
+        self._grid: list[list[TileCell]] = []
         for r in range(self.rows):
-            row_cells: List[TileCell] = []
+            row_cells: list[TileCell] = []
             for c in range(self.cols):
                 cell_bounds = TileBounds(
                     x_min=bounds.x_min + c * self._cell_width,
@@ -120,7 +119,7 @@ class TileIndex:
     # Point → cell mapping
     # ------------------------------------------------------------------
 
-    def _cell_for_point(self, x: float, y: float) -> Optional[TileCell]:
+    def _cell_for_point(self, x: float, y: float) -> TileCell | None:
         """Return the cell containing (x, y), or None if out of bounds."""
         if not self.bounds.contains_point(x, y):
             return None
@@ -182,7 +181,7 @@ class TileIndex:
 
         # Collect all existing (keyframe_id, center_x, center_y) entries
         # by using each cell's center as the representative point.
-        existing: List[Tuple[str, float, float]] = []
+        existing: list[tuple[str, float, float]] = []
         for row in self._grid:
             for cell in row:
                 cx, cy = cell.bounds.center
@@ -192,9 +191,9 @@ class TileIndex:
         # Rebuild grid with new bounds.
         new_cell_width = new_bounds.width / self.cols
         new_cell_height = new_bounds.height / self.rows
-        new_grid: List[List[TileCell]] = []
+        new_grid: list[list[TileCell]] = []
         for r in range(self.rows):
-            row_cells: List[TileCell] = []
+            row_cells: list[TileCell] = []
             for c in range(self.cols):
                 cell_bounds = TileBounds(
                     x_min=new_bounds.x_min + c * new_cell_width,
@@ -238,16 +237,16 @@ class TileIndex:
     # Queries
     # ------------------------------------------------------------------
 
-    def query_point(self, x: float, y: float) -> FrozenSet[str]:
+    def query_point(self, x: float, y: float) -> frozenset[str]:
         """Return keyframe IDs in the cell containing (x, y)."""
         cell = self._cell_for_point(x, y)
         if cell is None:
             return frozenset()
         return frozenset(cell.keyframe_ids)
 
-    def query_box(self, box: TileBounds) -> FrozenSet[str]:
+    def query_box(self, box: TileBounds) -> frozenset[str]:
         """Return all keyframe IDs in cells overlapping *box*."""
-        result: Set[str] = set()
+        result: set[str] = set()
         # Determine affected column/row range
         c_min = max(int((box.x_min - self.bounds.x_min) / self._cell_width), 0)
         c_max = min(
@@ -264,11 +263,11 @@ class TileIndex:
                 result.update(self._grid[r][c].keyframe_ids)
         return frozenset(result)
 
-    def query_radius(self, cx: float, cy: float, radius: float) -> FrozenSet[str]:
+    def query_radius(self, cx: float, cy: float, radius: float) -> frozenset[str]:
         """Return keyframe IDs in cells whose centres are within *radius*
         of ``(cx, cy)``.  This is approximate (cell-level, not point-level).
         """
-        result: Set[str] = set()
+        result: set[str] = set()
         for row in self._grid:
             for cell in row:
                 cell_cx, cell_cy = cell.bounds.center
@@ -281,11 +280,11 @@ class TileIndex:
     # Utilities
     # ------------------------------------------------------------------
 
-    def all_cells(self) -> List[TileCell]:
+    def all_cells(self) -> list[TileCell]:
         """Flat list of every cell in the grid."""
         return [cell for row in self._grid for cell in row]
 
-    def non_empty_cells(self) -> List[TileCell]:
+    def non_empty_cells(self) -> list[TileCell]:
         """Return cells that contain at least one keyframe."""
         return [cell for row in self._grid for cell in row if cell.count > 0]
 

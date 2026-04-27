@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import Dict, List, Optional
 
-from argusnet.evaluation.metrics import EvaluationReport
 from argusnet.evaluation.benchmarks import AggregatedResult
+from argusnet.evaluation.metrics import EvaluationReport
 
 __all__ = [
     "report_to_dict",
@@ -48,12 +47,12 @@ def report_to_markdown(report: EvaluationReport) -> str:
         "",
     ]
 
-    def _fmt(v: Optional[float], unit: str = "") -> str:
+    def _fmt(v: float | None, unit: str = "") -> str:
         return f"{v:.3f}{unit}" if v is not None else "N/A"
 
     lines += [
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| Localisation RMSE | {_fmt(report.localisation_rmse_m, ' m')} |",
         f"| Track continuity | {_fmt(report.track_continuity_mean)} |",
         f"| Time to reacquire (mean) | {_fmt(report.time_to_reacquire_mean_s, ' s')} |",
@@ -61,16 +60,16 @@ def report_to_markdown(report: EvaluationReport) -> str:
         "",
         "### Reliability",
         "",
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| False handoff rate | {report.false_handoff_rate:.4f} |",
         f"| Safety overrides | {report.safety_override_count} |",
         f"| Comms dropout duration | {report.comms_dropout_duration_s:.2f} s |",
         "",
         "### Mission Outcome",
         "",
-        f"| Metric | Value |",
-        f"|--------|-------|",
+        "| Metric | Value |",
+        "|--------|-------|",
         f"| Completion rate | {report.mission_completion_rate:.2%} |",
         f"| Energy reserve (min) | {report.energy_reserve_min:.2%} |",
         "",
@@ -87,15 +86,19 @@ def report_to_markdown(report: EvaluationReport) -> str:
 
 def aggregate_to_markdown(result: AggregatedResult) -> str:
     """Render an AggregatedResult as a Markdown section."""
-    def _fmt(v: Optional[float], unit: str = "") -> str:
+
+    def _fmt(v: float | None, unit: str = "") -> str:
         return f"{v:.3f}{unit}" if v is not None else "N/A"
 
-    def _fmt_pm(mean: Optional[float], std: Optional[float], unit: str = "") -> str:
+    def _fmt_pm(mean: float | None, std: float | None, unit: str = "") -> str:
         if mean is None:
             return "N/A"
         if std is not None:
             return f"{mean:.3f} ± {std:.3f}{unit}"
         return f"{mean:.3f}{unit}"
+
+    rmse = _fmt_pm(result.localisation_rmse_mean, result.localisation_rmse_std, " m")
+    continuity = _fmt_pm(result.track_continuity_mean, result.track_continuity_std)
 
     lines = [
         f"## Benchmark: {result.name}",
@@ -105,8 +108,8 @@ def aggregate_to_markdown(result: AggregatedResult) -> str:
         "",
         "| Metric | Mean ± Std |",
         "|--------|-----------|",
-        f"| Localisation RMSE | {_fmt_pm(result.localisation_rmse_mean, result.localisation_rmse_std, ' m')} |",
-        f"| Track continuity | {_fmt_pm(result.track_continuity_mean, result.track_continuity_std)} |",
+        f"| Localisation RMSE | {rmse} |",
+        f"| Track continuity | {continuity} |",
         f"| Mission completion | {_fmt(result.mission_completion_mean)} |",
         "",
     ]
@@ -138,11 +141,17 @@ def print_report(report: EvaluationReport) -> None:
 
 def print_aggregate(result: AggregatedResult) -> None:
     """Print a compact summary of an AggregatedResult to stdout."""
-    print(f"[{result.name}] {result.successful_runs}/{result.total_runs} runs, "
-          f"pass={result.pass_rate:.0%}")
+    print(
+        f"[{result.name}] {result.successful_runs}/{result.total_runs} runs, "
+        f"pass={result.pass_rate:.0%}"
+    )
     if result.localisation_rmse_mean is not None:
-        print(f"  RMSE: {result.localisation_rmse_mean:.2f} ± "
-              f"{result.localisation_rmse_std or 0:.2f} m")
+        print(
+            f"  RMSE: {result.localisation_rmse_mean:.2f} ± "
+            f"{result.localisation_rmse_std or 0:.2f} m"
+        )
     if result.track_continuity_mean is not None:
-        print(f"  Continuity: {result.track_continuity_mean:.3f} ± "
-              f"{result.track_continuity_std or 0:.3f}")
+        print(
+            f"  Continuity: {result.track_continuity_mean:.3f} ± "
+            f"{result.track_continuity_std or 0:.3f}"
+        )

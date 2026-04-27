@@ -7,18 +7,18 @@ and provides a unified query interface for planning and evaluation.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from argusnet.mapping.semantics import SemanticMap
 
 import numpy as np
 
-from argusnet.mapping.occupancy import GridBounds, OccupancyGrid
-from argusnet.mapping.elevation import ElevationMap, flat_elevation_map
 from argusnet.mapping.coverage import CoverageMap
+from argusnet.mapping.elevation import ElevationMap, flat_elevation_map
+from argusnet.mapping.occupancy import GridBounds, OccupancyGrid
 from argusnet.mapping.uncertainty import UncertaintyField
 
 __all__ = [
@@ -60,7 +60,7 @@ class WorldModel:
     def __init__(
         self,
         config: WorldModelConfig,
-        elevation: Optional[ElevationMap] = None,
+        elevation: ElevationMap | None = None,
     ) -> None:
         self.config = config
         bounds = config.bounds
@@ -89,7 +89,7 @@ class WorldModel:
 
     def fuse_semantic_into_occupancy(
         self,
-        semantic_map: "SemanticMap",
+        semantic_map: SemanticMap,
         building_confidence_threshold: float = 0.7,
     ) -> int:
         """Fuse semantic labels into occupancy and elevation constraints.
@@ -100,6 +100,7 @@ class WorldModel:
         Returns the number of cells updated.
         """
         from argusnet.mapping.semantics import SemanticLabel
+
         updated = 0
         for r in range(semantic_map.rows):
             for c in range(semantic_map.cols):
@@ -112,7 +113,9 @@ class WorldModel:
                 if label == int(SemanticLabel.BUILDING) and conf >= building_confidence_threshold:
                     # Force the corresponding occupancy cell to occupied
                     elev = self.elevation.at_point(x, y)
-                    self.occupancy.mark_occupied(x, y, height_m=elev + 10.0)  # 10m building height default
+                    self.occupancy.mark_occupied(
+                        x, y, height_m=elev + 10.0
+                    )  # 10m building height default
                     updated += 1
                 elif label == int(SemanticLabel.WATER):
                     # Water surface is free, but should be noted
@@ -144,7 +147,7 @@ class WorldModel:
         (p / "config.json").write_text(json.dumps(cfg, indent=2))
 
     @classmethod
-    def load(cls, directory: str | Path) -> "WorldModel":
+    def load(cls, directory: str | Path) -> WorldModel:
         """Load a previously saved WorldModel."""
         p = Path(directory)
         cfg = json.loads((p / "config.json").read_text())

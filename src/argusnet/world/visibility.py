@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -46,7 +47,7 @@ class SensorVisibilityModel:
     vegetation_hard_block_threshold: float = 0.12
 
     @classmethod
-    def optical_default(cls) -> "SensorVisibilityModel":
+    def optical_default(cls) -> SensorVisibilityModel:
         return cls()
 
 
@@ -54,8 +55,8 @@ class SensorVisibilityModel:
 class VisibilityResult:
     visible: bool
     blocker_type: str = "none"
-    first_hit_range_m: Optional[float] = None
-    closest_point: Optional[np.ndarray] = None
+    first_hit_range_m: float | None = None
+    closest_point: np.ndarray | None = None
     transmittance: float = 1.0
     detection_multiplier: float = 1.0
     noise_multiplier: float = 1.0
@@ -88,6 +89,7 @@ class DetectionResult:
 # Helper functions for probabilistic detection
 # ---------------------------------------------------------------------------
 
+
 def free_space_path_loss(range_m: float, max_range_m: float = 2000.0) -> float:
     """Range-dependent free-space path loss factor in [0, 1].
 
@@ -112,7 +114,7 @@ def free_space_path_loss(range_m: float, max_range_m: float = 2000.0) -> float:
 
 def compute_weather_factor(
     range_m: float,
-    weather: Optional["WeatherModel"],
+    weather: WeatherModel | None,
 ) -> float:
     """Return the weather-induced visibility factor in [0, 1].
 
@@ -126,7 +128,7 @@ def compute_weather_factor(
 def compute_effective_noise(
     range_m: float,
     land_cover_noise: float,
-    weather: Optional["WeatherModel"],
+    weather: WeatherModel | None,
     max_range_m: float = 2000.0,
 ) -> float:
     """Compute the effective noise multiplier combining range, land cover, and weather.
@@ -166,7 +168,9 @@ def identify_dominant_loss(
     return max(losses, key=losses.get)  # type: ignore[arg-type]
 
 
-def _liang_barsky_interval(origin_xy: np.ndarray, target_xy: np.ndarray, bounds: Bounds2D) -> Optional[Tuple[float, float]]:
+def _liang_barsky_interval(
+    origin_xy: np.ndarray, target_xy: np.ndarray, bounds: Bounds2D
+) -> tuple[float, float] | None:
     dx = float(target_xy[0] - origin_xy[0])
     dy = float(target_xy[1] - origin_xy[1])
     p_values = [-dx, dx, -dy, dy]
@@ -177,7 +181,7 @@ def _liang_barsky_interval(origin_xy: np.ndarray, target_xy: np.ndarray, bounds:
         float(bounds.y_max_m - origin_xy[1]),
     ]
     u1, u2 = 0.0, 1.0
-    for p_value, q_value in zip(p_values, q_values):
+    for p_value, q_value in zip(p_values, q_values, strict=False):
         if abs(p_value) <= 1.0e-12:
             if q_value < 0.0:
                 return None
@@ -198,7 +202,7 @@ def _grid_dda_intervals(
     target_xy: np.ndarray,
     grid_bounds: Bounds2D,
     cell_size_m: float,
-) -> List[Tuple[int, int, float, float]]:
+) -> list[tuple[int, int, float, float]]:
     interval = _liang_barsky_interval(origin_xy, target_xy, grid_bounds)
     if interval is None:
         return []
@@ -209,10 +213,34 @@ def _grid_dda_intervals(
     dx = float(end_point[0] - start_point[0])
     dy = float(end_point[1] - start_point[1])
 
-    cell_x = int(np.clip(math.floor((start_point[0] - grid_bounds.x_min_m) / cell_size_m), 0, max(0, int(math.ceil(grid_bounds.width_m / cell_size_m)) - 1)))
-    cell_y = int(np.clip(math.floor((start_point[1] - grid_bounds.y_min_m) / cell_size_m), 0, max(0, int(math.ceil(grid_bounds.height_m / cell_size_m)) - 1)))
-    end_cell_x = int(np.clip(math.floor((end_point[0] - grid_bounds.x_min_m) / cell_size_m), 0, max(0, int(math.ceil(grid_bounds.width_m / cell_size_m)) - 1)))
-    end_cell_y = int(np.clip(math.floor((end_point[1] - grid_bounds.y_min_m) / cell_size_m), 0, max(0, int(math.ceil(grid_bounds.height_m / cell_size_m)) - 1)))
+    cell_x = int(
+        np.clip(
+            math.floor((start_point[0] - grid_bounds.x_min_m) / cell_size_m),
+            0,
+            max(0, int(math.ceil(grid_bounds.width_m / cell_size_m)) - 1),
+        )
+    )
+    cell_y = int(
+        np.clip(
+            math.floor((start_point[1] - grid_bounds.y_min_m) / cell_size_m),
+            0,
+            max(0, int(math.ceil(grid_bounds.height_m / cell_size_m)) - 1),
+        )
+    )
+    end_cell_x = int(
+        np.clip(
+            math.floor((end_point[0] - grid_bounds.x_min_m) / cell_size_m),
+            0,
+            max(0, int(math.ceil(grid_bounds.width_m / cell_size_m)) - 1),
+        )
+    )
+    end_cell_y = int(
+        np.clip(
+            math.floor((end_point[1] - grid_bounds.y_min_m) / cell_size_m),
+            0,
+            max(0, int(math.ceil(grid_bounds.height_m / cell_size_m)) - 1),
+        )
+    )
 
     step_x = 0 if abs(dx) <= 1.0e-12 else (1 if dx > 0 else -1)
     step_y = 0 if abs(dy) <= 1.0e-12 else (1 if dy > 0 else -1)
@@ -225,11 +253,25 @@ def _grid_dda_intervals(
 
     t_delta_x = float("inf") if step_x == 0 else abs(cell_size_m / (target_xy[0] - origin_xy[0]))
     t_delta_y = float("inf") if step_y == 0 else abs(cell_size_m / (target_xy[1] - origin_xy[1]))
-    t_max_x = float("inf") if step_x == 0 else t_start + abs((next_boundary_x(cell_x) - start_point[0]) / max(dx, 1.0e-12 if dx >= 0 else -1.0e-12))
-    t_max_y = float("inf") if step_y == 0 else t_start + abs((next_boundary_y(cell_y) - start_point[1]) / max(dy, 1.0e-12 if dy >= 0 else -1.0e-12))
+    t_max_x = (
+        float("inf")
+        if step_x == 0
+        else t_start
+        + abs(
+            (next_boundary_x(cell_x) - start_point[0]) / max(dx, 1.0e-12 if dx >= 0 else -1.0e-12)
+        )
+    )
+    t_max_y = (
+        float("inf")
+        if step_y == 0
+        else t_start
+        + abs(
+            (next_boundary_y(cell_y) - start_point[1]) / max(dy, 1.0e-12 if dy >= 0 else -1.0e-12)
+        )
+    )
 
     current_t = t_start
-    intervals: List[Tuple[int, int, float, float]] = []
+    intervals: list[tuple[int, int, float, float]] = []
     while current_t < t_end + 1.0e-9:
         next_t = min(t_end, t_max_x, t_max_y)
         intervals.append((cell_x, cell_y, current_t, next_t))
@@ -250,7 +292,7 @@ def _grid_dda_intervals(
 
 
 class EnvironmentQuery:
-    def __init__(self, environment: "EnvironmentModel") -> None:
+    def __init__(self, environment: EnvironmentModel) -> None:
         self.environment = environment
 
     def height_at(self, x_m: float, y_m: float) -> float:
@@ -262,14 +304,14 @@ class EnvironmentQuery:
     def land_cover_at(self, x_m: float, y_m: float) -> LandCoverClass:
         return self.environment.land_cover.land_cover_at(x_m, y_m)
 
-    def query_obstacles(self, segment_aabb: Bounds2D) -> Tuple[ObstaclePrimitive, ...]:
+    def query_obstacles(self, segment_aabb: Bounds2D) -> tuple[ObstaclePrimitive, ...]:
         return self.environment.obstacles.query_obstacles(segment_aabb)
 
     def los(
         self,
         origin_xyz: np.ndarray,
         target_xyz: np.ndarray,
-        sensor_profile: Optional[SensorVisibilityModel] = None,
+        sensor_profile: SensorVisibilityModel | None = None,
         *,
         terrain_clearance_m: float = 1.0,
     ) -> VisibilityResult:
@@ -280,10 +322,9 @@ class EnvironmentQuery:
         if distance_m <= 1.0e-9:
             return VisibilityResult(visible=True)
 
-        if (
-            not self.environment.bounds_xy_m.contains_xy(float(origin[0]), float(origin[1]))
-            or not self.environment.bounds_xy_m.contains_xy(float(target[0]), float(target[1]))
-        ):
+        if not self.environment.bounds_xy_m.contains_xy(
+            float(origin[0]), float(origin[1])
+        ) or not self.environment.bounds_xy_m.contains_xy(float(target[0]), float(target[1])):
             closest_point = self._coverage_closest_point(origin, target)
             return VisibilityResult(
                 visible=False,
@@ -295,7 +336,9 @@ class EnvironmentQuery:
                 noise_multiplier=max(profile.noise_multiplier_by_land_cover.values(), default=1.0),
             )
 
-        terrain_hit = self._terrain_intersection(origin, target, terrain_clearance_m=terrain_clearance_m)
+        terrain_hit = self._terrain_intersection(
+            origin, target, terrain_clearance_m=terrain_clearance_m
+        )
         if terrain_hit is not None:
             blocker_type, hit_t, closest_point = terrain_hit
             return VisibilityResult(
@@ -323,11 +366,11 @@ class EnvironmentQuery:
             y_max_m=y_max_m,
         )
         candidates = self.query_obstacles(segment_bounds)
-        nearest_hit_t: Optional[float] = None
-        nearest_blocker: Optional[str] = None
-        nearest_closest_point: Optional[np.ndarray] = None
-        nearest_vegetation_hit_t: Optional[float] = None
-        nearest_vegetation_point: Optional[np.ndarray] = None
+        nearest_hit_t: float | None = None
+        nearest_blocker: str | None = None
+        nearest_closest_point: np.ndarray | None = None
+        nearest_vegetation_hit_t: float | None = None
+        nearest_vegetation_point: np.ndarray | None = None
         transmittance = 1.0
         segment = target - origin
         for primitive in candidates:
@@ -371,7 +414,9 @@ class EnvironmentQuery:
             return VisibilityResult(
                 visible=False,
                 blocker_type="vegetation",
-                first_hit_range_m=None if nearest_vegetation_hit_t is None else nearest_vegetation_hit_t * distance_m,
+                first_hit_range_m=None
+                if nearest_vegetation_hit_t is None
+                else nearest_vegetation_hit_t * distance_m,
                 closest_point=nearest_vegetation_point,
                 transmittance=transmittance,
                 detection_multiplier=0.0,
@@ -381,7 +426,9 @@ class EnvironmentQuery:
         return VisibilityResult(
             visible=True,
             blocker_type="none",
-            first_hit_range_m=None if nearest_vegetation_hit_t is None else nearest_vegetation_hit_t * distance_m,
+            first_hit_range_m=None
+            if nearest_vegetation_hit_t is None
+            else nearest_vegetation_hit_t * distance_m,
             closest_point=nearest_vegetation_point,
             transmittance=transmittance,
             detection_multiplier=detection_multiplier,
@@ -392,8 +439,8 @@ class EnvironmentQuery:
         self,
         origin_xyz: np.ndarray,
         target_xyz: np.ndarray,
-        sensor_profile: Optional[SensorVisibilityModel] = None,
-        weather: Optional["WeatherModel"] = None,
+        sensor_profile: SensorVisibilityModel | None = None,
+        weather: WeatherModel | None = None,
         *,
         max_range_m: float = 2000.0,
         terrain_clearance_m: float = 1.0,
@@ -474,8 +521,10 @@ class EnvironmentQuery:
         target: np.ndarray,
         *,
         terrain_clearance_m: float,
-    ) -> Optional[Tuple[str, Optional[float], Optional[np.ndarray]]]:
-        tile_span_m = self.environment.terrain.tile_size_cells * self.environment.terrain.base_resolution_m
+    ) -> tuple[str, float | None, np.ndarray | None] | None:
+        tile_span_m = (
+            self.environment.terrain.tile_size_cells * self.environment.terrain.base_resolution_m
+        )
         tile_intervals = _grid_dda_intervals(
             origin_xy=origin[:2],
             target_xy=target[:2],
@@ -502,26 +551,59 @@ class EnvironmentQuery:
             ):
                 mid_t = t0 + ((cell_t0 + cell_t1) * 0.5 * (t1 - t0))
                 point = origin + segment * mid_t
-                terrain_height = self.environment.terrain.height_at(float(point[0]), float(point[1])) + terrain_clearance_m
+                terrain_height = (
+                    self.environment.terrain.height_at(float(point[0]), float(point[1]))
+                    + terrain_clearance_m
+                )
                 if float(point[2]) <= terrain_height:
                     return (
                         "terrain",
                         mid_t,
-                        np.array([float(point[0]), float(point[1]), float(terrain_height)], dtype=float),
+                        np.array(
+                            [float(point[0]), float(point[1]), float(terrain_height)], dtype=float
+                        ),
                     )
         return None
 
     def _coverage_closest_point(self, origin: np.ndarray, target: np.ndarray) -> np.ndarray:
         interval = _liang_barsky_interval(origin[:2], target[:2], self.environment.bounds_xy_m)
-        clamped_x = float(np.clip(float(target[0]), self.environment.bounds_xy_m.x_min_m, self.environment.bounds_xy_m.x_max_m))
-        clamped_y = float(np.clip(float(target[1]), self.environment.bounds_xy_m.y_min_m, self.environment.bounds_xy_m.y_max_m))
+        clamped_x = float(
+            np.clip(
+                float(target[0]),
+                self.environment.bounds_xy_m.x_min_m,
+                self.environment.bounds_xy_m.x_max_m,
+            )
+        )
+        clamped_y = float(
+            np.clip(
+                float(target[1]),
+                self.environment.bounds_xy_m.y_min_m,
+                self.environment.bounds_xy_m.y_max_m,
+            )
+        )
         if interval is None:
             return np.array([clamped_x, clamped_y, float(target[2])], dtype=float)
         t_start, t_end = interval
-        hit_t = t_start if not self.environment.bounds_xy_m.contains_xy(float(origin[0]), float(origin[1])) else t_end
+        hit_t = (
+            t_start
+            if not self.environment.bounds_xy_m.contains_xy(float(origin[0]), float(origin[1]))
+            else t_end
+        )
         point = origin + (target - origin) * hit_t
-        point[0] = float(np.clip(float(point[0]), self.environment.bounds_xy_m.x_min_m, self.environment.bounds_xy_m.x_max_m))
-        point[1] = float(np.clip(float(point[1]), self.environment.bounds_xy_m.y_min_m, self.environment.bounds_xy_m.y_max_m))
+        point[0] = float(
+            np.clip(
+                float(point[0]),
+                self.environment.bounds_xy_m.x_min_m,
+                self.environment.bounds_xy_m.x_max_m,
+            )
+        )
+        point[1] = float(
+            np.clip(
+                float(point[1]),
+                self.environment.bounds_xy_m.y_min_m,
+                self.environment.bounds_xy_m.y_max_m,
+            )
+        )
         return point
 
 

@@ -17,14 +17,17 @@ Typical usage::
     roles = planner.assign_roles(
         drone_ids=["d0", "d1", "d2"],
         target_ids=["t0"],
-        drone_roles={"d0": ROLE_PRIMARY_OBSERVER, "d1": ROLE_SECONDARY_BASELINE, "d2": ROLE_RESERVE},
+        drone_roles={
+            "d0": ROLE_PRIMARY_OBSERVER,
+            "d1": ROLE_SECONDARY_BASELINE,
+            "d2": ROLE_RESERVE,
+        },
     )
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -38,7 +41,7 @@ ROLE_CORRIDOR_WATCHER = "corridor_watcher"
 ROLE_RELAY = "relay"
 ROLE_RESERVE = "reserve"
 
-ROLE_PRIORITY: Dict[str, int] = {
+ROLE_PRIORITY: dict[str, int] = {
     ROLE_PRIMARY_OBSERVER: 5,
     ROLE_SECONDARY_BASELINE: 4,
     ROLE_CORRIDOR_WATCHER: 3,
@@ -97,7 +100,7 @@ class PlannedTrajectory:
     planned_at_s: float
     valid_until_s: float
     generation: int
-    override_reason: Optional[str] = None
+    override_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,8 +155,8 @@ class PlannerEvent:
     """Human-readable trigger reason (e.g. ``"track_loss"``, ``"staleness_expiry"``)."""
 
     generation: int
-    route_length_m: Optional[float] = None
-    override_reason: Optional[str] = None
+    route_length_m: float | None = None
+    override_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,10 +188,10 @@ class CooperativePlanner:
     ) -> None:
         self._objectives = objectives
         self._replan_cooldown_s = float(replan_cooldown_s)
-        self._plans: Dict[str, PlannedTrajectory] = {}
-        self._events: List[PlannerEvent] = []
+        self._plans: dict[str, PlannedTrajectory] = {}
+        self._events: list[PlannerEvent] = []
         self._generation_counter: int = 0
-        self._last_replan_time: Dict[str, float] = {}
+        self._last_replan_time: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -196,10 +199,10 @@ class CooperativePlanner:
 
     def assign_roles(
         self,
-        drone_ids: List[str],
-        target_ids: List[str],
-        drone_roles: Dict[str, str],
-    ) -> Dict[str, str]:
+        drone_ids: list[str],
+        target_ids: list[str],
+        drone_roles: dict[str, str],
+    ) -> dict[str, str]:
         """Validate role assignments and ensure at least one primary_observer.
 
         Returns the (possibly corrected) role mapping.  If no
@@ -217,7 +220,7 @@ class CooperativePlanner:
             Proposed role mapping ``{drone_id: role_str}``.  Roles not in
             ``_ALL_ROLES`` are replaced with ``ROLE_RESERVE``.
         """
-        result: Dict[str, str] = {}
+        result: dict[str, str] = {}
 
         # Normalise and validate each entry
         for drone_id in drone_ids:
@@ -247,7 +250,7 @@ class CooperativePlanner:
         self,
         drone_id: str,
         role: str,
-        target_position: Optional[np.ndarray],
+        target_position: np.ndarray | None,
         drone_position: np.ndarray,
         planner: object,  # PathPlanner2D
         terrain_model: object,  # TerrainModel
@@ -296,7 +299,7 @@ class CooperativePlanner:
 
         # Build the 2-D goal position
         route = None
-        override_reason: Optional[str] = None
+        override_reason: str | None = None
         event_type = "plan_issued"
 
         drone_xy = np.asarray(drone_position, dtype=float)[:2]
@@ -363,7 +366,7 @@ class CooperativePlanner:
         track_stale_steps: int = 0,
         obstacle_warning: bool = False,
         role_changed: bool = False,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Decide whether *drone_id* should be replanned at *timestamp_s*.
 
         Evaluates replanning triggers in priority order (PLANNING.md §4.2):
@@ -419,10 +422,10 @@ class CooperativePlanner:
 
     def check_deconfliction(
         self,
-        drone_positions: Dict[str, np.ndarray],
-        drone_roles: Dict[str, str],
+        drone_positions: dict[str, np.ndarray],
+        drone_roles: dict[str, str],
         min_separation_m: float = 16.0,
-    ) -> List[Tuple[str, str, float]]:
+    ) -> list[tuple[str, str, float]]:
         """Evaluate separation constraints between all active (non-reserve) drones.
 
         Deconfliction is performed in 2-D XY space (PLANNING.md §5.1).
@@ -445,13 +448,13 @@ class CooperativePlanner:
             drone is listed second.  An empty list means no violations.
         """
         # Build list of active (non-reserve) drones with known positions
-        active: List[Tuple[str, np.ndarray]] = []
+        active: list[tuple[str, np.ndarray]] = []
         for drone_id, pos in drone_positions.items():
             role = drone_roles.get(drone_id, ROLE_RESERVE)
             if role != ROLE_RESERVE:
                 active.append((drone_id, np.asarray(pos, dtype=float)))
 
-        violations: List[Tuple[str, str, float]] = []
+        violations: list[tuple[str, str, float]] = []
         for i in range(len(active)):
             for j in range(i + 1, len(active)):
                 id_a, pos_a = active[i]
@@ -483,12 +486,12 @@ class CooperativePlanner:
         return float(planned_at_s) + window_s
 
     @property
-    def events(self) -> List[PlannerEvent]:
+    def events(self) -> list[PlannerEvent]:
         """Return a snapshot of all recorded planner events."""
         return list(self._events)
 
     @property
-    def plans(self) -> Dict[str, PlannedTrajectory]:
+    def plans(self) -> dict[str, PlannedTrajectory]:
         """Return a snapshot of the current plan per drone."""
         return dict(self._plans)
 
@@ -499,9 +502,7 @@ class CooperativePlanner:
     def _record_event(self, event: PlannerEvent) -> None:
         self._events.append(event)
 
-    def _record_replan_trigger(
-        self, drone_id: str, timestamp_s: float, trigger: str
-    ) -> None:
+    def _record_replan_trigger(self, drone_id: str, timestamp_s: float, trigger: str) -> None:
         plan = self._plans.get(drone_id)
         self._record_event(
             PlannerEvent(
@@ -513,9 +514,7 @@ class CooperativePlanner:
             )
         )
 
-    def _altitude_profile_for_role(
-        self, role: str, dynamics: object
-    ) -> AltitudeProfile:
+    def _altitude_profile_for_role(self, role: str, dynamics: object) -> AltitudeProfile:
         """Build an ``AltitudeProfile`` from *dynamics* suited to *role*."""
         # Pull attributes with safe fallbacks
         base_agl = float(getattr(dynamics, "drone_base_agl_m", 230.0))
@@ -591,10 +590,7 @@ class CooperativePlanner:
         if standoff_m > 0.0:
             direction = drone_xy - target_xy
             dist = float(np.linalg.norm(direction))
-            if dist > 1e-6:
-                direction = direction / dist
-            else:
-                direction = np.array([1.0, 0.0], dtype=float)
+            direction = direction / dist if dist > 1e-06 else np.array([1.0, 0.0], dtype=float)
             return target_xy + direction * standoff_m
 
         return target_xy.copy()

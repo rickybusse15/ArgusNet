@@ -16,7 +16,6 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -26,6 +25,7 @@ __all__ = ["CoordinationPolicy", "SharedMissionState", "CoordinationManager"]
 @dataclass(frozen=True)
 class CoordinationPolicy:
     """Configuration for multi-drone coordination behaviour."""
+
     elect_coordinator: bool = True
     # If True, the drone with the highest remaining battery is designated
     # coordinator each time election is requested.
@@ -48,15 +48,14 @@ class SharedMissionState:
     The serialisable fields (coordinator_drone_id, etc.) are written into
     ScanMissionState separately.
     """
-    claimed_cells: Dict[str, Tuple[int, int]] = field(default_factory=dict)
+
+    claimed_cells: dict[str, tuple[int, int]] = field(default_factory=dict)
     # drone_id -> (ci, cj) grid cell the drone is currently heading toward.
-    poi_assignments: Dict[str, str] = field(default_factory=dict)
+    poi_assignments: dict[str, str] = field(default_factory=dict)
     # drone_id -> poi_id tentative assignment (informational).
-    coordinator_id: Optional[str] = None
+    coordinator_id: str | None = None
     # The currently elected coordinator drone_id.
-    pending_messages: Dict[str, List[dict]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
+    pending_messages: dict[str, list[dict]] = field(default_factory=lambda: defaultdict(list))
     # Queued claimed-cell updates awaiting delivery (RF latency simulation).
     # Each entry: {"drone_id": str, "cell": (ci, cj), "deliver_at_step": int}
     message_latency_steps: int = 0
@@ -65,7 +64,7 @@ class SharedMissionState:
 class CoordinationManager:
     """Implements multi-drone coordination primitives."""
 
-    def __init__(self, policy: Optional[CoordinationPolicy] = None) -> None:
+    def __init__(self, policy: CoordinationPolicy | None = None) -> None:
         self.policy = policy or CoordinationPolicy()
 
     # ------------------------------------------------------------------
@@ -74,10 +73,10 @@ class CoordinationManager:
 
     def elect_coordinator(
         self,
-        drone_ids: List[str],
-        battery_states: Dict[str, object],   # drone_id -> BatteryState
+        drone_ids: list[str],
+        battery_states: dict[str, object],  # drone_id -> BatteryState
         battery_capacity_wh: float = 500.0,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return the drone_id with the highest remaining battery fraction.
 
         The result is deterministic for a given set of battery states.
@@ -103,7 +102,7 @@ class CoordinationManager:
     def update_claimed(
         self,
         drone_id: str,
-        cell: Optional[Tuple[int, int]],
+        cell: tuple[int, int] | None,
         shared_state: SharedMissionState,
         current_step: int,
     ) -> None:
@@ -121,14 +120,14 @@ class CoordinationManager:
             shared_state.claimed_cells[drone_id] = cell
         else:
             deliver_at = current_step + latency
-            shared_state.pending_messages[drone_id].append({
-                "cell": cell,
-                "deliver_at_step": deliver_at,
-            })
+            shared_state.pending_messages[drone_id].append(
+                {
+                    "cell": cell,
+                    "deliver_at_step": deliver_at,
+                }
+            )
 
-    def flush_messages(
-        self, shared_state: SharedMissionState, current_step: int
-    ) -> None:
+    def flush_messages(self, shared_state: SharedMissionState, current_step: int) -> None:
         """Apply queued messages whose delivery step has been reached."""
         for drone_id, messages in list(shared_state.pending_messages.items()):
             remaining = []
@@ -145,9 +144,9 @@ class CoordinationManager:
 
     def formation_offsets(
         self,
-        drone_ids: List[str],
+        drone_ids: list[str],
         lead_heading_rad: float,
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Compute per-drone XY offset to add to each drone's target waypoint.
 
         Returns an empty dict when ``formation_mode == "none"`` or fewer than
@@ -174,7 +173,7 @@ class CoordinationManager:
         # Along-track unit vector (forward).
         fwd = np.array([cos_h, sin_h], dtype=float)
 
-        offsets: Dict[str, np.ndarray] = {}
+        offsets: dict[str, np.ndarray] = {}
         for idx, did in enumerate(drone_ids):
             if idx == 0:
                 offsets[did] = np.zeros(2, dtype=float)

@@ -10,13 +10,13 @@ import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
-
-from argusnet.core.frames import ENUOrigin, enu_to_wgs84
-from .replay import ReplayDocument
+from typing import Any
 
 import numpy as np
 
+from argusnet.core.frames import ENUOrigin, enu_to_wgs84
+
+from .replay import ReplayDocument
 
 EXPORT_FORMATS = (
     "geojson",
@@ -45,8 +45,8 @@ def _collect_track_lines(
     replay_document: ReplayDocument,
     enu_origin: ENUOrigin,
     *,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> list[dict[str, Any]]:
     frames = _filter_frames(replay_document["frames"], start_time_s, end_time_s)
     track_positions: dict[str, list[tuple[float, float, float, float]]] = defaultdict(list)
@@ -79,8 +79,8 @@ def _collect_node_points(
     replay_document: ReplayDocument,
     enu_origin: ENUOrigin,
     *,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> list[dict[str, Any]]:
     frames = _filter_frames(replay_document["frames"], start_time_s, end_time_s)
     seen_nodes: dict[str, dict[str, Any]] = {}
@@ -108,8 +108,8 @@ def _collect_observation_points(
     replay_document: ReplayDocument,
     enu_origin: ENUOrigin,
     *,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> list[dict[str, Any]]:
     frames = _filter_frames(replay_document["frames"], start_time_s, end_time_s)
     features: list[dict[str, Any]] = []
@@ -133,6 +133,7 @@ def _collect_observation_points(
 # GeoJSON
 # ---------------------------------------------------------------------------
 
+
 def export_geojson(
     replay_document: ReplayDocument,
     enu_origin: ENUOrigin,
@@ -140,15 +141,15 @@ def export_geojson(
     *,
     include_observations: bool = False,
     include_nodes: bool = False,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> None:
     """Export tracks (and optionally observations/nodes) as a GeoJSON FeatureCollection."""
     frames = _filter_frames(replay_document["frames"], start_time_s, end_time_s)
 
     # Collect track positions over time
-    track_positions: Dict[str, List[List[float]]] = defaultdict(list)
-    track_timestamps: Dict[str, List[float]] = defaultdict(list)
+    track_positions: dict[str, list[list[float]]] = defaultdict(list)
+    track_timestamps: dict[str, list[float]] = defaultdict(list)
 
     for frame in frames:
         for track in frame.get("tracks", []):
@@ -158,26 +159,28 @@ def export_geojson(
             track_positions[track_id].append([lon, lat, alt])
             track_timestamps[track_id].append(track["timestamp_s"])
 
-    features: List[Dict[str, Any]] = []
+    features: list[dict[str, Any]] = []
 
     # Track LineStrings
     for track_id in sorted(track_positions.keys()):
         coords = track_positions[track_id]
         if len(coords) < 2:
             continue
-        features.append({
-            "type": "Feature",
-            "geometry": {
-                "type": "LineString",
-                "coordinates": coords,
-            },
-            "properties": {
-                "track_id": track_id,
-                "point_count": len(coords),
-                "start_time_s": track_timestamps[track_id][0],
-                "end_time_s": track_timestamps[track_id][-1],
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": coords,
+                },
+                "properties": {
+                    "track_id": track_id,
+                    "point_count": len(coords),
+                    "start_time_s": track_timestamps[track_id][0],
+                    "end_time_s": track_timestamps[track_id][-1],
+                },
+            }
+        )
 
     # Observation Points
     if include_observations:
@@ -185,23 +188,25 @@ def export_geojson(
             for obs in frame.get("observations", []):
                 origin = obs["origin"]
                 lat, lon, alt = enu_to_wgs84(np.array(origin, dtype=float), enu_origin)
-                features.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [lon, lat, alt],
-                    },
-                    "properties": {
-                        "type": "observation",
-                        "node_id": obs.get("node_id", ""),
-                        "target_id": obs.get("target_id", ""),
-                        "timestamp_s": obs.get("timestamp_s", 0.0),
-                    },
-                })
+                features.append(
+                    {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": [lon, lat, alt],
+                        },
+                        "properties": {
+                            "type": "observation",
+                            "node_id": obs.get("node_id", ""),
+                            "target_id": obs.get("target_id", ""),
+                            "timestamp_s": obs.get("timestamp_s", 0.0),
+                        },
+                    }
+                )
 
     # Node Points (latest position)
     if include_nodes:
-        seen_nodes: Dict[str, Dict] = {}
+        seen_nodes: dict[str, dict] = {}
         for frame in frames:
             for node in frame.get("nodes", []):
                 seen_nodes[node["node_id"]] = node
@@ -209,18 +214,20 @@ def export_geojson(
             node = seen_nodes[node_id]
             pos = node["position"]
             lat, lon, alt = enu_to_wgs84(np.array(pos, dtype=float), enu_origin)
-            features.append({
-                "type": "Feature",
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [lon, lat, alt],
-                },
-                "properties": {
-                    "type": "node",
-                    "node_id": node_id,
-                    "is_mobile": node.get("is_mobile", False),
-                },
-            })
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [lon, lat, alt],
+                    },
+                    "properties": {
+                        "type": "node",
+                        "node_id": node_id,
+                        "is_mobile": node.get("is_mobile", False),
+                    },
+                }
+            )
 
     geojson = {
         "type": "FeatureCollection",
@@ -237,14 +244,15 @@ def export_geojson(
 # CZML (Cesium)
 # ---------------------------------------------------------------------------
 
+
 def export_czml(
     replay_document: ReplayDocument,
     enu_origin: ENUOrigin,
     output_path: str,
     *,
-    start_time_utc: Optional[str] = None,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_utc: str | None = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> None:
     """Export tracks as CZML packets for Cesium visualization."""
     frames = _filter_frames(replay_document["frames"], start_time_s, end_time_s)
@@ -252,7 +260,7 @@ def export_czml(
     anchor_dt = _resolve_time_anchor(replay_document, explicit_start_time_utc=start_time_utc)
 
     # Collect track data
-    track_data: Dict[str, List[tuple]] = defaultdict(list)
+    track_data: dict[str, list[tuple]] = defaultdict(list)
     for frame in frames:
         t = frame.get("timestamp_s", 0.0)
         for track in frame.get("tracks", []):
@@ -260,7 +268,7 @@ def export_czml(
             lat, lon, alt = enu_to_wgs84(np.array(pos, dtype=float), enu_origin)
             track_data[track["track_id"]].append((t, lon, lat, alt))
 
-    packets: List[Dict[str, Any]] = []
+    packets: list[dict[str, Any]] = []
 
     # Document header
     anchor_iso = anchor_dt.isoformat()
@@ -275,16 +283,18 @@ def export_czml(
     start_iso = _iso_from_timestamp(anchor_dt, interval_start_s)
     end_iso = _iso_from_timestamp(anchor_dt, interval_end_s)
 
-    packets.append({
-        "id": "document",
-        "name": meta.get("scenario_name", "Smart Tracker Export"),
-        "version": "1.0",
-        "clock": {
-            "interval": f"{start_iso}/{end_iso}",
-            "currentTime": start_iso,
-            "multiplier": 1,
-        },
-    })
+    packets.append(
+        {
+            "id": "document",
+            "name": meta.get("scenario_name", "Smart Tracker Export"),
+            "version": "1.0",
+            "clock": {
+                "interval": f"{start_iso}/{end_iso}",
+                "currentTime": start_iso,
+                "multiplier": 1,
+            },
+        }
+    )
 
     # Track packets
     for track_id in sorted(track_data.keys()):
@@ -302,29 +312,31 @@ def export_czml(
         avail_start = _iso_from_timestamp(anchor_dt, first_t)
         avail_end = _iso_from_timestamp(anchor_dt, last_t)
 
-        packets.append({
-            "id": track_id,
-            "name": track_id,
-            "availability": f"{avail_start}/{avail_end}",
-            "position": {
-                "epoch": anchor_iso,
-                "cartographicDegrees": cartographic,
-            },
-            "point": {
-                "color": {"rgba": [255, 165, 0, 255]},
-                "pixelSize": 8,
-            },
-            "path": {
-                "material": {
-                    "solidColor": {
-                        "color": {"rgba": [255, 165, 0, 200]},
-                    }
+        packets.append(
+            {
+                "id": track_id,
+                "name": track_id,
+                "availability": f"{avail_start}/{avail_end}",
+                "position": {
+                    "epoch": anchor_iso,
+                    "cartographicDegrees": cartographic,
                 },
-                "width": 2,
-                "leadTime": 0,
-                "trailTime": total_duration,
-            },
-        })
+                "point": {
+                    "color": {"rgba": [255, 165, 0, 255]},
+                    "pixelSize": 8,
+                },
+                "path": {
+                    "material": {
+                        "solidColor": {
+                            "color": {"rgba": [255, 165, 0, 200]},
+                        }
+                    },
+                    "width": 2,
+                    "leadTime": 0,
+                    "trailTime": total_duration,
+                },
+            }
+        )
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -336,13 +348,14 @@ def export_czml(
 # Foxglove MCAP
 # ---------------------------------------------------------------------------
 
+
 def export_foxglove(
     replay_document: ReplayDocument,
     enu_origin: ENUOrigin,
     output_path: str,
     *,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> None:
     """Export tracks as a Foxglove MCAP file with SceneUpdate messages.
 
@@ -372,24 +385,26 @@ def export_foxglove(
         schema_id = writer.register_schema(
             name="argusnet.TrackPositions",
             encoding="jsonschema",
-            data=json.dumps({
-                "type": "object",
-                "properties": {
-                    "timestamp_s": {"type": "number"},
-                    "tracks": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "track_id": {"type": "string"},
-                                "lat_deg": {"type": "number"},
-                                "lon_deg": {"type": "number"},
-                                "alt_m": {"type": "number"},
+            data=json.dumps(
+                {
+                    "type": "object",
+                    "properties": {
+                        "timestamp_s": {"type": "number"},
+                        "tracks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "track_id": {"type": "string"},
+                                    "lat_deg": {"type": "number"},
+                                    "lon_deg": {"type": "number"},
+                                    "alt_m": {"type": "number"},
+                                },
                             },
                         },
                     },
-                },
-            }).encode("utf-8"),
+                }
+            ).encode("utf-8"),
         )
 
         channel_id = writer.register_channel(
@@ -406,17 +421,21 @@ def export_foxglove(
             for track in frame.get("tracks", []):
                 pos = track["position"]
                 lat, lon, alt = enu_to_wgs84(np.array(pos, dtype=float), enu_origin)
-                track_entries.append({
-                    "track_id": track["track_id"],
-                    "lat_deg": lat,
-                    "lon_deg": lon,
-                    "alt_m": alt,
-                })
+                track_entries.append(
+                    {
+                        "track_id": track["track_id"],
+                        "lat_deg": lat,
+                        "lon_deg": lon,
+                        "alt_m": alt,
+                    }
+                )
 
-            message_data = json.dumps({
-                "timestamp_s": timestamp_s,
-                "tracks": track_entries,
-            }).encode("utf-8")
+            message_data = json.dumps(
+                {
+                    "timestamp_s": timestamp_s,
+                    "tracks": track_entries,
+                }
+            ).encode("utf-8")
 
             writer.add_message(
                 channel_id=channel_id,
@@ -440,8 +459,8 @@ def export_kml(
     enu_origin: ENUOrigin,
     output_path: str,
     *,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> str:
     """Export tracks and sensor nodes as a KML document.
 
@@ -471,7 +490,7 @@ def export_kml(
     filtered_frames = _filter_frames(frames, start_time_s, end_time_s)
 
     # Collect track positions keyed by track_id
-    track_positions: Dict[str, List[tuple]] = defaultdict(list)
+    track_positions: dict[str, list[tuple]] = defaultdict(list)
     for frame in filtered_frames:
         for track in frame.get("tracks", []):
             track_id = track["track_id"]
@@ -480,7 +499,7 @@ def export_kml(
             track_positions[track_id].append((lon, lat, alt, track["timestamp_s"]))
 
     # Collect latest node positions
-    seen_nodes: Dict[str, Dict] = {}
+    seen_nodes: dict[str, dict] = {}
     for frame in filtered_frames:
         for node in frame.get("nodes", []):
             seen_nodes[node["node_id"]] = node
@@ -508,9 +527,7 @@ def export_kml(
 
         linestring = ET.SubElement(placemark, "LineString")
         ET.SubElement(linestring, "altitudeMode").text = "absolute"
-        coord_text = " ".join(
-            f"{lon},{lat},{alt}" for lon, lat, alt, _t in entries
-        )
+        coord_text = " ".join(f"{lon},{lat},{alt}" for lon, lat, alt, _t in entries)
         ET.SubElement(linestring, "coordinates").text = coord_text
 
     # Nodes folder
@@ -542,8 +559,8 @@ def export_kmz(
     enu_origin: ENUOrigin,
     output_path: str,
     *,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> str:
     """Export KML content as a single-document KMZ archive."""
     output = Path(output_path)
@@ -574,8 +591,8 @@ def export_gpx(
     enu_origin: ENUOrigin,
     output_path: str,
     *,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> str:
     """Export tracks and sensor nodes as a GPX 1.1 document.
 
@@ -598,14 +615,14 @@ def export_gpx(
         The *output_path* that was written to.
     """
     frames = replay_document["frames"]
-    meta = replay_document.get("meta", {})
+    replay_document.get("meta", {})
     anchor_dt = _resolve_time_anchor(replay_document)
 
     # Filter frames by time range
     filtered_frames = _filter_frames(frames, start_time_s, end_time_s)
 
     # Collect track positions keyed by track_id
-    track_positions: Dict[str, List[tuple]] = defaultdict(list)
+    track_positions: dict[str, list[tuple]] = defaultdict(list)
     for frame in filtered_frames:
         for track in frame.get("tracks", []):
             track_id = track["track_id"]
@@ -614,7 +631,7 @@ def export_gpx(
             track_positions[track_id].append((lat, lon, alt, track["timestamp_s"]))
 
     # Collect latest node positions
-    seen_nodes: Dict[str, Dict] = {}
+    seen_nodes: dict[str, dict] = {}
     for frame in filtered_frames:
         for node in frame.get("nodes", []):
             seen_nodes[node["node_id"]] = node
@@ -663,8 +680,8 @@ def export_geopackage(
     output_path: str,
     *,
     include_observations: bool = False,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> str:
     """Export tracks, nodes, and optional observations to a single GeoPackage."""
     fiona = _lazy_import_fiona()
@@ -685,12 +702,16 @@ def export_geopackage(
         start_time_s=start_time_s,
         end_time_s=end_time_s,
     )
-    observation_features = _collect_observation_points(
-        replay_document,
-        enu_origin,
-        start_time_s=start_time_s,
-        end_time_s=end_time_s,
-    ) if include_observations else []
+    observation_features = (
+        _collect_observation_points(
+            replay_document,
+            enu_origin,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+        )
+        if include_observations
+        else []
+    )
 
     with fiona.open(
         output,
@@ -785,8 +806,8 @@ def export_shapefile(
     output_dir: str,
     *,
     include_observations: bool = False,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> str:
     """Export tracks, nodes, and optional observations as Shapefile sets."""
     fiona = _lazy_import_fiona()
@@ -805,12 +826,16 @@ def export_shapefile(
         start_time_s=start_time_s,
         end_time_s=end_time_s,
     )
-    observation_features = _collect_observation_points(
-        replay_document,
-        enu_origin,
-        start_time_s=start_time_s,
-        end_time_s=end_time_s,
-    ) if include_observations else []
+    observation_features = (
+        _collect_observation_points(
+            replay_document,
+            enu_origin,
+            start_time_s=start_time_s,
+            end_time_s=end_time_s,
+        )
+        if include_observations
+        else []
+    )
 
     with fiona.open(
         output_root / "tracks.shp",
@@ -902,10 +927,10 @@ def export_shapefile(
 
 
 def _filter_frames(
-    frames: List[Dict[str, Any]],
-    start_time_s: Optional[float],
-    end_time_s: Optional[float],
-) -> List[Dict[str, Any]]:
+    frames: list[dict[str, Any]],
+    start_time_s: float | None,
+    end_time_s: float | None,
+) -> list[dict[str, Any]]:
     """Return frames within the optional ``[start_time_s, end_time_s]`` window."""
     if start_time_s is None and end_time_s is None:
         return frames
@@ -920,7 +945,7 @@ def _filter_frames(
     return result
 
 
-def _parse_iso_timestamp(value: object) -> Optional[datetime]:
+def _parse_iso_timestamp(value: object) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
@@ -935,7 +960,7 @@ def _parse_iso_timestamp(value: object) -> Optional[datetime]:
 def _resolve_time_anchor(
     replay_document: ReplayDocument,
     *,
-    explicit_start_time_utc: Optional[str] = None,
+    explicit_start_time_utc: str | None = None,
 ) -> datetime:
     explicit_anchor = _parse_iso_timestamp(explicit_start_time_utc)
     if explicit_anchor is not None:
@@ -965,8 +990,8 @@ def export_replay_format(
     *,
     include_observations: bool = False,
     include_nodes: bool = False,
-    start_time_s: Optional[float] = None,
-    end_time_s: Optional[float] = None,
+    start_time_s: float | None = None,
+    end_time_s: float | None = None,
 ) -> str:
     """Dispatch one replay export format to the correct implementation."""
     fmt = export_format.lower()
@@ -1088,9 +1113,11 @@ __all__ = [
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     """CLI entry point for ``argusnet-export``."""
     import argparse
+
     from .cli import _parse_enu_origin
     from .replay import load_replay_document
 
@@ -1101,13 +1128,15 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="Output file path.")
     parser.add_argument("--include-observations", action="store_true")
     parser.add_argument("--include-nodes", action="store_true")
-    parser.add_argument("--time-range", help="Time range as 'start,end' in seconds (e.g. '0.0,10.0').")
+    parser.add_argument(
+        "--time-range", help="Time range as 'start,end' in seconds (e.g. '0.0,10.0')."
+    )
     args = parser.parse_args()
 
     enu_origin = _parse_enu_origin(args.enu_origin)
     replay_doc = load_replay_document(args.replay)
 
-    time_kwargs: Dict[str, Optional[float]] = {}
+    time_kwargs: dict[str, float | None] = {}
     if args.time_range:
         parts = args.time_range.split(",")
         time_kwargs["start_time_s"] = float(parts[0]) if parts[0] else None
