@@ -576,13 +576,13 @@
     },
     "scan_mission_state": {
       "type": ["object", "null"],
-      "description": "State of the three-phase ISR mission (scanning → localizing → inspecting) at this frame. Present only in scan_map_inspect missions.",
+      "description": "State of the four-phase ISR mission (scanning → localizing → inspecting → egress) at this frame. Present only in scan_map_inspect missions.",
       "additionalProperties": true,
       "properties": {
         "phase": {
           "type": "string",
           "description": "Current mission phase.",
-          "enum": ["scanning", "localizing", "inspecting", "complete"]
+          "enum": ["scanning", "localizing", "inspecting", "egress", "complete"]
         },
         "scan_coverage_fraction": {
           "type": "number",
@@ -636,7 +636,33 @@
             "additionalProperties": true,
             "properties": {
               "poi_id": {"type": "string"},
-              "status": {"type": "string", "enum": ["pending", "active", "complete"]}
+              "status": {"type": "string", "enum": ["pending", "active", "complete"]},
+              "position": {
+                "type": "array",
+                "description": "World-space [x_m, y_m, z_m] position of this POI.",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          }
+        },
+        "egress_progress": {
+          "type": "array",
+          "description": "Per-drone return-to-home progress. Non-empty only during the egress phase.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "drone_id": {"type": "string"},
+              "distance_to_home_m": {"type": "number", "minimum": 0},
+              "home_position": {
+                "type": "array",
+                "description": "World-space [x_m, y_m, z_m] of the drone's home station.",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3
+              }
             }
           }
         },

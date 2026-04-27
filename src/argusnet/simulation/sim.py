@@ -29,6 +29,7 @@ from argusnet.world.environment import (
 )
 from argusnet.core.types import (
     BearingObservation,
+    EgressDroneProgress,
     InspectionEvent,
     LocalizationEstimate,
     LocalizationState,
@@ -4117,6 +4118,30 @@ def run_simulation(
     _drone_poi_assignments: Dict[str, str] = {}
     # Per-drone goto-hover trajectory overrides while inspecting a POI.
     _poi_trajectories: Dict[str, TrajectoryFn] = {}
+    # Per-drone return-to-home trajectories used during the egress phase.
+    _egress_trajectories: Dict[str, TrajectoryFn] = {}
+    # Home station position for each drone (captured once at sim start).
+    _drone_home_positions: Dict[str, np.ndarray] = {
+        drone_id: ctrl.station_position.copy()
+        for drone_id, ctrl in scenario.launchable_controllers.items()
+    }
+
+    def _make_goto_hover(sp: np.ndarray, txy: np.ndarray, tz: float,
+                         ts: float, ta: float) -> TrajectoryFn:
+        """Return a trajectory function that linearly flies sp→(txy, tz) over [ts, ta]."""
+        def _traj(t: float):
+            if t >= ta:
+                return np.array([txy[0], txy[1], tz]), np.zeros(3)
+            frac = max(0.0, min(1.0, (t - ts) / max(ta - ts, 1e-9)))
+            pos = np.array([
+                sp[0] + frac * (txy[0] - sp[0]),
+                sp[1] + frac * (txy[1] - sp[1]),
+                sp[2] + frac * (tz - sp[2]),
+            ])
+            dt_inv = 1.0 / max(ta - ts, 1e-9)
+            vel = np.array([txy[0] - sp[0], txy[1] - sp[1], tz - sp[2]]) * dt_inv
+            return pos, vel
+        return _traj
 
     # Auto-generate POIs spread across the map interior.
     # Each POI is placed at a valid drone-accessible altitude above the terrain
@@ -4230,6 +4255,17 @@ def run_simulation(
             overridden = []
             for ns in node_states:
                 traj_fn = _poi_trajectories.get(ns.node_id)
+                if traj_fn is not None:
+                    pos_ov, vel_ov = traj_fn(timestamp_s)
+                    ns = replace(ns, position=list(pos_ov), velocity=list(vel_ov))
+                overridden.append(ns)
+            node_states = overridden
+
+        # Override positions/velocities for drones returning to home during egress.
+        if _egress_trajectories:
+            overridden = []
+            for ns in node_states:
+                traj_fn = _egress_trajectories.get(ns.node_id)
                 if traj_fn is not None:
                     pos_ov, vel_ov = traj_fn(timestamp_s)
                     ns = replace(ns, position=list(pos_ov), velocity=list(vel_ov))
@@ -4449,23 +4485,6 @@ def run_simulation(
                         t0 = float(timestamp_s)
                         dist_m = float(np.linalg.norm(tgt_xy - start_pos[:2]))
                         t_arrive = t0 + dist_m / 28.0
-
-                        def _make_goto_hover(sp, txy, tz, ts, ta):
-                            def _traj(t):
-                                if t >= ta:
-                                    return np.array([txy[0], txy[1], tz]), np.zeros(3)
-                                frac = (t - ts) / max(ta - ts, 1e-9)
-                                frac = max(0.0, min(1.0, frac))
-                                pos = np.array([
-                                    sp[0] + frac * (txy[0] - sp[0]),
-                                    sp[1] + frac * (txy[1] - sp[1]),
-                                    sp[2] + frac * (tz - sp[2]),
-                                ])
-                                dt_inv = 1.0 / max(ta - ts, 1e-9)
-                                vel = np.array([txy[0]-sp[0], txy[1]-sp[1], tz-sp[2]]) * dt_inv
-                                return pos, vel
-                            return _traj
-
                         _poi_trajectories[ns.node_id] = _make_goto_hover(
                             start_pos, tgt_xy, tgt_z, t0, t_arrive
                         )
@@ -4492,8 +4511,35 @@ def run_simulation(
                             del _drone_poi_assignments[did]
                             _poi_trajectories.pop(did, None)
                 if _poi_manager.all_complete:
+                    _scan_phase = "egress"
+                    _phase_started_at_s = timestamp_s
+                    _poi_trajectories.clear()
+                    for ns in mobile_states:
+                        home = _drone_home_positions.get(ns.node_id)
+                        if home is not None:
+                            dist_m = float(np.linalg.norm(home[:2] - np.array(ns.position[:2])))
+                            _egress_trajectories[ns.node_id] = _make_goto_hover(
+                                np.array(ns.position, dtype=float),
+                                home[:2].copy(),
+                                float(home[2]),
+                                float(timestamp_s),
+                                float(timestamp_s) + dist_m / 28.0,
+                            )
+
+            elif _scan_phase == "egress":
+                arrived = 0
+                for ns in mobile_states:
+                    home = _drone_home_positions.get(ns.node_id)
+                    if home is None:
+                        arrived += 1
+                        continue
+                    dist_m = float(np.linalg.norm(home[:2] - np.array(ns.position[:2])))
+                    if dist_m < 15.0:
+                        arrived += 1
+                if mobile_states and arrived >= len(mobile_states):
                     _scan_phase = "complete"
                     _phase_started_at_s = timestamp_s
+                    _egress_trajectories.clear()
         else:
             scan_frac = cov.coverage_fraction
 
@@ -4517,18 +4563,34 @@ def run_simulation(
             # Advance the previous grid snapshot
             _prev_coverage_count_grid = _curr_grid.copy()
 
+            _enriched_poi_statuses = [
+                replace(s, position=_poi_manager._pois[s.poi_id].position)
+                for s in _poi_manager.statuses
+            ]
+            _egress_prog = tuple(
+                EgressDroneProgress(
+                    drone_id=ns.node_id,
+                    distance_to_home_m=float(np.linalg.norm(
+                        _drone_home_positions[ns.node_id][:2] - np.array(ns.position[:2])
+                    )),
+                    home_position=_drone_home_positions[ns.node_id],
+                )
+                for ns in mobile_states
+                if ns.node_id in _drone_home_positions
+            ) if _scan_phase == "egress" else ()
             step_scan_mission_state = ScanMissionState(
                 phase=_scan_phase,
                 scan_coverage_fraction=scan_frac,
                 scan_coverage_threshold=_scan_threshold,
                 localization_estimates=list(_loc_estimates),
-                poi_statuses=_poi_manager.statuses,
+                poi_statuses=_enriched_poi_statuses,
                 completed_poi_count=_poi_manager.completed_count,
                 total_poi_count=_poi_manager.total_count,
                 phase_started_at_s=_phase_started_at_s,
                 newly_scanned_cells=tuple(_newly_covered),
                 localization_timed_out=_loc_timed_out,
                 coordinator_drone_id=_shared_state.coordinator_id,
+                egress_progress=_egress_prog,
             )
 
         # --- Localization quality (derived from track covariances) ---

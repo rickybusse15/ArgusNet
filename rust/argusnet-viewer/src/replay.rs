@@ -213,6 +213,9 @@ pub struct ScanMissionState {
     /// The drone_id elected as mission coordinator, if any.
     #[serde(default)]
     pub coordinator_drone_id: Option<String>,
+    /// Per-drone return-to-home progress. Non-empty only during the egress phase.
+    #[serde(default)]
+    pub egress_progress: Vec<EgressProgress>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -233,6 +236,15 @@ pub struct PoiStatus {
     pub assigned_drone_id: Option<String>,
     #[serde(default)]
     pub dwell_accumulated_s: f32,
+    #[serde(default)]
+    pub position: Option<[f32; 3]>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct EgressProgress {
+    pub drone_id: String,
+    pub distance_to_home_m: f32,
+    pub home_position: [f32; 3],
 }
 
 #[derive(Debug, Clone, Deserialize)]

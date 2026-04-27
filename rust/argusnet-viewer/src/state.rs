@@ -57,6 +57,7 @@ pub struct MissionOverlaySettings {
     pub show_loc_ellipses: bool,
     pub show_reconstruction: bool,
     pub show_coord_frame: bool,
+    pub show_egress_paths: bool,
 }
 
 impl Default for MissionOverlaySettings {
@@ -67,6 +68,7 @@ impl Default for MissionOverlaySettings {
             show_loc_ellipses: true,
             show_reconstruction: true,
             show_coord_frame: true,
+            show_egress_paths: true,
         }
     }
 }

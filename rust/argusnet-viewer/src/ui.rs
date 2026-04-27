@@ -169,6 +169,7 @@ fn section_scene_header(
                 "scanning"   => ("SCANNING",   egui::Color32::from_rgb(80, 140, 255)),
                 "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
                 "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
+                "egress"     => ("EGRESS",     egui::Color32::from_rgb(255, 160, 30)),
                 "complete"   => ("COMPLETE",   egui::Color32::from_rgb(60, 200, 80)),
                 other        => (other,        egui::Color32::GRAY),
             };
@@ -348,6 +349,7 @@ fn section_mission_progress(
             "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
             "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
             "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
+            "egress" => ("EGRESS", egui::Color32::from_rgb(255, 160, 30)),
             "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
             other => (other, egui::Color32::GRAY),
         };
@@ -453,6 +455,27 @@ fn section_mission_progress(
                         .unwrap_or_default();
                     ui.label(format!("[{}]{}", poi.poi_id, drone_suffix));
                 });
+            }
+        }
+
+        // Egress phase: per-drone RTH progress
+        if ms.phase == "egress" {
+            let total = ms.egress_progress.len().max(1);
+            let arrived = ms.egress_progress.iter()
+                .filter(|e| e.distance_to_home_m < 20.0)
+                .count();
+            ui.label(format!("\u{21a9} {}/{} drones RTH", arrived, total));
+            for ep in &ms.egress_progress {
+                let max_dist = ms.egress_progress.iter()
+                    .map(|e| e.distance_to_home_m)
+                    .fold(1.0_f32, f32::max)
+                    .max(200.0);
+                let frac = (1.0 - ep.distance_to_home_m / max_dist).clamp(0.0, 1.0);
+                ui.add(
+                    egui::ProgressBar::new(frac)
+                        .text(format!("{}: {:.0} m", ep.drone_id, ep.distance_to_home_m))
+                        .fill(egui::Color32::from_rgb(255, 160, 30)),
+                );
             }
         }
 
@@ -589,6 +612,7 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
                     let color = match phase.as_str() {
                         "localizing" => egui::Color32::from_rgba_unmultiplied(255, 210, 60, 200),
                         "inspecting" => egui::Color32::from_rgba_unmultiplied(255, 140, 40, 200),
+                        "egress"     => egui::Color32::from_rgba_unmultiplied(255, 160, 30, 200),
                         "complete"   => egui::Color32::from_rgba_unmultiplied(60, 200, 80, 200),
                         _            => egui::Color32::from_rgba_unmultiplied(120, 120, 120, 150),
                     };
@@ -609,6 +633,7 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
                     let color = match phase.as_str() {
                         "localizing" => egui::Color32::from_rgb(255, 210, 60),
                         "inspecting" => egui::Color32::from_rgb(255, 140, 40),
+                        "egress"     => egui::Color32::from_rgb(255, 160, 30),
                         "complete"   => egui::Color32::from_rgb(60, 200, 80),
                         _            => egui::Color32::GRAY,
                     };
@@ -1291,6 +1316,7 @@ fn section_runtime_overlays(
         ui.checkbox(&mut mission_overlay.show_scan_grid, "Coverage grid");
         ui.checkbox(&mut mission_overlay.show_poi_markers, "POI markers");
         ui.checkbox(&mut mission_overlay.show_loc_ellipses, "Localization ellipses");
+        ui.checkbox(&mut mission_overlay.show_egress_paths, "Egress paths");
     });
 }
 
@@ -1499,6 +1525,16 @@ fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
             (
                 format!("\u{25cf} INSPECTING  {}/{}", done, total),
                 egui::Color32::from_rgb(255, 140, 40),
+            )
+        }
+        "egress" => {
+            let arrived = ms.egress_progress.iter()
+                .filter(|e| e.distance_to_home_m < 20.0)
+                .count();
+            let total = ms.egress_progress.len().max(1);
+            (
+                format!("\u{21a9} EGRESS  {}/{}", arrived, total),
+                egui::Color32::from_rgb(255, 160, 30),
             )
         }
         "complete" => (

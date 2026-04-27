@@ -142,6 +142,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
                 update_reconstruction_system,
                 maintain_reconstruction_mesh_system,
                 draw_coord_frame_system,
+                draw_egress_paths_system,
             )
                 .chain(),
         )
@@ -1170,8 +1171,21 @@ fn draw_scan_grid_system(
         );
         gizmos.rect(iso, Vec2::new(width, height), border_color);
 
-        // The scan cell point cloud is rendered as a GPU mesh by
-        // maintain_reconstruction_mesh_system; no per-point gizmo work needed here.
+        // During scanning, draw sensor-footprint circles under each mobile drone.
+        if ms.phase == "scanning" {
+            let footprint_r = 75.0_f32;
+            let footprint_color = Color::hsla(52.0, 1.0, 0.88, 0.65);
+            let circle_z = ground_z + 1.5;
+            for node in &frame.nodes {
+                if node.is_mobile {
+                    let iso_c = bevy::math::Isometry3d::new(
+                        Vec3::new(node.position[0], node.position[1], circle_z),
+                        Quat::IDENTITY,
+                    );
+                    gizmos.circle(iso_c, footprint_r, footprint_color);
+                }
+            }
+        }
     }
 }
 
@@ -1196,13 +1210,14 @@ fn draw_poi_markers_system(
             "active" => Color::srgb(1.0, 0.8, 0.0),
             _ => Color::srgb(0.8, 0.8, 0.8),
         };
-        // Draw a vertical diamond marker for each POI.
-        let marker_pos = Vec3::new(0.0, 5.0 + (poi_status.poi_id.len() as f32 * 30.0), 0.0);
-        let iso_top = bevy::math::Isometry3d::new(marker_pos + Vec3::Y * 8.0, Quat::IDENTITY);
-        let iso_bot = bevy::math::Isometry3d::new(marker_pos - Vec3::Y * 3.0, Quat::IDENTITY);
+        // Skip POIs with no known position (old replays without position field).
+        let Some(pos) = poi_status.position else { continue };
+        let marker_pos = Vec3::new(pos[0], pos[1], pos[2] + 5.0);
+        let iso_top = bevy::math::Isometry3d::new(marker_pos + Vec3::Z * 8.0, Quat::IDENTITY);
+        let iso_bot = bevy::math::Isometry3d::new(marker_pos - Vec3::Z * 3.0, Quat::IDENTITY);
         gizmos.sphere(iso_top, 5.0, color);
         gizmos.sphere(iso_bot, 3.0, color);
-        gizmos.line(marker_pos - Vec3::Y * 3.0, marker_pos + Vec3::Y * 8.0, color);
+        gizmos.line(marker_pos - Vec3::Z * 3.0, marker_pos + Vec3::Z * 8.0, color);
     }
 
     if !overlay.show_loc_ellipses {
@@ -1272,9 +1287,9 @@ fn setup_reconstruction_mesh(
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   vec![[0.0_f32, 0.0, 1.0]; 3]);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    vec![[0.0_f32; 4]; 3]);
 
-    // Semi-transparent scan-coverage overlay: teal tint, additive-friendly alpha.
+    // Bright-yellow scan-coverage overlay — maximally distinct from terrain greens/cyans.
     let mat = StandardMaterial {
-        base_color: bevy::color::Color::srgba(0.25, 0.85, 0.65, 0.45),
+        base_color: bevy::color::Color::srgba(0.90, 0.80, 0.15, 0.45),
         alpha_mode: AlphaMode::Blend,
         double_sided: true,
         cull_mode: None,
@@ -1323,8 +1338,8 @@ fn maintain_reconstruction_mesh_system(
     // Half-size of a grid cell (50 m resolution → 25 m half-extent).
     // Tiles are inset by 1 m per edge to leave a visible grid gap.
     const HALF: f32 = 24.0;
-    // Lift slightly above terrain so tiles never z-fight the ground mesh.
-    const Z_LIFT: f32 = 0.8;
+    // Lift clearly above terrain so tiles float visibly above the ground mesh.
+    const Z_LIFT: f32 = 2.5;
     // Up normal for all vertices in Z-up space.
     const NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
 
@@ -1334,12 +1349,13 @@ fn maintain_reconstruction_mesh_system(
     let mut colors:    Vec<[f32; 4]> = Vec::with_capacity(n * 4);
     let mut indices:   Vec<u32>      = Vec::with_capacity(n * 6);
 
+    // Uniform bright yellow — hue 52° sits in the largest gap of the terrain palette
+    // (green vegetation 110–130°, cyan water 190–210°, dark roads are achromatic).
+    let scan_lin = LinearRgba::from(Color::hsla(52.0, 0.95, 0.62, 0.70));
+    let scan_rgba = [scan_lin.red, scan_lin.green, scan_lin.blue, scan_lin.alpha];
+
     for pt in &reconstruction.points {
-        // Terrain-height-based colour: blue (sea level) → green → yellow → red (high).
-        let h = (pt[2] / 200.0_f32).clamp(0.0, 1.0);
-        let hue = 200.0 - h * 160.0;   // 200° (cyan-blue) → 40° (orange) as altitude rises
-        let lin = LinearRgba::from(Color::hsla(hue, 0.85, 0.60, 0.55));
-        let rgba = [lin.red, lin.green, lin.blue, lin.alpha];
+        let rgba = scan_rgba;
 
         let base = positions.len() as u32;
         let z = pt[2] + Z_LIFT;
@@ -1423,6 +1439,48 @@ fn draw_coord_frame_system(
         Quat::from_rotation_z(mean_heading),
     );
     gizmos.circle(ring_iso, axis_len * 0.25, Color::srgba(1.0, 1.0, 0.0, alpha * 0.5));
+}
+
+/// Draws return-to-home gizmo lines during the egress phase.
+/// For each drone with known egress progress, a line is drawn from the drone's
+/// current position to its home station, colored red→green as it closes the gap.
+fn draw_egress_paths_system(
+    mut gizmos: Gizmos,
+    replay_state: Res<ReplayState>,
+    overlay: Res<MissionOverlaySettings>,
+) {
+    if !overlay.show_egress_paths {
+        return;
+    }
+    let Some(frame) = replay_state.current_frame() else { return };
+    let Some(ref mission) = frame.scan_mission_state else { return };
+    if mission.phase != "egress" {
+        return;
+    }
+
+    // Max distance for color normalization (fall back to 2000 m).
+    let max_dist = mission.egress_progress.iter()
+        .map(|e| e.distance_to_home_m)
+        .fold(1.0_f32, f32::max)
+        .max(200.0);
+
+    for ep in &mission.egress_progress {
+        // Find drone's current position from node list.
+        let Some(node) = frame.nodes.iter().find(|n| n.node_id == ep.drone_id) else {
+            continue
+        };
+        let drone_pos  = Vec3::new(node.position[0],     node.position[1],     node.position[2]);
+        let home_pos   = Vec3::new(ep.home_position[0],  ep.home_position[1],  ep.home_position[2]);
+
+        // Color: red (far) → green (arrived).
+        let frac = (1.0 - ep.distance_to_home_m / max_dist).clamp(0.0, 1.0);
+        let line_color  = Color::hsla(frac * 120.0, 0.95, 0.55, 0.85);
+        let pad_color   = Color::hsla(frac * 120.0, 0.80, 0.70, 0.60);
+
+        gizmos.line(drone_pos, home_pos, line_color);
+        let iso = bevy::math::Isometry3d::new(home_pos + Vec3::Z * 1.0, Quat::IDENTITY);
+        gizmos.circle(iso, 8.0, pad_color);
+    }
 }
 
 /// Spawns a Python simulation subprocess when the user clicks "Run Simulation".

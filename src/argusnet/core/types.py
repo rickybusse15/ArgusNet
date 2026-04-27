@@ -207,6 +207,15 @@ class POIStatus:
     arrival_time_s: Optional[float] = None
     completion_time_s: Optional[float] = None
     dwell_accumulated_s: float = 0.0
+    position: Optional[Vector3] = None
+
+
+@dataclass(frozen=True)
+class EgressDroneProgress:
+    """Per-drone return-to-home progress emitted during the egress phase."""
+    drone_id: str
+    distance_to_home_m: float
+    home_position: Vector3
 
 
 @dataclass(frozen=True)
@@ -223,7 +232,7 @@ class LocalizationEstimate:
 @dataclass(frozen=True)
 class ScanMissionState:
     """Top-level mission state serialised into every replay frame."""
-    phase: str                          # "scanning" | "localizing" | "inspecting" | "complete"
+    phase: str                          # "scanning" | "localizing" | "inspecting" | "egress" | "complete"
     scan_coverage_fraction: float       # 0->1, fraction of map area covered
     scan_coverage_threshold: float      # target fraction to trigger phase transition
     localization_estimates: List[LocalizationEstimate]
@@ -239,6 +248,7 @@ class ScanMissionState:
     # Does not identify which specific drone(s) timed out vs. genuinely converged.
     localization_timed_out: bool = False
     coordinator_drone_id: Optional[str] = None  # elected by highest battery fraction (one-shot)
+    egress_progress: tuple = ()          # Tuple[EgressDroneProgress, ...]; non-empty during egress
 
 
 def to_jsonable(value: Any) -> Any:
