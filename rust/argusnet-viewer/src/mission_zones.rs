@@ -469,10 +469,7 @@ fn extract_largest_contour(
         let mut keys = vec![first.start, first.end];
         let mut current = first.end;
 
-        loop {
-            let Some(candidate_indices) = adjacency.get(&current) else {
-                break;
-            };
+        while let Some(candidate_indices) = adjacency.get(&current) {
             let next_index = candidate_indices
                 .iter()
                 .copied()

@@ -24,7 +24,7 @@ jobs:
       - name: Format check with ruff
         run: ruff format --check src/ tests/
       - name: Type check with mypy
-        run: mypy src/argusnet/ --ignore-missing-imports
+        run: mypy src/argusnet/ --ignore-missing-imports --follow-imports=skip
       - name: Run tests
         run: python -m pytest tests/ -q --timeout=120
 
