@@ -7,8 +7,7 @@ planning and obstacle mapping.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -37,7 +36,7 @@ class GridBounds:
     def ny(self) -> int:
         return max(1, int(np.ceil((self.y_max_m - self.y_min_m) / self.resolution_m)))
 
-    def xy_to_ij(self, x: float, y: float) -> Tuple[int, int]:
+    def xy_to_ij(self, x: float, y: float) -> tuple[int, int]:
         i = int((x - self.x_min_m) / self.resolution_m)
         j = int((y - self.y_min_m) / self.resolution_m)
         return (
@@ -45,7 +44,7 @@ class GridBounds:
             int(np.clip(j, 0, self.ny - 1)),
         )
 
-    def ij_to_xy(self, i: int, j: int) -> Tuple[float, float]:
+    def ij_to_xy(self, i: int, j: int) -> tuple[float, float]:
         x = self.x_min_m + (i + 0.5) * self.resolution_m
         y = self.y_min_m + (j + 0.5) * self.resolution_m
         return x, y
@@ -88,16 +87,14 @@ class OccupancyGrid:
     def mark_free(self, x: float, y: float) -> None:
         i, j = self.bounds.xy_to_ij(x, y)
         self._log_odds[i, j] = np.clip(
-            self._log_odds[i, j] + self.LOG_ODDS_FREE,
-            self.LOG_ODDS_MIN, self.LOG_ODDS_MAX
+            self._log_odds[i, j] + self.LOG_ODDS_FREE, self.LOG_ODDS_MIN, self.LOG_ODDS_MAX
         )
         self._obs_count[i, j] += 1
 
     def mark_occupied(self, x: float, y: float, height_m: float = 0.0) -> None:
         i, j = self.bounds.xy_to_ij(x, y)
         self._log_odds[i, j] = np.clip(
-            self._log_odds[i, j] + self.LOG_ODDS_OCC,
-            self.LOG_ODDS_MIN, self.LOG_ODDS_MAX
+            self._log_odds[i, j] + self.LOG_ODDS_OCC, self.LOG_ODDS_MIN, self.LOG_ODDS_MAX
         )
         self._max_height[i, j] = max(self._max_height[i, j], height_m)
         self._obs_count[i, j] += 1
@@ -106,7 +103,7 @@ class OccupancyGrid:
         self,
         origin: Vector3,
         direction: Vector3,
-        hit_range_m: Optional[float],
+        hit_range_m: float | None,
         max_range_m: float = 200.0,
     ) -> None:
         """Mark cells along a ray as free; mark hit cell as occupied."""
@@ -124,7 +121,8 @@ class OccupancyGrid:
         if hit_range_m is not None:
             hit = orig + d * hit_range_m
             self.mark_occupied(
-                float(hit[0]), float(hit[1]),
+                float(hit[0]),
+                float(hit[1]),
                 float(direction[2]) * hit_range_m if len(direction) > 2 else 0.0,
             )
 

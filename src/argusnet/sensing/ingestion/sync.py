@@ -7,8 +7,8 @@ using nearest-neighbour or interpolation strategies.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Deque, Dict, Generic, List, Optional, Tuple, TypeVar
+from dataclasses import dataclass
+from typing import Generic, TypeVar
 
 __all__ = [
     "SyncBuffer",
@@ -32,10 +32,10 @@ class FrameSyncResult(Generic[T]):
     target_s: float
     """The requested target timestamp."""
 
-    items: Dict[str, T]
+    items: dict[str, T]
     """Per-sensor data items, keyed by sensor ID. Missing sensors are omitted."""
 
-    latencies: Dict[str, float]
+    latencies: dict[str, float]
     """Time difference |item.timestamp - target_s| per sensor ID."""
 
 
@@ -48,13 +48,13 @@ class SyncBuffer(Generic[T]):
 
     def __init__(self, sensor_id: str, max_history: int = 64) -> None:
         self.sensor_id = sensor_id
-        self._buf: Deque[_TimestampedItem[T]] = deque(maxlen=max_history)
+        self._buf: deque[_TimestampedItem[T]] = deque(maxlen=max_history)
 
     def push(self, timestamp_s: float, data: T) -> None:
         """Add a new item to the buffer (must be monotonically increasing)."""
         self._buf.append(_TimestampedItem(timestamp_s=timestamp_s, data=data))
 
-    def nearest(self, target_s: float, max_age_s: float = 0.5) -> Optional[Tuple[float, T]]:
+    def nearest(self, target_s: float, max_age_s: float = 0.5) -> tuple[float, T] | None:
         """Return the (timestamp, data) item closest to *target_s*.
 
         Returns None if the buffer is empty or the closest item is older
@@ -67,7 +67,7 @@ class SyncBuffer(Generic[T]):
             return None
         return best.timestamp_s, best.data
 
-    def latest(self) -> Optional[Tuple[float, T]]:
+    def latest(self) -> tuple[float, T] | None:
         if not self._buf:
             return None
         it = self._buf[-1]
@@ -85,7 +85,7 @@ class NearestNeighbourSync(Generic[T]):
     def __init__(self, max_age_s: float = 0.2, max_history: int = 64) -> None:
         self.max_age_s = max_age_s
         self.max_history = max_history
-        self._buffers: Dict[str, SyncBuffer[T]] = {}
+        self._buffers: dict[str, SyncBuffer[T]] = {}
 
     def register(self, sensor_id: str) -> None:
         if sensor_id not in self._buffers:
@@ -98,8 +98,8 @@ class NearestNeighbourSync(Generic[T]):
 
     def sync(self, target_s: float) -> FrameSyncResult[T]:
         """Retrieve nearest-neighbour items from all registered sensors."""
-        items: Dict[str, T] = {}
-        latencies: Dict[str, float] = {}
+        items: dict[str, T] = {}
+        latencies: dict[str, float] = {}
         for sid, buf in self._buffers.items():
             result = buf.nearest(target_s, self.max_age_s)
             if result is not None:

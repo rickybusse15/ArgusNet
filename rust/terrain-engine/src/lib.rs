@@ -63,10 +63,7 @@ impl TerrainBounds {
     /// Returns `true` if the horizontal point `(x_m, y_m)` lies within the bounds.
     #[inline]
     pub fn contains_xy(&self, x_m: f64, y_m: f64) -> bool {
-        x_m >= self.x_min_m
-            && x_m <= self.x_max_m
-            && y_m >= self.y_min_m
-            && y_m <= self.y_max_m
+        x_m >= self.x_min_m && x_m <= self.x_max_m && y_m >= self.y_min_m && y_m <= self.y_max_m
     }
 
     /// Width of the domain in the X direction, metres.
@@ -214,11 +211,9 @@ fn compute_gradient<T: TerrainQuery + ?Sized>(
     y_m: f64,
     delta_m: f64,
 ) -> [f64; 2] {
-    let dzdx = (terrain.height_at(x_m + delta_m, y_m)
-        - terrain.height_at(x_m - delta_m, y_m))
+    let dzdx = (terrain.height_at(x_m + delta_m, y_m) - terrain.height_at(x_m - delta_m, y_m))
         / (2.0 * delta_m);
-    let dzdy = (terrain.height_at(x_m, y_m + delta_m)
-        - terrain.height_at(x_m, y_m - delta_m))
+    let dzdy = (terrain.height_at(x_m, y_m + delta_m) - terrain.height_at(x_m, y_m - delta_m))
         / (2.0 * delta_m);
     [dzdx, dzdy]
 }
@@ -460,10 +455,7 @@ impl GridTerrain {
     /// Return `true` if fractional grid coords are within valid interpolation range.
     #[inline]
     fn frac_in_bounds(&self, fx: f64, fy: f64) -> bool {
-        fx >= 0.0
-            && fy >= 0.0
-            && fx <= (self.cols as f64 - 1.0)
-            && fy <= (self.rows as f64 - 1.0)
+        fx >= 0.0 && fy >= 0.0 && fx <= (self.cols as f64 - 1.0) && fy <= (self.rows as f64 - 1.0)
     }
 
     /// Bilinear interpolation of the heightmap at fractional grid coordinates.
@@ -593,10 +585,7 @@ mod tests {
 
     /// Convenience builder: 100×100 m flat terrain at Z = 0.
     fn unit_flat() -> FlatTerrain {
-        FlatTerrain::new(
-            0.0,
-            TerrainBounds::new(0.0, 100.0, 0.0, 100.0, 0.0, 0.0),
-        )
+        FlatTerrain::new(0.0, TerrainBounds::new(0.0, 100.0, 0.0, 100.0, 0.0, 0.0))
     }
 
     /// Build an 11×11 node grid (10×10 m domain, 1 m spacing) with a 20 m hill
@@ -705,7 +694,7 @@ mod tests {
     #[test]
     fn test_clamp_altitude() {
         let t = unit_flat(); // surface at Z = 0
-        // Already above floor.
+                             // Already above floor.
         assert!((t.clamp_altitude(50.0, 50.0, 10.0, 5.0) - 10.0).abs() < 1e-12);
         // Below floor: clamped to 0 + 5 = 5.
         assert!((t.clamp_altitude(50.0, 50.0, 3.0, 5.0) - 5.0).abs() < 1e-12);

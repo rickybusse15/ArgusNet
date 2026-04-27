@@ -10,7 +10,7 @@ use bevy_egui::{EguiContexts, EguiPlugin};
 use crate::mission_zones::{self, build_projected_badges_system, ProjectedZoneBadges};
 use crate::orbit_camera::{OrbitCamera, OrbitCameraPlugin};
 use crate::replay::{
-    MarkerKind, RejectedObservation, ReplayDocument, ReplayState, RuntimeMarker,
+    MarkerKind, RejectedObservation, ReplayDocument, ReplayState, RuntimeMarker, TerrainViewerMesh,
 };
 use crate::schema::ScenePackage;
 use crate::state::{
@@ -56,7 +56,6 @@ struct ReloadedSceneBundle {
     layer_visibility: LayerVisibilityState,
     should_reframe_camera: bool,
 }
-
 
 pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
     let (scene_package, working_scene_root) = initialize_scene_package(scene_path.as_ref())?;
@@ -146,7 +145,10 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
             )
                 .chain(),
         )
-        .add_systems(Update, viewer_ui_system.in_set(bevy_egui::EguiSet::BeginPass))
+        .add_systems(
+            Update,
+            viewer_ui_system.in_set(bevy_egui::EguiSet::BeginPass),
+        )
         .run();
 
     Ok(())
@@ -178,7 +180,6 @@ fn setup_world(
     commands.insert_resource(AmbientLight {
         color: Color::srgb(0.95, 0.96, 0.98),
         brightness: 350.0,
-        ..default()
     });
 
     commands.spawn((
@@ -245,10 +246,8 @@ fn create_working_asset_root() -> Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "argusnet-viewer-{}-{suffix}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("argusnet-viewer-{}-{suffix}", std::process::id()));
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create working scene root {}", root.display()))?;
     // Canonicalize so that strip_prefix in asset_path_for matches the
@@ -427,10 +426,10 @@ fn sync_current_markers_system(
                             .metrics
                             .as_ref()
                             .and_then(|m| m.track_errors_m.get(&selected_label).copied());
-                        selection.selected_covariance_diag =
-                            track.covariance.as_ref().map(|cov| {
-                                crate::ui::covariance_diagonal(cov)
-                            });
+                        selection.selected_covariance_diag = track
+                            .covariance
+                            .as_ref()
+                            .map(|cov| crate::ui::covariance_diagonal(cov));
                         selection.selected_health = None;
                         selection.selected_sensor_type = None;
                         selection.selected_fov_half_angle_deg = None;
@@ -456,11 +455,14 @@ fn sync_current_markers_system(
                 }
                 "Truth" => {
                     // Find nearest track distance for truth inspection
-                    if let Some(truth) = frame.truths.iter().find(|t| t.target_id == selected_label) {
+                    if let Some(truth) = frame.truths.iter().find(|t| t.target_id == selected_label)
+                    {
                         let truth_pos = Vec3::from_array(truth.position);
-                        let nearest_dist = frame.tracks.iter().map(|t| {
-                            truth_pos.distance(Vec3::from_array(t.position))
-                        }).fold(f32::INFINITY, f32::min);
+                        let nearest_dist = frame
+                            .tracks
+                            .iter()
+                            .map(|t| truth_pos.distance(Vec3::from_array(t.position)))
+                            .fold(f32::INFINITY, f32::min);
                         if nearest_dist < f32::INFINITY {
                             selection.selected_nearest_track_dist_m = Some(nearest_dist);
                         } else {
@@ -529,14 +531,27 @@ fn draw_runtime_overlays_system(
     mission_zones: Res<LoadedMissionZones>,
 ) {
     // Compute altitude range across all current markers for color normalization.
-    let alt_min = markers.markers.iter().map(|m| m.position.z).fold(f32::INFINITY, f32::min);
-    let alt_max = markers.markers.iter().map(|m| m.position.z).fold(f32::NEG_INFINITY, f32::max);
+    let alt_min = markers
+        .markers
+        .iter()
+        .map(|m| m.position.z)
+        .fold(f32::INFINITY, f32::min);
+    let alt_max = markers
+        .markers
+        .iter()
+        .map(|m| m.position.z)
+        .fold(f32::NEG_INFINITY, f32::max);
     let alt_span = (alt_max - alt_min).max(1.0);
 
     // Retrieve measurement_std_m for each track from the current frame.
     let frame_tracks: Vec<(String, f32)> = replay_state
         .current_frame()
-        .map(|f| f.tracks.iter().map(|t| (t.track_id.clone(), t.measurement_std_m)).collect())
+        .map(|f| {
+            f.tracks
+                .iter()
+                .map(|t| (t.track_id.clone(), t.measurement_std_m))
+                .collect()
+        })
         .unwrap_or_default();
 
     for marker in &markers.markers {
@@ -573,7 +588,11 @@ fn draw_runtime_overlays_system(
         let n = trail_points.len();
         for (seg_idx, segment) in trail_points.windows(2).enumerate() {
             // t goes from 0 (oldest segment) to 1 (newest segment).
-            let t = if n > 2 { seg_idx as f32 / (n - 2) as f32 } else { 1.0 };
+            let t = if n > 2 {
+                seg_idx as f32 / (n - 2) as f32
+            } else {
+                1.0
+            };
             let alpha = 0.1 + 0.9 * t;
             // Use midpoint altitude for hue
             let mid_z = (segment[0].z + segment[1].z) * 0.5;
@@ -970,10 +989,10 @@ fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color,
         MarkerKind::Node => {
             if marker.is_mobile == Some(true) {
                 // Diamond glyph for mobile drones
-                let top    = pos + Vec3::Y * r;
-                let right  = pos + Vec3::X * r;
+                let top = pos + Vec3::Y * r;
+                let right = pos + Vec3::X * r;
                 let bottom = pos - Vec3::Y * r;
-                let left   = pos - Vec3::X * r;
+                let left = pos - Vec3::X * r;
                 gizmos.line(top, right, color);
                 gizmos.line(right, bottom, color);
                 gizmos.line(bottom, left, color);
@@ -983,9 +1002,9 @@ fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color,
             } else {
                 // Square bracket glyph for static ground sensors
                 let a = pos + Vec3::new(-r, -r, 0.0);
-                let b = pos + Vec3::new( r, -r, 0.0);
-                let c = pos + Vec3::new( r,  r, 0.0);
-                let d = pos + Vec3::new(-r,  r, 0.0);
+                let b = pos + Vec3::new(r, -r, 0.0);
+                let c = pos + Vec3::new(r, r, 0.0);
+                let d = pos + Vec3::new(-r, r, 0.0);
                 gizmos.line(a, b, color);
                 gizmos.line(b, c, color);
                 gizmos.line(c, d, color);
@@ -1056,11 +1075,23 @@ fn draw_sensor_overlays_system(
                     let a1 = std::f32::consts::TAU * (i + 1) as f32 / seg_count as f32;
                     let raw_p0 = [pos.x + a0.cos() * max_range, pos.y + a0.sin() * max_range];
                     let raw_p1 = [pos.x + a1.cos() * max_range, pos.y + a1.sin() * max_range];
-                    let Some([c0, c1]) = mission_zones::clip_segment_to_bounds(raw_p0, raw_p1, bounds) else {
+                    let Some([c0, c1]) =
+                        mission_zones::clip_segment_to_bounds(raw_p0, raw_p1, bounds)
+                    else {
                         continue;
                     };
-                    let z0 = mission_zones.terrain_mesh.as_ref().and_then(|m| m.sample_height(c0[0], c0[1])).unwrap_or(pos.z) + 1.5;
-                    let z1 = mission_zones.terrain_mesh.as_ref().and_then(|m| m.sample_height(c1[0], c1[1])).unwrap_or(pos.z) + 1.5;
+                    let z0 = mission_zones
+                        .terrain_mesh
+                        .as_ref()
+                        .and_then(|m| m.sample_height(c0[0], c0[1]))
+                        .unwrap_or(pos.z)
+                        + 1.5;
+                    let z1 = mission_zones
+                        .terrain_mesh
+                        .as_ref()
+                        .and_then(|m| m.sample_height(c1[0], c1[1]))
+                        .unwrap_or(pos.z)
+                        + 1.5;
                     let p0 = Vec3::new(c0[0], c0[1], z0);
                     let p1 = Vec3::new(c1[0], c1[1], z1);
                     gizmos.line(p0, p1, ring_color);
@@ -1083,8 +1114,10 @@ fn draw_sensor_overlays_system(
                     for i in 0..ring_segs {
                         let a0 = std::f32::consts::TAU * i as f32 / ring_segs as f32;
                         let a1 = std::f32::consts::TAU * (i + 1) as f32 / ring_segs as f32;
-                        let p0 = pos + Vec3::new(a0.cos() * dome_radius, a0.sin() * dome_radius, 0.0);
-                        let p1 = pos + Vec3::new(a1.cos() * dome_radius, a1.sin() * dome_radius, 0.0);
+                        let p0 =
+                            pos + Vec3::new(a0.cos() * dome_radius, a0.sin() * dome_radius, 0.0);
+                        let p1 =
+                            pos + Vec3::new(a1.cos() * dome_radius, a1.sin() * dome_radius, 0.0);
                         gizmos.line(p0, p1, fov_color);
                     }
                     // Four vertical great-circle arcs
@@ -1094,8 +1127,10 @@ fn draw_sensor_overlays_system(
                         let axis = Vec3::new(az.cos(), az.sin(), 0.0);
                         let perp = Vec3::new(-az.sin(), az.cos(), 0.0);
                         for i in 0..vert_segs {
-                            let el0 = std::f32::consts::PI * i as f32 / vert_segs as f32 - std::f32::consts::FRAC_PI_2;
-                            let el1 = std::f32::consts::PI * (i + 1) as f32 / vert_segs as f32 - std::f32::consts::FRAC_PI_2;
+                            let el0 = std::f32::consts::PI * i as f32 / vert_segs as f32
+                                - std::f32::consts::FRAC_PI_2;
+                            let el1 = std::f32::consts::PI * (i + 1) as f32 / vert_segs as f32
+                                - std::f32::consts::FRAC_PI_2;
                             let _ = perp; // used indirectly via axis below
                             let p0 = pos + (axis * el0.cos() + Vec3::Z * el0.sin()) * dome_radius;
                             let p1 = pos + (axis * el1.cos() + Vec3::Z * el1.sin()) * dome_radius;
@@ -1132,7 +1167,6 @@ fn draw_sensor_overlays_system(
             }
         }
     }
-
 }
 
 fn draw_scan_grid_system(
@@ -1162,24 +1196,36 @@ fn draw_scan_grid_system(
         let cy = (b.y_min_m + b.y_max_m) * 0.5;
         let width = b.x_max_m - b.x_min_m;
         let height = b.y_max_m - b.y_min_m;
-        let ground_z = scene_package.environment.terrain_summary.as_ref()
+        let ground_z = scene_package
+            .environment
+            .terrain_summary
+            .as_ref()
             .and_then(|s| s.min_height_m)
             .unwrap_or(0.0);
-        let iso = bevy::math::Isometry3d::new(
-            Vec3::new(cx, cy, ground_z + 2.0),
-            Quat::IDENTITY,
-        );
+        let iso = bevy::math::Isometry3d::new(Vec3::new(cx, cy, ground_z + 2.0), Quat::IDENTITY);
         gizmos.rect(iso, Vec2::new(width, height), border_color);
 
         // During scanning, draw sensor-footprint circles under each mobile drone.
+        // Anchor each circle to the local terrain height under the drone so it
+        // doesn't sink below the surface on non-flat terrain. Falls back to the
+        // global ground_z only when terrain isn't sampleable at the drone's XY.
         if ms.phase == "scanning" {
             let footprint_r = 75.0_f32;
             let footprint_color = Color::hsla(52.0, 1.0, 0.88, 0.65);
-            let circle_z = ground_z + 1.5;
+            const LIFT_M: f32 = 1.5;
+            let terrain_mesh = replay_state
+                .document
+                .as_ref()
+                .and_then(|doc| doc.terrain_viewer_mesh());
             for node in &frame.nodes {
                 if node.is_mobile {
+                    let local_ground = footprint_ground_z_m(
+                        terrain_mesh.as_ref(),
+                        ground_z,
+                        [node.position[0], node.position[1]],
+                    );
                     let iso_c = bevy::math::Isometry3d::new(
-                        Vec3::new(node.position[0], node.position[1], circle_z),
+                        Vec3::new(node.position[0], node.position[1], local_ground + LIFT_M),
                         Quat::IDENTITY,
                     );
                     gizmos.circle(iso_c, footprint_r, footprint_color);
@@ -1187,6 +1233,16 @@ fn draw_scan_grid_system(
             }
         }
     }
+}
+
+fn footprint_ground_z_m(
+    terrain_mesh: Option<&TerrainViewerMesh>,
+    fallback_ground_z: f32,
+    xy_m: [f32; 2],
+) -> f32 {
+    terrain_mesh
+        .and_then(|mesh| mesh.sample_height(xy_m[0], xy_m[1]))
+        .unwrap_or(fallback_ground_z)
 }
 
 fn draw_poi_markers_system(
@@ -1211,13 +1267,19 @@ fn draw_poi_markers_system(
             _ => Color::srgb(0.8, 0.8, 0.8),
         };
         // Skip POIs with no known position (old replays without position field).
-        let Some(pos) = poi_status.position else { continue };
+        let Some(pos) = poi_status.position else {
+            continue;
+        };
         let marker_pos = Vec3::new(pos[0], pos[1], pos[2] + 5.0);
         let iso_top = bevy::math::Isometry3d::new(marker_pos + Vec3::Z * 8.0, Quat::IDENTITY);
         let iso_bot = bevy::math::Isometry3d::new(marker_pos - Vec3::Z * 3.0, Quat::IDENTITY);
         gizmos.sphere(iso_top, 5.0, color);
         gizmos.sphere(iso_bot, 3.0, color);
-        gizmos.line(marker_pos - Vec3::Z * 3.0, marker_pos + Vec3::Z * 8.0, color);
+        gizmos.line(
+            marker_pos - Vec3::Z * 3.0,
+            marker_pos + Vec3::Z * 8.0,
+            color,
+        );
     }
 
     if !overlay.show_loc_ellipses {
@@ -1262,7 +1324,9 @@ fn update_reconstruction_system(
     // Viewer is Z-up: Python (x=east, y=north, h=terrain_height) maps directly.
     let prev_len = reconstruction.points.len();
     for triple in mission.newly_scanned_cells.chunks_exact(3) {
-        reconstruction.points.push([triple[0], triple[1], triple[2]]);
+        reconstruction
+            .points
+            .push([triple[0], triple[1], triple[2]]);
     }
     if reconstruction.points.len() > prev_len {
         reconstruction.dirty = true;
@@ -1282,10 +1346,13 @@ fn setup_reconstruction_mesh(
 
     // Initialise with a degenerate triangle so the GPU allocator never encounters
     // a zero-vertex buffer (Bevy's MeshAllocator panics on divide-by-zero).
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 3]);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   vec![[0.0_f32, 0.0, 1.0]; 3]);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    vec![[0.0_f32; 4]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0_f32, 0.0, 1.0]; 3]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0_f32; 4]; 3]);
 
     // Bright-yellow scan-coverage overlay — maximally distinct from terrain greens/cyans.
     let mat = StandardMaterial {
@@ -1320,7 +1387,11 @@ fn maintain_reconstruction_mesh_system(
     // Collect handles and update visibility in one pass.
     let mut handles: Vec<Handle<Mesh>> = Vec::new();
     for (mesh_3d, mut vis) in &mut mesh_q {
-        *vis = if should_show { Visibility::Visible } else { Visibility::Hidden };
+        *vis = if should_show {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
         if reconstruction.dirty && should_show {
             handles.push(mesh_3d.0.clone());
         }
@@ -1345,9 +1416,9 @@ fn maintain_reconstruction_mesh_system(
 
     let n = reconstruction.points.len();
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
-    let mut normals:   Vec<[f32; 3]> = Vec::with_capacity(n * 4);
-    let mut colors:    Vec<[f32; 4]> = Vec::with_capacity(n * 4);
-    let mut indices:   Vec<u32>      = Vec::with_capacity(n * 6);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
+    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(n * 4);
+    let mut indices: Vec<u32> = Vec::with_capacity(n * 6);
 
     // Uniform bright yellow — hue 52° sits in the largest gap of the terrain palette
     // (green vegetation 110–130°, cyan water 190–210°, dark roads are achromatic).
@@ -1364,24 +1435,27 @@ fn maintain_reconstruction_mesh_system(
         positions.push([pt[0] + HALF, pt[1] - HALF, z]);
         positions.push([pt[0] + HALF, pt[1] + HALF, z]);
         positions.push([pt[0] - HALF, pt[1] + HALF, z]);
-        for _ in 0..4 { normals.push(NORMAL); colors.push(rgba); }
+        for _ in 0..4 {
+            normals.push(NORMAL);
+            colors.push(rgba);
+        }
         // Two CCW triangles.
-        indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
     // Degenerate fallback so MeshAllocator never sees an empty buffer.
     if positions.is_empty() {
         positions = vec![[0.0; 3]; 3];
-        normals   = vec![[0.0, 0.0, 1.0]; 3];
-        colors    = vec![[0.0; 4]; 3];
-        indices   = vec![0, 1, 2];
+        normals = vec![[0.0, 0.0, 1.0]; 3];
+        colors = vec![[0.0; 4]; 3];
+        indices = vec![0, 1, 2];
     }
 
     for handle in handles {
         if let Some(mesh) = meshes.get_mut(&handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
-            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   normals.clone());
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.clone());
             mesh.insert_indices(bevy::render::mesh::Indices::U32(indices.clone()));
         }
     }
@@ -1413,32 +1487,63 @@ fn draw_coord_frame_system(
     // Mean localization position (average of all drone estimates).
     // Z-up: position_estimate = [east, north, altitude]; map directly.
     let n = mission.localization_estimates.len() as f32;
-    let mean_pos = mission.localization_estimates.iter().fold(Vec3::ZERO, |acc, est| {
-        acc + Vec3::new(est.position_estimate[0], est.position_estimate[1], est.position_estimate[2])
-    }) / n;
+    let mean_pos = mission
+        .localization_estimates
+        .iter()
+        .fold(Vec3::ZERO, |acc, est| {
+            acc + Vec3::new(
+                est.position_estimate[0],
+                est.position_estimate[1],
+                est.position_estimate[2],
+            )
+        })
+        / n;
 
     // Confidence drives axis length (small when uncertain, 80 m when confident).
-    let mean_conf = mission.localization_estimates.iter().map(|e| e.confidence).sum::<f32>() / n;
+    let mean_conf = mission
+        .localization_estimates
+        .iter()
+        .map(|e| e.confidence)
+        .sum::<f32>()
+        / n;
     let axis_len = 20.0 + mean_conf * 80.0;
     let alpha = 0.4 + mean_conf * 0.6;
 
     // Draw axes — X=red (east), Y=green (north), Z=blue (up in Z-up scene)
     let origin = mean_pos + Vec3::Z * 2.0;
-    gizmos.arrow(origin, origin + Vec3::X * axis_len, Color::srgba(1.0, 0.1, 0.1, alpha));
-    gizmos.arrow(origin, origin + Vec3::Y * axis_len, Color::srgba(0.1, 1.0, 0.1, alpha));
-    gizmos.arrow(origin, origin + Vec3::Z * axis_len, Color::srgba(0.1, 0.3, 1.0, alpha));
+    gizmos.arrow(
+        origin,
+        origin + Vec3::X * axis_len,
+        Color::srgba(1.0, 0.1, 0.1, alpha),
+    );
+    gizmos.arrow(
+        origin,
+        origin + Vec3::Y * axis_len,
+        Color::srgba(0.1, 1.0, 0.1, alpha),
+    );
+    gizmos.arrow(
+        origin,
+        origin + Vec3::Z * axis_len,
+        Color::srgba(0.1, 0.3, 1.0, alpha),
+    );
 
     // Label sphere at origin
     let iso = bevy::math::Isometry3d::new(origin, Quat::IDENTITY);
     gizmos.sphere(iso, 3.0, Color::srgba(1.0, 1.0, 0.0, alpha));
 
     // Heading ring around the origin — rotates around Z (up) in Z-up system.
-    let mean_heading = mission.localization_estimates.iter().map(|e| e.heading_rad).sum::<f32>() / n;
-    let ring_iso = bevy::math::Isometry3d::new(
-        origin,
-        Quat::from_rotation_z(mean_heading),
+    let mean_heading = mission
+        .localization_estimates
+        .iter()
+        .map(|e| e.heading_rad)
+        .sum::<f32>()
+        / n;
+    let ring_iso = bevy::math::Isometry3d::new(origin, Quat::from_rotation_z(mean_heading));
+    gizmos.circle(
+        ring_iso,
+        axis_len * 0.25,
+        Color::srgba(1.0, 1.0, 0.0, alpha * 0.5),
     );
-    gizmos.circle(ring_iso, axis_len * 0.25, Color::srgba(1.0, 1.0, 0.0, alpha * 0.5));
 }
 
 /// Draws return-to-home gizmo lines during the egress phase.
@@ -1452,14 +1557,20 @@ fn draw_egress_paths_system(
     if !overlay.show_egress_paths {
         return;
     }
-    let Some(frame) = replay_state.current_frame() else { return };
-    let Some(ref mission) = frame.scan_mission_state else { return };
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(ref mission) = frame.scan_mission_state else {
+        return;
+    };
     if mission.phase != "egress" {
         return;
     }
 
     // Max distance for color normalization (fall back to 2000 m).
-    let max_dist = mission.egress_progress.iter()
+    let max_dist = mission
+        .egress_progress
+        .iter()
         .map(|e| e.distance_to_home_m)
         .fold(1.0_f32, f32::max)
         .max(200.0);
@@ -1467,15 +1578,19 @@ fn draw_egress_paths_system(
     for ep in &mission.egress_progress {
         // Find drone's current position from node list.
         let Some(node) = frame.nodes.iter().find(|n| n.node_id == ep.drone_id) else {
-            continue
+            continue;
         };
-        let drone_pos  = Vec3::new(node.position[0],     node.position[1],     node.position[2]);
-        let home_pos   = Vec3::new(ep.home_position[0],  ep.home_position[1],  ep.home_position[2]);
+        let drone_pos = Vec3::new(node.position[0], node.position[1], node.position[2]);
+        let home_pos = Vec3::new(
+            ep.home_position[0],
+            ep.home_position[1],
+            ep.home_position[2],
+        );
 
         // Color: red (far) → green (arrived).
         let frac = (1.0 - ep.distance_to_home_m / max_dist).clamp(0.0, 1.0);
-        let line_color  = Color::hsla(frac * 120.0, 0.95, 0.55, 0.85);
-        let pad_color   = Color::hsla(frac * 120.0, 0.80, 0.70, 0.60);
+        let line_color = Color::hsla(frac * 120.0, 0.95, 0.55, 0.85);
+        let pad_color = Color::hsla(frac * 120.0, 0.80, 0.70, 0.60);
 
         gizmos.line(drone_pos, home_pos, line_color);
         let iso = bevy::math::Isometry3d::new(home_pos + Vec3::Z * 1.0, Quat::IDENTITY);
@@ -1655,6 +1770,7 @@ fn read_process_error(child: &mut Child, fallback: &str) -> String {
 }
 
 /// Polls the running simulation subprocess and rebuilds/reloads the scene when done.
+#[allow(clippy::too_many_arguments)]
 fn poll_simulation_system(
     mut commands: Commands,
     mut sim_process: Option<ResMut<SimulationProcess>>,
@@ -1757,6 +1873,7 @@ fn poll_simulation_system(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reload_rebuilt_scene(
     commands: &mut Commands,
     asset_server: &AssetServer,
@@ -1915,8 +2032,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        generation_rejection_position, prepare_reloaded_scene_bundle, preserved_replay_state,
-        tracker_rejection_position,
+        footprint_ground_z_m, generation_rejection_position, prepare_reloaded_scene_bundle,
+        preserved_replay_state, tracker_rejection_position,
     };
     use crate::mission_zones::{
         build_group_contour_segments, build_zone_overlap_model, compute_zone_overlap_components,
@@ -1977,6 +2094,8 @@ mod tests {
             mapping_state: None,
             localization_state: None,
             inspection_events: Vec::new(),
+            deconfliction_events: Vec::new(),
+            scan_mission_state: None,
         };
 
         let rejection = RejectedObservation {
@@ -2091,6 +2210,28 @@ mod tests {
         assert_eq!(next_state.playback_speed, 2.0);
         assert!(next_state.playing);
         assert_eq!(next_state.frame_index, 5);
+    }
+
+    #[test]
+    fn footprint_ground_z_samples_terrain_per_drone() {
+        let terrain_mesh = TerrainViewerMesh {
+            x_min_m: 0.0,
+            x_max_m: 10.0,
+            y_min_m: 0.0,
+            y_max_m: 10.0,
+            rows: 2,
+            cols: 2,
+            heights_m: vec![vec![4.0, 8.0], vec![12.0, 16.0]],
+        };
+
+        assert_eq!(
+            footprint_ground_z_m(Some(&terrain_mesh), -5.0, [10.0, 10.0]),
+            16.0
+        );
+        assert_eq!(
+            footprint_ground_z_m(Some(&terrain_mesh), -5.0, [20.0, 20.0]),
+            -5.0
+        );
     }
 
     #[test]

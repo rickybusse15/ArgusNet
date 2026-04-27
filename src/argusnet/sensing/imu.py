@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
-from argusnet.core.types import Vector3, vec3
+from argusnet.core.types import Vector3
 
 __all__ = [
     "IMUModel",
@@ -76,7 +76,7 @@ def sample_imu(
     true_angular_vel: Vector3,
     model: IMUModel,
     timestamp_s: float,
-    rng: "np.random.Generator | None" = None,
+    rng: np.random.Generator | None = None,
 ) -> IMUMeasurement:
     """Generate a noisy IMU measurement from ground-truth kinematics."""
     if rng is None:

@@ -195,6 +195,7 @@ impl SafetyMonitor {
     /// Process a new commanded state for `drone_id` and return a
     /// `SafetyDecision` containing the updated state, any violations, and the
     /// (potentially clamped) command.
+    #[allow(clippy::too_many_arguments)]
     pub fn process_command(
         &mut self,
         drone_id: &str,
@@ -216,7 +217,14 @@ impl SafetyMonitor {
         // For now we do a single pass (the monitor's job is escalation, not
         // exhaustive enumeration — callers that need all violations may do
         // multiple passes externally).
-        match validate_constraints(limits, &clamped, terrain, peers, energy_fraction, comms_rssi_dbm) {
+        match validate_constraints(
+            limits,
+            &clamped,
+            terrain,
+            peers,
+            energy_fraction,
+            comms_rssi_dbm,
+        ) {
             Ok(()) => {
                 // No violation — clamp is the identity.
             }
@@ -228,18 +236,23 @@ impl SafetyMonitor {
                 // Run a second pass on the clamped command so we can catch
                 // secondary violations caused by the original (e.g. clamp
                 // speed but still have terrain issue).
-                if let Err(v2) =
-                    validate_constraints(limits, &clamped, terrain, peers, energy_fraction, comms_rssi_dbm)
-                {
+                if let Err(v2) = validate_constraints(
+                    limits,
+                    &clamped,
+                    terrain,
+                    peers,
+                    energy_fraction,
+                    comms_rssi_dbm,
+                ) {
                     violations.push(v2);
                 }
             }
         }
 
         // Determine whether a terrain violation is present (critical — always Abort).
-        let has_terrain_violation = violations.iter().any(|v| {
-            matches!(v, ConstraintViolation::TerrainClearanceViolation { .. })
-        });
+        let has_terrain_violation = violations
+            .iter()
+            .any(|v| matches!(v, ConstraintViolation::TerrainClearanceViolation { .. }));
 
         // Check caution margin before taking the mutable borrow needed for state updates.
         let near_limit = self.near_any_limit(limits, &clamped, energy_fraction, comms_rssi_dbm);
@@ -248,7 +261,10 @@ impl SafetyMonitor {
         let lost_link_timeout = self.config.lost_link_timeout_s;
 
         // Now take the mutable reference to the record.
-        let record = self.drones.get_mut(drone_id).expect("record was just inserted");
+        let record = self
+            .drones
+            .get_mut(drone_id)
+            .expect("record was just inserted");
 
         // Update violation log.
         record.violation_history.extend(violations.clone());
@@ -264,8 +280,8 @@ impl SafetyMonitor {
         } else {
             record.consecutive_violation_frames += 1;
 
-            let should_abort = has_terrain_violation
-                || record.consecutive_violation_frames >= abort_frames;
+            let should_abort =
+                has_terrain_violation || record.consecutive_violation_frames >= abort_frames;
 
             if should_abort {
                 DroneSafetyState::Abort
@@ -287,11 +303,9 @@ impl SafetyMonitor {
             }
         } else {
             // Hysteresis: only clear LostLink if RSSI is 3 dB above threshold.
-            if record.state == DroneSafetyState::LostLink
-                && comms_rssi_dbm > limits.min_comms_rssi_dbm + 3.0
+            if record.state != DroneSafetyState::LostLink
+                || comms_rssi_dbm > limits.min_comms_rssi_dbm + 3.0
             {
-                record.low_rssi_accumulated_s = 0.0;
-            } else if record.state != DroneSafetyState::LostLink {
                 record.low_rssi_accumulated_s = 0.0;
             }
             new_state
@@ -364,7 +378,11 @@ impl SafetyMonitor {
 ///
 /// This is advisory — the safety monitor reports violations regardless, and
 /// the operator / flight controller is responsible for applying the clamp.
-fn clamp_command(cmd: &mut DroneCommandedState, violation: &ConstraintViolation, limits: &DronePhysicalLimits) {
+fn clamp_command(
+    cmd: &mut DroneCommandedState,
+    violation: &ConstraintViolation,
+    limits: &DronePhysicalLimits,
+) {
     match violation {
         ConstraintViolation::SpeedAboveMaximum { .. } => {
             let v = cmd.velocity_mps;
@@ -395,17 +413,16 @@ fn clamp_command(cmd: &mut DroneCommandedState, violation: &ConstraintViolation,
             // The safety monitor escalates to Abort regardless.
             cmd.position_m[2] += min_agl_m - (cmd.position_m[2]);
         }
-        ConstraintViolation::GimbalOutOfRange { axis, limit_rad, .. } => {
-            match axis.as_str() {
-                "pitch_down" => cmd.gimbal_pitch_rad = *limit_rad,
-                "pitch_up" => cmd.gimbal_pitch_rad = -limit_rad,
-                "yaw" => {
-                    cmd.gimbal_yaw_offset_rad =
-                        cmd.gimbal_yaw_offset_rad.clamp(-limit_rad, *limit_rad)
-                }
-                _ => {}
+        ConstraintViolation::GimbalOutOfRange {
+            axis, limit_rad, ..
+        } => match axis.as_str() {
+            "pitch_down" => cmd.gimbal_pitch_rad = *limit_rad,
+            "pitch_up" => cmd.gimbal_pitch_rad = -limit_rad,
+            "yaw" => {
+                cmd.gimbal_yaw_offset_rad = cmd.gimbal_yaw_offset_rad.clamp(-limit_rad, *limit_rad)
             }
-        }
+            _ => {}
+        },
         // Other violations do not have a simple pointwise clamp.
         _ => {}
     }
@@ -426,7 +443,10 @@ mod tests {
     }
 
     fn make_flat() -> FlatTerrain {
-        FlatTerrain::new(0.0, TerrainBounds::new(-10000.0, 10000.0, -10000.0, 10000.0, 0.0, 0.0))
+        FlatTerrain::new(
+            0.0,
+            TerrainBounds::new(-10000.0, 10000.0, -10000.0, 10000.0, 0.0, 0.0),
+        )
     }
 
     fn nominal_command() -> DroneCommandedState {
@@ -474,15 +494,7 @@ mod tests {
         let mut cmd = nominal_command();
         cmd.velocity_mps = [50.0, 0.0, 0.0];
 
-        let decision = monitor.process_command(
-            "drone-1",
-            cmd,
-            &limits,
-            &terrain,
-            &[],
-            0.50,
-            -60.0,
-        );
+        let decision = monitor.process_command("drone-1", cmd, &limits, &terrain, &[], 0.50, -60.0);
         assert_eq!(decision.state, DroneSafetyState::Warning);
         assert!(!decision.violations.is_empty());
     }
@@ -497,15 +509,7 @@ mod tests {
         let mut cmd = nominal_command();
         cmd.position_m[2] = 5.0;
 
-        let decision = monitor.process_command(
-            "drone-1",
-            cmd,
-            &limits,
-            &terrain,
-            &[],
-            0.50,
-            -60.0,
-        );
+        let decision = monitor.process_command("drone-1", cmd, &limits, &terrain, &[], 0.50, -60.0);
         assert_eq!(
             decision.state,
             DroneSafetyState::Abort,
@@ -523,13 +527,28 @@ mod tests {
         let mut cmd = nominal_command();
         cmd.velocity_mps = [50.0, 0.0, 0.0];
 
-        let d1 = monitor.process_command("drone-1", cmd.clone(), &limits, &terrain, &[], 0.50, -60.0);
-        let d2 = monitor.process_command("drone-1", cmd.clone(), &limits, &terrain, &[], 0.50, -60.0);
-        let d3 = monitor.process_command("drone-1", cmd.clone(), &limits, &terrain, &[], 0.50, -60.0);
+        let d1 =
+            monitor.process_command("drone-1", cmd.clone(), &limits, &terrain, &[], 0.50, -60.0);
+        let d2 =
+            monitor.process_command("drone-1", cmd.clone(), &limits, &terrain, &[], 0.50, -60.0);
+        let d3 =
+            monitor.process_command("drone-1", cmd.clone(), &limits, &terrain, &[], 0.50, -60.0);
 
-        assert_eq!(d1.state, DroneSafetyState::Warning, "frame 1 should be Warning");
-        assert_eq!(d2.state, DroneSafetyState::Warning, "frame 2 should be Warning");
-        assert_eq!(d3.state, DroneSafetyState::Abort, "frame 3 should escalate to Abort");
+        assert_eq!(
+            d1.state,
+            DroneSafetyState::Warning,
+            "frame 1 should be Warning"
+        );
+        assert_eq!(
+            d2.state,
+            DroneSafetyState::Warning,
+            "frame 2 should be Warning"
+        );
+        assert_eq!(
+            d3.state,
+            DroneSafetyState::Abort,
+            "frame 3 should escalate to Abort"
+        );
     }
 
     #[test]
@@ -595,7 +614,11 @@ mod tests {
             .violations
             .iter()
             .any(|v| matches!(v, ConstraintViolation::DroneSeparationViolation { .. }));
-        assert!(has_sep, "expected DroneSeparationViolation in {:?}", decision.violations);
+        assert!(
+            has_sep,
+            "expected DroneSeparationViolation in {:?}",
+            decision.violations
+        );
     }
 
     #[test]

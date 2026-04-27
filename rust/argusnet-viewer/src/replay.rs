@@ -189,6 +189,8 @@ pub struct ReplayFrame {
     #[serde(default)]
     pub inspection_events: Vec<InspectionEvent>,
     #[serde(default)]
+    pub deconfliction_events: Vec<DeconflictionEvent>,
+    #[serde(default)]
     pub scan_mission_state: Option<ScanMissionState>,
 }
 
@@ -383,6 +385,15 @@ pub struct InspectionEvent {
     pub timestamp_s: f32,
     #[serde(default)]
     pub zone_coverage_fraction: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeconflictionEvent {
+    pub yielding_drone_id: String,
+    pub conflicting_drone_id: String,
+    pub predicted_separation_m: f32,
+    pub resolution: String,
+    pub timestamp_s: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -748,7 +759,10 @@ mod tests {
         let f = &document.frames[0];
         assert!((f.mapping_state.as_ref().unwrap().coverage_fraction - 0.42).abs() < 1e-4);
         assert_eq!(f.inspection_events[0].event_type, "entered");
-        assert_eq!(f.localization_state.as_ref().unwrap().active_localizations, 2);
+        assert_eq!(
+            f.localization_state.as_ref().unwrap().active_localizations,
+            2
+        );
     }
 
     #[test]

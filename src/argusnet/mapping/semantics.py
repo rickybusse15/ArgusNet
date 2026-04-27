@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -39,7 +38,7 @@ class SemanticLabel(enum.IntEnum):
 class SemanticCell:
     """A single cell storing label votes and confidence."""
 
-    votes: Dict[int, float] = field(default_factory=dict)
+    votes: dict[int, float] = field(default_factory=dict)
     """Maps label (int) → observation count (float to support decay)."""
 
     @property
@@ -71,7 +70,7 @@ class SemanticCell:
             return 0.0
         return self.votes.get(label, 0) / total
 
-    def label_distribution(self) -> Dict[int, float]:
+    def label_distribution(self) -> dict[int, float]:
         """Return normalised probability for each observed label."""
         total = self.total_observations
         if total == 0:
@@ -114,7 +113,7 @@ class SemanticMap:
         self.decay_factor = max(0.0, min(1.0, decay_factor))
         self.cols = max(int(np.ceil((x_max - x_min) / self.cell_size_m)), 1)
         self.rows = max(int(np.ceil((y_max - y_min) / self.cell_size_m)), 1)
-        self._cells: List[List[SemanticCell]] = [
+        self._cells: list[list[SemanticCell]] = [
             [SemanticCell() for _ in range(self.cols)] for _ in range(self.rows)
         ]
 
@@ -122,7 +121,7 @@ class SemanticMap:
     # Coordinate helpers
     # ------------------------------------------------------------------
 
-    def _cell_index(self, x: float, y: float) -> Optional[Tuple[int, int]]:
+    def _cell_index(self, x: float, y: float) -> tuple[int, int] | None:
         """(row, col) for world coordinate, or None if out of bounds."""
         c = int((x - self.x_min) / self.cell_size_m)
         r = int((y - self.y_min) / self.cell_size_m)
@@ -130,7 +129,7 @@ class SemanticMap:
             return r, c
         return None
 
-    def cell_center(self, row: int, col: int) -> Tuple[float, float]:
+    def cell_center(self, row: int, col: int) -> tuple[float, float]:
         """World-space centre of cell (row, col)."""
         x = self.x_min + (col + 0.5) * self.cell_size_m
         y = self.y_min + (row + 0.5) * self.cell_size_m
@@ -186,7 +185,7 @@ class SemanticMap:
                         updated += 1
         return updated
 
-    def query(self, x: float, y: float) -> Optional[SemanticCell]:
+    def query(self, x: float, y: float) -> SemanticCell | None:
         """Return the cell at (x, y), or None if out of bounds."""
         idx = self._cell_index(x, y)
         if idx is None:
@@ -239,9 +238,9 @@ class SemanticMap:
     # Statistics
     # ------------------------------------------------------------------
 
-    def label_histogram(self) -> Dict[int, int]:
+    def label_histogram(self) -> dict[int, int]:
         """Count of cells per dominant label (excludes UNKNOWN)."""
-        hist: Dict[int, int] = {}
+        hist: dict[int, int] = {}
         for r in range(self.rows):
             for c in range(self.cols):
                 label = self._cells[r][c].dominant_label

@@ -6,12 +6,13 @@ POI status tracking, and scan_mission_state serialisation.
 These tests call run_simulation() directly and require the Rust tracking daemon.
 Use short step counts to keep run time low.
 """
+
 from __future__ import annotations
 
 import json
 import unittest
 
-from argusnet.core.types import POIStatus, ScanMissionState, to_jsonable
+from argusnet.core.types import to_jsonable
 from argusnet.simulation.sim import (
     ScenarioOptions,
     SimulationConfig,
@@ -19,10 +20,10 @@ from argusnet.simulation.sim import (
     run_simulation,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared helper
 # ---------------------------------------------------------------------------
+
 
 def _make_scan_result(
     steps: int = 6,
@@ -52,8 +53,8 @@ def _scan_frames(result):
 # Class 1: Initial state
 # ---------------------------------------------------------------------------
 
-class ISRMissionInitialStateTest(unittest.TestCase):
 
+class ISRMissionInitialStateTest(unittest.TestCase):
     def test_initial_phase_is_scanning(self) -> None:
         result = _make_scan_result(steps=3)
         frames = _scan_frames(result)
@@ -71,9 +72,7 @@ class ISRMissionInitialStateTest(unittest.TestCase):
     def test_threshold_preserved_in_state(self) -> None:
         result = _make_scan_result(steps=4, threshold=0.40)
         for frame in _scan_frames(result):
-            self.assertAlmostEqual(
-                frame.scan_mission_state.scan_coverage_threshold, 0.40, places=6
-            )
+            self.assertAlmostEqual(frame.scan_mission_state.scan_coverage_threshold, 0.40, places=6)
 
     def test_scan_mission_state_absent_in_target_tracking_mode(self) -> None:
         opts = ScenarioOptions(
@@ -94,15 +93,16 @@ class ISRMissionInitialStateTest(unittest.TestCase):
 # Class 2: Coverage accumulation
 # ---------------------------------------------------------------------------
 
-class ISRMissionCoverageTest(unittest.TestCase):
 
+class ISRMissionCoverageTest(unittest.TestCase):
     def test_coverage_fraction_increases_monotonically(self) -> None:
         result = _make_scan_result(steps=20, dt_s=0.5)
         frames = _scan_frames(result)
         fracs = [f.scan_mission_state.scan_coverage_fraction for f in frames]
-        for prev, curr in zip(fracs, fracs[1:]):
+        for prev, curr in zip(fracs, fracs[1:], strict=False):
             self.assertGreaterEqual(
-                curr, prev - 1e-9,  # allow tiny float rounding
+                curr,
+                prev - 1e-9,  # allow tiny float rounding
                 f"Coverage decreased: {prev} → {curr}",
             )
 
@@ -135,7 +135,8 @@ class ISRMissionCoverageTest(unittest.TestCase):
         cov_1 = frames_1[-1].scan_mission_state.scan_coverage_fraction if frames_1 else 0.0
         cov_4 = frames_4[-1].scan_mission_state.scan_coverage_fraction if frames_4 else 0.0
         self.assertGreaterEqual(
-            cov_4, cov_1,
+            cov_4,
+            cov_1,
             f"4-drone coverage ({cov_4:.4f}) should be >= 1-drone coverage ({cov_1:.4f})",
         )
 
@@ -145,7 +146,8 @@ class ISRMissionCoverageTest(unittest.TestCase):
         fracs = [f.scan_mission_state.scan_coverage_fraction for f in frames]
         for i in range(1, len(fracs)):
             self.assertGreaterEqual(
-                fracs[i], fracs[i - 1] - 1e-9,
+                fracs[i],
+                fracs[i - 1] - 1e-9,
                 f"Coverage went backward at step {i}: {fracs[i - 1]} → {fracs[i]}",
             )
 
@@ -153,6 +155,7 @@ class ISRMissionCoverageTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Class 3: Phase transitions (use low threshold to trigger quickly)
 # ---------------------------------------------------------------------------
+
 
 class ISRMissionPhaseTransitionTest(unittest.TestCase):
     """Use scan_coverage_threshold=0.01 so transitions happen in few steps."""
@@ -172,7 +175,8 @@ class ISRMissionPhaseTransitionTest(unittest.TestCase):
         result = self._fast_result(steps=25)
         phases = [f.scan_mission_state.phase for f in _scan_frames(result)]
         self.assertIn(
-            "localizing", phases,
+            "localizing",
+            phases,
             "Expected at least one 'localizing' frame with threshold=0.01 in 25 steps",
         )
 
@@ -183,7 +187,8 @@ class ISRMissionPhaseTransitionTest(unittest.TestCase):
             phase = frame.scan_mission_state.phase
             if seen_localizing:
                 self.assertNotEqual(
-                    phase, "scanning",
+                    phase,
+                    "scanning",
                     "Phase reverted to 'scanning' after reaching 'localizing'",
                 )
             if phase == "localizing":
@@ -198,7 +203,8 @@ class ISRMissionPhaseTransitionTest(unittest.TestCase):
         frames = _scan_frames(result)
         for frame in frames:
             self.assertGreaterEqual(
-                frame.scan_mission_state.phase_started_at_s, 0.0,
+                frame.scan_mission_state.phase_started_at_s,
+                0.0,
                 "phase_started_at_s must always be non-negative",
             )
         # If both scanning and localizing frames exist, the localizing
@@ -216,15 +222,13 @@ class ISRMissionPhaseTransitionTest(unittest.TestCase):
         # converges.  We verify the field type is always a list (may be empty
         # in early localizing steps before the grid localizer emits estimates).
         result = self._fast_result(steps=25)
-        localizing = [
-            f for f in _scan_frames(result)
-            if f.scan_mission_state.phase == "localizing"
-        ]
+        localizing = [f for f in _scan_frames(result) if f.scan_mission_state.phase == "localizing"]
         if not localizing:
             self.skipTest("No localizing frames reached in 25 steps")
         for frame in localizing:
             self.assertIsInstance(
-                frame.scan_mission_state.localization_estimates, list,
+                frame.scan_mission_state.localization_estimates,
+                list,
                 "localization_estimates must be a list",
             )
 
@@ -242,8 +246,8 @@ class ISRMissionPhaseTransitionTest(unittest.TestCase):
 # Class 4: POI status
 # ---------------------------------------------------------------------------
 
-class ISRMissionPOITest(unittest.TestCase):
 
+class ISRMissionPOITest(unittest.TestCase):
     def test_poi_count_matches_configured_poi_count(self) -> None:
         result = _make_scan_result(steps=6, poi_count=2)
         for frame in _scan_frames(result):
@@ -253,15 +257,13 @@ class ISRMissionPOITest(unittest.TestCase):
 
     def test_initial_poi_statuses_are_pending(self) -> None:
         result = _make_scan_result(steps=4)
-        scanning = [
-            f for f in _scan_frames(result)
-            if f.scan_mission_state.phase == "scanning"
-        ]
+        scanning = [f for f in _scan_frames(result) if f.scan_mission_state.phase == "scanning"]
         self.assertGreater(len(scanning), 0)
         frame = scanning[0]
         for poi in frame.scan_mission_state.poi_statuses:
             self.assertEqual(
-                poi.status, "pending",
+                poi.status,
+                "pending",
                 f"POI {poi.poi_id} should be 'pending' in scanning phase, got '{poi.status}'",
             )
 
@@ -271,7 +273,8 @@ class ISRMissionPOITest(unittest.TestCase):
         for frame in _scan_frames(result):
             for poi in frame.scan_mission_state.poi_statuses:
                 self.assertIn(
-                    poi.status, valid,
+                    poi.status,
+                    valid,
                     f"Invalid POI status: '{poi.status}'",
                 )
 
@@ -280,7 +283,8 @@ class ISRMissionPOITest(unittest.TestCase):
         for frame in _scan_frames(result):
             ms = frame.scan_mission_state
             self.assertLessEqual(
-                ms.completed_poi_count, ms.total_poi_count,
+                ms.completed_poi_count,
+                ms.total_poi_count,
                 f"completed ({ms.completed_poi_count}) > total ({ms.total_poi_count})",
             )
 

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -13,9 +12,9 @@ __all__ = ["PoseGraph", "PoseNode", "PoseEdge"]
 @dataclass
 class PoseNode:
     keyframe_id: str
-    position: np.ndarray      # (3,) ENU metres  [x, y, z]
-    yaw_rad: float            # heading (yaw only; SE2.5 representation)
-    covariance: np.ndarray    # (4, 4) [x, y, z, yaw]
+    position: np.ndarray  # (3,) ENU metres  [x, y, z]
+    yaw_rad: float  # heading (yaw only; SE2.5 representation)
+    covariance: np.ndarray  # (4, 4) [x, y, z, yaw]
 
 
 @dataclass
@@ -24,7 +23,7 @@ class PoseEdge:
     to_id: str
     delta_position: np.ndarray  # (3,) relative translation [dx, dy, dz]
     delta_yaw: float
-    information: np.ndarray     # (4, 4) inverse covariance [x, y, z, yaw]
+    information: np.ndarray  # (4, 4) inverse covariance [x, y, z, yaw]
 
 
 class PoseGraph:
@@ -39,8 +38,8 @@ class PoseGraph:
     """
 
     def __init__(self) -> None:
-        self._nodes: Dict[str, PoseNode] = {}
-        self._edges: List[PoseEdge] = []
+        self._nodes: dict[str, PoseNode] = {}
+        self._edges: list[PoseEdge] = []
 
     def add_node(self, node: PoseNode) -> None:
         self._nodes[node.keyframe_id] = node
@@ -54,7 +53,7 @@ class PoseGraph:
     def edge_count(self) -> int:
         return len(self._edges)
 
-    def optimize(self, iterations: int = 5) -> Dict[str, np.ndarray]:
+    def optimize(self, iterations: int = 5) -> dict[str, np.ndarray]:
         """Run Gauss-Newton optimization. Returns {keyframe_id: [x, y, z, yaw]}."""
         if len(self._nodes) < 2 or not self._edges:
             return {k: np.append(v.position, v.yaw_rad) for k, v in self._nodes.items()}
@@ -69,7 +68,7 @@ class PoseGraph:
         x = np.zeros(n * DOF)
         for i, kid in enumerate(ids):
             node = self._nodes[kid]
-            x[i * DOF:(i + 1) * DOF] = np.append(node.position, node.yaw_rad)
+            x[i * DOF : (i + 1) * DOF] = np.append(node.position, node.yaw_rad)
 
         # Fix first node (anchor)
         fixed = 0
@@ -84,19 +83,21 @@ class PoseGraph:
                     continue
                 i = id_to_idx[edge.from_id]
                 j = id_to_idx[edge.to_id]
-                xi = x[i * DOF:(i + 1) * DOF]
-                xj = x[j * DOF:(j + 1) * DOF]
+                xi = x[i * DOF : (i + 1) * DOF]
+                xj = x[j * DOF : (j + 1) * DOF]
 
                 # Residual: measured - predicted relative pose
                 pred_delta_pos = xj[:3] - xi[:3]
                 pred_delta_yaw = xj[3] - xi[3]
 
-                res = np.array([
-                    edge.delta_position[0] - pred_delta_pos[0],
-                    edge.delta_position[1] - pred_delta_pos[1],
-                    edge.delta_position[2] - pred_delta_pos[2],
-                    edge.delta_yaw - pred_delta_yaw,
-                ])
+                res = np.array(
+                    [
+                        edge.delta_position[0] - pred_delta_pos[0],
+                        edge.delta_position[1] - pred_delta_pos[1],
+                        edge.delta_position[2] - pred_delta_pos[2],
+                        edge.delta_yaw - pred_delta_yaw,
+                    ]
+                )
 
                 # Jacobian (simple linear case)
                 J_i = -np.eye(DOF)
@@ -114,18 +115,18 @@ class PoseGraph:
                     info_diag = np.ones(DOF)
                 Omega = np.diag(info_diag)
 
-                H[i * DOF:(i + 1) * DOF, i * DOF:(i + 1) * DOF] += J_i.T @ Omega @ J_i
-                H[i * DOF:(i + 1) * DOF, j * DOF:(j + 1) * DOF] += J_i.T @ Omega @ J_j
-                H[j * DOF:(j + 1) * DOF, i * DOF:(i + 1) * DOF] += J_j.T @ Omega @ J_i
-                H[j * DOF:(j + 1) * DOF, j * DOF:(j + 1) * DOF] += J_j.T @ Omega @ J_j
-                b[i * DOF:(i + 1) * DOF] += J_i.T @ Omega @ res
-                b[j * DOF:(j + 1) * DOF] += J_j.T @ Omega @ res
+                H[i * DOF : (i + 1) * DOF, i * DOF : (i + 1) * DOF] += J_i.T @ Omega @ J_i
+                H[i * DOF : (i + 1) * DOF, j * DOF : (j + 1) * DOF] += J_i.T @ Omega @ J_j
+                H[j * DOF : (j + 1) * DOF, i * DOF : (i + 1) * DOF] += J_j.T @ Omega @ J_i
+                H[j * DOF : (j + 1) * DOF, j * DOF : (j + 1) * DOF] += J_j.T @ Omega @ J_j
+                b[i * DOF : (i + 1) * DOF] += J_i.T @ Omega @ res
+                b[j * DOF : (j + 1) * DOF] += J_j.T @ Omega @ res
 
             # Fix anchor node (set its rows/cols to identity)
-            H[fixed * DOF:(fixed + 1) * DOF, :] = 0
-            H[:, fixed * DOF:(fixed + 1) * DOF] = 0
-            H[fixed * DOF:(fixed + 1) * DOF, fixed * DOF:(fixed + 1) * DOF] = np.eye(DOF)
-            b[fixed * DOF:(fixed + 1) * DOF] = 0
+            H[fixed * DOF : (fixed + 1) * DOF, :] = 0
+            H[:, fixed * DOF : (fixed + 1) * DOF] = 0
+            H[fixed * DOF : (fixed + 1) * DOF, fixed * DOF : (fixed + 1) * DOF] = np.eye(DOF)
+            b[fixed * DOF : (fixed + 1) * DOF] = 0
 
             # Solve: H dx = b
             try:
@@ -139,5 +140,5 @@ class PoseGraph:
         # Update nodes
         result = {}
         for i, kid in enumerate(ids):
-            result[kid] = x[i * DOF:(i + 1) * DOF].copy()
+            result[kid] = x[i * DOF : (i + 1) * DOF].copy()
         return result

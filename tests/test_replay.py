@@ -5,9 +5,13 @@ import os
 import tempfile
 import unittest
 
-from argusnet.core.types import BearingObservation, NodeState, TruthState, vec3
-from argusnet.evaluation.replay import build_replay_document, load_replay_document, validate_replay_document
 from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+from argusnet.core.types import BearingObservation, NodeState, TruthState, vec3
+from argusnet.evaluation.replay import (
+    build_replay_document,
+    load_replay_document,
+    validate_replay_document,
+)
 
 
 class ReplayDocumentTest(unittest.TestCase):
@@ -15,13 +19,33 @@ class ReplayDocumentTest(unittest.TestCase):
         platform = TrackingService(config=TrackerConfig())
         timestamp_s = 0.0
         node_a = NodeState("ground-a", vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, timestamp_s)
-        node_b = NodeState("ground-b", vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, timestamp_s)
+        node_b = NodeState(
+            "ground-b", vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, timestamp_s
+        )
         truth = TruthState("asset-a", vec3(50.0, 15.0, 10.0), vec3(0.0, 0.0, 0.0), timestamp_s)
         observations = [
-            BearingObservation("ground-a", "asset-a", node_a.position, truth.position - node_a.position, 0.002, timestamp_s, 1.0),
-            BearingObservation("ground-b", "asset-a", node_b.position, truth.position - node_b.position, 0.002, timestamp_s, 1.0),
+            BearingObservation(
+                "ground-a",
+                "asset-a",
+                node_a.position,
+                truth.position - node_a.position,
+                0.002,
+                timestamp_s,
+                1.0,
+            ),
+            BearingObservation(
+                "ground-b",
+                "asset-a",
+                node_b.position,
+                truth.position - node_b.position,
+                0.002,
+                timestamp_s,
+                1.0,
+            ),
         ]
-        frame = platform.ingest_frame(timestamp_s, node_states=[node_a, node_b], observations=observations, truths=[truth])
+        frame = platform.ingest_frame(
+            timestamp_s, node_states=[node_a, node_b], observations=observations, truths=[truth]
+        )
 
         document = build_replay_document(
             [frame],

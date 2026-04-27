@@ -20,15 +20,15 @@ Usage::
 from __future__ import annotations
 
 import json
-import math
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields
 from types import MappingProxyType
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Sensor configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class SensorConfig:
@@ -36,23 +36,67 @@ class SensorConfig:
 
     # -- Ground station arrays (cycled for stations beyond list length) --
 
-    ground_station_mast_agls_m: Tuple[float, ...] = (
-        2.0, 3.0, 2.5, 2.8, 2.2, 2.6, 2.4, 2.9, 2.7, 2.3, 2.8, 2.5,
+    ground_station_mast_agls_m: tuple[float, ...] = (
+        2.0,
+        3.0,
+        2.5,
+        2.8,
+        2.2,
+        2.6,
+        2.4,
+        2.9,
+        2.7,
+        2.3,
+        2.8,
+        2.5,
     )
     """Above-ground-level heights for ground station masts, in metres."""
 
-    ground_station_bearing_stds_rad: Tuple[float, ...] = (
-        0.008, 0.010, 0.009, 0.009, 0.011, 0.010, 0.009, 0.010, 0.009, 0.011, 0.010, 0.009,
+    ground_station_bearing_stds_rad: tuple[float, ...] = (
+        0.008,
+        0.010,
+        0.009,
+        0.009,
+        0.011,
+        0.010,
+        0.009,
+        0.010,
+        0.009,
+        0.011,
+        0.010,
+        0.009,
     )
     """Base bearing measurement noise standard deviation per station, in radians."""
 
-    ground_station_dropout_probabilities: Tuple[float, ...] = (
-        0.03, 0.04, 0.05, 0.035, 0.045, 0.04, 0.038, 0.042, 0.036, 0.044, 0.039, 0.041,
+    ground_station_dropout_probabilities: tuple[float, ...] = (
+        0.03,
+        0.04,
+        0.05,
+        0.035,
+        0.045,
+        0.04,
+        0.038,
+        0.042,
+        0.036,
+        0.044,
+        0.039,
+        0.041,
     )
     """Probability of an observation being dropped per step per station."""
 
-    ground_station_max_range_factors_m: Tuple[float, ...] = (
-        520.0, 520.0, 520.0, 560.0, 540.0, 550.0, 545.0, 555.0, 550.0, 535.0, 560.0, 545.0,
+    ground_station_max_range_factors_m: tuple[float, ...] = (
+        520.0,
+        520.0,
+        520.0,
+        560.0,
+        540.0,
+        550.0,
+        545.0,
+        555.0,
+        550.0,
+        535.0,
+        560.0,
+        545.0,
     )
     """Base maximum detection range per station, in metres (before platform scale)."""
 
@@ -130,7 +174,10 @@ class SensorConfig:
     """Transmittance threshold below which vegetation attenuation is applied."""
 
     drone_look_down_angle_deg: float = 30.0
-    """Default downward look angle for drones deriving sensor direction from velocity, in degrees."""
+    """Default downward look angle for drones deriving sensor direction
+
+    from velocity, in degrees.
+    """
 
     los_sample_step_m: float = 18.0
     """Sampling step for line-of-sight terrain clearance checks, in metres."""
@@ -145,6 +192,7 @@ class SensorConfig:
 # ---------------------------------------------------------------------------
 # Flight dynamics configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class DynamicsConfig:
@@ -313,6 +361,7 @@ class DynamicsConfig:
 # Platform preset profile (moved from sim.py)
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class PlatformPresetProfile:
     """Speed and range scaling factors for a platform configuration."""
@@ -337,11 +386,12 @@ class PlatformPresetProfile:
 # Ground station layout
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class GroundStationLayoutConfig:
     """Layout parameters for procedural ground station placement."""
 
-    normalized_offsets: Tuple[Tuple[float, float], ...] = (
+    normalized_offsets: tuple[tuple[float, float], ...] = (
         (-0.72, -0.64),
         (0.70, -0.28),
         (-0.08, 0.74),
@@ -371,95 +421,101 @@ class GroundStationLayoutConfig:
 # Target trajectory presets
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class TargetTrajectoryConfig:
     """Hardcoded trajectory parameters for the various target motion presets."""
 
     # -- sinusoid preset --
-    sinusoid_start_positions: Tuple[Tuple[float, float], ...] = (
+    sinusoid_start_positions: tuple[tuple[float, float], ...] = (
         (-40.0, 40.0),
         (210.0, -160.0),
     )
     """Start XY positions (before scale) for sinusoid targets."""
 
-    sinusoid_velocities: Tuple[Tuple[float, float], ...] = (
+    sinusoid_velocities: tuple[tuple[float, float], ...] = (
         (4.1, 1.7),
         (-3.5, 2.6),
     )
     """XY velocities for sinusoid targets, in m/s."""
 
-    sinusoid_lateral_axes: Tuple[int, ...] = (1, 0)
-    sinusoid_lateral_amplitudes: Tuple[float, ...] = (34.0, 26.0)
-    sinusoid_lateral_frequencies: Tuple[float, ...] = (0.13, 0.11)
-    sinusoid_base_agls_m: Tuple[float, ...] = (135.0, 165.0)
-    sinusoid_vertical_amplitudes_m: Tuple[float, ...] = (18.0, 24.0)
-    sinusoid_vertical_frequencies: Tuple[float, ...] = (0.09, 0.08)
+    sinusoid_lateral_axes: tuple[int, ...] = (1, 0)
+    sinusoid_lateral_amplitudes: tuple[float, ...] = (34.0, 26.0)
+    sinusoid_lateral_frequencies: tuple[float, ...] = (0.13, 0.11)
+    sinusoid_base_agls_m: tuple[float, ...] = (135.0, 165.0)
+    sinusoid_vertical_amplitudes_m: tuple[float, ...] = (18.0, 24.0)
+    sinusoid_vertical_frequencies: tuple[float, ...] = (0.09, 0.08)
 
     # -- racetrack preset --
-    racetrack_centers: Tuple[Tuple[float, float], ...] = (
+    racetrack_centers: tuple[tuple[float, float], ...] = (
         (-85.0, 70.0),
         (180.0, -145.0),
     )
-    racetrack_straight_lengths_m: Tuple[float, ...] = (230.0, 270.0)
-    racetrack_turn_radii_m: Tuple[float, ...] = (54.0, 60.0)
-    racetrack_speeds_mps: Tuple[float, ...] = (7.2, 6.6)
-    racetrack_base_agls_m: Tuple[float, ...] = (145.0, 175.0)
-    racetrack_vertical_amplitudes_m: Tuple[float, ...] = (16.0, 22.0)
-    racetrack_vertical_frequencies: Tuple[float, ...] = (0.07, 0.06)
+    racetrack_straight_lengths_m: tuple[float, ...] = (230.0, 270.0)
+    racetrack_turn_radii_m: tuple[float, ...] = (54.0, 60.0)
+    racetrack_speeds_mps: tuple[float, ...] = (7.2, 6.6)
+    racetrack_base_agls_m: tuple[float, ...] = (145.0, 175.0)
+    racetrack_vertical_amplitudes_m: tuple[float, ...] = (16.0, 22.0)
+    racetrack_vertical_frequencies: tuple[float, ...] = (0.07, 0.06)
 
     # -- waypoint_patrol preset --
-    patrol_centers: Tuple[Tuple[float, float], ...] = (
+    patrol_centers: tuple[tuple[float, float], ...] = (
         (-110.0, 145.0),
         (180.0, -125.0),
     )
-    patrol_widths_m: Tuple[float, ...] = (220.0, 190.0)
-    patrol_heights_m: Tuple[float, ...] = (165.0, 150.0)
-    patrol_speeds_mps: Tuple[float, ...] = (6.8, 6.2)
-    patrol_base_agls_m: Tuple[float, ...] = (155.0, 185.0)
-    patrol_vertical_amplitudes_m: Tuple[float, ...] = (18.0, 24.0)
-    patrol_vertical_frequencies: Tuple[float, ...] = (0.06, 0.05)
+    patrol_widths_m: tuple[float, ...] = (220.0, 190.0)
+    patrol_heights_m: tuple[float, ...] = (165.0, 150.0)
+    patrol_speeds_mps: tuple[float, ...] = (6.8, 6.2)
+    patrol_base_agls_m: tuple[float, ...] = (155.0, 185.0)
+    patrol_vertical_amplitudes_m: tuple[float, ...] = (18.0, 24.0)
+    patrol_vertical_frequencies: tuple[float, ...] = (0.06, 0.05)
 
 
 # ---------------------------------------------------------------------------
 # Map preset scales
 # ---------------------------------------------------------------------------
 
-DEFAULT_MAP_PRESET_SCALES: Mapping[str, float] = MappingProxyType({
-    "small": 1.0,
-    "medium": 1.75,
-    "large": 2.5,
-    "xlarge": 4.0,
-    "regional": 6.0,
-    "theater": 10.0,
-    "operational": 15.0,
-})
+DEFAULT_MAP_PRESET_SCALES: Mapping[str, float] = MappingProxyType(
+    {
+        "small": 1.0,
+        "medium": 1.75,
+        "large": 2.5,
+        "xlarge": 4.0,
+        "regional": 6.0,
+        "theater": 10.0,
+        "operational": 15.0,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Platform presets
 # ---------------------------------------------------------------------------
 
-DEFAULT_PLATFORM_PRESETS: Mapping[str, PlatformPresetProfile] = MappingProxyType({
-    "baseline": PlatformPresetProfile(
-        target_speed_scale=1.0,
-        drone_search_speed_scale=1.0,
-        follow_speed_cap_mps=42.0,
-        drone_max_range_scale=1.0,
-        ground_station_range_scale=1.5,
-    ),
-    "wide_area": PlatformPresetProfile(
-        target_speed_scale=1.35,
-        drone_search_speed_scale=1.45,
-        follow_speed_cap_mps=60.0,
-        drone_max_range_scale=1.8,
-        ground_station_range_scale=2.4,
-    ),
-})
+DEFAULT_PLATFORM_PRESETS: Mapping[str, PlatformPresetProfile] = MappingProxyType(
+    {
+        "baseline": PlatformPresetProfile(
+            target_speed_scale=1.0,
+            drone_search_speed_scale=1.0,
+            follow_speed_cap_mps=42.0,
+            drone_max_range_scale=1.0,
+            ground_station_range_scale=1.5,
+        ),
+        "wide_area": PlatformPresetProfile(
+            target_speed_scale=1.35,
+            drone_search_speed_scale=1.45,
+            follow_speed_cap_mps=60.0,
+            drone_max_range_scale=1.8,
+            ground_station_range_scale=2.4,
+        ),
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Top-level aggregator
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class SimulationConstants:
@@ -476,7 +532,9 @@ class SimulationConstants:
     dynamics: DynamicsConfig = field(default_factory=DynamicsConfig)
     """Flight dynamics, timing, and physical parameters."""
 
-    ground_station_layout: GroundStationLayoutConfig = field(default_factory=GroundStationLayoutConfig)
+    ground_station_layout: GroundStationLayoutConfig = field(
+        default_factory=GroundStationLayoutConfig
+    )
     """Procedural ground-station placement layout."""
 
     target_trajectories: TargetTrajectoryConfig = field(default_factory=TargetTrajectoryConfig)
@@ -497,12 +555,12 @@ class SimulationConstants:
     # ------------------------------------------------------------------
 
     @classmethod
-    def default(cls) -> "SimulationConstants":
+    def default(cls) -> SimulationConstants:
         """Return a ``SimulationConstants`` instance with all defaults."""
         return cls()
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "SimulationConstants":
+    def from_dict(cls, d: dict[str, Any]) -> SimulationConstants:
         """Construct from a (possibly partial) nested dictionary.
 
         Top-level keys correspond to the sub-config names (``sensor``,
@@ -510,23 +568,25 @@ class SimulationConstants:
         ``map_preset_scales``, ``platform_presets``).  Any missing key
         retains its default value.
         """
-        kwargs: Dict[str, Any] = {}
+        kwargs: dict[str, Any] = {}
         if "sensor" in d:
             kwargs["sensor"] = _subconfig_from_dict(SensorConfig, d["sensor"])
         if "dynamics" in d:
             kwargs["dynamics"] = _subconfig_from_dict(DynamicsConfig, d["dynamics"])
         if "ground_station_layout" in d:
             kwargs["ground_station_layout"] = _subconfig_from_dict(
-                GroundStationLayoutConfig, d["ground_station_layout"],
+                GroundStationLayoutConfig,
+                d["ground_station_layout"],
             )
         if "target_trajectories" in d:
             kwargs["target_trajectories"] = _subconfig_from_dict(
-                TargetTrajectoryConfig, d["target_trajectories"],
+                TargetTrajectoryConfig,
+                d["target_trajectories"],
             )
         if "map_preset_scales" in d:
             kwargs["map_preset_scales"] = MappingProxyType(dict(d["map_preset_scales"]))
         if "platform_presets" in d:
-            presets: Dict[str, PlatformPresetProfile] = {}
+            presets: dict[str, PlatformPresetProfile] = {}
             for name, values in d["platform_presets"].items():
                 if isinstance(values, dict):
                     presets[name] = PlatformPresetProfile(**values)
@@ -536,32 +596,33 @@ class SimulationConstants:
         return cls(**kwargs)
 
     @classmethod
-    def from_yaml(cls, path: str) -> "SimulationConstants":
+    def from_yaml(cls, path: str) -> SimulationConstants:
         """Load from a YAML file.  Falls back to JSON if PyYAML is unavailable."""
         try:
             import yaml  # type: ignore[import-untyped]
-            with open(path, "r", encoding="utf-8") as fh:
+
+            with open(path, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh)
         except ImportError:
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
         if not isinstance(data, dict):
             raise ValueError(f"Expected a mapping at the top level of {path}.")
         return cls.from_dict(data)
 
     @classmethod
-    def from_json(cls, path: str) -> "SimulationConstants":
+    def from_json(cls, path: str) -> SimulationConstants:
         """Load from a JSON file."""
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         if not isinstance(data, dict):
             raise ValueError(f"Expected a mapping at the top level of {path}.")
         return cls.from_dict(data)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain nested dictionary suitable for JSON/YAML."""
         # Build manually to avoid deepcopy issues with MappingProxy on Python 3.9
-        raw: Dict[str, Any] = {
+        raw: dict[str, Any] = {
             "sensor": asdict(self.sensor),
             "dynamics": asdict(self.dynamics),
             "ground_station_layout": asdict(self.ground_station_layout),
@@ -581,6 +642,7 @@ class SimulationConstants:
         """Serialise to a YAML string.  Falls back to JSON if PyYAML is unavailable."""
         try:
             import yaml  # type: ignore[import-untyped]
+
             return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
         except ImportError:
             return self.to_json()
@@ -590,7 +652,8 @@ class SimulationConstants:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _subconfig_from_dict(cls: type, d: Dict[str, Any]) -> Any:
+
+def _subconfig_from_dict(cls: type, d: dict[str, Any]) -> Any:
     """Instantiate a frozen dataclass from a (possibly partial) dict.
 
     Only keys that correspond to fields on *cls* are forwarded; unknown keys
@@ -598,7 +661,7 @@ def _subconfig_from_dict(cls: type, d: Dict[str, Any]) -> Any:
     from lists.
     """
     valid_names = {f.name for f in fields(cls)}
-    kwargs: Dict[str, Any] = {}
+    kwargs: dict[str, Any] = {}
     for key, value in d.items():
         if key not in valid_names:
             continue

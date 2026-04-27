@@ -20,13 +20,17 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from argusnet.core.config import DynamicsConfig, SensorConfig, SimulationConstants
-from argusnet.core.types import MissionZone, Vector3, vec3
-from argusnet.core.types import ZONE_TYPE_EXCLUSION, ZONE_TYPE_OBJECTIVE, ZONE_TYPE_PATROL, ZONE_TYPE_SURVEILLANCE
+from argusnet.core.config import SensorConfig, SimulationConstants
+from argusnet.core.types import (
+    ZONE_TYPE_OBJECTIVE,
+    ZONE_TYPE_SURVEILLANCE,
+    MissionZone,
+    Vector3,
+    vec3,
+)
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -52,7 +56,7 @@ class MissionTiming:
     duration_s: float
     dt_s: float = 0.25
     start_offset_s: float = 0.0
-    deadline_s: Optional[float] = None
+    deadline_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +82,7 @@ class MissionConstraints:
     min_sensor_baseline_m: float = 80.0
     max_target_covariance_m2: float = 500.0
     min_active_tracks: int = 1
-    exclusion_zones: List[MissionZone] = field(default_factory=list)
+    exclusion_zones: list[MissionZone] = field(default_factory=list)
     terrain_clearance_m: float = 30.0
     comms_range_m: float = 5000.0
 
@@ -133,7 +137,7 @@ class MissionSpec:
     target_count: int = 2
     difficulty: float = 0.5
     mission_type: str = "surveillance"
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     timing: MissionTiming = field(default_factory=lambda: MissionTiming(duration_s=180.0))
     constraints: MissionConstraints = field(default_factory=MissionConstraints)
 
@@ -143,12 +147,16 @@ class MissionSpec:
         if self.drone_count < 1 or self.drone_count > 12:
             raise ValueError(f"drone_count must be 1..12, got {self.drone_count}.")
         if self.ground_station_count < 1 or self.ground_station_count > 12:
-            raise ValueError(f"ground_station_count must be 1..12, got {self.ground_station_count}.")
+            raise ValueError(
+                f"ground_station_count must be 1..12, got {self.ground_station_count}."
+            )
         if self.target_count < 1 or self.target_count > 8:
             raise ValueError(f"target_count must be 1..8, got {self.target_count}.")
         valid_types = {"surveillance", "intercept", "persistent_observation", "search"}
         if self.mission_type not in valid_types:
-            raise ValueError(f"mission_type must be one of {sorted(valid_types)}, got {self.mission_type!r}.")
+            raise ValueError(
+                f"mission_type must be one of {sorted(valid_types)}, got {self.mission_type!r}."
+            )
 
 
 @dataclass(frozen=True)
@@ -174,9 +182,9 @@ class LaunchPoint:
     launch_id: str
     station_id: str
     position: Vector3
-    assigned_drone_ids: List[str]
+    assigned_drone_ids: list[str]
     earliest_launch_s: float = 0.0
-    latest_launch_s: Optional[float] = None
+    latest_launch_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -230,10 +238,10 @@ class MissionObjective:
 
     objective_id: str
     objective_type: str
-    target_ids: List[str]
-    zone: Optional[MissionZone] = None
+    target_ids: list[str]
+    zone: MissionZone | None = None
     start_s: float = 0.0
-    end_s: Optional[float] = None
+    end_s: float | None = None
     priority: int = 1
     required: bool = True
     success_condition: ObjectiveCondition = field(default_factory=ObjectiveCondition)
@@ -264,13 +272,13 @@ class FlightCorridor:
     """
 
     corridor_id: str
-    waypoints_xy_m: List[List[float]]
+    waypoints_xy_m: list[list[float]]
     width_m: float = 50.0
     min_agl_m: float = 30.0
     max_agl_m: float = 400.0
     direction: str = "bidirectional"
-    assigned_drone_ids: List[str] = field(default_factory=list)
-    active_window: List[float] = field(default_factory=lambda: [0.0, 600.0])
+    assigned_drone_ids: list[str] = field(default_factory=list)
+    active_window: list[float] = field(default_factory=lambda: [0.0, 600.0])
 
 
 @dataclass(frozen=True)
@@ -298,7 +306,7 @@ class ValidityReport:
     solvable: bool = True
     corridor_clear: bool = True
     baseline_adequate: bool = True
-    failures: List[str] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
 
     @property
     def is_valid(self) -> bool:
@@ -338,17 +346,18 @@ class GeneratedMission:
 
     scenario_def: object  # ScenarioDefinition; typed as object to avoid circular imports
     spec: MissionSpec
-    launch_points: List[LaunchPoint]
-    objectives: List[MissionObjective]
-    corridors: List[FlightCorridor]
+    launch_points: list[LaunchPoint]
+    objectives: list[MissionObjective]
+    corridors: list[FlightCorridor]
     timing: MissionTiming
-    tags: List[str]
+    tags: list[str]
     validity_report: ValidityReport
 
 
 # ---------------------------------------------------------------------------
 # Difficulty scaling
 # ---------------------------------------------------------------------------
+
 
 def apply_difficulty_scaling(
     spec: MissionSpec,
@@ -387,12 +396,10 @@ def apply_difficulty_scaling(
     old_sensor = constants.sensor
 
     scaled_ground_bearing_stds = tuple(
-        v * bearing_noise_multiplier
-        for v in old_sensor.ground_station_bearing_stds_rad
+        v * bearing_noise_multiplier for v in old_sensor.ground_station_bearing_stds_rad
     )
     scaled_ground_dropouts = tuple(
-        v * dropout_multiplier
-        for v in old_sensor.ground_station_dropout_probabilities
+        v * dropout_multiplier for v in old_sensor.ground_station_dropout_probabilities
     )
     scaled_drone_bearing_std = old_sensor.drone_base_bearing_std_rad * bearing_noise_multiplier
     scaled_drone_dropout = old_sensor.drone_base_dropout_probability * dropout_multiplier
@@ -439,9 +446,10 @@ def apply_difficulty_scaling(
     drone_search_speed_scale = 1.2 + d * (0.8 - 1.2)
 
     # Encode these into the platform presets
-    new_presets: Dict[str, object] = {}
+    new_presets: dict[str, object] = {}
     for name, profile in constants.platform_presets.items():
         from argusnet.core.config import PlatformPresetProfile
+
         new_presets[name] = PlatformPresetProfile(
             target_speed_scale=profile.target_speed_scale * target_speed_scale,
             drone_search_speed_scale=profile.drone_search_speed_scale * drone_search_speed_scale,
@@ -451,6 +459,7 @@ def apply_difficulty_scaling(
         )
 
     from types import MappingProxyType
+
     return SimulationConstants(
         sensor=new_sensor,
         dynamics=constants.dynamics,
@@ -465,6 +474,7 @@ def apply_difficulty_scaling(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _difficulty_band(difficulty: float) -> str:
     """Return the canonical difficulty-band tag value for a given difficulty scalar."""
     if difficulty < 0.33:
@@ -474,9 +484,9 @@ def _difficulty_band(difficulty: float) -> str:
     return "hard"
 
 
-def _base_tags(spec: MissionSpec) -> List[str]:
+def _base_tags(spec: MissionSpec) -> list[str]:
     """Derive canonical taxonomy tags from a ``MissionSpec``."""
-    tags: List[str] = list(spec.tags)
+    tags: list[str] = list(spec.tags)
     tag_set = set(tags)
 
     def _add(t: str) -> None:
@@ -492,7 +502,7 @@ def _base_tags(spec: MissionSpec) -> List[str]:
     return tags
 
 
-def _map_bounds_for_spec(spec: MissionSpec, constants: SimulationConstants) -> Dict[str, float]:
+def _map_bounds_for_spec(spec: MissionSpec, constants: SimulationConstants) -> dict[str, float]:
     """Return map bounds dict derived from the spec's map_preset."""
     scale_map = constants.map_preset_scales
     scale = float(scale_map.get(spec.map_preset, 1.0))
@@ -505,13 +515,13 @@ def _map_bounds_for_spec(spec: MissionSpec, constants: SimulationConstants) -> D
     }
 
 
-def _centre_of_bounds(bounds: Dict[str, float]) -> Tuple[float, float]:
+def _centre_of_bounds(bounds: dict[str, float]) -> tuple[float, float]:
     cx = (bounds["x_min_m"] + bounds["x_max_m"]) / 2.0
     cy = (bounds["y_min_m"] + bounds["y_max_m"]) / 2.0
     return cx, cy
 
 
-def _half_extent(bounds: Dict[str, float]) -> float:
+def _half_extent(bounds: dict[str, float]) -> float:
     hx = (bounds["x_max_m"] - bounds["x_min_m"]) / 2.0
     hy = (bounds["y_max_m"] - bounds["y_min_m"]) / 2.0
     return min(hx, hy)
@@ -520,6 +530,7 @@ def _half_extent(bounds: Dict[str, float]) -> float:
 # ---------------------------------------------------------------------------
 # Template factories
 # ---------------------------------------------------------------------------
+
 
 def surveillance_template(
     seed: int,
@@ -533,7 +544,7 @@ def surveillance_template(
     target_count: int = 2,
     difficulty: float = 0.3,
     duration_s: float = 180.0,
-    extra_tags: Optional[List[str]] = None,
+    extra_tags: list[str] | None = None,
 ) -> MissionSpec:
     """Return a ``MissionSpec`` pre-configured for a surveillance mission.
 
@@ -553,7 +564,7 @@ def surveillance_template(
     extra_tags:
         Additional tags merged into the default tag set.
     """
-    tags: List[str] = extra_tags or []
+    tags: list[str] = extra_tags or []
     timing = MissionTiming(
         duration_s=duration_s,
         dt_s=0.25,
@@ -597,7 +608,7 @@ def intercept_template(
     target_count: int = 1,
     difficulty: float = 0.5,
     duration_s: float = 180.0,
-    extra_tags: Optional[List[str]] = None,
+    extra_tags: list[str] | None = None,
 ) -> MissionSpec:
     """Return a ``MissionSpec`` pre-configured for an intercept mission.
 
@@ -616,7 +627,7 @@ def intercept_template(
     extra_tags:
         Additional tags merged into the default tag set.
     """
-    tags: List[str] = extra_tags or []
+    tags: list[str] = extra_tags or []
     timing = MissionTiming(
         duration_s=duration_s,
         dt_s=0.25,
@@ -660,7 +671,7 @@ def persistent_observation_template(
     target_count: int = 3,
     difficulty: float = 0.6,
     duration_s: float = 360.0,
-    extra_tags: Optional[List[str]] = None,
+    extra_tags: list[str] | None = None,
 ) -> MissionSpec:
     """Return a ``MissionSpec`` for a long-duration persistent observation mission.
 
@@ -680,7 +691,7 @@ def persistent_observation_template(
     extra_tags:
         Additional tags merged into the default tag set.
     """
-    tags: List[str] = extra_tags or []
+    tags: list[str] = extra_tags or []
     effective_duration = max(300.0, duration_s)
     timing = MissionTiming(
         duration_s=effective_duration,
@@ -725,7 +736,7 @@ def search_template(
     target_count: int = 1,
     difficulty: float = 0.4,
     duration_s: float = 240.0,
-    extra_tags: Optional[List[str]] = None,
+    extra_tags: list[str] | None = None,
 ) -> MissionSpec:
     """Return a ``MissionSpec`` pre-configured for a search mission.
 
@@ -744,7 +755,7 @@ def search_template(
     extra_tags:
         Additional tags merged into the default tag set.
     """
-    tags: List[str] = extra_tags or []
+    tags: list[str] = extra_tags or []
     timing = MissionTiming(
         duration_s=duration_s,
         dt_s=0.25,
@@ -780,12 +791,13 @@ def search_template(
 # Objective and corridor builders (per template type)
 # ---------------------------------------------------------------------------
 
+
 def _build_surveillance_objectives(
     spec: MissionSpec,
-    bounds: Dict[str, float],
-    target_ids: List[str],
+    bounds: dict[str, float],
+    target_ids: list[str],
     rng: np.random.Generator,
-) -> List[MissionObjective]:
+) -> list[MissionObjective]:
     """Build objectives for a surveillance mission."""
     cx, cy = _centre_of_bounds(bounds)
     he = _half_extent(bounds)
@@ -821,10 +833,10 @@ def _build_surveillance_objectives(
 
 def _build_intercept_objectives(
     spec: MissionSpec,
-    bounds: Dict[str, float],
-    target_ids: List[str],
+    bounds: dict[str, float],
+    target_ids: list[str],
     rng: np.random.Generator,
-) -> List[MissionObjective]:
+) -> list[MissionObjective]:
     """Build objectives for an intercept mission (acquire then maintain)."""
     acquire_end = spec.timing.start_offset_s + spec.timing.duration_s * 0.15
 
@@ -867,10 +879,10 @@ def _build_intercept_objectives(
 
 def _build_persistent_observation_objectives(
     spec: MissionSpec,
-    bounds: Dict[str, float],
-    target_ids: List[str],
+    bounds: dict[str, float],
+    target_ids: list[str],
     rng: np.random.Generator,
-) -> List[MissionObjective]:
+) -> list[MissionObjective]:
     """Build objectives for a persistent observation mission."""
     cx, cy = _centre_of_bounds(bounds)
     he = _half_extent(bounds)
@@ -931,10 +943,10 @@ def _build_persistent_observation_objectives(
 
 def _build_search_objectives(
     spec: MissionSpec,
-    bounds: Dict[str, float],
-    target_ids: List[str],
+    bounds: dict[str, float],
+    target_ids: list[str],
     rng: np.random.Generator,
-) -> List[MissionObjective]:
+) -> list[MissionObjective]:
     """Build objectives for a search mission."""
     cx, cy = _centre_of_bounds(bounds)
     he = _half_extent(bounds)
@@ -978,11 +990,11 @@ _OBJECTIVE_BUILDERS = {
 
 def _build_corridors(
     spec: MissionSpec,
-    bounds: Dict[str, float],
-    node_ids: List[str],
-    drone_ids: List[str],
+    bounds: dict[str, float],
+    node_ids: list[str],
+    drone_ids: list[str],
     rng: np.random.Generator,
-) -> List[FlightCorridor]:
+) -> list[FlightCorridor]:
     """Build flight corridors appropriate for the mission type."""
     cx, cy = _centre_of_bounds(bounds)
     he = _half_extent(bounds)
@@ -1022,7 +1034,7 @@ def _build_corridors(
 def _build_launch_points(
     spec: MissionSpec,
     scenario_def: object,
-) -> List[LaunchPoint]:
+) -> list[LaunchPoint]:
     """Build launch points from the scenario's ground station nodes."""
     # Extract ground station nodes (is_mobile=False) from scenario_def
     try:
@@ -1037,13 +1049,15 @@ def _build_launch_points(
         return []
 
     # Distribute drones across stations evenly
-    drone_ids_per_station: List[List[str]] = [[] for _ in station_nodes]
+    drone_ids_per_station: list[list[str]] = [[] for _ in station_nodes]
     for idx, d in enumerate(drone_nodes):
         station_idx = idx % len(station_nodes)
         drone_ids_per_station[station_idx].append(d.node_id)
 
-    launch_points: List[LaunchPoint] = []
-    for si, (station, drones_for_station) in enumerate(zip(station_nodes, drone_ids_per_station)):
+    launch_points: list[LaunchPoint] = []
+    for si, (station, drones_for_station) in enumerate(
+        zip(station_nodes, drone_ids_per_station, strict=False)
+    ):
         lp = LaunchPoint(
             launch_id=f"lp-{si:02d}",
             station_id=station.node_id,
@@ -1061,11 +1075,12 @@ def _build_launch_points(
 # Validity checker
 # ---------------------------------------------------------------------------
 
+
 def validate_mission(
     scenario_def: object,
     spec: MissionSpec,
-    objectives: List[MissionObjective],
-    corridors: List[FlightCorridor],
+    objectives: list[MissionObjective],
+    corridors: list[FlightCorridor],
 ) -> ValidityReport:
     """Run post-construction validity checks on a generated mission.
 
@@ -1102,7 +1117,7 @@ def validate_mission(
     ValidityReport
         Frozen validity report with any failures listed.
     """
-    failures: List[str] = []
+    failures: list[str] = []
 
     physically_valid = True
     sensor_valid = True
@@ -1165,9 +1180,7 @@ def validate_mission(
                 for prim in primitives:
                     if prim.point_inside(float(pos[0]), float(pos[1]), float(pos[2])):
                         physically_valid = False
-                        failures.append(
-                            f"Node {node.node_id} is inside obstacle at t=0"
-                        )
+                        failures.append(f"Node {node.node_id} is inside obstacle at t=0")
                         break
             except Exception:
                 pass
@@ -1199,24 +1212,23 @@ def validate_mission(
             except Exception:
                 continue
 
-        if not covered:
-            # Fall back: if any node exists with max_range_m == 0, treat as infinite range
-            if any(getattr(n.state(0.0), "max_range_m", 0.0) == 0.0 for n in sensor_nodes):
-                covered = True
+        # Fall back: if any node exists with max_range_m == 0, treat as infinite range.
+        if not covered and any(
+            getattr(n.state(0.0), "max_range_m", 0.0) == 0.0 for n in sensor_nodes
+        ):
+            covered = True
 
         if not covered:
             sensor_valid = False
-            failures.append(
-                f"No node covers target {target.target_id} at t=0"
-            )
+            failures.append(f"No node covers target {target.target_id} at t=0")
 
     # ----------------------------------------------------------------
     # Solvable: route planning for corridors
     # ----------------------------------------------------------------
     if active_obstacles is not None and map_bounds:
         try:
-            from .planning import PathPlanner2D, PlannerConfig
             from .environment import Bounds2D
+            from .planning import PathPlanner2D, PlannerConfig
 
             bounds_obj = Bounds2D(
                 x_min_m=float(map_bounds["x_min_m"]),
@@ -1263,7 +1275,7 @@ def validate_mission(
     # ----------------------------------------------------------------
     # Baseline adequacy: max separation among mobile nodes
     # ----------------------------------------------------------------
-    mobile_positions: List[np.ndarray] = []
+    mobile_positions: list[np.ndarray] = []
     for node in all_nodes:
         if node.is_mobile:
             try:
@@ -1283,7 +1295,8 @@ def validate_mission(
         if max_sep < min_baseline:
             baseline_adequate = False
             failures.append(
-                f"Max inter-drone separation {max_sep:.1f} m < min_sensor_baseline_m {min_baseline:.1f} m"
+                "Max inter-drone separation "
+                f"{max_sep:.1f} m < min_sensor_baseline_m {min_baseline:.1f} m"
             )
     elif len(mobile_positions) == 1:
         # Only one drone; baseline is technically zero but we treat as acceptable
@@ -1306,6 +1319,7 @@ def validate_mission(
 # ---------------------------------------------------------------------------
 # Main generator
 # ---------------------------------------------------------------------------
+
 
 def generate_mission(spec: MissionSpec) -> GeneratedMission:
     """Generate a fully resolved ``GeneratedMission`` from a ``MissionSpec``.
@@ -1336,10 +1350,10 @@ def generate_mission(spec: MissionSpec) -> GeneratedMission:
         If ``sim.py`` is not importable (should not happen in normal use).
     """
     # Lazy import to avoid circular dependency at module level
-    from argusnet.simulation.sim import build_default_scenario, ScenarioOptions
+    from argusnet.simulation.sim import ScenarioOptions, build_default_scenario
 
     max_attempts = 8
-    last_mission: Optional[GeneratedMission] = None
+    last_mission: GeneratedMission | None = None
     base_constants = SimulationConstants.default()
 
     for attempt in range(max_attempts):
@@ -1392,18 +1406,17 @@ def generate_mission(spec: MissionSpec) -> GeneratedMission:
         drone_ids = [n.node_id for n in scenario_def.nodes if n.is_mobile]
 
         # Build map bounds
-        bounds = dict(scenario_def.map_bounds_m) if scenario_def.map_bounds_m else _map_bounds_for_spec(
-            spec, scaled_constants
+        bounds = (
+            dict(scenario_def.map_bounds_m)
+            if scenario_def.map_bounds_m
+            else _map_bounds_for_spec(spec, scaled_constants)
         )
 
         rng = np.random.default_rng(current_seed)
 
         # Build objectives
         builder = _OBJECTIVE_BUILDERS.get(spec.mission_type)
-        if builder is not None:
-            objectives = builder(spec, bounds, target_ids, rng)
-        else:
-            objectives = []
+        objectives = builder(spec, bounds, target_ids, rng) if builder is not None else []
 
         # Build corridors
         corridors = _build_corridors(spec, bounds, node_ids, drone_ids, rng)

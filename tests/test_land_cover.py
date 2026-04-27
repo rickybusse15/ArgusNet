@@ -120,10 +120,18 @@ class TestSeasonalVariation(unittest.TestCase):
 
     def test_season_mapping(self) -> None:
         expected = {
-            12: "winter", 1: "winter", 2: "winter",
-            3: "spring", 4: "spring", 5: "spring",
-            6: "summer", 7: "summer", 8: "summer",
-            9: "autumn", 10: "autumn", 11: "autumn",
+            12: "winter",
+            1: "winter",
+            2: "winter",
+            3: "spring",
+            4: "spring",
+            5: "spring",
+            6: "summer",
+            7: "summer",
+            8: "summer",
+            9: "autumn",
+            10: "autumn",
+            11: "autumn",
         }
         for month, season in expected.items():
             sv = SeasonalVariation.from_month(month)

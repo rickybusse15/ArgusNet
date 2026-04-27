@@ -13,20 +13,19 @@ Usage::
     report = check_pass_fail(report)
     print(report.passed, report.failure_reasons)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Default pass/fail thresholds (from SCENARIOS.md Section 1)
 # ---------------------------------------------------------------------------
 
-DEFAULT_THRESHOLDS: Dict[str, object] = {
+DEFAULT_THRESHOLDS: dict[str, object] = {
     # Track performance
     "time_to_reacquire_mean_s_max": 10.0,
     "time_to_reacquire_mean_s_fail": 30.0,
@@ -48,6 +47,7 @@ DEFAULT_THRESHOLDS: Dict[str, object] = {
 # EvaluationReport dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class EvaluationReport:
     """Immutable evaluation report produced by ``evaluate_replay()``.
@@ -64,13 +64,13 @@ class EvaluationReport:
     duration_s: float
 
     # Track performance
-    time_to_reacquire_mean_s: Optional[float] = None
-    time_to_reacquire_p95_s: Optional[float] = None
+    time_to_reacquire_mean_s: float | None = None
+    time_to_reacquire_p95_s: float | None = None
     track_continuity_mean: float = 0.0
-    track_continuity_per_target: Dict[str, float] = field(default_factory=dict)
-    localisation_rmse_m: Optional[float] = None
-    localisation_rmse_per_track: Dict[str, float] = field(default_factory=dict)
-    covariance_reduction_mean: Optional[float] = None
+    track_continuity_per_target: dict[str, float] = field(default_factory=dict)
+    localisation_rmse_m: float | None = None
+    localisation_rmse_per_track: dict[str, float] = field(default_factory=dict)
+    covariance_reduction_mean: float | None = None
 
     # Reliability
     false_handoff_rate: float = 0.0
@@ -84,12 +84,12 @@ class EvaluationReport:
     required_objectives_met: int = 0
     required_objectives_total: int = 0
     energy_reserve_min: float = 1.0
-    energy_reserve_per_drone: Dict[str, float] = field(default_factory=dict)
+    energy_reserve_per_drone: dict[str, float] = field(default_factory=dict)
 
     # Summary
     passed: bool = False
-    failure_reasons: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
+    failure_reasons: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     generated_at_utc: str = ""
 
 
@@ -97,17 +97,18 @@ class EvaluationReport:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _extract_tracks_from_frame(frame: dict) -> List[dict]:
+
+def _extract_tracks_from_frame(frame: dict) -> list[dict]:
     """Return the tracks list from a replay frame dict."""
     return frame.get("tracks") or []
 
 
-def _extract_truths_from_frame(frame: dict) -> List[dict]:
+def _extract_truths_from_frame(frame: dict) -> list[dict]:
     """Return the truths list from a replay frame dict."""
     return frame.get("truths") or []
 
 
-def _extract_observations_from_frame(frame: dict) -> List[dict]:
+def _extract_observations_from_frame(frame: dict) -> list[dict]:
     """Return the observations list from a replay frame dict."""
     return frame.get("observations") or []
 
@@ -128,7 +129,8 @@ def _truth_position(truth: dict) -> np.ndarray:
 # Metric computation functions
 # ---------------------------------------------------------------------------
 
-def compute_time_to_reacquire(frames: List[dict]) -> Tuple[Optional[float], Optional[float]]:
+
+def compute_time_to_reacquire(frames: list[dict]) -> tuple[float | None, float | None]:
     """Compute mean and 95th-percentile time-to-reacquire across all track-loss events.
 
     A *track-loss event* begins when ``stale_steps > 0`` for a given track and
@@ -147,7 +149,7 @@ def compute_time_to_reacquire(frames: List[dict]) -> Tuple[Optional[float], Opti
 
     # Build per-track stale_steps time series
     # Structure: {track_id: [(timestamp_s, stale_steps), ...]}
-    track_stale: Dict[str, List[Tuple[float, int]]] = {}
+    track_stale: dict[str, list[tuple[float, int]]] = {}
     for frame in frames:
         ts = float(frame.get("timestamp_s", 0.0))
         for track in _extract_tracks_from_frame(frame):
@@ -160,9 +162,9 @@ def compute_time_to_reacquire(frames: List[dict]) -> Tuple[Optional[float], Opti
 
     mission_end_s = float(frames[-1].get("timestamp_s", 0.0))
 
-    reacquire_durations: List[float] = []
-    for tid, series in track_stale.items():
-        loss_start: Optional[float] = None
+    reacquire_durations: list[float] = []
+    for _tid, series in track_stale.items():
+        loss_start: float | None = None
         for ts, ss in series:
             if ss > 0 and loss_start is None:
                 loss_start = ts
@@ -183,9 +185,9 @@ def compute_time_to_reacquire(frames: List[dict]) -> Tuple[Optional[float], Opti
 
 
 def compute_track_continuity(
-    frames: List[dict],
-    target_ids: List[str],
-) -> Tuple[float, Dict[str, float]]:
+    frames: list[dict],
+    target_ids: list[str],
+) -> tuple[float, dict[str, float]]:
     """Compute track-continuity fraction per target and mission-wide mean.
 
     Continuity for a target is the fraction of simulation steps in which that
@@ -203,7 +205,7 @@ def compute_track_continuity(
         return 0.0, {}
 
     total_steps = len(frames)
-    steps_with_obs: Dict[str, int] = {tid: 0 for tid in target_ids}
+    steps_with_obs: dict[str, int] = {tid: 0 for tid in target_ids}
 
     for frame in frames:
         observed_targets = set()
@@ -215,7 +217,7 @@ def compute_track_continuity(
             if tid in observed_targets:
                 steps_with_obs[tid] += 1
 
-    per_target: Dict[str, float] = {}
+    per_target: dict[str, float] = {}
     for tid in target_ids:
         per_target[tid] = steps_with_obs[tid] / total_steps if total_steps > 0 else 0.0
 
@@ -224,8 +226,8 @@ def compute_track_continuity(
 
 
 def compute_localisation_rmse(
-    frames: List[dict],
-) -> Tuple[Optional[float], Dict[str, float]]:
+    frames: list[dict],
+) -> tuple[float | None, dict[str, float]]:
     """Compute localisation RMSE (metres) per track and mission-wide.
 
     Track-to-truth matching uses minimum Euclidean distance at the *first*
@@ -244,7 +246,7 @@ def compute_localisation_rmse(
         return None, {}
 
     # Determine track-to-truth mapping at first frame with both
-    track_to_truth: Dict[str, str] = {}
+    track_to_truth: dict[str, str] = {}
     for frame in frames:
         tracks = _extract_tracks_from_frame(frame)
         truths = _extract_truths_from_frame(frame)
@@ -273,12 +275,12 @@ def compute_localisation_rmse(
         return None, {}
 
     # Accumulate squared errors per track
-    sq_errors: Dict[str, List[float]] = {tid: [] for tid in track_to_truth}
+    sq_errors: dict[str, list[float]] = {tid: [] for tid in track_to_truth}
 
     for frame in frames:
         tracks = _extract_tracks_from_frame(frame)
         truths = _extract_truths_from_frame(frame)
-        truth_by_id: Dict[str, np.ndarray] = {
+        truth_by_id: dict[str, np.ndarray] = {
             t.get("target_id", ""): _truth_position(t) for t in truths
         }
         for track in tracks:
@@ -290,10 +292,10 @@ def compute_localisation_rmse(
                 continue
             tp = _track_position(track)
             err = float(np.linalg.norm(tp - truth_by_id[target_id]))
-            sq_errors[tid].append(err ** 2)
+            sq_errors[tid].append(err**2)
 
-    per_track: Dict[str, float] = {}
-    all_sq: List[float] = []
+    per_track: dict[str, float] = {}
+    all_sq: list[float] = []
     for tid, sq in sq_errors.items():
         if sq:
             per_track[tid] = float(np.sqrt(np.mean(sq)))
@@ -306,7 +308,7 @@ def compute_localisation_rmse(
     return mission_rmse, per_track
 
 
-def compute_covariance_reduction(frames: List[dict]) -> Optional[float]:
+def compute_covariance_reduction(frames: list[dict]) -> float | None:
     """Compute mean covariance reduction fraction across tracks.
 
     Reduction is ``(trace(P_initial) - trace(P_final)) / trace(P_initial)``
@@ -324,9 +326,9 @@ def compute_covariance_reduction(frames: List[dict]) -> Optional[float]:
         return None
 
     # Collect first and last covariance + update_count per track
-    track_first_cov: Dict[str, np.ndarray] = {}
-    track_last_cov: Dict[str, np.ndarray] = {}
-    track_update_count: Dict[str, int] = {}
+    track_first_cov: dict[str, np.ndarray] = {}
+    track_last_cov: dict[str, np.ndarray] = {}
+    track_update_count: dict[str, int] = {}
 
     for frame in frames:
         for track in _extract_tracks_from_frame(frame):
@@ -343,7 +345,7 @@ def compute_covariance_reduction(frames: List[dict]) -> Optional[float]:
             track_last_cov[tid] = cov_arr
             track_update_count[tid] = uc
 
-    reductions: List[float] = []
+    reductions: list[float] = []
     for tid in track_first_cov:
         if track_update_count.get(tid, 0) < 5:
             continue
@@ -364,6 +366,7 @@ def compute_covariance_reduction(frames: List[dict]) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # Main evaluation entry point
 # ---------------------------------------------------------------------------
+
 
 def evaluate_replay(
     replay_doc: dict,
@@ -389,7 +392,7 @@ def evaluate_replay(
         Call :func:`check_pass_fail` on the result to populate ``passed`` and
         ``failure_reasons``.
     """
-    frames: List[dict] = replay_doc.get("frames") or []
+    frames: list[dict] = replay_doc.get("frames") or []
     meta: dict = replay_doc.get("meta") or {}
 
     # --- duration ---
@@ -399,7 +402,7 @@ def evaluate_replay(
         duration_s = float(meta.get("duration_s", 0.0))
 
     # --- collect all target and track IDs ---
-    target_ids: List[str] = sorted(
+    target_ids: list[str] = sorted(
         {
             t.get("target_id", "")
             for frame in frames
@@ -419,23 +422,17 @@ def evaluate_replay(
     # -----------------------------------------------------------------------
     # Reliability metrics — sourced from replay metadata where available
     # -----------------------------------------------------------------------
-    planner_events: List[dict] = replay_doc.get("planner_events") or []
-    infeasible_count = sum(
-        1 for ev in planner_events if ev.get("event_type") in ("plan_rejected",)
-    )
+    planner_events: list[dict] = replay_doc.get("planner_events") or []
+    infeasible_count = sum(1 for ev in planner_events if ev.get("event_type") in ("plan_rejected",))
     safety_override_count = sum(
         1 for ev in planner_events if ev.get("event_type") == "safety_override"
     )
 
     # false_handoff_rate: stored in replay metadata if available, else 0
-    false_handoff_rate = float(
-        (replay_doc.get("evaluation") or {}).get("false_handoff_rate", 0.0)
-    )
+    false_handoff_rate = float((replay_doc.get("evaluation") or {}).get("false_handoff_rate", 0.0))
 
     # comms dropout from metadata
-    comms_dropout_count = int(
-        (replay_doc.get("evaluation") or {}).get("comms_dropout_count", 0)
-    )
+    comms_dropout_count = int((replay_doc.get("evaluation") or {}).get("comms_dropout_count", 0))
     comms_dropout_duration_s = float(
         (replay_doc.get("evaluation") or {}).get("comms_dropout_duration_s", 0.0)
     )
@@ -444,7 +441,7 @@ def evaluate_replay(
     # Mission outcome metrics
     # -----------------------------------------------------------------------
     # Energy reserves — computed from mobile node trajectories when available
-    energy_per_drone: Dict[str, float] = _compute_energy_reserves(frames)
+    energy_per_drone: dict[str, float] = _compute_energy_reserves(frames)
     energy_min = float(min(energy_per_drone.values())) if energy_per_drone else 1.0
 
     # Mission completion — use metadata if present, else default to 1.0 if we
@@ -497,7 +494,7 @@ def evaluate_replay(
     )
 
 
-def _compute_energy_reserves(frames: List[dict]) -> Dict[str, float]:
+def _compute_energy_reserves(frames: list[dict]) -> dict[str, float]:
     """Estimate energy reserves for each mobile drone from position time series.
 
     Uses the linear depletion model from SCENARIOS.md:
@@ -511,10 +508,10 @@ def _compute_energy_reserves(frames: List[dict]) -> Dict[str, float]:
     MAX_ENDURANCE_S = 600.0  # seconds (baseline platform parameter)
 
     # Collect position time series per mobile node
-    node_positions: Dict[str, List[Tuple[float, np.ndarray]]] = {}
+    node_positions: dict[str, list[tuple[float, np.ndarray]]] = {}
     for frame in frames:
         ts = float(frame.get("timestamp_s", 0.0))
-        for node in (frame.get("nodes") or []):
+        for node in frame.get("nodes") or []:
             if not node.get("is_mobile", False):
                 continue
             nid = node.get("node_id", "")
@@ -524,13 +521,13 @@ def _compute_energy_reserves(frames: List[dict]) -> Dict[str, float]:
     if not node_positions:
         return {}
 
-    energy_per_drone: Dict[str, float] = {}
+    energy_per_drone: dict[str, float] = {}
     for nid, series in node_positions.items():
         if len(series) < 2:
             energy_per_drone[nid] = 1.0
             continue
         total_dist = 0.0
-        speeds: List[float] = []
+        speeds: list[float] = []
         for i in range(1, len(series)):
             dt = series[i][0] - series[i - 1][0]
             dp = np.linalg.norm(series[i][1] - series[i - 1][1])
@@ -552,9 +549,10 @@ def _compute_energy_reserves(frames: List[dict]) -> Dict[str, float]:
 # Pass / fail evaluation
 # ---------------------------------------------------------------------------
 
+
 def check_pass_fail(
     report: EvaluationReport,
-    thresholds: Optional[Dict[str, object]] = None,
+    thresholds: dict[str, object] | None = None,
 ) -> EvaluationReport:
     """Evaluate pass/fail criteria and return an updated ``EvaluationReport``.
 
@@ -571,19 +569,17 @@ def check_pass_fail(
         A new :class:`EvaluationReport` with ``passed`` and ``failure_reasons``
         populated.
     """
-    t: Dict[str, object] = dict(DEFAULT_THRESHOLDS)
+    t: dict[str, object] = dict(DEFAULT_THRESHOLDS)
     if thresholds:
         t.update(thresholds)
 
-    failures: List[str] = []
+    failures: list[str] = []
 
     # --- time to reacquire ---
     ttr_mean = report.time_to_reacquire_mean_s
     ttr_fail = float(t["time_to_reacquire_mean_s_fail"])  # type: ignore[arg-type]
     if ttr_mean is not None and ttr_mean > ttr_fail:
-        failures.append(
-            f"time_to_reacquire_mean_s={ttr_mean:.1f} > {ttr_fail:.1f} (hard fail)"
-        )
+        failures.append(f"time_to_reacquire_mean_s={ttr_mean:.1f} > {ttr_fail:.1f} (hard fail)")
 
     # --- track continuity ---
     cont_min = float(t["track_continuity_mean_min"])  # type: ignore[arg-type]
@@ -602,16 +598,12 @@ def check_pass_fail(
     # --- false handoff rate ---
     fhr_max = float(t["false_handoff_rate_max"])  # type: ignore[arg-type]
     if report.false_handoff_rate > fhr_max:
-        failures.append(
-            f"false_handoff_rate={report.false_handoff_rate:.3f} > {fhr_max:.2f}"
-        )
+        failures.append(f"false_handoff_rate={report.false_handoff_rate:.3f} > {fhr_max:.2f}")
 
     # --- safety overrides ---
     so_max = int(t["safety_override_count_max"])  # type: ignore[arg-type]
     if report.safety_override_count > so_max:
-        failures.append(
-            f"safety_override_count={report.safety_override_count} > {so_max}"
-        )
+        failures.append(f"safety_override_count={report.safety_override_count} > {so_max}")
 
     # --- comms dropout duration ---
     cdd_max = float(t["comms_dropout_duration_s_max"])  # type: ignore[arg-type]
@@ -630,9 +622,7 @@ def check_pass_fail(
     # --- energy reserve ---
     er_min = float(t["energy_reserve_min_min"])  # type: ignore[arg-type]
     if report.energy_reserve_min < er_min:
-        failures.append(
-            f"energy_reserve_min={report.energy_reserve_min:.3f} < {er_min:.2f}"
-        )
+        failures.append(f"energy_reserve_min={report.energy_reserve_min:.3f} < {er_min:.2f}")
 
     passed = len(failures) == 0
 
@@ -673,6 +663,7 @@ def check_pass_fail(
 # Serialisation helpers
 # ---------------------------------------------------------------------------
 
+
 def report_to_dict(report: EvaluationReport) -> dict:
     """Serialise an :class:`EvaluationReport` to a JSON-serialisable dict.
 
@@ -705,9 +696,7 @@ def report_to_dict(report: EvaluationReport) -> dict:
             k: float(v) for k, v in report.track_continuity_per_target.items()
         },
         "localisation_rmse_m": (
-            float(report.localisation_rmse_m)
-            if report.localisation_rmse_m is not None
-            else None
+            float(report.localisation_rmse_m) if report.localisation_rmse_m is not None else None
         ),
         "localisation_rmse_per_track": {
             k: float(v) for k, v in report.localisation_rmse_per_track.items()
@@ -766,9 +755,7 @@ def report_from_dict(d: dict) -> EvaluationReport:
         track_continuity_mean=float(d.get("track_continuity_mean", 0.0)),
         track_continuity_per_target=dict(d.get("track_continuity_per_target") or {}),
         localisation_rmse_m=(
-            float(d["localisation_rmse_m"])
-            if d.get("localisation_rmse_m") is not None
-            else None
+            float(d["localisation_rmse_m"]) if d.get("localisation_rmse_m") is not None else None
         ),
         localisation_rmse_per_track=dict(d.get("localisation_rmse_per_track") or {}),
         covariance_reduction_mean=(

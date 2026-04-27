@@ -7,8 +7,8 @@ collecting EvaluationReport objects, and aggregating results across runs.
 from __future__ import annotations
 
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
 
 from argusnet.evaluation.metrics import EvaluationReport
 
@@ -34,13 +34,13 @@ class BenchmarkConfig:
     difficulty: float = 0.5
     """Difficulty level [0, 1]."""
 
-    seeds: List[int] = field(default_factory=lambda: [42, 43, 44])
+    seeds: list[int] = field(default_factory=lambda: [42, 43, 44])
     """Random seeds to run."""
 
     duration_s: float = 120.0
     """Simulation duration per seed (seconds)."""
 
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     """Optional categorisation tags."""
 
 
@@ -50,8 +50,8 @@ class BenchmarkRun:
 
     config: BenchmarkConfig
     seed: int
-    report: Optional[EvaluationReport] = None
-    error: Optional[str] = None
+    report: EvaluationReport | None = None
+    error: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -67,19 +67,19 @@ class AggregatedResult:
     successful_runs: int
     pass_rate: float
 
-    localisation_rmse_mean: Optional[float]
-    localisation_rmse_std: Optional[float]
-    track_continuity_mean: Optional[float]
-    track_continuity_std: Optional[float]
-    mission_completion_mean: Optional[float]
+    localisation_rmse_mean: float | None
+    localisation_rmse_std: float | None
+    track_continuity_mean: float | None
+    track_continuity_std: float | None
+    mission_completion_mean: float | None
 
-    failed_seeds: List[int]
-    errors: List[str]
+    failed_seeds: list[int]
+    errors: list[str]
 
 
 def aggregate_reports(
     name: str,
-    runs: List[BenchmarkRun],
+    runs: list[BenchmarkRun],
 ) -> AggregatedResult:
     """Aggregate a list of :class:`BenchmarkRun` objects into statistics."""
     successful = [r for r in runs if r.succeeded]
@@ -88,7 +88,7 @@ def aggregate_reports(
 
     reports = [r.report for r in successful if r.report is not None]
 
-    def _mean_std(vals: List[float]):
+    def _mean_std(vals: list[float]):
         if not vals:
             return None, None
         return statistics.mean(vals), (statistics.stdev(vals) if len(vals) > 1 else 0.0)
@@ -136,15 +136,15 @@ class BenchmarkSuite:
 
     def __init__(self, run_fn: RunFn) -> None:
         self._run_fn = run_fn
-        self._configs: List[BenchmarkConfig] = []
+        self._configs: list[BenchmarkConfig] = []
 
     def add(self, config: BenchmarkConfig) -> None:
         self._configs.append(config)
 
-    def run_all(self, verbose: bool = False) -> Dict[str, AggregatedResult]:
-        results: Dict[str, AggregatedResult] = {}
+    def run_all(self, verbose: bool = False) -> dict[str, AggregatedResult]:
+        results: dict[str, AggregatedResult] = {}
         for config in self._configs:
-            runs: List[BenchmarkRun] = []
+            runs: list[BenchmarkRun] = []
             for seed in config.seeds:
                 run = BenchmarkRun(config=config, seed=seed)
                 try:
@@ -153,7 +153,9 @@ class BenchmarkSuite:
                     run.error = str(exc)
                 runs.append(run)
                 if verbose:
-                    status = "PASS" if run.succeeded and run.report and run.report.passed else "FAIL"
+                    status = (
+                        "PASS" if run.succeeded and run.report and run.report.passed else "FAIL"
+                    )
                     print(f"  [{status}] {config.name} seed={seed}")
             results[config.name] = aggregate_reports(config.name, runs)
         return results

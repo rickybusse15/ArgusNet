@@ -1,4 +1,7 @@
-"""ArgusNet — world models for autonomous aerial mapping, inspection, localization, and spatial memory."""
+"""ArgusNet.
+
+World models for autonomous aerial mapping, inspection, localization, and spatial memory.
+"""
 
 from importlib import import_module
 
@@ -144,7 +147,10 @@ _EXPORTS = {
     # sensing
     "SensorErrorConfig": ("argusnet.sensing.models.noise", "SensorErrorConfig"),
     "SensorModel": ("argusnet.sensing.models.noise", "SensorModel"),
-    "sensor_error_config_from_preset": ("argusnet.sensing.models.noise", "sensor_error_config_from_preset"),
+    "sensor_error_config_from_preset": (
+        "argusnet.sensing.models.noise",
+        "sensor_error_config_from_preset",
+    ),
     # simulation
     "ScenarioDefinition": ("argusnet.simulation.sim", "ScenarioDefinition"),
     "ScenarioOptions": ("argusnet.simulation.sim", "ScenarioOptions"),

@@ -1,18 +1,68 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
 import math
-from pathlib import Path
 from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from types import MappingProxyType
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .behaviors import BEHAVIOR_PRESETS, build_target_trajectory as build_behavior_trajectory
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+from argusnet.core.config import (
+    DEFAULT_MAP_PRESET_SCALES,
+    DEFAULT_PLATFORM_PRESETS,
+    PlatformPresetProfile,
+    SimulationConstants,
+)
+from argusnet.core.frames import ENUOrigin
+from argusnet.core.types import (
+    ZONE_TYPE_EXCLUSION,
+    ZONE_TYPE_OBJECTIVE,
+    ZONE_TYPE_PATROL,
+    ZONE_TYPE_SURVEILLANCE,
+    BearingObservation,
+    DeconflictionEvent,
+    EgressDroneProgress,
+    InspectionEvent,
+    InspectionPOI,
+    LocalizationEstimate,
+    LocalizationState,
+    MappingState,
+    MissionZone,
+    NodeState,
+    ObservationRejection,
+    PlatformFrame,
+    ScanMissionState,
+    TruthState,
+    to_jsonable,
+    vec3,
+)
+from argusnet.evaluation.replay import ReplayDocument, build_replay_document, write_replay_document
+from argusnet.localization.engine import GridLocalizer, LocalizationConfig
+from argusnet.localization.vio import EKFVIO, VisualFeature
+from argusnet.mapping.coverage import CoverageMap
+from argusnet.mapping.occupancy import GridBounds
+from argusnet.mapping.world_map import WorldMap
+from argusnet.planning.battery import BatteryModel, BatteryState
+from argusnet.planning.coordination import (
+    CoordinationManager,
+    CoordinationPolicy,
+    SharedMissionState,
+)
+from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLayer
+from argusnet.planning.frontier import ClaimedCells, FrontierPlanner
+from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
+from argusnet.planning.poi import POIAssignmentContext, POIManager
+from argusnet.sensing.imu import IMUMeasurement
+from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
+from argusnet.sensing.models.noise import atmospheric_attenuation as sensor_atmospheric_attenuation
+from argusnet.sensing.models.noise import detection_probability as sensor_detection_probability
 from argusnet.world.environment import (
     Bounds2D,
     BuildingPrism,
@@ -27,57 +77,17 @@ from argusnet.world.environment import (
     SensorVisibilityModel,
     WallSegment,
 )
-from argusnet.core.types import (
-    BearingObservation,
-    EgressDroneProgress,
-    InspectionEvent,
-    LocalizationEstimate,
-    LocalizationState,
-    MapFeature,
-    MappingState,
-    MissionZone,
-    NodeState,
-    ObservationRejection,
-    PlatformFrame,
-    POIStatus,
-    InspectionPOI,
-    ScanMissionState,
-    TruthState,
-    ZONE_TYPE_EXCLUSION,
-    ZONE_TYPE_OBJECTIVE,
-    ZONE_TYPE_PATROL,
-    ZONE_TYPE_SURVEILLANCE,
-    to_jsonable,
-    vec3,
+from argusnet.world.terrain import (
+    KNOWN_TERRAIN_PRESETS,
+    OccludingObject,
+    TerrainModel,
+    terrain_model_from_preset,
+    xy_bounds,
 )
-from argusnet.mapping.world_map import WorldMap
-from argusnet.localization.engine import GridLocalizer, LocalizationConfig
-from argusnet.planning.poi import POIManager, POIAssignmentContext
-from argusnet.planning.frontier import FrontierPlanner, ClaimedCells
-from argusnet.planning.coordination import CoordinationManager, CoordinationPolicy, SharedMissionState
-from argusnet.mapping.coverage import CoverageMap
-from argusnet.mapping.occupancy import GridBounds
-from argusnet.core.config import (
-    DEFAULT_MAP_PRESET_SCALES,
-    DEFAULT_PLATFORM_PRESETS,
-    DynamicsConfig,
-    GroundStationLayoutConfig,
-    PlatformPresetProfile,
-    SensorConfig,
-    SimulationConstants,
-    TargetTrajectoryConfig,
-)
-from argusnet.planning.battery import BatteryModel, BatteryState
-from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
-from argusnet.evaluation.replay import ReplayDocument, build_replay_document, write_replay_document
-from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel, detection_probability as sensor_detection_probability
-from argusnet.sensing.models.noise import atmospheric_attenuation as sensor_atmospheric_attenuation
-from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
-from argusnet.world.terrain import KNOWN_TERRAIN_PRESETS, OccludingObject, TerrainModel, terrain_model_from_preset, xy_bounds
 from argusnet.world.weather import KNOWN_WEATHER_PRESETS, WeatherModel, weather_from_preset
-from argusnet.core.frames import ENUOrigin
-from argusnet.localization.vio import EKFVIO, VisualFeature
-from argusnet.sensing.imu import IMUMeasurement
+
+from .behaviors import BEHAVIOR_PRESETS
+from .behaviors import build_target_trajectory as build_behavior_trajectory
 
 # NOTE: Controller class extraction is planned for Phase 0.1.
 # Classes FollowPathController, ObservationTriggeredFollowController, and
@@ -92,7 +102,7 @@ from argusnet.sensing.imu import IMUMeasurement
 # Default constants instance — used when no explicit config is supplied.
 _DEFAULT_CONSTANTS = SimulationConstants.default()
 
-TrajectoryFn = Callable[[float], Tuple[np.ndarray, np.ndarray]]
+TrajectoryFn = Callable[[float], tuple[np.ndarray, np.ndarray]]
 
 REJECT_OUT_OF_RANGE = "out_of_range"
 REJECT_DROPOUT = "dropout"
@@ -109,7 +119,7 @@ REJECT_OBJECT_OCCLUSION = REJECT_BUILDING_OCCLUSION
 # SimulationConstants so existing imports keep working.
 MAP_PRESET_SCALES = dict(DEFAULT_MAP_PRESET_SCALES)
 TARGET_MOTION_PRESETS = set(BEHAVIOR_PRESETS)
-DRONE_MODE_PRESETS = {"inspect", "search", "mixed"}
+DRONE_MODE_PRESETS = {"inspect", "search", "mixed", "follow"}
 TERRAIN_PRESET_CHOICES = frozenset({"default", *KNOWN_TERRAIN_PRESETS})
 PLATFORM_PRESET_CHOICES = frozenset({"baseline", "wide_area"})
 
@@ -117,6 +127,10 @@ DEFAULT_SIM_DURATION_S = _DEFAULT_CONSTANTS.dynamics.default_duration_s
 DEFAULT_SIM_DT_S = _DEFAULT_CONSTANTS.dynamics.default_dt_s
 DEFAULT_SIM_STEPS = int(math.ceil(DEFAULT_SIM_DURATION_S / DEFAULT_SIM_DT_S)) + 1
 AERIAL_TARGET_MIN_AGL_M = _DEFAULT_CONSTANTS.dynamics.aerial_target_min_agl_m
+INTERCEPTOR_FOLLOW_RADIUS_M = _DEFAULT_CONSTANTS.dynamics.interceptor_follow_radius_m
+INTERCEPTOR_FOLLOW_ALTITUDE_OFFSET_M = (
+    _DEFAULT_CONSTANTS.dynamics.interceptor_follow_altitude_offset_m
+)
 GROUND_CONTACT_TOP_PAD_M = _DEFAULT_CONSTANTS.dynamics.ground_contact_top_pad_m
 METRICS_CSV_FIELDS = [
     "time_s",
@@ -150,7 +164,7 @@ class SimNode:
     trajectory: TrajectoryFn
     sensor_type: str = "optical"
     fov_half_angle_deg: float = 180.0
-    sensor_direction_fn: Optional[Callable[[float], np.ndarray]] = None
+    sensor_direction_fn: Callable[[float], np.ndarray] | None = None
 
     def state(self, timestamp_s: float) -> NodeState:
         position, velocity = self.trajectory(timestamp_s)
@@ -203,13 +217,13 @@ class SimTarget:
 
 @dataclass(frozen=True)
 class ObservationBatch:
-    observations: List[BearingObservation]
+    observations: list[BearingObservation]
     attempted_count: int
-    rejection_counts: Dict[str, int]
-    accepted_by_target: Dict[str, int]
-    rejected_by_target: Dict[str, int]
-    accepted_by_node_target: Dict[Tuple[str, str], int]
-    generation_rejections: List["ObservationRejection"] = field(default_factory=list)
+    rejection_counts: dict[str, int]
+    accepted_by_target: dict[str, int]
+    rejected_by_target: dict[str, int]
+    accepted_by_node_target: dict[tuple[str, str], int]
+    generation_rejections: list[ObservationRejection] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -222,17 +236,19 @@ class ScenarioOptions:
     clean_terrain: bool = False
     platform_preset: str = "baseline"
     ground_station_count: int = 7
-    target_count: int = 0
+    target_count: int = 2
     drone_count: int = 2
-    mission_mode: str = "scan_map_inspect"          # "scan_map_inspect" | "target_tracking"
-    scan_coverage_threshold: float = 0.70            # fraction to trigger LOCALIZING phase
-    poi_count: int = 3                                # auto-generated POIs in scan_map_inspect mode
+    mission_mode: str = "target_tracking"  # "scan_map_inspect" | "target_tracking"
+    scan_coverage_threshold: float = 0.70  # fraction to trigger LOCALIZING phase
+    poi_count: int = 3  # auto-generated POIs in scan_map_inspect mode
 
     def __post_init__(self) -> None:
         if self.map_preset not in MAP_PRESET_SCALES:
             raise ValueError(f"map_preset must be one of {sorted(MAP_PRESET_SCALES)}.")
         if self.target_motion_preset not in TARGET_MOTION_PRESETS:
-            raise ValueError(f"target_motion_preset must be one of {sorted(TARGET_MOTION_PRESETS)}.")
+            raise ValueError(
+                f"target_motion_preset must be one of {sorted(TARGET_MOTION_PRESETS)}."
+            )
         if self.drone_mode_preset not in DRONE_MODE_PRESETS:
             raise ValueError(f"drone_mode_preset must be one of {sorted(DRONE_MODE_PRESETS)}.")
         if self.terrain_preset not in TERRAIN_PRESET_CHOICES:
@@ -254,12 +270,12 @@ class ScenarioOptions:
 @dataclass(frozen=True)
 class ScenarioDefinition:
     scenario_name: str
-    nodes: Tuple[SimNode, ...]
-    targets: Tuple[SimTarget, ...]
-    terrain: Optional[object] = None
-    occluding_objects: Tuple[object, ...] = ()
-    environment: Optional[EnvironmentModel] = None
-    weather: Optional[WeatherModel] = None
+    nodes: tuple[SimNode, ...]
+    targets: tuple[SimTarget, ...]
+    terrain: object | None = None
+    occluding_objects: tuple[object, ...] = ()
+    environment: EnvironmentModel | None = None
+    weather: WeatherModel | None = None
     constants: SimulationConstants = _DEFAULT_CONSTANTS
     options: ScenarioOptions = field(default_factory=ScenarioOptions)
     map_bounds_m: Mapping[str, float] = field(default_factory=dict)
@@ -269,8 +285,8 @@ class ScenarioDefinition:
     drone_roles: Mapping[str, str] = field(default_factory=dict)
     adaptive_drone_controllers: Mapping[str, object] = field(default_factory=dict)
     launchable_controllers: Mapping[str, object] = field(default_factory=dict)
-    mission_zones: Tuple[MissionZone, ...] = ()
-    enu_origin: Optional[ENUOrigin] = None
+    mission_zones: tuple[MissionZone, ...] = ()
+    enu_origin: ENUOrigin | None = None
     use_vio_position: bool = False
 
     def __post_init__(self) -> None:
@@ -280,21 +296,43 @@ class ScenarioDefinition:
         object.__setattr__(
             self,
             "constants",
-            self.constants if isinstance(self.constants, SimulationConstants) else _DEFAULT_CONSTANTS,
+            self.constants
+            if isinstance(self.constants, SimulationConstants)
+            else _DEFAULT_CONSTANTS,
         )
-        object.__setattr__(self, "options", self.options if isinstance(self.options, ScenarioOptions) else ScenarioOptions())
+        object.__setattr__(
+            self,
+            "options",
+            self.options if isinstance(self.options, ScenarioOptions) else ScenarioOptions(),
+        )
         object.__setattr__(self, "map_bounds_m", MappingProxyType(dict(self.map_bounds_m)))
-        object.__setattr__(self, "target_motion_assignments", MappingProxyType(dict(self.target_motion_assignments)))
-        object.__setattr__(self, "drone_planner_modes", MappingProxyType(dict(self.drone_planner_modes)))
-        object.__setattr__(self, "drone_target_assignments", MappingProxyType(dict(self.drone_target_assignments)))
+        object.__setattr__(
+            self,
+            "target_motion_assignments",
+            MappingProxyType(dict(self.target_motion_assignments)),
+        )
+        object.__setattr__(
+            self, "drone_planner_modes", MappingProxyType(dict(self.drone_planner_modes))
+        )
+        object.__setattr__(
+            self, "drone_target_assignments", MappingProxyType(dict(self.drone_target_assignments))
+        )
         object.__setattr__(self, "drone_roles", MappingProxyType(dict(self.drone_roles)))
-        object.__setattr__(self, "adaptive_drone_controllers", MappingProxyType(dict(self.adaptive_drone_controllers)))
-        object.__setattr__(self, "launchable_controllers", MappingProxyType(dict(self.launchable_controllers)))
+        object.__setattr__(
+            self,
+            "adaptive_drone_controllers",
+            MappingProxyType(dict(self.adaptive_drone_controllers)),
+        )
+        object.__setattr__(
+            self, "launchable_controllers", MappingProxyType(dict(self.launchable_controllers))
+        )
         object.__setattr__(self, "mission_zones", tuple(self.mission_zones))
         if not self.scenario_name.strip():
             raise ValueError("scenario_name must be non-empty.")
         if not self.nodes:
             raise ValueError("ScenarioDefinition requires at least one node.")
+        if not self.targets and self.options.mission_mode != "scan_map_inspect":
+            raise ValueError("ScenarioDefinition requires at least one target.")
         # targets may be empty in scan_map_inspect mode (no live targets to track)
         if self.map_bounds_m:
             required_keys = ("x_min_m", "x_max_m", "y_min_m", "y_max_m")
@@ -312,11 +350,7 @@ class ScenarioDefinition:
                 if self.map_bounds_m
                 else Bounds2D.from_mapping(
                     xy_bounds(
-                        (
-                            point
-                            for node in self.nodes
-                            for point in [node.state(0.0).position]
-                        ),
+                        (point for node in self.nodes for point in [node.state(0.0).position]),
                         padding_m=150.0,
                     )
                 )
@@ -330,12 +364,14 @@ class ScenarioDefinition:
         object.__setattr__(self, "environment", active_environment)
         object.__setattr__(self, "terrain", active_environment.terrain)
         if not self.occluding_objects:
-            object.__setattr__(self, "occluding_objects", tuple(active_environment.obstacles.primitives))
+            object.__setattr__(
+                self, "occluding_objects", tuple(active_environment.obstacles.primitives)
+            )
 
-    def node_states(self, timestamp_s: float) -> List[NodeState]:
+    def node_states(self, timestamp_s: float) -> list[NodeState]:
         return [node.state(timestamp_s) for node in self.nodes]
 
-    def truths(self, timestamp_s: float) -> List[TruthState]:
+    def truths(self, timestamp_s: float) -> list[TruthState]:
         return [target.truth(timestamp_s) for target in self.targets]
 
     def reset_runtime_state(self) -> None:
@@ -353,7 +389,7 @@ class SimulationConfig:
     steps: int = DEFAULT_SIM_STEPS
     dt_s: float = DEFAULT_SIM_DT_S
     seed: int = 7
-    requested_duration_s: Optional[float] = None
+    requested_duration_s: float | None = None
 
     def __post_init__(self) -> None:
         if self.steps <= 0:
@@ -362,9 +398,10 @@ class SimulationConfig:
             raise ValueError("dt_s must be finite and greater than 0.")
         if not isinstance(self.seed, int):
             raise ValueError("seed must be an integer.")
-        if self.requested_duration_s is not None:
-            if not np.isfinite(self.requested_duration_s) or self.requested_duration_s <= 0.0:
-                raise ValueError("requested_duration_s must be finite and greater than 0.")
+        if self.requested_duration_s is not None and (
+            not np.isfinite(self.requested_duration_s) or self.requested_duration_s <= 0.0
+        ):
+            raise ValueError("requested_duration_s must be finite and greater than 0.")
 
     @classmethod
     def from_duration(
@@ -372,7 +409,7 @@ class SimulationConfig:
         duration_s: float,
         dt_s: float = DEFAULT_SIM_DT_S,
         seed: int = 7,
-    ) -> "SimulationConfig":
+    ) -> SimulationConfig:
         if not np.isfinite(duration_s) or duration_s <= 0.0:
             raise ValueError("duration_s must be finite and greater than 0.")
         if not np.isfinite(dt_s) or dt_s <= 0.0:
@@ -390,14 +427,14 @@ class SimulationResult:
     scenario_name: str
     simulation_config: SimulationConfig
     tracker_config: TrackerConfig
-    frames: List[PlatformFrame]
-    metrics_rows: List[dict]
-    summary: Dict[str, object]
-    replay_metadata: Dict[str, object] = field(default_factory=dict)
-    # Per-step VIO estimates for each mobile node: [{node_id: {"position": [...], "covariance_trace": float}}, ...]
-    vio_estimates_per_frame: List[Dict[str, object]] = field(default_factory=list)
+    frames: list[PlatformFrame]
+    metrics_rows: list[dict]
+    summary: dict[str, object]
+    replay_metadata: dict[str, object] = field(default_factory=dict)
+    # Per-step VIO estimates for each mobile node.
+    vio_estimates_per_frame: list[dict[str, object]] = field(default_factory=list)
     # Path to JSONL file when run with streaming_output_path; None otherwise.
-    streaming_jsonl_path: Optional[Path] = None
+    streaming_jsonl_path: Path | None = None
 
 
 @dataclass
@@ -413,12 +450,12 @@ class FollowPathController:
     lead_s: float = 4.0
     candidate_count: int = 12
     rotation_rate_rad_s: float = 0.08
-    planner: Optional[PathPlanner2D] = None
+    planner: PathPlanner2D | None = None
     min_agl_m: float = 18.0
     vertical_amplitude_m: float = 0.0
     vertical_frequency_rad_s: float = 0.0
-    target_altitude_offset_m: Optional[float] = None
-    max_accel_mps2: Optional[float] = None
+    target_altitude_offset_m: float | None = None
+    max_accel_mps2: float | None = None
     terrain_following: bool = False
     terrain_following_agl_m: float = 30.0
     terrain_following_smoothing_s: float = 1.5
@@ -426,11 +463,11 @@ class FollowPathController:
     # so they form an optimal triangulation / intercept geometry.
     # slot_index selects which angular segment this drone occupies;
     # slot_count is the total number of drones sharing this orbit.
-    drone_role: str = "interceptor"   # "tracker" | "interceptor"
-    slot_index: int = 0               # which angular slot (0-based)
-    slot_count: int = 1               # total slots / drones on this target
-    mission_zones: Tuple[MissionZone, ...] = ()
-    _state: Dict[str, object] = field(default_factory=dict, init=False, repr=False)
+    drone_role: str = "interceptor"  # "tracker" | "interceptor"
+    slot_index: int = 0  # which angular slot (0-based)
+    slot_count: int = 1  # total slots / drones on this target
+    mission_zones: tuple[MissionZone, ...] = ()
+    _state: dict[str, object] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._state = {
@@ -463,12 +500,15 @@ class FollowPathController:
         self._state["route_points"] = None
         self._state["route_goal_xy"] = None
 
-    def __call__(self, timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         terrain = self.environment.terrain
         sensor_profile = SensorVisibilityModel.optical_default()
         state = self._state
         cached_timestamp = state["cached_timestamp"]
-        if isinstance(cached_timestamp, (int, float)) and abs(timestamp_s - cached_timestamp) <= 1e-9:
+        if (
+            isinstance(cached_timestamp, (int, float))
+            and abs(timestamp_s - cached_timestamp) <= 1e-9
+        ):
             cached_position, cached_velocity = state["cached_result"]
             return cached_position.copy(), cached_velocity.copy()
 
@@ -485,19 +525,23 @@ class FollowPathController:
         # Trackers: maximise triangulation baseline; interceptors: pincer approach.
         slot_offset = (self.slot_index * math.tau) / max(self.slot_count, 1)
         base_angle = self.phase + slot_offset + self.rotation_rate_rad_s * timestamp_s
-        first_in_bounds_xy: Optional[np.ndarray] = None
+        first_in_bounds_xy: np.ndarray | None = None
         route_goal_xy = state["route_goal_xy"]
         current_xy = state["last_xy"]
         if not isinstance(current_xy, np.ndarray):
-            current_xy = clamp_to_bounds(lead_position[:2], self.map_bounds_m, margin_m=15.0 * self.map_scale)
+            current_xy = clamp_to_bounds(
+                lead_position[:2], self.map_bounds_m, margin_m=15.0 * self.map_scale
+            )
             if self.planner is not None:
-                current_xy = self.planner.nearest_free_point(current_xy, self.planner.config.drone_clearance_m)
+                current_xy = self.planner.nearest_free_point(
+                    current_xy, self.planner.config.drone_clearance_m
+                )
         last_direction_xy = state["last_direction_xy"]
         if isinstance(last_direction_xy, np.ndarray):
             current_heading_xy = last_direction_xy
         else:
             current_heading_xy = np.asarray(lead_velocity[:2], dtype=float)
-        best_option: Optional[Tuple[int, float, float, np.ndarray, Optional[np.ndarray]]] = None
+        best_option: tuple[int, float, float, np.ndarray, np.ndarray | None] | None = None
 
         for index in range(self.candidate_count):
             angle = base_angle + index * (math.tau / self.candidate_count)
@@ -512,7 +556,8 @@ class FollowPathController:
             altitude_offset_m = (
                 None
                 if self.target_altitude_offset_m is None
-                else self.target_altitude_offset_m + self.vertical_amplitude_m * math.sin(vertical_phase)
+                else self.target_altitude_offset_m
+                + self.vertical_amplitude_m * math.sin(vertical_phase)
             )
             candidate_position, _ = compose_air_state(
                 xy_m=candidate_xy,
@@ -527,7 +572,9 @@ class FollowPathController:
                 target_altitude_rate_offset_mps=(
                     None
                     if self.target_altitude_offset_m is None
-                    else self.vertical_amplitude_m * self.vertical_frequency_rad_s * math.cos(vertical_phase)
+                    else self.vertical_amplitude_m
+                    * self.vertical_frequency_rad_s
+                    * math.cos(vertical_phase)
                 ),
             )
             if self.environment.obstacles.point_collides(
@@ -536,7 +583,7 @@ class FollowPathController:
                 float(candidate_position[2]),
             ):
                 continue
-            candidate_route_points: Optional[np.ndarray] = None
+            candidate_route_points: np.ndarray | None = None
             candidate_route_cost = float(np.linalg.norm(candidate_xy - current_xy))
             if self.planner is not None:
                 candidate_route = self.planner.plan_route(
@@ -559,14 +606,16 @@ class FollowPathController:
             heading_norm = float(np.linalg.norm(current_heading_xy))
             route_direction_xy = (
                 candidate_route_points[1] - candidate_route_points[0]
-                if isinstance(candidate_route_points, np.ndarray) and len(candidate_route_points) > 1
+                if isinstance(candidate_route_points, np.ndarray)
+                and len(candidate_route_points) > 1
                 else (candidate_xy - current_xy)
             )
             route_norm = float(np.linalg.norm(route_direction_xy))
             if heading_norm > 1.0e-6 and route_norm > 1.0e-6:
                 cosine = float(
                     np.clip(
-                        np.dot(current_heading_xy, route_direction_xy) / (heading_norm * route_norm),
+                        np.dot(current_heading_xy, route_direction_xy)
+                        / (heading_norm * route_norm),
                         -1.0,
                         1.0,
                     )
@@ -583,10 +632,14 @@ class FollowPathController:
                 best_option = candidate_score
 
         planned_route_points = state["route_points"]
-        replan_required = not isinstance(planned_route_points, np.ndarray) or len(planned_route_points) < 2
+        replan_required = (
+            not isinstance(planned_route_points, np.ndarray) or len(planned_route_points) < 2
+        )
         if isinstance(route_goal_xy, np.ndarray) and best_option is not None:
             replan_threshold_m = max(30.0, self.standoff_radius_m * 0.5)
-            replan_required = replan_required or (float(np.linalg.norm(best_option[3] - route_goal_xy)) >= replan_threshold_m)
+            replan_required = replan_required or (
+                float(np.linalg.norm(best_option[3] - route_goal_xy)) >= replan_threshold_m
+            )
         elif best_option is not None:
             replan_required = True
 
@@ -618,11 +671,17 @@ class FollowPathController:
 
         last_xy = state["last_xy"]
         last_timestamp = state["last_timestamp"]
-        delta_t_s = 0.0 if not isinstance(last_timestamp, (int, float)) else max(timestamp_s - last_timestamp, 0.0)
+        delta_t_s = (
+            0.0
+            if not isinstance(last_timestamp, (int, float))
+            else max(timestamp_s - last_timestamp, 0.0)
+        )
         max_speed_mps = self.max_speed_mps
         travel_distance_m = max_speed_mps * delta_t_s
         active_route_points = (
-            planned_route_points if isinstance(planned_route_points, np.ndarray) else np.vstack([current_xy, current_xy])
+            planned_route_points
+            if isinstance(planned_route_points, np.ndarray)
+            else np.vstack([current_xy, current_xy])
         )
         if delta_t_s <= 1.0e-9:
             if not isinstance(last_xy, np.ndarray) and len(active_route_points) > 1:
@@ -634,7 +693,9 @@ class FollowPathController:
                 chosen_xy = active_route_points[0]
                 route_direction_xy = current_heading_xy
         else:
-            active_route_points, chosen_xy, route_direction_xy = advance_along_polyline(active_route_points, travel_distance_m)
+            active_route_points, chosen_xy, route_direction_xy = advance_along_polyline(
+                active_route_points, travel_distance_m
+            )
 
         if not isinstance(last_xy, np.ndarray) or delta_t_s <= 1.0e-9:
             direction_xy = np.asarray(route_direction_xy, dtype=float)
@@ -679,8 +740,14 @@ class FollowPathController:
                 if orbit_blend > 0.05:
                     # Tangent direction: rotate radius vector 90° in the direction
                     # of rotation_rate_rad_s (positive = counter-clockwise).
-                    sign = math.copysign(1.0, self.rotation_rate_rad_s) if abs(self.rotation_rate_rad_s) > 1e-9 else 1.0
-                    tangent_xy = sign * np.array([-vec_from_target[1], vec_from_target[0]], dtype=float)
+                    sign = (
+                        math.copysign(1.0, self.rotation_rate_rad_s)
+                        if abs(self.rotation_rate_rad_s) > 1e-9
+                        else 1.0
+                    )
+                    tangent_xy = sign * np.array(
+                        [-vec_from_target[1], vec_from_target[0]], dtype=float
+                    )
                     tangent_norm = float(np.linalg.norm(tangent_xy))
                     if tangent_norm > 1e-6:
                         cur_spd = float(np.linalg.norm(xy_velocity))
@@ -735,7 +802,9 @@ class FollowPathController:
             )
 
         vertical_phase = self.vertical_frequency_rad_s * timestamp_s + self.phase * 0.5
-        vertical_rate_mps = self.vertical_amplitude_m * self.vertical_frequency_rad_s * math.cos(vertical_phase)
+        vertical_rate_mps = (
+            self.vertical_amplitude_m * self.vertical_frequency_rad_s * math.cos(vertical_phase)
+        )
         position, velocity = compose_air_state(
             xy_m=chosen_xy,
             xy_velocity_mps=xy_velocity,
@@ -748,7 +817,8 @@ class FollowPathController:
             target_altitude_offset_m=(
                 None
                 if self.target_altitude_offset_m is None
-                else self.target_altitude_offset_m + self.vertical_amplitude_m * math.sin(vertical_phase)
+                else self.target_altitude_offset_m
+                + self.vertical_amplitude_m * math.sin(vertical_phase)
             ),
             target_altitude_rate_offset_mps=(
                 None if self.target_altitude_offset_m is None else vertical_rate_mps
@@ -785,7 +855,9 @@ class FollowPathController:
         state["last_xy"] = position[:2].copy()
         state["last_direction_xy"] = np.asarray(xy_velocity[:2], dtype=float).copy()
         state["route_points"] = active_route_points
-        state["route_goal_xy"] = None if route_goal_xy is None else np.asarray(route_goal_xy, dtype=float).copy()
+        state["route_goal_xy"] = (
+            None if route_goal_xy is None else np.asarray(route_goal_xy, dtype=float).copy()
+        )
         state["cached_timestamp"] = float(timestamp_s)
         state["cached_result"] = (position.copy(), velocity.copy())
         return position, velocity
@@ -798,10 +870,10 @@ class ObservationTriggeredFollowController:
     follow_trajectory: FollowPathController
     preferred_target_id: str
     engaged: bool = field(default=False, init=False)
-    _last_timestamp_s: Optional[float] = field(default=None, init=False, repr=False)
-    _last_result: Optional[Tuple[np.ndarray, np.ndarray]] = field(default=None, init=False, repr=False)
+    _last_timestamp_s: float | None = field(default=None, init=False, repr=False)
+    _last_result: tuple[np.ndarray, np.ndarray] | None = field(default=None, init=False, repr=False)
 
-    def __call__(self, timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         active_trajectory = self.follow_trajectory if self.engaged else self.search_trajectory
         position, velocity = active_trajectory(timestamp_s)
         self._last_timestamp_s = float(timestamp_s)
@@ -811,7 +883,12 @@ class ObservationTriggeredFollowController:
     def update_from_frame(self, frame: PlatformFrame, observation_batch: ObservationBatch) -> None:
         if self.engaged:
             return
-        has_observation = observation_batch.accepted_by_node_target.get((self.node_id, self.preferred_target_id), 0) > 0
+        has_observation = (
+            observation_batch.accepted_by_node_target.get(
+                (self.node_id, self.preferred_target_id), 0
+            )
+            > 0
+        )
         if not has_observation:
             return
         if self._last_result is not None and self._last_timestamp_s is not None:
@@ -844,16 +921,16 @@ class LaunchableTrajectoryController:
     operational_trajectory: TrajectoryFn
     climb_duration_s: float = 8.0
     operational_altitude_agl: float = 230.0
-    weather: Optional[WeatherModel] = None
-    terrain: Optional[object] = None
-    map_bounds_m: Optional[Mapping[str, float]] = None
+    weather: WeatherModel | None = None
+    terrain: object | None = None
+    map_bounds_m: Mapping[str, float] | None = None
     min_operational_agl_m: float = 18.0
     launched: bool = field(default=False, init=False)
-    launch_time_s: Optional[float] = field(default=None, init=False)
-    launch_target_id: Optional[str] = field(default=None, init=False)
+    launch_time_s: float | None = field(default=None, init=False)
+    launch_target_id: str | None = field(default=None, init=False)
     assigned_station_id: str = ""
 
-    def __call__(self, timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         if not self.launched or self.launch_time_s is None:
             return self.station_position.copy(), np.zeros(3, dtype=float)
 
@@ -864,9 +941,13 @@ class LaunchableTrajectoryController:
         if elapsed < self.climb_duration_s:
             fraction = elapsed / self.climb_duration_s
             # Smooth-step easing for natural climb profile
-            smooth = 3.0 * fraction ** 2 - 2.0 * fraction ** 3
+            smooth = 3.0 * fraction**2 - 2.0 * fraction**3
             target_z = self.station_position[2] + self.operational_altitude_agl * smooth
-            climb_rate = self.operational_altitude_agl * (6.0 * fraction - 6.0 * fraction ** 2) / self.climb_duration_s
+            climb_rate = (
+                self.operational_altitude_agl
+                * (6.0 * fraction - 6.0 * fraction**2)
+                / self.climb_duration_s
+            )
             position = np.array(
                 [self.station_position[0], self.station_position[1], target_z],
                 dtype=float,
@@ -914,7 +995,7 @@ def compose_terrain_state(
     terrain: object,
     min_agl_m: float,
     terrain_speed_adaptation: bool = False,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     xy = np.asarray(xy_m, dtype=float)
     xy_velocity = np.asarray(xy_velocity_mps, dtype=float)
     ground_m = terrain.height_at(float(xy[0]), float(xy[1]))
@@ -941,11 +1022,11 @@ def compose_air_state(
     min_agl_m: float,
     nominal_agl_m: float,
     agl_rate_mps: float,
-    target_position: Optional[np.ndarray] = None,
-    target_velocity: Optional[np.ndarray] = None,
-    target_altitude_offset_m: Optional[float] = None,
-    target_altitude_rate_offset_mps: Optional[float] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
+    target_position: np.ndarray | None = None,
+    target_velocity: np.ndarray | None = None,
+    target_altitude_offset_m: float | None = None,
+    target_altitude_rate_offset_mps: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     if target_position is None or target_altitude_offset_m is None:
         return compose_terrain_state(
             xy_m=xy_m,
@@ -960,7 +1041,11 @@ def compose_air_state(
     xy_velocity = np.asarray(xy_velocity_mps, dtype=float)
     ground_m = terrain.height_at(float(xy[0]), float(xy[1]))
     target = np.asarray(target_position, dtype=float)
-    target_velocity_value = np.zeros(3, dtype=float) if target_velocity is None else np.asarray(target_velocity, dtype=float)
+    target_velocity_value = (
+        np.zeros(3, dtype=float)
+        if target_velocity is None
+        else np.asarray(target_velocity, dtype=float)
+    )
     nominal_z_m = max(
         float(ground_m + min_agl_m),
         float(target[2] + target_altitude_offset_m),
@@ -983,8 +1068,8 @@ def collision_aware_position(
     *,
     terrain: object,
     min_agl_m: float,
-    obstacle_layer: Optional[ObstacleLayer] = None,
-) -> Tuple[np.ndarray, np.ndarray]:
+    obstacle_layer: ObstacleLayer | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     if obstacle_layer is None:
         return position, velocity
     adjusted_position = np.asarray(position, dtype=float).copy()
@@ -996,7 +1081,9 @@ def collision_aware_position(
         )
         if collision is None:
             return adjusted_position, velocity.copy()
-        pushed_xy = collision.push_outside_xy(float(adjusted_position[0]), float(adjusted_position[1]), margin_m=1.0)
+        pushed_xy = collision.push_outside_xy(
+            float(adjusted_position[0]), float(adjusted_position[1]), margin_m=1.0
+        )
         adjusted_position = np.array(
             [
                 float(pushed_xy[0]),
@@ -1012,7 +1099,7 @@ def push_waypoint_outside_obstacles(
     point_xy: Sequence[float],
     *,
     terrain: object,
-    obstacle_layer: Optional[ObstacleLayer],
+    obstacle_layer: ObstacleLayer | None,
     agl_m: float,
 ) -> np.ndarray:
     candidate_xy = np.asarray(point_xy, dtype=float).reshape(2)
@@ -1020,10 +1107,14 @@ def push_waypoint_outside_obstacles(
         return candidate_xy
     for _ in range(8):
         candidate_z = terrain.height_at(float(candidate_xy[0]), float(candidate_xy[1])) + agl_m
-        collision = obstacle_layer.point_collides(float(candidate_xy[0]), float(candidate_xy[1]), float(candidate_z))
+        collision = obstacle_layer.point_collides(
+            float(candidate_xy[0]), float(candidate_xy[1]), float(candidate_z)
+        )
         if collision is None:
             return candidate_xy
-        candidate_xy = collision.push_outside_xy(float(candidate_xy[0]), float(candidate_xy[1]), margin_m=1.0)
+        candidate_xy = collision.push_outside_xy(
+            float(candidate_xy[0]), float(candidate_xy[1]), margin_m=1.0
+        )
     return candidate_xy
 
 
@@ -1031,7 +1122,7 @@ def adjust_waypoints_for_obstacles(
     waypoints_xy: np.ndarray,
     *,
     terrain: object,
-    obstacle_layer: Optional[ObstacleLayer],
+    obstacle_layer: ObstacleLayer | None,
     agl_m: float,
 ) -> np.ndarray:
     return np.vstack(
@@ -1047,7 +1138,9 @@ def adjust_waypoints_for_obstacles(
     )
 
 
-def advance_along_polyline(points_xy: np.ndarray, travel_distance_m: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def advance_along_polyline(
+    points_xy: np.ndarray, travel_distance_m: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     polyline = np.asarray(points_xy, dtype=float)
     if polyline.ndim != 2 or polyline.shape[0] < 2 or polyline.shape[1] != 2:
         raise ValueError("points_xy must have shape (n, 2) with n >= 2.")
@@ -1090,7 +1183,9 @@ def perimeter_waypoints(bounds: Mapping[str, float], inset_fraction: float = 0.1
     )
 
 
-def build_orbital_anchor_points(center_xy: np.ndarray, radii_xy: np.ndarray, sample_count: int = 16) -> np.ndarray:
+def build_orbital_anchor_points(
+    center_xy: np.ndarray, radii_xy: np.ndarray, sample_count: int = 16
+) -> np.ndarray:
     angles = np.linspace(0.0, math.tau, num=max(sample_count, 8), endpoint=False)
     return np.column_stack(
         [
@@ -1110,7 +1205,7 @@ def build_racetrack_anchor_points(
     turn_radius_m = max(float(turn_radius_m), 5.0)
     track_length_m = (2.0 * straight_length_m) + (2.0 * math.pi * turn_radius_m)
     distances = np.linspace(0.0, track_length_m, num=max(sample_count, 8), endpoint=False)
-    points: List[np.ndarray] = []
+    points: list[np.ndarray] = []
     for distance_m in distances:
         if distance_m < straight_length_m:
             x_m = center_xy[0] - (straight_length_m * 0.5) + distance_m
@@ -1148,10 +1243,12 @@ def build_racetrack_anchor_points(
     return np.vstack(points)
 
 
-def static_ground_point(x_m: float, y_m: float, mast_agl_m: float, terrain: TerrainModel) -> TrajectoryFn:
+def static_ground_point(
+    x_m: float, y_m: float, mast_agl_m: float, terrain: TerrainModel
+) -> TrajectoryFn:
     zero = np.zeros(3, dtype=float)
 
-    def trajectory(_: float) -> Tuple[np.ndarray, np.ndarray]:
+    def trajectory(_: float) -> tuple[np.ndarray, np.ndarray]:
         ground_m = terrain.height_at(x_m, y_m)
         position = np.array([x_m, y_m, ground_m + mast_agl_m], dtype=float)
         return position, zero.copy()
@@ -1186,7 +1283,7 @@ def build_ground_station_specs(
     map_bounds_m: Mapping[str, float],
     count: int,
     constants: SimulationConstants = _DEFAULT_CONSTANTS,
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     sensor_cfg = constants.sensor
     layout_cfg = constants.ground_station_layout
     span_x_m = map_bounds_m["x_max_m"] - map_bounds_m["x_min_m"]
@@ -1204,7 +1301,7 @@ def build_ground_station_specs(
     dropout_probabilities = list(sensor_cfg.ground_station_dropout_probabilities)
     max_range_factors = list(sensor_cfg.ground_station_max_range_factors_m)
 
-    specs: List[Dict[str, object]] = []
+    specs: list[dict[str, object]] = []
     for index in range(count):
         if index < len(normalized_offsets):
             offset_x, offset_y = normalized_offsets[index]
@@ -1216,7 +1313,9 @@ def build_ground_station_specs(
                 dtype=float,
             )
         else:
-            angle = (index - len(normalized_offsets)) * (math.tau / max(count - len(normalized_offsets), 4)) + layout_cfg.overflow_angle_offset_rad
+            angle = (index - len(normalized_offsets)) * (
+                math.tau / max(count - len(normalized_offsets), 4)
+            ) + layout_cfg.overflow_angle_offset_rad
             nominal_xy = center_xy + np.array(
                 [
                     math.cos(angle) * span_x_m * layout_cfg.overflow_radius_fraction,
@@ -1225,7 +1324,11 @@ def build_ground_station_specs(
                 dtype=float,
             )
         mast_agl_m = mast_agls[index % len(mast_agls)]
-        adjusted_xy = clamp_to_bounds(nominal_xy, map_bounds_m, margin_m=min(span_x_m, span_y_m) * layout_cfg.bounds_margin_fraction)
+        adjusted_xy = clamp_to_bounds(
+            nominal_xy,
+            map_bounds_m,
+            margin_m=min(span_x_m, span_y_m) * layout_cfg.bounds_margin_fraction,
+        )
         adjusted_xy = push_waypoint_outside_obstacles(
             adjusted_xy,
             terrain=terrain,
@@ -1253,15 +1356,17 @@ def orbital_path(
     omega: float,
     phase: float,
     terrain: object,
-    obstacle_layer: Optional[ObstacleLayer] = None,
-    planner: Optional[PathPlanner2D] = None,
-    clearance_m: Optional[float] = None,
+    obstacle_layer: ObstacleLayer | None = None,
+    planner: PathPlanner2D | None = None,
+    clearance_m: float | None = None,
     min_agl_m: float = 18.0,
 ) -> TrajectoryFn:
     radius_x, radius_y = float(radii_xy[0]), float(radii_xy[1])
     if planner is not None:
         loop_route = planner.route_waypoints(
-            build_orbital_anchor_points(np.asarray(center_xy, dtype=float), np.asarray(radii_xy, dtype=float)),
+            build_orbital_anchor_points(
+                np.asarray(center_xy, dtype=float), np.asarray(radii_xy, dtype=float)
+            ),
             clearance_m=planner.config.target_clearance_m if clearance_m is None else clearance_m,
             closed=True,
         )
@@ -1271,8 +1376,12 @@ def orbital_path(
                 planner.config.target_clearance_m if clearance_m is None else clearance_m,
             )
             loop_route = planner.route_waypoints(
-                build_orbital_anchor_points(np.asarray(shifted_center_xy, dtype=float), np.asarray(radii_xy, dtype=float)),
-                clearance_m=planner.config.target_clearance_m if clearance_m is None else clearance_m,
+                build_orbital_anchor_points(
+                    np.asarray(shifted_center_xy, dtype=float), np.asarray(radii_xy, dtype=float)
+                ),
+                clearance_m=planner.config.target_clearance_m
+                if clearance_m is None
+                else clearance_m,
                 closed=True,
             )
         if loop_route is not None:
@@ -1288,7 +1397,7 @@ def orbital_path(
                 min_agl_m=min_agl_m,
             )
 
-    def trajectory(timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def trajectory(timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         angle = omega * timestamp_s + phase
         x_m = center_xy[0] + radius_x * np.cos(angle)
         y_m = center_xy[1] + radius_y * np.sin(angle)
@@ -1327,19 +1436,21 @@ def sinusoid_target(
     vertical_frequency: float,
     phase: float,
     terrain: object,
-    obstacle_layer: Optional[ObstacleLayer] = None,
+    obstacle_layer: ObstacleLayer | None = None,
     min_agl_m: float = 3.0,
 ) -> TrajectoryFn:
     if lateral_axis not in (0, 1):
         raise ValueError("lateral_axis must be 0 (x) or 1 (y).")
 
-    def trajectory(timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def trajectory(timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         xy = start_xy + velocity_xy * timestamp_s
         derived_velocity_xy = velocity_xy.copy()
 
         lateral_phase = lateral_frequency * timestamp_s + phase
         xy[lateral_axis] += lateral_amplitude * np.sin(lateral_phase)
-        derived_velocity_xy[lateral_axis] += lateral_amplitude * lateral_frequency * np.cos(lateral_phase)
+        derived_velocity_xy[lateral_axis] += (
+            lateral_amplitude * lateral_frequency * np.cos(lateral_phase)
+        )
 
         vertical_phase = vertical_frequency * timestamp_s + phase * 0.5
         agl_m = base_agl_m + vertical_amplitude * np.sin(vertical_phase)
@@ -1374,9 +1485,9 @@ def racetrack_target(
     vertical_frequency: float,
     phase: float,
     terrain: object,
-    obstacle_layer: Optional[ObstacleLayer] = None,
-    planner: Optional[PathPlanner2D] = None,
-    clearance_m: Optional[float] = None,
+    obstacle_layer: ObstacleLayer | None = None,
+    planner: PathPlanner2D | None = None,
+    clearance_m: float | None = None,
     min_agl_m: float = 3.0,
 ) -> TrajectoryFn:
     straight_length_m = max(float(straight_length_m), 10.0)
@@ -1385,16 +1496,22 @@ def racetrack_target(
     track_length_m = (2.0 * straight_length_m) + (2.0 * math.pi * turn_radius_m)
     phase_offset_m = (phase % math.tau) / math.tau * track_length_m
     if planner is not None:
-        active_clearance_m = planner.config.target_clearance_m if clearance_m is None else clearance_m
+        active_clearance_m = (
+            planner.config.target_clearance_m if clearance_m is None else clearance_m
+        )
         loop_route = planner.route_waypoints(
-            build_racetrack_anchor_points(np.asarray(center_xy, dtype=float), straight_length_m, turn_radius_m),
+            build_racetrack_anchor_points(
+                np.asarray(center_xy, dtype=float), straight_length_m, turn_radius_m
+            ),
             clearance_m=active_clearance_m,
             closed=True,
         )
         if loop_route is None:
             shifted_center_xy = planner.nearest_free_point(center_xy, active_clearance_m)
             loop_route = planner.route_waypoints(
-                build_racetrack_anchor_points(np.asarray(shifted_center_xy, dtype=float), straight_length_m, turn_radius_m),
+                build_racetrack_anchor_points(
+                    np.asarray(shifted_center_xy, dtype=float), straight_length_m, turn_radius_m
+                ),
                 clearance_m=active_clearance_m,
                 closed=True,
             )
@@ -1411,7 +1528,7 @@ def racetrack_target(
                 min_agl_m=min_agl_m,
             )
 
-    def trajectory(timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def trajectory(timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         distance_m = (speed_mps * timestamp_s + phase_offset_m) % track_length_m
         if distance_m < straight_length_m:
             x_m = center_xy[0] - (straight_length_m * 0.5) + distance_m
@@ -1490,7 +1607,7 @@ def looped_waypoint_path(
     vertical_frequency: float,
     phase: float,
     terrain: object,
-    obstacle_layer: Optional[ObstacleLayer] = None,
+    obstacle_layer: ObstacleLayer | None = None,
     min_agl_m: float = 3.0,
 ) -> TrajectoryFn:
     points = np.asarray(waypoints_xy, dtype=float)
@@ -1507,11 +1624,13 @@ def looped_waypoint_path(
     phase_offset_m = (phase % math.tau) / math.tau * path_length_m
     speed_mps = max(float(speed_mps), 0.5)
 
-    def trajectory(timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def trajectory(timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         distance_m = (speed_mps * timestamp_s + phase_offset_m) % path_length_m
         segment_index = int(np.searchsorted(cumulative_lengths, distance_m, side="right"))
         segment_index = min(segment_index, len(segment_vectors) - 1)
-        segment_start_distance = 0.0 if segment_index == 0 else float(cumulative_lengths[segment_index - 1])
+        segment_start_distance = (
+            0.0 if segment_index == 0 else float(cumulative_lengths[segment_index - 1])
+        )
         segment_distance = distance_m - segment_start_distance
         segment_length = max(float(segment_lengths[segment_index]), 1e-6)
         direction_xy = segment_vectors[segment_index] / segment_length
@@ -1541,7 +1660,9 @@ def looped_waypoint_path(
     return trajectory
 
 
-def noisy_unit_vector(rng: np.random.Generator, direction: np.ndarray, noise_std_rad: float) -> np.ndarray:
+def noisy_unit_vector(
+    rng: np.random.Generator, direction: np.ndarray, noise_std_rad: float
+) -> np.ndarray:
     direction = direction / np.linalg.norm(direction)
     perturbation = rng.normal(0.0, noise_std_rad, size=3)
     candidate = direction + perturbation
@@ -1578,7 +1699,7 @@ def occluding_object_for_segment(
     origin: np.ndarray,
     target: np.ndarray,
     occluding_objects: Sequence[OccludingObject],
-) -> Optional[OccludingObject]:
+) -> OccludingObject | None:
     for occluding_object in occluding_objects:
         if occluding_object.segment_intersects(origin=origin, target=target, terrain=terrain):
             return occluding_object
@@ -1610,7 +1731,9 @@ def platform_profile_for_preset(platform_preset: str) -> PlatformPresetProfile:
         raise ValueError(f"Unknown platform preset {platform_preset!r}.") from error
 
 
-def map_bounds_for_scale(scale: float, constants: SimulationConstants = _DEFAULT_CONSTANTS) -> Dict[str, float]:
+def map_bounds_for_scale(
+    scale: float, constants: SimulationConstants = _DEFAULT_CONSTANTS
+) -> dict[str, float]:
     dyn = constants.dynamics
     return {
         "x_min_m": -dyn.map_bounds_x_extent_m * scale,
@@ -1642,7 +1765,7 @@ def _point_in_polygon(point_xy: np.ndarray, polygon_xy: np.ndarray) -> bool:
     for index in range(len(polygon_xy)):
         a = polygon_xy[index]
         b = polygon_xy[(index + 1) % len(polygon_xy)]
-        if ((a[1] > point_xy[1]) != (b[1] > point_xy[1])):
+        if (a[1] > point_xy[1]) != (b[1] > point_xy[1]):
             x_cross = (b[0] - a[0]) * (point_xy[1] - a[1]) / max((b[1] - a[1]), 1.0e-12) + a[0]
             if point_xy[0] < x_cross:
                 inside = not inside
@@ -1686,7 +1809,9 @@ def procedural_land_cover_layer(
                 if isinstance(obstacle, ForestStand):
                     if _point_in_polygon(point_xy, obstacle.footprint_xy_m):
                         classes[row, col] = int(LandCoverClass.FOREST)
-                        density[row, col] = max(density[row, col], int(np.clip(obstacle.density, 0.0, 1.0) * 255))
+                        density[row, col] = max(
+                            density[row, col], int(np.clip(obstacle.density, 0.0, 1.0) * 255)
+                        )
                 elif hasattr(obstacle, "footprint_xy_m"):
                     footprint_source = obstacle.footprint_xy_m
                     if callable(footprint_source):
@@ -1717,9 +1842,11 @@ def build_obstacle_cluster(
     center_xy: np.ndarray,
     scale: float,
     terrain: object,
-) -> Tuple[List[object], List[object]]:
+) -> tuple[list[object], list[object]]:
     center_xy = np.asarray(center_xy, dtype=float)
-    hangar_center = np.array([float(center_xy[0] - 28.0 * scale), float(center_xy[1] - 18.0 * scale)], dtype=float)
+    hangar_center = np.array(
+        [float(center_xy[0] - 28.0 * scale), float(center_xy[1] - 18.0 * scale)], dtype=float
+    )
     hangar_footprint = OrientedBox(
         primitive_id=f"{cluster_id}-hangar-shape",
         blocker_type="building",
@@ -1744,9 +1871,13 @@ def build_obstacle_cluster(
         dtype=float,
     )
     warehouse_min_z, warehouse_max_z = _terrain_height_span_at_points(terrain, warehouse_footprint)
-    warehouse_base_z, warehouse_top_z = _solid_obstacle_elevations(warehouse_min_z, warehouse_max_z, 28.0)
+    warehouse_base_z, warehouse_top_z = _solid_obstacle_elevations(
+        warehouse_min_z, warehouse_max_z, 28.0
+    )
 
-    tower_center = np.array([float(center_xy[0] - 6.0 * scale), float(center_xy[1] + 38.0 * scale)], dtype=float)
+    tower_center = np.array(
+        [float(center_xy[0] - 6.0 * scale), float(center_xy[1] + 38.0 * scale)], dtype=float
+    )
     tower_radius_m = 10.0 * scale
     tower_min_z, tower_max_z = _terrain_height_span_for_cylinder(
         terrain,
@@ -1756,7 +1887,7 @@ def build_obstacle_cluster(
     )
     tower_base_z, tower_top_z = _solid_obstacle_elevations(tower_min_z, tower_max_z, 54.0)
 
-    hard_obstacles: List[object] = [
+    hard_obstacles: list[object] = [
         OrientedBox(
             primitive_id=f"{cluster_id}-hangar",
             blocker_type="building",
@@ -1791,7 +1922,7 @@ def build_obstacle_cluster(
         [float(center_xy[0] - 62.0 * scale), float(center_xy[1] + 92.0 * scale)],
         [float(center_xy[0] - 102.0 * scale), float(center_xy[1] + 58.0 * scale)],
     ]
-    soft_obstacles: List[object] = [
+    soft_obstacles: list[object] = [
         _forest_stand_for_terrain(
             primitive_id=f"{cluster_id}-forest",
             footprint_xy_m=forest_footprint,
@@ -1804,7 +1935,13 @@ def build_obstacle_cluster(
     return hard_obstacles, soft_obstacles
 
 
-def _rectangle_patch(center_xy: np.ndarray, length_m: float, width_m: float, land_cover_class: LandCoverClass, density: int = 0) -> LandCoverPatch:
+def _rectangle_patch(
+    center_xy: np.ndarray,
+    length_m: float,
+    width_m: float,
+    land_cover_class: LandCoverClass,
+    density: int = 0,
+) -> LandCoverPatch:
     center_xy = np.asarray(center_xy, dtype=float)
     half_length = length_m * 0.5
     half_width = width_m * 0.5
@@ -1877,7 +2014,7 @@ def _preset_environment_profile(
     terrain: object,
     hard_obstacles: Sequence[object],
     soft_obstacles: Sequence[object],
-) -> Tuple[List[object], List[LandCoverPatch], List[LandCoverPatch]]:
+) -> tuple[list[object], list[LandCoverPatch], list[LandCoverPatch]]:
     bounds_center = np.array(
         [
             (map_bounds_m["x_min_m"] + map_bounds_m["x_max_m"]) * 0.5,
@@ -1893,15 +2030,39 @@ def _preset_environment_profile(
         land_cover_class=LandCoverClass.WATER,
     )
     lake_patches = [
-        _ellipse_patch(np.array([-220.0, 165.0], dtype=float) * scale, 115.0 * scale, 78.0 * scale, LandCoverClass.WATER),
-        _ellipse_patch(np.array([245.0, -175.0], dtype=float) * scale, 95.0 * scale, 62.0 * scale, LandCoverClass.WATER),
+        _ellipse_patch(
+            np.array([-220.0, 165.0], dtype=float) * scale,
+            115.0 * scale,
+            78.0 * scale,
+            LandCoverClass.WATER,
+        ),
+        _ellipse_patch(
+            np.array([245.0, -175.0], dtype=float) * scale,
+            95.0 * scale,
+            62.0 * scale,
+            LandCoverClass.WATER,
+        ),
     ]
     urban_patches = [
-        _rectangle_patch(bounds_center, 280.0 * scale, 220.0 * scale, LandCoverClass.URBAN, density=190),
-        _rectangle_patch(np.array([310.0, 205.0], dtype=float) * scale, 150.0 * scale, 120.0 * scale, LandCoverClass.URBAN, density=180),
-        _rectangle_patch(np.array([-260.0, -180.0], dtype=float) * scale, 160.0 * scale, 120.0 * scale, LandCoverClass.URBAN, density=180),
+        _rectangle_patch(
+            bounds_center, 280.0 * scale, 220.0 * scale, LandCoverClass.URBAN, density=190
+        ),
+        _rectangle_patch(
+            np.array([310.0, 205.0], dtype=float) * scale,
+            150.0 * scale,
+            120.0 * scale,
+            LandCoverClass.URBAN,
+            density=180,
+        ),
+        _rectangle_patch(
+            np.array([-260.0, -180.0], dtype=float) * scale,
+            160.0 * scale,
+            120.0 * scale,
+            LandCoverClass.URBAN,
+            density=180,
+        ),
     ]
-    terrain_only_patches: List[LandCoverPatch] = []
+    terrain_only_patches: list[LandCoverPatch] = []
 
     if terrain_preset == "jungle_canopy":
         extra_canopy = [
@@ -1935,7 +2096,11 @@ def _preset_environment_profile(
         return ([*soft_obstacles, *extra_canopy], [], terrain_only_patches)
 
     if terrain_preset == "arctic_tundra":
-        sparse_manmade = [obstacle for obstacle in hard_obstacles if getattr(obstacle, "blocker_type", "") in {"building", "wall"}][:2]
+        sparse_manmade = [
+            obstacle
+            for obstacle in hard_obstacles
+            if getattr(obstacle, "blocker_type", "") in {"building", "wall"}
+        ][:2]
         return (sparse_manmade, [], terrain_only_patches)
 
     if terrain_preset == "military_compound":
@@ -2046,7 +2211,9 @@ def build_default_environment(
         dtype=float,
     )
     warehouse_min_z, warehouse_max_z = _terrain_height_span_at_points(terrain, warehouse_footprint)
-    warehouse_base_z, warehouse_top_z = _solid_obstacle_elevations(warehouse_min_z, warehouse_max_z, 34.0)
+    warehouse_base_z, warehouse_top_z = _solid_obstacle_elevations(
+        warehouse_min_z, warehouse_max_z, 34.0
+    )
 
     east_fence_start = np.array([175.0 * scale, -120.0 * scale], dtype=float)
     east_fence_end = np.array([230.0 * scale, 110.0 * scale], dtype=float)
@@ -2059,10 +2226,14 @@ def build_default_environment(
         base_z_m=0.0,
         top_z_m=1.0,
     ).footprint_xy_m()
-    east_fence_min_z, east_fence_max_z = _terrain_height_span_at_points(terrain, east_fence_footprint)
-    east_fence_base_z, east_fence_top_z = _solid_obstacle_elevations(east_fence_min_z, east_fence_max_z, 18.0)
+    east_fence_min_z, east_fence_max_z = _terrain_height_span_at_points(
+        terrain, east_fence_footprint
+    )
+    east_fence_base_z, east_fence_top_z = _solid_obstacle_elevations(
+        east_fence_min_z, east_fence_max_z, 18.0
+    )
 
-    hard_obstacles: List[object] = [
+    hard_obstacles: list[object] = [
         OrientedBox(
             primitive_id="hangar-south",
             blocker_type="building",
@@ -2099,7 +2270,7 @@ def build_default_environment(
             top_z_m=east_fence_top_z,
         ),
     ]
-    soft_obstacles: List[object] = [
+    soft_obstacles: list[object] = [
         _forest_stand_for_terrain(
             primitive_id="pine-stand-west",
             footprint_xy_m=[
@@ -2133,7 +2304,9 @@ def build_default_environment(
         ],
     }
     for cluster_index, center_xy in enumerate(cluster_centers_by_preset.get(map_preset, ())):
-        extra_hard, extra_soft = build_obstacle_cluster(f"{map_preset}-cluster-{cluster_index}", center_xy, scale, terrain)
+        extra_hard, extra_soft = build_obstacle_cluster(
+            f"{map_preset}-cluster-{cluster_index}", center_xy, scale, terrain
+        )
         hard_obstacles.extend(extra_hard)
         soft_obstacles.extend(extra_soft)
     if map_preset == "regional":
@@ -2148,8 +2321,12 @@ def build_default_environment(
             base_z_m=0.0,
             top_z_m=1.0,
         ).footprint_xy_m()
-        regional_east_min_z, regional_east_max_z = _terrain_height_span_at_points(terrain, regional_east_footprint)
-        regional_east_base_z, regional_east_top_z = _solid_obstacle_elevations(regional_east_min_z, regional_east_max_z, 20.0)
+        regional_east_min_z, regional_east_max_z = _terrain_height_span_at_points(
+            terrain, regional_east_footprint
+        )
+        regional_east_base_z, regional_east_top_z = _solid_obstacle_elevations(
+            regional_east_min_z, regional_east_max_z, 20.0
+        )
         regional_west_start = np.array([-470.0 * scale, -290.0 * scale], dtype=float)
         regional_west_end = np.array([-430.0 * scale, 300.0 * scale], dtype=float)
         regional_west_footprint = WallSegment(
@@ -2161,8 +2338,12 @@ def build_default_environment(
             base_z_m=0.0,
             top_z_m=1.0,
         ).footprint_xy_m()
-        regional_west_min_z, regional_west_max_z = _terrain_height_span_at_points(terrain, regional_west_footprint)
-        regional_west_base_z, regional_west_top_z = _solid_obstacle_elevations(regional_west_min_z, regional_west_max_z, 20.0)
+        regional_west_min_z, regional_west_max_z = _terrain_height_span_at_points(
+            terrain, regional_west_footprint
+        )
+        regional_west_base_z, regional_west_top_z = _solid_obstacle_elevations(
+            regional_west_min_z, regional_west_max_z, 20.0
+        )
         hard_obstacles.extend(
             [
                 WallSegment(
@@ -2216,7 +2397,9 @@ def build_default_environment(
     )
 
 
-def within_bounds(xy_m: Sequence[float], bounds: Mapping[str, float], margin_m: float = 0.0) -> bool:
+def within_bounds(
+    xy_m: Sequence[float], bounds: Mapping[str, float], margin_m: float = 0.0
+) -> bool:
     x_m = float(xy_m[0])
     y_m = float(xy_m[1])
     return (
@@ -2227,7 +2410,9 @@ def within_bounds(xy_m: Sequence[float], bounds: Mapping[str, float], margin_m: 
     )
 
 
-def clamp_to_bounds(xy_m: Sequence[float], bounds: Mapping[str, float], margin_m: float = 0.0) -> np.ndarray:
+def clamp_to_bounds(
+    xy_m: Sequence[float], bounds: Mapping[str, float], margin_m: float = 0.0
+) -> np.ndarray:
     min_x = bounds["x_min_m"] + margin_m
     max_x = bounds["x_max_m"] - margin_m
     min_y = bounds["y_min_m"] + margin_m
@@ -2241,7 +2426,7 @@ def clamp_to_bounds(xy_m: Sequence[float], bounds: Mapping[str, float], margin_m
     )
 
 
-def _obstacle_footprint_xy(obstacle: object) -> Optional[np.ndarray]:
+def _obstacle_footprint_xy(obstacle: object) -> np.ndarray | None:
     footprint_source = getattr(obstacle, "footprint_xy_m", None)
     if footprint_source is None:
         return None
@@ -2255,7 +2440,7 @@ def _obstacle_footprint_xy(obstacle: object) -> Optional[np.ndarray]:
 def _terrain_height_span_at_points(
     terrain: object,
     points_xy_m: Sequence[Sequence[float]],
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     heights = [float(terrain.height_at(float(x_m), float(y_m))) for x_m, y_m in points_xy_m]
     return min(heights), max(heights)
 
@@ -2271,10 +2456,13 @@ def _terrain_height_span_for_cylinder(
     radius_m: float,
     *,
     sample_count: int = 8,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     angles = np.linspace(0.0, math.tau, num=sample_count, endpoint=False, dtype=float)
     sample_points = [
-        (center_x_m + radius_m * math.cos(float(angle)), center_y_m + radius_m * math.sin(float(angle)))
+        (
+            center_x_m + radius_m * math.cos(float(angle)),
+            center_y_m + radius_m * math.sin(float(angle)),
+        )
         for angle in angles
     ]
     sample_points.append((center_x_m, center_y_m))
@@ -2304,7 +2492,7 @@ def _solid_obstacle_elevations(
     nominal_height_m: float,
     *,
     top_pad_m: float = GROUND_CONTACT_TOP_PAD_M,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     base_z = float(min_terrain_z)
     top_z = float(max_terrain_z + max(float(nominal_height_m), 0.0) + top_pad_m)
     return base_z, top_z
@@ -2326,15 +2514,17 @@ def _forest_stand_for_terrain(
         primitive_id=primitive_id,
         footprint_xy_m=footprint,
         canopy_base_z_m=min_terrain_z,
-        canopy_top_z_m=max(reference_z + float(canopy_top_agl_m), max_terrain_z + GROUND_CONTACT_TOP_PAD_M),
+        canopy_top_z_m=max(
+            reference_z + float(canopy_top_agl_m), max_terrain_z + GROUND_CONTACT_TOP_PAD_M
+        ),
         density=density,
     )
 
 
-def split_bounds_along_x(bounds: Mapping[str, float], count: int) -> List[Dict[str, float]]:
+def split_bounds_along_x(bounds: Mapping[str, float], count: int) -> list[dict[str, float]]:
     if count <= 1:
         return [dict(bounds)]
-    sectors: List[Dict[str, float]] = []
+    sectors: list[dict[str, float]] = []
     width_m = (bounds["x_max_m"] - bounds["x_min_m"]) / count
     for index in range(count):
         sectors.append(
@@ -2403,7 +2593,7 @@ def build_lawnmower_waypoints(
     elif y_values[-1] < y_max_m:
         y_values.append(y_max_m)
 
-    waypoints: List[List[float]] = []
+    waypoints: list[list[float]] = []
     sweep_to_max = True
     for y_m in y_values:
         if sweep_to_max:
@@ -2425,12 +2615,14 @@ def search_path(
     lane_spacing_m: float,
     speed_mps: float,
     phase: float,
-    environment: Optional[EnvironmentModel] = None,
-    planner: Optional[PathPlanner2D] = None,
+    environment: EnvironmentModel | None = None,
+    planner: PathPlanner2D | None = None,
     min_agl_m: float = 18.0,
     inset_fraction: float = 0.2,
 ) -> TrajectoryFn:
-    waypoints = build_lawnmower_waypoints(sector_bounds, lane_spacing_m=lane_spacing_m, inset_fraction=inset_fraction)
+    waypoints = build_lawnmower_waypoints(
+        sector_bounds, lane_spacing_m=lane_spacing_m, inset_fraction=inset_fraction
+    )
     if planner is not None:
         route = planner.route_waypoints(
             waypoints,
@@ -2486,17 +2678,17 @@ def follow_path(
     lead_s: float = 4.0,
     candidate_count: int = 12,
     rotation_rate_rad_s: float = 0.08,
-    planner: Optional[PathPlanner2D] = None,
+    planner: PathPlanner2D | None = None,
     min_agl_m: float = 18.0,
-    target_altitude_offset_m: Optional[float] = None,
-    max_accel_mps2: Optional[float] = None,
+    target_altitude_offset_m: float | None = None,
+    max_accel_mps2: float | None = None,
     terrain_following: bool = False,
     terrain_following_agl_m: float = 30.0,
     terrain_following_smoothing_s: float = 1.5,
     drone_role: str = "interceptor",
     slot_index: int = 0,
     slot_count: int = 1,
-    mission_zones: Tuple[MissionZone, ...] = (),
+    mission_zones: tuple[MissionZone, ...] = (),
 ) -> TrajectoryFn:
     return FollowPathController(
         target_trajectory=target_trajectory,
@@ -2526,13 +2718,15 @@ def follow_path(
     )
 
 
-def target_motion_sequence(target_motion_preset: str, count: int) -> List[str]:
+def target_motion_sequence(target_motion_preset: str, count: int) -> list[str]:
     return [target_motion_preset] * count
 
 
-def drone_mode_sequence(drone_mode_preset: str, count: int) -> List[str]:
+def drone_mode_sequence(drone_mode_preset: str, count: int) -> list[str]:
     if drone_mode_preset == "mixed":
-        return ["inspect" if index % 2 == 0 else "search" for index in range(count)]
+        return ["follow" if index % 2 == 0 else "search" for index in range(count)]
+    if drone_mode_preset == "inspect":
+        return ["follow"] * count
     return [drone_mode_preset] * count
 
 
@@ -2550,12 +2744,12 @@ def _apply_weather_adjustments(
     *,
     timestamp_s: float,
     dt_s: float = 1.0,
-    weather: Optional[WeatherModel],
-    terrain: Optional[object],
-    map_bounds_m: Optional[Mapping[str, float]],
+    weather: WeatherModel | None,
+    terrain: object | None,
+    map_bounds_m: Mapping[str, float] | None,
     min_agl_m: float,
     wind_scale: float = 0.35,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     adjusted_position = np.asarray(position, dtype=float).copy()
     adjusted_velocity = np.asarray(velocity, dtype=float).copy()
     if weather is None:
@@ -2563,7 +2757,9 @@ def _apply_weather_adjustments(
 
     # Clamp position above terrain first so speed penalty uses the true AGL.
     if terrain is not None:
-        terrain_height = float(terrain.height_at(float(adjusted_position[0]), float(adjusted_position[1])))
+        terrain_height = float(
+            terrain.height_at(float(adjusted_position[0]), float(adjusted_position[1]))
+        )
         adjusted_position[2] = max(adjusted_position[2], terrain_height + min_agl_m)
         altitude_m = float(adjusted_position[2]) - terrain_height
     else:
@@ -2580,7 +2776,9 @@ def _apply_weather_adjustments(
     if map_bounds_m is not None:
         adjusted_position[:2] = clamp_to_bounds(adjusted_position[:2], map_bounds_m, margin_m=1.0)
     if terrain is not None:
-        terrain_height = float(terrain.height_at(float(adjusted_position[0]), float(adjusted_position[1])))
+        terrain_height = float(
+            terrain.height_at(float(adjusted_position[0]), float(adjusted_position[1]))
+        )
         adjusted_position[2] = max(adjusted_position[2], terrain_height + min_agl_m)
     return adjusted_position, adjusted_velocity
 
@@ -2588,14 +2786,14 @@ def _apply_weather_adjustments(
 @dataclass
 class WeatherAdjustedTrajectory:
     trajectory: TrajectoryFn
-    weather: Optional[WeatherModel]
-    terrain: Optional[object]
-    map_bounds_m: Optional[Mapping[str, float]]
+    weather: WeatherModel | None
+    terrain: object | None
+    map_bounds_m: Mapping[str, float] | None
     min_agl_m: float
     wind_scale: float = 0.35
     dt_s: float = 1.0
 
-    def __call__(self, timestamp_s: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
         position, velocity = self.trajectory(timestamp_s)
         return _apply_weather_adjustments(
             position,
@@ -2624,7 +2822,7 @@ def _target_motion_profile(
     terrain: object,
     map_bounds_m: Mapping[str, float],
     constants: SimulationConstants,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     center_x = 0.5 * (float(map_bounds_m["x_min_m"]) + float(map_bounds_m["x_max_m"]))
     center_y = 0.5 * (float(map_bounds_m["y_min_m"]) + float(map_bounds_m["y_max_m"]))
     terrain_height = float(terrain.height_at(center_x, center_y))
@@ -2666,7 +2864,7 @@ def _sensor_model_for_node(node: SimNode, *, seed: int) -> SensorModel:
     return model
 
 
-def _build_sensor_models(nodes: Sequence[SimNode], *, seed: int) -> Dict[str, SensorModel]:
+def _build_sensor_models(nodes: Sequence[SimNode], *, seed: int) -> dict[str, SensorModel]:
     return {
         node.node_id: _sensor_model_for_node(node, seed=_stable_seed(seed, "sensor", node.node_id))
         for node in nodes
@@ -2682,8 +2880,8 @@ def build_target_trajectory(
     rng: np.random.Generator,
     terrain: object,
     map_bounds_m: Mapping[str, float],
-    obstacle_layer: Optional[ObstacleLayer] = None,
-    planner: Optional[PathPlanner2D] = None,
+    obstacle_layer: ObstacleLayer | None = None,
+    planner: PathPlanner2D | None = None,
 ) -> TrajectoryFn:
     phase = float(rng.uniform(0.0, math.tau))
 
@@ -2703,13 +2901,16 @@ def build_target_trajectory(
         vertical_amplitudes = [18.0, 24.0]
         vertical_frequencies = [0.09, 0.08]
         i = index % len(start_positions)
-        start_xy = scale_xy(start_positions[i], scale) + rng.uniform(-30.0, 30.0, size=2) * scale * (index // len(start_positions))
+        start_xy = scale_xy(start_positions[i], scale) + rng.uniform(
+            -30.0, 30.0, size=2
+        ) * scale * (index // len(start_positions))
         return sinusoid_target(
             start_xy=clamp_to_bounds(start_xy, map_bounds_m, margin_m=40.0 * scale),
             velocity_xy=scale_xy(velocities[i], platform_profile.target_speed_scale),
             lateral_axis=lateral_axes[i],
             lateral_amplitude=lateral_amplitudes[i] * scale,
-            lateral_frequency=lateral_frequencies[i] * (1.0 + 0.1 * (index // len(start_positions))),
+            lateral_frequency=lateral_frequencies[i]
+            * (1.0 + 0.1 * (index // len(start_positions))),
             base_agl_m=base_agls[i] + 20.0 * (index // len(start_positions)),
             vertical_amplitude=vertical_amplitudes[i],
             vertical_frequency=vertical_frequencies[i],
@@ -2732,7 +2933,8 @@ def build_target_trajectory(
         vertical_frequencies = [0.07, 0.06]
         i = index % len(centers)
         center_xy = clamp_to_bounds(
-            scale_xy(centers[i], scale) + rng.uniform(-18.0, 18.0, size=2) * scale
+            scale_xy(centers[i], scale)
+            + rng.uniform(-18.0, 18.0, size=2) * scale
             + rng.uniform(-60.0, 60.0, size=2) * scale * (index // len(centers)),
             map_bounds_m,
             margin_m=80.0 * scale,
@@ -2766,7 +2968,8 @@ def build_target_trajectory(
         vertical_frequencies = [0.06, 0.05]
         i = index % len(centers)
         center_xy = clamp_to_bounds(
-            scale_xy(centers[i], scale) + rng.uniform(-20.0, 20.0, size=2) * scale
+            scale_xy(centers[i], scale)
+            + rng.uniform(-20.0, 20.0, size=2) * scale
             + rng.uniform(-50.0, 50.0, size=2) * scale * (index // len(centers)),
             map_bounds_m,
             margin_m=90.0 * scale,
@@ -2804,9 +3007,9 @@ def generate_mission_zones(
     scale: float,
     terrain: object,
     rng: np.random.Generator,
-    count: Optional[int] = None,
+    count: int | None = None,
     obstacles: Sequence[object] = (),
-) -> List[MissionZone]:
+) -> list[MissionZone]:
     x_min = float(map_bounds_m["x_min_m"])
     x_max = float(map_bounds_m["x_max_m"])
     y_min = float(map_bounds_m["y_min_m"])
@@ -2819,7 +3022,12 @@ def generate_mission_zones(
     if count is None:
         count = max(3, int(scale * 1.5))
 
-    zone_types = [ZONE_TYPE_SURVEILLANCE, ZONE_TYPE_OBJECTIVE, ZONE_TYPE_PATROL, ZONE_TYPE_EXCLUSION]
+    zone_types = [
+        ZONE_TYPE_SURVEILLANCE,
+        ZONE_TYPE_OBJECTIVE,
+        ZONE_TYPE_PATROL,
+        ZONE_TYPE_EXCLUSION,
+    ]
     base_radius = min_span * 0.06
     zone_specs = []
     for i in range(count):
@@ -2829,20 +3037,24 @@ def generate_mission_zones(
                 "index": i,
                 "zone_type": zone_type,
                 "radius_m": float(rng.uniform(base_radius * 0.6, base_radius * 1.4)),
-                "priority": 1 if zone_type == ZONE_TYPE_OBJECTIVE else (2 if zone_type == ZONE_TYPE_SURVEILLANCE else 3),
+                "priority": 1
+                if zone_type == ZONE_TYPE_OBJECTIVE
+                else (2 if zone_type == ZONE_TYPE_SURVEILLANCE else 3),
                 "label": f"{zone_type}-{i}",
             }
         )
 
-    building_positions: List[Tuple[float, float]] = []
-    building_extents_m: List[float] = []
+    building_positions: list[tuple[float, float]] = []
+    building_extents_m: list[float] = []
     for obstacle in obstacles:
         blocker_type = getattr(obstacle, "blocker_type", "")
         if blocker_type and blocker_type != "building":
             continue
         footprint = _obstacle_footprint_xy(obstacle)
         if hasattr(obstacle, "center_x_m") and hasattr(obstacle, "center_y_m"):
-            center_xy = np.array([float(obstacle.center_x_m), float(obstacle.center_y_m)], dtype=float)
+            center_xy = np.array(
+                [float(obstacle.center_x_m), float(obstacle.center_y_m)], dtype=float
+            )
         elif footprint is not None:
             center_xy = footprint.mean(axis=0)
         else:
@@ -2879,12 +3091,22 @@ def generate_mission_zones(
         for col in range(len(sample_x))
     ]
     candidate_limit = max(8, count * 4)
-    peak_candidates = [sample["xy"] for sample in sorted(terrain_samples, key=lambda sample: sample["height"], reverse=True)[:candidate_limit]]
-    flat_candidates = [sample["xy"] for sample in sorted(terrain_samples, key=lambda sample: (sample["gradient"], -sample["height"]))[:candidate_limit]]
+    peak_candidates = [
+        sample["xy"]
+        for sample in sorted(terrain_samples, key=lambda sample: sample["height"], reverse=True)[
+            :candidate_limit
+        ]
+    ]
+    flat_candidates = [
+        sample["xy"]
+        for sample in sorted(
+            terrain_samples, key=lambda sample: (sample["gradient"], -sample["height"])
+        )[:candidate_limit]
+    ]
 
-    placed_zones: List[MissionZone] = []
-    objective_centers: List[np.ndarray] = []
-    zones_by_index: Dict[int, MissionZone] = {}
+    placed_zones: list[MissionZone] = []
+    objective_centers: list[np.ndarray] = []
+    zones_by_index: dict[int, MissionZone] = {}
 
     def _zone_margin(radius_m: float) -> float:
         return radius_m + edge_buffer_m
@@ -2904,12 +3126,17 @@ def generate_mission_zones(
                 return False
         return True
 
-    def _relative_candidates(candidates: Sequence[np.ndarray], radius_m: float) -> Sequence[np.ndarray]:
+    def _relative_candidates(
+        candidates: Sequence[np.ndarray], radius_m: float
+    ) -> Sequence[np.ndarray]:
         if not objective_centers:
             return candidates
         related = []
         for candidate_xy in candidates:
-            nearest_objective_m = min(float(np.linalg.norm(candidate_xy - objective_xy)) for objective_xy in objective_centers)
+            nearest_objective_m = min(
+                float(np.linalg.norm(candidate_xy - objective_xy))
+                for objective_xy in objective_centers
+            )
             if 2.0 * radius_m <= nearest_objective_m <= 3.0 * radius_m:
                 related.append(candidate_xy)
         return related or candidates
@@ -2941,18 +3168,22 @@ def generate_mission_zones(
                 return _zone_from_center(spec, random_xy)
         return _zone_from_center(spec, _random_center(radius_m))
 
-    def _sample_objective(radius_m: float) -> Optional[np.ndarray]:
+    def _sample_objective(radius_m: float) -> np.ndarray | None:
         if not building_positions:
             return None
         anchor_index = int(rng.integers(0, len(building_positions)))
         anchor_xy = np.asarray(building_positions[anchor_index], dtype=float)
         anchor_extent_m = building_extents_m[anchor_index]
         angle = float(rng.uniform(0.0, math.tau))
-        offset_m = 1.5 * anchor_extent_m + radius_m + float(rng.uniform(0.0, max(radius_m, 0.35 * anchor_extent_m)))
+        offset_m = (
+            1.5 * anchor_extent_m
+            + radius_m
+            + float(rng.uniform(0.0, max(radius_m, 0.35 * anchor_extent_m)))
+        )
         direction = np.array([math.cos(angle), math.sin(angle)], dtype=float)
         return anchor_xy + direction * offset_m
 
-    def _sample_exclusion(radius_m: float) -> Optional[np.ndarray]:
+    def _sample_exclusion(radius_m: float) -> np.ndarray | None:
         if not building_positions:
             return None
         anchor_index = int(rng.integers(0, len(building_positions)))
@@ -2963,7 +3194,7 @@ def generate_mission_zones(
         direction = np.array([math.cos(angle), math.sin(angle)], dtype=float)
         return anchor_xy + direction * offset_m
 
-    def _sample_surveillance(radius_m: float) -> Optional[np.ndarray]:
+    def _sample_surveillance(radius_m: float) -> np.ndarray | None:
         candidates = _relative_candidates(peak_candidates, radius_m)
         if not candidates:
             return None
@@ -2971,7 +3202,7 @@ def generate_mission_zones(
         anchor_xy = np.asarray(candidates[int(rng.integers(0, top_band))], dtype=float)
         return anchor_xy + rng.uniform(-0.25, 0.25, size=2) * radius_m
 
-    def _sample_patrol(radius_m: float) -> Optional[np.ndarray]:
+    def _sample_patrol(radius_m: float) -> np.ndarray | None:
         candidates = _relative_candidates(flat_candidates, radius_m)
         if not candidates:
             return None
@@ -3009,7 +3240,7 @@ def generate_mission_zones(
 
 
 def build_default_scenario(
-    options: Optional[ScenarioOptions] = None,
+    options: ScenarioOptions | None = None,
     seed: int = 7,
     constants: SimulationConstants = _DEFAULT_CONSTANTS,
 ) -> ScenarioDefinition:
@@ -3035,18 +3266,37 @@ def build_default_scenario(
     )
     rng = np.random.default_rng(seed)
 
-    _default_target_names = ["lynx", "orca", "fox", "hawk", "viper", "cobra", "eagle", "raven",
-                              "wolf", "bear", "puma", "falcon", "shark", "stag", "crane", "pike"]
+    _default_target_names = [
+        "lynx",
+        "orca",
+        "fox",
+        "hawk",
+        "viper",
+        "cobra",
+        "eagle",
+        "raven",
+        "wolf",
+        "bear",
+        "puma",
+        "falcon",
+        "shark",
+        "stag",
+        "crane",
+        "pike",
+    ]
     target_count = active_options.target_count
     target_ids = [
         f"asset-{_default_target_names[i % len(_default_target_names)]}"
-        if i < len(_default_target_names) else f"asset-{i}"
+        if i < len(_default_target_names)
+        else f"asset-{i}"
         for i in range(target_count)
     ]
     target_assignments = {}
-    targets: List[SimTarget] = []
+    targets: list[SimTarget] = []
     for index, target_id in enumerate(target_ids):
-        motion_name = target_motion_sequence(active_options.target_motion_preset, len(target_ids))[index]
+        motion_name = target_motion_sequence(active_options.target_motion_preset, len(target_ids))[
+            index
+        ]
         altitude_m, speed_mps = _target_motion_profile(
             motion_name,
             index,
@@ -3089,8 +3339,10 @@ def build_default_scenario(
         SimNode(
             node_id=spec["node_id"],
             is_mobile=False,
-            bearing_std_rad=spec["bearing_std_rad"] * sensor_cfg.ground_station_bearing_std_rad_scale,
-            dropout_probability=spec["dropout_probability"] * sensor_cfg.ground_station_dropout_probability_scale,
+            bearing_std_rad=spec["bearing_std_rad"]
+            * sensor_cfg.ground_station_bearing_std_rad_scale,
+            dropout_probability=spec["dropout_probability"]
+            * sensor_cfg.ground_station_dropout_probability_scale,
             max_range_m=float(spec["max_range_m"]) * platform_profile.ground_station_range_scale,
             trajectory=static_ground_point(
                 float(spec["xy_m"][0]),
@@ -3108,17 +3360,31 @@ def build_default_scenario(
     drone_count = active_options.drone_count
     drone_specs = []
     for di in range(drone_count):
-        drone_name = _compass_names[di % len(_compass_names)] if di < len(_compass_names) else str(di)
-        drone_specs.append({
-            "node_id": f"drone-{drone_name}",
-            "bearing_std_rad": sensor_cfg.drone_base_bearing_std_rad + sensor_cfg.drone_bearing_std_rad_increment * (di % 4),
-            "dropout_probability": sensor_cfg.drone_base_dropout_probability + sensor_cfg.drone_dropout_probability_increment * (di % 3),
-            "max_range_m": sensor_cfg.drone_base_max_range_m * platform_profile.drone_max_range_scale,
-            "base_agl_m": dynamics_cfg.drone_base_agl_m + dynamics_cfg.drone_agl_increment_m * (di % 4),
-            "vertical_amplitude_m": dynamics_cfg.drone_vertical_amplitude_base_m + dynamics_cfg.drone_vertical_amplitude_increment_m * (di % 3),
-            "vertical_frequency_rad_s": dynamics_cfg.drone_vertical_frequency_base_rad_s - dynamics_cfg.drone_vertical_frequency_decrement_rad_s * (di % 3),
-            "search_speed_mps": (dynamics_cfg.drone_search_speed_base_mps - dynamics_cfg.drone_search_speed_decrement_mps * (di % 3)) * platform_profile.drone_search_speed_scale,
-        })
+        drone_name = (
+            _compass_names[di % len(_compass_names)] if di < len(_compass_names) else str(di)
+        )
+        drone_specs.append(
+            {
+                "node_id": f"drone-{drone_name}",
+                "bearing_std_rad": sensor_cfg.drone_base_bearing_std_rad
+                + sensor_cfg.drone_bearing_std_rad_increment * (di % 4),
+                "dropout_probability": sensor_cfg.drone_base_dropout_probability
+                + sensor_cfg.drone_dropout_probability_increment * (di % 3),
+                "max_range_m": sensor_cfg.drone_base_max_range_m
+                * platform_profile.drone_max_range_scale,
+                "base_agl_m": dynamics_cfg.drone_base_agl_m
+                + dynamics_cfg.drone_agl_increment_m * (di % 4),
+                "vertical_amplitude_m": dynamics_cfg.drone_vertical_amplitude_base_m
+                + dynamics_cfg.drone_vertical_amplitude_increment_m * (di % 3),
+                "vertical_frequency_rad_s": dynamics_cfg.drone_vertical_frequency_base_rad_s
+                - dynamics_cfg.drone_vertical_frequency_decrement_rad_s * (di % 3),
+                "search_speed_mps": (
+                    dynamics_cfg.drone_search_speed_base_mps
+                    - dynamics_cfg.drone_search_speed_decrement_mps * (di % 3)
+                )
+                * platform_profile.drone_search_speed_scale,
+            }
+        )
 
     drone_modes = drone_mode_sequence(active_options.drone_mode_preset, len(drone_specs))
     search_drone_indices = [index for index, mode in enumerate(drone_modes) if mode == "search"]
@@ -3140,11 +3406,11 @@ def build_default_scenario(
         _station_positions[gs_spec["node_id"]] = gs_traj(0.0)[0]
 
     target_by_id = {target.target_id: target for target in targets}
-    drone_assignments: Dict[str, str] = {}
-    drone_target_assignments: Dict[str, str] = {}
-    drone_roles_map: Dict[str, str] = {}
-    adaptive_drone_controllers: Dict[str, ObservationTriggeredFollowController] = {}
-    launchable_controllers: Dict[str, LaunchableTrajectoryController] = {}
+    drone_assignments: dict[str, str] = {}
+    drone_target_assignments: dict[str, str] = {}
+    drone_roles_map: dict[str, str] = {}
+    adaptive_drone_controllers: dict[str, ObservationTriggeredFollowController] = {}
+    launchable_controllers: dict[str, LaunchableTrajectoryController] = {}
 
     if active_options.mission_mode == "target_tracking":
         # -----------------------------------------------------------------------
@@ -3156,14 +3422,14 @@ def build_default_scenario(
         # evenly around the standoff circle so sensor baselines are maximised.
         # -----------------------------------------------------------------------
         _n_drones = len(drone_specs)
-        _drone_role_list: List[str] = [
-            "interceptor" if drone_modes[i] == "inspect" else "tracker"
+        _drone_role_list: list[str] = [
+            "interceptor" if drone_modes[i] in {"inspect", "follow"} else "tracker"
             for i in range(_n_drones)
         ]
 
         # First pass: count how many drones of each role target each asset
-        _tracker_total: Dict[str, int] = {}
-        _interceptor_total: Dict[str, int] = {}
+        _tracker_total: dict[str, int] = {}
+        _interceptor_total: dict[str, int] = {}
         if target_ids:
             for index in range(_n_drones):
                 _tid = target_ids[index % len(target_ids)]
@@ -3173,15 +3439,17 @@ def build_default_scenario(
                     _interceptor_total[_tid] = _interceptor_total.get(_tid, 0) + 1
 
         # Running slot counters (incremented as we assign)
-        _tracker_slots: Dict[str, int] = {}
-        _interceptor_slots: Dict[str, int] = {}
+        _tracker_slots: dict[str, int] = {}
+        _interceptor_slots: dict[str, int] = {}
 
         for index, spec in enumerate(drone_specs):
             node_id = spec["node_id"]
             drone_mode = drone_modes[index]
             target_id = target_ids[index % len(target_ids)] if target_ids else ""
             role = _drone_role_list[index]
-            drone_assignments[node_id] = drone_mode
+            drone_assignments[node_id] = (
+                "follow" if drone_mode in {"inspect", "follow"} else drone_mode
+            )
             drone_target_assignments[node_id] = target_id
             drone_roles_map[node_id] = role
 
@@ -3212,7 +3480,7 @@ def build_default_scenario(
             assigned_station_id = ground_specs[assigned_station_idx]["node_id"]
             station_pos = _station_positions[assigned_station_id]
 
-            if drone_mode == "inspect":
+            if drone_mode in {"inspect", "follow"}:
                 raw_trajectory = follow_path(
                     target_trajectory=target_by_id[target_id].trajectory,
                     environment=environment,
@@ -3321,7 +3589,7 @@ def build_default_scenario(
         all_sectors = split_bounds_along_x(map_bounds_m, len(drone_specs))
 
         # Pre-compute (drone_index, station_x) so we can sort by station x.
-        _drone_station_x: List[Tuple[int, float]] = []
+        _drone_station_x: list[tuple[int, float]] = []
         for _di, _spec in enumerate(drone_specs):
             _si = _di % len(ground_specs)
             _sid = ground_specs[_si]["node_id"]
@@ -3330,9 +3598,8 @@ def build_default_scenario(
         # Sort by x so sector 0 (westmost) goes to the westernmost drone, etc.
         _drone_station_x.sort(key=lambda t: t[1])
         # Map drone_index -> sector_index
-        _drone_to_sector: Dict[int, int] = {
-            drone_idx: sector_idx
-            for sector_idx, (drone_idx, _) in enumerate(_drone_station_x)
+        _drone_to_sector: dict[int, int] = {
+            drone_idx: sector_idx for sector_idx, (drone_idx, _) in enumerate(_drone_station_x)
         }
 
         for index, spec in enumerate(drone_specs):
@@ -3439,9 +3706,9 @@ def _generation_rejection(
     timestamp_s: float,
     reason: str,
     detail: str,
-    closest_point: Optional[np.ndarray] = None,
+    closest_point: np.ndarray | None = None,
     blocker_type: str = "",
-    first_hit_range_m: Optional[float] = None,
+    first_hit_range_m: float | None = None,
 ) -> ObservationRejection:
     return ObservationRejection(
         node_id=node_state.node_id,
@@ -3451,7 +3718,9 @@ def _generation_rejection(
         detail=detail,
         origin=np.asarray(node_state.position, dtype=float).copy(),
         attempted_point=np.asarray(truth.position, dtype=float).copy(),
-        closest_point=None if closest_point is None else np.asarray(closest_point, dtype=float).copy(),
+        closest_point=None
+        if closest_point is None
+        else np.asarray(closest_point, dtype=float).copy(),
         blocker_type=blocker_type,
         first_hit_range_m=first_hit_range_m,
     )
@@ -3465,18 +3734,21 @@ def build_observations(
     terrain: object,
     occluding_objects: Sequence[object] = (),
     min_elevation_deg: float = 0.5,
-    environment: Optional[EnvironmentModel] = None,
-    sensor_profile: Optional[SensorVisibilityModel] = None,
-    weather: Optional[WeatherModel] = None,
-    sensor_models: Optional[Mapping[str, SensorModel]] = None,
+    environment: EnvironmentModel | None = None,
+    sensor_profile: SensorVisibilityModel | None = None,
+    weather: WeatherModel | None = None,
+    sensor_models: Mapping[str, SensorModel] | None = None,
     constants: SimulationConstants = _DEFAULT_CONSTANTS,
-    seed: Optional[int] = None,
+    seed: int | None = None,
 ) -> ObservationBatch:
     active_environment = environment
     if active_environment is None:
         bounds = Bounds2D.from_mapping(
             xy_bounds(
-                [*(node.state(timestamp_s).position for node in nodes), *(truth.position for truth in truths)],
+                [
+                    *(node.state(timestamp_s).position for node in nodes),
+                    *(truth.position for truth in truths),
+                ],
                 padding_m=120.0,
             )
         )
@@ -3487,17 +3759,21 @@ def build_observations(
             occluding_objects=occluding_objects,
         )
     active_profile = sensor_profile or SensorVisibilityModel.optical_default()
-    active_sensor_models = dict(sensor_models) if sensor_models is not None else _build_sensor_models(
-        nodes,
-        seed=0 if seed is None else seed,
+    active_sensor_models = (
+        dict(sensor_models)
+        if sensor_models is not None
+        else _build_sensor_models(
+            nodes,
+            seed=0 if seed is None else seed,
+        )
     )
     sensor_cfg = constants.sensor
     observations = []
     rejection_counts: Counter[str] = Counter()
     accepted_by_target: Counter[str] = Counter()
     rejected_by_target: Counter[str] = Counter()
-    accepted_by_node_target: Counter[Tuple[str, str]] = Counter()
-    generation_rejections: List[ObservationRejection] = []
+    accepted_by_node_target: Counter[tuple[str, str]] = Counter()
+    generation_rejections: list[ObservationRejection] = []
     attempted_count = 0
 
     for node in nodes:
@@ -3531,7 +3807,10 @@ def build_observations(
                         detail=(
                             "Target is coincident with the node origin."
                             if range_m < 1e-6
-                            else f"Range {range_m:.1f} m exceeds max sensor range {node.max_range_m:.1f} m."
+                            else (
+                                f"Range {range_m:.1f} m exceeds max sensor range "
+                                f"{node.max_range_m:.1f} m."
+                            )
                         ),
                     )
                 )
@@ -3547,7 +3826,9 @@ def build_observations(
                     speed_xy = float(np.linalg.norm(vel[:2]))
                     if speed_xy > 0.5:
                         look = vel.copy()
-                        look[2] = -np.tan(np.radians(sensor_cfg.drone_look_down_angle_deg)) * speed_xy
+                        look[2] = (
+                            -np.tan(np.radians(sensor_cfg.drone_look_down_angle_deg)) * speed_xy
+                        )
                         sensor_dir = look / np.linalg.norm(look)
                 if sensor_dir is not None:
                     los_unit = line_of_sight / range_m
@@ -3585,9 +3866,7 @@ def build_observations(
                 continue
             # Airborne nodes must be able to look down toward lower-altitude targets.
             required_elevation_deg = (
-                sensor_cfg.mobile_min_elevation_deg
-                if node.is_mobile
-                else min_elevation_deg
+                sensor_cfg.mobile_min_elevation_deg if node.is_mobile else min_elevation_deg
             )
             elevation_deg = elevation_angle_deg(line_of_sight)
             if elevation_deg < required_elevation_deg:
@@ -3713,13 +3992,20 @@ def build_observations(
             altitude_noise_multiplier = 1.0
             altitude_confidence_factor = 1.0
             if node.is_mobile:
-                agl_m = max(float(node_state.position[2] - terrain.height_at(
-                    float(node_state.position[0]), float(node_state.position[1]))), 0.0)
+                agl_m = max(
+                    float(
+                        node_state.position[2]
+                        - terrain.height_at(
+                            float(node_state.position[0]), float(node_state.position[1])
+                        )
+                    ),
+                    0.0,
+                )
                 # Quality degrades above 200 m AGL (atmospheric + resolution loss)
                 if agl_m > sensor_cfg.altitude_quality_threshold_m:
-                    excess = (
-                        agl_m - sensor_cfg.altitude_quality_threshold_m
-                    ) / max(sensor_cfg.altitude_quality_range_m, 1.0)
+                    excess = (agl_m - sensor_cfg.altitude_quality_threshold_m) / max(
+                        sensor_cfg.altitude_quality_range_m, 1.0
+                    )
                     normalized_excess = min(excess, 1.0)
                     altitude_noise_multiplier = (
                         1.0 + normalized_excess * sensor_cfg.altitude_noise_multiplier_max
@@ -3763,9 +4049,16 @@ def build_observations(
                 )
             )
             # Thermal sensor observation (for thermal/IR sensor nodes)
-            if getattr(node_state, 'sensor_type', node.sensor_type) in ('thermal', 'lwir', 'mwir', 'ir'):
+            if getattr(node_state, "sensor_type", node.sensor_type) in (
+                "thermal",
+                "lwir",
+                "mwir",
+                "ir",
+            ):
                 _thermal_bearing_std = effective_bearing_std * 1.3
-                _thermal_direction = noisy_unit_vector(pair_rng, line_of_sight, _thermal_bearing_std)
+                _thermal_direction = noisy_unit_vector(
+                    pair_rng, line_of_sight, _thermal_bearing_std
+                )
                 observations.append(
                     BearingObservation(
                         node_id=node.node_id,
@@ -3802,29 +4095,35 @@ def build_observations(
 
         # Generate false alarm (clutter) observations from sensor_error_config
         sensor_error_config = sensor_model.config
-        if (hasattr(sensor_error_config, 'false_alarm_rate_per_scan')
-                and sensor_error_config.false_alarm_rate_per_scan > 0):
+        if (
+            hasattr(sensor_error_config, "false_alarm_rate_per_scan")
+            and sensor_error_config.false_alarm_rate_per_scan > 0
+        ):
             n_clutter = int(clutter_rng.poisson(sensor_error_config.false_alarm_rate_per_scan))
             for clutter_idx in range(n_clutter):
                 clutter_bearing_noise = getattr(
-                    sensor_error_config, 'clutter_bearing_std_rad', 0.05
+                    sensor_error_config, "clutter_bearing_std_rad", 0.05
                 )
                 random_az = clutter_rng.uniform(-math.pi, math.pi)
                 random_el = clutter_rng.uniform(0.0, math.pi / 3)  # 0-60 deg elevation
-                clutter_dir = np.array([
-                    math.cos(random_el) * math.cos(random_az),
-                    math.cos(random_el) * math.sin(random_az),
-                    math.sin(random_el),
-                ])
-                observations.append(BearingObservation(
-                    node_id=node_state.node_id,
-                    target_id=f"clutter-{clutter_idx}",
-                    origin=node_state.position,
-                    direction=tuple(clutter_dir),
-                    bearing_std_rad=clutter_bearing_noise,
-                    timestamp_s=timestamp_s,
-                    confidence=0.3,
-                ))
+                clutter_dir = np.array(
+                    [
+                        math.cos(random_el) * math.cos(random_az),
+                        math.cos(random_el) * math.sin(random_az),
+                        math.sin(random_el),
+                    ]
+                )
+                observations.append(
+                    BearingObservation(
+                        node_id=node_state.node_id,
+                        target_id=f"clutter-{clutter_idx}",
+                        origin=node_state.position,
+                        direction=tuple(clutter_dir),
+                        bearing_std_rad=clutter_bearing_noise,
+                        timestamp_s=timestamp_s,
+                        confidence=0.3,
+                    )
+                )
 
     return ObservationBatch(
         observations=observations,
@@ -3850,14 +4149,16 @@ def _build_metrics_rows(
     frame: PlatformFrame,
     truths: Sequence[TruthState],
     observation_batch: ObservationBatch,
-) -> Tuple[List[dict], List[float]]:
+) -> tuple[list[dict], list[float]]:
     truth_by_id = {truth.target_id: truth for truth in truths}
-    observation_counts: Dict[str, int] = {}
+    observation_counts: dict[str, int] = {}
     for observation in frame.observations:
-        observation_counts[observation.target_id] = observation_counts.get(observation.target_id, 0) + 1
+        observation_counts[observation.target_id] = (
+            observation_counts.get(observation.target_id, 0) + 1
+        )
 
-    rows: List[dict] = []
-    errors: List[float] = []
+    rows: list[dict] = []
+    errors: list[float] = []
     for track in frame.tracks:
         truth = truth_by_id.get(track.track_id)
         if truth is None:
@@ -3891,17 +4192,21 @@ def _build_simulation_summary(
     generation_rejection_counts: Counter[str],
     generation_accepted_by_target: Counter[str],
     generation_rejected_by_target: Counter[str],
-) -> Dict[str, object]:
+) -> dict[str, object]:
     accepted_count = int(sum(generation_accepted_by_target.values()))
     rejected_count = int(sum(generation_rejection_counts.values()))
     return {
         "frame_count": len(frames),
-        "track_rmse_m": float(np.sqrt(np.mean(np.square(per_track_errors)))) if per_track_errors else None,
+        "track_rmse_m": float(np.sqrt(np.mean(np.square(per_track_errors))))
+        if per_track_errors
+        else None,
         "track_update_count": len(per_track_errors),
         "generation_attempted_count": int(generation_attempted_count),
         "generation_accepted_count": accepted_count,
         "generation_rejected_count": rejected_count,
-        "generation_acceptance_rate": (accepted_count / generation_attempted_count) if generation_attempted_count else 0.0,
+        "generation_acceptance_rate": (accepted_count / generation_attempted_count)
+        if generation_attempted_count
+        else 0.0,
         "generation_rejection_counts": dict(sorted(generation_rejection_counts.items())),
         "generation_accepted_by_target": dict(sorted(generation_accepted_by_target.items())),
         "generation_rejected_by_target": dict(sorted(generation_rejected_by_target.items())),
@@ -3913,8 +4218,8 @@ def _build_replay_metadata(
     scenario: ScenarioDefinition,
     simulation_config: SimulationConfig,
     tracker_config: TrackerConfig,
-    summary: Dict[str, object],
-) -> Dict[str, object]:
+    summary: dict[str, object],
+) -> dict[str, object]:
     environment = scenario.environment
     if environment is None:
         raise ValueError("ScenarioDefinition.environment must be populated before replay export.")
@@ -3992,14 +4297,14 @@ def _generate_poi_positions(
     map_bounds_m: Mapping[str, float],
     count: int,
     seed: int = 0,
-) -> List[np.ndarray]:
+) -> list[np.ndarray]:
     """Generate POI positions spread across the map (grid-like, slightly randomised)."""
     rng = np.random.default_rng(seed + 999)
     x_min, x_max = float(map_bounds_m["x_min_m"]), float(map_bounds_m["x_max_m"])
     y_min, y_max = float(map_bounds_m["y_min_m"]), float(map_bounds_m["y_max_m"])
     margin = (x_max - x_min) * 0.15
     positions = []
-    for i in range(count):
+    for _i in range(count):
         x = rng.uniform(x_min + margin, x_max - margin)
         y = rng.uniform(y_min + margin, y_max - margin)
         z = 80.0  # inspection altitude AGL
@@ -4010,8 +4315,8 @@ def _generate_poi_positions(
 def run_simulation(
     scenario: ScenarioDefinition,
     simulation_config: SimulationConfig,
-    tracker_config: Optional[TrackerConfig] = None,
-    streaming_output_path: Optional[Path] = None,
+    tracker_config: TrackerConfig | None = None,
+    streaming_output_path: Path | None = None,
     max_frames_in_memory: int = 500,
 ) -> SimulationResult:
     active_tracker_config = tracker_config or TrackerConfig()
@@ -4020,10 +4325,10 @@ def run_simulation(
     sensor_models = _build_sensor_models(scenario.nodes, seed=simulation_config.seed)
     service = TrackingService(config=active_tracker_config, retain_history=True)
 
-    frames: List[PlatformFrame] = []
+    frames: list[PlatformFrame] = []
     _total_frame_count: int = 0  # tracks count even when frames[] is a rolling window
-    metrics_rows: List[dict] = []
-    per_track_errors: List[float] = []
+    metrics_rows: list[dict] = []
+    per_track_errors: list[float] = []
     generation_rejection_counts: Counter[str] = Counter()
     generation_accepted_by_target: Counter[str] = Counter()
     generation_rejected_by_target: Counter[str] = Counter()
@@ -4052,11 +4357,10 @@ def run_simulation(
     _target_cells = max(5, int(0.05 * _coverage_bounds.nx * _coverage_bounds.ny / _n_mobile))
     _r_cells = max(1, int(math.ceil(math.sqrt(_target_cells / math.pi))))
     _FOOTPRINT_RADIUS_M = max(50.0, float(_r_cells) * _coverage_bounds.resolution_m)
-    _zone_coverage_maps: Dict[str, CoverageMap] = {
-        zone.zone_id: CoverageMap(_coverage_bounds)
-        for zone in scenario.mission_zones
+    _zone_coverage_maps: dict[str, CoverageMap] = {
+        zone.zone_id: CoverageMap(_coverage_bounds) for zone in scenario.mission_zones
     }
-    _node_zone_membership: Dict[str, set] = {}  # node_id -> set of active zone_ids
+    _node_zone_membership: dict[str, set] = {}  # node_id -> set of active zone_ids
     # Track previously covered cells so we can emit per-frame deltas for the
     # viewer's LiDAR reconstruction.  Starts as all-zeros (nothing covered).
     _prev_coverage_count_grid: np.ndarray = np.zeros(
@@ -4073,8 +4377,8 @@ def run_simulation(
         cruise_speed_m_per_s=28.0,
         climb_speed_m_per_s=5.0,
     )
-    _battery_states: Dict[str, BatteryState] = {}
-    _battery_prev_positions: Dict[str, Optional[np.ndarray]] = {}
+    _battery_states: dict[str, BatteryState] = {}
+    _battery_prev_positions: dict[str, np.ndarray | None] = {}
     _battery_low_warned: set = set()
     for node in scenario.nodes:
         if node.is_mobile:
@@ -4098,7 +4402,7 @@ def run_simulation(
 
     # GridLocalizer estimates drone self-pose against the built coverage map.
     _grid_localizer = GridLocalizer(LocalizationConfig())
-    _loc_estimates: List[LocalizationEstimate] = []
+    _loc_estimates: list[LocalizationEstimate] = []
     _loc_confidence_threshold = 0.65
     _loc_timed_out: bool = False
 
@@ -4112,35 +4416,49 @@ def run_simulation(
     _shared_state = SharedMissionState()
     _coordinator_elected = False
 
+    # Deconfliction layer: enforces minimum inter-drone separation each step.
+    _deconfliction = DeconflictionLayer(
+        config=DeconflictionConfig(),
+        role_lookup=scenario.drone_roles,
+        terrain=scenario.terrain,
+        exclusion_zones=list(scenario.mission_zones),
+        corridors=list(getattr(scenario, "corridors", ())),
+    )
+
     # Inspection flags.
     _poi_rescored = False
     # Tracks which poi_id each drone is flying toward (to detect new assignments).
-    _drone_poi_assignments: Dict[str, str] = {}
+    _drone_poi_assignments: dict[str, str] = {}
     # Per-drone goto-hover trajectory overrides while inspecting a POI.
-    _poi_trajectories: Dict[str, TrajectoryFn] = {}
+    _poi_trajectories: dict[str, TrajectoryFn] = {}
     # Per-drone return-to-home trajectories used during the egress phase.
-    _egress_trajectories: Dict[str, TrajectoryFn] = {}
+    _egress_trajectories: dict[str, TrajectoryFn] = {}
     # Home station position for each drone (captured once at sim start).
-    _drone_home_positions: Dict[str, np.ndarray] = {
+    _drone_home_positions: dict[str, np.ndarray] = {
         drone_id: ctrl.station_position.copy()
         for drone_id, ctrl in scenario.launchable_controllers.items()
     }
 
-    def _make_goto_hover(sp: np.ndarray, txy: np.ndarray, tz: float,
-                         ts: float, ta: float) -> TrajectoryFn:
+    def _make_goto_hover(
+        sp: np.ndarray, txy: np.ndarray, tz: float, ts: float, ta: float
+    ) -> TrajectoryFn:
         """Return a trajectory function that linearly flies sp→(txy, tz) over [ts, ta]."""
+
         def _traj(t: float):
             if t >= ta:
                 return np.array([txy[0], txy[1], tz]), np.zeros(3)
             frac = max(0.0, min(1.0, (t - ts) / max(ta - ts, 1e-9)))
-            pos = np.array([
-                sp[0] + frac * (txy[0] - sp[0]),
-                sp[1] + frac * (txy[1] - sp[1]),
-                sp[2] + frac * (tz - sp[2]),
-            ])
+            pos = np.array(
+                [
+                    sp[0] + frac * (txy[0] - sp[0]),
+                    sp[1] + frac * (txy[1] - sp[1]),
+                    sp[2] + frac * (tz - sp[2]),
+                ]
+            )
             dt_inv = 1.0 / max(ta - ts, 1e-9)
             vel = np.array([txy[0] - sp[0], txy[1] - sp[1], tz - sp[2]]) * dt_inv
             return pos, vel
+
         return _traj
 
     # Auto-generate POIs spread across the map interior.
@@ -4149,15 +4467,18 @@ def run_simulation(
     _POI_HOVER_AGL_M = 40.0  # metres above ground the drone hovers while dwelling
 
     def _make_poi_positions(
-        bounds: Dict, count: int, seed: int,
-        terrain=None, obstacles=None,
-    ) -> List[np.ndarray]:
+        bounds: dict,
+        count: int,
+        seed: int,
+        terrain=None,
+        obstacles=None,
+    ) -> list[np.ndarray]:
         rng2 = np.random.default_rng(seed + 999)
         x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
         y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
         margin_x = (x_max - x_min) * 0.15
         margin_y = (y_max - y_min) * 0.15
-        positions: List[np.ndarray] = []
+        positions: list[np.ndarray] = []
         for _ in range(count):
             for _attempt in range(200):
                 x = float(rng2.uniform(x_min + margin_x, x_max - margin_x))
@@ -4175,7 +4496,9 @@ def run_simulation(
         return positions
 
     _poi_positions = _make_poi_positions(
-        dict(scenario.map_bounds_m), _poi_count_cfg, simulation_config.seed,
+        dict(scenario.map_bounds_m),
+        _poi_count_cfg,
+        simulation_config.seed,
         terrain=scenario.terrain,
         obstacles=getattr(scenario.environment, "obstacles", None),
     )
@@ -4200,10 +4523,10 @@ def run_simulation(
 
     # --- VIO backends ---
     # One EKFVIO per mobile node; ground-station nodes don't need odometry.
-    _vio_backends: Dict[str, EKFVIO] = {}
-    _vio_prev_positions: Dict[str, np.ndarray] = {}
-    _vio_prev_velocities: Dict[str, np.ndarray] = {}
-    _vio_estimates_per_frame: List[Dict[str, object]] = []
+    _vio_backends: dict[str, EKFVIO] = {}
+    _vio_prev_positions: dict[str, np.ndarray] = {}
+    _vio_prev_velocities: dict[str, np.ndarray] = {}
+    _vio_estimates_per_frame: list[dict[str, object]] = []
     _vio_feature_ids = list(range(10))  # stable feature IDs for inter-frame matching
     for node in scenario.nodes:
         if node.is_mobile:
@@ -4228,11 +4551,15 @@ def run_simulation(
                 _battery_states[ns.node_id] = _battery_states[ns.node_id].consume(cost_wh)
                 remaining = _battery_states[ns.node_id].remaining_wh
                 frac = remaining / _battery_model.capacity_wh
-                if frac <= _battery_model.reserve_fraction and ns.node_id not in _battery_low_warned:
+                if (
+                    frac <= _battery_model.reserve_fraction
+                    and ns.node_id not in _battery_low_warned
+                ):
                     _battery_low_warned.add(ns.node_id)
                     import warnings
+
                     warnings.warn(
-                        f"[Battery] {ns.node_id} at {frac*100:.1f}% — at reserve threshold",
+                        f"[Battery] {ns.node_id} at {frac * 100:.1f}% — at reserve threshold",
                         stacklevel=1,
                     )
             _battery_prev_positions[ns.node_id] = np.array(ns.position, dtype=float)
@@ -4272,15 +4599,45 @@ def run_simulation(
                 overridden.append(ns)
             node_states = overridden
 
+        # --- Inter-drone deconfliction ---
+        # Resolve close-approaches between mobile drones by yielding the lower-
+        # priority drone perpendicular to its heading. Runs after all controller
+        # and trajectory overrides but before observation generation, so the
+        # tracker and replay see the resolved positions.
+        _step_deconfliction_events: list[DeconflictionEvent] = []
+        _mobile_proposed = {
+            ns.node_id: (
+                np.asarray(ns.position, dtype=float),
+                np.asarray(ns.velocity, dtype=float),
+            )
+            for ns in node_states
+            if ns.is_mobile
+        }
+        if len(_mobile_proposed) >= 2:
+            _resolved, _step_deconfliction_events = _deconfliction.resolve_step(
+                _mobile_proposed, timestamp_s
+            )
+            if _step_deconfliction_events:
+                node_states = [
+                    replace(
+                        ns,
+                        position=list(_resolved[ns.node_id][0]),
+                        velocity=list(_resolved[ns.node_id][1]),
+                    )
+                    if ns.node_id in _resolved
+                    else ns
+                    for ns in node_states
+                ]
+
         truths = scenario.truths(timestamp_s)
 
         # --- VIO update (Phase 2.4) ---
         # Run EKFVIO for each mobile node using synthetic IMU + features derived
         # from the ground-truth trajectory.  Must happen before ingest_frame so
         # that use_vio_position can substitute positions into the tracker request.
-        step_vio: Dict[str, object] = {}
+        step_vio: dict[str, object] = {}
         dt_s = simulation_config.dt_s
-        _vio_positions_this_step: Dict[str, np.ndarray] = {}
+        _vio_positions_this_step: dict[str, np.ndarray] = {}
         for node in scenario.nodes:
             if not node.is_mobile:
                 continue
@@ -4383,12 +4740,10 @@ def run_simulation(
             for ns in mobile_states:
                 terrain_h = 0.0
                 if scenario.terrain is not None:
-                    try:
-                        terrain_h = float(scenario.terrain.height_at(
-                            float(ns.position[0]), float(ns.position[1])
-                        ))
-                    except Exception:
-                        pass
+                    with contextlib.suppress(Exception):
+                        terrain_h = float(
+                            scenario.terrain.height_at(float(ns.position[0]), float(ns.position[1]))
+                        )
                 _world_map.add_scan_observation(
                     drone_position=np.array(ns.position, dtype=float),
                     terrain_height=terrain_h,
@@ -4404,7 +4759,11 @@ def run_simulation(
                 _loc_estimates = []
                 for ns in mobile_states:
                     spd = float(np.linalg.norm(ns.velocity[:2]))
-                    heading = float(np.arctan2(float(ns.velocity[1]), float(ns.velocity[0]))) if spd > 0.1 else 0.0
+                    heading = (
+                        float(np.arctan2(float(ns.velocity[1]), float(ns.velocity[0])))
+                        if spd > 0.1
+                        else 0.0
+                    )
                     est = _grid_localizer.update(
                         drone_id=ns.node_id,
                         nominal_position=np.array(ns.position, dtype=float),
@@ -4431,17 +4790,16 @@ def run_simulation(
                     # Gap-fill gate: only transition if enclosed interior holes
                     # are below the minimum fraction threshold.
                     _gap_cells = _frontier_planner.find_gap_cells(_world_map.coverage_map)
-                    _total_cells = max(_world_map.coverage_map.bounds.nx * _world_map.coverage_map.bounds.ny, 1)
+                    _total_cells = max(
+                        _world_map.coverage_map.bounds.nx * _world_map.coverage_map.bounds.ny, 1
+                    )
                     if len(_gap_cells) / _total_cells < _frontier_planner.cfg.gap_fill_min_fraction:
                         # If localization already converged during scanning,
                         # skip the localizing phase entirely.
                         loc_converged = (not mobile_states) or all(
                             e.confidence >= _loc_confidence_threshold for e in _loc_estimates
                         )
-                        if loc_converged:
-                            _scan_phase = "inspecting"
-                        else:
-                            _scan_phase = "localizing"
+                        _scan_phase = "inspecting" if loc_converged else "localizing"
                         _phase_started_at_s = timestamp_s
 
             elif _scan_phase == "localizing":
@@ -4494,15 +4852,27 @@ def run_simulation(
                         if poi_id is not None:
                             for other_ns in mobile_states:
                                 other_batt = _battery_states.get(other_ns.node_id)
-                                other_frac = (other_batt.remaining_wh / _battery_model.capacity_wh if other_batt else 1.0)
-                                if other_ns.node_id != ns.node_id and other_frac > 0.50 and _poi_manager.assignment_for(other_ns.node_id) is None:
+                                other_frac = (
+                                    other_batt.remaining_wh / _battery_model.capacity_wh
+                                    if other_batt
+                                    else 1.0
+                                )
+                                if (
+                                    other_ns.node_id != ns.node_id
+                                    and other_frac > 0.50
+                                    and _poi_manager.assignment_for(other_ns.node_id) is None
+                                ):
                                     _poi_manager.trigger_handoff(ns.node_id, other_ns.node_id)
                                     break
-                    _poi_manager.accumulate_dwell(ns.node_id, np.array(ns.position, dtype=float), simulation_config.dt_s)
+                    _poi_manager.accumulate_dwell(
+                        ns.node_id, np.array(ns.position, dtype=float), simulation_config.dt_s
+                    )
                 # Team assignment: if one POI remains and multiple drones are free.
                 pending_pois = [p for p in _poi_manager.statuses if p.status == "pending"]
                 if len(pending_pois) == 1 and len(drone_ids_unassigned) > 1:
-                    _poi_manager.request_team_assign(pending_pois[0].poi_id, drone_ids_unassigned[1])
+                    _poi_manager.request_team_assign(
+                        pending_pois[0].poi_id, drone_ids_unassigned[1]
+                    )
                 newly_completed = _poi_manager.check_completions(timestamp_s)
                 # When a POI completes, clear the redirect so the drone can be reassigned.
                 for done_poi_id in newly_completed:
@@ -4543,22 +4913,20 @@ def run_simulation(
         else:
             scan_frac = cov.coverage_fraction
 
-        step_scan_mission_state: Optional[ScanMissionState] = None
+        step_scan_mission_state: ScanMissionState | None = None
         if _mission_mode == "scan_map_inspect":
             # Compute delta: which cells were newly covered this step?
-            _curr_grid = _coverage_map.count_grid          # (nx, ny) int32
+            _curr_grid = _coverage_map.count_grid  # (nx, ny) int32
             _new_mask = (_curr_grid > 0) & (_prev_coverage_count_grid == 0)
-            _newly_covered: List[Tuple[float, float, float]] = []
+            _newly_covered: list[tuple[float, float, float]] = []
             if _new_mask.any():
                 _ii, _jj = np.where(_new_mask)
                 _b = _coverage_bounds
-                for _ci, _cj in zip(_ii.tolist(), _jj.tolist()):
+                for _ci, _cj in zip(_ii.tolist(), _jj.tolist(), strict=False):
                     _cx, _cy = _b.ij_to_xy(int(_ci), int(_cj))
                     _th = 0.0
-                    try:
+                    with contextlib.suppress(Exception):
                         _th = float(scenario.terrain.height_at(float(_cx), float(_cy)))
-                    except Exception:
-                        pass
                     _newly_covered.append((round(_cx, 1), round(_cy, 1), round(_th, 1)))
             # Advance the previous grid snapshot
             _prev_coverage_count_grid = _curr_grid.copy()
@@ -4567,17 +4935,23 @@ def run_simulation(
                 replace(s, position=_poi_manager._pois[s.poi_id].position)
                 for s in _poi_manager.statuses
             ]
-            _egress_prog = tuple(
-                EgressDroneProgress(
-                    drone_id=ns.node_id,
-                    distance_to_home_m=float(np.linalg.norm(
-                        _drone_home_positions[ns.node_id][:2] - np.array(ns.position[:2])
-                    )),
-                    home_position=_drone_home_positions[ns.node_id],
+            _egress_prog = (
+                tuple(
+                    EgressDroneProgress(
+                        drone_id=ns.node_id,
+                        distance_to_home_m=float(
+                            np.linalg.norm(
+                                _drone_home_positions[ns.node_id][:2] - np.array(ns.position[:2])
+                            )
+                        ),
+                        home_position=_drone_home_positions[ns.node_id],
+                    )
+                    for ns in mobile_states
+                    if ns.node_id in _drone_home_positions
                 )
-                for ns in mobile_states
-                if ns.node_id in _drone_home_positions
-            ) if _scan_phase == "egress" else ()
+                if _scan_phase == "egress"
+                else ()
+            )
             step_scan_mission_state = ScanMissionState(
                 phase=_scan_phase,
                 scan_coverage_fraction=scan_frac,
@@ -4594,10 +4968,10 @@ def run_simulation(
             )
 
         # --- Localization quality (derived from track covariances) ---
-        step_localization_state: Optional[LocalizationState] = None
+        step_localization_state: LocalizationState | None = None
         if frame.tracks:
-            pos_stds: List[float] = []
-            confidences: List[float] = []
+            pos_stds: list[float] = []
+            confidences: list[float] = []
             for track in frame.tracks:
                 if track.covariance is not None:
                     flat = np.asarray(track.covariance).flatten()
@@ -4612,7 +4986,7 @@ def run_simulation(
             )
 
         # --- Inspection events (zone entry / coverage_updated / exit) ---
-        step_inspection_events: List[InspectionEvent] = []
+        step_inspection_events: list[InspectionEvent] = []
         for zone in scenario.mission_zones:
             zmap = _zone_coverage_maps[zone.zone_id]
             zcenter = np.array([zone.center[0], zone.center[1]], dtype=float)
@@ -4628,11 +5002,7 @@ def run_simulation(
                 zcov = zmap.stats.coverage_fraction
                 if inside and not was_inside:
                     # Exclusion-zone entry is a violation, not a normal entry.
-                    event_type = (
-                        "violation"
-                        if zone.zone_type == ZONE_TYPE_EXCLUSION
-                        else "entered"
-                    )
+                    event_type = "violation" if zone.zone_type == ZONE_TYPE_EXCLUSION else "entered"
                     _node_zone_membership.setdefault(ns.node_id, set()).add(zone.zone_id)
                 elif not inside and was_inside:
                     event_type = "exited"
@@ -4641,13 +5011,15 @@ def run_simulation(
                     event_type = "coverage_updated"
                 else:
                     continue
-                step_inspection_events.append(InspectionEvent(
-                    zone_id=zone.zone_id,
-                    node_id=ns.node_id,
-                    event_type=event_type,
-                    timestamp_s=timestamp_s,
-                    zone_coverage_fraction=zcov,
-                ))
+                step_inspection_events.append(
+                    InspectionEvent(
+                        zone_id=zone.zone_id,
+                        node_id=ns.node_id,
+                        event_type=event_type,
+                        timestamp_s=timestamp_s,
+                        zone_coverage_fraction=zcov,
+                    )
+                )
 
         frame = PlatformFrame(
             timestamp_s=frame.timestamp_s,
@@ -4662,6 +5034,7 @@ def run_simulation(
             mapping_state=step_mapping_state,
             localization_state=step_localization_state,
             inspection_events=step_inspection_events,
+            deconfliction_events=_step_deconfliction_events,
             scan_mission_state=step_scan_mission_state,
         )
 
@@ -4714,12 +5087,16 @@ def run_simulation(
     )
 
 
-def build_simulation_report_lines(result: SimulationResult) -> List[str]:
+def build_simulation_report_lines(result: SimulationResult) -> list[str]:
     lines = ["time_s  active_tracks  observations  mean_error_m  max_error_m"]
     stride = max(1, int(round(1.0 / result.simulation_config.dt_s)))
     for frame in result.frames[::stride]:
-        mean_error = "n/a" if frame.metrics.mean_error_m is None else f"{frame.metrics.mean_error_m:6.2f}"
-        max_error = "n/a" if frame.metrics.max_error_m is None else f"{frame.metrics.max_error_m:6.2f}"
+        mean_error = (
+            "n/a" if frame.metrics.mean_error_m is None else f"{frame.metrics.mean_error_m:6.2f}"
+        )
+        max_error = (
+            "n/a" if frame.metrics.max_error_m is None else f"{frame.metrics.max_error_m:6.2f}"
+        )
         lines.append(
             f"{frame.timestamp_s:>6.1f}  "
             f"{frame.metrics.active_track_count:>13}  "
@@ -4734,7 +5111,9 @@ def build_simulation_report_lines(result: SimulationResult) -> List[str]:
         lines.append("No fused tracks were produced.")
     else:
         lines.append("")
-        lines.append(f"Track RMSE: {rmse:.2f} m across {result.summary['track_update_count']} track updates")
+        lines.append(
+            f"Track RMSE: {rmse:.2f} m across {result.summary['track_update_count']} track updates"
+        )
     return lines
 
 
@@ -4754,12 +5133,12 @@ def build_replay_document_from_result(result: SimulationResult) -> ReplayDocumen
 
 # Indices of diagonal elements for a 6x6 covariance stored as a 36-element
 # flat list: positions (0,0),(1,1),(2,2),(3,3),(4,4),(5,5).
-_COV6_DIAG_INDICES: List[int] = [0, 7, 14, 21, 28, 35]
+_COV6_DIAG_INDICES: list[int] = [0, 7, 14, 21, 28, 35]
 # Same for a 3x3 (9-element flat list).
-_COV3_DIAG_INDICES: List[int] = [0, 4, 8]
+_COV3_DIAG_INDICES: list[int] = [0, 4, 8]
 
 
-def _compact_frame(frame_dict: Dict[str, object]) -> Dict[str, object]:
+def _compact_frame(frame_dict: dict[str, object]) -> dict[str, object]:
     """Return a copy of *frame_dict* with debug fields omitted and precision reduced.
 
     Applied when ``--compact`` is active:
@@ -4770,7 +5149,7 @@ def _compact_frame(frame_dict: Dict[str, object]) -> Dict[str, object]:
     * Position values are rounded to 2 decimal places.
     * Velocity and bearing values are rounded to 4 decimal places.
     """
-    out: Dict[str, object] = {}
+    out: dict[str, object] = {}
     for key, value in frame_dict.items():
         if key in ("generation_rejections", "rejected_observations"):
             continue
@@ -4780,7 +5159,7 @@ def _compact_frame(frame_dict: Dict[str, object]) -> Dict[str, object]:
                 if not isinstance(track, dict):
                     compact_tracks.append(track)
                     continue
-                t: Dict[str, object] = {}
+                t: dict[str, object] = {}
                 for tk, tv in track.items():
                     if tk == "covariance" and isinstance(tv, list):
                         n = len(tv)
@@ -4801,7 +5180,7 @@ def _compact_frame(frame_dict: Dict[str, object]) -> Dict[str, object]:
                 if not isinstance(node, dict):
                     compact_nodes.append(node)
                     continue
-                nd: Dict[str, object] = {}
+                nd: dict[str, object] = {}
                 for nk, nv in node.items():
                     if nk == "position" and isinstance(nv, list):
                         nv = [round(float(v), 2) for v in nv]
@@ -4816,7 +5195,7 @@ def _compact_frame(frame_dict: Dict[str, object]) -> Dict[str, object]:
                 if not isinstance(obs, dict):
                     compact_obs.append(obs)
                     continue
-                ob: Dict[str, object] = {}
+                ob: dict[str, object] = {}
                 for ok, ov in obs.items():
                     if ok == "position" and isinstance(ov, list):
                         ov = [round(float(v), 2) for v in ov]
@@ -4862,12 +5241,12 @@ def _build_compact_replay_document(
 
 
 def simulate(
-    steps: Optional[int],
+    steps: int | None,
     dt: float,
     seed: int,
-    csv_path: Optional[str],
-    replay_path: Optional[str],
-    duration_s: Optional[float] = None,
+    csv_path: str | None,
+    replay_path: str | None,
+    duration_s: float | None = None,
     map_preset: str = "regional",
     target_motion: str = "mixed",
     drone_mode: str = "mixed",
@@ -4890,7 +5269,9 @@ def simulate(
     if steps is not None:
         simulation_config = SimulationConfig(steps=steps, dt_s=dt, seed=seed)
     else:
-        active_duration_s = constants.dynamics.default_duration_s if duration_s is None else duration_s
+        active_duration_s = (
+            constants.dynamics.default_duration_s if duration_s is None else duration_s
+        )
         simulation_config = SimulationConfig.from_duration(active_duration_s, dt_s=dt, seed=seed)
 
     scenario = build_default_scenario(
@@ -4913,7 +5294,7 @@ def simulate(
         constants=constants,
     )
     # Derive streaming JSONL path alongside the replay output.
-    streaming_jsonl_path: Optional[Path] = None
+    streaming_jsonl_path: Path | None = None
     if streaming and replay_path:
         streaming_jsonl_path = Path(replay_path).with_suffix(".frames.jsonl")
 
@@ -4936,6 +5317,7 @@ def simulate(
         if streaming_jsonl_path is not None and streaming_jsonl_path.exists():
             # Assemble replay from the JSONL file without loading all frames.
             from argusnet.evaluation.replay import write_streaming_replay_document
+
             write_streaming_replay_document(
                 jsonl_path=streaming_jsonl_path,
                 output_path=Path(replay_path),
@@ -4966,15 +5348,12 @@ class _TrackProvidedAction(argparse.Action):
         parser: argparse.ArgumentParser,
         namespace: argparse.Namespace,
         values: object,
-        option_string: Optional[str] = None,
+        option_string: str | None = None,
     ) -> None:
         provided = getattr(namespace, "_provided_sim_args", None)
-        if provided is None:
-            provided = set()
-        else:
-            provided = set(provided)
+        provided = set() if provided is None else set(provided)
         provided.add(self.dest)
-        setattr(namespace, "_provided_sim_args", provided)
+        namespace._provided_sim_args = provided
         if self.nargs == 0:
             setattr(namespace, self.dest, self.const if self.const is not None else True)
         else:
@@ -5010,8 +5389,16 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         action=_TrackProvidedAction,
         help="Simulation duration in seconds.",
     )
-    parser.add_argument("--dt", type=float, default=DEFAULT_SIM_DT_S, action=_TrackProvidedAction, help="Simulation step in seconds.")
-    parser.add_argument("--seed", type=int, default=7, action=_TrackProvidedAction, help="Random seed.")
+    parser.add_argument(
+        "--dt",
+        type=float,
+        default=DEFAULT_SIM_DT_S,
+        action=_TrackProvidedAction,
+        help="Simulation step in seconds.",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=7, action=_TrackProvidedAction, help="Random seed."
+    )
     parser.add_argument(
         "--config-file",
         default=None,
@@ -5045,7 +5432,9 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         nargs=0,
         const=True,
         default=False,
-        help="Keep terrain geometry but omit buildings, walls, and vegetation from the environment.",
+        help=(
+            "Keep terrain geometry but omit buildings, walls, and vegetation from the environment."
+        ),
     )
     parser.add_argument(
         "--platform-preset",
@@ -5054,9 +5443,28 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         action=_TrackProvidedAction,
         help="Named kinematics and range preset for targets and sensors.",
     )
-    parser.add_argument("--ground-stations", type=int, default=7, action=_TrackProvidedAction, help="Number of fixed ground stations to place.")
-    parser.add_argument("--target-count", type=int, default=0, action=_TrackProvidedAction, dest="target_count", help="Number of targets to simulate (default 0 in scan_map_inspect mode).")
-    parser.add_argument("--drone-count", type=int, default=2, action=_TrackProvidedAction, help="Number of mobile drones to simulate.")
+    parser.add_argument(
+        "--ground-stations",
+        type=int,
+        default=7,
+        action=_TrackProvidedAction,
+        help="Number of fixed ground stations to place.",
+    )
+    parser.add_argument(
+        "--target-count",
+        type=int,
+        default=0,
+        action=_TrackProvidedAction,
+        dest="target_count",
+        help="Number of targets to simulate (default 0 in scan_map_inspect mode).",
+    )
+    parser.add_argument(
+        "--drone-count",
+        type=int,
+        default=2,
+        action=_TrackProvidedAction,
+        help="Number of mobile drones to simulate.",
+    )
     parser.add_argument(
         "--target-motion",
         choices=sorted(TARGET_MOTION_PRESETS),
@@ -5071,18 +5479,54 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         action=_TrackProvidedAction,
         help="Mobile drone planner preset.",
     )
-    parser.add_argument("--csv", dest="csv_path", default=None, action=_TrackProvidedAction, help="Optional per-track metrics CSV.")
-    parser.add_argument("--replay", dest="replay_path", default="replay.json", action=_TrackProvidedAction, help="Replay JSON output.")
-    parser.add_argument("--compact", action="store_true", default=False, help="Write compact replay (omit debug fields, reduce precision).")
-    parser.add_argument("--replay-subsample", type=int, default=1, metavar="N", help="Write every Nth frame to replay (1=all frames).")
-    parser.add_argument("--mission-mode", dest="mission_mode",
-                        choices=["scan_map_inspect", "target_tracking"],
-                        default="scan_map_inspect",
-                        help="Mission mode: scan_map_inspect (default) or target_tracking (legacy).")
-    parser.add_argument("--scan-threshold", dest="scan_coverage_threshold", type=float, default=0.70,
-                        help="Coverage fraction (0-1) to trigger LOCALIZING phase (default: 0.70).")
-    parser.add_argument("--poi-count", dest="poi_count", type=int, default=3,
-                        help="Number of auto-generated POIs in scan_map_inspect mode (default: 3).")
+    parser.add_argument(
+        "--csv",
+        dest="csv_path",
+        default=None,
+        action=_TrackProvidedAction,
+        help="Optional per-track metrics CSV.",
+    )
+    parser.add_argument(
+        "--replay",
+        dest="replay_path",
+        default="replay.json",
+        action=_TrackProvidedAction,
+        help="Replay JSON output.",
+    )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        default=False,
+        help="Write compact replay (omit debug fields, reduce precision).",
+    )
+    parser.add_argument(
+        "--replay-subsample",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Write every Nth frame to replay (1=all frames).",
+    )
+    parser.add_argument(
+        "--mission-mode",
+        dest="mission_mode",
+        choices=["scan_map_inspect", "target_tracking"],
+        default="scan_map_inspect",
+        help="Mission mode: scan_map_inspect (default) or target_tracking (legacy).",
+    )
+    parser.add_argument(
+        "--scan-threshold",
+        dest="scan_coverage_threshold",
+        type=float,
+        default=0.70,
+        help="Coverage fraction (0-1) to trigger LOCALIZING phase (default: 0.70).",
+    )
+    parser.add_argument(
+        "--poi-count",
+        dest="poi_count",
+        type=int,
+        default=3,
+        help="Number of auto-generated POIs in scan_map_inspect mode (default: 3).",
+    )
     parser.add_argument(
         "--streaming",
         action="store_true",
@@ -5103,7 +5547,7 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     return parser
 
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the 3D sensor fusion platform simulation.")
     add_cli_arguments(parser)
     return parser.parse_args(argv)
@@ -5159,7 +5603,7 @@ def run_from_args(args: argparse.Namespace) -> None:
     )
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     run_from_args(parse_args(argv))
 
 

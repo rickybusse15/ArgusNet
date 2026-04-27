@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import math
 import struct
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -27,7 +26,11 @@ class SimpleMesh:
             raise ValueError("positions must have shape (n, 3)")
         if normals.shape != positions.shape:
             raise ValueError("normals must have the same shape as positions")
-        if colors.ndim != 2 or colors.shape[0] != positions.shape[0] or colors.shape[1] not in (3, 4):
+        if (
+            colors.ndim != 2
+            or colors.shape[0] != positions.shape[0]
+            or colors.shape[1] not in (3, 4)
+        ):
             raise ValueError("colors must have shape (n, 3) or (n, 4)")
         if indices.ndim != 1:
             raise ValueError("indices must be a flat array")
@@ -101,7 +104,9 @@ def write_glb(path: str | Path, mesh: SimpleMesh, *, name: str) -> None:
 
     position_bytes = np.ascontiguousarray(mesh.positions.astype(np.float32)).tobytes(order="C")
     normal_bytes = np.ascontiguousarray(mesh.normals.astype(np.float32)).tobytes(order="C")
-    color_bytes = np.ascontiguousarray(np.clip(mesh.colors, 0.0, 1.0).astype(np.float32)).tobytes(order="C")
+    color_bytes = np.ascontiguousarray(np.clip(mesh.colors, 0.0, 1.0).astype(np.float32)).tobytes(
+        order="C"
+    )
     index_bytes = np.ascontiguousarray(mesh.indices.astype(np.uint32)).tobytes(order="C")
 
     chunks: list[bytes] = []

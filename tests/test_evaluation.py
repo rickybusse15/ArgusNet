@@ -3,16 +3,13 @@
 Covers metric computation functions, the full evaluate_replay pipeline,
 pass/fail checking, serialisation round-trips, and edge cases.
 """
-from __future__ import annotations
 
-import math
-from typing import Dict, List
+from __future__ import annotations
 
 import numpy as np
 import pytest
 
 from argusnet.evaluation.metrics import (
-    DEFAULT_THRESHOLDS,
     EvaluationReport,
     check_pass_fail,
     compute_covariance_reduction,
@@ -24,17 +21,17 @@ from argusnet.evaluation.metrics import (
     report_to_dict,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers — synthetic frame / replay builders
 # ---------------------------------------------------------------------------
 
+
 def _make_frame(
     ts: float,
-    tracks: List[dict] | None = None,
-    truths: List[dict] | None = None,
-    observations: List[dict] | None = None,
-    nodes: List[dict] | None = None,
+    tracks: list[dict] | None = None,
+    truths: list[dict] | None = None,
+    observations: list[dict] | None = None,
+    nodes: list[dict] | None = None,
 ) -> dict:
     """Build a single replay frame dict."""
     f: dict = {"timestamp_s": ts}
@@ -75,7 +72,7 @@ def _identity_cov(scale: float = 1.0) -> list:
 
 def _build_good_replay() -> dict:
     """Return a synthetic replay document that should pass all default thresholds."""
-    frames: List[dict] = []
+    frames: list[dict] = []
     n_frames = 20
     for i in range(n_frames):
         ts = float(i)
@@ -113,6 +110,7 @@ def _build_good_replay() -> dict:
 # ===================================================================
 # compute_time_to_reacquire
 # ===================================================================
+
 
 class TestTimeToReacquire:
     def test_empty_frames_returns_none(self):
@@ -176,6 +174,7 @@ class TestTimeToReacquire:
 # compute_track_continuity
 # ===================================================================
 
+
 class TestTrackContinuity:
     def test_empty_frames(self):
         mean, per = compute_track_continuity([], ["tgt1"])
@@ -226,6 +225,7 @@ class TestTrackContinuity:
 # ===================================================================
 # compute_localisation_rmse
 # ===================================================================
+
 
 class TestLocalisationRMSE:
     def test_empty_frames(self):
@@ -303,6 +303,7 @@ class TestLocalisationRMSE:
 # compute_covariance_reduction
 # ===================================================================
 
+
 class TestCovarianceReduction:
     def test_empty_frames(self):
         assert compute_covariance_reduction([]) is None
@@ -316,11 +317,15 @@ class TestCovarianceReduction:
         frames = [
             _make_frame(
                 0.0,
-                tracks=[_make_track("t1", [0, 0, 0], covariance=_identity_cov(10.0), update_count=3)],
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(10.0), update_count=3)
+                ],
             ),
             _make_frame(
                 1.0,
-                tracks=[_make_track("t1", [0, 0, 0], covariance=_identity_cov(2.0), update_count=4)],
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(2.0), update_count=4)
+                ],
             ),
         ]
         assert compute_covariance_reduction(frames) is None
@@ -330,11 +335,15 @@ class TestCovarianceReduction:
         frames = [
             _make_frame(
                 0.0,
-                tracks=[_make_track("t1", [0, 0, 0], covariance=_identity_cov(10.0), update_count=1)],
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(10.0), update_count=1)
+                ],
             ),
             _make_frame(
                 1.0,
-                tracks=[_make_track("t1", [0, 0, 0], covariance=_identity_cov(5.0), update_count=10)],
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(5.0), update_count=10)
+                ],
             ),
         ]
         result = compute_covariance_reduction(frames)
@@ -353,7 +362,9 @@ class TestCovarianceReduction:
     def test_covariance_too_small_ignored(self):
         """Covariance with fewer than 9 elements is skipped."""
         frames = [
-            _make_frame(0.0, tracks=[_make_track("t1", [0, 0, 0], covariance=[1, 2, 3], update_count=10)]),
+            _make_frame(
+                0.0, tracks=[_make_track("t1", [0, 0, 0], covariance=[1, 2, 3], update_count=10)]
+            ),
         ]
         assert compute_covariance_reduction(frames) is None
 
@@ -361,6 +372,7 @@ class TestCovarianceReduction:
 # ===================================================================
 # evaluate_replay
 # ===================================================================
+
 
 class TestEvaluateReplay:
     def test_basic_fields(self):
@@ -425,6 +437,7 @@ class TestEvaluateReplay:
 # check_pass_fail
 # ===================================================================
 
+
 class TestCheckPassFail:
     def _good_report(self) -> EvaluationReport:
         """Return a report that satisfies all default thresholds."""
@@ -452,8 +465,12 @@ class TestCheckPassFail:
 
     def test_fail_time_to_reacquire(self):
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0,
-            duration_s=60.0, time_to_reacquire_mean_s=35.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=60.0,
+            time_to_reacquire_mean_s=35.0,
         )
         result = check_pass_fail(report)
         assert result.passed is False
@@ -461,9 +478,14 @@ class TestCheckPassFail:
 
     def test_fail_track_continuity(self):
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0,
-            duration_s=60.0, track_continuity_mean=0.5,
-            mission_completion_rate=1.0, energy_reserve_min=1.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=60.0,
+            track_continuity_mean=0.5,
+            mission_completion_rate=1.0,
+            energy_reserve_min=1.0,
         )
         result = check_pass_fail(report)
         assert result.passed is False
@@ -471,9 +493,14 @@ class TestCheckPassFail:
 
     def test_fail_localisation_rmse(self):
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0,
-            duration_s=60.0, localisation_rmse_m=55.0,
-            track_continuity_mean=0.9, mission_completion_rate=1.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=60.0,
+            localisation_rmse_m=55.0,
+            track_continuity_mean=0.9,
+            mission_completion_rate=1.0,
             energy_reserve_min=1.0,
         )
         result = check_pass_fail(report)
@@ -482,9 +509,14 @@ class TestCheckPassFail:
 
     def test_fail_safety_override(self):
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0,
-            duration_s=60.0, safety_override_count=1,
-            track_continuity_mean=0.9, mission_completion_rate=1.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=60.0,
+            safety_override_count=1,
+            track_continuity_mean=0.9,
+            mission_completion_rate=1.0,
             energy_reserve_min=1.0,
         )
         result = check_pass_fail(report)
@@ -493,9 +525,14 @@ class TestCheckPassFail:
 
     def test_fail_energy_reserve(self):
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0,
-            duration_s=60.0, energy_reserve_min=0.05,
-            track_continuity_mean=0.9, mission_completion_rate=1.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=60.0,
+            energy_reserve_min=0.05,
+            track_continuity_mean=0.9,
+            mission_completion_rate=1.0,
         )
         result = check_pass_fail(report)
         assert result.passed is False
@@ -504,9 +541,14 @@ class TestCheckPassFail:
     def test_custom_threshold_override(self):
         """Override one threshold — the rest still use defaults."""
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0,
-            duration_s=60.0, track_continuity_mean=0.7,
-            mission_completion_rate=1.0, energy_reserve_min=1.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=60.0,
+            track_continuity_mean=0.7,
+            mission_completion_rate=1.0,
+            energy_reserve_min=1.0,
         )
         # Default threshold is 0.80 so 0.7 fails normally
         result_default = check_pass_fail(report)
@@ -519,7 +561,10 @@ class TestCheckPassFail:
     def test_multiple_failures(self):
         """A report that fails on several metrics gets all reasons listed."""
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
             duration_s=60.0,
             time_to_reacquire_mean_s=40.0,
             track_continuity_mean=0.5,
@@ -538,6 +583,7 @@ class TestCheckPassFail:
 # ===================================================================
 # Serialisation round-trip
 # ===================================================================
+
 
 class TestSerialisation:
     def test_roundtrip_all_fields(self):
@@ -618,17 +664,26 @@ class TestSerialisation:
 # EvaluationReport dataclass
 # ===================================================================
 
+
 class TestEvaluationReportDataclass:
     def test_frozen(self):
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0, duration_s=0.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=0.0,
         )
         with pytest.raises(AttributeError):
             report.passed = True  # type: ignore[misc]
 
     def test_default_values(self):
         report = EvaluationReport(
-            scenario_name="x", mission_type="m", difficulty=0.0, seed=0, duration_s=0.0,
+            scenario_name="x",
+            mission_type="m",
+            difficulty=0.0,
+            seed=0,
+            duration_s=0.0,
         )
         assert report.passed is False
         assert report.failure_reasons == []
@@ -639,6 +694,7 @@ class TestEvaluationReportDataclass:
 # ===================================================================
 # Integration: evaluate_replay -> check_pass_fail
 # ===================================================================
+
 
 class TestIntegration:
     def test_good_replay_passes(self):
@@ -665,7 +721,11 @@ class TestIntegration:
             "meta": {"duration_s": 9.0},
             "frames": frames,
             "planner_events": [{"event_type": "safety_override"}],
-            "evaluation": {"false_handoff_rate": 0.0, "comms_dropout_count": 0, "comms_dropout_duration_s": 0.0},
+            "evaluation": {
+                "false_handoff_rate": 0.0,
+                "comms_dropout_count": 0,
+                "comms_dropout_duration_s": 0.0,
+            },
             "mission": {"required_objectives_total": 2, "required_objectives_met": 0},
         }
         report = evaluate_replay(replay, "bad", "search", 1.0, 0)

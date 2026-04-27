@@ -240,7 +240,9 @@ class EnvironmentBundleTest(unittest.TestCase):
             loaded = load_environment_bundle(str(bundle_path))
 
         self.assertEqual("bundle-scene", loaded.environment_id)
-        self.assertAlmostEqual(environment.terrain.height_at(10.0, 10.0), loaded.terrain.height_at(10.0, 10.0))
+        self.assertAlmostEqual(
+            environment.terrain.height_at(10.0, 10.0), loaded.terrain.height_at(10.0, 10.0)
+        )
         self.assertEqual(LandCoverClass.FOREST, loaded.land_cover.land_cover_at(15.0, 5.0))
         self.assertEqual(1, len(loaded.obstacles.primitives))
 

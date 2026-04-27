@@ -12,26 +12,26 @@ from __future__ import annotations
 
 import numpy as np
 
-from argusnet.world.environment import (
-    Bounds2D,
-    TerrainLayer,
-    EnvironmentModel,
-    EnvironmentCRS,
-    ObstacleLayer,
-    LandCoverLayer,
-    CylinderObstacle,
-)
+from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 from argusnet.core.types import (
-    MissionZone,
+    ZONE_TYPE_EXCLUSION,
+    ZONE_TYPE_OBJECTIVE,
+    ZONE_TYPE_SURVEILLANCE,
     BearingObservation,
+    MissionZone,
     NodeState,
     TruthState,
     vec3,
-    ZONE_TYPE_SURVEILLANCE,
-    ZONE_TYPE_EXCLUSION,
-    ZONE_TYPE_OBJECTIVE,
 )
-from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+from argusnet.world.environment import (
+    Bounds2D,
+    CylinderObstacle,
+    EnvironmentCRS,
+    EnvironmentModel,
+    LandCoverLayer,
+    ObstacleLayer,
+    TerrainLayer,
+)
 
 
 def create_terrain_environment() -> EnvironmentModel:
@@ -250,8 +250,10 @@ def run_tracking_scenario(env: EnvironmentModel) -> None:
     print("=" * 80)
 
     print(f"\nEnvironment: {env.environment_id}")
-    print(f"Bounds: {env.bounds_xy_m.x_min_m:.0f}-{env.bounds_xy_m.x_max_m:.0f}m x "
-          f"{env.bounds_xy_m.y_min_m:.0f}-{env.bounds_xy_m.y_max_m:.0f}m")
+    print(
+        f"Bounds: {env.bounds_xy_m.x_min_m:.0f}-{env.bounds_xy_m.x_max_m:.0f}m x "
+        f"{env.bounds_xy_m.y_min_m:.0f}-{env.bounds_xy_m.y_max_m:.0f}m"
+    )
 
     print(f"\nSensors: {len(frame.nodes)}")
     for node in frame.nodes:
@@ -271,11 +273,11 @@ def run_tracking_scenario(env: EnvironmentModel) -> None:
     for track in frame.tracks:
         print(f"  {track.track_id}: position={track.position}, stale={track.stale_steps}")
 
-    print(f"\nMetrics:")
+    print("\nMetrics:")
     print(f"  Accepted observations: {frame.metrics.accepted_observation_count}")
     print(f"  Rejected observations: {frame.metrics.rejected_observation_count}")
 
-    print(f"\nRejection counts:")
+    print("\nRejection counts:")
     for reason, count in frame.metrics.rejection_counts.items():
         print(f"  {reason}: {count}")
 
@@ -287,7 +289,11 @@ def run_tracking_scenario(env: EnvironmentModel) -> None:
         if rejection.detail:
             print(f"    Detail: {rejection.detail}")
         if rejection.origin is not None:
-            print(f"    Origin: ({rejection.origin[0]:.1f}, {rejection.origin[1]:.1f}, {rejection.origin[2]:.1f})")
+            print(
+                "    Origin: "
+                f"({rejection.origin[0]:.1f}, {rejection.origin[1]:.1f}, "
+                f"{rejection.origin[2]:.1f})"
+            )
         if rejection.blocker_type:
             print(f"    Blocker type: {rejection.blocker_type}")
         if rejection.first_hit_range_m is not None:

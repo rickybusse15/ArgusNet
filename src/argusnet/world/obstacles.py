@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -16,8 +16,8 @@ def _as_float_array(values: Sequence[Sequence[float]], *, dims: int) -> np.ndarr
     return array
 
 
-def _unique_sorted(values: Iterable[float], tolerance: float = 1.0e-9) -> List[float]:
-    deduped: List[float] = []
+def _unique_sorted(values: Iterable[float], tolerance: float = 1.0e-9) -> list[float]:
+    deduped: list[float] = []
     for value in sorted(values):
         if not deduped or abs(value - deduped[-1]) > tolerance:
             deduped.append(value)
@@ -38,9 +38,7 @@ def _point_on_segment(
     dot = float(np.dot(point, segment))
     if dot < -tolerance:
         return False
-    if dot > float(np.dot(segment, segment)) + tolerance:
-        return False
-    return True
+    return not dot > float(np.dot(segment, segment)) + tolerance
 
 
 def _point_in_polygon(point_xy: np.ndarray, polygon_xy: np.ndarray) -> bool:
@@ -50,7 +48,7 @@ def _point_in_polygon(point_xy: np.ndarray, polygon_xy: np.ndarray) -> bool:
         b = polygon_xy[(index + 1) % len(polygon_xy)]
         if _point_on_segment(point_xy, a, b):
             return True
-        intersects = ((a[1] > point_xy[1]) != (b[1] > point_xy[1]))
+        intersects = (a[1] > point_xy[1]) != (b[1] > point_xy[1])
         if intersects:
             x_cross = (b[0] - a[0]) * (point_xy[1] - a[1]) / max((b[1] - a[1]), 1.0e-12) + a[0]
             if point_xy[0] < x_cross:
@@ -63,7 +61,7 @@ def _segment_intersection_parameters(
     a1: np.ndarray,
     b0: np.ndarray,
     b1: np.ndarray,
-) -> Optional[Tuple[float, float]]:
+) -> tuple[float, float] | None:
     da = a1 - a0
     db = b1 - b0
     denominator = (da[0] * db[1]) - (da[1] * db[0])
@@ -81,8 +79,8 @@ def _segment_polygon_intervals(
     origin_xy: np.ndarray,
     target_xy: np.ndarray,
     polygon_xy: np.ndarray,
-) -> List[Tuple[float, float]]:
-    t_values: List[float] = [0.0, 1.0]
+) -> list[tuple[float, float]]:
+    t_values: list[float] = [0.0, 1.0]
     for index in range(len(polygon_xy)):
         edge_start = polygon_xy[index]
         edge_end = polygon_xy[(index + 1) % len(polygon_xy)]
@@ -91,8 +89,8 @@ def _segment_polygon_intervals(
             t_values.append(parameters[0])
     t_values = _unique_sorted(value for value in t_values if -1.0e-9 <= value <= 1.0 + 1.0e-9)
 
-    intervals: List[Tuple[float, float]] = []
-    for start, end in zip(t_values[:-1], t_values[1:]):
+    intervals: list[tuple[float, float]] = []
+    for start, end in zip(t_values[:-1], t_values[1:], strict=False):
         if end - start <= 1.0e-9:
             continue
         midpoint = (start + end) * 0.5
@@ -102,7 +100,9 @@ def _segment_polygon_intervals(
     return intervals
 
 
-def _nearest_point_on_segment(point_xy: np.ndarray, start_xy: np.ndarray, end_xy: np.ndarray) -> np.ndarray:
+def _nearest_point_on_segment(
+    point_xy: np.ndarray, start_xy: np.ndarray, end_xy: np.ndarray
+) -> np.ndarray:
     segment = end_xy - start_xy
     length_sq = float(np.dot(segment, segment))
     if length_sq <= 1.0e-12:
@@ -114,7 +114,9 @@ def _nearest_point_on_segment(point_xy: np.ndarray, start_xy: np.ndarray, end_xy
 def _signed_polygon_area(polygon_xy: np.ndarray) -> float:
     x_values = polygon_xy[:, 0]
     y_values = polygon_xy[:, 1]
-    return 0.5 * float(np.dot(x_values, np.roll(y_values, -1)) - np.dot(y_values, np.roll(x_values, -1)))
+    return 0.5 * float(
+        np.dot(x_values, np.roll(y_values, -1)) - np.dot(y_values, np.roll(x_values, -1))
+    )
 
 
 def _edge_outward_normal(start_xy: np.ndarray, end_xy: np.ndarray, *, is_ccw: bool) -> np.ndarray:
@@ -136,7 +138,7 @@ class ObstaclePrimitive:
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
         raise NotImplementedError
 
-    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> Optional[float]:
+    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
         raise NotImplementedError
 
     def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
@@ -145,7 +147,7 @@ class ObstaclePrimitive:
     def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
         raise NotImplementedError
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         raise NotImplementedError
 
 
@@ -170,9 +172,11 @@ class PolygonPrism(ObstaclePrimitive):
             y_max_m=float(np.max(self.footprint_xy_m[:, 1])),
         )
 
-    def _inside_intervals(self, origin: np.ndarray, target: np.ndarray) -> List[Tuple[float, float]]:
+    def _inside_intervals(
+        self, origin: np.ndarray, target: np.ndarray
+    ) -> list[tuple[float, float]]:
         intervals = _segment_polygon_intervals(origin[:2], target[:2], self.footprint_xy_m)
-        filtered: List[Tuple[float, float]] = []
+        filtered: list[tuple[float, float]] = []
         for start, end in intervals:
             z_start = float(origin[2] + ((target[2] - origin[2]) * start))
             z_end = float(origin[2] + ((target[2] - origin[2]) * end))
@@ -182,9 +186,11 @@ class PolygonPrism(ObstaclePrimitive):
 
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
         distance_m = float(np.linalg.norm(target - origin))
-        return float(sum((end - start) * distance_m for start, end in self._inside_intervals(origin, target)))
+        return float(
+            sum((end - start) * distance_m for start, end in self._inside_intervals(origin, target))
+        )
 
-    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> Optional[float]:
+    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
         intervals = self._inside_intervals(origin, target)
         return intervals[0][0] if intervals else None
 
@@ -217,7 +223,7 @@ class PolygonPrism(ObstaclePrimitive):
                 best_candidate = candidate
         return best_candidate
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "object_id": self.primitive_id,
             "kind": "polygon-prism-v1",
@@ -267,7 +273,7 @@ class ForestStand(PolygonPrism):
         )
         object.__setattr__(self, "density", float(max(density, 0.0)))
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         metadata = super().to_metadata()
         metadata["kind"] = "forest-stand-v1"
         metadata["density"] = self.density
@@ -324,7 +330,7 @@ class OrientedBox(ObstaclePrimitive):
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
         return self._as_prism().path_length_inside(origin, target)
 
-    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> Optional[float]:
+    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
         return self._as_prism().first_hit_t(origin, target)
 
     def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
@@ -333,7 +339,7 @@ class OrientedBox(ObstaclePrimitive):
     def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
         return self._as_prism().push_outside_xy(x_m, y_m, margin_m=margin_m)
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "object_id": self.primitive_id,
             "kind": "box-v1",
@@ -392,7 +398,7 @@ class WallSegment(ObstaclePrimitive):
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
         return self._as_prism().path_length_inside(origin, target)
 
-    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> Optional[float]:
+    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
         return self._as_prism().first_hit_t(origin, target)
 
     def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
@@ -401,7 +407,7 @@ class WallSegment(ObstaclePrimitive):
     def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
         return self._as_prism().push_outside_xy(x_m, y_m, margin_m=margin_m)
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "object_id": self.primitive_id,
             "kind": "wall-v1",
@@ -441,7 +447,7 @@ class CylinderObstacle(ObstaclePrimitive):
             return 0.0
         return float((interval[1] - interval[0]) * np.linalg.norm(target - origin))
 
-    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> Optional[float]:
+    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
         interval = self._t_interval(origin, target)
         return None if interval is None else interval[0]
 
@@ -455,10 +461,7 @@ class CylinderObstacle(ObstaclePrimitive):
     def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
         delta = np.array([x_m - self.center_x_m, y_m - self.center_y_m], dtype=float)
         radius = float(np.linalg.norm(delta))
-        if radius <= 1.0e-9:
-            direction = np.array([1.0, 0.0], dtype=float)
-        else:
-            direction = delta / radius
+        direction = np.array([1.0, 0.0], dtype=float) if radius <= 1e-09 else delta / radius
         return np.array(
             [
                 self.center_x_m + direction[0] * (self.radius_m + max(margin_m, 1.0)),
@@ -467,7 +470,7 @@ class CylinderObstacle(ObstaclePrimitive):
             dtype=float,
         )
 
-    def _t_interval(self, origin: np.ndarray, target: np.ndarray) -> Optional[Tuple[float, float]]:
+    def _t_interval(self, origin: np.ndarray, target: np.ndarray) -> tuple[float, float] | None:
         origin_xy = origin[:2]
         target_xy = target[:2]
         segment_xy = target_xy - origin_xy
@@ -476,7 +479,10 @@ class CylinderObstacle(ObstaclePrimitive):
         if a <= 1.0e-9:
             if float(np.dot(relative_xy, relative_xy)) > self.radius_m * self.radius_m:
                 return None
-            if max(float(origin[2]), float(target[2])) < self.base_z_m or min(float(origin[2]), float(target[2])) > self.top_z_m:
+            if (
+                max(float(origin[2]), float(target[2])) < self.base_z_m
+                or min(float(origin[2]), float(target[2])) > self.top_z_m
+            ):
                 return None
             return (0.0, 1.0)
         b = 2.0 * float(np.dot(relative_xy, segment_xy))
@@ -497,7 +503,7 @@ class CylinderObstacle(ObstaclePrimitive):
             return None
         return (start, end)
 
-    def to_metadata(self) -> Dict[str, object]:
+    def to_metadata(self) -> dict[str, object]:
         return {
             "object_id": self.primitive_id,
             "kind": "cylinder-v1",

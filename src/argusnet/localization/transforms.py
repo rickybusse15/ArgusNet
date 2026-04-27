@@ -8,12 +8,11 @@ composed and inverted, wrapping the WGS84/ENU frame machinery in
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
 import numpy as np
 
-from argusnet.core.types import Vector3, vec3
-from argusnet.core.geometry import normalize, rotation_matrix_z
+from argusnet.core.geometry import rotation_matrix_z
+from argusnet.core.types import Vector3
 
 __all__ = [
     "SE3",
@@ -46,7 +45,7 @@ class SE3:
         """Rotate a direction vector (no translation)."""
         return self.R @ np.asarray(direction, dtype=float)
 
-    def __matmul__(self, other: "SE3") -> "SE3":
+    def __matmul__(self, other: SE3) -> SE3:
         """Compose two transforms: self ∘ other."""
         return compose(self, other)
 
@@ -81,8 +80,8 @@ class TransformTree:
     """
 
     def __init__(self) -> None:
-        self._parent: Dict[str, str] = {}
-        self._tf: Dict[str, SE3] = {}  # child → transform from parent to child
+        self._parent: dict[str, str] = {}
+        self._tf: dict[str, SE3] = {}  # child → transform from parent to child
 
     def register(self, frame: str, parent: str, tf: SE3) -> None:
         """Register *frame* as a child of *parent* with transform *tf*."""
@@ -95,6 +94,7 @@ class TransformTree:
         Walks up to "world" for both frames and composes the path.
         Only supports tree-structured (acyclic) graphs.
         """
+
         def chain_to_world(frame: str) -> list[SE3]:
             tfs: list[SE3] = []
             while frame in self._parent:
@@ -116,7 +116,5 @@ class TransformTree:
             tf = compose(tf, t)
         return tf
 
-    def transform_point(
-        self, point: Vector3, source_frame: str, target_frame: str
-    ) -> np.ndarray:
+    def transform_point(self, point: Vector3, source_frame: str, target_frame: str) -> np.ndarray:
         return self.lookup(target_frame, source_frame).apply(point)

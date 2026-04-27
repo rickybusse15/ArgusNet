@@ -8,7 +8,12 @@ from pathlib import Path
 
 import numpy as np
 
-from argusnet.world.scene_loader import _build_obstacle_meshes, build_scene_from_gis, build_scene_from_replay, load_scene_manifest
+from argusnet.world.scene_loader import (
+    _build_obstacle_meshes,
+    build_scene_from_gis,
+    build_scene_from_replay,
+    load_scene_manifest,
+)
 
 try:
     import tifffile
@@ -62,6 +67,10 @@ def _sample_replay_document() -> dict:
                         "timestamp_s": 0.0,
                         "position": [10.0, 5.0, 120.0],
                         "velocity": [0.0, 0.0, 0.0],
+                        "covariance": [1.0] * 9,
+                        "measurement_std_m": 1.0,
+                        "update_count": 1,
+                        "stale_steps": 0,
                     }
                 ],
                 "truths": [
@@ -83,7 +92,13 @@ def _sample_replay_document() -> dict:
                 ],
                 "observations": [],
                 "rejected_observations": [],
-                "metrics": {},
+                "metrics": {
+                    "active_track_count": 1,
+                    "observation_count": 0,
+                    "accepted_observation_count": 0,
+                    "rejected_observation_count": 0,
+                },
+                "generation_rejections": [],
             }
         ],
     }
@@ -176,7 +191,9 @@ class SceneCompilationTest(unittest.TestCase):
             self.assertEqual("demo-scene", loaded_manifest["scene_id"])
             self.assertEqual("terrain-base", loaded_manifest["layers"][0]["style_id"])
 
-            style_document = json.loads((scene_root / "metadata" / "style.json").read_text(encoding="utf-8"))
+            style_document = json.loads(
+                (scene_root / "metadata" / "style.json").read_text(encoding="utf-8")
+            )
             style_ids = {layer["id"] for layer in style_document["layers"]}
             self.assertTrue({"terrain-base", "tracks", "truths", "nodes"}.issubset(style_ids))
 
@@ -260,11 +277,17 @@ class SceneCompilationTest(unittest.TestCase):
 
             terrain_layers = [layer for layer in manifest["layers"] if layer["kind"] == "terrain"]
             self.assertGreater(len(terrain_layers), 1)
-            self.assertTrue(any(layer["style_id"] == "landcover-forest" for layer in manifest["layers"]))
+            self.assertTrue(
+                any(layer["style_id"] == "landcover-forest" for layer in manifest["layers"])
+            )
             self.assertTrue(any(layer["style_id"] == "buildings" for layer in manifest["layers"]))
 
-            environment_document = json.loads((output_path / "metadata" / "environment.json").read_text(encoding="utf-8"))
-            self.assertEqual(["EPSG:32611"], environment_document["overlay_source_crs"]["landcover"])
+            environment_document = json.loads(
+                (output_path / "metadata" / "environment.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                ["EPSG:32611"], environment_document["overlay_source_crs"]["landcover"]
+            )
             self.assertEqual(1, environment_document["overlay_counts"]["landcover"])
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -109,9 +108,7 @@ class ThermalCameraModel(SensorBase):
         Returns:
             1-sigma noise in metres.
         """
-        return float(
-            self.netd_mk * np.exp(self.absorption_coeff_per_m * range_m) * 0.3
-        )
+        return float(self.netd_mk * np.exp(self.absorption_coeff_per_m * range_m) * 0.3)
 
     def in_fov(self, bearing_vec: np.ndarray) -> bool:
         """Check whether *bearing_vec* lies inside the rectangular FOV.
@@ -147,7 +144,7 @@ class ThermalCameraModel(SensorBase):
             h_angle = float(np.arccos(cos_h))
 
         # Vertical angle: elevation from the XY plane.
-        cos_v = np.clip(bv[0], -1.0, 1.0)
+        np.clip(bv[0], -1.0, 1.0)
         # Use arcsin of the Z component relative to the bearing magnitude.
         v_angle = float(abs(np.arcsin(np.clip(bv[2], -1.0, 1.0))))
 
@@ -158,7 +155,7 @@ class ThermalCameraModel(SensorBase):
         platform_pos: np.ndarray,
         target_pos: np.ndarray,
         timestamp_s: float,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Generate a thermal observation of the target.
 
         Steps:

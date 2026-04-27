@@ -3,20 +3,20 @@
 Provides range-dependent noise, atmospheric attenuation, sensor bias drift,
 false alarm (clutter) generation, and missed detection probability.
 """
+
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
 
 import numpy as np
 
-from argusnet.core.types import BearingObservation, vec3
-
+from argusnet.core.types import BearingObservation
 
 # ---------------------------------------------------------------------------
 # Sensor error configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class SensorErrorConfig:
@@ -86,6 +86,7 @@ class SensorErrorConfig:
 @dataclass(frozen=True)
 class SensorErrorPreset:
     """Named sensor error preset."""
+
     name: str
     config: SensorErrorConfig
 
@@ -129,8 +130,7 @@ def sensor_error_config_from_preset(name: str) -> SensorErrorConfig:
     """
     if name not in SENSOR_ERROR_PRESETS:
         raise ValueError(
-            f"Unknown sensor error preset {name!r}. "
-            f"Available: {sorted(SENSOR_ERROR_PRESETS)}"
+            f"Unknown sensor error preset {name!r}. Available: {sorted(SENSOR_ERROR_PRESETS)}"
         )
     return SENSOR_ERROR_PRESETS[name]
 
@@ -138,6 +138,7 @@ def sensor_error_config_from_preset(name: str) -> SensorErrorConfig:
 # ---------------------------------------------------------------------------
 # Sensor bias drift tracker (stateful, per-node)
 # ---------------------------------------------------------------------------
+
 
 class SensorBiasDrift:
     """Tracks per-node bearing bias drift as a bounded random walk.
@@ -156,7 +157,7 @@ class SensorBiasDrift:
         self._max_bias = max_bias_rad
         self._rng = np.random.default_rng(seed)
         self._current_bias: float = 0.0
-        self._last_time: Optional[float] = None
+        self._last_time: float | None = None
 
     @property
     def current_bias_rad(self) -> float:
@@ -186,6 +187,7 @@ class SensorBiasDrift:
 # Core sensor model functions
 # ---------------------------------------------------------------------------
 
+
 def range_dependent_bearing_noise(
     base_std_rad: float,
     range_m: float,
@@ -198,7 +200,7 @@ def range_dependent_bearing_noise(
     if range_m <= 0.0 or config.range_noise_reference_m <= 0.0:
         return base_std_rad
     ratio = range_m / config.range_noise_reference_m
-    scaled = base_std_rad * (ratio ** config.range_noise_exponent)
+    scaled = base_std_rad * (ratio**config.range_noise_exponent)
     return float(np.clip(scaled, base_std_rad, config.max_bearing_std_rad))
 
 
@@ -259,7 +261,7 @@ def generate_false_alarms(
     config: SensorErrorConfig,
     timestamp_s: float,
     node_id: str,
-) -> List[BearingObservation]:
+) -> list[BearingObservation]:
     """Generate Poisson-distributed false alarm (clutter) observations.
 
     Returns a list of BearingObservation with target_id="clutter".
@@ -271,7 +273,7 @@ def generate_false_alarms(
     if count == 0:
         return []
 
-    alarms: List[BearingObservation] = []
+    alarms: list[BearingObservation] = []
     for _ in range(count):
         # Random direction (uniform on unit sphere)
         direction = rng.normal(size=3)
@@ -349,6 +351,7 @@ def apply_bias_to_direction(
 # Composite sensor model: applies all effects to a single observation
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SensorModel:
     """Stateful sensor model that applies all error effects.
@@ -358,7 +361,7 @@ class SensorModel:
     """
 
     config: SensorErrorConfig = field(default_factory=SensorErrorConfig)
-    bias_drift: Optional[SensorBiasDrift] = None
+    bias_drift: SensorBiasDrift | None = None
     _initialized: bool = field(default=False, init=False, repr=False)
 
     def initialize(self, seed: int = 0) -> None:
@@ -411,7 +414,7 @@ class SensorModel:
         node_position: np.ndarray,
         timestamp_s: float,
         node_id: str,
-    ) -> List[BearingObservation]:
+    ) -> list[BearingObservation]:
         """Generate false alarm observations for this sensor."""
         return generate_false_alarms(rng, node_position, self.config, timestamp_s, node_id)
 

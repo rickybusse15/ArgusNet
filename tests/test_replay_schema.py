@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import unittest
-from pathlib import Path
 
 from argusnet.evaluation.replay import _SCHEMA_PATH, validate_replay_with_schema
 
@@ -68,7 +66,44 @@ def _minimal_valid_document() -> dict:
                         "timestamp_s": 0.0,
                         "position": [50.0, 15.0, 10.0],
                         "velocity": [0.0, 0.0, 0.0],
-                        "covariance": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+                        "covariance": [
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            1.0,
+                        ],
                         "measurement_std_m": 5.0,
                         "update_count": 1,
                         "stale_steps": 0,
@@ -132,7 +167,15 @@ class TestSchemaFileValidity(unittest.TestCase):
         with _SCHEMA_PATH.open("r", encoding="utf-8") as fh:
             schema = json.load(fh)
         self.assertIn("definitions", schema)
-        expected_defs = {"vector3", "frame", "node_state", "bearing_observation", "track_state", "truth_state", "platform_metrics"}
+        expected_defs = {
+            "vector3",
+            "frame",
+            "node_state",
+            "bearing_observation",
+            "track_state",
+            "truth_state",
+            "platform_metrics",
+        }
         self.assertTrue(expected_defs.issubset(set(schema["definitions"].keys())))
 
 
@@ -261,11 +304,50 @@ class TestExtraFieldsAllowed(unittest.TestCase):
         self.assertEqual(errors, [], f"Extra track fields should be allowed, got: {errors}")
 
 
+class TestDeconflictionEventsSchema(unittest.TestCase):
+    """Schema accepts (and validates the shape of) deconfliction_events."""
+
+    def test_valid_deconfliction_event(self) -> None:
+        doc = _minimal_valid_document()
+        doc["frames"][0]["deconfliction_events"] = [
+            {
+                "yielding_drone_id": "drone-1",
+                "conflicting_drone_id": "drone-0",
+                "predicted_separation_m": 12.5,
+                "resolution": "lateral_offset",
+                "timestamp_s": 0.0,
+            }
+        ]
+        errors = validate_replay_with_schema(doc)
+        self.assertEqual(errors, [], f"Expected no errors but got: {errors}")
+
+    def test_empty_deconfliction_events(self) -> None:
+        doc = _minimal_valid_document()
+        doc["frames"][0]["deconfliction_events"] = []
+        errors = validate_replay_with_schema(doc)
+        self.assertEqual(errors, [], f"Expected no errors but got: {errors}")
+
+    def test_corridor_hold_resolution(self) -> None:
+        doc = _minimal_valid_document()
+        doc["frames"][0]["deconfliction_events"] = [
+            {
+                "yielding_drone_id": "drone-1",
+                "conflicting_drone_id": "drone-0",
+                "predicted_separation_m": 35.0,
+                "resolution": "corridor_hold",
+                "timestamp_s": 5.0,
+            }
+        ]
+        errors = validate_replay_with_schema(doc)
+        self.assertEqual(errors, [], f"Expected no errors but got: {errors}")
+
+
 class TestFallbackValidation(unittest.TestCase):
     """Test the manual fallback path directly, regardless of jsonschema availability."""
 
     def test_manual_fallback_catches_missing_meta(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         del doc["meta"]
@@ -275,6 +357,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_catches_missing_frames(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         del doc["frames"]
@@ -284,6 +367,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_catches_empty_frames(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["frames"] = []
@@ -292,6 +376,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_catches_wrong_meta_type(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["meta"] = "bad"
@@ -300,6 +385,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_catches_wrong_dt_s_type(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["meta"]["dt_s"] = "bad"
@@ -308,6 +394,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_catches_negative_dt_s(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["meta"]["dt_s"] = -1.0
@@ -316,6 +403,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_passes_valid_document(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         errors = _manual_schema_validation(doc, schema)
@@ -323,6 +411,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_allows_extra_fields(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["custom_extension"] = True
@@ -332,6 +421,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_catches_missing_dt_s(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         del doc["meta"]["dt_s"]
@@ -341,6 +431,7 @@ class TestFallbackValidation(unittest.TestCase):
 
     def test_manual_fallback_catches_frame_missing_required_fields(self) -> None:
         from argusnet.evaluation.replay import _load_replay_schema, _manual_schema_validation
+
         schema = _load_replay_schema()
         doc = _minimal_valid_document()
         doc["frames"] = [{"timestamp_s": 0.0}]  # missing most required frame fields

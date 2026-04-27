@@ -6,12 +6,11 @@ can always return to its home position with a minimum reserve.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 
-from argusnet.core.types import Vector3, vec3
+from argusnet.core.types import Vector3
 
 __all__ = [
     "BatteryModel",
@@ -69,10 +68,10 @@ class BatteryModel:
         dz = float(end[2] - start[2])
         return self.travel_cost_wh(h_dist) + self.climb_cost_wh(dz)
 
-    def route_cost_wh(self, waypoints: List[Vector3]) -> float:
+    def route_cost_wh(self, waypoints: list[Vector3]) -> float:
         """Total energy cost for a sequence of waypoints."""
         total = 0.0
-        for a, b in zip(waypoints[:-1], waypoints[1:]):
+        for a, b in zip(waypoints[:-1], waypoints[1:], strict=False):
             total += self.segment_cost_wh(a, b)
         return total
 
@@ -92,7 +91,7 @@ class BatteryState:
     def fraction(self) -> float:
         return self.remaining_wh  # caller normalises against capacity
 
-    def consume(self, cost_wh: float) -> "BatteryState":
+    def consume(self, cost_wh: float) -> BatteryState:
         return BatteryState(
             remaining_wh=max(0.0, self.remaining_wh - cost_wh),
             timestamp_s=self.timestamp_s,
@@ -123,10 +122,10 @@ class BudgetResult:
 
 
 def compute_route_budget(
-    waypoints: List[Vector3],
+    waypoints: list[Vector3],
     home: Vector3,
     model: BatteryModel,
-    current_wh: Optional[float] = None,
+    current_wh: float | None = None,
 ) -> BudgetResult:
     """Analyse whether the remaining battery supports flying *waypoints*.
 
@@ -139,7 +138,7 @@ def compute_route_budget(
     Returns:
         A :class:`BudgetResult` describing feasibility.
     """
-    available = (current_wh if current_wh is not None else model.capacity_wh)
+    available = current_wh if current_wh is not None else model.capacity_wh
     reserve = model.capacity_wh * model.reserve_fraction
     usable = available - reserve
 
@@ -156,8 +155,7 @@ def compute_route_budget(
 
     # Energy from each segment onwards (suffix sums)
     seg_costs = [
-        model.segment_cost_wh(waypoints[k], waypoints[k + 1])
-        for k in range(len(waypoints) - 1)
+        model.segment_cost_wh(waypoints[k], waypoints[k + 1]) for k in range(len(waypoints) - 1)
     ]
     # Return cost from each waypoint to home
     return_costs = [model.segment_cost_wh(wp, home) for wp in waypoints]
@@ -168,7 +166,7 @@ def compute_route_budget(
     # Find how many segments we can do before must-return
     cumulative = 0.0
     max_segs = 0
-    for k, (sc, rc) in enumerate(zip(seg_costs, return_costs[1:])):
+    for k, (sc, rc) in enumerate(zip(seg_costs, return_costs[1:], strict=False)):
         if cumulative + sc + rc <= usable:
             cumulative += sc
             max_segs = k + 1
@@ -188,11 +186,11 @@ def compute_route_budget(
 
 
 def insert_return_waypoint(
-    waypoints: List[Vector3],
+    waypoints: list[Vector3],
     home: Vector3,
     model: BatteryModel,
     current_wh: float,
-) -> List[Vector3]:
+) -> list[Vector3]:
     """Truncate *waypoints* at the energy budget limit and append *home*.
 
     Returns the safe sub-route ending at *home*.

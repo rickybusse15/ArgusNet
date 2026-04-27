@@ -6,8 +6,6 @@ sensor footprints during a simulation run, using numpy for performance.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import numpy as np
 
 __all__ = [
@@ -114,7 +112,7 @@ class CoverageMap:
         gx, gy = np.meshgrid(xs, ys)  # shapes: (len(ys), len(xs))
 
         dist_sq = (gx - cx_cell) ** 2 + (gy - cy_cell) ** 2
-        mask = dist_sq <= r_cells ** 2
+        mask = dist_sq <= r_cells**2
 
         # Safe scatter-add: use np.add.at to handle any duplicate indices
         # (in practice the mask produces unique indices, but this is robust).

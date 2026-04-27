@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from argusnet.core.frames import ENUOrigin, wgs84_to_enu
+from argusnet.core.frames import ENUOrigin
 from argusnet.sensing.ingestion.frame_stream import (
     MQTTIngestionAdapter,
     parse_mqtt_node_state,
@@ -70,9 +70,7 @@ class TestParseMQTTObservation(unittest.TestCase):
         )
         expected_z = math.sin(math.radians(45.0))
         expected_y = math.cos(math.radians(45.0))
-        np.testing.assert_allclose(
-            obs.direction, [0.0, expected_y, expected_z], atol=1e-10
-        )
+        np.testing.assert_allclose(obs.direction, [0.0, expected_y, expected_z], atol=1e-10)
 
     def test_default_target_id(self):
         origin = ENUOrigin(0.0, 0.0, 0.0)

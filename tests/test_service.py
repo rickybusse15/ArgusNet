@@ -10,10 +10,8 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 import argusnet.cli.main as cli_module
-from argusnet.simulation.sim import ScenarioDefinition, ScenarioOptions, SimulationConfig, build_default_scenario, run_simulation
-from argusnet.core.config import SimulationConstants
 from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
-from argusnet.world.environment import LandCoverClass
+from argusnet.core.config import SimulationConstants
 from argusnet.core.types import BearingObservation, NodeState, TruthState, to_jsonable, vec3
 from argusnet.evaluation.replay import load_replay_document
 from argusnet.simulation.sim import (
@@ -22,11 +20,17 @@ from argusnet.simulation.sim import (
     INTERCEPTOR_FOLLOW_ALTITUDE_OFFSET_M,
     INTERCEPTOR_FOLLOW_RADIUS_M,
     ObservationTriggeredFollowController,
+    ScenarioDefinition,
+    ScenarioOptions,
     SimNode,
     SimTarget,
+    SimulationConfig,
+    build_default_scenario,
     build_replay_document_from_result,
+    run_simulation,
     simulate,
 )
+from argusnet.world.environment import LandCoverClass
 from argusnet.world.terrain import TerrainModel
 
 
@@ -120,8 +124,22 @@ class TrackingServiceContractTest(unittest.TestCase):
         truth = cls._truth(timestamp_s)
         nodes = cls._nodes(timestamp_s)
         return [
-            bearing("ground-a", "asset-a", nodes[0].position, truth.position, timestamp_s, confidence=confidence),
-            bearing("ground-b", "asset-a", nodes[1].position, truth.position, timestamp_s, confidence=confidence),
+            bearing(
+                "ground-a",
+                "asset-a",
+                nodes[0].position,
+                truth.position,
+                timestamp_s,
+                confidence=confidence,
+            ),
+            bearing(
+                "ground-b",
+                "asset-a",
+                nodes[1].position,
+                truth.position,
+                timestamp_s,
+                confidence=confidence,
+            ),
         ]
 
 
@@ -140,7 +158,9 @@ class SimulationCoreContractTest(unittest.TestCase):
     def test_run_simulation_has_no_stdout_side_effects(self) -> None:
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            result = run_simulation(build_default_scenario(), SimulationConfig(steps=4, dt_s=0.5, seed=3))
+            result = run_simulation(
+                build_default_scenario(), SimulationConfig(steps=4, dt_s=0.5, seed=3)
+            )
 
         self.assertEqual("", buffer.getvalue())
         self.assertEqual(4, len(result.frames))
@@ -162,7 +182,9 @@ class SimulationCoreContractTest(unittest.TestCase):
         self.assertGreaterEqual(len(scenario.nodes), 1)
         self.assertGreaterEqual(len(scenario.targets), 1)
         terrain_metadata = scenario.terrain.to_metadata()
-        self.assertGreater(terrain_metadata["max_height_m"] - terrain_metadata["min_height_m"], 120.0)
+        self.assertGreater(
+            terrain_metadata["max_height_m"] - terrain_metadata["min_height_m"], 120.0
+        )
         self.assertTrue(
             any(
                 getattr(obstacle, "blocker_type", None) in {"building", "wall", "vegetation"}
@@ -171,7 +193,9 @@ class SimulationCoreContractTest(unittest.TestCase):
         )
 
     def test_ground_station_count_controls_fixed_node_count(self) -> None:
-        scenario = build_default_scenario(ScenarioOptions(map_preset="large", ground_station_count=9), seed=7)
+        scenario = build_default_scenario(
+            ScenarioOptions(map_preset="large", ground_station_count=9), seed=7
+        )
         fixed_ground_nodes = [node for node in scenario.nodes if not node.is_mobile]
 
         self.assertEqual(9, len(fixed_ground_nodes))
@@ -208,7 +232,9 @@ class SimulationCoreContractTest(unittest.TestCase):
             run_simulation(scenario, SimulationConfig(steps=2, dt_s=0.5, seed=7))
         )
         for zone_meta in replay_document["meta"]["zones"]:
-            expected_z = scenario.terrain.height_at(float(zone_meta["center"][0]), float(zone_meta["center"][1]))
+            expected_z = scenario.terrain.height_at(
+                float(zone_meta["center"][0]), float(zone_meta["center"][1])
+            )
             self.assertAlmostEqual(expected_z, float(zone_meta["center"][2]), places=4)
 
     def test_ground_contact_obstacles_span_local_terrain_relief(self) -> None:
@@ -226,20 +252,28 @@ class SimulationCoreContractTest(unittest.TestCase):
                     angles = np.linspace(0.0, 2.0 * np.pi, num=8, endpoint=False, dtype=float)
                     sample_points = [
                         (
-                            float(obstacle.center_x_m) + float(obstacle.radius_m) * float(np.cos(angle)),
-                            float(obstacle.center_y_m) + float(obstacle.radius_m) * float(np.sin(angle)),
+                            float(obstacle.center_x_m)
+                            + float(obstacle.radius_m) * float(np.cos(angle)),
+                            float(obstacle.center_y_m)
+                            + float(obstacle.radius_m) * float(np.sin(angle)),
                         )
                         for angle in angles
                     ]
                     sample_points.append((float(obstacle.center_x_m), float(obstacle.center_y_m)))
                 else:
                     footprint_source = obstacle.footprint_xy_m
-                    footprint = footprint_source() if callable(footprint_source) else footprint_source
-                    sample_points = [(float(x_m), float(y_m)) for x_m, y_m in np.asarray(footprint, dtype=float)]
+                    footprint = (
+                        footprint_source() if callable(footprint_source) else footprint_source
+                    )
+                    sample_points = [
+                        (float(x_m), float(y_m)) for x_m, y_m in np.asarray(footprint, dtype=float)
+                    ]
 
                 heights = [float(terrain.height_at(x_m, y_m)) for x_m, y_m in sample_points]
                 self.assertLessEqual(float(obstacle.base_z_m), min(heights) + 1.0e-6)
-                self.assertGreaterEqual(float(obstacle.top_z_m), max(heights) + GROUND_CONTACT_TOP_PAD_M - 1.0e-6)
+                self.assertGreaterEqual(
+                    float(obstacle.top_z_m), max(heights) + GROUND_CONTACT_TOP_PAD_M - 1.0e-6
+                )
 
     def test_terrain_presets_populate_expected_blockers_and_clean_terrain_strips_them(self) -> None:
         expected_classes = {
@@ -291,28 +325,40 @@ class SimulationCoreContractTest(unittest.TestCase):
                 if terrain_preset == "river_valley":
                     self.assertIn(int(LandCoverClass.WATER), clean_classes)
                 else:
-                    self.assertFalse({int(LandCoverClass.FOREST), int(LandCoverClass.URBAN)} & clean_classes)
+                    self.assertFalse(
+                        {int(LandCoverClass.FOREST), int(LandCoverClass.URBAN)} & clean_classes
+                    )
 
     def test_target_motion_presets_are_deterministic_for_fixed_seed(self) -> None:
         sample_times = (0.0, 5.0, 18.5)
         for target_motion in ("racetrack", "waypoint_patrol", "loiter", "transit", "evasive"):
             scenario_a = build_default_scenario(
-                ScenarioOptions(map_preset="medium", target_motion_preset=target_motion, drone_mode_preset="search"),
+                ScenarioOptions(
+                    map_preset="medium",
+                    target_motion_preset=target_motion,
+                    drone_mode_preset="search",
+                ),
                 seed=13,
             )
             scenario_b = build_default_scenario(
-                ScenarioOptions(map_preset="medium", target_motion_preset=target_motion, drone_mode_preset="search"),
+                ScenarioOptions(
+                    map_preset="medium",
+                    target_motion_preset=target_motion,
+                    drone_mode_preset="search",
+                ),
                 seed=13,
             )
             for timestamp_s in sample_times:
                 truths_a = scenario_a.truths(timestamp_s)
                 truths_b = scenario_b.truths(timestamp_s)
-                for truth_a, truth_b in zip(truths_a, truths_b):
+                for truth_a, truth_b in zip(truths_a, truths_b, strict=False):
                     self.assertTrue(np.allclose(truth_a.position, truth_b.position))
                     self.assertTrue(np.allclose(truth_a.velocity, truth_b.velocity))
 
     def test_follow_planner_stays_above_ground_and_within_bounds(self) -> None:
-        options = ScenarioOptions(map_preset="medium", target_motion_preset="mixed", drone_mode_preset="follow")
+        options = ScenarioOptions(
+            map_preset="medium", target_motion_preset="mixed", drone_mode_preset="follow"
+        )
         scenario = build_default_scenario(options=options, seed=7)
         # Run a short simulation to trigger drone launches from ground stations
         result = run_simulation(scenario, SimulationConfig(steps=60, dt_s=0.25, seed=7))
@@ -331,7 +377,9 @@ class SimulationCoreContractTest(unittest.TestCase):
                 self.assertLessEqual(state.position[0], scenario.map_bounds_m["x_max_m"])
                 self.assertGreaterEqual(state.position[1], scenario.map_bounds_m["y_min_m"])
                 self.assertLessEqual(state.position[1], scenario.map_bounds_m["y_max_m"])
-                ground_m = scenario.terrain.height_at(float(state.position[0]), float(state.position[1]))
+                ground_m = scenario.terrain.height_at(
+                    float(state.position[0]), float(state.position[1])
+                )
                 self.assertGreaterEqual(state.position[2], ground_m + 18.0)
                 self.assertIsNone(
                     scenario.environment.obstacles.point_collides(
@@ -343,13 +391,21 @@ class SimulationCoreContractTest(unittest.TestCase):
         timestamps = np.linspace(airborne_start_s, airborne_start_s + 18.0, num=10)
         max_step_distance_m = 42.0 * 1.75 * ((timestamps[1] - timestamps[0]) + 1.0e-6)
         for node in mobile_nodes:
-            samples = np.array([node.state(float(timestamp_s)).position for timestamp_s in timestamps])
-            for start, end in zip(samples[:-1], samples[1:]):
-                self.assertLessEqual(float(np.linalg.norm(end[:2] - start[:2])), max_step_distance_m * 1.05)
-            self.assertGreater(np.ptp(np.asarray(altitude_histories[node.node_id], dtype=float)), 4.0)
+            samples = np.array(
+                [node.state(float(timestamp_s)).position for timestamp_s in timestamps]
+            )
+            for start, end in zip(samples[:-1], samples[1:], strict=False):
+                self.assertLessEqual(
+                    float(np.linalg.norm(end[:2] - start[:2])), max_step_distance_m * 1.05
+                )
+            self.assertGreater(
+                np.ptp(np.asarray(altitude_histories[node.node_id], dtype=float)), 4.0
+            )
 
     def test_search_planner_covers_sector_and_stays_terrain_clamped(self) -> None:
-        options = ScenarioOptions(map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search")
+        options = ScenarioOptions(
+            map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search"
+        )
         scenario = build_default_scenario(options=options, seed=7)
         # Run a short simulation to trigger drone launches from ground stations
         result = run_simulation(scenario, SimulationConfig(steps=60, dt_s=0.25, seed=7))
@@ -362,7 +418,9 @@ class SimulationCoreContractTest(unittest.TestCase):
             else:
                 sampler = controller
             # Start after launch + climb phase so drones are airborne
-            samples = np.array([sampler(float(timestamp_s))[0] for timestamp_s in np.linspace(24.0, 96.0, num=20)])
+            samples = np.array(
+                [sampler(float(timestamp_s))[0] for timestamp_s in np.linspace(24.0, 96.0, num=20)]
+            )
             self.assertGreater(np.ptp(samples[:, 0]), 120.0)
             self.assertGreater(np.ptp(samples[:, 1]), 120.0)
             self.assertGreater(np.ptp(samples[:, 2]), 4.0)
@@ -378,7 +436,9 @@ class SimulationCoreContractTest(unittest.TestCase):
                 )
 
     def test_search_drone_waypoints_do_not_land_inside_buildings(self) -> None:
-        options = ScenarioOptions(map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search")
+        options = ScenarioOptions(
+            map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search"
+        )
         scenario = build_default_scenario(options=options, seed=11)
         # Run a short simulation to trigger drone launches
         result = run_simulation(scenario, SimulationConfig(steps=60, dt_s=0.25, seed=11))
@@ -398,26 +458,41 @@ class SimulationCoreContractTest(unittest.TestCase):
                 )
 
     def test_search_drones_switch_into_follow_mode_after_target_detection(self) -> None:
-        options = ScenarioOptions(map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search")
+        options = ScenarioOptions(
+            map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search"
+        )
         scenario = build_default_scenario(options=options, seed=7)
 
         self.assertTrue(scenario.adaptive_drone_controllers)
-        self.assertTrue(all(not controller.engaged for controller in scenario.adaptive_drone_controllers.values()))
+        self.assertTrue(
+            all(
+                not controller.engaged
+                for controller in scenario.adaptive_drone_controllers.values()
+            )
+        )
 
         run_simulation(scenario, SimulationConfig(steps=40, dt_s=0.5, seed=7))
 
-        self.assertTrue(any(controller.engaged for controller in scenario.adaptive_drone_controllers.values()))
+        self.assertTrue(
+            any(controller.engaged for controller in scenario.adaptive_drone_controllers.values())
+        )
 
     def test_targets_traverse_as_airborne_tracks(self) -> None:
         scenario = build_default_scenario(
-            ScenarioOptions(map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search"),
+            ScenarioOptions(
+                map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search"
+            ),
             seed=7,
         )
 
-        altitude_histories: dict[str, list[float]] = {target.target_id: [] for target in scenario.targets}
+        altitude_histories: dict[str, list[float]] = {
+            target.target_id: [] for target in scenario.targets
+        }
         for timestamp_s in np.linspace(0.0, 36.0, num=12):
             for truth in scenario.truths(float(timestamp_s)):
-                ground_m = scenario.terrain.height_at(float(truth.position[0]), float(truth.position[1]))
+                ground_m = scenario.terrain.height_at(
+                    float(truth.position[0]), float(truth.position[1])
+                )
                 altitude_histories[truth.target_id].append(float(truth.position[2]))
                 self.assertGreaterEqual(truth.position[2], ground_m + AERIAL_TARGET_MIN_AGL_M)
 
@@ -426,7 +501,9 @@ class SimulationCoreContractTest(unittest.TestCase):
 
     def test_follow_interceptors_hold_radius_above_targets(self) -> None:
         scenario = build_default_scenario(
-            ScenarioOptions(map_preset="medium", target_motion_preset="mixed", drone_mode_preset="follow"),
+            ScenarioOptions(
+                map_preset="medium", target_motion_preset="mixed", drone_mode_preset="follow"
+            ),
             seed=7,
         )
         # Run a short simulation so ground stations trigger drone launches
@@ -441,7 +518,9 @@ class SimulationCoreContractTest(unittest.TestCase):
             for node in mobile_nodes:
                 state = node.state(float(timestamp_s))
                 assigned_truth = truth_by_id[scenario.drone_target_assignments[node.node_id]]
-                horizontal_distance_m = float(np.linalg.norm(state.position[:2] - assigned_truth.position[:2]))
+                horizontal_distance_m = float(
+                    np.linalg.norm(state.position[:2] - assigned_truth.position[:2])
+                )
                 self.assertGreaterEqual(horizontal_distance_m, INTERCEPTOR_FOLLOW_RADIUS_M * 0.45)
                 self.assertLessEqual(horizontal_distance_m, INTERCEPTOR_FOLLOW_RADIUS_M * 1.65)
                 self.assertGreaterEqual(
@@ -452,11 +531,21 @@ class SimulationCoreContractTest(unittest.TestCase):
     def test_new_large_terrain_presets_are_deterministic(self) -> None:
         for terrain_preset in ("rolling_highlands", "lake_district"):
             scenario_a = build_default_scenario(
-                ScenarioOptions(map_preset="xlarge", target_motion_preset="mixed", drone_mode_preset="search", terrain_preset=terrain_preset),
+                ScenarioOptions(
+                    map_preset="xlarge",
+                    target_motion_preset="mixed",
+                    drone_mode_preset="search",
+                    terrain_preset=terrain_preset,
+                ),
                 seed=17,
             )
             scenario_b = build_default_scenario(
-                ScenarioOptions(map_preset="xlarge", target_motion_preset="mixed", drone_mode_preset="search", terrain_preset=terrain_preset),
+                ScenarioOptions(
+                    map_preset="xlarge",
+                    target_motion_preset="mixed",
+                    drone_mode_preset="search",
+                    terrain_preset=terrain_preset,
+                ),
                 seed=17,
             )
             result_a = run_simulation(scenario_a, SimulationConfig(steps=6, dt_s=0.25, seed=17))
@@ -466,7 +555,9 @@ class SimulationCoreContractTest(unittest.TestCase):
             self.assertEqual(result_a.metrics_rows, result_b.metrics_rows)
 
     def test_platform_preset_decouples_speed_and_range_from_map_scale(self) -> None:
-        def scenario_envelopes(map_preset: str, platform_preset: str) -> dict[str, tuple[float, ...]]:
+        def scenario_envelopes(
+            map_preset: str, platform_preset: str
+        ) -> dict[str, tuple[float, ...]]:
             scenario = build_default_scenario(
                 ScenarioOptions(
                     map_preset=map_preset,
@@ -494,15 +585,26 @@ class SimulationCoreContractTest(unittest.TestCase):
 
             return {
                 "targets": tuple(
-                    sorted(round(float(np.linalg.norm(truth.velocity[:2])), 3) for truth in scenario.truths(12.0))
+                    sorted(
+                        round(float(np.linalg.norm(truth.velocity[:2])), 3)
+                        for truth in scenario.truths(12.0)
+                    )
                 ),
                 "search": tuple(sorted(search_speeds)),
                 "follow": tuple(sorted(follow_caps)),
                 "ground_ranges": tuple(
-                    sorted(round(float(node.max_range_m), 3) for node in scenario.nodes if not node.is_mobile)
+                    sorted(
+                        round(float(node.max_range_m), 3)
+                        for node in scenario.nodes
+                        if not node.is_mobile
+                    )
                 ),
                 "drone_ranges": tuple(
-                    sorted(round(float(node.max_range_m), 3) for node in scenario.nodes if node.is_mobile)
+                    sorted(
+                        round(float(node.max_range_m), 3)
+                        for node in scenario.nodes
+                        if node.is_mobile
+                    )
                 ),
             }
 
@@ -511,7 +613,9 @@ class SimulationCoreContractTest(unittest.TestCase):
             with self.subTest(map_preset=map_preset):
                 envelopes = scenario_envelopes(map_preset, "baseline")
                 self.assertEqual(len(baseline_small["targets"]), len(envelopes["targets"]))
-                for baseline_speed, candidate_speed in zip(baseline_small["targets"], envelopes["targets"]):
+                for baseline_speed, candidate_speed in zip(
+                    baseline_small["targets"], envelopes["targets"], strict=False
+                ):
                     self.assertAlmostEqual(baseline_speed, candidate_speed, delta=0.35)
                 self.assertEqual(baseline_small["search"], envelopes["search"])
                 self.assertEqual(baseline_small["follow"], envelopes["follow"])
@@ -553,7 +657,10 @@ class SimulationCoreContractTest(unittest.TestCase):
         )
         target = SimTarget(
             target_id="asset-a",
-            trajectory=lambda _: (np.array([10.0, 0.0, 5.0], dtype=float), np.zeros(3, dtype=float)),
+            trajectory=lambda _: (
+                np.array([10.0, 0.0, 5.0], dtype=float),
+                np.zeros(3, dtype=float),
+            ),
         )
 
         with self.assertRaisesRegex(ValueError, "scenario_name"):
@@ -593,11 +700,17 @@ class SimulationCoreContractTest(unittest.TestCase):
         self.assertFalse(args.clean_terrain)
         self.assertEqual("baseline", args.platform_preset)
 
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+        with (
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
             cli_module.parse_args(["--steps", "10", "--duration-s", "20"])
 
     def test_replay_metadata_remains_viewer_compatible(self) -> None:
-        result = run_simulation(build_default_scenario(), SimulationConfig(steps=4, dt_s=0.5, seed=9))
+        result = run_simulation(
+            build_default_scenario(), SimulationConfig(steps=4, dt_s=0.5, seed=9)
+        )
         replay_document = build_replay_document_from_result(result)
 
         self.assertEqual(4, replay_document["meta"]["frame_count"])
@@ -623,10 +736,18 @@ class SimulationCoreContractTest(unittest.TestCase):
 
         self.assertEqual("follow", replay_document["meta"]["drone_planner_modes"]["drone-east"])
         self.assertEqual("search", replay_document["meta"]["drone_planner_modes"]["drone-north"])
-        self.assertEqual("asset-lynx", replay_document["meta"]["drone_target_assignments"]["drone-east"])
-        self.assertEqual("asset-orca", replay_document["meta"]["drone_target_assignments"]["drone-north"])
-        self.assertEqual("mixed", replay_document["meta"]["target_motion_assignments"]["asset-lynx"])
-        self.assertEqual("mixed", replay_document["meta"]["target_motion_assignments"]["asset-orca"])
+        self.assertEqual(
+            "asset-lynx", replay_document["meta"]["drone_target_assignments"]["drone-east"]
+        )
+        self.assertEqual(
+            "asset-orca", replay_document["meta"]["drone_target_assignments"]["drone-north"]
+        )
+        self.assertEqual(
+            "mixed", replay_document["meta"]["target_motion_assignments"]["asset-lynx"]
+        )
+        self.assertEqual(
+            "mixed", replay_document["meta"]["target_motion_assignments"]["asset-orca"]
+        )
 
     def test_weather_preset_changes_target_motion_and_is_preserved(self) -> None:
         clear_scenario = build_default_scenario(
@@ -686,7 +807,9 @@ class SimulationCoreContractTest(unittest.TestCase):
             replay_document = load_replay_document(str(replay_path))
             self.assertEqual(5, replay_document["meta"]["frame_count"])
             self.assertEqual(99, replay_document["meta"]["seed"])
-            self.assertEqual("loiter", replay_document["meta"]["scenario_options"]["target_motion_preset"])
+            self.assertEqual(
+                "loiter", replay_document["meta"]["scenario_options"]["target_motion_preset"]
+            )
 
     def test_simulation_adapter_writes_csv_and_replay(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -724,6 +847,7 @@ class TestJPDAMode(unittest.TestCase):
 
     def test_jpda_ingest_frame_returns_platform_frame(self) -> None:
         from argusnet.core.types import PlatformFrame
+
         nodes = [
             NodeState("gs-a", vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, 0.0),
             NodeState("gs-b", vec3(200.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, 0.0),
@@ -789,6 +913,7 @@ class TestTrackStream(unittest.TestCase):
 
     def test_track_stream_frames_are_platform_frames(self) -> None:
         from argusnet.core.types import PlatformFrame
+
         for frame in self.service.track_stream(self._frame_inputs(steps=2)):
             self.assertIsInstance(frame, PlatformFrame)
 

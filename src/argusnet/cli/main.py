@@ -4,8 +4,9 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import TYPE_CHECKING
 
 COMMAND_SIM = "sim"
 COMMAND_INGEST = "ingest"
@@ -17,24 +18,30 @@ COMMAND_VALIDATE_REPLAY = "validate-replay"
 COMMAND_INFO = "info"
 COMMAND_DUMP_CONFIG = "dump-config"
 
-ALL_COMMANDS = frozenset({
-    COMMAND_SIM,
-    COMMAND_INGEST,
-    COMMAND_EXPORT,
-    COMMAND_BATCH_EXPORT,
-    COMMAND_BUILD_SCENE,
-    COMMAND_VALIDATE_SCENE,
-    COMMAND_VALIDATE_REPLAY,
-    COMMAND_INFO,
-    COMMAND_DUMP_CONFIG,
-})
+if TYPE_CHECKING:
+    from argusnet.core.frames import ENUOrigin
+
+ALL_COMMANDS = frozenset(
+    {
+        COMMAND_SIM,
+        COMMAND_INGEST,
+        COMMAND_EXPORT,
+        COMMAND_BATCH_EXPORT,
+        COMMAND_BUILD_SCENE,
+        COMMAND_VALIDATE_SCENE,
+        COMMAND_VALIDATE_REPLAY,
+        COMMAND_INFO,
+        COMMAND_DUMP_CONFIG,
+    }
+)
 
 PROJECT_DEPENDENCY_MODULES = frozenset(
     {"grpc", "numpy", "google", "google.protobuf", "protobuf", "pyproj", "tifffile"}
 )
 
 PYTHON_DEPENDENCY_INSTALL_HINT = (
-    "ArgusNet requires Python dependencies (`numpy`, `grpcio`, `protobuf`, `pyproj`, and `tifffile`). "
+    "ArgusNet requires Python dependencies "
+    "(`numpy`, `grpcio`, `protobuf`, `pyproj`, and `tifffile`). "
     "Install project dependencies with `python3 -m pip install --user -e .`."
 )
 
@@ -76,11 +83,17 @@ def _add_logging_args(parser: argparse.ArgumentParser) -> None:
     """Add --verbose / --quiet flags to a parser."""
     log_group = parser.add_mutually_exclusive_group()
     log_group.add_argument(
-        "-v", "--verbose", action="store_true", default=False,
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=False,
         help="Enable verbose (DEBUG) logging.",
     )
     log_group.add_argument(
-        "-q", "--quiet", action="store_true", default=False,
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=False,
         help="Suppress all output except errors.",
     )
 
@@ -115,7 +128,7 @@ def _iter_with_progress(
     return tqdm(items, desc=description, unit="format")
 
 
-def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
+def build_parser(command: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="argusnet",
         description="Run the ArgusNet simulator, scene compiler, and exporters.",
@@ -127,7 +140,9 @@ def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
     sim_parser = subparsers.add_parser(COMMAND_SIM, help="Run the simulation.")
     _add_logging_args(sim_parser)
     sim_parser.add_argument(
-        "--dry-run", action="store_true", default=False,
+        "--dry-run",
+        action="store_true",
+        default=False,
         help="Print simulation configuration and exit without running.",
     )
     if command in (None, COMMAND_SIM):
@@ -144,20 +159,50 @@ def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
     )
     _add_logging_args(ingest_parser)
     source_group = ingest_parser.add_mutually_exclusive_group(required=True)
-    source_group.add_argument("--mqtt-broker", default=None, help="MQTT broker hostname (live ingestion).")
-    source_group.add_argument("--replay-file", default=None, help="Path to replay.json for file-based replay ingestion.")
-    ingest_parser.add_argument("--mqtt-port", type=int, default=1883, help="MQTT broker port (default: 1883).")
-    ingest_parser.add_argument("--observation-topic", default="argusnet/observations", help="MQTT topic for observations.")
-    ingest_parser.add_argument("--node-topic", default="argusnet/nodes", help="MQTT topic for node states.")
-    ingest_parser.add_argument("--replay-speed", type=float, default=1.0, help="Playback speed multiplier for --replay-file (default: 1.0; 0 = as fast as possible).")
-    ingest_parser.add_argument("--replay-loop", action="store_true", help="Loop replay file continuously.")
-    ingest_parser.add_argument("--enu-origin", required=True, help="ENU origin as 'lat,lon,alt' (degrees, meters).")
-    ingest_parser.add_argument("--endpoint", default=None, help="gRPC daemon endpoint (default: spawn local).")
-    ingest_parser.add_argument("--frame-interval", type=float, default=0.25, help="Frame flush interval in seconds (default: 0.25).")
-    ingest_parser.add_argument("--replay-output", default=None, help="Optional path to write replay JSON on exit.")
+    source_group.add_argument(
+        "--mqtt-broker", default=None, help="MQTT broker hostname (live ingestion)."
+    )
+    source_group.add_argument(
+        "--replay-file", default=None, help="Path to replay.json for file-based replay ingestion."
+    )
+    ingest_parser.add_argument(
+        "--mqtt-port", type=int, default=1883, help="MQTT broker port (default: 1883)."
+    )
+    ingest_parser.add_argument(
+        "--observation-topic", default="argusnet/observations", help="MQTT topic for observations."
+    )
+    ingest_parser.add_argument(
+        "--node-topic", default="argusnet/nodes", help="MQTT topic for node states."
+    )
+    ingest_parser.add_argument(
+        "--replay-speed",
+        type=float,
+        default=1.0,
+        help="Playback speed multiplier for --replay-file (default: 1.0; 0 = as fast as possible).",
+    )
+    ingest_parser.add_argument(
+        "--replay-loop", action="store_true", help="Loop replay file continuously."
+    )
+    ingest_parser.add_argument(
+        "--enu-origin", required=True, help="ENU origin as 'lat,lon,alt' (degrees, meters)."
+    )
+    ingest_parser.add_argument(
+        "--endpoint", default=None, help="gRPC daemon endpoint (default: spawn local)."
+    )
+    ingest_parser.add_argument(
+        "--frame-interval",
+        type=float,
+        default=0.25,
+        help="Frame flush interval in seconds (default: 0.25).",
+    )
+    ingest_parser.add_argument(
+        "--replay-output", default=None, help="Optional path to write replay JSON on exit."
+    )
 
     # --- export ---
-    export_parser = subparsers.add_parser(COMMAND_EXPORT, help="Export replay data to external formats.")
+    export_parser = subparsers.add_parser(
+        COMMAND_EXPORT, help="Export replay data to external formats."
+    )
     _add_logging_args(export_parser)
     export_parser.add_argument("--replay", required=True, help="Path to replay JSON file.")
     export_parser.add_argument(
@@ -166,11 +211,25 @@ def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
         choices=["geojson", "czml", "foxglove", "kml", "kmz", "gpx", "geopackage", "shapefile"],
         help="Export format.",
     )
-    export_parser.add_argument("--enu-origin", required=True, help="ENU origin as 'lat,lon,alt' (degrees, meters).")
+    export_parser.add_argument(
+        "--enu-origin", required=True, help="ENU origin as 'lat,lon,alt' (degrees, meters)."
+    )
     export_parser.add_argument("--output", required=True, help="Output file path.")
-    export_parser.add_argument("--include-observations", action="store_true", help="Include observations in export (GeoJSON only).")
-    export_parser.add_argument("--include-nodes", action="store_true", help="Include node positions in export (GeoJSON only).")
-    export_parser.add_argument("--time-range", default=None, help="Time range filter as 'start_s,end_s' (e.g., '10.0,60.0').")
+    export_parser.add_argument(
+        "--include-observations",
+        action="store_true",
+        help="Include observations in export (GeoJSON only).",
+    )
+    export_parser.add_argument(
+        "--include-nodes",
+        action="store_true",
+        help="Include node positions in export (GeoJSON only).",
+    )
+    export_parser.add_argument(
+        "--time-range",
+        default=None,
+        help="Time range filter as 'start_s,end_s' (e.g., '10.0,60.0').",
+    )
 
     batch_export_parser = subparsers.add_parser(
         COMMAND_BATCH_EXPORT,
@@ -178,31 +237,67 @@ def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
     )
     _add_logging_args(batch_export_parser)
     batch_export_parser.add_argument("--replay", required=True, help="Path to replay JSON file.")
-    batch_export_parser.add_argument("--enu-origin", required=True, help="ENU origin as 'lat,lon,alt' (degrees, meters).")
+    batch_export_parser.add_argument(
+        "--enu-origin", required=True, help="ENU origin as 'lat,lon,alt' (degrees, meters)."
+    )
     batch_export_parser.add_argument(
         "--formats",
         required=True,
         help="Comma-separated export formats, for example 'geojson,kml,kmz'.",
     )
-    batch_export_parser.add_argument("--output-dir", required=True, help="Directory for exported outputs.")
-    batch_export_parser.add_argument("--include-observations", action="store_true", help="Include observations where the format supports them.")
-    batch_export_parser.add_argument("--include-nodes", action="store_true", help="Include nodes where the format supports them.")
-    batch_export_parser.add_argument("--time-range", default=None, help="Time range filter as 'start_s,end_s'.")
+    batch_export_parser.add_argument(
+        "--output-dir", required=True, help="Directory for exported outputs."
+    )
+    batch_export_parser.add_argument(
+        "--include-observations",
+        action="store_true",
+        help="Include observations where the format supports them.",
+    )
+    batch_export_parser.add_argument(
+        "--include-nodes", action="store_true", help="Include nodes where the format supports them."
+    )
+    batch_export_parser.add_argument(
+        "--time-range", default=None, help="Time range filter as 'start_s,end_s'."
+    )
 
     # --- build-scene ---
-    scene_parser = subparsers.add_parser(COMMAND_BUILD_SCENE, help="Compile a smartscene-v1 package.")
+    scene_parser = subparsers.add_parser(
+        COMMAND_BUILD_SCENE, help="Compile a smartscene-v1 package."
+    )
     _add_logging_args(scene_parser)
     scene_parser.add_argument("--output", required=True, help="Output scene package directory.")
-    scene_parser.add_argument("--scene-id", default=None, help="Optional scene identifier override.")
-    scene_parser.add_argument("--replay", default=None, help="Optional replay JSON file to package.")
-    scene_parser.add_argument("--environment-bundle", default=None, help="Optional smartmap-v1 environment bundle path.")
-    scene_parser.add_argument("--dem", default=None, help="Single-band DEM GeoTIFF for GIS scene compilation.")
-    scene_parser.add_argument("--source-crs", default=None, help="Optional CRS identifier for GIS inputs, for example EPSG:32611.")
-    scene_parser.add_argument("--landcover", nargs="*", default=None, help="Optional GeoJSON land-cover polygons.")
-    scene_parser.add_argument("--roads", nargs="*", default=None, help="Optional GeoJSON road lines.")
-    scene_parser.add_argument("--water", nargs="*", default=None, help="Optional GeoJSON water polygons or lines.")
-    scene_parser.add_argument("--zones", nargs="*", default=None, help="Optional GeoJSON thematic polygons.")
-    scene_parser.add_argument("--buildings", nargs="*", default=None, help="Optional GeoJSON building polygons.")
+    scene_parser.add_argument(
+        "--scene-id", default=None, help="Optional scene identifier override."
+    )
+    scene_parser.add_argument(
+        "--replay", default=None, help="Optional replay JSON file to package."
+    )
+    scene_parser.add_argument(
+        "--environment-bundle", default=None, help="Optional smartmap-v1 environment bundle path."
+    )
+    scene_parser.add_argument(
+        "--dem", default=None, help="Single-band DEM GeoTIFF for GIS scene compilation."
+    )
+    scene_parser.add_argument(
+        "--source-crs",
+        default=None,
+        help="Optional CRS identifier for GIS inputs, for example EPSG:32611.",
+    )
+    scene_parser.add_argument(
+        "--landcover", nargs="*", default=None, help="Optional GeoJSON land-cover polygons."
+    )
+    scene_parser.add_argument(
+        "--roads", nargs="*", default=None, help="Optional GeoJSON road lines."
+    )
+    scene_parser.add_argument(
+        "--water", nargs="*", default=None, help="Optional GeoJSON water polygons or lines."
+    )
+    scene_parser.add_argument(
+        "--zones", nargs="*", default=None, help="Optional GeoJSON thematic polygons."
+    )
+    scene_parser.add_argument(
+        "--buildings", nargs="*", default=None, help="Optional GeoJSON building polygons."
+    )
 
     # --- validate-scene ---
     validate_scene_parser = subparsers.add_parser(
@@ -235,19 +330,23 @@ def build_parser(command: Optional[str] = None) -> argparse.ArgumentParser:
     )
     _add_logging_args(dump_config_parser)
     dump_config_parser.add_argument(
-        "--format", choices=["json", "yaml"], default="json",
+        "--format",
+        choices=["json", "yaml"],
+        default="json",
         help="Output format (default: json).",
     )
     dump_config_parser.add_argument(
-        "--output", default=None,
+        "--output",
+        default=None,
         help="Optional output file path (default: stdout).",
     )
 
     return parser
 
 
-def _parse_enu_origin(value: str) -> "ENUOrigin":
+def _parse_enu_origin(value: str) -> ENUOrigin:
     from argusnet.core.frames import ENUOrigin
+
     parts = value.split(",")
     if len(parts) not in (2, 3):
         raise argparse.ArgumentTypeError("ENU origin must be 'lat,lon' or 'lat,lon,alt'")
@@ -267,14 +366,14 @@ def normalize_argv(argv: Sequence[str]) -> list[str]:
     return [COMMAND_SIM, *argv]
 
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     normalized_argv = normalize_argv(sys.argv[1:] if argv is None else argv)
     command = normalized_argv[0] if normalized_argv and normalized_argv[0] == COMMAND_SIM else None
     parser = build_parser(command)
     return parser.parse_args(normalized_argv)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     normalized_argv = normalize_argv(sys.argv[1:] if argv is None else argv)
     if normalized_argv and normalized_argv[0] == COMMAND_SIM:
         try:
@@ -326,6 +425,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 # New commands
 # ---------------------------------------------------------------------------
 
+
 def _run_validate_scene(args: argparse.Namespace) -> None:
     scene_path = Path(args.path)
     if not scene_path.is_dir():
@@ -335,14 +435,18 @@ def _run_validate_scene(args: argparse.Namespace) -> None:
     if not manifest_path.exists():
         manifest_path = scene_path / "manifest.json"
     if not manifest_path.exists():
-        raise SystemExit(f"Validation failed: missing scene_manifest.json or manifest.json in {scene_path}.")
+        raise SystemExit(
+            f"Validation failed: missing scene_manifest.json or manifest.json in {scene_path}."
+        )
 
     from argusnet.world.scene_loader import load_scene_manifest
 
     try:
         manifest = load_scene_manifest(manifest_path)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"Validation failed: {manifest_path.name} is not valid JSON: {exc}") from exc
+        raise SystemExit(
+            f"Validation failed: {manifest_path.name} is not valid JSON: {exc}"
+        ) from exc
     except (OSError, ValueError) as exc:
         raise SystemExit(f"Validation failed: {exc}") from exc
 
@@ -381,16 +485,17 @@ def _run_validate_replay(args: argparse.Namespace) -> None:
         raise SystemExit(f"Error: {replay_path} does not exist.")
 
     try:
-        with open(replay_path, "r", encoding="utf-8") as fh:
+        with open(replay_path, encoding="utf-8") as fh:
             document = json.load(fh)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"Error: {replay_path} is not valid JSON: {exc}")
+        raise SystemExit(f"Error: {replay_path} is not valid JSON: {exc}") from exc
 
     from argusnet.evaluation.replay import validate_replay_document
+
     try:
         validate_replay_document(document)
     except ValueError as exc:
-        raise SystemExit(f"Validation failed: {exc}")
+        raise SystemExit(f"Validation failed: {exc}") from exc
 
     meta = document.get("meta", {})
     frame_count = meta.get("frame_count", len(document.get("frames", [])))
@@ -403,10 +508,10 @@ def _run_info(args: argparse.Namespace) -> None:
         raise SystemExit(f"Error: {replay_path} does not exist.")
 
     try:
-        with open(replay_path, "r", encoding="utf-8") as fh:
+        with open(replay_path, encoding="utf-8") as fh:
             document = json.load(fh)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"Error: {replay_path} is not valid JSON: {exc}")
+        raise SystemExit(f"Error: {replay_path} is not valid JSON: {exc}") from exc
 
     meta = document.get("meta", {})
     summary = document.get("summary", {})
@@ -421,6 +526,8 @@ def _run_info(args: argparse.Namespace) -> None:
     track_ids = meta.get("track_ids", [])
     generated_at = meta.get("generated_at_utc", "N/A")
 
+    node_preview = f"{', '.join(node_ids[:5])}{'...' if len(node_ids) > 5 else ''}"
+    track_preview = f"{', '.join(track_ids[:5])}{'...' if len(track_ids) > 5 else ''}"
     lines = [
         f"Replay: {replay_path.name}",
         f"  Scenario:     {scenario_name}",
@@ -429,8 +536,8 @@ def _run_info(args: argparse.Namespace) -> None:
         f"  Frame count:  {frame_count}",
         f"  Time step:    {dt_s} s",
         f"  Duration:     {duration_s:.1f} s",
-        f"  Sensor nodes: {len(node_ids)} ({', '.join(node_ids[:5])}{'...' if len(node_ids) > 5 else ''})",
-        f"  Tracks:       {len(track_ids)} ({', '.join(track_ids[:5])}{'...' if len(track_ids) > 5 else ''})",
+        f"  Sensor nodes: {len(node_ids)} ({node_preview})",
+        f"  Tracks:       {len(track_ids)} ({track_preview})",
     ]
 
     if summary:
@@ -453,13 +560,11 @@ def _run_info(args: argparse.Namespace) -> None:
 
 def _run_dump_config(args: argparse.Namespace) -> None:
     from argusnet.core.config import SimulationConstants
+
     constants = SimulationConstants.default()
 
     fmt = getattr(args, "format", "json")
-    if fmt == "yaml":
-        output = constants.to_yaml()
-    else:
-        output = constants.to_json(indent=2)
+    output = constants.to_yaml() if fmt == "yaml" else constants.to_json(indent=2)
 
     output_path = getattr(args, "output", None)
     if output_path:
@@ -481,6 +586,7 @@ def _run_sim_dry_run(args: argparse.Namespace) -> None:
     constants = None
     try:
         from argusnet.core.config import SimulationConstants
+
         config_file = getattr(args, "config_file", None)
         if config_file:
             lowered = str(config_file).lower()
@@ -498,7 +604,9 @@ def _run_sim_dry_run(args: argparse.Namespace) -> None:
     dt_s = getattr(args, "dt", "default")
     seed = getattr(args, "seed", "default")
     if constants is not None:
-        duration_s = duration_s if _provided("duration_s") else constants.dynamics.default_duration_s
+        duration_s = (
+            duration_s if _provided("duration_s") else constants.dynamics.default_duration_s
+        )
         dt_s = dt_s if _provided("dt") else constants.dynamics.default_dt_s
         seed = seed if _provided("seed") else constants.dynamics.default_seed
     print(f"  Duration:    {duration_s} s")
@@ -515,7 +623,7 @@ def _run_sim_dry_run(args: argparse.Namespace) -> None:
     try:
         if constants is None:
             raise RuntimeError("constants unavailable")
-        print(f"\n  Config summary:")
+        print("\n  Config summary:")
         print(f"    Sensor bearing std: {constants.sensor.drone_base_bearing_std_rad:.4f} rad")
         print(f"    Drone base AGL:     {constants.dynamics.drone_base_agl_m:.0f} m")
         print(f"    Max stale steps:    {constants.dynamics.default_max_stale_steps}")
@@ -529,9 +637,14 @@ def _run_sim_dry_run(args: argparse.Namespace) -> None:
 # Existing commands (unchanged logic)
 # ---------------------------------------------------------------------------
 
+
 def _run_ingest(args: argparse.Namespace) -> None:
-    from argusnet.sensing.ingestion.frame_stream import FileReplayIngestionAdapter, LiveIngestionRunner, MQTTIngestionAdapter
     from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
+    from argusnet.sensing.ingestion.frame_stream import (
+        FileReplayIngestionAdapter,
+        LiveIngestionRunner,
+        MQTTIngestionAdapter,
+    )
 
     enu_origin = _parse_enu_origin(args.enu_origin)
 
@@ -570,6 +683,7 @@ def _run_ingest(args: argparse.Namespace) -> None:
         adapter.stop()
         if args.replay_output and replay_frames:
             from argusnet.evaluation.replay import build_replay_document, write_replay_document
+
             doc = build_replay_document(
                 replay_frames,
                 scenario_name="live-ingest" if not args.replay_file else "file-replay",
@@ -615,12 +729,18 @@ def _run_export(args: argparse.Namespace) -> None:
 
 
 def _run_batch_export(args: argparse.Namespace) -> None:
-    from argusnet.evaluation.export import EXPORT_FORMATS, export_replay_format, suggested_output_path
+    from argusnet.evaluation.export import (
+        EXPORT_FORMATS,
+        export_replay_format,
+        suggested_output_path,
+    )
     from argusnet.evaluation.replay import load_replay_document
 
     enu_origin = _parse_enu_origin(args.enu_origin)
     replay_doc = load_replay_document(args.replay)
-    requested_formats = [value.strip().lower() for value in args.formats.split(",") if value.strip()]
+    requested_formats = [
+        value.strip().lower() for value in args.formats.split(",") if value.strip()
+    ]
     unknown_formats = [value for value in requested_formats if value not in EXPORT_FORMATS]
     if unknown_formats:
         raise SystemExit(f"Unsupported batch-export formats: {', '.join(sorted(unknown_formats))}")

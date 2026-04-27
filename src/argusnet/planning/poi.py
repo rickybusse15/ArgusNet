@@ -1,8 +1,8 @@
 """Point-of-Interest (POI) management for the inspection phase."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -15,8 +15,9 @@ _TRAVEL_POWER_W = 350.0
 @dataclass(frozen=True)
 class POIAssignmentContext:
     """Per-drone context for energy-aware POI assignment."""
+
     drone_id: str
-    drone_pos: np.ndarray           # (3,) XYZ metres
+    drone_pos: np.ndarray  # (3,) XYZ metres
     battery_remaining_wh: float
     battery_capacity_wh: float
     cruise_speed_mps: float = 28.0
@@ -38,24 +39,21 @@ class POIManager:
          of newly completed POIs.
     """
 
-    def __init__(self, pois: List[InspectionPOI]) -> None:
-        self._pois: Dict[str, InspectionPOI] = {p.poi_id: p for p in pois}
-        self._statuses: Dict[str, POIStatus] = {
-            p.poi_id: POIStatus(poi_id=p.poi_id, status="pending")
-            for p in pois
+    def __init__(self, pois: list[InspectionPOI]) -> None:
+        self._pois: dict[str, InspectionPOI] = {p.poi_id: p for p in pois}
+        self._statuses: dict[str, POIStatus] = {
+            p.poi_id: POIStatus(poi_id=p.poi_id, status="pending") for p in pois
         }
-        self._drone_assignment: Dict[str, str] = {}   # drone_id -> poi_id
-        self._dwell_acc: Dict[str, float] = {}         # poi_id -> accumulated dwell
-        self._effective_priorities: Dict[str, int] = {
-            p.poi_id: p.priority for p in pois
-        }
+        self._drone_assignment: dict[str, str] = {}  # drone_id -> poi_id
+        self._dwell_acc: dict[str, float] = {}  # poi_id -> accumulated dwell
+        self._effective_priorities: dict[str, int] = {p.poi_id: p.priority for p in pois}
 
     # ------------------------------------------------------------------
     # Queries
     # ------------------------------------------------------------------
 
     @property
-    def statuses(self) -> List[POIStatus]:
+    def statuses(self) -> list[POIStatus]:
         return list(self._statuses.values())
 
     @property
@@ -70,7 +68,7 @@ class POIManager:
     def all_complete(self) -> bool:
         return self.completed_count == self.total_count
 
-    def assignment_for(self, drone_id: str) -> Optional[str]:
+    def assignment_for(self, drone_id: str) -> str | None:
         """Return the poi_id currently assigned to this drone, or None."""
         return self._drone_assignment.get(drone_id)
 
@@ -83,7 +81,7 @@ class POIManager:
         drone_id: str,
         drone_pos: np.ndarray,
         battery_fraction: float = 1.0,
-    ) -> Optional[InspectionPOI]:
+    ) -> InspectionPOI | None:
         """Assign the highest-priority nearby unassigned POI to drone_id.
 
         Already-assigned drones keep their current POI.
@@ -99,17 +97,14 @@ class POIManager:
             return None
 
         pending = [
-            poi for poi in self._pois.values()
-            if self._statuses[poi.poi_id].status == "pending"
+            poi for poi in self._pois.values() if self._statuses[poi.poi_id].status == "pending"
         ]
         if not pending:
             return None
 
         # Sort by priority desc, then distance asc.
-        def sort_key(poi: InspectionPOI) -> Tuple[int, float]:
-            dist = float(np.linalg.norm(
-                np.array(poi.position[:2]) - np.array(drone_pos[:2])
-            ))
+        def sort_key(poi: InspectionPOI) -> tuple[int, float]:
+            dist = float(np.linalg.norm(np.array(poi.position[:2]) - np.array(drone_pos[:2])))
             return (-poi.priority, dist)
 
         pending.sort(key=sort_key)
@@ -139,9 +134,7 @@ class POIManager:
         travel_s = dist_m / max(cruise_speed_mps, 0.1)
         return _TRAVEL_POWER_W * travel_s / 3600.0
 
-    def assign_energy_aware(
-        self, context: POIAssignmentContext
-    ) -> Optional[InspectionPOI]:
+    def assign_energy_aware(self, context: POIAssignmentContext) -> InspectionPOI | None:
         """Assign a POI to a drone accounting for battery budget.
 
         Already-assigned drones keep their current POI.
@@ -163,13 +156,12 @@ class POIManager:
             return None
 
         pending = [
-            poi for poi in self._pois.values()
-            if self._statuses[poi.poi_id].status == "pending"
+            poi for poi in self._pois.values() if self._statuses[poi.poi_id].status == "pending"
         ]
         if not pending:
             return None
 
-        best_poi: Optional[InspectionPOI] = None
+        best_poi: InspectionPOI | None = None
         best_score = float("-inf")
         for poi in pending:
             cost_wh = self._energy_cost_wh(
@@ -216,6 +208,7 @@ class POIManager:
         # Assign to new drone.
         self._drone_assignment[to_drone_id] = poi_id
         from dataclasses import replace
+
         self._statuses[poi_id] = replace(st, assigned_drone_id=to_drone_id)
         return True
 
@@ -243,9 +236,7 @@ class POIManager:
             if self._statuses[poi_id].status != "pending":
                 continue
             try:
-                density = world_map.coverage_in_region(
-                    poi.position[:2], radius_m=50.0
-                )
+                density = world_map.coverage_in_region(poi.position[:2], radius_m=50.0)
             except Exception:
                 density = 1.0
             boost = int(round((1.0 - float(density)) * 3))
@@ -261,15 +252,13 @@ class POIManager:
         if poi_id is None:
             return
         poi = self._pois[poi_id]
-        dist = float(np.linalg.norm(
-            np.array(poi.position[:2]) - np.array(drone_pos[:2])
-        ))
+        dist = float(np.linalg.norm(np.array(poi.position[:2]) - np.array(drone_pos[:2])))
         if dist <= 30.0:
             self._dwell_acc[poi_id] = self._dwell_acc.get(poi_id, 0.0) + dt_s
 
-    def check_completions(self, timestamp_s: float) -> List[str]:
+    def check_completions(self, timestamp_s: float) -> list[str]:
         """Return list of poi_ids that just became complete this step."""
-        newly_done: List[str] = []
+        newly_done: list[str] = []
         for poi_id, poi in self._pois.items():
             st = self._statuses[poi_id]
             if st.status != "active":

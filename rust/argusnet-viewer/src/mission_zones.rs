@@ -546,19 +546,17 @@ fn rdp_range(points: &[[f32; 2]], start: usize, end: usize, epsilon: f32, keep: 
     let dx = ex - sx;
     let dy = ey - sy;
     let len_sq = dx * dx + dy * dy;
-    for i in (start + 1)..end {
+    for (index, point) in points.iter().enumerate().take(end).skip(start + 1) {
+        let px = point[0] - sx;
+        let py = point[1] - sy;
         let dist = if len_sq < f32::EPSILON {
-            let px = points[i][0] - sx;
-            let py = points[i][1] - sy;
             (px * px + py * py).sqrt()
         } else {
-            let px = points[i][0] - sx;
-            let py = points[i][1] - sy;
             ((px * dy - py * dx).abs()) / len_sq.sqrt()
         };
         if dist > max_dist {
             max_dist = dist;
-            max_index = i;
+            max_index = index;
         }
     }
     if max_dist > epsilon {
@@ -682,11 +680,7 @@ pub fn sample_terrain_height(
 
 /// Try to sample terrain height; returns `None` when a mesh exists but the
 /// point is outside its coverage. Used to skip segments that leak off-map.
-fn try_terrain_height(
-    terrain_mesh: &Option<TerrainViewerMesh>,
-    x_m: f32,
-    y_m: f32,
-) -> Option<f32> {
+fn try_terrain_height(terrain_mesh: &Option<TerrainViewerMesh>, x_m: f32, y_m: f32) -> Option<f32> {
     terrain_mesh.as_ref()?.sample_height(x_m, y_m)
 }
 
@@ -758,7 +752,13 @@ fn group_outline_color(group: &ZoneOverlapGroup) -> Color {
 // Draw helpers
 // ---------------------------------------------------------------------------
 
-fn draw_xy_rect(gizmos: &mut Gizmos, center: Vec3, half_width: f32, half_height: f32, color: Color) {
+fn draw_xy_rect(
+    gizmos: &mut Gizmos,
+    center: Vec3,
+    half_width: f32,
+    half_height: f32,
+    color: Color,
+) {
     let a = center + Vec3::new(-half_width, -half_height, 0.0);
     let b = center + Vec3::new(half_width, -half_height, 0.0);
     let c = center + Vec3::new(half_width, half_height, 0.0);
@@ -921,8 +921,16 @@ fn draw_zone_group_outline(
             if h0.is_none() || h1.is_none() {
                 continue;
             }
-            let start = Vec3::new(segment[0][0], segment[0][1], h0.unwrap() + ZONE_GLYPH_LIFT_M);
-            let end = Vec3::new(segment[1][0], segment[1][1], h1.unwrap() + ZONE_GLYPH_LIFT_M);
+            let start = Vec3::new(
+                segment[0][0],
+                segment[0][1],
+                h0.unwrap() + ZONE_GLYPH_LIFT_M,
+            );
+            let end = Vec3::new(
+                segment[1][0],
+                segment[1][1],
+                h1.unwrap() + ZONE_GLYPH_LIFT_M,
+            );
             gizmos.line(start, end, color);
         } else {
             let start = Vec3::new(

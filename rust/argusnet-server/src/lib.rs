@@ -1,4 +1,11 @@
 use anyhow::{anyhow, Result};
+use argusnet_core::{PlatformFrame, TrackerConfig, TrackingEngine};
+use argusnet_proto::pb::world_model_service_server::{WorldModelService, WorldModelServiceServer};
+use argusnet_proto::pb::{
+    GetConfigRequest, GetConfigResponse, HealthRequest, HealthResponse, IngestFrameRequest,
+    IngestFrameResponse, LatestFrameRequest, LatestFrameResponse, MissionStatusRequest,
+    MissionStatusResponse, ResetRequest, ResetResponse,
+};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
@@ -10,19 +17,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tonic::{transport::Server, Request, Response, Status};
-use argusnet_core::{PlatformFrame, TrackerConfig, TrackingEngine};
-use argusnet_proto::pb::world_model_service_server::{WorldModelService, WorldModelServiceServer};
-use argusnet_proto::pb::{
-    GetConfigRequest, GetConfigResponse, HealthRequest, HealthResponse, IngestFrameRequest,
-    IngestFrameResponse, LatestFrameRequest, LatestFrameResponse, MissionStatusRequest,
-    MissionStatusResponse, ResetRequest, ResetResponse,
-};
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "argusnetd",
-    about = "ArgusNet Rust tracking daemon."
-)]
+#[command(name = "argusnetd", about = "ArgusNet Rust tracking daemon.")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -331,17 +328,14 @@ fn invalid_argument(message: impl Into<String>) -> Status {
     Status::invalid_argument(message.into())
 }
 
-fn convert_request(
-    request: IngestFrameRequest,
-) -> Result<
-    (
-        f64,
-        Vec<argusnet_core::NodeState>,
-        Vec<argusnet_core::BearingObservation>,
-        Vec<argusnet_core::TruthState>,
-    ),
-    Status,
-> {
+type ConvertedRequest = (
+    f64,
+    Vec<argusnet_core::NodeState>,
+    Vec<argusnet_core::BearingObservation>,
+    Vec<argusnet_core::TruthState>,
+);
+
+fn convert_request(request: IngestFrameRequest) -> Result<ConvertedRequest, Status> {
     let timestamp_s = request.timestamp_s;
     let node_states = request
         .node_states
@@ -437,11 +431,13 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                     });
                     let _ = response.send(reply);
                 }
-                EngineCommand::MissionStatus { scenario_name, response } => {
+                EngineCommand::MissionStatus {
+                    scenario_name,
+                    response,
+                } => {
                     let latest = engine.latest_frame();
                     let elapsed_s = latest.map_or(0.0, |f| f.timestamp_s);
-                    let active_track_count = latest
-                        .map_or(0, |f| f.metrics.active_track_count);
+                    let active_track_count = latest.map_or(0, |f| f.metrics.active_track_count);
                     let active_track_ids: Vec<String> = latest
                         .map(|f| f.tracks.iter().map(|t| t.track_id.clone()).collect())
                         .unwrap_or_default();
@@ -449,7 +445,7 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                         scenario_name,
                         elapsed_s,
                         active_track_count,
-                        active_zone_count: 0,  // zones pushed from Python, not stored server-side
+                        active_zone_count: 0, // zones pushed from Python, not stored server-side
                         zones: vec![],
                         active_track_ids,
                     });
@@ -544,7 +540,9 @@ impl WorldModelService for GrpcTrackerService {
         request: Request<MissionStatusRequest>,
     ) -> Result<Response<MissionStatusResponse>, Status> {
         let scenario_name = request.into_inner().scenario_name;
-        Ok(Response::new(self.engine.mission_status(scenario_name).await?))
+        Ok(Response::new(
+            self.engine.mission_status(scenario_name).await?,
+        ))
     }
 }
 

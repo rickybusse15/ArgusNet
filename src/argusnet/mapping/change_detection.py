@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional
-
-import numpy as np
 
 __all__ = ["ChangeEvent", "ChangeDetector"]
 
@@ -59,7 +56,7 @@ class ChangeDetector:
         past_map,
         current_map,
         age_s: float = 0.0,
-    ) -> List[ChangeEvent]:
+    ) -> list[ChangeEvent]:
         """Compare *past_map* and *current_map* and return changed cells.
 
         Both maps must have the same grid dimensions and cell_size_m.
@@ -72,8 +69,7 @@ class ChangeDetector:
                 Used to discount the baseline confidence via exponential decay.
                 Defaults to 0 (no discounting; identical to Phase 2 behaviour).
         """
-        if (past_map.rows != current_map.rows or
-                past_map.cols != current_map.cols):
+        if past_map.rows != current_map.rows or past_map.cols != current_map.cols:
             return []
 
         # Pre-compute the temporal discount factor once per call.
@@ -86,8 +82,10 @@ class ChangeDetector:
                 curr_cell = current_map._cells[r][c]
 
                 # Skip cells without enough observations
-                if (past_cell.total_observations < self.min_observation_count or
-                        curr_cell.total_observations < self.min_observation_count):
+                if (
+                    past_cell.total_observations < self.min_observation_count
+                    or curr_cell.total_observations < self.min_observation_count
+                ):
                     continue
 
                 past_label = past_cell.dominant_label
@@ -99,27 +97,28 @@ class ChangeDetector:
                 past_conf = past_cell.confidence
                 curr_conf = curr_cell.confidence
 
-                if (past_conf < self.min_confidence_old or
-                        curr_conf < self.min_confidence_new):
+                if past_conf < self.min_confidence_old or curr_conf < self.min_confidence_new:
                     continue
 
                 x, y = current_map.cell_center(r, c)
                 # Temporal decay discounts the old-map confidence, so long-stale
                 # baselines produce lower change-confidence scores.
                 change_confidence = age_weight * past_conf * curr_conf
-                events.append(ChangeEvent(
-                    row=r,
-                    col=c,
-                    x_m=x,
-                    y_m=y,
-                    old_label=past_label,
-                    new_label=curr_label,
-                    confidence=float(change_confidence),
-                ))
+                events.append(
+                    ChangeEvent(
+                        row=r,
+                        col=c,
+                        x_m=x,
+                        y_m=y,
+                        old_label=past_label,
+                        new_label=curr_label,
+                        confidence=float(change_confidence),
+                    )
+                )
 
         return events
 
-    def events_to_dicts(self, events: List[ChangeEvent]) -> List[dict]:
+    def events_to_dicts(self, events: list[ChangeEvent]) -> list[dict]:
         """Convert events to JSON-serializable dicts."""
         return [
             {

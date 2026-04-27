@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import numpy as np
 
-from argusnet.localization.vio import VIOState
 from argusnet.localization.transforms import SE3
+from argusnet.localization.vio import VIOState
 
 try:
     from scipy.optimize import minimize as _scipy_minimize
+
     _HAS_SCIPY = True
 except ImportError:
     _HAS_SCIPY = False
@@ -22,7 +22,7 @@ __all__ = ["MapRelocalizor", "RelocalizationResult"]
 @dataclass(frozen=True)
 class RelocalizationResult:
     success: bool
-    corrected_state: Optional[VIOState]
+    corrected_state: VIOState | None
     confidence: float
 
 
@@ -113,7 +113,9 @@ class MapRelocalizor:
             covariance=state.covariance.copy() if state.covariance is not None else None,
             tracked_feature_count=state.tracked_feature_count,
         )
-        return RelocalizationResult(success=True, corrected_state=corrected_state, confidence=confidence)
+        return RelocalizationResult(
+            success=True, corrected_state=corrected_state, confidence=confidence
+        )
 
     def _score_alignment(
         self,
@@ -127,14 +129,14 @@ class MapRelocalizor:
         diverse label distribution = informative region = good anchor.
         """
         r = self.footprint_radius_m
-        cell_size = getattr(semantic_map, 'cell_size_m', 1.0)
+        cell_size = getattr(semantic_map, "cell_size_m", 1.0)
         steps = max(int(r / cell_size), 3)
         label_counts: dict = {}
         total = 0
         for dx in np.linspace(-r, r, steps):
             for dy in np.linspace(-r, r, steps):
                 x, y = candidate_xy[0] + dx, candidate_xy[1] + dy
-                label = getattr(semantic_map, 'label_at', lambda a, b: 0)(x, y)
+                label = getattr(semantic_map, "label_at", lambda a, b: 0)(x, y)
                 label_counts[label] = label_counts.get(label, 0) + 1
                 total += 1
         if total == 0:

@@ -17,17 +17,19 @@ Typical usage::
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
-TrajectoryFn = Callable[[float], Tuple[np.ndarray, np.ndarray]]
+TrajectoryFn = Callable[[float], tuple[np.ndarray, np.ndarray]]
 
 
 # ---------------------------------------------------------------------------
 # Configuration data-classes
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class FlightEnvelope:
@@ -51,13 +53,13 @@ class FlightEnvelope:
         """
         g = 9.80665
         bank_rad = math.radians(max(self.max_bank_angle_deg, 1.0))
-        return self.min_speed_mps ** 2 / (g * math.tan(bank_rad))
+        return self.min_speed_mps**2 / (g * math.tan(bank_rad))
 
     def min_turn_radius_at_speed(self, speed_mps: float) -> float:
         """Return the minimum turn radius at an arbitrary speed."""
         g = 9.80665
         bank_rad = math.radians(max(self.max_bank_angle_deg, 1.0))
-        return speed_mps ** 2 / (g * math.tan(bank_rad))
+        return speed_mps**2 / (g * math.tan(bank_rad))
 
 
 @dataclass(frozen=True)
@@ -75,10 +77,7 @@ class TurbulenceModel:
         derived from seeded hashing so that repeated calls with the same
         arguments produce the same result.
         """
-        rng = np.random.default_rng(
-            self.seed
-            ^ int(abs(time_s * 1000.0)) % (2 ** 31)
-        )
+        rng = np.random.default_rng(self.seed ^ int(abs(time_s * 1000.0)) % (2**31))
         scale_inv = 1.0 / max(self.spectral_scale_m, 1.0)
         phase_x = math.sin(position[0] * scale_inv + time_s * 0.3) * 0.5
         phase_y = math.cos(position[1] * scale_inv + time_s * 0.25) * 0.5
@@ -92,6 +91,7 @@ class TurbulenceModel:
 # ---------------------------------------------------------------------------
 # Behaviour classes
 # ---------------------------------------------------------------------------
+
 
 class LoiterBehavior:
     """Orbit around a point with configurable radius and altitude variation."""
@@ -113,7 +113,7 @@ class LoiterBehavior:
         self._alt_period_s = max(float(altitude_period_s), 1.0)
         self._omega = self._direction * self._speed_mps / self._radius_m
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         angle = self._omega * t
         cx, cy = float(self._center[0]), float(self._center[1])
         base_alt = float(self._center[2]) if self._center.size >= 3 else 150.0
@@ -143,19 +143,19 @@ class TransitBehavior:
 
     def __init__(
         self,
-        waypoints: List[np.ndarray],
+        waypoints: list[np.ndarray],
         speed_mps: float,
-        envelope: FlightEnvelope = FlightEnvelope(),
+        envelope: FlightEnvelope | None = None,
     ) -> None:
         if len(waypoints) < 2:
             raise ValueError("TransitBehavior requires at least 2 waypoints.")
         self._waypoints = [np.asarray(w, dtype=float).copy() for w in waypoints]
         self._speed = max(float(speed_mps), 0.5)
-        self._envelope = envelope
+        self._envelope = envelope if envelope is not None else FlightEnvelope()
 
         # Pre-compute cumulative arc-length times for constant-speed flight
-        self._segment_lengths: List[float] = []
-        self._cumulative_times: List[float] = [0.0]
+        self._segment_lengths: list[float] = []
+        self._cumulative_times: list[float] = [0.0]
         for i in range(len(self._waypoints) - 1):
             seg = self._waypoints[i + 1] - self._waypoints[i]
             length = float(np.linalg.norm(seg))
@@ -167,7 +167,7 @@ class TransitBehavior:
 
         # Build tangent vectors at each waypoint for Hermite interpolation.
         n = len(self._waypoints)
-        self._tangents: List[np.ndarray] = []
+        self._tangents: list[np.ndarray] = []
         for i in range(n):
             if i == 0:
                 d = self._waypoints[1] - self._waypoints[0]
@@ -176,18 +176,15 @@ class TransitBehavior:
             else:
                 d = self._waypoints[i + 1] - self._waypoints[i - 1]
             norm = float(np.linalg.norm(d))
-            if norm > 1e-9:
-                d = d / norm * self._speed
-            else:
-                d = np.zeros(3, dtype=float)
+            d = d / norm * self._speed if norm > 1e-09 else np.zeros(3, dtype=float)
             self._tangents.append(d)
 
     # ---- Hermite helpers ----
 
     @staticmethod
-    def _hermite(p0: np.ndarray, m0: np.ndarray,
-                 p1: np.ndarray, m1: np.ndarray,
-                 u: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _hermite(
+        p0: np.ndarray, m0: np.ndarray, p1: np.ndarray, m1: np.ndarray, u: float
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Evaluate cubic Hermite at parameter *u* in [0, 1].
 
         Returns (position, tangent_du).
@@ -206,7 +203,7 @@ class TransitBehavior:
         tangent = dh00 * p0 + dh10 * m0 + dh01 * p1 + dh11 * m1
         return pos, tangent
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         if t < 0.0:
             t = 0.0
 
@@ -277,7 +274,7 @@ class EvasiveBehavior:
         self._seed = seed
 
         # Pre-generate evasion windows for the first 600 seconds.
-        self._windows: List[Tuple[float, float]] = []
+        self._windows: list[tuple[float, float]] = []
         self._max_precomputed_s = 600.0
         self._generate_windows(self._max_precomputed_s)
 
@@ -285,7 +282,7 @@ class EvasiveBehavior:
         rng = np.random.default_rng(self._seed)
         check_interval = 5.0
         t = 0.0
-        windows: List[Tuple[float, float]] = []
+        windows: list[tuple[float, float]] = []
         while t < max_time_s:
             if rng.random() < self._evasion_prob * (check_interval / self._evasion_dur):
                 end_t = t + self._evasion_dur
@@ -295,7 +292,7 @@ class EvasiveBehavior:
                 t += check_interval
         self._windows = windows
 
-    def _is_evading(self, t: float) -> Tuple[bool, float]:
+    def _is_evading(self, t: float) -> tuple[bool, float]:
         """Return (is_evading, blend_factor) at time *t*.
 
         The blend factor ramps 0 -> 1 over the first 2 s of the window and
@@ -304,7 +301,7 @@ class EvasiveBehavior:
         ramp_s = 2.0
         for start, end in self._windows:
             if start <= t <= end:
-                duration = end - start
+                end - start
                 elapsed = t - start
                 remaining = end - t
                 ramp_in = min(elapsed / ramp_s, 1.0) if ramp_s > 0 else 1.0
@@ -313,7 +310,7 @@ class EvasiveBehavior:
                 return True, blend
         return False, 0.0
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         pos, vel = self._base(t)
         evading, blend = self._is_evading(t)
         if not evading or blend <= 0.0:
@@ -352,8 +349,8 @@ class SearchPatternBehavior:
 
         # Pre-build waypoint list for the pattern.
         self._waypoints = self._build_waypoints()
-        self._segment_lengths: List[float] = []
-        self._cumulative_dists: List[float] = [0.0]
+        self._segment_lengths: list[float] = []
+        self._cumulative_dists: list[float] = [0.0]
         for i in range(len(self._waypoints) - 1):
             d = float(np.linalg.norm(self._waypoints[i + 1] - self._waypoints[i]))
             self._segment_lengths.append(max(d, 1e-6))
@@ -362,7 +359,7 @@ class SearchPatternBehavior:
 
         # Pre-compute Catmull-Rom tangents at each waypoint for smooth corners.
         n = len(self._waypoints)
-        self._tangents: List[np.ndarray] = []
+        self._tangents: list[np.ndarray] = []
         for i in range(n):
             if i == 0:
                 d = self._waypoints[1] - self._waypoints[0]
@@ -371,26 +368,33 @@ class SearchPatternBehavior:
             else:
                 d = self._waypoints[i + 1] - self._waypoints[i - 1]
             norm = float(np.linalg.norm(d))
-            self._tangents.append(d / norm * self._speed if norm > 1e-9 else np.zeros(3, dtype=float))
+            self._tangents.append(
+                d / norm * self._speed if norm > 1e-9 else np.zeros(3, dtype=float)
+            )
 
-    def _build_waypoints(self) -> List[np.ndarray]:
+    def _build_waypoints(self) -> list[np.ndarray]:
         cx = float(self._center[0])
         cy = float(self._center[1])
 
         if self._pattern == "expanding_square":
             # Expanding square: successive right turns with increasing leg length.
-            pts: List[np.ndarray] = [np.array([cx, cy, self._alt], dtype=float)]
+            pts: list[np.ndarray] = [np.array([cx, cy, self._alt], dtype=float)]
             directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
             leg_count = 20  # enough legs for long simulations
             for i in range(leg_count):
                 multiplier = (i // 2 + 1) * self._leg
                 dx, dy = directions[i % 4]
                 last = pts[-1]
-                pts.append(np.array([
-                    float(last[0]) + dx * multiplier,
-                    float(last[1]) + dy * multiplier,
-                    self._alt,
-                ], dtype=float))
+                pts.append(
+                    np.array(
+                        [
+                            float(last[0]) + dx * multiplier,
+                            float(last[1]) + dy * multiplier,
+                            self._alt,
+                        ],
+                        dtype=float,
+                    )
+                )
             return pts
         else:
             # Sector search: radiating lines from center.
@@ -400,15 +404,20 @@ class SearchPatternBehavior:
             for i in range(sector_count):
                 angle = 2.0 * math.pi * i / sector_count
                 pts.append(np.array([cx, cy, self._alt], dtype=float))
-                pts.append(np.array([
-                    cx + radius * math.cos(angle),
-                    cy + radius * math.sin(angle),
-                    self._alt,
-                ], dtype=float))
+                pts.append(
+                    np.array(
+                        [
+                            cx + radius * math.cos(angle),
+                            cy + radius * math.sin(angle),
+                            self._alt,
+                        ],
+                        dtype=float,
+                    )
+                )
                 radius += self._leg * 0.25
             return pts
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         if len(self._waypoints) < 2:
             return self._center.copy(), np.zeros(3, dtype=float)
 
@@ -463,7 +472,7 @@ class CompositeTrajectory:
 
     BLEND_DURATION_S: float = 2.0
 
-    def __init__(self, segments: List[Tuple[float, TrajectoryFn]]) -> None:
+    def __init__(self, segments: list[tuple[float, TrajectoryFn]]) -> None:
         if not segments:
             raise ValueError("CompositeTrajectory requires at least one segment.")
         self._segments = sorted(segments, key=lambda s: s[0])
@@ -475,7 +484,7 @@ class CompositeTrajectory:
                 idx = i
         return idx
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         idx = self._active_index(t)
         seg_start, seg_fn = self._segments[idx]
 
@@ -487,7 +496,7 @@ class CompositeTrajectory:
                 alpha = (t - seg_start) / self.BLEND_DURATION_S
                 alpha = max(0.0, min(1.0, alpha))
                 # Smooth-step for C1 continuity.
-                alpha = 3 * alpha ** 2 - 2 * alpha ** 3
+                alpha = 3 * alpha**2 - 2 * alpha**3
                 p_old, v_old = prev_fn(t)
                 p_new, v_new = seg_fn(t)
                 pos = p_old * (1.0 - alpha) + p_new * alpha
@@ -500,6 +509,7 @@ class CompositeTrajectory:
 # ---------------------------------------------------------------------------
 # Target behavior policy families (architecture update Section 11)
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class TargetPolicyParams:
@@ -520,39 +530,67 @@ class TargetPolicyParams:
 
 # Named policy families from architecture update Section 11.3
 TARGET_POLICY_DIRECT_TRANSIT = TargetPolicyParams(
-    speed_min_mps=15.0, speed_max_mps=35.0,
-    heading_change_aggressiveness=0.05, terrain_preference=0.0,
-    exposure_penalty=0.0, urgency=0.9, predictability=0.95,
+    speed_min_mps=15.0,
+    speed_max_mps=35.0,
+    heading_change_aggressiveness=0.05,
+    terrain_preference=0.0,
+    exposure_penalty=0.0,
+    urgency=0.9,
+    predictability=0.95,
 )
 TARGET_POLICY_CAUTIOUS_TRANSIT = TargetPolicyParams(
-    speed_min_mps=10.0, speed_max_mps=25.0,
-    heading_change_aggressiveness=0.15, terrain_preference=0.3,
-    exposure_penalty=0.2, urgency=0.5, predictability=0.7,
+    speed_min_mps=10.0,
+    speed_max_mps=25.0,
+    heading_change_aggressiveness=0.15,
+    terrain_preference=0.3,
+    exposure_penalty=0.2,
+    urgency=0.5,
+    predictability=0.7,
 )
 TARGET_POLICY_COVER_SEEKING = TargetPolicyParams(
-    speed_min_mps=8.0, speed_max_mps=20.0,
-    heading_change_aggressiveness=0.3, terrain_preference=0.8,
-    exposure_penalty=0.7, urgency=0.3, predictability=0.4,
+    speed_min_mps=8.0,
+    speed_max_mps=20.0,
+    heading_change_aggressiveness=0.3,
+    terrain_preference=0.8,
+    exposure_penalty=0.7,
+    urgency=0.3,
+    predictability=0.4,
 )
 TARGET_POLICY_DECEPTIVE_ZIGZAG = TargetPolicyParams(
-    speed_min_mps=12.0, speed_max_mps=28.0,
-    heading_change_aggressiveness=0.8, terrain_preference=0.2,
-    exposure_penalty=0.1, urgency=0.4, predictability=0.15,
+    speed_min_mps=12.0,
+    speed_max_mps=28.0,
+    heading_change_aggressiveness=0.8,
+    terrain_preference=0.2,
+    exposure_penalty=0.1,
+    urgency=0.4,
+    predictability=0.15,
 )
 TARGET_POLICY_STOP_OBSERVE_MOVE = TargetPolicyParams(
-    speed_min_mps=0.0, speed_max_mps=25.0,
-    heading_change_aggressiveness=0.2, terrain_preference=0.5,
-    exposure_penalty=0.5, urgency=0.2, predictability=0.3,
+    speed_min_mps=0.0,
+    speed_max_mps=25.0,
+    heading_change_aggressiveness=0.2,
+    terrain_preference=0.5,
+    exposure_penalty=0.5,
+    urgency=0.2,
+    predictability=0.3,
 )
 TARGET_POLICY_CORRIDOR_HUGGING = TargetPolicyParams(
-    speed_min_mps=12.0, speed_max_mps=30.0,
-    heading_change_aggressiveness=0.1, terrain_preference=0.6,
-    exposure_penalty=0.3, urgency=0.7, predictability=0.6,
+    speed_min_mps=12.0,
+    speed_max_mps=30.0,
+    heading_change_aggressiveness=0.1,
+    terrain_preference=0.6,
+    exposure_penalty=0.3,
+    urgency=0.7,
+    predictability=0.6,
 )
 TARGET_POLICY_RANDOM_AMBIGUITY = TargetPolicyParams(
-    speed_min_mps=5.0, speed_max_mps=35.0,
-    heading_change_aggressiveness=0.5, terrain_preference=0.2,
-    exposure_penalty=0.1, urgency=0.3, predictability=0.05,
+    speed_min_mps=5.0,
+    speed_max_mps=35.0,
+    heading_change_aggressiveness=0.5,
+    terrain_preference=0.2,
+    exposure_penalty=0.1,
+    urgency=0.3,
+    predictability=0.05,
 )
 
 NAMED_TARGET_POLICIES: dict = {
@@ -575,7 +613,7 @@ class StopObserveMoveBehavior:
 
     def __init__(
         self,
-        waypoints: List[np.ndarray],
+        waypoints: list[np.ndarray],
         speed_mps: float = 20.0,
         stop_duration_s: float = 10.0,
         move_duration_s: float = 20.0,
@@ -588,7 +626,7 @@ class StopObserveMoveBehavior:
         rng = np.random.default_rng(seed)
         self._phase_offset = rng.uniform(0, self._cycle)
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         phase = (t + self._phase_offset) % self._cycle
         if phase < self._move_dur:
             return self._transit(t)
@@ -631,14 +669,19 @@ class DeceptiveZigzagBehavior:
             self._dir = diff / self._total_dist
             self._perp = np.array([-self._dir[1], self._dir[0]], dtype=float)
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         along = min(self._speed * t, self._total_dist)
         lateral = self._amp * math.sin(2 * math.pi * t / self._period + self._phase)
         xy = self._start + self._dir * along + self._perp * lateral
 
         d_along = self._speed if along < self._total_dist else 0.0
-        d_lateral = (self._amp * 2 * math.pi / self._period
-                     * math.cos(2 * math.pi * t / self._period + self._phase))
+        d_lateral = (
+            self._amp
+            * 2
+            * math.pi
+            / self._period
+            * math.cos(2 * math.pi * t / self._period + self._phase)
+        )
         vxy = self._dir * d_along + self._perp * d_lateral
 
         pos = np.array([xy[0], xy[1], self._alt], dtype=float)
@@ -656,7 +699,7 @@ class SplitProbabilityBehavior:
 
     def __init__(
         self,
-        trajectories: List[TrajectoryFn],
+        trajectories: list[TrajectoryFn],
         decision_interval_s: float = 30.0,
         seed: int = 42,
     ) -> None:
@@ -669,7 +712,7 @@ class SplitProbabilityBehavior:
         n_decisions = int(600.0 / self._interval) + 1
         self._choices = self._rng.integers(0, len(trajectories), size=n_decisions)
 
-    def __call__(self, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
         decision_idx = int(t / self._interval) % len(self._choices)
         traj_idx = int(self._choices[decision_idx]) % len(self._trajectories)
         return self._trajectories[traj_idx](t)
@@ -681,7 +724,7 @@ def build_policy_trajectory(
     altitude_m: float,
     speed_mps: float,
     seed: int = 42,
-    terrain_height_fn: Optional[Callable[[float, float], float]] = None,
+    terrain_height_fn: Callable[[float, float], float] | None = None,
 ) -> TrajectoryFn:
     """Build a target trajectory from a named policy family.
 
@@ -702,8 +745,7 @@ def build_policy_trajectory(
     """
     if policy_name not in NAMED_TARGET_POLICIES:
         raise ValueError(
-            f"Unknown target policy {policy_name!r}. "
-            f"Choose from {sorted(NAMED_TARGET_POLICIES)}."
+            f"Unknown target policy {policy_name!r}. Choose from {sorted(NAMED_TARGET_POLICIES)}."
         )
 
     params = NAMED_TARGET_POLICIES[policy_name]
@@ -724,11 +766,14 @@ def build_policy_trajectory(
         n_wps = rng.integers(4, 8)
         wps = []
         for _ in range(n_wps):
-            wp = np.array([
-                center[0] + rng.uniform(-0.25, 0.25) * span[0],
-                center[1] + rng.uniform(-0.25, 0.25) * span[1],
-                altitude_m + rng.uniform(-10, 10),
-            ], dtype=float)
+            wp = np.array(
+                [
+                    center[0] + rng.uniform(-0.25, 0.25) * span[0],
+                    center[1] + rng.uniform(-0.25, 0.25) * span[1],
+                    altitude_m + rng.uniform(-10, 10),
+                ],
+                dtype=float,
+            )
             wps.append(wp)
         return TransitBehavior(waypoints=wps, speed_mps=effective_speed)
 
@@ -749,37 +794,52 @@ def build_policy_trajectory(
         start = center + rng.uniform(-0.3, 0.3, size=2) * span
         goal = center + rng.uniform(-0.3, 0.3, size=2) * span
         return DeceptiveZigzagBehavior(
-            start_xy=start, goal_xy=goal,
-            altitude_m=altitude_m, speed_mps=effective_speed,
+            start_xy=start,
+            goal_xy=goal,
+            altitude_m=altitude_m,
+            speed_mps=effective_speed,
             zigzag_amplitude_m=float(span.min()) * 0.08,
-            zigzag_period_s=25.0, seed=seed,
+            zigzag_period_s=25.0,
+            seed=seed,
         )
 
     if policy_name == "stop_observe_move":
         n_wps = rng.integers(3, 6)
         wps = []
         for _ in range(n_wps):
-            wp = np.array([
-                center[0] + rng.uniform(-0.2, 0.2) * span[0],
-                center[1] + rng.uniform(-0.2, 0.2) * span[1],
-                altitude_m,
-            ], dtype=float)
+            wp = np.array(
+                [
+                    center[0] + rng.uniform(-0.2, 0.2) * span[0],
+                    center[1] + rng.uniform(-0.2, 0.2) * span[1],
+                    altitude_m,
+                ],
+                dtype=float,
+            )
             wps.append(wp)
         return StopObserveMoveBehavior(
-            waypoints=wps, speed_mps=effective_speed,
-            stop_duration_s=12.0, move_duration_s=18.0, seed=seed,
+            waypoints=wps,
+            speed_mps=effective_speed,
+            stop_duration_s=12.0,
+            move_duration_s=18.0,
+            seed=seed,
         )
 
     if policy_name == "corridor_hugging":
         # Linear corridor with slight meander
-        start = np.array([
-            center[0] - span[0] * 0.35,
-            center[1] + rng.uniform(-0.1, 0.1) * span[1],
-        ], dtype=float)
-        end = np.array([
-            center[0] + span[0] * 0.35,
-            center[1] + rng.uniform(-0.1, 0.1) * span[1],
-        ], dtype=float)
+        start = np.array(
+            [
+                center[0] - span[0] * 0.35,
+                center[1] + rng.uniform(-0.1, 0.1) * span[1],
+            ],
+            dtype=float,
+        )
+        end = np.array(
+            [
+                center[0] + span[0] * 0.35,
+                center[1] + rng.uniform(-0.1, 0.1) * span[1],
+            ],
+            dtype=float,
+        )
         n_intermediate = 4
         wps = [np.array([start[0], start[1], altitude_m], dtype=float)]
         for i in range(1, n_intermediate + 1):
@@ -792,7 +852,7 @@ def build_policy_trajectory(
 
     if policy_name == "random_ambiguity":
         # Multiple sub-trajectories, randomly switching
-        sub_trajs: List[TrajectoryFn] = []
+        sub_trajs: list[TrajectoryFn] = []
         for i in range(3):
             sub_seed = seed + i * 1000
             sub_trajs.append(_sinusoid_trajectory(bounds, altitude_m, effective_speed, sub_seed))
@@ -840,13 +900,21 @@ def scale_policy_by_difficulty(
 # Factory / preset helpers
 # ---------------------------------------------------------------------------
 
-BEHAVIOR_PRESETS = frozenset({
-    "loiter", "transit", "evasive", "search_pattern",
-    "sinusoid", "racetrack", "waypoint_patrol", "mixed",
-})
+BEHAVIOR_PRESETS = frozenset(
+    {
+        "loiter",
+        "transit",
+        "evasive",
+        "search_pattern",
+        "sinusoid",
+        "racetrack",
+        "waypoint_patrol",
+        "mixed",
+    }
+)
 
 
-def _bounds_center_and_span(bounds: Any) -> Tuple[np.ndarray, np.ndarray]:
+def _bounds_center_and_span(bounds: Any) -> tuple[np.ndarray, np.ndarray]:
     """Extract centre and span from a bounds mapping or dict-like object."""
     if hasattr(bounds, "__getitem__"):
         x_min = float(bounds["x_min_m"])
@@ -861,7 +929,10 @@ def _bounds_center_and_span(bounds: Any) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def _sinusoid_trajectory(
-    bounds: Any, altitude_m: float, speed_mps: float, seed: int,
+    bounds: Any,
+    altitude_m: float,
+    speed_mps: float,
+    seed: int,
 ) -> TrajectoryFn:
     """Lightweight sinusoidal path for the factory (no terrain coupling)."""
     rng = np.random.default_rng(seed)
@@ -874,7 +945,7 @@ def _sinusoid_trajectory(
     freq = speed_mps / max(float(span.min()), 100.0) * 2.0
     phase = rng.uniform(0, 2 * math.pi)
 
-    def _traj(t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _traj(t: float) -> tuple[np.ndarray, np.ndarray]:
         x = start_xy[0] + vx * t + lateral_amp * math.sin(freq * t + phase)
         y = start_xy[1] + vy * t
         z = altitude_m + 15.0 * math.sin(0.08 * t + phase * 0.5)
@@ -887,7 +958,10 @@ def _sinusoid_trajectory(
 
 
 def _racetrack_trajectory(
-    bounds: Any, altitude_m: float, speed_mps: float, seed: int,
+    bounds: Any,
+    altitude_m: float,
+    speed_mps: float,
+    seed: int,
 ) -> TrajectoryFn:
     """Simple racetrack oval for the factory."""
     rng = np.random.default_rng(seed)
@@ -899,7 +973,7 @@ def _racetrack_trajectory(
     track_len = 2.0 * straight + 2.0 * math.pi * turn_r
     phase_offset = rng.uniform(0, track_len)
 
-    def _traj(t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _traj(t: float) -> tuple[np.ndarray, np.ndarray]:
         d = (speed_mps * t + phase_offset) % track_len
         if d < straight:
             x = cx - straight * 0.5 + d
@@ -932,7 +1006,10 @@ def _racetrack_trajectory(
 
 
 def _waypoint_patrol_trajectory(
-    bounds: Any, altitude_m: float, speed_mps: float, seed: int,
+    bounds: Any,
+    altitude_m: float,
+    speed_mps: float,
+    seed: int,
 ) -> TrajectoryFn:
     """Rectangular patrol path for the factory."""
     rng = np.random.default_rng(seed)
@@ -951,15 +1028,15 @@ def _waypoint_patrol_trajectory(
     # Close the loop
     waypoints_2d.append(waypoints_2d[0].copy())
 
-    seg_lens: List[float] = []
-    cum_dists: List[float] = [0.0]
+    seg_lens: list[float] = []
+    cum_dists: list[float] = [0.0]
     for i in range(len(waypoints_2d) - 1):
         d = float(np.linalg.norm(waypoints_2d[i + 1] - waypoints_2d[i]))
         seg_lens.append(max(d, 1e-6))
         cum_dists.append(cum_dists[-1] + max(d, 1e-6))
     total_dist = cum_dists[-1]
 
-    def _traj(t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _traj(t: float) -> tuple[np.ndarray, np.ndarray]:
         dist = (speed_mps * max(t, 0.0)) % total_dist
         seg_idx = 0
         for i in range(len(cum_dists) - 1):
@@ -992,7 +1069,7 @@ def build_target_trajectory(
     altitude_m: float,
     speed_mps: float,
     seed: int = 42,
-    terrain_height_fn: Optional[Callable[[float, float], float]] = None,
+    terrain_height_fn: Callable[[float, float], float] | None = None,
 ) -> TrajectoryFn:
     """Build a trajectory function from a behaviour preset name.
 
@@ -1013,19 +1090,21 @@ def build_target_trajectory(
     """
     if preset not in BEHAVIOR_PRESETS:
         raise ValueError(
-            f"Unknown behaviour preset {preset!r}. "
-            f"Choose from {sorted(BEHAVIOR_PRESETS)}."
+            f"Unknown behaviour preset {preset!r}. Choose from {sorted(BEHAVIOR_PRESETS)}."
         )
 
     rng = np.random.default_rng(seed)
     center, span = _bounds_center_and_span(bounds)
 
     if preset == "loiter":
-        loiter_center = np.array([
-            center[0] + rng.uniform(-0.15, 0.15) * span[0],
-            center[1] + rng.uniform(-0.15, 0.15) * span[1],
-            altitude_m,
-        ], dtype=float)
+        loiter_center = np.array(
+            [
+                center[0] + rng.uniform(-0.15, 0.15) * span[0],
+                center[1] + rng.uniform(-0.15, 0.15) * span[1],
+                altitude_m,
+            ],
+            dtype=float,
+        )
         radius = float(span.min()) * 0.08
         return LoiterBehavior(
             center=loiter_center,
@@ -1038,11 +1117,14 @@ def build_target_trajectory(
         n_wps = rng.integers(3, 6)
         waypoints = []
         for _ in range(n_wps):
-            wp = np.array([
-                center[0] + rng.uniform(-0.3, 0.3) * span[0],
-                center[1] + rng.uniform(-0.3, 0.3) * span[1],
-                altitude_m + rng.uniform(-20.0, 20.0),
-            ], dtype=float)
+            wp = np.array(
+                [
+                    center[0] + rng.uniform(-0.3, 0.3) * span[0],
+                    center[1] + rng.uniform(-0.3, 0.3) * span[1],
+                    altitude_m + rng.uniform(-20.0, 20.0),
+                ],
+                dtype=float,
+            )
             waypoints.append(wp)
         return TransitBehavior(waypoints=waypoints, speed_mps=speed_mps)
 
@@ -1060,11 +1142,14 @@ def build_target_trajectory(
         )
 
     if preset == "search_pattern":
-        search_center = np.array([
-            center[0] + rng.uniform(-0.1, 0.1) * span[0],
-            center[1] + rng.uniform(-0.1, 0.1) * span[1],
-            altitude_m,
-        ], dtype=float)
+        search_center = np.array(
+            [
+                center[0] + rng.uniform(-0.1, 0.1) * span[0],
+                center[1] + rng.uniform(-0.1, 0.1) * span[1],
+                altitude_m,
+            ],
+            dtype=float,
+        )
         return SearchPatternBehavior(
             center=search_center,
             pattern="expanding_square",
@@ -1084,14 +1169,19 @@ def build_target_trajectory(
 
     if preset == "mixed":
         # Composite: loiter for 30 s, then transit, then search.
-        loiter_center = np.array([
-            center[0] + rng.uniform(-0.1, 0.1) * span[0],
-            center[1] + rng.uniform(-0.1, 0.1) * span[1],
-            altitude_m,
-        ], dtype=float)
+        loiter_center = np.array(
+            [
+                center[0] + rng.uniform(-0.1, 0.1) * span[0],
+                center[1] + rng.uniform(-0.1, 0.1) * span[1],
+                altitude_m,
+            ],
+            dtype=float,
+        )
         seg_loiter = LoiterBehavior(
-            center=loiter_center, radius_m=float(span.min()) * 0.06,
-            speed_mps=speed_mps, clockwise=True,
+            center=loiter_center,
+            radius_m=float(span.min()) * 0.06,
+            speed_mps=speed_mps,
+            clockwise=True,
         )
         wp1 = loiter_center + np.array([float(span[0]) * 0.15, float(span[1]) * 0.1, 0.0])
         wp2 = loiter_center + np.array([float(span[0]) * 0.25, -float(span[1]) * 0.05, 0.0])
@@ -1100,15 +1190,19 @@ def build_target_trajectory(
             speed_mps=speed_mps,
         )
         seg_search = SearchPatternBehavior(
-            center=wp2, pattern="expanding_square",
+            center=wp2,
+            pattern="expanding_square",
             leg_length_m=float(span.min()) * 0.04,
-            speed_mps=speed_mps, altitude_m=altitude_m,
+            speed_mps=speed_mps,
+            altitude_m=altitude_m,
         )
-        return CompositeTrajectory(segments=[
-            (0.0, seg_loiter),
-            (30.0, seg_transit),
-            (90.0, seg_search),
-        ])
+        return CompositeTrajectory(
+            segments=[
+                (0.0, seg_loiter),
+                (30.0, seg_transit),
+                (90.0, seg_search),
+            ]
+        )
 
     # Unreachable given the preset check above, but keep for safety.
     raise ValueError(f"Unhandled preset {preset!r}.")

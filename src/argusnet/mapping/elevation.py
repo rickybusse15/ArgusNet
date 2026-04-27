@@ -8,8 +8,6 @@ unified elevation query interface.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional, Tuple
 
 import numpy as np
 
@@ -26,12 +24,12 @@ __all__ = [
 class ElevationPatch:
     """A rectangular region of elevation data."""
 
-    x_m: np.ndarray   # (N,) ENU X grid values
-    y_m: np.ndarray   # (M,) ENU Y grid values
-    z_m: np.ndarray   # (M, N) elevation in metres
+    x_m: np.ndarray  # (N,) ENU X grid values
+    y_m: np.ndarray  # (M,) ENU Y grid values
+    z_m: np.ndarray  # (M, N) elevation in metres
 
     @property
-    def shape(self) -> Tuple[int, int]:
+    def shape(self) -> tuple[int, int]:
         return self.z_m.shape
 
     def at(self, x: float, y: float) -> float:
@@ -51,10 +49,7 @@ class ElevationPatch:
         z01 = self.z_m[yi, xi + 1]
         z11 = self.z_m[yi + 1, xi + 1]
 
-        return float(
-            (1 - ty) * ((1 - tx) * z00 + tx * z01)
-            + ty * ((1 - tx) * z10 + tx * z11)
-        )
+        return float((1 - ty) * ((1 - tx) * z00 + tx * z01) + ty * ((1 - tx) * z10 + tx * z11))
 
 
 class ElevationMap:
@@ -70,14 +65,14 @@ class ElevationMap:
 
     def __init__(
         self,
-        heights_m: Optional[np.ndarray] = None,
-        x_values_m: Optional[np.ndarray] = None,
-        y_values_m: Optional[np.ndarray] = None,
+        heights_m: np.ndarray | None = None,
+        x_values_m: np.ndarray | None = None,
+        y_values_m: np.ndarray | None = None,
         default_elevation_m: float = 0.0,
     ) -> None:
         self._default = default_elevation_m
         if heights_m is not None and x_values_m is not None and y_values_m is not None:
-            self._patch: Optional[ElevationPatch] = ElevationPatch(
+            self._patch: ElevationPatch | None = ElevationPatch(
                 x_m=x_values_m, y_m=y_values_m, z_m=heights_m
             )
         else:
@@ -88,7 +83,7 @@ class ElevationMap:
     # ------------------------------------------------------------------
 
     @classmethod
-    def flat(cls, elevation_m: float = 0.0) -> "ElevationMap":
+    def flat(cls, elevation_m: float = 0.0) -> ElevationMap:
         return cls(default_elevation_m=elevation_m)
 
     @classmethod
@@ -99,7 +94,7 @@ class ElevationMap:
         x_max_m: float,
         y_min_m: float,
         y_max_m: float,
-    ) -> "ElevationMap":
+    ) -> ElevationMap:
         """Build from a 2-D height array with explicit bounds."""
         rows, cols = heights_m.shape
         x_vals = np.linspace(x_min_m, x_max_m, cols)
@@ -107,7 +102,9 @@ class ElevationMap:
         return cls(heights_m=heights_m, x_values_m=x_vals, y_values_m=y_vals)
 
     @classmethod
-    def from_terrain_model(cls, terrain_model: object, bounds_m: float = 2000.0, resolution_m: float = 10.0) -> "ElevationMap":
+    def from_terrain_model(
+        cls, terrain_model: object, bounds_m: float = 2000.0, resolution_m: float = 10.0
+    ) -> ElevationMap:
         """Sample an argusnet.world.terrain.TerrainModel into a grid."""
         coords = np.arange(-bounds_m / 2, bounds_m / 2, resolution_m)
         XX, YY = np.meshgrid(coords, coords)
@@ -124,7 +121,7 @@ class ElevationMap:
             return self._default
         return self._patch.at(x_m, y_m)
 
-    def at_point_with_uncertainty(self, x_m: float, y_m: float) -> Tuple[float, float]:
+    def at_point_with_uncertainty(self, x_m: float, y_m: float) -> tuple[float, float]:
         """Return (elevation_m, std_m) with local terrain roughness as uncertainty.
 
         The std_m is derived from the variance of the four surrounding grid cells.
@@ -141,7 +138,9 @@ class ElevationMap:
         z00 = self._patch.z_m[yi, xi]
         z10 = self._patch.z_m[min(yi + 1, self._patch.z_m.shape[0] - 1), xi]
         z01 = self._patch.z_m[yi, min(xi + 1, self._patch.z_m.shape[1] - 1)]
-        z11 = self._patch.z_m[min(yi + 1, self._patch.z_m.shape[0] - 1), min(xi + 1, self._patch.z_m.shape[1] - 1)]
+        z11 = self._patch.z_m[
+            min(yi + 1, self._patch.z_m.shape[0] - 1), min(xi + 1, self._patch.z_m.shape[1] - 1)
+        ]
 
         surrounding = [z00, z10, z01, z11]
         std_m = float(np.std(surrounding))

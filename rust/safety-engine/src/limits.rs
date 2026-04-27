@@ -121,7 +121,7 @@ impl DronePhysicalLimits {
     pub fn interceptor_default() -> Self {
         Self {
             max_speed_mps: 42.0,
-            min_speed_mps: 0.0, // multirotor: hover-capable
+            min_speed_mps: 0.0,        // multirotor: hover-capable
             max_bank_angle_rad: 0.524, // 30°
             max_yaw_rate_rad_s: 0.8,
             max_climb_rate_mps: 8.0,

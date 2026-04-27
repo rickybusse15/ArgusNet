@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import numpy as np
 
-from argusnet.core.types import Vector3, vec3
 from argusnet.core.geometry import normalize
+from argusnet.core.types import Vector3, vec3
 
 __all__ = [
     "CameraModel",
@@ -52,7 +51,7 @@ class CameraModel:
     def cy(self) -> float:
         return self.image_height_px / 2.0
 
-    def project(self, point_cam: Vector3) -> Optional[Tuple[float, float]]:
+    def project(self, point_cam: Vector3) -> tuple[float, float] | None:
         """Project a 3-D point in *camera* frame to pixel (u, v).
 
         Returns None if the point is behind the camera (z <= 0).
@@ -101,7 +100,7 @@ class PinholeCamera:
     def world_to_cam(self, world_point: Vector3) -> Vector3:
         return self.rotation @ (np.asarray(world_point, dtype=float) - self.position)
 
-    def project_world(self, world_point: Vector3) -> Optional[Tuple[float, float]]:
+    def project_world(self, world_point: Vector3) -> tuple[float, float] | None:
         """Project a world-frame 3-D point to pixel coordinates."""
         return self.model.project(self.world_to_cam(world_point))
 

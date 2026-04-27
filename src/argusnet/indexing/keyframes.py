@@ -7,8 +7,9 @@ downstream retrieval, mapping, and evaluation.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any
 
 import numpy as np
 
@@ -17,6 +18,7 @@ from argusnet.core.types import Vector3
 
 try:
     from scipy.spatial import KDTree as _KDTree
+
     _HAS_SCIPY = True
 except ImportError:
     _HAS_SCIPY = False
@@ -41,7 +43,7 @@ class Keyframe:
     position: Vector3
     """Camera / sensor position in world frame (metres)."""
 
-    orientation_rad: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    orientation_rad: tuple[float, float, float] = (0.0, 0.0, 0.0)
     """Orientation as (roll, pitch, yaw) in radians."""
 
     coverage_delta: float = 0.0
@@ -56,10 +58,10 @@ class Keyframe:
     mission_id: str = ""
     """Mission this keyframe belongs to."""
 
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     """Arbitrary metadata (feature count, image path, etc.)."""
 
-    descriptor: Optional[np.ndarray] = field(default=None, compare=False, hash=False)
+    descriptor: np.ndarray | None = field(default=None, compare=False, hash=False)
     """Optional appearance descriptor vector for loop-closure verification.
 
     Typically a unit-normalised embedding from a visual place-recognition
@@ -76,11 +78,11 @@ class KeyframeStore:
     """
 
     def __init__(self) -> None:
-        self._keyframes: Dict[str, Keyframe] = {}
-        self._by_time: List[Keyframe] = []  # kept sorted by timestamp
-        self._kdtree: Optional[Any] = None
-        self._kdtree_coords: Optional[np.ndarray] = None
-        self._kdtree_ids: List[str] = []
+        self._keyframes: dict[str, Keyframe] = {}
+        self._by_time: list[Keyframe] = []  # kept sorted by timestamp
+        self._kdtree: Any | None = None
+        self._kdtree_coords: np.ndarray | None = None
+        self._kdtree_ids: list[str] = []
 
     # ------------------------------------------------------------------
     # Mutators
@@ -93,7 +95,7 @@ class KeyframeStore:
         self._by_time.sort(key=lambda k: k.timestamp_s)
         self._invalidate_kdtree()
 
-    def remove(self, keyframe_id: str) -> Optional[Keyframe]:
+    def remove(self, keyframe_id: str) -> Keyframe | None:
         """Remove and return a keyframe by ID, or ``None``."""
         kf = self._keyframes.pop(keyframe_id, None)
         if kf is not None:
@@ -118,9 +120,7 @@ class KeyframeStore:
             return
         if not _HAS_SCIPY or not self._by_time:
             return
-        coords = np.array(
-            [list(kf.position) for kf in self._by_time], dtype=float
-        )
+        coords = np.array([list(kf.position) for kf in self._by_time], dtype=float)
         self._kdtree_coords = coords
         self._kdtree_ids = [kf.keyframe_id for kf in self._by_time]
         self._kdtree = _KDTree(coords)
@@ -129,7 +129,7 @@ class KeyframeStore:
     # Queries
     # ------------------------------------------------------------------
 
-    def get(self, keyframe_id: str) -> Optional[Keyframe]:
+    def get(self, keyframe_id: str) -> Keyframe | None:
         return self._keyframes.get(keyframe_id)
 
     def __len__(self) -> int:
@@ -138,15 +138,15 @@ class KeyframeStore:
     def __contains__(self, keyframe_id: str) -> bool:
         return keyframe_id in self._keyframes
 
-    def all(self) -> List[Keyframe]:
+    def all(self) -> list[Keyframe]:
         """Return all keyframes sorted by timestamp."""
         return list(self._by_time)
 
-    def query_temporal(self, t_min: float, t_max: float) -> List[Keyframe]:
+    def query_temporal(self, t_min: float, t_max: float) -> list[Keyframe]:
         """Return keyframes in ``[t_min, t_max]``."""
         return [kf for kf in self._by_time if t_min <= kf.timestamp_s <= t_max]
 
-    def query_spatial(self, center: Vector3, radius_m: float) -> List[Keyframe]:
+    def query_spatial(self, center: Vector3, radius_m: float) -> list[Keyframe]:
         """Return keyframes within *radius_m* of *center* (Euclidean).
 
         Uses a KDTree for O(log N) queries when scipy is available;
@@ -156,19 +156,21 @@ class KeyframeStore:
         self._ensure_kdtree()
         if _HAS_SCIPY and self._kdtree is not None:
             indices = self._kdtree.query_ball_point(center_arr, radius_m)
-            return [self._keyframes[self._kdtree_ids[i]] for i in indices
-                    if self._kdtree_ids[i] in self._keyframes]
+            return [
+                self._keyframes[self._kdtree_ids[i]]
+                for i in indices
+                if self._kdtree_ids[i] in self._keyframes
+            ]
         # O(n) fallback
         return [
             kf
             for kf in self._by_time
-            if float(np.linalg.norm(np.asarray(kf.position, dtype=float) - center_arr))
-            <= radius_m
+            if float(np.linalg.norm(np.asarray(kf.position, dtype=float) - center_arr)) <= radius_m
         ]
 
     def query_spatial_box(
         self, x_min: float, x_max: float, y_min: float, y_max: float
-    ) -> List[Keyframe]:
+    ) -> list[Keyframe]:
         """Return keyframes within a 2-D bounding box.
 
         Uses a KDTree for an initial candidate filter when scipy is available;
@@ -179,7 +181,11 @@ class KeyframeStore:
             cx = (x_min + x_max) * 0.5
             cy = (y_min + y_max) * 0.5
             # Use the midpoint in z of the stored data, defaulting to 0.
-            cz = float(np.mean(self._kdtree_coords[:, 2])) if self._kdtree_coords is not None and len(self._kdtree_coords) > 0 else 0.0
+            cz = (
+                float(np.mean(self._kdtree_coords[:, 2]))
+                if self._kdtree_coords is not None and len(self._kdtree_coords) > 0
+                else 0.0
+            )
             half_diag = float(np.hypot((x_max - x_min) * 0.5, (y_max - y_min) * 0.5))
             center_arr = np.array([cx, cy, cz], dtype=float)
             indices = self._kdtree.query_ball_point(center_arr, half_diag)
@@ -187,7 +193,11 @@ class KeyframeStore:
             for i in indices:
                 kid = self._kdtree_ids[i]
                 kf = self._keyframes.get(kid)
-                if kf is not None and x_min <= kf.position[0] <= x_max and y_min <= kf.position[1] <= y_max:
+                if (
+                    kf is not None
+                    and x_min <= kf.position[0] <= x_max
+                    and y_min <= kf.position[1] <= y_max
+                ):
                     result.append(kf)
             return result
         # O(n) fallback
@@ -197,11 +207,11 @@ class KeyframeStore:
             if x_min <= kf.position[0] <= x_max and y_min <= kf.position[1] <= y_max
         ]
 
-    def query_mission(self, mission_id: str) -> List[Keyframe]:
+    def query_mission(self, mission_id: str) -> list[Keyframe]:
         """Return all keyframes for a given mission."""
         return [kf for kf in self._by_time if kf.mission_id == mission_id]
 
-    def top_by_novelty(self, n: int = 10) -> List[Keyframe]:
+    def top_by_novelty(self, n: int = 10) -> list[Keyframe]:
         """Return the *n* keyframes with highest novelty score."""
         return sorted(self._by_time, key=lambda kf: kf.novelty_score, reverse=True)[:n]
 
@@ -209,7 +219,7 @@ class KeyframeStore:
     # Serialization
     # ------------------------------------------------------------------
 
-    def to_dicts(self) -> List[Dict[str, Any]]:
+    def to_dicts(self) -> list[dict[str, Any]]:
         """Serialize all keyframes to a list of JSON-friendly dicts."""
         return [
             {
@@ -228,7 +238,7 @@ class KeyframeStore:
         ]
 
     @classmethod
-    def from_dicts(cls, records: Sequence[Dict[str, Any]]) -> KeyframeStore:
+    def from_dicts(cls, records: Sequence[dict[str, Any]]) -> KeyframeStore:
         """Deserialize from a list of dicts."""
         store = cls()
         for rec in records:
@@ -256,7 +266,7 @@ def select_keyframes_by_coverage(
     candidates: Sequence[Keyframe],
     min_coverage_delta: float = 1.0,
     max_keyframes: int = 1000,
-) -> List[Keyframe]:
+) -> list[Keyframe]:
     """Greedy keyframe selection based on coverage delta.
 
     Iterates candidates in time order, accepting those whose
@@ -264,7 +274,7 @@ def select_keyframes_by_coverage(
     *max_keyframes*.
     """
     sorted_candidates = sorted(candidates, key=lambda kf: kf.timestamp_s)
-    selected: List[Keyframe] = []
+    selected: list[Keyframe] = []
     for kf in sorted_candidates:
         if len(selected) >= max_keyframes:
             break

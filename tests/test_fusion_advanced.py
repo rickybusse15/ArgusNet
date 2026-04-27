@@ -8,23 +8,23 @@ import unittest
 import numpy as np
 
 from argusnet.localization.state import (
+    TRACK_STATE_COASTING,
+    TRACK_STATE_CONFIRMED,
+    TRACK_STATE_DELETED,
+    TRACK_STATE_TENTATIVE,
     AdaptiveFilterConfig,
     CoordinatedTurnTrack3D,
     IMMTrack3D,
     KalmanTrack3D,
     ManagedTrack,
     TrackLifecycleConfig,
-    TRACK_STATE_TENTATIVE,
-    TRACK_STATE_CONFIRMED,
-    TRACK_STATE_COASTING,
-    TRACK_STATE_DELETED,
     _gaussian_likelihood,
 )
-
 
 # ---------------------------------------------------------------------------
 # CoordinatedTurnTrack3D tests
 # ---------------------------------------------------------------------------
+
 
 class TestCoordinatedTurnTrack3D(unittest.TestCase):
     def test_initialize_state_shape(self):
@@ -125,6 +125,7 @@ class TestCoordinatedTurnTrack3D(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # IMMTrack3D tests
 # ---------------------------------------------------------------------------
+
 
 class TestIMMTrack3D(unittest.TestCase):
     def test_initialize(self):
@@ -231,6 +232,7 @@ class TestIMMTrack3D(unittest.TestCase):
 # Gaussian likelihood helper
 # ---------------------------------------------------------------------------
 
+
 class TestGaussianLikelihood(unittest.TestCase):
     def test_zero_innovation_high_likelihood(self):
         S = np.eye(3) * 10.0
@@ -255,6 +257,7 @@ class TestGaussianLikelihood(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # ManagedTrack lifecycle tests
 # ---------------------------------------------------------------------------
+
 
 class TestManagedTrack(unittest.TestCase):
     def _make_track(self, config=None):
@@ -317,8 +320,10 @@ class TestManagedTrack(unittest.TestCase):
 
     def test_deleted_after_max_coast_frames(self):
         config = TrackLifecycleConfig(
-            confirmation_m=2, confirmation_n=5,
-            max_coast_frames=3, max_coast_seconds=100.0,
+            confirmation_m=2,
+            confirmation_n=5,
+            max_coast_frames=3,
+            max_coast_seconds=100.0,
         )
         track = self._make_track(config)
         # Confirm
@@ -334,8 +339,10 @@ class TestManagedTrack(unittest.TestCase):
 
     def test_deleted_after_max_coast_seconds(self):
         config = TrackLifecycleConfig(
-            confirmation_m=2, confirmation_n=5,
-            max_coast_frames=100, max_coast_seconds=2.0,
+            confirmation_m=2,
+            confirmation_n=5,
+            max_coast_frames=100,
+            max_coast_seconds=2.0,
         )
         track = self._make_track(config)
         # Confirm at t=1
@@ -368,8 +375,10 @@ class TestManagedTrack(unittest.TestCase):
 
     def test_quality_score_low_with_many_misses(self):
         config = TrackLifecycleConfig(
-            confirmation_m=2, confirmation_n=5,
-            max_coast_frames=20, max_coast_seconds=100.0,
+            confirmation_m=2,
+            confirmation_n=5,
+            max_coast_frames=20,
+            max_coast_seconds=100.0,
             min_quality_score=0.01,
         )
         track = self._make_track(config)
@@ -412,6 +421,7 @@ class TestManagedTrack(unittest.TestCase):
 # AdaptiveFilterConfig tests
 # ---------------------------------------------------------------------------
 
+
 class TestAdaptiveFilterConfig(unittest.TestCase):
     def test_defaults(self):
         cfg = AdaptiveFilterConfig()
@@ -434,6 +444,7 @@ class TestAdaptiveFilterConfig(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # TrackLifecycleConfig tests
 # ---------------------------------------------------------------------------
+
 
 class TestTrackLifecycleConfig(unittest.TestCase):
     def test_defaults(self):

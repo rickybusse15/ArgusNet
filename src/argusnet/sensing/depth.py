@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -75,8 +74,8 @@ def sample_depth(
     direction: Vector3,
     model: DepthModel,
     timestamp_s: float,
-    rng: "np.random.Generator | None" = None,
-) -> Optional[DepthMeasurement]:
+    rng: np.random.Generator | None = None,
+) -> DepthMeasurement | None:
     """Generate a noisy depth measurement from ground-truth range.
 
     Returns None if the true range is outside [min_range_m, max_range_m].

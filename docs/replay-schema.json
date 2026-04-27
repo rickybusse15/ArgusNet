@@ -289,8 +289,17 @@
             "vegetation_occlusion",
             "out_of_coverage",
             "outside_fov",
+            "unknown_node",
+            "invalid_target_id",
+            "invalid_direction",
             "low_confidence",
-            "bearing_noise_too_high"
+            "invalid_bearing_std",
+            "bearing_noise_too_high",
+            "timestamp_skew",
+            "duplicate_node_observation",
+            "insufficient_cluster_observations",
+            "weak_intersection_geometry",
+            "fusion_failure"
           ]
         },
         "detail": {
@@ -427,6 +436,19 @@
         "event_type": {"type": "string", "enum": ["entered", "coverage_updated", "exited", "violation"]},
         "timestamp_s": {"type": "number"},
         "zone_coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "deconfliction_event": {
+      "type": "object",
+      "description": "Record of a yielded position resolution between two drones predicted to violate minimum separation.",
+      "required": ["yielding_drone_id", "conflicting_drone_id", "predicted_separation_m", "resolution", "timestamp_s"],
+      "additionalProperties": true,
+      "properties": {
+        "yielding_drone_id": {"type": "string"},
+        "conflicting_drone_id": {"type": "string"},
+        "predicted_separation_m": {"type": "number", "minimum": 0},
+        "resolution": {"type": "string", "enum": ["lateral_offset", "vertical_offset", "corridor_hold"]},
+        "timestamp_s": {"type": "number"}
       }
     },
     "platform_metrics": {
@@ -567,6 +589,13 @@
           "description": "Zone-entry, coverage-update, and exit events for mobile nodes this frame.",
           "items": {
             "$ref": "#/definitions/inspection_event"
+          }
+        },
+        "deconfliction_events": {
+          "type": "array",
+          "description": "Inter-drone yield events recorded when minimum separation would be violated this frame.",
+          "items": {
+            "$ref": "#/definitions/deconfliction_event"
           }
         },
         "scan_mission_state": {

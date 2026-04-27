@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -16,7 +16,7 @@ class SceneLayerMesh:
     layer_id: str
     semantic_kind: str
     mesh: SimpleMesh
-    style_id: Optional[str] = None
+    style_id: str | None = None
 
 
 def normalize(vector: np.ndarray) -> np.ndarray:
@@ -35,8 +35,12 @@ def grid_normals(heights_m: np.ndarray, x_values: np.ndarray, y_values: np.ndarr
         for col in range(cols):
             x0 = x_values[max(col - 1, 0)]
             x1 = x_values[min(col + 1, cols - 1)]
-            dz_dx = (heights_m[row, min(col + 1, cols - 1)] - heights_m[row, max(col - 1, 0)]) / max(x1 - x0, 1.0e-6)
-            dz_dy = (heights_m[min(row + 1, rows - 1), col] - heights_m[max(row - 1, 0), col]) / max(y1 - y0, 1.0e-6)
+            dz_dx = (
+                heights_m[row, min(col + 1, cols - 1)] - heights_m[row, max(col - 1, 0)]
+            ) / max(x1 - x0, 1.0e-6)
+            dz_dy = (
+                heights_m[min(row + 1, rows - 1), col] - heights_m[max(row - 1, 0), col]
+            ) / max(y1 - y0, 1.0e-6)
             normals[row, col] = normalize(np.array([-dz_dx, -dz_dy, 1.0], dtype=np.float32))
     return normals.reshape((-1, 3))
 
@@ -69,8 +73,8 @@ def shade_terrain_colors(
     heights_m: np.ndarray,
     normals: np.ndarray,
     *,
-    positions_xy: Optional[np.ndarray] = None,
-    landcover: Optional[np.ndarray] = None,
+    positions_xy: np.ndarray | None = None,
+    landcover: np.ndarray | None = None,
 ) -> np.ndarray:
     light = normalize(np.array([0.45, 0.25, 0.86], dtype=np.float32))
     fill_light = normalize(np.array([-0.3, 0.4, 0.55], dtype=np.float32))
@@ -137,8 +141,8 @@ def mesh_from_height_grid(
     y_values: np.ndarray,
     heights_m: np.ndarray,
     *,
-    color_override: Optional[Sequence[float]] = None,
-    landcover: Optional[np.ndarray] = None,
+    color_override: Sequence[float] | None = None,
+    landcover: np.ndarray | None = None,
 ) -> SimpleMesh:
     rows, cols = heights_m.shape
     xx, yy = np.meshgrid(x_values, y_values)
@@ -147,7 +151,9 @@ def mesh_from_height_grid(
     colors = (
         solid_color_array(positions.shape[0], color_override)
         if color_override is not None
-        else shade_terrain_colors(heights_m, normals, positions_xy=positions[:, :2], landcover=landcover)
+        else shade_terrain_colors(
+            heights_m, normals, positions_xy=positions[:, :2], landcover=landcover
+        )
     )
 
     indices = []
@@ -167,7 +173,12 @@ def mesh_from_height_grid(
 
 
 def polygon_area(points_xy: np.ndarray) -> float:
-    return 0.5 * float(np.sum(points_xy[:, 0] * np.roll(points_xy[:, 1], -1) - points_xy[:, 1] * np.roll(points_xy[:, 0], -1)))
+    return 0.5 * float(
+        np.sum(
+            points_xy[:, 0] * np.roll(points_xy[:, 1], -1)
+            - points_xy[:, 1] * np.roll(points_xy[:, 0], -1)
+        )
+    )
 
 
 def point_in_triangle(point: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
@@ -198,7 +209,7 @@ def triangulate_polygon(points_xy: np.ndarray) -> np.ndarray:
         return np.zeros((0,), dtype=np.uint32)
     vertices = list(range(polygon.shape[0]))
     clockwise = polygon_area(polygon) < 0.0
-    triangles: List[int] = []
+    triangles: list[int] = []
     guard = 0
     while len(vertices) > 2 and guard < polygon.shape[0] * polygon.shape[0]:
         ear_found = False
@@ -221,7 +232,11 @@ def triangulate_polygon(points_xy: np.ndarray) -> np.ndarray:
                 if other not in {prev_index, curr_index, next_index}
             ):
                 continue
-            triangles.extend([prev_index, curr_index, next_index] if not clockwise else [prev_index, next_index, curr_index])
+            triangles.extend(
+                [prev_index, curr_index, next_index]
+                if not clockwise
+                else [prev_index, next_index, curr_index]
+            )
             del vertices[index]
             ear_found = True
             break
@@ -242,7 +257,11 @@ def mesh_from_polygon(
         return merge_meshes(())
     positions = np.array(
         [
-            [float(point[0]), float(point[1]), float(height_at(float(point[0]), float(point[1]))) + z_offset_m]
+            [
+                float(point[0]),
+                float(point[1]),
+                float(height_at(float(point[0]), float(point[1]))) + z_offset_m,
+            ]
             for point in points_xy
         ],
         dtype=np.float32,
@@ -268,8 +287,8 @@ def mesh_from_polyline(
 ) -> SimpleMesh:
     if len(points_xy) < 2:
         return merge_meshes(())
-    positions: List[List[float]] = []
-    indices: List[int] = []
+    positions: list[list[float]] = []
+    indices: list[int] = []
     for segment_index in range(len(points_xy) - 1):
         start = np.asarray(points_xy[segment_index], dtype=np.float32)
         end = np.asarray(points_xy[segment_index + 1], dtype=np.float32)
@@ -282,11 +301,13 @@ def mesh_from_polyline(
         quad_xy = [start - offset, start + offset, end + offset, end - offset]
         base = len(positions)
         for point in quad_xy:
-            positions.append([
-                float(point[0]),
-                float(point[1]),
-                float(height_at(float(point[0]), float(point[1]))) + z_offset_m,
-            ])
+            positions.append(
+                [
+                    float(point[0]),
+                    float(point[1]),
+                    float(height_at(float(point[0]), float(point[1]))) + z_offset_m,
+                ]
+            )
         indices.extend([base, base + 1, base + 2, base, base + 2, base + 3])
     if not indices:
         return merge_meshes(())
@@ -310,19 +331,23 @@ def mesh_from_extrusion(
     if len(points_xy) < 3 or top_z_m <= base_z_m:
         return merge_meshes(())
     footprint = np.asarray(points_xy, dtype=np.float32)
-    roof_positions = np.column_stack([footprint, np.full((len(footprint),), top_z_m, dtype=np.float32)])
+    roof_positions = np.column_stack(
+        [footprint, np.full((len(footprint),), top_z_m, dtype=np.float32)]
+    )
     roof_indices = triangulate_polygon(footprint)
     roof_mesh = merge_meshes(())
     if roof_indices.size:
         roof_mesh = SimpleMesh(
             positions=roof_positions,
-            normals=np.repeat(np.array([[0.0, 0.0, 1.0]], dtype=np.float32), len(roof_positions), axis=0),
+            normals=np.repeat(
+                np.array([[0.0, 0.0, 1.0]], dtype=np.float32), len(roof_positions), axis=0
+            ),
             colors=solid_color_array(len(roof_positions), color_rgba),
             indices=roof_indices,
         )
 
-    wall_positions: List[List[float]] = []
-    wall_indices: List[int] = []
+    wall_positions: list[list[float]] = []
+    wall_indices: list[int] = []
     for index in range(len(footprint)):
         next_index = (index + 1) % len(footprint)
         start = footprint[index]
@@ -354,12 +379,20 @@ def height_function_from_mesh(mesh: Mapping[str, object]) -> Callable[[float, fl
     rows = int(mesh["rows"])
     cols = int(mesh["cols"])
     heights = np.asarray(mesh["heights_m"], dtype=np.float32)
-    x_values = np.linspace(float(mesh["x_min_m"]), float(mesh["x_max_m"]), num=cols, dtype=np.float32)
-    y_values = np.linspace(float(mesh["y_min_m"]), float(mesh["y_max_m"]), num=rows, dtype=np.float32)
+    x_values = np.linspace(
+        float(mesh["x_min_m"]), float(mesh["x_max_m"]), num=cols, dtype=np.float32
+    )
+    y_values = np.linspace(
+        float(mesh["y_min_m"]), float(mesh["y_max_m"]), num=rows, dtype=np.float32
+    )
 
     def height_at(x_m: float, y_m: float) -> float:
-        tx = np.clip(np.interp(float(x_m), x_values, np.arange(cols, dtype=np.float32)), 0.0, cols - 1)
-        ty = np.clip(np.interp(float(y_m), y_values, np.arange(rows, dtype=np.float32)), 0.0, rows - 1)
+        tx = np.clip(
+            np.interp(float(x_m), x_values, np.arange(cols, dtype=np.float32)), 0.0, cols - 1
+        )
+        ty = np.clip(
+            np.interp(float(y_m), y_values, np.arange(rows, dtype=np.float32)), 0.0, rows - 1
+        )
         col = min(int(math.floor(float(tx))), cols - 2)
         row = min(int(math.floor(float(ty))), rows - 2)
         ax = float(tx) - col
@@ -375,9 +408,15 @@ def height_function_from_mesh(mesh: Mapping[str, object]) -> Callable[[float, fl
     return height_at
 
 
-def terrain_mesh_from_viewer_mesh(mesh: Mapping[str, object], *, landcover: Optional[np.ndarray] = None) -> SimpleMesh:
-    x_values = np.linspace(float(mesh["x_min_m"]), float(mesh["x_max_m"]), num=int(mesh["cols"]), dtype=np.float32)
-    y_values = np.linspace(float(mesh["y_min_m"]), float(mesh["y_max_m"]), num=int(mesh["rows"]), dtype=np.float32)
+def terrain_mesh_from_viewer_mesh(
+    mesh: Mapping[str, object], *, landcover: np.ndarray | None = None
+) -> SimpleMesh:
+    x_values = np.linspace(
+        float(mesh["x_min_m"]), float(mesh["x_max_m"]), num=int(mesh["cols"]), dtype=np.float32
+    )
+    y_values = np.linspace(
+        float(mesh["y_min_m"]), float(mesh["y_max_m"]), num=int(mesh["rows"]), dtype=np.float32
+    )
     heights = np.asarray(mesh["heights_m"], dtype=np.float32)
     return mesh_from_height_grid(x_values, y_values, heights, landcover=landcover)
 
@@ -390,7 +429,7 @@ def chunked_height_grid_layers(
     y_values: np.ndarray,
     heights_m: np.ndarray,
     max_chunk_vertices: int = 65,
-) -> List[SceneLayerMesh]:
+) -> list[SceneLayerMesh]:
     rows, cols = heights_m.shape
     if rows < 2 or cols < 2:
         return []
@@ -405,7 +444,7 @@ def chunked_height_grid_layers(
             )
         ]
 
-    layers: List[SceneLayerMesh] = []
+    layers: list[SceneLayerMesh] = []
     step = max(max_chunk_vertices - 1, 1)
     chunk_row = 0
     for row_start in range(0, rows - 1, step):
@@ -437,15 +476,17 @@ def chunked_height_grid_layers(
 def write_scene_layers(
     output_dir: Path,
     layers: Sequence[SceneLayerMesh],
-) -> List[Dict[str, object]]:
-    manifest_layers: List[Dict[str, object]] = []
+) -> list[dict[str, object]]:
+    manifest_layers: list[dict[str, object]] = []
     for layer in layers:
         layer_id = layer.layer_id
         semantic_kind = layer.semantic_kind
         mesh = layer.mesh
         if mesh.vertex_count == 0 or mesh.indices.size == 0:
             continue
-        relative_path = (Path("terrain") if semantic_kind == "terrain" else Path("overlays")) / f"{layer_id}.glb"
+        relative_path = (
+            Path("terrain") if semantic_kind == "terrain" else Path("overlays")
+        ) / f"{layer_id}.glb"
         write_glb(output_dir / relative_path, mesh, name=layer_id)
         manifest_layers.append(
             {

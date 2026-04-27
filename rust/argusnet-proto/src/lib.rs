@@ -445,8 +445,8 @@ pub fn frame_from_pb(frame: pb::PlatformFrame) -> Result<PlatformFrame, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::Vector3;
     use argusnet_core::PlatformMetrics;
+    use nalgebra::Vector3;
 
     #[test]
     fn rejection_round_trip_preserves_optional_geometry() {

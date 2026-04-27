@@ -1,5 +1,7 @@
 """ArgusNet mission planning modules."""
-from .poi import POIManager
+
 from argusnet.core.types import POIStatus
+
+from .poi import POIManager
 
 __all__ = ["POIManager", "POIStatus"]
