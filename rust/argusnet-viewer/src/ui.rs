@@ -46,9 +46,12 @@ const PLATFORM_PRESETS: &[&str] = &["baseline", "wide_area"];
 const MOTION_PRESETS: &[&str] = &["sinusoid", "racetrack", "waypoint_patrol", "mixed"];
 const DRONE_MODES: &[&str] = &["inspect", "search", "mixed"];
 
-/// Stale step threshold: nodes/tracks exceeding this are flagged in alerts.
+/// Stale step threshold: nodes/tracks exceeding this many missed updates are
+/// flagged in the alert panel. Mirrors `TrackerConfig.max_stale_steps` from
+/// `rust/argusnet-core/src/lib.rs`; keep in sync if that default changes.
 const STALE_THRESHOLD: u32 = 5;
-/// Health threshold: nodes below this fraction are flagged in alerts.
+/// Node health fraction below which a node is flagged in the alert panel.
+/// Health is computed in `argusnet_grpc.py` as `1.0 - dropout_probability * 0.5`.
 const HEALTH_ALERT_THRESHOLD: f32 = 0.3;
 
 #[allow(clippy::too_many_arguments)]
@@ -111,7 +114,7 @@ pub fn viewer_ui_system(
                     section_selection(ui, &selection);
                     ui.separator();
 
-                    section_safety_alerts(ui, &replay_state);
+                    section_safety_alerts(ui, &replay_state, &mission_zones);
 
                     section_frame_events(ui, &replay_state);
 
@@ -773,7 +776,7 @@ fn section_tracking_metrics(ui: &mut egui::Ui, frame_metrics: &CurrentFrameMetri
         if !metrics.track_errors_m.is_empty() {
             ui.collapsing("Per-Track Errors", |ui| {
                 let mut errors: Vec<_> = metrics.track_errors_m.iter().collect();
-                errors.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
+                errors.sort_by(|a, b| a.1.total_cmp(b.1));
                 for (track_id, error) in errors {
                     ui.label(format!("  {track_id}: {error:.2} m"));
                 }
@@ -984,6 +987,21 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
                     diag[2].sqrt()
                 ));
             }
+            if let Some(p_cv) = selection.selected_mode_probability_cv {
+                let p_ct = 1.0 - p_cv;
+                kv_row(
+                    ui,
+                    "IMM blend",
+                    &format!("CV {:.0}% / CT {:.0}%", p_cv * 100.0, p_ct * 100.0),
+                );
+            }
+            if !selection.selected_contributing_nodes.is_empty() {
+                kv_row(
+                    ui,
+                    "Updated by",
+                    &selection.selected_contributing_nodes.join(", "),
+                );
+            }
         }
         "Node" => {
             if let Some(health) = selection.selected_health {
@@ -1022,13 +1040,24 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
 // Section: Safety & Alerts
 // ---------------------------------------------------------------------------
 
-fn section_safety_alerts(ui: &mut egui::Ui, replay_state: &ReplayState) {
+fn section_safety_alerts(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    mission_zones: &LoadedMissionZones,
+) {
     let Some(frame) = replay_state.current_frame() else {
         return;
     };
 
     // Collect alerts from current frame state
     let mut alerts: Vec<(AlertLevel, String)> = Vec::new();
+
+    if mission_zones.terrain_mesh.is_none() {
+        alerts.push((
+            AlertLevel::Warning,
+            "Terrain data unavailable \u{2014} elevation falls back to entity altitude".to_string(),
+        ));
+    }
 
     // Check for stale tracks
     for track in &frame.tracks {

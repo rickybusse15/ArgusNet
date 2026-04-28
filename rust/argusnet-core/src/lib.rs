@@ -380,6 +380,10 @@ pub struct TrackState {
     pub stale_steps: u32,
     pub lifecycle_state: Option<String>,
     pub quality_score: Option<f64>,
+    /// IMM CV-model weight in [0, 1]. None when not using an IMM filter.
+    pub mode_probability_cv: Option<f64>,
+    /// Node IDs whose observations contributed to the most recent update.
+    pub contributing_node_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -895,6 +899,8 @@ impl IMMTrack3D {
             stale_steps,
             lifecycle_state,
             quality_score,
+            mode_probability_cv: Some(self.mode_probabilities[0]),
+            contributing_node_ids: Vec::new(), // filled in by ManagedTrack::snapshot
         }
     }
 }
@@ -961,6 +967,8 @@ pub(crate) struct ManagedTrack {
     last_update_time_s: f64,
     update_history: Vec<bool>,
     quality_score: f64,
+    /// Node IDs whose observations were fused in the most recent update.
+    pub(crate) contributing_node_ids: Vec<String>,
 }
 
 impl ManagedTrack {
@@ -988,6 +996,7 @@ impl ManagedTrack {
             last_update_time_s: timestamp_s,
             update_history: vec![true],
             quality_score: 0.5,
+            contributing_node_ids: Vec::new(),
         }
     }
 
@@ -1000,6 +1009,7 @@ impl ManagedTrack {
         position: Vector3<f64>,
         measurement_std_m: f64,
         timestamp_s: f64,
+        node_ids: &[String],
     ) -> Result<(), String> {
         self.filter_state
             .update_position(position, measurement_std_m)?;
@@ -1010,6 +1020,8 @@ impl ManagedTrack {
         self.update_history.push(true);
         self.trim_update_history();
         self.update_lifecycle();
+        self.contributing_node_ids.clear();
+        self.contributing_node_ids.extend_from_slice(node_ids);
         Ok(())
     }
 
@@ -1087,14 +1099,16 @@ impl ManagedTrack {
     }
 
     fn snapshot(&self) -> TrackState {
-        self.filter_state.snapshot(
+        let mut state = self.filter_state.snapshot(
             &self.track_id,
             self.measurement_std_m,
             self.update_count,
             self.stale_steps,
             Some(self.lifecycle_state.as_str().to_string()),
             Some(self.quality_score),
-        )
+        );
+        state.contributing_node_ids = self.contributing_node_ids.clone();
+        state
     }
 }
 
@@ -1367,10 +1381,12 @@ impl TrackingEngine {
             };
 
             accepted_observations.extend(deduped_cluster.iter().cloned());
+            let cluster_node_ids: Vec<String> =
+                deduped_cluster.iter().map(|o| o.node_id.clone()).collect();
             if let Some(managed_track) = self.tracks.get_mut(&track_id) {
                 managed_track.predict(timestamp_s);
                 if managed_track
-                    .update(estimate.position, estimate.measurement_std_m, timestamp_s)
+                    .update(estimate.position, estimate.measurement_std_m, timestamp_s, &cluster_node_ids)
                     .is_err()
                 {
                     rejections.extend(self.reject_cluster(
@@ -1450,6 +1466,8 @@ impl TrackingEngine {
         for assignment in assignments {
             let cluster = &valid_clusters[assignment.cluster_index];
             accepted_observations.extend(cluster.iter().cloned());
+            let cluster_node_ids: Vec<String> =
+                cluster.iter().map(|o| o.node_id.clone()).collect();
 
             let track_id = match assignment.track_id {
                 TrackAssignment::Existing(ref id) => id.clone(),
@@ -1465,6 +1483,7 @@ impl TrackingEngine {
                                 assignment.position,
                                 assignment.measurement_std_m,
                                 timestamp_s,
+                                &cluster_node_ids,
                             )
                             .is_err()
                         {
@@ -1554,8 +1573,10 @@ impl TrackingEngine {
         for update in result.track_updates {
             if let Some(track) = self.tracks.get_mut(&update.track_id) {
                 track.predict(timestamp_s);
+                // JPDA fuses all observations probabilistically; contributing
+                // node attribution is ambiguous so we leave it empty.
                 if track
-                    .update(update.position, update.measurement_std_m, timestamp_s)
+                    .update(update.position, update.measurement_std_m, timestamp_s, &[])
                     .is_ok()
                 {
                     updated_track_ids.push(update.track_id);

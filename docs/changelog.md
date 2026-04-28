@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-04-27 — Phase 3/4: ISR Mission + Egress + Deconfliction
+
+- Phase 3: scan → localize → inspect state machine with scan coverage threshold,
+  POI localization ellipses, and inspection event logging
+- Phase 4: egress/RTH with per-drone home tracking and arrival detection
+- Deconfliction hardening: separation enforcement, heading-aware avoidance
+- Viewer: IMM blend panel (CV/CT %), contributing nodes, NaN-safe sort,
+  named alert constants, scan overlay color fix (bright yellow)
+
 ## March 15, 2026 — Viewer UI overhaul
 
 ### Usability

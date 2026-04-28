@@ -69,7 +69,7 @@ Covers: mission zone definitions, objectives, rules of engagement, drone assignm
 | Mission zone data model (surveillance, exclusion, patrol, objective) | **Exists** | `models.py` `MissionZone`, zone type constants (lines 136-154) |
 | Zone creation in scenario builder | **Exists** | `sim.py` `build_default_scenario()` |
 | Zone serialisation to replay / viewer | **Exists** | `replay.py`, Rust viewer `replay.rs` `MissionZone` |
-| Zone enforcement logic (drones avoid exclusion zones) | **Absent** | Drones have no awareness of `MissionZone` objects at runtime |
+| Zone enforcement logic (drones avoid exclusion zones) | **Implemented** | `sim.py` mission-zone-aware routing enforces exclusion zones during path planning (Phase 3) |
 | Zone-driven task assignment (assign drone to patrol zone) | **Absent** | Drone-to-target assignments are hardcoded or simple index-based |
 | Objective completion detection | **Absent** | — |
 | Rules of engagement (ROE) | **Absent** | — |
@@ -96,7 +96,7 @@ Covers: 2D path planning, obstacle avoidance, drone routing, coverage planning, 
 | Multi-drone coordinator (election, RF latency, formations) | **Exists** | `src/argusnet/planning/coordination.py` `CoordinationManager` |
 | Energy-aware POI assignment (handoff, team dwell, rescoring) | **Exists** | `src/argusnet/planning/poi.py` `POIManager.assign_energy_aware()` |
 | 3D path planning (altitude-aware) | **Absent** | Planner is 2D only; altitude is handled separately by AGL logic |
-| Dynamic obstacle avoidance (other drones) | **Absent** | — |
+| Dynamic obstacle avoidance (other drones) | **Implemented** | `sim.py` deconfliction: separation enforcement and heading-aware avoidance (Phase 3/4) |
 | Mission-zone-aware routing | **Absent** | Planner does not know about `MissionZone` |
 | Formal Planning subsystem interface | **Absent** | `PathPlanner2D` is used inline in `FollowPathController` with no abstract interface |
 

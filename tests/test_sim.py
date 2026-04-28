@@ -6,14 +6,19 @@ import numpy as np
 
 from argusnet.core.types import PlatformFrame, PlatformMetrics, TruthState
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
+from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLayer
 from argusnet.simulation.sim import (
+    DRONE_MODE_PRESETS,
     REJECT_OBJECT_OCCLUSION,
     REJECT_OUT_OF_COVERAGE,
+    TARGET_MOTION_PRESETS,
     ObservationBatch,
     ObservationTriggeredFollowController,
+    ScenarioOptions,
     SimNode,
     build_observations,
     orbital_path,
+    push_waypoint_outside_obstacles,
 )
 from argusnet.world.environment import (
     Bounds2D,
@@ -23,6 +28,7 @@ from argusnet.world.environment import (
     ObstacleLayer,
     TerrainLayer,
 )
+from argusnet.world.obstacles import BuildingPrism
 from argusnet.world.terrain import OccludingObject, TerrainModel
 from argusnet.world.weather import weather_from_preset
 
@@ -349,6 +355,136 @@ class SimulationEnvironmentTest(unittest.TestCase):
             [(obs.target_id, round(float(obs.confidence), 4)) for obs in batch_a.observations],
             [(obs.target_id, round(float(obs.confidence), 4)) for obs in batch_b.observations],
         )
+
+
+class ScenarioOptionsValidationTest(unittest.TestCase):
+    """Verify preset round-trips and error messages for ScenarioOptions."""
+
+    def test_all_valid_target_motion_presets_accepted(self) -> None:
+        for preset in sorted(TARGET_MOTION_PRESETS):
+            options = ScenarioOptions(target_motion_preset=preset)
+            self.assertEqual(options.target_motion_preset, preset)
+
+    def test_all_valid_drone_mode_presets_accepted(self) -> None:
+        for preset in sorted(DRONE_MODE_PRESETS):
+            options = ScenarioOptions(drone_mode_preset=preset)
+            self.assertEqual(options.drone_mode_preset, preset)
+
+    def test_invalid_preset_error_includes_bad_value(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            ScenarioOptions(target_motion_preset="BOGUS_PRESET_XYZ")
+        self.assertIn("BOGUS_PRESET_XYZ", str(ctx.exception))
+
+    def test_invalid_drone_mode_error_includes_bad_value(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            ScenarioOptions(drone_mode_preset="no_such_mode")
+        self.assertIn("no_such_mode", str(ctx.exception))
+
+
+class DynamicObstacleInjectionTest(unittest.TestCase):
+    """Verify that waypoints inside a newly-injected obstacle are pushed outside."""
+
+    def test_waypoint_inside_injected_building_is_corrected(self) -> None:
+        building = BuildingPrism(
+            primitive_id="injected-1",
+            footprint_xy_m=[[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]],
+            base_z_m=0.0,
+            top_z_m=15.0,
+        )
+        bounds = Bounds2D(0.0, 100.0, 0.0, 100.0)
+        obstacle_layer = ObstacleLayer(
+            bounds_xy_m=bounds, tile_size_m=32.0, primitives=(building,)
+        )
+        terrain = TerrainLayer.from_height_grid(
+            environment_id="flat",
+            bounds_xy_m=bounds,
+            heights_m=np.zeros((2, 2), dtype=float),
+            resolution_m=50.0,
+            tile_size_cells=2,
+        )
+
+        # Waypoint placed at the center of the building footprint.
+        pushed = push_waypoint_outside_obstacles(
+            [10.0, 10.0],
+            terrain=terrain,
+            obstacle_layer=obstacle_layer,
+            agl_m=5.0,
+        )
+
+        self.assertIsNone(
+            obstacle_layer.point_collides(float(pushed[0]), float(pushed[1]), 5.0),
+            msg=f"Pushed waypoint {pushed} is still inside the building",
+        )
+
+    def test_waypoint_already_clear_is_returned_unchanged(self) -> None:
+        building = BuildingPrism(
+            primitive_id="injected-2",
+            footprint_xy_m=[[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]],
+            base_z_m=0.0,
+            top_z_m=15.0,
+        )
+        bounds = Bounds2D(0.0, 100.0, 0.0, 100.0)
+        obstacle_layer = ObstacleLayer(
+            bounds_xy_m=bounds, tile_size_m=32.0, primitives=(building,)
+        )
+        terrain = TerrainLayer.from_height_grid(
+            environment_id="flat",
+            bounds_xy_m=bounds,
+            heights_m=np.zeros((2, 2), dtype=float),
+            resolution_m=50.0,
+            tile_size_cells=2,
+        )
+
+        clear_point = np.array([80.0, 80.0], dtype=float)
+        pushed = push_waypoint_outside_obstacles(
+            clear_point,
+            terrain=terrain,
+            obstacle_layer=obstacle_layer,
+            agl_m=5.0,
+        )
+
+        np.testing.assert_array_almost_equal(pushed, clear_point)
+
+
+class MultiDroneDeconflictionIntegrationTest(unittest.TestCase):
+    """Integration-level check: three-drone deconfliction maintains separation over time."""
+
+    def test_three_drone_separation_never_violated_during_convergence(self) -> None:
+        cfg = DeconflictionConfig(min_separation_m=18.0)
+        roles = {
+            "d-alpha": "primary_observer",
+            "d-beta": "secondary_baseline",
+            "d-gamma": "secondary_baseline",
+        }
+        layer = DeconflictionLayer(cfg, role_lookup=roles)
+
+        # Three drones placed very close together (5 m, well below 18 m min sep).
+        positions = {
+            "d-alpha": np.array([0.0, 0.0, 80.0], dtype=float),
+            "d-beta": np.array([5.0, 0.0, 80.0], dtype=float),
+            "d-gamma": np.array([-5.0, 5.0, 80.0], dtype=float),
+        }
+        velocities = {k: np.zeros(3, dtype=float) for k in positions}
+
+        for step in range(8):
+            proposed = {k: (positions[k].copy(), velocities[k].copy()) for k in positions}
+            adjusted, _ = layer.resolve_step(proposed, timestamp_s=float(step) * 0.5)
+
+            ids = sorted(adjusted.keys())
+            for i in range(len(ids)):
+                for j in range(i + 1, len(ids)):
+                    sep = float(np.linalg.norm(adjusted[ids[i]][0] - adjusted[ids[j]][0]))
+                    self.assertGreaterEqual(
+                        sep,
+                        cfg.min_separation_m,
+                        msg=(
+                            f"Step {step}: pair ({ids[i]}, {ids[j]}) "
+                            f"separation {sep:.2f} m < min {cfg.min_separation_m} m"
+                        ),
+                    )
+
+            for k in positions:
+                positions[k] = adjusted[k][0]
 
 
 if __name__ == "__main__":

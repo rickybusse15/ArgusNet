@@ -403,3 +403,225 @@ async fn grpc_daemon_matches_golden_fixture_and_streaming() {
     server_handle.abort();
     let _ = fs::remove_file(config_path);
 }
+
+fn minimal_config_path(tag: &str) -> PathBuf {
+    let path = repo_root().join(format!("target/test-minimal-config-{tag}.yaml"));
+    fs::write(
+        &path,
+        "min_observations: 2\nmax_stale_steps: 8\nretain_history: false\n\
+         min_confidence: 0.15\nmax_bearing_std_rad: 0.15\nmax_timestamp_skew_s: 5.0\n\
+         min_intersection_angle_deg: 2.0\n",
+    )
+    .expect("write minimal config");
+    path
+}
+
+fn make_observation(node_id: &str, target_id: &str, t: f64, origin: [f64; 3], target: [f64; 3]) -> BearingObservation {
+    let dx = target[0] - origin[0];
+    let dy = target[1] - origin[1];
+    let dz = target[2] - origin[2];
+    let mag = (dx * dx + dy * dy + dz * dz).sqrt();
+    BearingObservation {
+        node_id: node_id.to_string(),
+        target_id: target_id.to_string(),
+        origin: Some(Vector3 { x_m: origin[0], y_m: origin[1], z_m: origin[2] }),
+        direction: Some(Vector3 { x_m: dx / mag, y_m: dy / mag, z_m: dz / mag }),
+        bearing_std_rad: 0.01,
+        timestamp_s: t,
+        confidence: 0.9,
+    }
+}
+
+fn make_node(node_id: &str, t: f64, pos: [f64; 3]) -> NodeState {
+    NodeState {
+        node_id: node_id.to_string(),
+        position: Some(Vector3 { x_m: pos[0], y_m: pos[1], z_m: pos[2] }),
+        velocity: Some(Vector3 { x_m: 0.0, y_m: 0.0, z_m: 0.0 }),
+        is_mobile: false,
+        timestamp_s: t,
+        health: 1.0,
+        sensor_type: "optical".to_string(),
+        fov_half_angle_deg: 180.0,
+        max_range_m: 2000.0,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn track_response_includes_mode_probability_cv() {
+    let config_path = minimal_config_path("mode-prob");
+    let address = allocate_endpoint();
+    let server_handle = tokio::spawn(argusnet_server::serve(argusnet_server::ServeArgs {
+        listen: address.clone(),
+        config: Some(config_path.clone()),
+        min_observations: None,
+        max_stale_steps: None,
+        min_confidence: None,
+        max_bearing_std_rad: None,
+        max_timestamp_skew_s: None,
+        min_intersection_angle_deg: None,
+        data_association_mode: None,
+        cv_process_accel_std: None,
+        ct_process_accel_std: None,
+        ct_turn_rate_std: None,
+        innovation_window: None,
+        innovation_scale_factor: None,
+        innovation_max_scale: None,
+        adaptive_measurement_noise: None,
+        chi_squared_gate_threshold: None,
+        cluster_distance_threshold_m: None,
+        near_parallel_rejection_angle_deg: None,
+        confirmation_m: None,
+        confirmation_n: None,
+        max_coast_frames: None,
+        max_coast_seconds: None,
+        min_quality_score: None,
+    }));
+
+    let mut client = loop {
+        match WorldModelServiceClient::connect(format!("http://{address}")).await {
+            Ok(c) => break c,
+            Err(_) => sleep(Duration::from_millis(100)).await,
+        }
+    };
+
+    // Two ground nodes with a wide baseline to produce strong triangulation geometry.
+    let node_a_pos = [-300.0f64, 0.0, 10.0];
+    let node_b_pos = [300.0f64, 0.0, 10.0];
+    let target_pos = [0.0f64, 400.0, 60.0];
+
+    for frame_idx in 0..5u64 {
+        let t = frame_idx as f64 * 1.0;
+        let tx = target_pos[0] + t * 2.0;
+        let request = IngestFrameRequest {
+            timestamp_s: t,
+            node_states: vec![
+                make_node("node-alpha", t, node_a_pos),
+                make_node("node-beta", t, node_b_pos),
+            ],
+            observations: vec![
+                make_observation("node-alpha", "tgt-1", t, node_a_pos, [tx, target_pos[1], target_pos[2]]),
+                make_observation("node-beta", "tgt-1", t, node_b_pos, [tx, target_pos[1], target_pos[2]]),
+            ],
+            truths: vec![TruthState {
+                target_id: "tgt-1".to_string(),
+                position: Some(Vector3 { x_m: tx, y_m: target_pos[1], z_m: target_pos[2] }),
+                velocity: Some(Vector3 { x_m: 2.0, y_m: 0.0, z_m: 0.0 }),
+                timestamp_s: t,
+            }],
+        };
+        let response = client
+            .ingest_frame(request)
+            .await
+            .expect("ingest")
+            .into_inner();
+        let frame = response.frame.expect("frame");
+        if !frame.tracks.is_empty() {
+            for track in &frame.tracks {
+                assert!(
+                    track.mode_probability_cv >= 0.0 && track.mode_probability_cv <= 1.0,
+                    "mode_probability_cv={} is outside [0,1]",
+                    track.mode_probability_cv,
+                );
+            }
+        }
+    }
+
+    server_handle.abort();
+    let _ = fs::remove_file(config_path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn track_response_contributing_nodes_populated() {
+    let config_path = minimal_config_path("contrib-nodes");
+    let address = allocate_endpoint();
+    let server_handle = tokio::spawn(argusnet_server::serve(argusnet_server::ServeArgs {
+        listen: address.clone(),
+        config: Some(config_path.clone()),
+        min_observations: None,
+        max_stale_steps: None,
+        min_confidence: None,
+        max_bearing_std_rad: None,
+        max_timestamp_skew_s: None,
+        min_intersection_angle_deg: None,
+        data_association_mode: None,
+        cv_process_accel_std: None,
+        ct_process_accel_std: None,
+        ct_turn_rate_std: None,
+        innovation_window: None,
+        innovation_scale_factor: None,
+        innovation_max_scale: None,
+        adaptive_measurement_noise: None,
+        chi_squared_gate_threshold: None,
+        cluster_distance_threshold_m: None,
+        near_parallel_rejection_angle_deg: None,
+        confirmation_m: None,
+        confirmation_n: None,
+        max_coast_frames: None,
+        max_coast_seconds: None,
+        min_quality_score: None,
+    }));
+
+    let mut client = loop {
+        match WorldModelServiceClient::connect(format!("http://{address}")).await {
+            Ok(c) => break c,
+            Err(_) => sleep(Duration::from_millis(100)).await,
+        }
+    };
+
+    let node_a_pos = [-250.0f64, 0.0, 10.0];
+    let node_b_pos = [250.0f64, 0.0, 10.0];
+    let target_pos = [0.0f64, 350.0, 55.0];
+
+    let mut last_frame = None;
+    for frame_idx in 0..5u64 {
+        let t = frame_idx as f64 * 1.0;
+        let tx = target_pos[0] + t * 3.0;
+        let request = IngestFrameRequest {
+            timestamp_s: t,
+            node_states: vec![
+                make_node("sensor-1", t, node_a_pos),
+                make_node("sensor-2", t, node_b_pos),
+            ],
+            observations: vec![
+                make_observation("sensor-1", "obj-a", t, node_a_pos, [tx, target_pos[1], target_pos[2]]),
+                make_observation("sensor-2", "obj-a", t, node_b_pos, [tx, target_pos[1], target_pos[2]]),
+            ],
+            truths: vec![TruthState {
+                target_id: "obj-a".to_string(),
+                position: Some(Vector3 { x_m: tx, y_m: target_pos[1], z_m: target_pos[2] }),
+                velocity: Some(Vector3 { x_m: 3.0, y_m: 0.0, z_m: 0.0 }),
+                timestamp_s: t,
+            }],
+        };
+        let response = client
+            .ingest_frame(request)
+            .await
+            .expect("ingest")
+            .into_inner();
+        last_frame = response.frame;
+    }
+
+    if let Some(frame) = last_frame {
+        let tracks_with_nodes: Vec<_> = frame
+            .tracks
+            .iter()
+            .filter(|t| !t.contributing_nodes.is_empty())
+            .collect();
+        assert!(
+            !tracks_with_nodes.is_empty(),
+            "expected at least one track with contributing_nodes populated, got {} tracks total",
+            frame.tracks.len(),
+        );
+        for track in &tracks_with_nodes {
+            for node_id in &track.contributing_nodes {
+                assert!(
+                    node_id == "sensor-1" || node_id == "sensor-2",
+                    "unexpected contributing node: {node_id}",
+                );
+            }
+        }
+    }
+
+    server_handle.abort();
+    let _ = fs::remove_file(config_path);
+}

@@ -76,6 +76,7 @@ from argusnet.world.environment import (
     OrientedBox,
     SensorVisibilityModel,
     WallSegment,
+    _point_in_polygon,
 )
 from argusnet.world.terrain import (
     KNOWN_TERRAIN_PRESETS,
@@ -168,25 +169,6 @@ class SimNode:
 
     def state(self, timestamp_s: float) -> NodeState:
         position, velocity = self.trajectory(timestamp_s)
-        # Phase 2.4 VIO wiring point: after computing position/velocity from the
-        # trajectory, a VIO backend could be updated here using synthetic features
-        # derived from the ground-truth position.  The pattern would be:
-        #
-        #   if hasattr(self, '_vio_backend') and self._vio_backend is not None:
-        #       from argusnet.localization.vio import VisualFeature
-        #       synthetic_features = [
-        #           VisualFeature(feature_id=i, u=float(i * 30), v=float(i * 20))
-        #           for i in range(10)
-        #       ]
-        #       vio_state = self._vio_backend.process_image(
-        #           synthetic_features, timestamp_s=timestamp_s
-        #       )
-        #       # vio_state would then be written to a vio_states dict keyed by
-        #       # self.node_id for use in replay metadata or sensor fusion.
-        #
-        # Full wiring requires ScenarioDefinition to carry a vio_states mapping
-        # and the run_simulation loop to pass it into each SimNode; deferred to
-        # Phase 2.4 when the drone-update pattern is finalized.
         return NodeState(
             node_id=self.node_id,
             position=position,
@@ -244,19 +226,34 @@ class ScenarioOptions:
 
     def __post_init__(self) -> None:
         if self.map_preset not in MAP_PRESET_SCALES:
-            raise ValueError(f"map_preset must be one of {sorted(MAP_PRESET_SCALES)}.")
+            raise ValueError(
+                f"Unknown map_preset {self.map_preset!r}. Must be one of {sorted(MAP_PRESET_SCALES)}."
+            )
         if self.target_motion_preset not in TARGET_MOTION_PRESETS:
             raise ValueError(
-                f"target_motion_preset must be one of {sorted(TARGET_MOTION_PRESETS)}."
+                f"Unknown target_motion_preset {self.target_motion_preset!r}."
+                f" Must be one of {sorted(TARGET_MOTION_PRESETS)}."
             )
         if self.drone_mode_preset not in DRONE_MODE_PRESETS:
-            raise ValueError(f"drone_mode_preset must be one of {sorted(DRONE_MODE_PRESETS)}.")
+            raise ValueError(
+                f"Unknown drone_mode_preset {self.drone_mode_preset!r}."
+                f" Must be one of {sorted(DRONE_MODE_PRESETS)}."
+            )
         if self.terrain_preset not in TERRAIN_PRESET_CHOICES:
-            raise ValueError(f"terrain_preset must be one of {sorted(TERRAIN_PRESET_CHOICES)}.")
+            raise ValueError(
+                f"Unknown terrain_preset {self.terrain_preset!r}."
+                f" Must be one of {sorted(TERRAIN_PRESET_CHOICES)}."
+            )
         if self.weather_preset not in KNOWN_WEATHER_PRESETS:
-            raise ValueError(f"weather_preset must be one of {sorted(KNOWN_WEATHER_PRESETS)}.")
+            raise ValueError(
+                f"Unknown weather_preset {self.weather_preset!r}."
+                f" Must be one of {sorted(KNOWN_WEATHER_PRESETS)}."
+            )
         if self.platform_preset not in PLATFORM_PRESET_CHOICES:
-            raise ValueError(f"platform_preset must be one of {sorted(PLATFORM_PRESET_CHOICES)}.")
+            raise ValueError(
+                f"Unknown platform_preset {self.platform_preset!r}."
+                f" Must be one of {sorted(PLATFORM_PRESET_CHOICES)}."
+            )
         if self.ground_station_count <= 0:
             raise ValueError("ground_station_count must be greater than 0.")
         if self.target_count < 0:
@@ -264,7 +261,10 @@ class ScenarioOptions:
         if self.drone_count <= 0:
             raise ValueError("drone_count must be greater than 0.")
         if self.mission_mode not in {"scan_map_inspect", "target_tracking"}:
-            raise ValueError("mission_mode must be 'scan_map_inspect' or 'target_tracking'.")
+            raise ValueError(
+                f"Unknown mission_mode {self.mission_mode!r}."
+                " Must be 'scan_map_inspect' or 'target_tracking'."
+            )
 
 
 @dataclass(frozen=True)
@@ -1760,18 +1760,6 @@ def terrain_resolution_for_scale(scale: float) -> float:
     return 15.0
 
 
-def _point_in_polygon(point_xy: np.ndarray, polygon_xy: np.ndarray) -> bool:
-    inside = False
-    for index in range(len(polygon_xy)):
-        a = polygon_xy[index]
-        b = polygon_xy[(index + 1) % len(polygon_xy)]
-        if (a[1] > point_xy[1]) != (b[1] > point_xy[1]):
-            x_cross = (b[0] - a[0]) * (point_xy[1] - a[1]) / max((b[1] - a[1]), 1.0e-12) + a[0]
-            if point_xy[0] < x_cross:
-                inside = not inside
-    return inside
-
-
 @dataclass(frozen=True)
 class LandCoverPatch:
     polygon_xy_m: np.ndarray
@@ -2417,6 +2405,12 @@ def clamp_to_bounds(
     max_x = bounds["x_max_m"] - margin_m
     min_y = bounds["y_min_m"] + margin_m
     max_y = bounds["y_max_m"] - margin_m
+    # When margin exceeds half the span, collapse to the midpoint rather than
+    # producing an inverted range that np.clip handles inconsistently.
+    if min_x > max_x:
+        min_x = max_x = (bounds["x_min_m"] + bounds["x_max_m"]) * 0.5
+    if min_y > max_y:
+        min_y = max_y = (bounds["y_min_m"] + bounds["y_max_m"]) * 0.5
     return np.array(
         [
             np.clip(float(xy_m[0]), min_x, max_x),

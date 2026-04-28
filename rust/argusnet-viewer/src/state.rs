@@ -133,6 +133,10 @@ pub struct SelectionState {
     pub selected_is_mobile: Option<bool>,
     // Track-specific fields
     pub selected_covariance_diag: Option<[f64; 3]>,
+    /// IMM CV-model probability for the selected track.
+    pub selected_mode_probability_cv: Option<f32>,
+    /// Node IDs that contributed to the selected track's last update.
+    pub selected_contributing_nodes: Vec<String>,
     // Truth-specific fields
     pub selected_nearest_track_dist_m: Option<f32>,
 }
@@ -153,6 +157,8 @@ impl SelectionState {
         self.selected_max_range_m = None;
         self.selected_is_mobile = None;
         self.selected_covariance_diag = None;
+        self.selected_mode_probability_cv = None;
+        self.selected_contributing_nodes.clear();
         self.selected_nearest_track_dist_m = None;
     }
 }

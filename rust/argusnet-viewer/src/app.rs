@@ -73,6 +73,9 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
     let terrain_mesh = replay_document
         .as_ref()
         .and_then(|doc| doc.terrain_viewer_mesh());
+    if terrain_mesh.is_none() && replay_document.is_some() {
+        warn!("Replay has no terrain mesh — 3-D elevation will fall back to entity altitude");
+    }
     let mut zone_overlap_model =
         mission_zones::build_zone_overlap_model(&mission_zones, ZoneFocus::None);
     zone_overlap_model.generation = 1;
@@ -430,6 +433,9 @@ fn sync_current_markers_system(
                             .covariance
                             .as_ref()
                             .map(|cov| crate::ui::covariance_diagonal(cov));
+                        selection.selected_mode_probability_cv = track.mode_probability_cv;
+                        selection.selected_contributing_nodes =
+                            track.contributing_node_ids.clone();
                         selection.selected_health = None;
                         selection.selected_sensor_type = None;
                         selection.selected_fov_half_angle_deg = None;
@@ -1945,14 +1951,18 @@ fn prepare_reloaded_scene_bundle(
     next_scene_package: ScenePackage,
     next_replay_document: Option<ReplayDocument>,
 ) -> ReloadedSceneBundle {
+    let terrain_mesh = next_replay_document
+        .as_ref()
+        .and_then(|document| document.terrain_viewer_mesh());
+    if terrain_mesh.is_none() && next_replay_document.is_some() {
+        warn!("Reloaded replay has no terrain mesh — 3-D elevation will fall back to entity altitude");
+    }
     let mission_zones = LoadedMissionZones {
         zones: next_replay_document
             .as_ref()
             .map(|document| document.zones())
             .unwrap_or_default(),
-        terrain_mesh: next_replay_document
-            .as_ref()
-            .and_then(|document| document.terrain_viewer_mesh()),
+        terrain_mesh,
     };
 
     ReloadedSceneBundle {

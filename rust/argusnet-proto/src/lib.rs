@@ -265,13 +265,11 @@ pub fn track_to_pb(track: TrackState) -> pb::TrackState {
         stale_steps: track.stale_steps,
         lifecycle_state: track.lifecycle_state,
         quality_score: track.quality_score,
-        // FusedTrack extension fields — populated with defaults until
-        // argusnet-core produces them.
         acceleration_mps2: vec![0.0, 0.0, 0.0],
         confidence: track.quality_score.unwrap_or(0.0),
-        mode_probability_cv: 1.0,
+        mode_probability_cv: track.mode_probability_cv.unwrap_or(1.0),
         last_seen_s: track.timestamp_s,
-        contributing_nodes: vec![],
+        contributing_nodes: track.contributing_node_ids,
     }
 }
 
@@ -287,6 +285,12 @@ pub fn track_from_pb(track: pb::TrackState) -> Result<TrackState, String> {
         stale_steps: track.stale_steps,
         lifecycle_state: track.lifecycle_state,
         quality_score: track.quality_score,
+        mode_probability_cv: if track.mode_probability_cv == 0.0 {
+            None
+        } else {
+            Some(track.mode_probability_cv)
+        },
+        contributing_node_ids: track.contributing_nodes,
     })
 }
 

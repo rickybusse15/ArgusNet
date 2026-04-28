@@ -5,11 +5,11 @@ architecture update plan): drone roles, planning objectives, the contract that t
 planned route into an executable trajectory, replanning triggers, and deconfliction rules.
 
 References throughout point to the existing implementations in:
-- `src/smart_tracker/planning.py` (`PathPlanner2D`, `PlannerConfig`, `PlannerRoute`)
-- `src/smart_tracker/sim.py` (`ScenarioDefinition.drone_roles`, `drone_planner_modes`,
+- `src/argusnet/planning/planning.py` (`PathPlanner2D`, `PlannerConfig`, `PlannerRoute`)
+- `src/argusnet/simulation/sim.py` (`ScenarioDefinition.drone_roles`, `drone_planner_modes`,
   `drone_target_assignments`, `adaptive_drone_controllers`)
-- `src/smart_tracker/config.py` (`DynamicsConfig`, `SensorConfig`)
-- `src/smart_tracker/behaviors.py` (`FlightEnvelope`, `TransitBehavior`, `LoiterBehavior`)
+- `src/argusnet/simulation/behaviors.py` (`FlightEnvelope`, `TransitBehavior`, `LoiterBehavior`;
+  dynamics/sensor config now in `sensor_models.py`)
 
 ---
 

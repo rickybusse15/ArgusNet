@@ -262,6 +262,12 @@ pub struct TrackState {
     pub stale_steps: u32,
     #[serde(default, deserialize_with = "deserialize_flat_f64_vec")]
     pub covariance: Option<Vec<f64>>,
+    /// IMM CV-model weight in [0, 1]; None when not present in replay.
+    #[serde(default)]
+    pub mode_probability_cv: Option<f32>,
+    /// Node IDs that contributed to the most recent update.
+    #[serde(default)]
+    pub contributing_node_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -624,6 +630,11 @@ mod live_stream {
             } else {
                 Some(t.covariance_row_major)
             };
+            let mode_probability_cv = if t.mode_probability_cv > 0.0 {
+                Some(t.mode_probability_cv as f32)
+            } else {
+                None
+            };
             TrackState {
                 track_id: t.track_id,
                 position: [pos.x_m as f32, pos.y_m as f32, pos.z_m as f32],
@@ -632,6 +643,8 @@ mod live_stream {
                 update_count: t.update_count,
                 stale_steps: t.stale_steps,
                 covariance,
+                mode_probability_cv,
+                contributing_node_ids: t.contributing_nodes,
             }
         }
     }
