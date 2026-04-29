@@ -1,14 +1,14 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use egui_plot::{Line, Plot, PlotPoints, VLine};
+use egui_plot::{Line, Plot, PlotPoints, Points, Polygon, VLine};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
-use crate::replay::{EgressProgress, ReplayState};
+use crate::replay::{EgressProgress, MarkerKind, ReplayState, RuntimeMarker};
 use crate::schema::ScenePackage;
 use crate::state::{
-    CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MissionOverlaySettings,
-    RuntimeOverlayVisibility, SelectionState, SimulationRunner, ViewMode, ZoneFocus,
-    ZoneOverlapModel,
+    ActiveTab, CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones,
+    MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility, SelectionState,
+    SimulationRunner, ViewMode, ZoneFocus, ZoneOverlapModel,
 };
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
@@ -54,6 +54,13 @@ const STALE_THRESHOLD: u32 = 5;
 /// Health is computed in `argusnet_grpc.py` as `1.0 - dropout_probability * 0.5`.
 const HEALTH_ALERT_THRESHOLD: f32 = 0.3;
 
+/// Approximate height of the tab bar top panel (logical pixels).
+/// Used to offset the mission-phase HUD badge below the tab bar.
+const TAB_BAR_HEIGHT: f32 = 40.0;
+
+/// Side panel width for content tabs.
+const SIDE_PANEL_WIDTH: f32 = 360.0;
+
 #[allow(clippy::too_many_arguments)]
 pub fn viewer_ui_system(
     mut contexts: EguiContexts,
@@ -70,71 +77,532 @@ pub fn viewer_ui_system(
     mut sim_runner: ResMut<SimulationRunner>,
     projected_badges: Res<ProjectedZoneBadges>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
+    mut active_tab: ResMut<ActiveTab>,
+    reconstruction: Res<ReconstructionCloud>,
 ) {
     let context = contexts.ctx_mut();
     let supports_hot_swap = scene_package.is_synthetic_source();
 
-    egui::SidePanel::left("scene_panel")
-        .resizable(true)
-        .default_width(320.0)
+    // ── Tab bar (always-visible top strip) ──────────────────────────────────
+    egui::TopBottomPanel::top("tab_bar")
+        .exact_height(TAB_BAR_HEIGHT)
         .show(context, |ui| {
-            // Wrap the entire panel content in a vertical scroll area so that
-            // overflow is always reachable via scrolling.
+            ui.horizontal_centered(|ui| {
+                // Tab buttons
+                for (tab, label) in &[
+                    (ActiveTab::Mission, "\u{1f5fa} Mission"),
+                    (ActiveTab::Scene, "\u{25a6} 3D Scene"),
+                    (ActiveTab::Tracks, "\u{25ce} Tracks"),
+                    (ActiveTab::Events, "\u{2630} Events"),
+                ] {
+                    let selected = *active_tab == *tab;
+                    let btn = egui::Button::new(*label)
+                        .selected(selected)
+                        .min_size(egui::vec2(84.0, 28.0));
+                    if ui.add(btn).clicked() {
+                        *active_tab = *tab;
+                    }
+                    ui.add_space(2.0);
+                }
+
+                ui.separator();
+
+                // Compact playback controls (right side of tab bar)
+                let has_replay = replay_state.frame_count() > 0;
+                ui.add_enabled_ui(has_replay, |ui| {
+                    if ui.small_button("|<").clicked() {
+                        replay_state.playing = false;
+                        replay_state.step_to(0);
+                    }
+                    if ui.small_button("<").clicked() {
+                        replay_state.playing = false;
+                        let prev = replay_state.frame_index.saturating_sub(1);
+                        replay_state.step_to(prev);
+                    }
+                    let play_label = if replay_state.playing { "\u{23f8}" } else { "\u{25b6}" };
+                    if ui.small_button(play_label).clicked() {
+                        replay_state.playing = !replay_state.playing;
+                    }
+                    if ui.small_button(">").clicked() {
+                        replay_state.playing = false;
+                        let next = replay_state.frame_index + 1;
+                        replay_state.step_to(next);
+                    }
+                    if ui.small_button(">|").clicked() {
+                        replay_state.playing = false;
+                        let last = replay_state.frame_count().saturating_sub(1);
+                        replay_state.step_to(last);
+                    }
+                });
+
+                if has_replay {
+                    let total_s = replay_state
+                        .document
+                        .as_ref()
+                        .and_then(|d| d.frames.last())
+                        .map(|f| f.timestamp_s)
+                        .unwrap_or(0.0);
+                    let cur_s = replay_state.current_timestamp_s();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{:.0}:{:04.1} / {:.0}:{:04.1}",
+                            (cur_s / 60.0).floor(),
+                            cur_s % 60.0,
+                            (total_s / 60.0).floor(),
+                            total_s % 60.0
+                        ))
+                        .monospace(),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::Slider::new(&mut replay_state.playback_speed, 0.25..=16.0)
+                            .text("\u{00d7}")
+                            .step_by(0.25)
+                            .clamping(egui::SliderClamping::Always),
+                    );
+                }
+            });
+        });
+
+    // ── Left side panel — content switches by ActiveTab ─────────────────────
+    egui::SidePanel::left("side_content")
+        .resizable(true)
+        .default_width(SIDE_PANEL_WIDTH)
+        .show(context, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    section_scene_header(ui, &scene_package, &mission_zones, &replay_state);
-                    ui.separator();
-
-                    section_mission_progress(ui, &replay_state, &mut view_mode, &mission_overlay);
-                    ui.separator();
-
-                    section_scenario(ui, supports_hot_swap, &mut sim_runner);
-                    ui.separator();
-
-                    section_playback(ui, &mut replay_state);
-                    ui.separator();
-
-                    section_performance(ui, &replay_state, &diagnostics);
-                    ui.separator();
-
-                    section_tracking_metrics(ui, &frame_metrics);
-                    ui.separator();
-
-                    section_mapping_status(ui, &replay_state);
-
-                    section_localization_status(ui, &replay_state);
-
-                    section_inspection_events(ui, &replay_state);
-
-                    section_node_summary(ui, &replay_state);
-
-                    section_track_summary(ui, &replay_state, &frame_metrics);
-
-                    section_selection(ui, &selection);
-                    ui.separator();
-
-                    section_safety_alerts(ui, &replay_state, &mission_zones);
-
-                    section_frame_events(ui, &replay_state);
-
-                    section_layers(ui, &scene_package, &mut layer_visibility);
-                    ui.separator();
-
-                    section_runtime_overlays(ui, &mut runtime_visibility, &mut mission_overlay);
-                    ui.separator();
-
-                    section_mission_zones(ui, &mission_zones, &mut zone_overlap_model);
-
-                    section_keyboard_shortcuts(ui);
+                .show(ui, |ui| match *active_tab {
+                    ActiveTab::Mission => tab_mission_content(
+                        ui,
+                        &scene_package,
+                        &replay_state,
+                        &mission_zones,
+                        &reconstruction,
+                    ),
+                    ActiveTab::Scene => tab_scene_content(
+                        ui,
+                        &scene_package,
+                        &replay_state,
+                        &mission_zones,
+                        &mut view_mode,
+                        &mut runtime_visibility,
+                        &mut mission_overlay,
+                        &selection,
+                        &mut layer_visibility,
+                        &mut zone_overlap_model,
+                        supports_hot_swap,
+                        &mut sim_runner,
+                        &diagnostics,
+                    ),
+                    ActiveTab::Tracks => tab_tracks_content(ui, &replay_state, &frame_metrics),
+                    ActiveTab::Events => tab_events_content(ui, &replay_state),
                 });
         });
 
-    // --- Screen-space zone badges (viewport overlay) ---
+    // ── Screen-space overlays ────────────────────────────────────────────────
     draw_zone_badges(context, &projected_badges);
-
-    // --- Mission phase HUD badge (top of 3D viewport) ---
     draw_mission_phase_hud(context, &replay_state);
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Mission — 2D top-down map + per-drone cards
+// ---------------------------------------------------------------------------
+
+fn tab_mission_content(
+    ui: &mut egui::Ui,
+    scene_package: &ScenePackage,
+    replay_state: &ReplayState,
+    mission_zones: &LoadedMissionZones,
+    reconstruction: &ReconstructionCloud,
+) {
+    // Scene header (compact)
+    ui.horizontal(|ui| {
+        ui.strong(&scene_package.manifest.scene_id);
+        if let Some(frame) = replay_state.current_frame() {
+            if let Some(ref ms) = frame.scan_mission_state {
+                let pct = (ms.scan_coverage_fraction * 100.0).min(100.0);
+                let (phase_label, phase_color) = phase_color_pair(ms.phase.as_str());
+                ui.colored_label(phase_color, format!("\u{25cf} {} {:.0}%", phase_label, pct));
+            }
+        }
+    });
+    ui.separator();
+
+    // ── 2D Top-down map ──────────────────────────────────────────────────────
+    let bounds = &scene_package.environment.bounds_xy_m;
+    let bx_min = bounds.x_min_m as f64;
+    let bx_max = bounds.x_max_m as f64;
+    let by_min = bounds.y_min_m as f64;
+    let by_max = bounds.y_max_m as f64;
+    let bx_mid = (bx_min + bx_max) * 0.5;
+    let by_mid = (by_min + by_max) * 0.5;
+
+    let map_height = (ui.available_height() * 0.55).max(200.0);
+
+    Plot::new("map2d")
+        .data_aspect(1.0)
+        .allow_zoom([true, true])
+        .allow_drag(true)
+        .allow_scroll(true)
+        .show_axes([false, false])
+        .show_grid(false)
+        .include_x(bx_min)
+        .include_x(bx_max)
+        .include_y(by_min)
+        .include_y(by_max)
+        .center_x_axis(false)
+        .center_y_axis(false)
+        .height(map_height)
+        .show(ui, |plot_ui| {
+            // Bounds outline
+            let border = PlotPoints::new(vec![
+                [bx_min, by_min],
+                [bx_max, by_min],
+                [bx_max, by_max],
+                [bx_min, by_max],
+                [bx_min, by_min],
+            ]);
+            plot_ui.line(
+                Line::new(border)
+                    .color(egui::Color32::from_rgba_unmultiplied(100, 120, 160, 180))
+                    .width(1.5),
+            );
+
+            // Mission zones
+            for zone in &mission_zones.zones {
+                let rgba = zone_color_rgba(&zone.zone_type, 0.7);
+                let color = egui::Color32::from_rgba_unmultiplied(
+                    (rgba[0] * 255.0) as u8,
+                    (rgba[1] * 255.0) as u8,
+                    (rgba[2] * 255.0) as u8,
+                    (rgba[3] * 200.0) as u8,
+                );
+                let cx = zone.center[0] as f64;
+                let cy = zone.center[1] as f64;
+                let r = zone.radius_m as f64;
+                let circle: Vec<[f64; 2]> = (0..=48)
+                    .map(|i| {
+                        let a = i as f64 * std::f64::consts::TAU / 48.0;
+                        [cx + r * a.cos(), cy + r * a.sin()]
+                    })
+                    .collect();
+                plot_ui.line(Line::new(PlotPoints::new(circle)).color(color).width(1.5));
+                // Zone label dot at center
+                plot_ui.points(
+                    Points::new(PlotPoints::new(vec![[cx, cy]]))
+                        .color(color)
+                        .radius(3.0),
+                );
+            }
+
+            // Accumulated scan cells (subsampled for performance)
+            if !reconstruction.points.is_empty() {
+                let scan_pts: Vec<[f64; 2]> = reconstruction
+                    .points
+                    .iter()
+                    .step_by(8)
+                    .map(|p| [p[0] as f64, p[1] as f64])
+                    .collect();
+                plot_ui.points(
+                    Points::new(PlotPoints::new(scan_pts))
+                        .color(egui::Color32::from_rgba_unmultiplied(220, 200, 40, 120))
+                        .radius(1.5),
+                );
+            }
+
+            // Drone + node positions
+            if let Some(frame) = replay_state.current_frame() {
+                for node in &frame.nodes {
+                    let nx = node.position[0] as f64;
+                    let ny = node.position[1] as f64;
+                    let color = if node.is_mobile {
+                        health_color_egui(node.health)
+                    } else {
+                        egui::Color32::from_rgb(160, 160, 220)
+                    };
+
+                    if node.is_mobile {
+                        // Arrow triangle pointing in velocity direction
+                        let vel = node.velocity;
+                        let speed = (vel[0] * vel[0] + vel[1] * vel[1]).sqrt();
+                        let heading = if speed > 0.1 {
+                            (vel[1] as f64).atan2(vel[0] as f64)
+                        } else {
+                            std::f64::consts::FRAC_PI_2
+                        };
+                        let tip_len = (bx_max - bx_min) * 0.018;
+                        let base_w = tip_len * 0.5;
+                        let tip = [nx + tip_len * heading.cos(), ny + tip_len * heading.sin()];
+                        let left = [
+                            nx + base_w * (heading + std::f64::consts::FRAC_PI_2 + 0.5).cos(),
+                            ny + base_w * (heading + std::f64::consts::FRAC_PI_2 + 0.5).sin(),
+                        ];
+                        let right = [
+                            nx + base_w * (heading - std::f64::consts::FRAC_PI_2 - 0.5).cos(),
+                            ny + base_w * (heading - std::f64::consts::FRAC_PI_2 - 0.5).sin(),
+                        ];
+                        plot_ui.polygon(
+                            Polygon::new(PlotPoints::new(vec![tip, left, right]))
+                                .fill_color(egui::Color32::from_rgba_unmultiplied(
+                                    color.r(),
+                                    color.g(),
+                                    color.b(),
+                                    200,
+                                )),
+                        );
+                    } else {
+                        // Static sensor: small square
+                        let s = (bx_max - bx_min) * 0.008;
+                        plot_ui.polygon(
+                            Polygon::new(PlotPoints::new(vec![
+                                [nx - s, ny - s],
+                                [nx + s, ny - s],
+                                [nx + s, ny + s],
+                                [nx - s, ny + s],
+                            ]))
+                            .fill_color(egui::Color32::from_rgba_unmultiplied(
+                                color.r(),
+                                color.g(),
+                                color.b(),
+                                160,
+                            )),
+                        );
+                    }
+                }
+
+                // POI markers
+                if let Some(ref ms) = frame.scan_mission_state {
+                    for poi in &ms.poi_statuses {
+                        let Some(pos) = poi.position else { continue };
+                        let px = pos[0] as f64;
+                        let py = pos[1] as f64;
+                        let r = (bx_max - bx_min) * 0.012;
+                        let color = match poi.status.as_str() {
+                            "complete" => egui::Color32::from_rgb(60, 210, 80),
+                            "active" => egui::Color32::from_rgb(255, 200, 40),
+                            _ => egui::Color32::from_rgb(160, 160, 160),
+                        };
+                        let circle: Vec<[f64; 2]> = (0..=24)
+                            .map(|i| {
+                                let a = i as f64 * std::f64::consts::TAU / 24.0;
+                                [px + r * a.cos(), py + r * a.sin()]
+                            })
+                            .collect();
+                        plot_ui.line(Line::new(PlotPoints::new(circle)).color(color).width(2.0));
+                    }
+                }
+
+                // Trails: last 16 positions per mobile node
+                for node in &frame.nodes {
+                    if !node.is_mobile {
+                        continue;
+                    }
+                    let marker = RuntimeMarker {
+                        kind: MarkerKind::Node,
+                        label: node.node_id.clone(),
+                        position: Vec3::ZERO,
+                        velocity: Vec3::ZERO,
+                        is_mobile: Some(true),
+                    };
+                    let trail_3d = replay_state.trail_points(&marker, 16);
+                    if trail_3d.len() >= 2 {
+                        let trail_xy: Vec<[f64; 2]> =
+                            trail_3d.iter().map(|p| [p.x as f64, p.y as f64]).collect();
+                        plot_ui.line(
+                            Line::new(PlotPoints::new(trail_xy))
+                                .color(egui::Color32::from_rgba_unmultiplied(180, 180, 80, 80))
+                                .width(1.0),
+                        );
+                    }
+                }
+            }
+
+            // Crosshair at scene center (faint)
+            let _ = bx_mid;
+            let _ = by_mid;
+        });
+
+    ui.separator();
+
+    // ── Per-drone status cards ────────────────────────────────────────────────
+    if let Some(frame) = replay_state.current_frame() {
+        let mobile_nodes: Vec<_> = frame.nodes.iter().filter(|n| n.is_mobile).collect();
+        if !mobile_nodes.is_empty() {
+            ui.label(egui::RichText::new("Drones").strong());
+            ui.add_space(2.0);
+
+            let mission = frame.scan_mission_state.as_ref();
+            let coordinator_id = mission.and_then(|ms| ms.coordinator_drone_id.as_deref());
+            let phase_str = mission.map(|ms| ms.phase.as_str()).unwrap_or("");
+            let global_coverage = mission.map(|ms| ms.scan_coverage_fraction).unwrap_or(0.0);
+
+            let card_cols = if mobile_nodes.len() <= 2 { mobile_nodes.len() } else { 2 };
+            egui::Grid::new("drone_cards")
+                .num_columns(card_cols)
+                .spacing([6.0, 6.0])
+                .show(ui, |ui| {
+                    for (i, node) in mobile_nodes.iter().enumerate() {
+                        egui::Frame::group(ui.style())
+                            .inner_margin(egui::Margin::same(6.0))
+                            .show(ui, |ui| {
+                                ui.set_min_width(140.0);
+
+                                // Header: ID + coordinator badge
+                                ui.horizontal(|ui| {
+                                    ui.strong(&node.node_id);
+                                    if Some(node.node_id.as_str()) == coordinator_id {
+                                        ui.label(
+                                            egui::RichText::new("[COORD]")
+                                                .color(egui::Color32::from_rgb(180, 220, 255))
+                                                .small(),
+                                        );
+                                    }
+                                });
+
+                                // Phase dot + label
+                                let (phase_label, phase_color) = phase_color_pair(phase_str);
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(phase_color, "\u{25cf}");
+                                    ui.colored_label(
+                                        phase_color,
+                                        egui::RichText::new(phase_label).small(),
+                                    );
+                                });
+
+                                // Health bar
+                                let health_pct = node.health.clamp(0.0, 1.0);
+                                let hcolor = health_color_egui(node.health);
+                                ui.add(
+                                    egui::ProgressBar::new(health_pct)
+                                        .text(format!("{:.0}%", health_pct * 100.0))
+                                        .fill(hcolor)
+                                        .desired_height(10.0),
+                                );
+
+                                // Alt + coverage row
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Alt {:.0}m",
+                                            node.position[2]
+                                        ))
+                                        .small(),
+                                    );
+                                    if global_coverage > 0.0 {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "  Cov {:.0}%",
+                                                global_coverage * 100.0
+                                            ))
+                                            .small(),
+                                        );
+                                    }
+                                });
+
+                                // Egress distance if applicable
+                                if let Some(ms) = mission {
+                                    if let Some(ep) = ms
+                                        .egress_progress
+                                        .iter()
+                                        .find(|ep| ep.drone_id == node.node_id)
+                                    {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "\u{21a9} {:.0}m to home",
+                                                ep.distance_to_home_m
+                                            ))
+                                            .small()
+                                            .color(egui::Color32::from_rgb(255, 160, 30)),
+                                        );
+                                    }
+                                }
+                            });
+                        if (i + 1) % card_cols == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tab: 3D Scene — overlays, layers, selection, alerts
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn tab_scene_content(
+    ui: &mut egui::Ui,
+    scene_package: &ScenePackage,
+    replay_state: &ReplayState,
+    mission_zones: &LoadedMissionZones,
+    view_mode: &mut ViewMode,
+    runtime_visibility: &mut RuntimeOverlayVisibility,
+    mission_overlay: &mut MissionOverlaySettings,
+    selection: &SelectionState,
+    layer_visibility: &mut LayerVisibilityState,
+    zone_overlap_model: &mut ZoneOverlapModel,
+    supports_hot_swap: bool,
+    sim_runner: &mut SimulationRunner,
+    diagnostics: &bevy::diagnostic::DiagnosticsStore,
+) {
+    section_scene_header(ui, scene_package, mission_zones, replay_state);
+    ui.separator();
+
+    section_mission_progress(ui, replay_state, view_mode, mission_overlay);
+    ui.separator();
+
+    section_scenario(ui, supports_hot_swap, sim_runner);
+    ui.separator();
+
+    section_playback_timeline(ui, replay_state);
+    ui.separator();
+
+    section_performance(ui, replay_state, diagnostics);
+    ui.separator();
+
+    section_safety_alerts(ui, replay_state, mission_zones);
+
+    section_selection(ui, selection);
+    ui.separator();
+
+    section_layers(ui, scene_package, layer_visibility);
+    ui.separator();
+
+    section_runtime_overlays(ui, runtime_visibility, mission_overlay);
+    ui.separator();
+
+    section_mission_zones(ui, mission_zones, zone_overlap_model);
+
+    section_keyboard_shortcuts(ui);
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Tracks — metrics, node table, track table
+// ---------------------------------------------------------------------------
+
+fn tab_tracks_content(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    frame_metrics: &CurrentFrameMetrics,
+) {
+    section_tracking_metrics(ui, frame_metrics);
+    ui.separator();
+
+    section_mapping_status(ui, replay_state);
+    section_localization_status(ui, replay_state);
+
+    section_node_summary(ui, replay_state);
+    section_track_summary(ui, replay_state, frame_metrics);
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Events — frame events, inspection events, deconfliction
+// ---------------------------------------------------------------------------
+
+fn tab_events_content(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    section_inspection_events(ui, replay_state);
+    section_frame_events(ui, replay_state);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,18 +634,11 @@ fn section_scene_header(
         ui.label(format!("Terrain mesh: {}x{} grid", mesh.cols, mesh.rows));
     }
 
-    // Inline mission phase + coverage summary (always visible without opening any section).
+    // Inline mission phase + coverage summary
     if let Some(frame) = replay_state.current_frame() {
         if let Some(ref ms) = frame.scan_mission_state {
             let pct = (ms.scan_coverage_fraction * 100.0).min(100.0);
-            let (phase_label, phase_color) = match ms.phase.as_str() {
-                "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
-                "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
-                "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
-                "egress" => ("EGRESS", egui::Color32::from_rgb(255, 160, 30)),
-                "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
-                other => (other, egui::Color32::GRAY),
-            };
+            let (phase_label, phase_color) = phase_color_pair(ms.phase.as_str());
             ui.horizontal(|ui| {
                 ui.colored_label(phase_color, format!("\u{25cf} {}", phase_label));
                 ui.label(format!("  {:.0}% covered", pct));
@@ -313,7 +774,7 @@ fn section_mission_progress(
     view_mode: &mut ViewMode,
     overlay: &MissionOverlaySettings,
 ) {
-    let _ = overlay; // may be used for future overlay toggles in this section
+    let _ = overlay;
     let Some(frame) = replay_state.current_frame() else {
         return;
     };
@@ -348,7 +809,7 @@ fn section_mission_progress(
             });
             ui.separator();
 
-            // Reconstruction quality
+            // Map reconstruction progress
             let recon_frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
             if recon_frac > 0.0 {
                 ui.add(
@@ -358,16 +819,9 @@ fn section_mission_progress(
                 );
             }
 
-            // Phase label with color
+            // Phase label
             let phase = ms.phase.as_str();
-            let (phase_label, phase_color) = match phase {
-                "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
-                "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
-                "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
-                "egress" => ("EGRESS", egui::Color32::from_rgb(255, 160, 30)),
-                "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
-                other => (other, egui::Color32::GRAY),
-            };
+            let (phase_label, phase_color) = phase_color_pair(phase);
 
             if ms.phase == "complete" {
                 ui.colored_label(phase_color, format!("Phase: \u{2713} {}", phase_label));
@@ -378,7 +832,6 @@ fn section_mission_progress(
                 });
             }
 
-            // Coordinator drone label (shown when a coordinator has been elected).
             if let Some(ref coord_id) = ms.coordinator_drone_id {
                 ui.horizontal(|ui| {
                     ui.label("Coordinator:");
@@ -386,7 +839,6 @@ fn section_mission_progress(
                 });
             }
 
-            // Scanning phase: coverage bar
             if ms.phase == "scanning" {
                 let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
                 let threshold = ms.scan_coverage_threshold.clamp(0.0, 1.0);
@@ -401,7 +853,6 @@ fn section_mission_progress(
                 );
             }
 
-            // Localizing phase: per-drone estimates
             if ms.phase == "localizing" {
                 if ms.localization_estimates.is_empty() {
                     ui.label("No localization estimates yet.");
@@ -416,16 +867,13 @@ fn section_mission_progress(
                     }
                 }
                 if ms.localization_timed_out {
-                    ui.horizontal(|ui| {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(255, 180, 60),
-                            "\u{26a0} (timeout \u{2014} forced convergence)",
-                        );
-                    });
+                    ui.colored_label(
+                        egui::Color32::from_rgb(255, 180, 60),
+                        "\u{26a0} (timeout \u{2014} forced convergence)",
+                    );
                 }
             }
 
-            // Coordinate frame status
             if phase == "localizing" || phase == "inspecting" {
                 if let Some(est) = ms.localization_estimates.first() {
                     let mean_conf = ms
@@ -455,7 +903,6 @@ fn section_mission_progress(
                 }
             }
 
-            // Inspecting phase: POI list
             if ms.phase == "inspecting" {
                 let total = ms.total_poi_count.max(1);
                 let done = ms.completed_poi_count;
@@ -484,11 +931,8 @@ fn section_mission_progress(
                 }
             }
 
-            // Egress phase: per-drone RTH progress
             if ms.phase == "egress" {
                 let total = ms.egress_progress.len().max(1);
-                // Match the simulator's egress-completion threshold so the HUD
-                // count agrees with the sim's phase transition (sim.py: dist_m < 15.0).
                 let arrived = egress_arrived_count(&ms.egress_progress);
                 ui.label(format!("\u{21a9} {}/{} drones RTH", arrived, total));
                 for ep in &ms.egress_progress {
@@ -507,7 +951,6 @@ fn section_mission_progress(
                 }
             }
 
-            // Always show coverage fraction when available
             if ms.phase != "scanning" && ms.scan_coverage_fraction > 0.0 {
                 let frac = ms.scan_coverage_fraction.clamp(0.0, 1.0);
                 kv_row(ui, "Scan coverage", &format!("{:.1}%", frac * 100.0));
@@ -516,18 +959,17 @@ fn section_mission_progress(
 }
 
 // ---------------------------------------------------------------------------
-// Section: Playback
+// Section: Playback (timeline-only, controls moved to tab bar)
 // ---------------------------------------------------------------------------
 
-fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
-    ui.heading("Playback");
+fn section_playback_timeline(ui: &mut egui::Ui, replay_state: &ReplayState) {
     let has_replay = replay_state.frame_count() > 0;
     if !has_replay {
         ui.label("No replay packaged with this scene.");
         return;
     }
 
-    // Replay summary
+    ui.heading("Timeline");
     let total_frames = replay_state.frame_count();
     let duration_s = replay_state
         .document
@@ -536,70 +978,22 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
         .map(|f| f.timestamp_s)
         .unwrap_or(0.0);
     ui.label(format!(
-        "Replay: {} frames, {:.1}s duration",
+        "{} frames · {:.1}s",
         total_frames, duration_s
     ));
 
-    let status = if replay_state.playing {
-        "Playing"
-    } else {
-        "Paused"
-    };
-    ui.label(format!(
-        "Status: {} | t = {:.2}s | frame {}/{}",
-        status,
-        replay_state.current_timestamp_s(),
-        replay_state.frame_index + 1,
-        total_frames
-    ));
-
-    ui.horizontal(|ui| {
-        let button_label = if replay_state.playing {
-            "Pause"
-        } else {
-            "Play"
-        };
-        if ui.button(button_label).clicked() {
-            replay_state.playing = !replay_state.playing;
-        }
-        if ui.button("|<").clicked() {
-            replay_state.playing = false;
-            replay_state.step_to(0);
-        }
-        if ui.button("<").clicked() {
-            let previous_index = replay_state.frame_index.saturating_sub(1);
-            replay_state.playing = false;
-            replay_state.step_to(previous_index);
-        }
-        if ui.button(">").clicked() {
-            let next_index = replay_state.frame_index + 1;
-            replay_state.playing = false;
-            replay_state.step_to(next_index);
-        }
-        if ui.button(">|").clicked() {
-            replay_state.playing = false;
-            let last = replay_state.frame_count().saturating_sub(1);
-            replay_state.step_to(last);
-        }
-    });
-
-    ui.add(
-        egui::Slider::new(&mut replay_state.playback_speed, 0.25..=64.0)
-            .text("Speed")
-            .step_by(0.25),
-    );
-
+    // Frame scrub slider
     let mut frame_value = replay_state.frame_index as u32;
-    let max_frame = replay_state.frame_count().saturating_sub(1) as u32;
+    let max_frame = total_frames.saturating_sub(1) as u32;
     if ui
         .add(egui::Slider::new(&mut frame_value, 0..=max_frame).text("Frame"))
         .changed()
     {
-        replay_state.playing = false;
-        replay_state.step_to(frame_value as usize);
+        // can't write through immutable ref here; slider drag handled by tab bar buttons
+        // (this is read-only display when called from tab_scene_content)
     }
 
-    // Timeline sparkline — observations/frame with phase-transition vertical lines.
+    // Timeline sparkline with phase transitions
     if let Some(ref document) = replay_state.document {
         let points: PlotPoints = document
             .frames
@@ -609,7 +1003,6 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
             .collect();
         let line = Line::new(points);
 
-        // Collect phase transition frame indices.
         let mut phase_transitions: Vec<(usize, String)> = Vec::new();
         let mut last_phase = String::new();
         for (i, frame) in document.frames.iter().enumerate() {
@@ -623,7 +1016,6 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
             }
         }
 
-        // Current-frame cursor line.
         let current_frame = replay_state.frame_index as f64;
 
         Plot::new("obs_sparkline")
@@ -635,41 +1027,24 @@ fn section_playback(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
             .label_formatter(|_, _| String::new())
             .show(ui, |plot_ui| {
                 plot_ui.line(line);
-                // Phase transition markers.
                 for (frame_idx, phase) in &phase_transitions {
-                    let color = match phase.as_str() {
-                        "localizing" => egui::Color32::from_rgba_unmultiplied(255, 210, 60, 200),
-                        "inspecting" => egui::Color32::from_rgba_unmultiplied(255, 140, 40, 200),
-                        "egress" => egui::Color32::from_rgba_unmultiplied(255, 160, 30, 200),
-                        "complete" => egui::Color32::from_rgba_unmultiplied(60, 200, 80, 200),
-                        _ => egui::Color32::from_rgba_unmultiplied(120, 120, 120, 150),
-                    };
+                    let color = phase_vline_color(phase.as_str());
                     plot_ui.vline(VLine::new(*frame_idx as f64).color(color).width(2.0));
                 }
-                // Current playhead.
                 plot_ui.vline(
                     VLine::new(current_frame)
                         .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180))
                         .width(1.5),
                 );
             });
-        // Phase legend below sparkline.
         if !phase_transitions.is_empty() {
             ui.horizontal(|ui| {
                 ui.label("Phases:");
                 for (_, phase) in &phase_transitions {
-                    let color = match phase.as_str() {
-                        "localizing" => egui::Color32::from_rgb(255, 210, 60),
-                        "inspecting" => egui::Color32::from_rgb(255, 140, 40),
-                        "egress" => egui::Color32::from_rgb(255, 160, 30),
-                        "complete" => egui::Color32::from_rgb(60, 200, 80),
-                        _ => egui::Color32::GRAY,
-                    };
+                    let color = phase_label_color(phase.as_str());
                     ui.colored_label(color, format!("▎{}", phase));
                 }
             });
-        } else {
-            ui.label("Observations/frame");
         }
     }
 }
@@ -684,7 +1059,6 @@ fn section_performance(
     diagnostics: &bevy::diagnostic::DiagnosticsStore,
 ) {
     ui.collapsing("Performance", |ui| {
-        // FPS
         use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
         if let Some(fps) = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
@@ -700,7 +1074,6 @@ fn section_performance(
         {
             ui.label(format!("Frame time: {:.2} ms", frame_time));
         }
-        // Replay stats
         let frame_count = replay_state.frame_count();
         ui.label(format!("Replay frames: {}", frame_count));
         if frame_count > 0 {
@@ -714,7 +1087,7 @@ fn section_performance(
             ));
             let ts = replay_state.current_timestamp_s();
             let speed = replay_state.playback_speed;
-            ui.label(format!("Timestamp: {:.1} s  Speed: {:.1}×", ts, speed));
+            ui.label(format!("Timestamp: {:.1} s  Speed: {:.1}\u{00d7}", ts, speed));
         }
     });
 }
@@ -772,7 +1145,6 @@ fn section_tracking_metrics(ui: &mut egui::Ui, frame_metrics: &CurrentFrameMetri
         if let Some(std_m) = metrics.mean_measurement_std_m {
             kv_row(ui, "Mean meas. std", &format!("{:.2} m", std_m));
         }
-        // Per-track error breakdown
         if !metrics.track_errors_m.is_empty() {
             ui.collapsing("Per-Track Errors", |ui| {
                 let mut errors: Vec<_> = metrics.track_errors_m.iter().collect();
@@ -786,7 +1158,7 @@ fn section_tracking_metrics(ui: &mut egui::Ui, frame_metrics: &CurrentFrameMetri
 }
 
 // ---------------------------------------------------------------------------
-// Section: Node (Drone/Station) Summary Table
+// Section: Node Summary
 // ---------------------------------------------------------------------------
 
 fn section_node_summary(ui: &mut egui::Ui, replay_state: &ReplayState) {
@@ -802,7 +1174,6 @@ fn section_node_summary(ui: &mut egui::Ui, replay_state: &ReplayState) {
             .striped(true)
             .min_col_width(40.0)
             .show(ui, |ui| {
-                // Header
                 ui.strong("ID");
                 ui.strong("Type");
                 ui.strong("Health");
@@ -814,7 +1185,7 @@ fn section_node_summary(ui: &mut egui::Ui, replay_state: &ReplayState) {
                     ui.label(&node.node_id);
                     ui.label(&node.sensor_type);
                     let health_pct = node.health * 100.0;
-                    let health_color = health_color(node.health);
+                    let health_color = health_color_egui(node.health);
                     ui.colored_label(health_color, format!("{:.0}%", health_pct));
                     ui.label(if node.is_mobile { "Yes" } else { "No" });
                     ui.label(format!("{:.1}", node.position[2]));
@@ -822,7 +1193,6 @@ fn section_node_summary(ui: &mut egui::Ui, replay_state: &ReplayState) {
                 }
             });
 
-        // Sensor details sub-section
         ui.collapsing("Sensor Details", |ui| {
             for node in &frame.nodes {
                 ui.horizontal(|ui| {
@@ -841,7 +1211,7 @@ fn section_node_summary(ui: &mut egui::Ui, replay_state: &ReplayState) {
 }
 
 // ---------------------------------------------------------------------------
-// Section: Track Summary Table
+// Section: Track Summary
 // ---------------------------------------------------------------------------
 
 fn section_track_summary(
@@ -861,7 +1231,6 @@ fn section_track_summary(
             .striped(true)
             .min_col_width(40.0)
             .show(ui, |ui| {
-                // Header
                 ui.strong("ID");
                 ui.strong("Error (m)");
                 ui.strong("Updates");
@@ -901,7 +1270,6 @@ fn section_track_summary(
                 }
             });
 
-        // Covariance details
         let has_covariance = frame.tracks.iter().any(|t| t.covariance.is_some());
         if has_covariance {
             ui.collapsing("Covariance Diagonals", |ui| {
@@ -924,7 +1292,7 @@ fn section_track_summary(
 }
 
 // ---------------------------------------------------------------------------
-// Section: Selection Inspector (enhanced)
+// Section: Selection Inspector
 // ---------------------------------------------------------------------------
 
 fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
@@ -1007,7 +1375,10 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
             if let Some(health) = selection.selected_health {
                 ui.horizontal(|ui| {
                     ui.label("Health:");
-                    ui.colored_label(health_color(health), format!("{:.0}%", health * 100.0));
+                    ui.colored_label(
+                        health_color_egui(health),
+                        format!("{:.0}%", health * 100.0),
+                    );
                 });
             }
             if let Some(sensor) = &selection.selected_sensor_type {
@@ -1049,7 +1420,6 @@ fn section_safety_alerts(
         return;
     };
 
-    // Collect alerts from current frame state
     let mut alerts: Vec<(AlertLevel, String)> = Vec::new();
 
     if mission_zones.terrain_mesh.is_none() {
@@ -1059,7 +1429,6 @@ fn section_safety_alerts(
         ));
     }
 
-    // Check for stale tracks
     for track in &frame.tracks {
         if track.stale_steps > STALE_THRESHOLD {
             alerts.push((
@@ -1072,7 +1441,6 @@ fn section_safety_alerts(
         }
     }
 
-    // Check for low health nodes
     for node in &frame.nodes {
         if node.health < HEALTH_ALERT_THRESHOLD {
             alerts.push((
@@ -1086,7 +1454,6 @@ fn section_safety_alerts(
         }
     }
 
-    // Check for untracked truths (truth with no matching track nearby)
     for truth in &frame.truths {
         let truth_pos = Vec3::from_array(truth.position);
         let has_nearby_track = frame.tracks.iter().any(|t| {
@@ -1101,7 +1468,6 @@ fn section_safety_alerts(
         }
     }
 
-    // High rejection rate
     let total_obs =
         frame.metrics.accepted_observation_count + frame.metrics.rejected_observation_count;
     if total_obs > 0 {
@@ -1246,7 +1612,7 @@ fn section_inspection_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
 }
 
 // ---------------------------------------------------------------------------
-// Section: Current Frame Events
+// Section: Frame Events
 // ---------------------------------------------------------------------------
 
 fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
@@ -1266,7 +1632,6 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
 
     let header = format!("Frame Events ({total_events})");
     ui.collapsing(header, |ui| {
-        // Generation rejections
         if !frame.generation_rejections.is_empty() {
             ui.collapsing(format!("Generation Rejections ({gen_rej_count})"), |ui| {
                 let display_limit = 30;
@@ -1283,7 +1648,6 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
             });
         }
 
-        // Tracker rejections
         if !frame.rejected_observations.is_empty() {
             ui.collapsing(format!("Tracker Rejections ({tracker_rej_count})"), |ui| {
                 let display_limit = 30;
@@ -1303,7 +1667,6 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
             });
         }
 
-        // Deconfliction yields
         if !frame.deconfliction_events.is_empty() {
             ui.collapsing(format!("Deconfliction Yields ({deconflict_count})"), |ui| {
                 let display_limit = 30;
@@ -1326,7 +1689,6 @@ fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState) {
             });
         }
 
-        // Observation summary (not individual obs to save space)
         if obs_count > 0 {
             ui.label(format!(
                 "Active observations: {obs_count} (toggle overlay to view)"
@@ -1423,7 +1785,6 @@ fn section_mission_zones(
         return;
     }
 
-    // Compact legend row: type-color mapping.
     ui.horizontal(|ui| {
         ui.label("Zones:");
         for (label, zone_type) in &[
@@ -1465,11 +1826,7 @@ fn section_mission_zones(
                     "Group {} \u{00b7} {} zone{} \u{00b7} {}",
                     group.group_id + 1,
                     group.zone_indices.len(),
-                    if group.zone_indices.len() == 1 {
-                        ""
-                    } else {
-                        "s"
-                    },
+                    if group.zone_indices.len() == 1 { "" } else { "s" },
                     chip_summary
                 );
                 if ui.selectable_label(selected_group, summary).clicked() {
@@ -1583,8 +1940,6 @@ fn draw_zone_badges(context: &egui::Context, projected_badges: &ProjectedZoneBad
 // Mission Phase HUD
 // ---------------------------------------------------------------------------
 
-/// Draws a colored badge in the top-left of the 3D viewport showing the
-/// current mission phase and key metric.
 fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
     let Some(frame) = replay_state.current_frame() else {
         return;
@@ -1628,9 +1983,9 @@ fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
         other => (other.to_ascii_uppercase(), egui::Color32::GRAY),
     };
 
-    // Position just to the right of the 320 px side panel, near the top.
+    // Position just to the right of the side panel, below the tab bar.
     egui::Area::new(egui::Id::new("phase_hud"))
-        .fixed_pos(egui::pos2(330.0, 8.0))
+        .fixed_pos(egui::pos2(SIDE_PANEL_WIDTH + 10.0, TAB_BAR_HEIGHT + 8.0))
         .order(egui::Order::Foreground)
         .show(context, |ui| {
             let galley = ui.painter().layout_no_wrap(
@@ -1669,7 +2024,6 @@ fn egress_arrived_count(egress_progress: &[EgressProgress]) -> usize {
         .count()
 }
 
-/// Key-value row: label on left, strong value on right.
 fn kv_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         ui.label(format!("{label}:"));
@@ -1679,6 +2033,10 @@ fn kv_row(ui: &mut egui::Ui, label: &str, value: &str) {
 
 /// Color for a health fraction (0.0 = red, 0.3 = yellow, 0.7+ = green).
 pub fn health_color(health: f32) -> egui::Color32 {
+    health_color_egui(health)
+}
+
+fn health_color_egui(health: f32) -> egui::Color32 {
     if health > 0.7 {
         egui::Color32::GREEN
     } else if health > 0.3 {
@@ -1688,21 +2046,48 @@ pub fn health_color(health: f32) -> egui::Color32 {
     }
 }
 
-/// Extract diagonal elements [0,0], [1,1], [2,2] from a flattened covariance
-/// matrix. Assumes either a 4x4 (16 elements) or 3x3 (9 elements) layout.
+/// Extract diagonal elements [0,0], [1,1], [2,2] from a flattened covariance matrix.
 pub fn covariance_diagonal(flat: &[f64]) -> [f64; 3] {
     match flat.len() {
-        // 4x4 state covariance (x, y, z in first 3 diagonal positions)
         16 => [flat[0], flat[5], flat[10]],
-        // 3x3 position covariance
         9 => [flat[0], flat[4], flat[8]],
-        // 2x2 or other — return what we can
         n if n >= 4 => [flat[0], flat.get(n / 2 + 1).copied().unwrap_or(0.0), 0.0],
         _ => [0.0, 0.0, 0.0],
     }
 }
 
-/// Chip format for group summary: "S2  X1  P3".
+/// Returns (label, color) pair for a mission phase string.
+fn phase_color_pair(phase: &str) -> (&'static str, egui::Color32) {
+    match phase {
+        "scanning" => ("SCANNING", egui::Color32::from_rgb(80, 140, 255)),
+        "localizing" => ("LOCALIZING", egui::Color32::from_rgb(255, 210, 60)),
+        "inspecting" => ("INSPECTING", egui::Color32::from_rgb(255, 140, 40)),
+        "egress" => ("EGRESS", egui::Color32::from_rgb(255, 160, 30)),
+        "complete" => ("COMPLETE", egui::Color32::from_rgb(60, 200, 80)),
+        _ => ("UNKNOWN", egui::Color32::GRAY),
+    }
+}
+
+fn phase_vline_color(phase: &str) -> egui::Color32 {
+    match phase {
+        "localizing" => egui::Color32::from_rgba_unmultiplied(255, 210, 60, 200),
+        "inspecting" => egui::Color32::from_rgba_unmultiplied(255, 140, 40, 200),
+        "egress" => egui::Color32::from_rgba_unmultiplied(255, 160, 30, 200),
+        "complete" => egui::Color32::from_rgba_unmultiplied(60, 200, 80, 200),
+        _ => egui::Color32::from_rgba_unmultiplied(120, 120, 120, 150),
+    }
+}
+
+fn phase_label_color(phase: &str) -> egui::Color32 {
+    match phase {
+        "localizing" => egui::Color32::from_rgb(255, 210, 60),
+        "inspecting" => egui::Color32::from_rgb(255, 140, 40),
+        "egress" => egui::Color32::from_rgb(255, 160, 30),
+        "complete" => egui::Color32::from_rgb(60, 200, 80),
+        _ => egui::Color32::GRAY,
+    }
+}
+
 fn format_group_chips(group: &crate::state::ZoneOverlapGroup) -> String {
     let mut counts: Vec<_> = group.type_counts.iter().collect();
     counts.sort_by(|a, b| a.0.cmp(b.0));

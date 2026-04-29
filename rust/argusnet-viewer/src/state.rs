@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use bevy::prelude::{Entity, Resource, Vec3};
+use bevy::prelude::{Component, Entity, Resource, Vec3};
 
 use crate::replay::{FrameMetrics, MissionZone, RuntimeMarker, TerrainViewerMesh};
 
@@ -75,7 +75,7 @@ impl Default for MissionOverlaySettings {
 
 /// Persistent reconstruction cloud — accumulated by the viewer as the
 /// replay plays back.  Reset when the replay is restarted or reloaded.
-#[derive(Debug, Clone, Default, Resource)]
+#[derive(Debug, Clone, Resource)]
 pub struct ReconstructionCloud {
     /// Accumulated scan points: [x_m, y_m, terrain_height_m] in world coords.
     pub points: Vec<[f32; 3]>,
@@ -83,6 +83,22 @@ pub struct ReconstructionCloud {
     pub last_frame_index: usize,
     /// True when points changed since last GPU mesh upload.
     pub dirty: bool,
+    /// Maximum terrain height seen across all scan points (for height-hue mapping).
+    pub max_z: f32,
+    /// Minimum terrain height seen across all scan points.
+    pub min_z: f32,
+}
+
+impl Default for ReconstructionCloud {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            last_frame_index: 0,
+            dirty: false,
+            max_z: 1.0,
+            min_z: 0.0,
+        }
+    }
 }
 
 impl ReconstructionCloud {
@@ -90,8 +106,29 @@ impl ReconstructionCloud {
         self.points.clear();
         self.last_frame_index = 0;
         self.dirty = true;
+        self.max_z = 1.0;
+        self.min_z = 0.0;
     }
 }
+
+/// Active tab in the dashboard tab bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource, Default)]
+pub enum ActiveTab {
+    /// 2-D top-down map + per-drone status cards.
+    #[default]
+    Mission,
+    /// 3-D scene controls: overlays, layers, zones, selection, alerts.
+    Scene,
+    /// Tracking metrics, node table, track table.
+    Tracks,
+    /// Frame events, inspection events, deconfliction log.
+    Events,
+}
+
+/// Marker component on the top-down orthographic camera used for the Split-mode
+/// right-half reconstruction viewport.
+#[derive(Component)]
+pub struct ReconstructionCamera;
 
 /// Which rendering layer the viewer shows.
 #[derive(Debug, Clone, PartialEq, Eq, Resource, Default)]

@@ -14,9 +14,10 @@ use crate::replay::{
 };
 use crate::schema::ScenePackage;
 use crate::state::{
-    CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
-    LoadedMissionZones, MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility,
-    SelectionState, SimPhase, SimulationRunner, ViewMode, WorkingSceneRoot, ZoneFocus,
+    ActiveTab, CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
+    LoadedMissionZones, MissionOverlaySettings, ReconstructionCamera, ReconstructionCloud,
+    RuntimeOverlayVisibility, SelectionState, SimPhase, SimulationRunner, ViewMode,
+    WorkingSceneRoot, ZoneFocus,
 };
 use crate::ui::viewer_ui_system;
 
@@ -105,6 +106,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
         .insert_resource(MissionOverlaySettings::default())
         .insert_resource(ReconstructionCloud::default())
         .insert_resource(ViewMode::default())
+        .insert_resource(ActiveTab::default())
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {
@@ -129,6 +131,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
             (
                 advance_playback_system,
                 keyboard_playback_system,
+                sync_split_viewports_system,
                 spawn_simulation_system,
                 poll_simulation_system,
                 mission_zones::refresh_zone_overlap_model_system,
@@ -200,6 +203,30 @@ fn setup_world(
         Camera3d::default(),
         Transform::from_translation(eye).looking_at(focus, Vec3::Z),
     ));
+
+    // Top-down orthographic camera for the Split-mode reconstruction viewport.
+    // Inactive by default; sync_split_viewports_system enables it when ViewMode::Split.
+    let bounds = &scene_package.environment.bounds_xy_m;
+    let cx = (bounds.x_min_m + bounds.x_max_m) * 0.5;
+    let cy = (bounds.y_min_m + bounds.y_max_m) * 0.5;
+    let scene_height_m = (bounds.y_max_m - bounds.y_min_m).max(100.0);
+    commands.spawn((
+        ReconstructionCamera,
+        Camera3d::default(),
+        Camera {
+            order: 1,
+            is_active: false,
+            ..default()
+        },
+        Projection::Orthographic(bevy::render::camera::OrthographicProjection {
+            scaling_mode: bevy::render::camera::ScalingMode::FixedVertical {
+                viewport_height: scene_height_m,
+            },
+            ..bevy::render::camera::OrthographicProjection::default_3d()
+        }),
+        Transform::from_xyz(cx, cy, 5000.0).looking_at(Vec3::new(cx, cy, 0.0), Vec3::Y),
+    ));
+
     spawn_base_layers(
         &mut commands,
         asset_server.as_ref(),
@@ -390,6 +417,48 @@ fn keyboard_playback_system(
             ViewMode::ScanMap => ViewMode::Split,
             ViewMode::Split => ViewMode::RealWorld,
         };
+    }
+}
+
+/// Adjusts camera viewports when ViewMode::Split is active.
+/// Left half → main perspective camera; right half → top-down reconstruction camera.
+fn sync_split_viewports_system(
+    view_mode: Res<ViewMode>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut main_cam: Query<&mut Camera, (With<MainCamera>, Without<ReconstructionCamera>)>,
+    mut recon_cam: Query<&mut Camera, With<ReconstructionCamera>>,
+) {
+    use bevy::render::camera::Viewport;
+    let Ok(window) = windows.get_single() else {
+        return;
+    };
+    let w = window.physical_width();
+    let h = window.physical_height();
+    let Ok(mut main) = main_cam.get_single_mut() else {
+        return;
+    };
+    let Ok(mut recon) = recon_cam.get_single_mut() else {
+        return;
+    };
+
+    if *view_mode == ViewMode::Split {
+        main.viewport = Some(Viewport {
+            physical_position: UVec2::ZERO,
+            physical_size: UVec2::new(w / 2, h),
+            ..default()
+        });
+        main.is_active = true;
+        recon.viewport = Some(Viewport {
+            physical_position: UVec2::new(w / 2, 0),
+            physical_size: UVec2::new(w / 2, h),
+            ..default()
+        });
+        recon.is_active = true;
+    } else {
+        main.viewport = None;
+        main.is_active = true;
+        recon.viewport = None;
+        recon.is_active = false;
     }
 }
 
@@ -1330,9 +1399,14 @@ fn update_reconstruction_system(
     // Viewer is Z-up: Python (x=east, y=north, h=terrain_height) maps directly.
     let prev_len = reconstruction.points.len();
     for triple in mission.newly_scanned_cells.chunks_exact(3) {
-        reconstruction
-            .points
-            .push([triple[0], triple[1], triple[2]]);
+        let z = triple[2];
+        reconstruction.points.push([triple[0], triple[1], z]);
+        if z > reconstruction.max_z {
+            reconstruction.max_z = z;
+        }
+        if z < reconstruction.min_z {
+            reconstruction.min_z = z;
+        }
     }
     if reconstruction.points.len() > prev_len {
         reconstruction.dirty = true;
@@ -1412,13 +1486,16 @@ fn maintain_reconstruction_mesh_system(
         return;
     }
 
-    // Half-size of a grid cell (50 m resolution → 25 m half-extent).
-    // Tiles are inset by 1 m per edge to leave a visible grid gap.
-    const HALF: f32 = 24.0;
-    // Lift clearly above terrain so tiles float visibly above the ground mesh.
-    const Z_LIFT: f32 = 2.5;
+    // Half-size of a grid cell. Base terrain resolution is 5 m → 2 m half-extent
+    // leaves a 0.5 m gap per edge, producing a crisp grid of fine tiles.
+    const HALF: f32 = 2.0;
+    // Sit just above terrain to avoid z-fighting without floating awkwardly.
+    const Z_LIFT: f32 = 1.0;
     // Up normal for all vertices in Z-up space.
     const NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
+
+    let z_range = (reconstruction.max_z - reconstruction.min_z).max(1.0);
+    let min_z = reconstruction.min_z;
 
     let n = reconstruction.points.len();
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(n * 4);
@@ -1426,13 +1503,14 @@ fn maintain_reconstruction_mesh_system(
     let mut colors: Vec<[f32; 4]> = Vec::with_capacity(n * 4);
     let mut indices: Vec<u32> = Vec::with_capacity(n * 6);
 
-    // Uniform bright yellow — hue 52° sits in the largest gap of the terrain palette
-    // (green vegetation 110–130°, cyan water 190–210°, dark roads are achromatic).
-    let scan_lin = LinearRgba::from(Color::hsla(52.0, 0.95, 0.62, 0.70));
-    let scan_rgba = [scan_lin.red, scan_lin.green, scan_lin.blue, scan_lin.alpha];
-
     for pt in &reconstruction.points {
-        let rgba = scan_rgba;
+        // Height-mapped hue: blue (180°) at low elevation → yellow (52°) at high.
+        // This gives the reconstruction a height-map appearance that matches terrain
+        // colour intuitions while staying distinct from the green vegetation layer.
+        let t = ((pt[2] - min_z) / z_range).clamp(0.0, 1.0);
+        let hue = 180.0 - t * 128.0; // 180° (blue-cyan) → 52° (yellow)
+        let scan_lin = LinearRgba::from(Color::hsla(hue, 0.90, 0.58, 0.80));
+        let rgba = [scan_lin.red, scan_lin.green, scan_lin.blue, scan_lin.alpha];
 
         let base = positions.len() as u32;
         let z = pt[2] + Z_LIFT;
