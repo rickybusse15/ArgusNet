@@ -303,6 +303,53 @@ class TerrainModel:
     def height_at(self, x_m: float, y_m: float) -> float:
         return max(self.analytic_height_at(x_m, y_m), self.ground_plane_m)
 
+    def analytic_height_at_many(self, xy_m: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
+        points = np.asarray(xy_m, dtype=float)
+        if points.shape == (2,):
+            points = points.reshape(1, 2)
+            scalar_input = True
+        else:
+            scalar_input = False
+        if points.ndim < 2 or points.shape[-1] != 2:
+            raise ValueError("xy_m must have shape (..., 2).")
+        original_shape = points.shape[:-1]
+        flat = points.reshape(-1, 2)
+        x_m = flat[:, 0]
+        y_m = flat[:, 1]
+
+        ridge_r2 = max(self.ridge_radius_m**2, 1.0)
+        basin_r2 = max(self.basin_radius_m**2, 1.0)
+        x_freq = (2.0 * np.pi) / max(self.wave_length_x_m, 1.0)
+        y_freq = (2.0 * np.pi) / max(self.wave_length_y_m, 1.0)
+        wave = (
+            self.wave_amplitude_m
+            * np.sin(x_m * x_freq + self.wave_phase_x_rad)
+            * np.cos(y_m * y_freq + self.wave_phase_y_rad)
+        )
+        ridge_dx = x_m - self.ridge_center_x_m
+        ridge_dy = y_m - self.ridge_center_y_m
+        ridge = self.ridge_amplitude_m * np.exp(
+            -(ridge_dx * ridge_dx + ridge_dy * ridge_dy) / (2.0 * ridge_r2)
+        )
+        basin_dx = x_m - self.basin_center_x_m
+        basin_dy = y_m - self.basin_center_y_m
+        basin = self.basin_depth_m * np.exp(
+            -(basin_dx * basin_dx + basin_dy * basin_dy) / (2.0 * basin_r2)
+        )
+        slope = x_m * self.slope_x_m_per_m + y_m * self.slope_y_m_per_m
+        heights = self.base_elevation_m + slope + wave + ridge - basin
+        for feature in self.features:
+            heights += np.fromiter(
+                (feature.height_contribution(float(x), float(y)) for x, y in flat),
+                dtype=float,
+                count=flat.shape[0],
+            )
+        return heights[0] if scalar_input else heights.reshape(original_shape)
+
+    def height_at_many(self, xy_m: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
+        heights = self.analytic_height_at_many(xy_m)
+        return np.maximum(heights, self.ground_plane_m)
+
     def clamp_altitude(self, xy_m: Sequence[float], z_m: float, min_agl_m: float) -> float:
         ground_m = self.height_at(float(xy_m[0]), float(xy_m[1]))
         return max(z_m, ground_m + max(min_agl_m, 0.0))

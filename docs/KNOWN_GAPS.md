@@ -18,10 +18,10 @@ Covers: terrain, obstacles, land cover, weather, CRS/geodetics.
 |-----------|--------|-----------------|
 | Analytic terrain model (procedural) | **Exists** | `terrain.py` `TerrainModel` |
 | Tiled heightmap (runtime query) | **Exists** | `environment.py` `TerrainLayer` |
-| Real DEM ingest (GeoTIFF) | **Exists** (partial) | `environment.py` `TerrainLayer.from_geotiff()`, `_scene_gis.py` |
+| Real DEM ingest (GeoTIFF) | **Exists** | `environment.py` `TerrainLayer.from_geotiff()`, `world/procedural.py` |
 | Obstacle primitives (buildings, walls, forests) | **Exists** | `obstacles.py` |
 | Land cover layer | **Exists** (stub default) | `environment.py` `LandCoverLayer` |
-| Seasonal variation | **Exists** (data structure only) | `environment.py` `SeasonalVariation` |
+| Seasonal variation | **Exists** | `environment.py` `SeasonalVariation`, `world/procedural.py` land-cover masks |
 | Weather model (wind, precipitation, cloud) | **Exists** | `weather.py` `WeatherModel` |
 | Weather affecting sensor noise | **Exists** | `visibility.py` `compute_weather_factor()` |
 | Weather affecting flight dynamics (wind drift on targets/drones) | **Absent** | — |
@@ -230,12 +230,12 @@ model but have no implementation:
 | Feature | What Exists | What Is Missing |
 |---------|-------------|----------------|
 | `fusion.py` Python Kalman tracker | Full implementation of `KalmanTrack3D`, `triangulate_bearings()` | Not called from any sim or production path; may be dead code |
-| `SeasonalVariation` in environment | Data class with `foliage_density_factor` and `snow_cover` | Not read by `LandCoverLayer`, `SensorVisibilityModel`, or terrain models |
+| `SeasonalVariation` in environment | Data class with `foliage_density_factor` and `snow_cover` | Used by procedural land-cover masks; sensor-specific seasonal tuning remains future work |
 | `SensorErrorConfig` false alarm model | Parameters `false_alarm_rate_per_scan`, `clutter_bearing_std_rad`, `clutter_min/max_range_m` defined | Not wired into `build_observations()` in `sim.py`; clutter observations are never generated |
 | `SensorErrorConfig` bias drift model | Parameters `bias_drift_rate_rad_per_s`, `bias_drift_max_rad` defined | Not wired into `build_observations()`; sensors have no persistent bias state |
 | `adaptive_measurement_noise` in tracker | Flag exists and code path exists in Rust (`IMMTrack3D.update_position()`) | Disabled by default; never enabled in standard scenario builders |
 | `coordinates.py` geodetic transforms | `wgs84_to_enu`, `enu_to_wgs84`, `ENUOrigin` | ENU origin is never set in simulation scenarios; all coordinates are purely local |
-| GeoTIFF DEM ingest | `TerrainLayer.from_geotiff()` and `_scene_gis.py` | No CLI flag to select an external DEM; requires manual API use |
+| GeoTIFF DEM ingest | `TerrainLayer.from_geotiff()` and `world/procedural.py` | CLI supports DEM and hybrid terrain; production DEM validation/tuning remains scenario-specific |
 | `tracker-viewer` headless mode | `rust/tracker-viewer/src/headless.rs` exists | Not tested or documented as a CI/render path |
 
 ---

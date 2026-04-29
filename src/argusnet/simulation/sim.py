@@ -75,14 +75,19 @@ from argusnet.world.environment import (
     ObstacleLayer,
     OrientedBox,
     SensorVisibilityModel,
+    TerrainLayer,
     WallSegment,
-    _point_in_polygon,
+)
+from argusnet.world.procedural import (
+    LandCoverPatch,
+    TerrainBuildConfig,
+    build_land_cover_layer,
+    build_terrain_layer,
 )
 from argusnet.world.terrain import (
     KNOWN_TERRAIN_PRESETS,
     OccludingObject,
     TerrainModel,
-    terrain_model_from_preset,
     xy_bounds,
 )
 from argusnet.world.weather import KNOWN_WEATHER_PRESETS, WeatherModel, weather_from_preset
@@ -213,7 +218,14 @@ class ScenarioOptions:
     map_preset: str = "regional"
     target_motion_preset: str = "mixed"
     drone_mode_preset: str = "mixed"
+    terrain_source: str = "procedural"
     terrain_preset: str = "alpine"
+    terrain_seed: int | None = None
+    dem_path: str | None = None
+    dem_crs: str | None = None
+    detail_strength: float = 1.0
+    terrain_resolution_m: float | None = None
+    season_month: int = 7
     weather_preset: str = "clear"
     clean_terrain: bool = False
     platform_preset: str = "baseline"
@@ -227,7 +239,8 @@ class ScenarioOptions:
     def __post_init__(self) -> None:
         if self.map_preset not in MAP_PRESET_SCALES:
             raise ValueError(
-                f"Unknown map_preset {self.map_preset!r}. Must be one of {sorted(MAP_PRESET_SCALES)}."
+                f"Unknown map_preset {self.map_preset!r}. "
+                f"Must be one of {sorted(MAP_PRESET_SCALES)}."
             )
         if self.target_motion_preset not in TARGET_MOTION_PRESETS:
             raise ValueError(
@@ -244,6 +257,16 @@ class ScenarioOptions:
                 f"Unknown terrain_preset {self.terrain_preset!r}."
                 f" Must be one of {sorted(TERRAIN_PRESET_CHOICES)}."
             )
+        TerrainBuildConfig(
+            terrain_source=self.terrain_source,
+            terrain_preset=self.terrain_preset,
+            terrain_seed=self.terrain_seed,
+            dem_path=self.dem_path,
+            dem_crs=self.dem_crs,
+            detail_strength=self.detail_strength,
+            terrain_resolution_m=self.terrain_resolution_m,
+            season_month=self.season_month,
+        )
         if self.weather_preset not in KNOWN_WEATHER_PRESETS:
             raise ValueError(
                 f"Unknown weather_preset {self.weather_preset!r}."
@@ -520,6 +543,7 @@ class FollowPathController:
             state["route_points"] = None
             state["route_goal_xy"] = None
 
+        current_target_position, current_target_velocity = self.target_trajectory(timestamp_s)
         lead_position, lead_velocity = self.target_trajectory(timestamp_s + self.lead_s)
         # Slot offset spreads N cooperative drones evenly around the orbit circle.
         # Trackers: maximise triangulation baseline; interceptors: pincer approach.
@@ -851,6 +875,13 @@ class FollowPathController:
                 inward_speed = float(np.dot(velocity[:2], -push_dir))
                 if inward_speed > 0:
                     velocity[:2] = velocity[:2] + inward_speed * push_dir
+        if self.target_altitude_offset_m is not None:
+            min_follow_z_m = float(
+                current_target_position[2] + (self.target_altitude_offset_m * 0.3)
+            )
+            if float(position[2]) < min_follow_z_m:
+                position[2] = min_follow_z_m
+                velocity[2] = max(float(velocity[2]), float(current_target_velocity[2]))
         state["last_timestamp"] = float(timestamp_s)
         state["last_xy"] = position[:2].copy()
         state["last_direction_xy"] = np.asarray(xy_velocity[:2], dtype=float).copy()
@@ -1760,16 +1791,6 @@ def terrain_resolution_for_scale(scale: float) -> float:
     return 15.0
 
 
-@dataclass(frozen=True)
-class LandCoverPatch:
-    polygon_xy_m: np.ndarray
-    land_cover_class: LandCoverClass
-    density: int = 0
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "polygon_xy_m", np.asarray(self.polygon_xy_m, dtype=float))
-
-
 def procedural_land_cover_layer(
     bounds_xy_m: Bounds2D,
     terrain: object,
@@ -1777,51 +1798,28 @@ def procedural_land_cover_layer(
     *,
     patches: Sequence[LandCoverPatch] = (),
     resolution_m: float,
+    season_month: int = 7,
+    terrain_preset: str = "default",
+    seed: int = 0,
+    suppress_vegetation: bool = False,
 ) -> LandCoverLayer:
-    cols = max(1, int(math.ceil(bounds_xy_m.width_m / resolution_m)))
-    rows = max(1, int(math.ceil(bounds_xy_m.height_m / resolution_m)))
-    classes = np.full((rows, cols), int(LandCoverClass.OPEN), dtype=np.uint8)
-    density = np.zeros((rows, cols), dtype=np.uint8)
-
-    x_values = bounds_xy_m.x_min_m + ((np.arange(cols, dtype=float) + 0.5) * resolution_m)
-    y_values = bounds_xy_m.y_min_m + ((np.arange(rows, dtype=float) + 0.5) * resolution_m)
-
-    for row, y_m in enumerate(y_values):
-        for col, x_m in enumerate(x_values):
-            point_xy = np.array([x_m, y_m], dtype=float)
-            point_z = float(terrain.height_at(float(x_m), float(y_m)))
-            if point_z <= terrain.ground_plane_m + 1.0:
-                classes[row, col] = int(LandCoverClass.WATER)
-
-            for obstacle in obstacles:
-                if isinstance(obstacle, ForestStand):
-                    if _point_in_polygon(point_xy, obstacle.footprint_xy_m):
-                        classes[row, col] = int(LandCoverClass.FOREST)
-                        density[row, col] = max(
-                            density[row, col], int(np.clip(obstacle.density, 0.0, 1.0) * 255)
-                        )
-                elif hasattr(obstacle, "footprint_xy_m"):
-                    footprint_source = obstacle.footprint_xy_m
-                    if callable(footprint_source):
-                        footprint = np.asarray(footprint_source(), dtype=float)
-                    elif isinstance(footprint_source, np.ndarray):
-                        footprint = footprint_source
-                    else:
-                        footprint = np.asarray(footprint_source, dtype=float)
-                    if _point_in_polygon(point_xy, footprint):
-                        classes[row, col] = int(LandCoverClass.URBAN)
-                        density[row, col] = max(density[row, col], 180)
-            for patch in patches:
-                if _point_in_polygon(point_xy, patch.polygon_xy_m):
-                    classes[row, col] = int(patch.land_cover_class)
-                    density[row, col] = max(density[row, col], int(np.clip(patch.density, 0, 255)))
-
-    return LandCoverLayer.from_rasters(
+    if not isinstance(terrain, TerrainLayer):
+        terrain = EnvironmentModel.from_legacy(
+            environment_id="land-cover",
+            bounds_xy_m=bounds_xy_m,
+            terrain_model=terrain,
+            terrain_resolution_m=max(min(resolution_m, 10.0), 1.0),
+        ).terrain
+    return build_land_cover_layer(
         bounds_xy_m=bounds_xy_m,
-        classes=classes,
-        density=density,
+        terrain=terrain,
+        obstacles=obstacles,
+        patches=patches,
         resolution_m=resolution_m,
-        tile_size_cells=256,
+        season=TerrainBuildConfig(season_month=season_month).season,
+        terrain_preset=terrain_preset,
+        seed=seed,
+        suppress_vegetation=suppress_vegetation,
     )
 
 
@@ -2148,21 +2146,26 @@ def _preset_environment_profile(
 
 def build_default_environment(
     scale: float,
-    terrain_model: TerrainModel,
+    terrain_model: object,
     map_bounds_m: Mapping[str, float],
     *,
     map_preset: str = "medium",
     terrain_preset: str = "default",
     clean_terrain: bool = False,
+    season_month: int = 7,
 ) -> EnvironmentModel:
     environment_id = f"procedural-{scale:.2f}"
     bounds = map_bounds_object(map_bounds_m)
-    terrain = EnvironmentModel.from_legacy(
-        environment_id=environment_id,
-        bounds_xy_m=bounds,
-        terrain_model=terrain_model,
-        terrain_resolution_m=terrain_resolution_for_scale(scale),
-    ).terrain
+    terrain = (
+        terrain_model
+        if isinstance(terrain_model, TerrainLayer)
+        else EnvironmentModel.from_legacy(
+            environment_id=environment_id,
+            bounds_xy_m=bounds,
+            terrain_model=terrain_model,
+            terrain_resolution_m=terrain_resolution_for_scale(scale),
+        ).terrain
+    )
 
     hangar_center = np.array([20.0 * scale, -35.0 * scale], dtype=float)
     hangar_footprint = OrientedBox(
@@ -2370,6 +2373,10 @@ def build_default_environment(
         obstacles=all_obstacles,
         patches=active_patches,
         resolution_m=max(10.0, terrain.base_resolution_m * 2.0),
+        season_month=season_month,
+        terrain_preset=terrain_preset,
+        seed=_stable_seed(0, "land-cover", terrain_preset, map_preset, scale),
+        suppress_vegetation=clean_terrain,
     )
     return EnvironmentModel(
         environment_id=environment_id,
@@ -3242,8 +3249,23 @@ def build_default_scenario(
     active_weather = weather_from_preset(active_options.weather_preset)
     scale = map_scale_for_preset(active_options.map_preset)
     platform_profile = platform_profile_for_preset(active_options.platform_preset)
-    terrain = terrain_model_from_preset(active_options.terrain_preset, scale)
     map_bounds_m = map_bounds_for_scale(scale, constants=constants)
+    terrain_config = TerrainBuildConfig(
+        terrain_source=active_options.terrain_source,
+        terrain_preset=active_options.terrain_preset,
+        terrain_seed=active_options.terrain_seed,
+        dem_path=active_options.dem_path,
+        dem_crs=active_options.dem_crs,
+        detail_strength=active_options.detail_strength,
+        terrain_resolution_m=active_options.terrain_resolution_m
+        or terrain_resolution_for_scale(scale),
+        season_month=active_options.season_month,
+    )
+    terrain = build_terrain_layer(
+        terrain_config,
+        map_bounds_object(map_bounds_m),
+        environment_id=f"{active_options.terrain_source}-{active_options.terrain_preset}",
+    )
     environment = build_default_environment(
         scale,
         terrain,
@@ -3251,6 +3273,7 @@ def build_default_scenario(
         map_preset=active_options.map_preset,
         terrain_preset=active_options.terrain_preset,
         clean_terrain=active_options.clean_terrain,
+        season_month=active_options.season_month,
     )
     terrain_layer = environment.terrain
     planner = PathPlanner2D(
@@ -4241,7 +4264,14 @@ def _build_replay_metadata(
             "map_preset": scenario.options.map_preset,
             "target_motion_preset": scenario.options.target_motion_preset,
             "drone_mode_preset": scenario.options.drone_mode_preset,
+            "terrain_source": scenario.options.terrain_source,
             "terrain_preset": scenario.options.terrain_preset,
+            "terrain_seed": scenario.options.terrain_seed,
+            "dem_path": scenario.options.dem_path,
+            "dem_crs": scenario.options.dem_crs,
+            "detail_strength": scenario.options.detail_strength,
+            "terrain_resolution_m": scenario.options.terrain_resolution_m,
+            "season_month": scenario.options.season_month,
             "weather_preset": scenario.options.weather_preset,
             "clean_terrain": scenario.options.clean_terrain,
             "platform_preset": scenario.options.platform_preset,
@@ -5244,7 +5274,14 @@ def simulate(
     map_preset: str = "regional",
     target_motion: str = "mixed",
     drone_mode: str = "mixed",
+    terrain_source: str = "procedural",
     terrain_preset: str = "alpine",
+    terrain_seed: int | None = None,
+    dem_path: str | None = None,
+    dem_crs: str | None = None,
+    detail_strength: float = 1.0,
+    terrain_resolution_m: float | None = None,
+    season_month: int = 7,
     weather_preset: str = "clear",
     clean_terrain: bool = False,
     platform_preset: str = "baseline",
@@ -5273,7 +5310,14 @@ def simulate(
             map_preset=map_preset,
             target_motion_preset=target_motion,
             drone_mode_preset=drone_mode,
+            terrain_source=terrain_source,
             terrain_preset=terrain_preset,
+            terrain_seed=terrain_seed,
+            dem_path=dem_path,
+            dem_crs=dem_crs,
+            detail_strength=detail_strength,
+            terrain_resolution_m=terrain_resolution_m,
+            season_month=season_month,
             weather_preset=weather_preset,
             clean_terrain=clean_terrain,
             platform_preset=platform_preset,
@@ -5407,11 +5451,58 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Named map footprint preset.",
     )
     parser.add_argument(
+        "--terrain-source",
+        choices=["procedural", "dem", "hybrid"],
+        default="procedural",
+        action=_TrackProvidedAction,
+        help="Terrain source: procedural, dem, or hybrid DEM plus procedural detail.",
+    )
+    parser.add_argument(
         "--terrain-preset",
         choices=sorted(TERRAIN_PRESET_CHOICES),
         default="alpine",
         action=_TrackProvidedAction,
         help="Terrain family preset.",
+    )
+    parser.add_argument(
+        "--terrain-seed",
+        type=int,
+        default=None,
+        action=_TrackProvidedAction,
+        help="Optional terrain seed. Defaults to a deterministic seed derived from the preset.",
+    )
+    parser.add_argument(
+        "--dem-path",
+        default=None,
+        action=_TrackProvidedAction,
+        help="Optional GeoTIFF DEM path for dem or hybrid terrain sources.",
+    )
+    parser.add_argument(
+        "--dem-crs",
+        default=None,
+        action=_TrackProvidedAction,
+        help="Optional source CRS identifier for the DEM, for example EPSG:32611.",
+    )
+    parser.add_argument(
+        "--detail-strength",
+        type=float,
+        default=1.0,
+        action=_TrackProvidedAction,
+        help="Procedural detail multiplier for procedural and hybrid terrain.",
+    )
+    parser.add_argument(
+        "--terrain-resolution-m",
+        type=float,
+        default=None,
+        action=_TrackProvidedAction,
+        help="Runtime terrain grid resolution in metres.",
+    )
+    parser.add_argument(
+        "--season-month",
+        type=int,
+        default=7,
+        action=_TrackProvidedAction,
+        help="Calendar month (1-12) used for seasonal land-cover masks.",
     )
     parser.add_argument(
         "--weather-preset",
@@ -5579,7 +5670,14 @@ def run_from_args(args: argparse.Namespace) -> None:
         map_preset=args.map_preset,
         target_motion=args.target_motion,
         drone_mode=args.drone_mode,
+        terrain_source=getattr(args, "terrain_source", "procedural"),
         terrain_preset=args.terrain_preset,
+        terrain_seed=getattr(args, "terrain_seed", None),
+        dem_path=getattr(args, "dem_path", None),
+        dem_crs=getattr(args, "dem_crs", None),
+        detail_strength=getattr(args, "detail_strength", 1.0),
+        terrain_resolution_m=getattr(args, "terrain_resolution_m", None),
+        season_month=getattr(args, "season_month", 7),
         weather_preset=args.weather_preset,
         clean_terrain=args.clean_terrain,
         platform_preset=args.platform_preset,

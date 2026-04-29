@@ -23,6 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 bevy = "0.15.3"
 bevy_egui = "0.31.1"
+egui_extras = "0.29"
 egui_plot = "0.29"
 image = { version = "0.25", default-features = false, features = ["png"] }
 argusnet-proto = { path = "../argusnet-proto", optional = true }

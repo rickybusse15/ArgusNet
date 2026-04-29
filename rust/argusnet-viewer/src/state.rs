@@ -111,18 +111,52 @@ impl ReconstructionCloud {
     }
 }
 
-/// Active tab in the dashboard tab bar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource, Default)]
-pub enum ActiveTab {
-    /// 2-D top-down map + per-drone status cards.
+/// Primary operator mode for the viewer shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewerMode {
+    /// Mission operations, drone health, map layers, selection, and alerts.
     #[default]
     Mission,
-    /// 3-D scene controls: overlays, layers, zones, selection, alerts.
-    Scene,
-    /// Tracking metrics, node table, track table.
-    Tracks,
-    /// Frame events, inspection events, deconfliction log.
-    Events,
+    /// Replay timeline, frame/event navigation, and playback inspection.
+    Replay,
+    /// Tracking, node, event, performance, and deconfliction diagnostics.
+    Diagnostics,
+    /// Scenario regeneration and synthetic mission controls.
+    Scenario,
+}
+
+/// Preset grouping for high-level map and overlay controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MapLayerPreset {
+    /// Operator-focused default overlays.
+    #[default]
+    Operator,
+    /// Reconstruction and localization-heavy overlays.
+    Reconstruction,
+    /// Safety, zones, and rejection-heavy overlays.
+    Safety,
+}
+
+/// UI-only presentation state for the operator shell.
+#[derive(Debug, Clone, Resource)]
+pub struct ViewerUiState {
+    pub mode: ViewerMode,
+    pub drawer_open: bool,
+    pub selected_timeline_frame: Option<usize>,
+    pub focused_entity_label: Option<String>,
+    pub map_layer_preset: MapLayerPreset,
+}
+
+impl Default for ViewerUiState {
+    fn default() -> Self {
+        Self {
+            mode: ViewerMode::Mission,
+            drawer_open: true,
+            selected_timeline_frame: None,
+            focused_entity_label: None,
+            map_layer_preset: MapLayerPreset::Operator,
+        }
+    }
 }
 
 /// Marker component on the top-down orthographic camera used for the Split-mode

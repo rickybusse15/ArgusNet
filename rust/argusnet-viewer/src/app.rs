@@ -14,9 +14,9 @@ use crate::replay::{
 };
 use crate::schema::ScenePackage;
 use crate::state::{
-    ActiveTab, CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
+    CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
     LoadedMissionZones, MissionOverlaySettings, ReconstructionCamera, ReconstructionCloud,
-    RuntimeOverlayVisibility, SelectionState, SimPhase, SimulationRunner, ViewMode,
+    RuntimeOverlayVisibility, SelectionState, SimPhase, SimulationRunner, ViewMode, ViewerUiState,
     WorkingSceneRoot, ZoneFocus,
 };
 use crate::ui::viewer_ui_system;
@@ -106,7 +106,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
         .insert_resource(MissionOverlaySettings::default())
         .insert_resource(ReconstructionCloud::default())
         .insert_resource(ViewMode::default())
-        .insert_resource(ActiveTab::default())
+        .insert_resource(ViewerUiState::default())
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {
@@ -503,8 +503,7 @@ fn sync_current_markers_system(
                             .as_ref()
                             .map(|cov| crate::ui::covariance_diagonal(cov));
                         selection.selected_mode_probability_cv = track.mode_probability_cv;
-                        selection.selected_contributing_nodes =
-                            track.contributing_node_ids.clone();
+                        selection.selected_contributing_nodes = track.contributing_node_ids.clone();
                         selection.selected_health = None;
                         selection.selected_sensor_type = None;
                         selection.selected_fov_half_angle_deg = None;
@@ -2033,7 +2032,9 @@ fn prepare_reloaded_scene_bundle(
         .as_ref()
         .and_then(|document| document.terrain_viewer_mesh());
     if terrain_mesh.is_none() && next_replay_document.is_some() {
-        warn!("Reloaded replay has no terrain mesh — 3-D elevation will fall back to entity altitude");
+        warn!(
+            "Reloaded replay has no terrain mesh — 3-D elevation will fall back to entity altitude"
+        );
     }
     let mission_zones = LoadedMissionZones {
         zones: next_replay_document

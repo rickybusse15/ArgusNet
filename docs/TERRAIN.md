@@ -1,7 +1,7 @@
-# Analytic Terrain Interface Contract
+# Runtime Terrain Interface Contract
 
-Stage 0 interface definition. Formalises the query API, role separation, and
-caching strategy for terrain access across the Python and Rust layers.
+This document defines the terrain query API, generation entrypoint, role
+separation, and caching strategy for terrain access across Python and Rust.
 
 ---
 
@@ -27,7 +27,13 @@ decisions. Physics and path planning are not the viewer's responsibility.
 
 ### 1.2 Analytic Terrain (simulation / planning / tracking path)
 
-**Owner:** `terrain.py` (`TerrainModel`) and `environment.py` (`TerrainLayer`).
+**Owner:** `environment.py` (`TerrainLayer`) at runtime.
+
+**Construction:** `world/procedural.py` exposes `TerrainBuildConfig` and
+`build_terrain_layer(config, bounds)`. Supported sources are:
+- `procedural`: deterministic layered terrain by preset and seed.
+- `dem`: GeoTIFF DEM promoted into a runtime `TerrainLayer`.
+- `hybrid`: DEM base elevation plus deterministic procedural detail.
 
 **Purpose:** Authoritative source for:
 - height queries used by altitude clamping (`clamp_altitude`)
@@ -46,11 +52,13 @@ queries.
 
 | Interface method (formal name below) | Current Python implementation | Notes |
 |--------------------------------------|-------------------------------|-------|
-| `height_at(x, y)` | `TerrainModel.height_at` / `TerrainLayer.height_at` | Both clamp to `ground_plane_m` |
-| `analytic_height_at(x, y)` | `TerrainModel.analytic_height_at` | Raw sum without floor clamp |
+| `height_at(x, y)` | `TerrainLayer.height_at` | Runtime scalar query, clamped to `ground_plane_m` |
+| `height_at_many(xy)` | `TerrainLayer.height_at_many` | Runtime batch query over shape `(..., 2)` |
+| `analytic_height_at(x, y)` | `TerrainModel.analytic_height_at` | Legacy construction helper |
 | `gradient_at(x, y)` | `TerrainModel.gradient_at` / `TerrainLayer.gradient_at` | Central-difference, delta configurable |
+| `gradient_at_many(xy)` | `TerrainLayer.gradient_at_many` | Batch central-difference query |
 | `normal_at(x, y)` | `TerrainLayer.normal_at` | Derived from gradient |
-| `curvature_at(x, y)` | Not yet implemented | See Section 4 |
+| `curvature_at(x, y)` | `TerrainModel.curvature_at` / `TerrainLayer.curvature_at` | Laplacian approximation |
 | `los_raycast(origin, target)` | `EnvironmentQuery._terrain_intersection` | Returns first hit |
 | `comms_shadow(origin, target)` | `EnvironmentQuery.los` (`blocker_type == "terrain"`) | Folded into sensor LOS |
 | `land_cover_at(x, y)` | `LandCoverLayer.land_cover_at` | Returns `LandCoverClass` enum |
@@ -60,10 +68,8 @@ queries.
 
 ## 3. TerrainQuery Trait (Rust)
 
-The Rust tracker-core and tracker-server currently do not query terrain; all
-terrain logic lives in Python. The architecture update introduces a
-`TerrainQuery` trait so that Rust components (path correction, safety monitor,
-communications link budget) can call terrain services without importing Python.
+The Rust terrain engine provides a `TerrainQuery` trait and `GridTerrain`
+backend that match Python `TerrainLayer` bilinear interpolation semantics.
 
 ```rust
 /// Analytic terrain query interface.
@@ -158,10 +164,7 @@ pub struct TerrainBounds {
 
 ---
 
-## 4. Curvature (not yet implemented)
-
-The `curvature_at` method is not currently in `terrain.py` but is required by
-the planning layer for identifying ridge crossings and valley traps.
+## 4. Curvature
 
 **Definition:** Laplacian approximation using the four-point stencil:
 
@@ -172,19 +175,7 @@ kappa(x, y) = (h(x+d,y) + h(x-d,y) + h(x,y+d) + h(x,y-d) - 4*h(x,y)) / d^2
 where `d = delta_m`. Positive values indicate convex surfaces (hilltops);
 negative values indicate concave surfaces (valleys).
 
-**Python addition** (to be added to `TerrainModel` and `TerrainLayer`):
-
-```python
-def curvature_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
-    d = max(delta_m, 0.1)
-    return (
-        self.height_at(x_m + d, y_m)
-        + self.height_at(x_m - d, y_m)
-        + self.height_at(x_m, y_m + d)
-        + self.height_at(x_m, y_m - d)
-        - 4.0 * self.height_at(x_m, y_m)
-    ) / (d * d)
-```
+This exists on both `TerrainModel` and `TerrainLayer`.
 
 ---
 
@@ -192,58 +183,29 @@ def curvature_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
 
 ### 5.1 Existing mechanism
 
-`TerrainLayer` holds an `_tile_cache: OrderedDict` keyed by `(lod, tx, ty)`.
-This is an LRU tile cache for the tiled-heightmap representation. It is
-populated lazily by `tile_for_xy`.
-
-`TerrainModel` (analytic) has no cache; every call recomputes the sum of
-feature contributions. For a scene with many `TerrainFeature` instances this
-can be slow at high query rates.
+`TerrainLayer` holds an LRU tile cache keyed by `(lod, tx, ty)` and a
+`viewer_mesh(max_dimension)` cache keyed by mesh dimension. Runtime hot paths
+should prefer `height_at_many`, `gradient_at_many`, and `slope_rad_at_many`
+instead of scalar loops.
 
 ### 5.2 Required additions
 
-#### Point-query result cache (analytic model)
+#### Terrain construction cache
 
-An LRU cache for `height_at` queries on `TerrainModel`, keyed by a quantised
-grid position:
-
-- Quantise `(x_m, y_m)` to a configurable `cache_cell_m` (default 0.5 m).
-- Cache up to `max_entries` (default 16 384) entries.
-- Invalidate the entire cache if the `TerrainModel` is replaced (immutable
-  dataclass, so replacement means a new object).
-
-```python
-from functools import lru_cache
-
-# Applied at the TerrainModel level when cache_cell_m is set:
-def _quantise(v: float, cell: float) -> int:
-    return int(round(v / cell))
-```
-
-#### Gradient cache
-
-Gradient queries (central difference) cost two `height_at` calls each.
-Cache `gradient_at` with the same quantisation key plus the quantised
-`delta_m`.
+Generated terrain is immutable after construction. Rebuild terrain when source,
+preset, seed, DEM path, detail strength, resolution, bounds, or season changes.
 
 #### Rust-side cache
 
-The Rust `TerrainQuery` implementation wraps the Python terrain via FFI or
-gRPC. To avoid per-query round trips:
-
-1. At scene load time, bake a fixed-resolution height grid into shared memory
-   (e.g. a `mmap`-backed float array).
-2. The Rust implementation reads directly from this grid with bilinear
-   interpolation, matching the behaviour of `TerrainLayer.height_at`.
-3. Cache invalidation: the grid is re-baked when the scene is replaced
-   (single-writer, multiple-reader).
+Rust reads fixed-resolution grids through `GridTerrain`. Line-of-sight marching
+uses adaptive sample counts based on segment length rather than a fixed sample
+count.
 
 ### 5.3 Cache invalidation rules
 
 | Event | Action |
 |-------|--------|
-| New `TerrainModel` constructed | Discard analytic point cache |
-| New `TerrainLayer` loaded | Discard tile cache + shared-memory grid |
+| New `TerrainLayer` loaded | Discard tile and viewer-mesh caches |
 | Terrain preset changed via CLI | Both of the above |
 | Scene hot-reload in viewer | Re-bake Rust shared-memory grid |
 
