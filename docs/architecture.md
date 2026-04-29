@@ -2,55 +2,87 @@
 
 Guide for engineers and AI agents. Covers module responsibilities, data flow, invariants, subsystem boundaries, and common change workflows.
 
-## Six-Subsystem Architecture
+## Current Requirement Set
 
-The platform is organized into six subsystems. Each has a clear responsibility, authoritative state ownership, and defined interfaces to the others. See `docs/STATE_OWNERSHIP.md` for the full state ownership map.
+The current ArgusNet requirement set is a **closed-loop, belief-world mission system**. The project should not be treated as only a tracker, replay viewer, or simulation harness.
 
-```
+The current top-level requirement documents are:
+
+| Requirement document | Role |
+|----------------------|------|
+| `TERRAIN.md` | Analytic terrain query interface and terrain/runtime boundary |
+| `MAPPING.md` | Belief-world mapping, geofence-bounded exploration, uncertainty-aware world reconstruction |
+| `LOCALIZATION.md` | Pose recovery, map-relative localization, relocalization after restart or battery swap |
+| `INDEXING.md` | Spatial memory, keyframes, evidence, reconstructions, and cross-mission retrieval |
+| `INSPECTION.md` | Map-relative inspection targets, multi-view capture, local reconstruction, repeat inspection |
+| `MISSION_EXECUTION.md` | Closed-loop runtime mission coordination, task model, safety-gated execution |
+| `PLANNING.md` | Drone roles, route planning, planner-to-trajectory contract |
+| `SAFETY.md` | Safety validation, physical limits, abort/hold/return behavior |
+
+Older subsystem docs remain useful implementation references, but the documents above now define the authoritative direction for new work.
+
+## Eight-Subsystem Architecture
+
+The platform is organized into eight cooperating subsystems. Each has clear responsibility, authoritative state ownership, and defined interfaces to the others. See `docs/STATE_OWNERSHIP.md` for the full state ownership map.
+
+```text
 +------------------+     +------------------+     +------------------+
-|  1. WORLD MODEL  |     | 2. SENSING/FUSION|     | 3. MISSION GEN   |
-|  terrain, clutter|---->| radar, sensors,  |     | scenarios, seeds, |
-|  visibility, CRS |     | fused tracks     |     | objectives, zones |
+|  1. WORLD MODEL  |     | 2. SENSING/FUSION|     | 3. LOCALIZATION  |
+| terrain, clutter |---->| sensors, tracks, |---->| pose, covariance,|
+| visibility, CRS  |     | observations     |     | relocalization   |
 +------------------+     +------------------+     +------------------+
         |                        |                        |
         v                        v                        v
 +------------------+     +------------------+     +------------------+
-| 4. PLANNING      |<----| 5. TRAJECTORY    |<----| 6. EVALUATION    |
-| roles, routes,   |     | physical limits, |     | metrics, replay, |
-| replanning       |---->| safety monitor   |     | benchmarks       |
+| 4. MAPPING       |---->| 5. INDEXING      |---->| 6. INSPECTION    |
+| belief world,    |     | spatial memory,  |     | targets, evidence|
+| coverage, unknown|     | keyframes, data  |     | reconstructions  |
 +------------------+     +------------------+     +------------------+
+        |                        |                        |
+        v                        v                        v
++------------------+     +------------------+
+| 7. PLANNING /    |---->| 8. MISSION       |
+| TRAJECTORY/SAFETY|     | EXECUTION / EVAL |
+| routes, commands |     | loop, replay     |
++------------------+     +------------------+
 ```
 
 ### Subsystem → Code Mapping
 
 | Subsystem | Python modules | Rust crates | Docs |
 |-----------|---------------|-------------|------|
-| 1. World Model | `terrain.py`, `environment.py`, `obstacles.py`, `visibility.py`, `weather.py`, `environment_io.py` | `terrain-engine` (planned) | `TERRAIN.md` |
+| 1. World Model | `terrain.py`, `environment.py`, `obstacles.py`, `visibility.py`, `weather.py`, `environment_io.py` | `terrain-engine` / `world-engine` (planned) | `TERRAIN.md` |
 | 2. Sensing/Fusion | `sensor_models.py`, `fusion.py`, `service.py` | `tracker-core`, `tracker-server`, `tracker-proto` | `FUSION.md` |
-| 3. Mission Gen | `sim.py` (scenario builders), `models.py` (MissionZone) | — (planned: `mission-gen`) | `MISSION_MODEL.md` |
-| 4. Planning | `planning.py`, `sim.py` (controllers) | — (planned: `planner-engine`) | `PLANNING.md` |
-| 5. Trajectory | `behaviors.py`, `sim.py` (FollowPathController) | — (planned: `trajectory-engine`, `safety-engine`) | `SAFETY.md` |
-| 6. Evaluation | `replay.py`, `export.py` | `tracker-viewer` | `SCENARIOS.md` |
+| 3. Localization | current replay/localization state plus planned localization modules | planned: `localization-engine` | `LOCALIZATION.md` |
+| 4. Mapping | `src/argusnet/core/types.py`, coverage/mapping state, planned belief-world modules | planned: `mapping-engine` | `MAPPING.md` |
+| 5. Indexing | planned keyframe/evidence/map tile stores | planned: `indexing-engine` or storage adapters | `INDEXING.md` |
+| 6. Inspection | planned inspection target/evidence/reconstruction modules | planned: `inspection-engine` | `INSPECTION.md` |
+| 7. Planning / Trajectory / Safety | `planning.py`, `behaviors.py`, `sim.py` controllers | planned: `planner-engine`, `trajectory-engine`, `safety-engine` | `PLANNING.md`, `SAFETY.md` |
+| 8. Mission Execution / Evaluation | `sim.py`, `replay.py`, `export.py`, CLI orchestration | `tracker-viewer` plus planned runtime services | `MISSION_EXECUTION.md`, `SCENARIOS.md` |
 
 ### Core Architectural Rule
 
 > Do not execute mission intent directly. All mission actions must pass through:
-> `mission intent → candidate route → feasibility validation → executable trajectory → safety monitor → execution`
+> `mission intent → candidate task → candidate route/viewpoint → trajectory proposal → safety validation → executable command`.
 
-See `docs/adr/003-mission-intent-pipeline.md`.
+Mission execution is closed-loop: sensor ingestion updates localization and mapping; mapping updates the belief world; indexing stores reusable memory; planning chooses actions from that belief; safety validates commands; replay/evaluation records what happened.
+
+See `docs/MISSION_EXECUTION.md` and `docs/adr/003-mission-intent-pipeline.md`.
 
 ## Entry points
 
 - `src/smart_tracker/cli.py` — CLI dispatcher (`sim`, `build-scene`, `ingest`, `export`)
 - `src/smart_tracker/sim.py` — Scenario construction, observation synthesis, replay generation
 - `src/smart_tracker/service.py` — Python gRPC proxy to Rust daemon (`TrackingService`)
-- `proto/smarttracker/v1/tracker.proto` — Authoritative service contract
+- `proto/smarttracker/v1/tracker.proto` — Current tracking service contract
 - `rust/tracker-core/src/lib.rs` — Native tracking math and lifecycle
 - `rust/tracker-viewer/src/main.rs` — Bevy viewer binary
 
-## Data flow
+## Current Data Flow
 
-```
+The current implementation path is still primarily simulation/replay oriented:
+
+```text
 CLI args → ScenarioOptions / SimulationConfig
 → build_default_scenario()
 → build_observations() via EnvironmentQuery.los()
@@ -61,46 +93,78 @@ CLI args → ScenarioOptions / SimulationConfig
 → tracker-viewer loads and renders
 ```
 
+## Target Data Flow
+
+The required direction is a closed-loop mission runtime:
+
+```text
+Mission constraints / geofence
+   ↓
+Sensor ingestion
+   ↓
+LocalizationState update
+   ↓
+BeliefWorldModel / mapping update
+   ↓
+Indexing update and retrieval
+   ↓
+Planning / inspection task selection
+   ↓
+Trajectory proposal
+   ↓
+Safety validation
+   ↓
+Command execution
+   ↓
+Replay, metrics, evidence, and mission log
+```
+
+Ground truth may exist in simulation for scoring, but planning and inspection must use the belief world and localization state, not hidden truth.
+
 ## Python modules
 
 | Module | Subsystem | Responsibility |
 |--------|-----------|---------------|
-| `sim.py` | 3, 4 | Scenario builders, observation generation, path planning, replay metadata |
-| `service.py` | 2 | gRPC client proxy. `TrackingService.ingest_frame()` is the runtime handle |
-| `environment.py` | 1 | Tiled terrain/obstacle/land-cover layers wrapped in `EnvironmentModel` |
-| `terrain.py` | 1 | Analytic terrain model, features, presets |
-| `obstacles.py` | 1 | Obstacle primitives, collision, footprint logic |
-| `visibility.py` | 1 | LOS queries. `EnvironmentQuery.los()` is the single entry point |
-| `planning.py` | 4 | Obstacle-aware 2D route planning, visibility-graph detours |
-| `behaviors.py` | 5 | Target trajectory behaviors (loiter, transit, evasive, search, etc.) |
-| `sensor_models.py` | 2 | Range-dependent noise, detection probability, atmospheric attenuation |
-| `fusion.py` | 2 | Python Kalman filter (triangulation utility; Rust is authoritative for tracking) |
-| `models.py` | all | Shared dataclasses (`NodeState`, `BearingObservation`, `TrackState`, `PlatformFrame`, `MissionZone`) |
-| `config.py` | all | Simulation constants (`SensorConfig`, `DynamicsConfig`, `SimulationConstants`) |
-| `weather.py` | 1 | Weather models (visibility, precipitation, wind) |
-| `replay.py` | 6 | Replay JSON validation, writing, loading |
-| `export.py` | 6 | GeoJSON, CZML, Foxglove MCAP, KML, Shapefile export |
-| `scene.py` | 6 | `smartscene-v1` compiler (replay and GIS modes) |
-| `_glb.py`, `_scene_*.py` | 6 | Internal scene compiler helpers |
-| `ingest.py` | 2 | MQTT and file replay ingestion adapters |
-| `coordinates.py` | 1 | WGS84/ECEF/ENU transforms |
-| `environment_io.py` | 1 | Environment bundle serialization |
+| `sim.py` | Mission execution, scenario generation | Current scenario builders, observation generation, path planning, replay metadata |
+| `service.py` | Sensing/Fusion | gRPC client proxy. `TrackingService.ingest_frame()` is the runtime handle |
+| `environment.py` | World Model | Tiled terrain/obstacle/land-cover layers wrapped in `EnvironmentModel` |
+| `terrain.py` | World Model | Analytic terrain model, features, presets |
+| `obstacles.py` | World Model | Obstacle primitives, collision, footprint logic |
+| `visibility.py` | World Model / Sensing | LOS queries. `EnvironmentQuery.los()` is current single entry point |
+| `planning.py` | Planning | Obstacle-aware 2D route planning, visibility-graph detours |
+| `behaviors.py` | Trajectory | Target and drone trajectory behaviors |
+| `sensor_models.py` | Sensing | Range-dependent noise, detection probability, atmospheric attenuation |
+| `fusion.py` | Sensing/Fusion | Python Kalman/triangulation utility; Rust is authoritative for tracking |
+| `models.py` | Shared | Dataclasses such as `NodeState`, `BearingObservation`, `TrackState`, `PlatformFrame`, `MissionZone` |
+| `config.py` | Shared | Simulation constants and sensor/dynamics config |
+| `weather.py` | World Model | Weather models |
+| `replay.py` | Evaluation / UI | Replay JSON validation, writing, loading |
+| `export.py` | Evaluation / UI | GeoJSON, CZML, Foxglove MCAP, KML, Shapefile export |
+| `scene.py` | Evaluation / UI | `smartscene-v1` compiler |
+| `ingest.py` | Sensing | MQTT and file replay ingestion adapters |
+| `coordinates.py` | World / Localization | WGS84/ECEF/ENU transforms |
+| `environment_io.py` | World | Environment bundle serialization |
 
 ## Rust workspace
 
 | Crate | Subsystem | Responsibility |
 |-------|-----------|---------------|
-| `tracker-core` | 2 | Fusion runtime: IMM Kalman filter, GNN/JPDA association, rejection validation, health tracking |
-| `tracker-server` | 2 | gRPC daemon (`smart-trackerd`), config loading |
-| `tracker-viewer` | 6 | Bevy app: scene loading, orbit camera, egui UI, replay playback |
-| `tracker-proto` | 2 | Protobuf bindings and Rust conversion helpers |
-| `terrain-engine` (planned) | 1 | Analytic terrain queries (`TerrainQuery` trait) |
-| `trajectory-engine` (planned) | 5 | Feasible path generation, constraint validation |
-| `safety-engine` (planned) | 5 | Safety monitor, abort/lost-link behaviors |
+| `tracker-core` | Sensing/Fusion | Fusion runtime: IMM Kalman filter, GNN/JPDA association, rejection validation, health tracking |
+| `tracker-server` | Sensing/Fusion | gRPC daemon (`smart-trackerd`), config loading |
+| `tracker-viewer` | Evaluation / UI | Bevy app: scene loading, orbit camera, egui UI, replay playback |
+| `tracker-proto` | Sensing/Fusion | Protobuf bindings and Rust conversion helpers |
+| `terrain-engine` / `world-engine` (planned) | World / Mapping | Terrain and belief-world queries |
+| `localization-engine` (planned) | Localization | Map-relative pose recovery and confidence state |
+| `planner-engine` (planned) | Planning | Route/viewpoint/task planning from belief state |
+| `trajectory-engine` (planned) | Trajectory | Feasible path generation and motion constraints |
+| `safety-engine` (planned) | Safety | Safety monitor, abort/lost-link/return-home behavior |
+| `indexing-engine` (planned) | Indexing | Spatial memory and artifact retrieval |
 
-## Environment stack
+## Environment and belief-world stack
 
-```
+Current implementation:
+
+```text
 terrain.py → analytic TerrainModel and presets
 environment.py → tiled layers → EnvironmentModel
 obstacles.py → geometry, point containment, push-out
@@ -109,21 +173,35 @@ visibility.py → LOS queries over EnvironmentModel
 environment_io.py → bundle read/write
 ```
 
-Flow: `sim.py` picks a terrain preset → `EnvironmentModel.from_legacy()` converts to tiled layers → `build_observations()` calls `EnvironmentQuery.los()` → collision-aware pathing uses `ObstacleLayer.point_collides()`.
+Target requirement:
 
-**Visual vs Analytic terrain:** See `docs/adr/001-world-model-authority.md`. Visual terrain (viewer mesh) may differ in resolution from analytic terrain (planning/sensing queries). The `TerrainQuery` trait (docs/TERRAIN.md) formalizes the analytic interface.
+```text
+Prior world / geofence / live observations
+   ↓
+BeliefWorldModel
+   ↓
+WorldBeliefQuery
+   ↓
+Localization, planning, inspection, safety
+```
+
+**Visual vs Analytic terrain:** See `docs/adr/001-world-model-authority.md`. Visual terrain may differ in resolution from analytic/belief terrain. Viewer meshes are display artifacts; planning, safety, and inspection must query the analytic/belief interfaces.
 
 ## State authority
 
 | Concept | Authority | Details |
 |---------|-----------|---------|
-| Terrain, obstacles, weather | Python | Static for simulation duration |
-| Bearing observations | Python (generated) → Rust (filtered) | Split rejection ownership |
-| Tracks (FusedTrack) | **Rust** | Single source of truth (ADR-002) |
-| Platform metrics | **Rust** | Computed per frame |
+| Ground truth terrain/objects | Simulation only | Used for synthetic observations and scoring; not planner input in physical-mode tests |
+| Prior world/geofence | Mission / World | Initial constraints and optional starting map |
+| Belief world | Mapping | Authoritative planning input for unknown/known/unsafe regions |
+| Localization state | Localization | Authoritative platform pose estimate and confidence |
+| Bearing observations | Sensing/Python generated → Rust filtered | Split rejection ownership remains current implementation detail |
+| Tracks (FusedTrack) | **Rust** | Single source of truth for tracked target state |
+| Platform metrics | **Rust** | Computed per frame in current tracker path |
 | Node health | **Rust** | Accumulated, polled on demand |
-| Mission zones | Python | Cosmetic only; enforcement planned |
-| Replay document | Python (writes) → Rust viewer (reads) | Sole sim↔viewer interface |
+| Mission zones / geofence | Mission Execution | Hard constraints, not merely cosmetic |
+| Inspection targets/evidence | Inspection + Indexing | Persistent map-relative mission artifacts |
+| Replay document | Evaluation/UI | Current sim↔viewer interface; target runtime should also log mission/evidence artifacts |
 
 See `docs/STATE_OWNERSHIP.md` for the complete map.
 
@@ -131,8 +209,9 @@ See `docs/STATE_OWNERSHIP.md` for the complete map.
 
 - XY: meters in local projected map frame
 - Z: meters above terrain datum
-- Angles: radians (CLI flags explicitly labeled when degrees)
+- Angles: radians internally
 - `smartscene-v1`: meter-based
+- Ground truth and belief-world layers must use explicit frame IDs when multiple sessions or relocalization are involved
 
 ## Invariants
 
@@ -140,27 +219,46 @@ See `docs/STATE_OWNERSHIP.md` for the complete map.
 - Simulation is deterministic for fixed seed + config
 - Replay metadata changes should be additive
 - Physical collision never pushes entities below terrain
-- Drones stay inside map bounds
+- Drones stay inside geofence/map bounds unless operator explicitly changes mission constraints
 - Rust is the source of truth for tracking output
-- All mission actions pass through the feasibility pipeline (ADR-003)
-- Fused tracks are the sole target belief consumed by planners (ADR-002)
+- BeliefWorldModel is the source of truth for physical-mode planning input
+- LocalizationState gates map-relative planning and inspection
+- Mission zones/geofences are safety constraints, not only viewer annotations
+- All mission actions pass through the feasibility/safety pipeline
+- Fused tracks are the sole target belief consumed by planners for dynamic tracked objects
+- Ground truth must not be used by planning, localization, inspection, or safety in physical-mode tests
 
 ## Common change paths
 
+### Add or change belief-world mapping
+Edit planned mapping modules plus `MAPPING.md`, `STATE_OWNERSHIP.md`, tests for truth isolation and coverage behavior.
+
+### Add or change localization behavior
+Edit localization modules plus `LOCALIZATION.md`, `coordinates.py`, replay/viewer schemas, and tests for startup/relocalization modes.
+
+### Add or change inspection behavior
+Edit inspection modules plus `INSPECTION.md`, indexing adapters, planner integration, viewer/replay schema, and evaluation metrics.
+
+### Add or change mission execution behavior
+Edit runtime loop/orchestration plus `MISSION_EXECUTION.md`, safety validation, task state, and replay/mission logs.
+
+### Add or change indexing behavior
+Edit index storage/query modules plus `INDEXING.md`, artifact schema, keyframe/evidence persistence, and retrieval tests.
+
 ### Add a terrain preset
-Edit: `terrain.py`, `sim.py`, `tests/test_terrain_features.py`, `tests/test_service.py`
+Edit: `terrain.py`, `sim.py`, `tests/test_terrain_features.py`, `tests/test_service.py`.
 
 ### Add an obstacle primitive
-Edit: `obstacles.py`, `visibility.py`, `environment_io.py`, `tests/test_collision.py`, `tests/test_environment.py`
+Edit: `obstacles.py`, `visibility.py`, `environment_io.py`, `tests/test_collision.py`, `tests/test_environment.py`.
 
 ### Change drone pathing
-Edit: `planning.py`, `sim.py`. Test: `test_collision.py`, `test_service.py`, `test_sim.py`
+Edit: `planning.py`, `sim.py`, and eventually planner/trajectory/safety modules. Test collision, safety, localization-confidence gating, and mission execution flow.
 
 ### Change observation acceptance/rejection
-Edit: `sim.py`, `visibility.py`. Inspect rejection constants, `build_observations()`, `SensorVisibilityModel`.
+Edit: `sim.py`, `visibility.py`, `sensor_models.py`, and Rust prefiltering as needed. Preserve documented generation-vs-runtime rejection ownership.
 
 ### Change live runtime behavior
-Edit: `proto/tracker.proto`, `rust/tracker-core/src/lib.rs`, `rust/tracker-server/src/lib.rs`, `service.py`, `tests/test_runtime.py`
+Edit: `proto/tracker.proto`, Rust runtime crates, `service.py`, mission execution modules, and `tests/test_runtime.py`.
 
 ### Add a new Rust crate
 1. Create `rust/<crate-name>/Cargo.toml` and `src/lib.rs`
@@ -174,7 +272,7 @@ Edit: `proto/tracker.proto`, `rust/tracker-core/src/lib.rs`, `rust/tracker-serve
 2. Rebuild Rust bindings (`cargo build` triggers `build.rs`)
 3. Regenerate Python bindings (`protoc`)
 4. Update `service.py` serializers/deserializers
-5. Update `rust/tracker-server/src/lib.rs` conversions
+5. Update Rust server conversions
 6. Run both `cargo test` and `pytest`
 
 ## Architecture Decision Records
@@ -187,19 +285,35 @@ All nontrivial architecture changes require an ADR in `docs/adr/`. See `docs/adr
 | 002 | Unified Fused Track as Authoritative Target State | proposed |
 | 003 | Mission Intent Must Pass Through Feasibility Pipeline | proposed |
 
+Recommended new ADRs:
+
+| Proposed ADR | Purpose |
+|--------------|---------|
+| Belief World as Planning Authority | Planning/safety use belief-world state, not simulation truth |
+| Localization Gating for Inspection | Inspection routing requires localization confidence threshold |
+| Persistent Spatial Memory | Indexing is the source of cross-mission retrieval |
+
 ## Debug checklist
 
-1. No observations → check `sim.py`, `terrain.py`, `visibility.py`, environment bounds
+1. No observations → check sensing, terrain, visibility, environment bounds
 2. Wrong tracks → check Rust runtime or protobuf/service conversion
-3. Replay correct but viewer wrong → check Bevy viewer code
-4. Constraint violation → check `DronePhysicalLimits` in `SAFETY.md`
-5. Mission zone not enforced → zone enforcement not yet implemented (see `KNOWN_GAPS.md`)
+3. Bad map update → check localization state, sensor pose, belief-world frame, and mapping uncertainty
+4. Planner uses impossible information → check for accidental ground-truth access
+5. Replay correct but viewer wrong → check Bevy viewer code and replay schema
+6. Constraint violation → check `SAFETY.md`, mission geofence, and safety gate
+7. Inspection failed → check localization confidence, LOS, viewpoint safety, evidence quality, and target state
+8. Relocalization failed → check indexing/keyframes, map region candidates, and coordinate frames
 
 ## Related documentation
 
 | Document | Content |
 |----------|---------|
 | `TERRAIN.md` | Analytic terrain query interface and caching strategy |
+| `MAPPING.md` | Belief-world mapping, geofence-bounded exploration, uncertainty handling |
+| `LOCALIZATION.md` | Pose recovery, map-relative localization, relocalization modes |
+| `INDEXING.md` | Spatial memory, keyframes, artifact retrieval, mission persistence |
+| `INSPECTION.md` | Inspection targets, multi-view capture, local reconstruction, change detection |
+| `MISSION_EXECUTION.md` | Closed-loop runtime, task model, mission phases, safety-gated execution |
 | `FUSION.md` | Fused track schema, lifecycle state machine, staleness rules |
 | `SAFETY.md` | Drone physical limits, constraint validation, safety monitor |
 | `MISSION_MODEL.md` | Mission generation schema, templates, difficulty scaling |
