@@ -441,4 +441,6 @@ For implementation details already present in this repository, see:
 - [Terrain notes](docs/TERRAIN.md)
 - [Planning notes](docs/PLANNING.md)
 - [Safety notes](docs/SAFETY.md)
+- [Benchmark scenarios](docs/SCENARIOS.md)
+- [Performance and benchmarking standard](docs/PERFORMANCE_AND_BENCHMARKING.md)
 - [Changelog](docs/changelog.md)
