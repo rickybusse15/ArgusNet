@@ -1,14 +1,15 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
+use egui_extras::{Column, TableBuilder};
 use egui_plot::{Line, Plot, PlotPoints, Points, Polygon, VLine};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
 use crate::replay::{EgressProgress, MarkerKind, ReplayState, RuntimeMarker};
 use crate::schema::ScenePackage;
 use crate::state::{
-    ActiveTab, CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones,
+    CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MapLayerPreset,
     MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility, SelectionState,
-    SimulationRunner, ViewMode, ZoneFocus, ZoneOverlapModel,
+    SimulationRunner, ViewMode, ViewerMode, ViewerUiState, ZoneFocus, ZoneOverlapModel,
 };
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
@@ -54,12 +55,9 @@ const STALE_THRESHOLD: u32 = 5;
 /// Health is computed in `argusnet_grpc.py` as `1.0 - dropout_probability * 0.5`.
 const HEALTH_ALERT_THRESHOLD: f32 = 0.3;
 
-/// Approximate height of the tab bar top panel (logical pixels).
-/// Used to offset the mission-phase HUD badge below the tab bar.
-const TAB_BAR_HEIGHT: f32 = 40.0;
-
-/// Side panel width for content tabs.
-const SIDE_PANEL_WIDTH: f32 = 360.0;
+const TOP_STATUS_HEIGHT: f32 = 52.0;
+const BOTTOM_TIMELINE_HEIGHT: f32 = 126.0;
+const DRAWER_WIDTH: f32 = 390.0;
 
 #[allow(clippy::too_many_arguments)]
 pub fn viewer_ui_system(
@@ -77,131 +75,739 @@ pub fn viewer_ui_system(
     mut sim_runner: ResMut<SimulationRunner>,
     projected_badges: Res<ProjectedZoneBadges>,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
-    mut active_tab: ResMut<ActiveTab>,
+    mut ui_state: ResMut<ViewerUiState>,
     reconstruction: Res<ReconstructionCloud>,
 ) {
     let context = contexts.ctx_mut();
     let supports_hot_swap = scene_package.is_synthetic_source();
+    ui_state.focused_entity_label = selection.selected_label.clone();
+    configure_operator_style(context);
 
-    // ── Tab bar (always-visible top strip) ──────────────────────────────────
-    egui::TopBottomPanel::top("tab_bar")
-        .exact_height(TAB_BAR_HEIGHT)
+    egui::TopBottomPanel::top("operator_status_bar")
+        .exact_height(TOP_STATUS_HEIGHT)
         .show(context, |ui| {
-            ui.horizontal_centered(|ui| {
-                // Tab buttons
-                for (tab, label) in &[
-                    (ActiveTab::Mission, "\u{1f5fa} Mission"),
-                    (ActiveTab::Scene, "\u{25a6} 3D Scene"),
-                    (ActiveTab::Tracks, "\u{25ce} Tracks"),
-                    (ActiveTab::Events, "\u{2630} Events"),
-                ] {
-                    let selected = *active_tab == *tab;
-                    let btn = egui::Button::new(*label)
-                        .selected(selected)
-                        .min_size(egui::vec2(84.0, 28.0));
-                    if ui.add(btn).clicked() {
-                        *active_tab = *tab;
-                    }
-                    ui.add_space(2.0);
-                }
+            top_status_bar(
+                ui,
+                &scene_package,
+                &mut replay_state,
+                &mut view_mode,
+                &mut ui_state,
+            );
+        });
 
-                ui.separator();
+    egui::TopBottomPanel::bottom("operator_timeline")
+        .exact_height(BOTTOM_TIMELINE_HEIGHT)
+        .show(context, |ui| {
+            section_operator_timeline(ui, &mut replay_state, &mut ui_state);
+        });
 
-                // Compact playback controls (right side of tab bar)
-                let has_replay = replay_state.frame_count() > 0;
-                ui.add_enabled_ui(has_replay, |ui| {
-                    if ui.small_button("|<").clicked() {
-                        replay_state.playing = false;
-                        replay_state.step_to(0);
-                    }
-                    if ui.small_button("<").clicked() {
-                        replay_state.playing = false;
-                        let prev = replay_state.frame_index.saturating_sub(1);
-                        replay_state.step_to(prev);
-                    }
-                    let play_label = if replay_state.playing { "\u{23f8}" } else { "\u{25b6}" };
-                    if ui.small_button(play_label).clicked() {
-                        replay_state.playing = !replay_state.playing;
-                    }
-                    if ui.small_button(">").clicked() {
-                        replay_state.playing = false;
-                        let next = replay_state.frame_index + 1;
-                        replay_state.step_to(next);
-                    }
-                    if ui.small_button(">|").clicked() {
-                        replay_state.playing = false;
-                        let last = replay_state.frame_count().saturating_sub(1);
-                        replay_state.step_to(last);
-                    }
-                });
-
-                if has_replay {
-                    let total_s = replay_state
-                        .document
-                        .as_ref()
-                        .and_then(|d| d.frames.last())
-                        .map(|f| f.timestamp_s)
-                        .unwrap_or(0.0);
-                    let cur_s = replay_state.current_timestamp_s();
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{:.0}:{:04.1} / {:.0}:{:04.1}",
-                            (cur_s / 60.0).floor(),
-                            cur_s % 60.0,
-                            (total_s / 60.0).floor(),
-                            total_s % 60.0
-                        ))
-                        .monospace(),
-                    );
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::Slider::new(&mut replay_state.playback_speed, 0.25..=16.0)
-                            .text("\u{00d7}")
-                            .step_by(0.25)
-                            .clamping(egui::SliderClamping::Always),
-                    );
-                }
+    if ui_state.drawer_open {
+        egui::SidePanel::right("operator_drawer")
+            .resizable(true)
+            .default_width(DRAWER_WIDTH)
+            .width_range(320.0..=540.0)
+            .show(context, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| match ui_state.mode {
+                        ViewerMode::Mission => drawer_mission_content(
+                            ui,
+                            &scene_package,
+                            &replay_state,
+                            &mission_zones,
+                            &reconstruction,
+                            &mut view_mode,
+                            &mut runtime_visibility,
+                            &mut mission_overlay,
+                            &selection,
+                            &mut layer_visibility,
+                            &mut zone_overlap_model,
+                            &mut ui_state,
+                        ),
+                        ViewerMode::Replay => {
+                            drawer_replay_content(ui, &mut replay_state, &mut ui_state)
+                        }
+                        ViewerMode::Diagnostics => drawer_diagnostics_content(
+                            ui,
+                            &replay_state,
+                            &frame_metrics,
+                            &mission_zones,
+                            &diagnostics,
+                        ),
+                        ViewerMode::Scenario => drawer_scenario_content(
+                            ui,
+                            &scene_package,
+                            &replay_state,
+                            &mission_zones,
+                            &mut zone_overlap_model,
+                            supports_hot_swap,
+                            &mut sim_runner,
+                        ),
+                    });
             });
-        });
+    }
 
-    // ── Left side panel — content switches by ActiveTab ─────────────────────
-    egui::SidePanel::left("side_content")
-        .resizable(true)
-        .default_width(SIDE_PANEL_WIDTH)
-        .show(context, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .show(ui, |ui| match *active_tab {
-                    ActiveTab::Mission => tab_mission_content(
-                        ui,
-                        &scene_package,
-                        &replay_state,
-                        &mission_zones,
-                        &reconstruction,
-                    ),
-                    ActiveTab::Scene => tab_scene_content(
-                        ui,
-                        &scene_package,
-                        &replay_state,
-                        &mission_zones,
-                        &mut view_mode,
-                        &mut runtime_visibility,
-                        &mut mission_overlay,
-                        &selection,
-                        &mut layer_visibility,
-                        &mut zone_overlap_model,
-                        supports_hot_swap,
-                        &mut sim_runner,
-                        &diagnostics,
-                    ),
-                    ActiveTab::Tracks => tab_tracks_content(ui, &replay_state, &frame_metrics),
-                    ActiveTab::Events => tab_events_content(ui, &replay_state),
-                });
-        });
-
-    // ── Screen-space overlays ────────────────────────────────────────────────
     draw_zone_badges(context, &projected_badges);
     draw_mission_phase_hud(context, &replay_state);
+}
+
+fn configure_operator_style(context: &egui::Context) {
+    let mut style = (*context.style()).clone();
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.button_padding = egui::vec2(9.0, 4.0);
+    style.visuals.widgets.active.rounding = 4.0.into();
+    style.visuals.widgets.hovered.rounding = 4.0.into();
+    style.visuals.widgets.inactive.rounding = 4.0.into();
+    context.set_style(style);
+}
+
+fn top_status_bar(
+    ui: &mut egui::Ui,
+    scene_package: &ScenePackage,
+    replay_state: &mut ReplayState,
+    view_mode: &mut ViewMode,
+    ui_state: &mut ViewerUiState,
+) {
+    ui.horizontal(|ui| {
+        ui.strong("ArgusNet");
+        ui.label(&scene_package.manifest.scene_id);
+        ui.separator();
+
+        if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
+            status_chip(ui, phase, color);
+            ui.label(detail);
+        } else {
+            status_chip(ui, "NO REPLAY", egui::Color32::GRAY);
+        }
+
+        ui.separator();
+        playback_buttons(ui, replay_state);
+
+        if replay_state.frame_count() > 0 {
+            let cur_s = replay_state.current_timestamp_s();
+            let total_s = replay_state
+                .document
+                .as_ref()
+                .and_then(|doc| doc.frames.last())
+                .map(|frame| frame.timestamp_s)
+                .unwrap_or(0.0);
+            ui.monospace(format_time_range(cur_s, total_s));
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let drawer_label = if ui_state.drawer_open {
+                "Hide Panel"
+            } else {
+                "Show Panel"
+            };
+            if ui.button(drawer_label).clicked() {
+                ui_state.drawer_open = !ui_state.drawer_open;
+            }
+            mode_button(ui, ui_state, ViewerMode::Scenario, "Scenario");
+            mode_button(ui, ui_state, ViewerMode::Diagnostics, "Diagnostics");
+            mode_button(ui, ui_state, ViewerMode::Replay, "Replay");
+            mode_button(ui, ui_state, ViewerMode::Mission, "Mission");
+            ui.separator();
+            if ui
+                .selectable_label(*view_mode == ViewMode::Split, "Split")
+                .clicked()
+            {
+                *view_mode = ViewMode::Split;
+            }
+            if ui
+                .selectable_label(*view_mode == ViewMode::ScanMap, "Scan")
+                .clicked()
+            {
+                *view_mode = ViewMode::ScanMap;
+            }
+            if ui
+                .selectable_label(*view_mode == ViewMode::RealWorld, "Real")
+                .clicked()
+            {
+                *view_mode = ViewMode::RealWorld;
+            }
+        });
+    });
+}
+
+fn mode_button(ui: &mut egui::Ui, ui_state: &mut ViewerUiState, mode: ViewerMode, label: &str) {
+    if ui
+        .selectable_label(ui_state.mode == mode, label)
+        .on_hover_text(format!("{label} mode"))
+        .clicked()
+    {
+        ui_state.mode = mode;
+        ui_state.drawer_open = true;
+    }
+}
+
+fn playback_buttons(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
+    let has_replay = replay_state.frame_count() > 0;
+    ui.add_enabled_ui(has_replay, |ui| {
+        if ui.small_button("|<").on_hover_text("First frame").clicked() {
+            replay_state.playing = false;
+            replay_state.step_to(0);
+        }
+        if ui
+            .small_button("<")
+            .on_hover_text("Previous frame")
+            .clicked()
+        {
+            replay_state.playing = false;
+            replay_state.step_to(replay_state.frame_index.saturating_sub(1));
+        }
+        let play_label = if replay_state.playing {
+            "Pause"
+        } else {
+            "Play"
+        };
+        if ui.small_button(play_label).clicked() {
+            replay_state.playing = !replay_state.playing;
+        }
+        if ui.small_button(">").on_hover_text("Next frame").clicked() {
+            replay_state.playing = false;
+            replay_state.step_to(replay_state.frame_index + 1);
+        }
+        if ui.small_button(">|").on_hover_text("Last frame").clicked() {
+            replay_state.playing = false;
+            replay_state.step_to(replay_state.frame_count().saturating_sub(1));
+        }
+    });
+}
+
+fn status_chip(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
+    ui.colored_label(color, egui::RichText::new(label).strong());
+}
+
+fn mission_status_summary(
+    replay_state: &ReplayState,
+) -> Option<(&'static str, egui::Color32, String)> {
+    let frame = replay_state.current_frame()?;
+    let mission = frame.scan_mission_state.as_ref()?;
+    let (label, color) = phase_color_pair(mission.phase.as_str());
+    let detail = match mission.phase.as_str() {
+        "scanning" => format!(
+            "Coverage {:.0}% / {:.0}%",
+            mission.scan_coverage_fraction * 100.0,
+            mission.scan_coverage_threshold * 100.0
+        ),
+        "inspecting" => format!(
+            "POI {}/{} complete",
+            mission.completed_poi_count,
+            mission.total_poi_count.max(1)
+        ),
+        "egress" => format!(
+            "RTH {}/{}",
+            egress_arrived_count(&mission.egress_progress),
+            mission.egress_progress.len().max(1)
+        ),
+        _ => format!("Coverage {:.0}%", mission.scan_coverage_fraction * 100.0),
+    };
+    Some((label, color, detail))
+}
+
+fn format_time_range(current_s: f32, total_s: f32) -> String {
+    format!(
+        "{:.0}:{:04.1} / {:.0}:{:04.1}",
+        (current_s / 60.0).floor(),
+        current_s % 60.0,
+        (total_s / 60.0).floor(),
+        total_s % 60.0
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drawer_mission_content(
+    ui: &mut egui::Ui,
+    scene_package: &ScenePackage,
+    replay_state: &ReplayState,
+    mission_zones: &LoadedMissionZones,
+    reconstruction: &ReconstructionCloud,
+    view_mode: &mut ViewMode,
+    runtime_visibility: &mut RuntimeOverlayVisibility,
+    mission_overlay: &mut MissionOverlaySettings,
+    selection: &SelectionState,
+    layer_visibility: &mut LayerVisibilityState,
+    zone_overlap_model: &mut ZoneOverlapModel,
+    ui_state: &mut ViewerUiState,
+) {
+    ui.heading("Mission");
+    ui.label("Operator view");
+    ui.separator();
+
+    mission_layer_presets(ui, ui_state, runtime_visibility, mission_overlay);
+    section_mission_progress(ui, replay_state, view_mode, mission_overlay);
+    ui.separator();
+    tab_mission_content(
+        ui,
+        scene_package,
+        replay_state,
+        mission_zones,
+        reconstruction,
+    );
+    ui.separator();
+    section_safety_alerts(ui, replay_state, mission_zones);
+    section_selection(ui, selection);
+    ui.separator();
+    section_runtime_overlays(ui, runtime_visibility, mission_overlay);
+    ui.separator();
+    section_layers(ui, scene_package, layer_visibility);
+    ui.separator();
+    section_mission_zones(ui, mission_zones, zone_overlap_model);
+}
+
+fn mission_layer_presets(
+    ui: &mut egui::Ui,
+    ui_state: &mut ViewerUiState,
+    runtime_visibility: &mut RuntimeOverlayVisibility,
+    mission_overlay: &mut MissionOverlaySettings,
+) {
+    ui.horizontal(|ui| {
+        ui.label("Layer preset:");
+        for (preset, label) in &[
+            (MapLayerPreset::Operator, "Operator"),
+            (MapLayerPreset::Reconstruction, "Reconstruction"),
+            (MapLayerPreset::Safety, "Safety"),
+        ] {
+            if ui
+                .selectable_label(ui_state.map_layer_preset == *preset, *label)
+                .clicked()
+            {
+                ui_state.map_layer_preset = *preset;
+                apply_layer_preset(*preset, runtime_visibility, mission_overlay);
+            }
+        }
+    });
+}
+
+fn apply_layer_preset(
+    preset: MapLayerPreset,
+    runtime_visibility: &mut RuntimeOverlayVisibility,
+    mission_overlay: &mut MissionOverlaySettings,
+) {
+    match preset {
+        MapLayerPreset::Operator => {
+            runtime_visibility.nodes = true;
+            runtime_visibility.tracks = true;
+            runtime_visibility.truths = true;
+            runtime_visibility.zones = true;
+            runtime_visibility.radar_rings = true;
+            runtime_visibility.observations = false;
+            runtime_visibility.rejection_markers = false;
+            mission_overlay.show_scan_grid = true;
+            mission_overlay.show_poi_markers = true;
+            mission_overlay.show_reconstruction = true;
+            mission_overlay.show_coord_frame = true;
+        }
+        MapLayerPreset::Reconstruction => {
+            runtime_visibility.nodes = true;
+            runtime_visibility.tracks = false;
+            runtime_visibility.truths = false;
+            runtime_visibility.zones = true;
+            runtime_visibility.radar_rings = false;
+            runtime_visibility.observations = false;
+            runtime_visibility.rejection_markers = false;
+            mission_overlay.show_scan_grid = true;
+            mission_overlay.show_poi_markers = true;
+            mission_overlay.show_reconstruction = true;
+            mission_overlay.show_coord_frame = true;
+        }
+        MapLayerPreset::Safety => {
+            runtime_visibility.nodes = true;
+            runtime_visibility.tracks = true;
+            runtime_visibility.truths = true;
+            runtime_visibility.zones = true;
+            runtime_visibility.radar_rings = true;
+            runtime_visibility.observations = true;
+            runtime_visibility.rejection_markers = true;
+            mission_overlay.show_scan_grid = false;
+            mission_overlay.show_poi_markers = true;
+            mission_overlay.show_reconstruction = false;
+            mission_overlay.show_coord_frame = false;
+        }
+    }
+}
+
+fn drawer_replay_content(
+    ui: &mut egui::Ui,
+    replay_state: &mut ReplayState,
+    ui_state: &mut ViewerUiState,
+) {
+    ui.heading("Replay");
+    ui.label("Timeline and frame events");
+    ui.separator();
+    section_operator_timeline(ui, replay_state, ui_state);
+    ui.separator();
+    jump_to_event_controls(ui, replay_state, ui_state);
+    section_inspection_events(ui, replay_state);
+    section_frame_events(ui, replay_state);
+}
+
+fn drawer_diagnostics_content(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    frame_metrics: &CurrentFrameMetrics,
+    mission_zones: &LoadedMissionZones,
+    diagnostics: &bevy::diagnostic::DiagnosticsStore,
+) {
+    ui.heading("Diagnostics");
+    ui.label("Current-frame health, tracking, and event tables");
+    ui.separator();
+    section_performance(ui, replay_state, diagnostics);
+    ui.separator();
+    section_tracking_metrics(ui, frame_metrics);
+    section_mapping_status(ui, replay_state);
+    section_localization_status(ui, replay_state);
+    diagnostic_node_table(ui, replay_state);
+    diagnostic_track_table(ui, replay_state, frame_metrics);
+    diagnostic_event_table(ui, replay_state);
+    section_safety_alerts(ui, replay_state, mission_zones);
+}
+
+fn drawer_scenario_content(
+    ui: &mut egui::Ui,
+    scene_package: &ScenePackage,
+    replay_state: &ReplayState,
+    mission_zones: &LoadedMissionZones,
+    zone_overlap_model: &mut ZoneOverlapModel,
+    supports_hot_swap: bool,
+    sim_runner: &mut SimulationRunner,
+) {
+    ui.heading("Scenario");
+    ui.label("Synthetic mission setup and scene reload");
+    ui.separator();
+    section_scenario(ui, supports_hot_swap, sim_runner);
+    ui.separator();
+    section_scene_header(ui, scene_package, mission_zones, replay_state);
+    ui.separator();
+    section_mission_zones(ui, mission_zones, zone_overlap_model);
+    section_keyboard_shortcuts(ui);
+}
+
+fn section_operator_timeline(
+    ui: &mut egui::Ui,
+    replay_state: &mut ReplayState,
+    ui_state: &mut ViewerUiState,
+) {
+    let has_replay = replay_state.frame_count() > 0;
+    if !has_replay {
+        ui.label("No replay packaged with this scene.");
+        return;
+    }
+
+    let total_frames = replay_state.frame_count();
+    let current_frame = replay_state.frame_index;
+    ui.horizontal(|ui| {
+        ui.strong("Timeline");
+        ui.label(format!("frame {} / {}", current_frame + 1, total_frames));
+        ui.separator();
+        ui.label(format!("speed {:.2}x", replay_state.playback_speed));
+        ui.add(
+            egui::Slider::new(&mut replay_state.playback_speed, 0.25..=16.0)
+                .show_value(false)
+                .step_by(0.25)
+                .clamping(egui::SliderClamping::Always),
+        );
+    });
+
+    let mut frame_value = current_frame as u32;
+    let max_frame = total_frames.saturating_sub(1) as u32;
+    if ui
+        .add(
+            egui::Slider::new(&mut frame_value, 0..=max_frame)
+                .text("Frame")
+                .clamping(egui::SliderClamping::Always),
+        )
+        .changed()
+    {
+        replay_state.playing = false;
+        replay_state.step_to(frame_value as usize);
+        ui_state.selected_timeline_frame = Some(frame_value as usize);
+    }
+
+    if let Some(document) = &replay_state.document {
+        let event_points: PlotPoints = document
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(i, frame)| [i as f64, frame_event_count(frame) as f64])
+            .collect();
+        let obs_points: PlotPoints = document
+            .frames
+            .iter()
+            .enumerate()
+            .map(|(i, frame)| [i as f64, frame.metrics.observation_count as f64])
+            .collect();
+        let phase_transitions = phase_transitions(document);
+        Plot::new("operator_timeline_plot")
+            .height(56.0)
+            .allow_zoom(false)
+            .allow_drag(false)
+            .allow_scroll(false)
+            .show_axes([false, true])
+            .label_formatter(|_, _| String::new())
+            .show(ui, |plot_ui| {
+                plot_ui.line(
+                    Line::new(obs_points)
+                        .color(egui::Color32::from_rgb(95, 150, 220))
+                        .width(1.5),
+                );
+                plot_ui.line(
+                    Line::new(event_points)
+                        .color(egui::Color32::from_rgb(245, 180, 70))
+                        .width(1.5),
+                );
+                for (frame_idx, phase) in &phase_transitions {
+                    plot_ui.vline(
+                        VLine::new(*frame_idx as f64)
+                            .color(phase_vline_color(phase.as_str()))
+                            .width(2.0),
+                    );
+                }
+                plot_ui.vline(
+                    VLine::new(replay_state.frame_index as f64)
+                        .color(egui::Color32::WHITE)
+                        .width(2.0),
+                );
+            });
+    }
+}
+
+fn jump_to_event_controls(
+    ui: &mut egui::Ui,
+    replay_state: &mut ReplayState,
+    ui_state: &mut ViewerUiState,
+) {
+    let event_frames = event_frame_indices(replay_state);
+    if event_frames.is_empty() {
+        ui.label("No frame events in this replay.");
+        return;
+    }
+
+    ui.horizontal(|ui| {
+        if ui.button("Previous Event").clicked() {
+            if let Some(frame_idx) = event_frames
+                .iter()
+                .rev()
+                .copied()
+                .find(|idx| *idx < replay_state.frame_index)
+                .or_else(|| event_frames.last().copied())
+            {
+                replay_state.playing = false;
+                replay_state.step_to(frame_idx);
+                ui_state.selected_timeline_frame = Some(frame_idx);
+            }
+        }
+        if ui.button("Next Event").clicked() {
+            if let Some(frame_idx) = event_frames
+                .iter()
+                .copied()
+                .find(|idx| *idx > replay_state.frame_index)
+                .or_else(|| event_frames.first().copied())
+            {
+                replay_state.playing = false;
+                replay_state.step_to(frame_idx);
+                ui_state.selected_timeline_frame = Some(frame_idx);
+            }
+        }
+        ui.label(format!("{} event frames", event_frames.len()));
+    });
+}
+
+fn event_frame_indices(replay_state: &ReplayState) -> Vec<usize> {
+    replay_state
+        .document
+        .as_ref()
+        .map(|document| {
+            document
+                .frames
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, frame)| (frame_event_count(frame) > 0).then_some(idx))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn phase_transitions(document: &crate::replay::ReplayDocument) -> Vec<(usize, String)> {
+    let mut transitions = Vec::new();
+    let mut last_phase = String::new();
+    for (idx, frame) in document.frames.iter().enumerate() {
+        if let Some(mission) = &frame.scan_mission_state {
+            if mission.phase != last_phase {
+                if idx > 0 {
+                    transitions.push((idx, mission.phase.clone()));
+                }
+                last_phase = mission.phase.clone();
+            }
+        }
+    }
+    transitions
+}
+
+fn frame_event_count(frame: &crate::replay::ReplayFrame) -> usize {
+    frame.generation_rejections.len()
+        + frame.rejected_observations.len()
+        + frame.deconfliction_events.len()
+        + frame.inspection_events.len()
+}
+
+fn diagnostic_node_table(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    ui.heading(format!("Nodes ({})", frame.nodes.len()));
+    if frame.nodes.is_empty() {
+        ui.label("No nodes in this frame.");
+        return;
+    }
+    TableBuilder::new(ui)
+        .striped(true)
+        .column(Column::auto())
+        .column(Column::remainder())
+        .column(Column::auto())
+        .column(Column::auto())
+        .column(Column::auto())
+        .header(18.0, |mut header| {
+            header.col(|ui| {
+                ui.strong("ID");
+            });
+            header.col(|ui| {
+                ui.strong("Sensor");
+            });
+            header.col(|ui| {
+                ui.strong("Health");
+            });
+            header.col(|ui| {
+                ui.strong("Alt");
+            });
+            header.col(|ui| {
+                ui.strong("Mobile");
+            });
+        })
+        .body(|mut body| {
+            for node in &frame.nodes {
+                body.row(20.0, |mut row| {
+                    row.col(|ui| {
+                        ui.label(&node.node_id);
+                    });
+                    row.col(|ui| {
+                        ui.label(&node.sensor_type);
+                    });
+                    row.col(|ui| {
+                        ui.colored_label(
+                            health_color_egui(node.health),
+                            format!("{:.0}%", node.health * 100.0),
+                        );
+                    });
+                    row.col(|ui| {
+                        ui.label(format!("{:.0}m", node.position[2]));
+                    });
+                    row.col(|ui| {
+                        ui.label(if node.is_mobile { "Yes" } else { "No" });
+                    });
+                });
+            }
+        });
+}
+
+fn diagnostic_track_table(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    frame_metrics: &CurrentFrameMetrics,
+) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    ui.heading(format!("Tracks ({})", frame.tracks.len()));
+    if frame.tracks.is_empty() {
+        ui.label("No active tracks in this frame.");
+        return;
+    }
+    TableBuilder::new(ui)
+        .striped(true)
+        .column(Column::remainder())
+        .column(Column::auto())
+        .column(Column::auto())
+        .column(Column::auto())
+        .header(18.0, |mut header| {
+            header.col(|ui| {
+                ui.strong("ID");
+            });
+            header.col(|ui| {
+                ui.strong("Error");
+            });
+            header.col(|ui| {
+                ui.strong("Updates");
+            });
+            header.col(|ui| {
+                ui.strong("Stale");
+            });
+        })
+        .body(|mut body| {
+            for track in &frame.tracks {
+                body.row(20.0, |mut row| {
+                    row.col(|ui| {
+                        ui.label(&track.track_id);
+                    });
+                    row.col(|ui| {
+                        let error = frame_metrics
+                            .metrics
+                            .as_ref()
+                            .and_then(|metrics| metrics.track_errors_m.get(&track.track_id))
+                            .copied();
+                        if let Some(error) = error {
+                            ui.label(format!("{error:.1}m"));
+                        } else {
+                            ui.label("-");
+                        }
+                    });
+                    row.col(|ui| {
+                        ui.label(track.update_count.to_string());
+                    });
+                    row.col(|ui| {
+                        let color = if track.stale_steps > STALE_THRESHOLD {
+                            egui::Color32::RED
+                        } else if track.stale_steps > 0 {
+                            egui::Color32::YELLOW
+                        } else {
+                            egui::Color32::GREEN
+                        };
+                        ui.colored_label(color, track.stale_steps.to_string());
+                    });
+                });
+            }
+        });
+}
+
+fn diagnostic_event_table(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let rows = [
+        ("Generation rejections", frame.generation_rejections.len()),
+        ("Tracker rejections", frame.rejected_observations.len()),
+        ("Deconfliction yields", frame.deconfliction_events.len()),
+        ("Inspection events", frame.inspection_events.len()),
+        ("Observations", frame.observations.len()),
+    ];
+    ui.heading("Frame Events");
+    TableBuilder::new(ui)
+        .striped(true)
+        .column(Column::remainder())
+        .column(Column::auto())
+        .body(|mut body| {
+            for (label, count) in rows {
+                body.row(20.0, |mut row| {
+                    row.col(|ui| {
+                        ui.label(label);
+                    });
+                    row.col(|ui| {
+                        ui.strong(count.to_string());
+                    });
+                });
+            }
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -342,13 +948,14 @@ fn tab_mission_content(
                             ny + base_w * (heading - std::f64::consts::FRAC_PI_2 - 0.5).sin(),
                         ];
                         plot_ui.polygon(
-                            Polygon::new(PlotPoints::new(vec![tip, left, right]))
-                                .fill_color(egui::Color32::from_rgba_unmultiplied(
+                            Polygon::new(PlotPoints::new(vec![tip, left, right])).fill_color(
+                                egui::Color32::from_rgba_unmultiplied(
                                     color.r(),
                                     color.g(),
                                     color.b(),
                                     200,
-                                )),
+                                ),
+                            ),
                         );
                     } else {
                         // Static sensor: small square
@@ -360,12 +967,14 @@ fn tab_mission_content(
                                 [nx + s, ny + s],
                                 [nx - s, ny + s],
                             ]))
-                            .fill_color(egui::Color32::from_rgba_unmultiplied(
-                                color.r(),
-                                color.g(),
-                                color.b(),
-                                160,
-                            )),
+                            .fill_color(
+                                egui::Color32::from_rgba_unmultiplied(
+                                    color.r(),
+                                    color.g(),
+                                    color.b(),
+                                    160,
+                                ),
+                            ),
                         );
                     }
                 }
@@ -436,7 +1045,11 @@ fn tab_mission_content(
             let phase_str = mission.map(|ms| ms.phase.as_str()).unwrap_or("");
             let global_coverage = mission.map(|ms| ms.scan_coverage_fraction).unwrap_or(0.0);
 
-            let card_cols = if mobile_nodes.len() <= 2 { mobile_nodes.len() } else { 2 };
+            let card_cols = if mobile_nodes.len() <= 2 {
+                mobile_nodes.len()
+            } else {
+                2
+            };
             egui::Grid::new("drone_cards")
                 .num_columns(card_cols)
                 .spacing([6.0, 6.0])
@@ -531,6 +1144,7 @@ fn tab_mission_content(
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn tab_scene_content(
     ui: &mut egui::Ui,
     scene_package: &ScenePackage,
@@ -581,6 +1195,7 @@ fn tab_scene_content(
 // Tab: Tracks — metrics, node table, track table
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn tab_tracks_content(
     ui: &mut egui::Ui,
     replay_state: &ReplayState,
@@ -600,6 +1215,7 @@ fn tab_tracks_content(
 // Tab: Events — frame events, inspection events, deconfliction
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn tab_events_content(ui: &mut egui::Ui, replay_state: &ReplayState) {
     section_inspection_events(ui, replay_state);
     section_frame_events(ui, replay_state);
@@ -789,19 +1405,19 @@ fn section_mission_progress(
             ui.horizontal(|ui| {
                 ui.label("View:");
                 if ui
-                    .selectable_label(*view_mode == ViewMode::RealWorld, "\u{1f30d} Real")
+                    .selectable_label(*view_mode == ViewMode::RealWorld, "Real")
                     .clicked()
                 {
                     *view_mode = ViewMode::RealWorld;
                 }
                 if ui
-                    .selectable_label(*view_mode == ViewMode::ScanMap, "\u{1f4e1} Scan Map")
+                    .selectable_label(*view_mode == ViewMode::ScanMap, "Scan Map")
                     .clicked()
                 {
                     *view_mode = ViewMode::ScanMap;
                 }
                 if ui
-                    .selectable_label(*view_mode == ViewMode::Split, "\u{229e} Split")
+                    .selectable_label(*view_mode == ViewMode::Split, "Split")
                     .clicked()
                 {
                     *view_mode = ViewMode::Split;
@@ -824,7 +1440,7 @@ fn section_mission_progress(
             let (phase_label, phase_color) = phase_color_pair(phase);
 
             if ms.phase == "complete" {
-                ui.colored_label(phase_color, format!("Phase: \u{2713} {}", phase_label));
+                ui.colored_label(phase_color, format!("Phase: {}", phase_label));
             } else {
                 ui.horizontal(|ui| {
                     ui.label("Phase:");
@@ -869,7 +1485,7 @@ fn section_mission_progress(
                 if ms.localization_timed_out {
                     ui.colored_label(
                         egui::Color32::from_rgb(255, 180, 60),
-                        "\u{26a0} (timeout \u{2014} forced convergence)",
+                        "Timeout: forced convergence",
                     );
                 }
             }
@@ -915,9 +1531,9 @@ fn section_mission_progress(
 
                 for poi in &ms.poi_statuses {
                     let (icon, color) = match poi.status.as_str() {
-                        "complete" => ("\u{2713}", egui::Color32::from_rgb(60, 200, 80)),
-                        "active" => ("\u{27f3}", egui::Color32::from_rgb(255, 200, 60)),
-                        _ => ("\u{25cb}", egui::Color32::GRAY),
+                        "complete" => ("DONE", egui::Color32::from_rgb(60, 200, 80)),
+                        "active" => ("ACTIVE", egui::Color32::from_rgb(255, 200, 60)),
+                        _ => ("OPEN", egui::Color32::GRAY),
                     };
                     ui.horizontal(|ui| {
                         ui.colored_label(color, icon);
@@ -934,7 +1550,7 @@ fn section_mission_progress(
             if ms.phase == "egress" {
                 let total = ms.egress_progress.len().max(1);
                 let arrived = egress_arrived_count(&ms.egress_progress);
-                ui.label(format!("\u{21a9} {}/{} drones RTH", arrived, total));
+                ui.label(format!("{}/{} drones RTH", arrived, total));
                 for ep in &ms.egress_progress {
                     let max_dist = ms
                         .egress_progress
@@ -977,10 +1593,7 @@ fn section_playback_timeline(ui: &mut egui::Ui, replay_state: &ReplayState) {
         .and_then(|d| d.frames.last())
         .map(|f| f.timestamp_s)
         .unwrap_or(0.0);
-    ui.label(format!(
-        "{} frames · {:.1}s",
-        total_frames, duration_s
-    ));
+    ui.label(format!("{} frames · {:.1}s", total_frames, duration_s));
 
     // Frame scrub slider
     let mut frame_value = replay_state.frame_index as u32;
@@ -1087,7 +1700,10 @@ fn section_performance(
             ));
             let ts = replay_state.current_timestamp_s();
             let speed = replay_state.playback_speed;
-            ui.label(format!("Timestamp: {:.1} s  Speed: {:.1}\u{00d7}", ts, speed));
+            ui.label(format!(
+                "Timestamp: {:.1} s  Speed: {:.1}\u{00d7}",
+                ts, speed
+            ));
         }
     });
 }
@@ -1375,10 +1991,7 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
             if let Some(health) = selection.selected_health {
                 ui.horizontal(|ui| {
                     ui.label("Health:");
-                    ui.colored_label(
-                        health_color_egui(health),
-                        format!("{:.0}%", health * 100.0),
-                    );
+                    ui.colored_label(health_color_egui(health), format!("{:.0}%", health * 100.0));
                 });
             }
             if let Some(sensor) = &selection.selected_sensor_type {
@@ -1498,8 +2111,8 @@ fn section_safety_alerts(
         } else {
             for (level, message) in &alerts {
                 let (icon, color) = match level {
-                    AlertLevel::Error => ("\u{2716}", egui::Color32::RED),
-                    AlertLevel::Warning => ("\u{26a0}", egui::Color32::YELLOW),
+                    AlertLevel::Error => ("ERROR", egui::Color32::RED),
+                    AlertLevel::Warning => ("WARN", egui::Color32::YELLOW),
                 };
                 ui.horizontal(|ui| {
                     ui.colored_label(color, icon);
@@ -1826,7 +2439,11 @@ fn section_mission_zones(
                     "Group {} \u{00b7} {} zone{} \u{00b7} {}",
                     group.group_id + 1,
                     group.zone_indices.len(),
-                    if group.zone_indices.len() == 1 { "" } else { "s" },
+                    if group.zone_indices.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
                     chip_summary
                 );
                 if ui.selectable_label(selected_group, summary).clicked() {
@@ -1964,7 +2581,7 @@ fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
             let done = ms.completed_poi_count;
             let total = ms.total_poi_count.max(1);
             (
-                format!("\u{25cf} INSPECTING  {}/{}", done, total),
+                format!("INSPECTING  {}/{}", done, total),
                 egui::Color32::from_rgb(255, 140, 40),
             )
         }
@@ -1972,20 +2589,17 @@ fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
             let arrived = egress_arrived_count(&ms.egress_progress);
             let total = ms.egress_progress.len().max(1);
             (
-                format!("\u{21a9} EGRESS  {}/{}", arrived, total),
+                format!("EGRESS  {}/{}", arrived, total),
                 egui::Color32::from_rgb(255, 160, 30),
             )
         }
-        "complete" => (
-            "\u{2713} COMPLETE".to_string(),
-            egui::Color32::from_rgb(60, 200, 80),
-        ),
+        "complete" => ("COMPLETE".to_string(), egui::Color32::from_rgb(60, 200, 80)),
         other => (other.to_ascii_uppercase(), egui::Color32::GRAY),
     };
 
-    // Position just to the right of the side panel, below the tab bar.
+    // Position below the operator status strip.
     egui::Area::new(egui::Id::new("phase_hud"))
-        .fixed_pos(egui::pos2(SIDE_PANEL_WIDTH + 10.0, TAB_BAR_HEIGHT + 8.0))
+        .fixed_pos(egui::pos2(12.0, TOP_STATUS_HEIGHT + 8.0))
         .order(egui::Order::Foreground)
         .show(context, |ui| {
             let galley = ui.painter().layout_no_wrap(

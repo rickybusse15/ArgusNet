@@ -105,10 +105,18 @@ class ElevationMap:
     def from_terrain_model(
         cls, terrain_model: object, bounds_m: float = 2000.0, resolution_m: float = 10.0
     ) -> ElevationMap:
-        """Sample an argusnet.world.terrain.TerrainModel into a grid."""
+        """Sample a terrain object with ``height_at`` into a grid."""
         coords = np.arange(-bounds_m / 2, bounds_m / 2, resolution_m)
         XX, YY = np.meshgrid(coords, coords)
-        heights = np.vectorize(lambda x, y: terrain_model.height(float(x), float(y)))(XX, YY)
+        if hasattr(terrain_model, "height_at_many"):
+            points = np.column_stack([XX.reshape(-1), YY.reshape(-1)])
+            heights = np.asarray(terrain_model.height_at_many(points), dtype=float).reshape(
+                XX.shape
+            )
+        else:
+            heights = np.vectorize(lambda x, y: terrain_model.height_at(float(x), float(y)))(
+                XX, YY
+            )
         return cls.from_array(heights, coords[0], coords[-1], coords[0], coords[-1])
 
     # ------------------------------------------------------------------

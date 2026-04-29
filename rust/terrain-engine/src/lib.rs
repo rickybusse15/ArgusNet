@@ -201,8 +201,14 @@ pub trait TerrainQuery: Send + Sync {
 /// Default finite-difference step size, in metres.
 const DEFAULT_DELTA_M: f64 = 1.0;
 
-/// Number of samples used when marching a ray for LOS checks.
-const LOS_SAMPLES: usize = 256;
+/// Target step length used when marching a ray for LOS checks.
+const LOS_TARGET_STEP_M: f64 = 5.0;
+
+/// Minimum number of samples used for short LOS checks.
+const LOS_MIN_SAMPLES: usize = 16;
+
+/// Maximum number of samples used for long LOS checks.
+const LOS_MAX_SAMPLES: usize = 2048;
 
 /// Compute gradient `[dz/dx, dz/dy]` via central differences.
 fn compute_gradient<T: TerrainQuery + ?Sized>(
@@ -237,9 +243,12 @@ fn march_los<T: TerrainQuery + ?Sized>(
     let dx = target[0] - origin[0];
     let dy = target[1] - origin[1];
     let dz = target[2] - origin[2];
+    let horizontal_range_m = (dx * dx + dy * dy).sqrt();
+    let sample_count = ((horizontal_range_m / LOS_TARGET_STEP_M).ceil() as usize)
+        .clamp(LOS_MIN_SAMPLES, LOS_MAX_SAMPLES);
 
-    for i in 1..=LOS_SAMPLES {
-        let t = i as f64 / LOS_SAMPLES as f64;
+    for i in 1..=sample_count {
+        let t = i as f64 / sample_count as f64;
         let px = origin[0] + t * dx;
         let py = origin[1] + t * dy;
         let pz = origin[2] + t * dz;

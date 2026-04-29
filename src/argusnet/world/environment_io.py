@@ -113,6 +113,7 @@ def write_environment_bundle(path: str, environment: EnvironmentModel) -> None:
             "lod_resolutions_m": list(environment.terrain.lod_resolutions_m),
             "interpolation": environment.terrain.interpolation,
             "ground_plane_m": environment.terrain.ground_plane_m,
+            "source": dict(environment.terrain.source_metadata),
             "tiles": terrain_tiles,
         },
         "land_cover": {
@@ -162,6 +163,7 @@ def load_environment_bundle(path: str) -> EnvironmentModel:
         ground_plane_m=float(terrain_manifest["ground_plane_m"]),
         tiles=terrain_tiles,
         environment_id=str(manifest["environment_id"]),
+        source_metadata=terrain_manifest.get("source", {"source": "bundle"}),
     )
 
     land_cover_manifest = manifest["land_cover"]
