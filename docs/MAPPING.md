@@ -42,6 +42,20 @@ Mapping is therefore the bridge between sensing and planning. It converts raw ob
 
 ---
 
+## Current implementation
+
+The current codebase has a partial mapping runtime used by `scan_map_inspect`:
+
+- `src/argusnet/mapping/coverage.py` defines `CoverageMap` and `CoverageStats`.
+- `src/argusnet/mapping/world_map.py` defines `WorldMap`, which wraps coverage and scan-derived height/feature observations.
+- `argusnet.core.types.MappingState` records replay-visible aggregate coverage: `coverage_fraction`, `covered_cells`, `total_cells`, and `mean_revisits`.
+- `src/argusnet/simulation/sim.py` populates `MappingState` each frame and uses `WorldMap.coverage_map` for scan-map-inspect phase transitions.
+- `FrontierPlanner.find_gap_cells()` is currently wired as the enclosed-hole gate before the mission leaves the scanning phase.
+
+The richer `BeliefWorldModel` and `WorldBeliefQuery` terminology below is the roadmap contract. Today, `CoverageMap`, `WorldMap`, and `MappingState` are the implemented bridge toward that contract.
+
+---
+
 ## 3. Core distinction: truth, prior, belief, and visual world
 
 ArgusNet should maintain separate world representations with different authority levels.
@@ -89,7 +103,7 @@ The geofence is not just a visual boundary. It is a hard planning and safety con
 
 The mapping subsystem should output a `BeliefWorldModel`: a queryable representation of the current reconstructed environment.
 
-At minimum, each map cell or local region should track:
+At minimum, each map cell or local region should store:
 
 - height estimate;
 - height uncertainty;
@@ -176,7 +190,7 @@ A frontier or next-best-view score should consider:
 - communications connectivity;
 - return-home feasibility;
 - sensor viewing geometry;
-- inspection priority, if a mission target exists.
+- inspection priority, if a mission POI exists.
 
 This makes mapping active rather than passive. The drone does not only fly a fixed path; it uses the current reconstructed world to decide what information is most valuable next.
 
@@ -298,9 +312,8 @@ Minimum rules:
 
 ### Phase 1 — Belief map foundation
 
-- Add a `BeliefWorldModel` data structure.
-- Track observed/unobserved cells.
-- Track coverage and uncertainty.
+- Extend the current `CoverageMap` / `WorldMap` bridge into a first-class `BeliefWorldModel`.
+- Preserve current `MappingState` replay output while adding observed/unobserved and uncertainty state.
 - Store geofence membership.
 - Expose a `WorldBeliefQuery` interface.
 
@@ -345,4 +358,4 @@ This mapping step is successful when ArgusNet can:
 - stop at geofence, battery, or safety limits;
 - evaluate reconstruction quality in simulation without allowing the planner to use ground truth.
 
-At that point, ArgusNet becomes a true world-modeling system rather than only a tracker or replay simulator.
+At that point, ArgusNet becomes a true world-modeling system rather than only a replay simulator.

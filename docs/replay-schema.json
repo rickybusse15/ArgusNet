@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://smart-trajectory-tracker/replay-document.schema.json",
+  "$id": "https://argusnet/replay-document.schema.json",
   "title": "Replay Document",
   "description": "Schema for Smart Trajectory Tracker replay documents that capture simulation frames, track states, observations, and metrics.",
   "type": "object",
@@ -189,7 +189,7 @@
         },
         "is_mobile": {
           "type": "boolean",
-          "description": "Whether the node is a mobile platform (e.g., drone) as opposed to a fixed ground station."
+          "description": "Whether the node is a mobile platform as opposed to a fixed sensor or relay node."
         },
         "timestamp_s": {
           "type": "number",
@@ -605,7 +605,7 @@
     },
     "scan_mission_state": {
       "type": ["object", "null"],
-      "description": "State of the four-phase ISR mission (scanning → localizing → inspecting → egress) at this frame. Present only in scan_map_inspect missions.",
+      "description": "State of the scan-map-inspect mission (scanning → localizing → inspecting → egress → complete) at this frame. Present only in scan_map_inspect missions.",
       "additionalProperties": true,
       "properties": {
         "phase": {

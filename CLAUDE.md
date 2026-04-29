@@ -2,7 +2,7 @@
 
 ## Project
 
-Civilian 3D sensor fusion platform. Python simulation + Rust tracking engine + Bevy 3D viewer.
+Civilian 3D world-modeling platform. Python simulation + Rust sensor-fusion service + Bevy 3D viewer.
 
 ## Structure
 
@@ -25,7 +25,7 @@ python3 -m pytest tests/ -q         # Python tests
 
 ## Key conventions
 
-- **Frozen dataclasses** for all data models (`models.py`)
+- **Frozen dataclasses** for shared runtime/replay state (`src/argusnet/core/types.py`)
 - **gRPC boundary**: Python calls Rust via `TrackingService.ingest_frame()`
 - **Replay-as-contract**: replay JSON is the interface between simulation and viewer
 - **Deterministic simulation** for fixed seed + config
@@ -35,7 +35,7 @@ python3 -m pytest tests/ -q         # Python tests
 ## Critical rules
 
 - **Proto changes** require updating both Python bindings (`src/argusnet/v1/`) AND Rust (`argusnet-proto`, `argusnet-core`, `argusnet-server`)
-- **Rust is source of truth** for tracking output — do not put tracking math in Python
+- **Rust is source of truth** for fused object-state output — do not put duplicated fusion math in Python
 - `environment.py` must continue re-exporting moved symbols for backward compatibility
 - Replay metadata changes should be **additive** unless updating viewer + tests together
 - Physical collision must never push entities below terrain
@@ -50,4 +50,3 @@ python3 -m pytest tests/ -q         # Python tests
 | gRPC service | `proto/argusnet/v1/world_model.proto`, `src/argusnet/adapters/argusnet_grpc.py`, `rust/argusnet-server/` |
 | Scene packaging | `src/argusnet/world/scene_loader.py`, `_glb.py` |
 | Viewer | `rust/argusnet-viewer/src/` |
-

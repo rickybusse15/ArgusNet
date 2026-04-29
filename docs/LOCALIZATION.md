@@ -59,6 +59,29 @@ That command only works if the system can localize itself relative to the stored
 
 ---
 
+## Current implementation
+
+Current ArgusNet localization is split between implemented scan-map-inspect state and roadmap
+pose-recovery architecture:
+
+- `src/argusnet/localization/engine.py` defines `GridLocalizer` and `LocalizationConfig`.
+- The current mission gate uses `LocalizationConfig.localization_timeout_steps`; older shorthand
+  names are stale.
+- `argusnet.core.types.LocalizationState` records aggregate replay state:
+  `active_localizations`, `mean_position_std_m`, and `mean_observation_confidence`.
+- `argusnet.core.types.LocalizationEstimate` records per-drone estimates inside
+  `ScanMissionState`.
+- `src/argusnet/simulation/sim.py` populates localization state during `scan_map_inspect`.
+- `src/argusnet/localization/vio.py` provides VIO interfaces/backends.
+- `src/argusnet/localization/relocalization.py`, `pose_graph.py`, `loop_closure.py`, and related
+  modules are foundations for richer relocalization, but they are not the current scan mission
+  authority.
+
+The richer pose/covariance/status model below is the roadmap contract. Current replay state is a
+smaller confidence/std bridge.
+
+---
+
 ## 3. Relationship to mapping
 
 Mapping and localization form a closed loop.
@@ -170,9 +193,10 @@ The localization subsystem may use several evidence sources.
 | known geofence | limits search area |
 | prior terrain model | terrain-relative pose correction |
 | prior obstacle/structure map | landmark and shape matching |
-| stored inspection points | map-relative navigation targets |
+| stored inspection points | map-relative navigation POIs |
 
-No single sensor should be treated as universally authoritative. Localization should fuse evidence and track uncertainty.
+No single sensor should be treated as universally authoritative. Localization should fuse evidence
+and monitor uncertainty.
 
 ---
 
@@ -284,11 +308,11 @@ Until the new drone localizes, it should not be sent to a precise inspection poi
 
 A later inspection system will depend on localization.
 
-Inspection targets should be stored in the world model as map-relative objects:
+Inspection POIs should be stored in the world model as map-relative objects:
 
 ```text
-InspectionTarget
-  target_id: str
+InspectionSite
+  site_id: str
   world_position_m: [x, y, z]
   required_view_angle: optional
   required_standoff_m: optional
@@ -297,7 +321,7 @@ InspectionTarget
   confidence: float
 ```
 
-To fly to an inspection target, the system must first know its own pose relative to that target.
+To fly to an inspection POI, the system must first know its own pose relative to that POI.
 
 ```text
 Current live observations
@@ -306,7 +330,7 @@ LocalizationState
         ↓
 Map-relative current pose
         ↓
-Planner route to inspection target
+Planner route to inspection POI
         ↓
 Trajectory and safety validation
 ```
@@ -371,7 +395,7 @@ The belief world also helps localization:
 - terrain height can constrain altitude;
 - obstacle layout can support shape matching;
 - coverage history tells where recognizable features exist;
-- prior inspection targets provide known landmarks;
+- prior inspection POIs provide known landmarks;
 - uncertainty layers indicate where localization is likely weak.
 
 Mapping improves localization, and localization improves mapping.
@@ -396,9 +420,10 @@ Minimum safety rules:
 
 ### Phase 1 — Localization state model
 
-- Add `LocalizationState` as a first-class runtime object.
-- Track pose estimate, uncertainty, confidence, and status.
-- Serialize localization state into replay and viewer state.
+- Extend the existing `LocalizationState` and `LocalizationEstimate` replay bridge into a richer
+  pose, covariance, confidence, and status model.
+- Preserve current scan-map-inspect replay compatibility.
+- Keep timeout behavior explicit through `LocalizationConfig.localization_timeout_steps`.
 
 ### Phase 2 — Startup mode handling
 
@@ -423,7 +448,7 @@ Minimum safety rules:
 
 ### Phase 5 — Inspection preparation
 
-- Define map-relative inspection targets.
+- Define map-relative inspection POIs.
 - Require localization confidence before routing to inspection points.
 - Add evaluation metrics for revisit accuracy.
 
@@ -431,7 +456,7 @@ Minimum safety rules:
 
 ## 17. Evaluation metrics
 
-Simulation should measure localization separately from mapping and tracking.
+Simulation should measure localization separately from mapping and inspection.
 
 Useful metrics:
 
@@ -442,7 +467,7 @@ Useful metrics:
 - false localization confidence;
 - localization lost events;
 - percentage of mission spent localized;
-- revisit error to known inspection targets;
+- revisit error to known inspection POIs;
 - map alignment error after relocalization;
 - planning violations caused by pose uncertainty.
 

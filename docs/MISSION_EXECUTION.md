@@ -55,6 +55,24 @@ The loop should continue until a stop condition is reached.
 
 ---
 
+## Current implementation bridge
+
+The full closed-loop executive below is roadmap architecture. The current runtime bridge is
+`scan_map_inspect` inside `src/argusnet/simulation/sim.py`:
+
+- Mapping state is populated from `CoverageMap` / `WorldMap`.
+- Localization state is populated from `GridLocalizer`.
+- Inspection state is handled through `InspectionPOI`, `POIStatus`, and `POIManager`.
+- Coordinator election is wired through `CoordinationManager.elect_coordinator()`.
+- Frontier completion uses `FrontierPlanner.find_gap_cells()`.
+- Deconfliction events are emitted through `src/argusnet/planning/deconfliction.py`.
+- The mission phase sequence is `scanning -> localizing -> inspecting -> egress -> complete`.
+
+`src/argusnet/mission/execution.py` is a foundation for the future executive. It is not yet the
+single authority for all simulation motion.
+
+---
+
 ## 3. Authority rule
 
 Mission execution must not directly command motion from high-level intent.
@@ -81,12 +99,12 @@ Mission execution consumes state from several subsystems.
 | State | Source | Use |
 |------|--------|-----|
 | Mission constraints | Operator / mission config | Defines geofence, limits, goals |
-| BeliefWorldModel | Mapping | Defines known, unknown, unsafe, and uncertain regions |
-| LocalizationState | Localization | Determines whether platform can act safely |
-| InspectionTarget | Inspection | Defines meaningful map-relative tasks |
-| Indexed memory | Indexing | Retrieves prior maps, keyframes, targets, evidence |
+| BeliefWorldModel | Mapping | Target authority for known, unknown, unsafe, and uncertain regions; current bridge is `CoverageMap` / `WorldMap` |
+| LocalizationState | Localization | Determines whether platform can act safely; current bridge is aggregate replay state plus `LocalizationEstimate` |
+| Inspection POI/site | Inspection | Roadmap persistent task model; current bridge is `InspectionPOI` / `POIStatus` |
+| Indexed memory | Indexing | Retrieves prior maps, keyframes, POIs, and evidence |
 | Platform health | Runtime / safety | Determines energy, comms, sensor health |
-| Tracks / detections | Sensing and fusion | Dynamic objects or targets, if used |
+| Detections / fused object states | Sensing and fusion | Dynamic objects, if used |
 | Weather / environment | World model | Affects sensing, safety, and execution |
 
 Mission execution should never treat any single subsystem as globally authoritative for all decisions.
@@ -149,9 +167,9 @@ The mission executive should convert high-level objectives into explicit tasks.
 ```text
 MissionTask
   task_id: str
-  task_type: map_frontier | inspect_target | relocalize | return_home | hold | revisit | operator_review
+  task_type: map_frontier | inspect_poi | relocalize | return_home | hold | revisit | operator_review
   priority: int
-  target_ref: optional str
+  poi_ref: optional str
   required_localization_confidence: float
   required_world_confidence: optional float
   status: pending | active | blocked | complete | failed
@@ -162,7 +180,7 @@ Examples:
 
 - map the next frontier cell;
 - relocalize after startup;
-- inspect a roof vent target;
+- inspect a roof vent POI;
 - revisit a previously inspected tower;
 - return home due to battery reserve;
 - hold because localization is lost.
@@ -178,7 +196,7 @@ A mission may move through several phases.
 | initialize | Load config, geofence, prior world model, and platform state |
 | localize | Establish or recover map-relative pose |
 | map | Build or update the belief world |
-| inspect | Capture evidence for known targets |
+| inspect | Capture evidence for known POIs |
 | index | Store observations, evidence, keyframes, and reconstructions |
 | evaluate | Compute progress and quality metrics |
 | return_home | Safely return to launch or recovery zone |
@@ -234,7 +252,7 @@ Operator approval should be required for:
 
 - expanding or changing the geofence;
 - entering a higher-risk mode;
-- ignoring a blocked target;
+- ignoring a blocked POI;
 - continuing after repeated localization failure;
 - accepting low-confidence inspection results;
 - using real-world adapters outside simulation.
@@ -270,7 +288,7 @@ The mission executive should handle failures explicitly.
 |--------|-------------------|
 | localization lost | hold, climb if safe, relocalize, or return using fallback |
 | battery low | stop new tasks and return home |
-| target blocked | mark blocked with reason, choose alternate target |
+| POI blocked | mark blocked with reason, choose alternate POI |
 | route unsafe | request alternate plan or hold |
 | geofence boundary reached | stop expansion or request operator approval |
 | comms degraded | return, relay, or hold depending on policy |
@@ -305,7 +323,7 @@ Mission-level evaluation should include:
 
 - mission completion status;
 - coverage achieved;
-- inspection targets completed;
+- inspection POIs completed;
 - time spent localized;
 - time spent mapping vs inspecting;
 - number of safety rejections;
@@ -361,7 +379,7 @@ Mission execution is successful when ArgusNet can:
 - start from a mission boundary and objective;
 - localize or relocalize before acting;
 - map unknown space inside the geofence;
-- inspect map-relative targets;
+- inspect map-relative POIs;
 - store evidence and reconstructions;
 - reject unsafe routes;
 - return home when required;

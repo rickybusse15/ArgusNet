@@ -51,11 +51,11 @@ No drone may move without passing through this pipeline. The pipeline enforces:
 
 | Module | Change type |
 |--------|------------|
-| `src/smart_tracker/sim.py` | modified (drone motion refactor) |
-| `src/smart_tracker/planning.py` | modified (output CandidateRoute) |
+| `src/argusnet/simulation/sim.py` | modified (drone motion refactor) |
+| `src/argusnet/planning/planner_base.py` | modified (output CandidateRoute) |
 | `rust/trajectory-engine/` | new crate |
 | `rust/safety-engine/` | new crate |
-| `src/smart_tracker/models.py` | modified (new types) |
+| `src/argusnet/core/types.py` | modified (new types) |
 
 ## Tests Required
 

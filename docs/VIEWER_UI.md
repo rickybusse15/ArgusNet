@@ -1,133 +1,123 @@
 # Viewer UI Reference
 
+The viewer presents replay state for mapping, localization, inspection, safety, and multi-drone
+coordination. The interface should make it clear what has been mapped, where drones are localized,
+which POIs are being inspected, and why safety or deconfliction events occurred.
+
 ## Panel Layout
 
-The viewer uses a single resizable left side panel with vertical scrolling.
-All sections are organized top-to-bottom by operational priority.
-
 ### Scene Header
-- Scene ID and coordinate reference system
-- Terrain bounds (X/Y extents in meters)
-- Elevation range (min/max height in meters)
-- Terrain mesh resolution (if loaded)
 
-### Scenario Controls (collapsible)
-- Map, terrain, platform, motion, and drone mode presets
-- Target/drone/station count sliders
-- Duration and seed controls
-- "Run Simulation" button (synthetic scenes only)
+- Scene ID and coordinate reference system
+- Terrain bounds and elevation range
+- Terrain mesh resolution
+- Replay duration and frame count
+
+### Scenario Controls
+
+- Map, terrain, platform, workflow, and drone mode presets
+- Drone count, duration, and seed controls
+- Run simulation button for synthetic scenes
 - Progress bar during simulation pipeline
 
 ### Playback
-- Replay summary: frame count, total duration
-- Play/Pause, step forward/back, jump to start/end buttons
-- Speed slider (0.25x to 4x)
-- Frame scrubber slider
-- Current timestamp and frame indicator
 
-### Tracking Metrics (collapsible)
-- Active track count
-- Mean and max localization error (meters)
-- Observation count, acceptance rate with progress bar
-- Rejection breakdown by reason (collapsible)
-- Mean measurement standard deviation
-- Per-track error breakdown (collapsible)
+- Play/Pause
+- Step forward/back
+- Jump to start/end
+- Speed slider
+- Frame scrubber
+- Current timestamp and frame index
 
-### Nodes / Drones (collapsible)
-Summary table of all sensor nodes in the current frame:
-- ID, sensor type, health %, mobile status, altitude
-- Sensor details sub-section: FOV and max range per node
+### Mapping
 
-### Tracks (collapsible)
-Summary table of all active tracks in the current frame:
-- Track ID, localization error, update count, stale steps, measurement std
-- Covariance diagonals sub-section (sigma_x, sigma_y, sigma_z in meters)
+- Coverage fraction
+- Covered/total cells
+- Mean revisit count
+- Newly scanned cells
+- Coverage and uncertainty overlays
 
-### Selection Inspector
-Click any marker in the 3D viewport to inspect it:
+### Localization
 
-**All marker types:** position (x/y/z meters), velocity vector and speed, heading angle
+- Active localization count
+- Mean position uncertainty
+- Mean confidence
+- Per-drone localization estimate and confidence
+- Timeout indicator when the mission advanced through timeout handling
 
-**Tracks:** measurement std, update count, stale steps (color-coded), track error, covariance diagonal
+### Inspection
 
-**Nodes:** health (color-coded), sensor type, mobile status, FOV angle, max range
+- POI list and status
+- Assigned drone
+- Dwell accumulated and completion time
+- Planned/achieved viewpoints when available
+- Inspection events and blocked reasons
 
-**Truths:** distance to nearest track
+### Drones
 
-### Alerts (collapsible)
-Dynamically computed from current frame state:
-- Stale tracks (>5 steps without update)
-- Low health nodes (<30%)
-- Untracked truths (no track within 50m)
-- High rejection rate (>50%)
+- ID, health, mobile status, altitude, battery fraction
+- Sensor details: type, FOV, and range
+- Current route/phase when available
 
-Green "No active alerts" when clean.
+### Coordination And Safety
 
-### Frame Events (collapsible)
-Events from the current replay frame:
-- Launch events: drone, station, target, launch time
-- Generation rejections: reason, node, target, blocker type (capped at 30 displayed)
-- Tracker rejections: reason, node, target, detail (capped at 30 displayed)
-- Observation count summary
+- Coordinator drone ID
+- Deconfliction events
+- Egress progress
+- Return-home distance
+- Safety/rejection events
 
-### Layers (collapsible)
-Toggle visibility of base GIS/terrain layers loaded from the scene package.
+### Frame Events
 
-### Runtime Overlays (collapsible)
-Toggle visibility of 9 overlay categories:
-- Tracks, Truths, Nodes
-- Observation Rays, Rejection Markers
-- Mission Zones, FOV Cones, Radar Rings, Launch Lines
+- Mapping updates
+- Localization updates
+- Inspection events
+- Deconfliction events
+- Observation/rejection summaries
 
-### Mission Zones (collapsible)
-- Type legend: S=surveillance, X=exclusion, P=patrol, O=objective
-- Zone groups with chip summary (type counts)
-- Click a group to focus the camera/zone rendering on it
-- Expand groups to see individual zone details (type, label, radius, priority)
+### Layers
 
-### Keyboard Shortcuts (collapsible)
-Reference table shown at the bottom of the panel.
+- Terrain
+- Map coverage
+- Localization ellipses
+- Inspection POIs
+- Routes and egress paths
+- Mission zones
+- Sensor FOV cones
 
-## Keyboard Controls
+### Mission Zones
 
-| Key | Action |
-|-----|--------|
+- Mapping area
+- Inspection area
+- Exclusion zone
+- Return-home area
+- Revisit area
+
+## Controls
+
+| Input | Action |
+|-------|--------|
 | Space | Play / Pause |
 | Left Arrow | Previous frame |
 | Right Arrow | Next frame |
 | Home | Jump to first frame |
 | End | Jump to last frame |
-
-## Mouse Controls
-
-| Input | Action |
-|-------|--------|
 | Right-drag | Orbit camera |
-| Middle-drag (or Shift+right-drag) | Pan camera |
+| Middle-drag or Shift+right-drag | Pan camera |
 | Scroll wheel | Zoom in/out |
-| Left-click on marker | Select for inspection |
+| Left-click marker | Select for inspection |
 
-## Overflow and Scrolling
+## Verification
 
-The entire side panel is wrapped in a vertical scroll area. All content is reachable
-by scrolling even when the window is too small to show everything at once.
-
-Lists with potentially unbounded content (rejections, events) are capped at display
-limits (20-30 items) with a "... and N more" indicator.
-
-## Verifying UI is Connected to Real State
-
-1. Start playback — all value fields should update each frame
-2. Click a track marker — selection panel should show live position updates
-3. Check Tracking Metrics — values should change as the scenario progresses
-4. Open Alerts — stale track warnings should appear/disappear as tracks age
-5. Check Node summary — health values should reflect actual node degradation
-6. Step frame by frame — all panels should update consistently
+1. Playback updates mapping, localization, inspection, and egress panels each frame.
+2. Selecting a drone shows live position, battery, and localization state.
+3. Selecting a POI shows assignment, dwell, and completion state.
+4. Mapping overlays match `MappingState` and `ScanMissionState.newly_scanned_cells`.
+5. Localization overlays match `LocalizationEstimate` uncertainty and confidence.
+6. Deconfliction and inspection event lists match replay frame contents.
 
 ## Known Limitations
 
-- Panel width is limited; very long IDs may be truncated
-- Covariance display assumes 4x4 or 3x3 matrix layout
-- Safety alerts use fixed thresholds (stale=5, health=30%, untracked=50m, rejection=50%)
-- Event display is per-frame only (no cross-frame event history)
-- Zone badges overlay may overlap with the side panel at extreme window sizes
+- Panel width is limited; very long IDs may be truncated.
+- Event display is per-frame only unless replay history is explicitly accumulated.
+- Some roadmap inspection evidence/reconstruction panels depend on future indexing support.

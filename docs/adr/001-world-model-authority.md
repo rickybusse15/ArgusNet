@@ -44,10 +44,11 @@ The analytic terrain service will be the authoritative source for planning, sens
 | Module | Change type |
 |--------|------------|
 | `rust/terrain-engine/` | new crate |
-| `src/smart_tracker/terrain.py` | modified (extract trait interface) |
-| `src/smart_tracker/visibility.py` | modified (use trait) |
-| `src/smart_tracker/planning.py` | modified (use trait) |
-| `rust/tracker-viewer/` | modified (visual terrain only) |
+| `src/argusnet/world/terrain.py` | modified (extract trait interface) |
+| `src/argusnet/world/environment.py` | modified (`TerrainLayer` runtime query owner) |
+| `src/argusnet/world/visibility.py` | modified (use trait) |
+| `src/argusnet/planning/planner_base.py` | modified (use trait) |
+| `rust/argusnet-viewer/` | modified (visual terrain only) |
 
 ## Tests Required
 

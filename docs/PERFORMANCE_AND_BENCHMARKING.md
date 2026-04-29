@@ -2,7 +2,7 @@
 
 This document defines the ArgusNet efficiency, benchmarking, data-layout, caching, language-boundary, and code-quality standards. It is written as an implementation guide for both human engineers and AI coding agents.
 
-ArgusNet is a closed-loop belief-world mission system, not only a replay viewer or tracker. Performance work must therefore preserve safety, determinism, state ownership, and architectural boundaries before optimizing raw speed.
+ArgusNet is a closed-loop belief-world mission system, not only a replay viewer. Performance work must therefore preserve safety, determinism, state ownership, and architectural boundaries before optimizing raw speed.
 
 ---
 
@@ -22,7 +22,7 @@ ArgusNet performance work has four goals:
 The current implementation is mixed Python and Rust:
 
 - Python handles simulation setup, scenario generation, environment/terrain modeling, replay/export tooling, and CLI orchestration.
-- Rust handles authoritative tracking/fusion math, the gRPC runtime daemon, protobuf conversion, and the Bevy viewer.
+- Rust handles authoritative sensor-fusion math, the gRPC runtime daemon, protobuf conversion, and the Bevy viewer.
 - Existing docs already define benchmark scenario families, replay evaluation metrics, terrain cache expectations, and code-completion standards.
 
 This document makes those standards operational by defining when to benchmark, what to measure, when to migrate code between languages, and how data structures should be shaped for future modules.
@@ -65,7 +65,7 @@ Use for an entire subsystem running on synthetic but realistic data.
 Examples:
 
 - Terrain query batch over a map tile
-- Sensor observation generation for `N` drones and `M` targets
+- Sensor observation generation for `N` drones and `M` observed objects or POIs
 - Fusion service ingest for a full frame
 - Planner route generation across obstacle-dense scenes
 - Replay writer/exporter processing a mission log
@@ -97,7 +97,7 @@ Required output:
 - CPU utilization when available
 - Peak memory
 - Replay size
-- Number of frames, observations, tracks, planning events, safety events, and exported artifacts
+- Number of frames, observations, fused object states, planning events, safety events, and exported artifacts
 
 ### Level 3: System Benchmark
 
@@ -105,7 +105,7 @@ Use before major releases or architectural migrations.
 
 Examples:
 
-- Full Python simulation + Rust tracker daemon + replay export + viewer load
+- Full Python simulation + Rust fusion daemon + replay export + viewer load
 - Long multi-seed benchmark sweep
 - Large map and scene package ingestion
 - Realistic closed-loop runtime test with mission execution, mapping, indexing, planning, and safety logging
@@ -137,7 +137,7 @@ Every accepted performance baseline should record at least this matrix.
 | Memory | replay_size_mb | lower | Replay/export storage pressure |
 | Quality | mission_completion_rate | higher | Must not regress while optimizing |
 | Quality | localisation_rmse_m | lower | Track/localization quality gate |
-| Quality | track_continuity_mean | higher | Coverage/fusion quality gate |
+| Quality | fusion_continuity_mean | higher | Coverage/fusion quality gate |
 | Reliability | safety_override_count | lower | Target is zero for normal scenarios |
 | Reliability | infeasible_path_rejection_count | lower | Allowed in adversarial scenarios if logged |
 | Determinism | repeated_seed_diff_count | zero | Same seed should produce identical outputs |
@@ -180,7 +180,7 @@ Use stable string IDs at external boundaries and compact integer IDs inside hot 
 
 Recommended pattern:
 
-- External/replay/protobuf: `drone_id: string`, `track_id: string`, `target_id: string`, `mission_id: string`
+- External/replay/protobuf: stable string IDs such as `drone_id`, `poi_id`, `object_id`, and `mission_id`
 - Internal Rust hot path: map external IDs to `u32` or `usize` indexes through an ID table
 - Python batch processing: use integer indexes in arrays, preserve a sidecar `id_to_index` / `index_to_id` mapping
 
@@ -224,7 +224,7 @@ Rules:
 | Heavy replay frames | JSONL, Arrow, or chunked binary sidecar when JSON becomes too large | Avoid single massive files |
 | Viewer scene package | Existing `.smartscene` plus binary sidecars for large meshes/arrays | Keep package load fast |
 
-Large replay, scene, or array files should not be committed directly. Use generated artifact directories, Git LFS only when the project intentionally tracks a large reference artifact, or external release assets.
+Large replay, scene, or array files should not be committed directly. Use generated artifact directories, Git LFS only when the project intentionally stores a large reference artifact, or external release assets.
 
 ---
 
@@ -301,7 +301,7 @@ Every cache must document:
 |---|---|---|---|---|
 | Analytic terrain point cache | World/Terrain | quantized `(x_m, y_m, cell_m)` | height | new terrain model |
 | Terrain gradient cache | World/Terrain | quantized `(x_m, y_m, delta_m)` | gradient | new terrain model |
-| LOS segment cache | Visibility/Sensing | quantized origin/target/clearance + scene version | blocker result | scene/terrain/obstacle update |
+| LOS segment cache | Visibility/Sensing | quantized origin/endpoint/clearance + scene version | blocker result | scene/terrain/obstacle update |
 | Obstacle spatial index | World/Obstacles | scene version | R-tree/BVH/grid | obstacle set update |
 | Planner route cache | Planning | start/goal/geofence/obstacle version/planner config | route candidate | map or constraints update |
 | Map tile cache | Mapping/World | tile ID + LOD + version | belief/elevation/occupancy tile | tile update/version bump |
@@ -409,8 +409,8 @@ Benchmark gates:
 
 Standards:
 
-- Rust remains authoritative for fused tracks.
-- Python may synthesize observations, but tracking lifecycle, covariance, and health state should stay in Rust.
+- Rust remains authoritative for fused object states.
+- Python may synthesize observations, but fusion lifecycle, covariance, and health state should stay in Rust.
 - Observations must include source ID, timestamp, frame ID, covariance/noise model, and rejection reason when rejected.
 - Association/gating changes require deterministic scenario comparisons.
 
@@ -418,9 +418,9 @@ Benchmark gates:
 
 - ingest frame latency
 - observations/sec
-- association complexity versus number of drones/targets
-- localization/track error metrics
-- stale-track reacquisition metrics
+- association complexity versus number of drones and observed objects
+- localization/fusion error metrics
+- stale fused-state reacquisition metrics
 
 ### 9.3 Localization
 
@@ -544,10 +544,14 @@ Recommended command shape:
 cargo bench --workspace
 python3 -m pytest tests/ -q -m benchmark_fast
 python3 -m pytest tests/ -q --benchmark-only
-smart-tracker sim --duration-s 60 --seed 7 --write-eval
+argusnet sim --duration-s 60 --seed 7
 ```
 
-Future helper target:
+Current evaluation helpers live under `argusnet.evaluation.metrics`, `argusnet.evaluation.reports`,
+and `argusnet.evaluation.benchmarks`. Benchmark marker commands and specialized CLI wrappers should
+be treated as standards until they are wired into CI.
+
+Future helper:
 
 ```bash
 python3 -m argusnet.evaluation.benchmark \
@@ -566,7 +570,7 @@ python3 -m argusnet.evaluation.benchmark \
 | Python CPU | `py-spy`, `scalene`, `cProfile` |
 | Python memory | `tracemalloc`, `memray`, `scalene` |
 | Cross-process tracing | OpenTelemetry spans or structured JSON logs |
-| Experiment tracking | MLflow-compatible run directories |
+| Experiment logging | MLflow-compatible run directories |
 | Large arrays/tables | Arrow/Parquet/NumPy memory maps |
 
 ---
@@ -594,6 +598,9 @@ Nightly/release runs should include:
 - benchmark report artifact upload
 
 ### 11.3 Golden performance files
+
+This is a standard for accepted baselines. The repository may not yet contain these files for every
+scenario; add them when a benchmark is promoted to a regression gate.
 
 Store accepted benchmark summaries under:
 

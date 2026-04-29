@@ -12,12 +12,12 @@ the boundary explicit and normative.
 
 ### 1.1 Visual Terrain (render path)
 
-**Owner:** `tracker-viewer` (Bevy).
+**Owner:** `argusnet-viewer` (Bevy).
 
 **Purpose:** Rendering only. Vertices, normals, UVs, texture coordinates,
 level-of-detail meshes for the Bevy scene.
 
-**Source:** `TerrainLayer.viewer_mesh()` in `environment.py` generates a
+**Source:** `TerrainLayer.viewer_mesh()` in `src/argusnet/world/environment.py` generates a
 downsampled grid (capped at 128 × 128 by default) suitable for GPU upload.
 The `.smartscene` package carries this as `terrain.viewer_mesh` JSON.
 
@@ -25,11 +25,11 @@ The `.smartscene` package carries this as `terrain.viewer_mesh` JSON.
 and smoothing. The viewer MUST NOT call analytic query functions for rendering
 decisions. Physics and path planning are not the viewer's responsibility.
 
-### 1.2 Analytic Terrain (simulation / planning / tracking path)
+### 1.2 Analytic Terrain (simulation / planning / sensing path)
 
-**Owner:** `environment.py` (`TerrainLayer`) at runtime.
+**Owner:** `src/argusnet/world/environment.py` (`TerrainLayer`) at runtime.
 
-**Construction:** `world/procedural.py` exposes `TerrainBuildConfig` and
+**Construction:** `src/argusnet/world/procedural.py` exposes `TerrainBuildConfig` and
 `build_terrain_layer(config, bounds)`. Supported sources are:
 - `procedural`: deterministic layered terrain by preset and seed.
 - `dem`: GeoTIFF DEM promoted into a runtime `TerrainLayer`.
@@ -59,8 +59,8 @@ queries.
 | `gradient_at_many(xy)` | `TerrainLayer.gradient_at_many` | Batch central-difference query |
 | `normal_at(x, y)` | `TerrainLayer.normal_at` | Derived from gradient |
 | `curvature_at(x, y)` | `TerrainModel.curvature_at` / `TerrainLayer.curvature_at` | Laplacian approximation |
-| `los_raycast(origin, target)` | `EnvironmentQuery._terrain_intersection` | Returns first hit |
-| `comms_shadow(origin, target)` | `EnvironmentQuery.los` (`blocker_type == "terrain"`) | Folded into sensor LOS |
+| `los_raycast(origin, endpoint)` | `EnvironmentQuery._terrain_intersection` | Returns first hit |
+| `comms_shadow(origin, endpoint)` | `EnvironmentQuery.los` (`blocker_type == "terrain"`) | Folded into sensor LOS |
 | `land_cover_at(x, y)` | `LandCoverLayer.land_cover_at` | Returns `LandCoverClass` enum |
 | `clamp_altitude(xy, z, min_agl)` | `TerrainModel.clamp_altitude` / `TerrainLayer.clamp_altitude` | Both exist |
 
@@ -110,7 +110,7 @@ pub trait TerrainQuery: Send + Sync {
     // Segment / LOS queries
     // -----------------------------------------------------------------------
 
-    /// Test whether the segment from `origin` to `target` (each [x, y, z] metres)
+    /// Test whether the segment from `origin` to `endpoint` (each [x, y, z] metres)
     /// intersects the terrain surface, applying `clearance_m` as a vertical
     /// safety margin above the terrain.
     ///
@@ -118,7 +118,7 @@ pub trait TerrainQuery: Send + Sync {
     fn los_raycast(
         &self,
         origin: [f64; 3],
-        target: [f64; 3],
+        endpoint: [f64; 3],
         clearance_m: f64,
     ) -> Option<TerrainHit>;
 

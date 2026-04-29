@@ -12,7 +12,7 @@ The indexing subsystem answers:
 
 - Have we seen this place before?
 - Where was this observation captured?
-- What data exists for this target or region?
+- What data exists for this POI or region?
 - What changed between missions?
 - Which areas are well-covered or under-observed?
 - What evidence supports a given inspection result?
@@ -25,7 +25,7 @@ Without indexing, ArgusNet cannot:
 
 - reuse maps across missions
 - relocalize effectively
-- revisit inspection targets
+- revisit inspection POIs
 - compare data over time
 - build spatial memory
 
@@ -45,7 +45,7 @@ Indexing should store structured artifacts:
 - keyframes (images + pose)
 - landmarks / descriptors
 - map tiles (terrain, occupancy, semantic layers)
-- inspection targets
+- inspection POIs
 - inspection evidence sets
 - local reconstructions
 - mission logs
@@ -77,7 +77,7 @@ Data should be queryable by:
 
 - spatial region (x, y, z bounds)
 - geofence or mission region
-- target_id
+- poi_id
 - timestamp range
 - sensor type
 - confidence thresholds
@@ -97,11 +97,11 @@ Possible structures:
 IndexQuery
   keyframes_in_region(bounds)
   nearest_keyframes(position)
-  observations_for_target(target_id)
-  reconstructions_for_target(target_id)
+  observations_for_poi(poi_id)
+  reconstructions_for_poi(poi_id)
   coverage_map(region)
   recent_missions(region)
-  change_records(target_id)
+  change_records(poi_id)
 ```
 
 ---
@@ -113,7 +113,7 @@ IndexWrite
   add_keyframe(...)
   add_observation(...)
   add_map_update(...)
-  add_inspection_target(...)
+  add_inspection_poi(...)
   add_evidence_set(...)
   add_reconstruction(...)
   add_change_record(...)
@@ -152,7 +152,7 @@ Indexing should preserve:
 | Mapping | writes world updates |
 | Localization | reads keyframes and landmarks |
 | Inspection | writes evidence and reconstructions |
-| Planning | reads coverage and target data |
+| Planning | reads coverage and POI data |
 | Mission execution | logs events and decisions |
 | Evaluation | reads mission outputs |
 

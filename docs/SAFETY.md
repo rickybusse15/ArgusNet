@@ -135,7 +135,7 @@ pub struct DronePhysicalLimits {
     // Platform identity
     // ------------------------------------------------------------------
 
-    /// Human-readable platform type label (e.g. "interceptor", "tracker").
+    /// Human-readable platform type label (e.g. "mapper", "inspector").
     pub platform_type: String,
 }
 
@@ -182,8 +182,8 @@ subsumes `FlightEnvelope` and extends it with comms, energy, and gimbal fields.
 
 ```rust
 impl DronePhysicalLimits {
-    /// Interceptor-role drone: fast, tight turn, moderate endurance.
-    pub fn interceptor_default() -> Self {
+    /// Mapper drone: efficient coverage platform.
+    pub fn mapper_default() -> Self {
         Self {
             max_speed_mps: 42.0,
             min_speed_mps: 0.0,       // multirotor: hover-capable
@@ -204,12 +204,12 @@ impl DronePhysicalLimits {
             gimbal_max_yaw_offset_rad: 1.571, // 90°
             min_drone_separation_m: 8.0,
             min_drone_vertical_separation_m: 5.0,
-            platform_type: "interceptor".to_string(),
+            platform_type: "mapper".to_string(),
         }
     }
 
-    /// Tracker-role drone: wider orbit, longer endurance, larger standoff.
-    pub fn tracker_default() -> Self {
+    /// Inspector drone: stable platform for POI capture.
+    pub fn inspector_default() -> Self {
         Self {
             max_speed_mps: 35.0,
             min_speed_mps: 0.0,
@@ -230,7 +230,7 @@ impl DronePhysicalLimits {
             gimbal_max_yaw_offset_rad: 1.047, // 60°
             min_drone_separation_m: 12.0,
             min_drone_vertical_separation_m: 8.0,
-            platform_type: "tracker".to_string(),
+            platform_type: "inspector".to_string(),
         }
     }
 }
@@ -333,7 +333,7 @@ implicitly:
 |-----------|--------------------------|
 | Terrain clearance | `TerrainModel.clamp_altitude` + `DynamicsConfig.*_min_agl_m` |
 | Speed cap | `follow_speed_cap_mps` in `PlatformPresetProfile` |
-| Collision avoidance | `planning.py` obstacle push + `DynamicsConfig.collision_push_margin_m` |
+| Collision avoidance | `src/argusnet/planning/planner_base.py` obstacle push + `DynamicsConfig.collision_push_margin_m` |
 | Physical collision below terrain | Critical rule in CLAUDE.md: "Physical collision must never push entities below terrain" |
 | Drone separation | Not formally enforced; implicit via orbit radius spacing |
 | Energy / comms | Not modelled (simulation assumes perfect comms) |
@@ -476,7 +476,7 @@ Triggered when `energy_fraction < min_energy_reserve_fraction`.
 
 ```
 1. Complete the current observation frame (if update_count > 0 this frame).
-2. Compute direct RTH path using visibility-graph planner (planning.py).
+2. Compute direct RTH path using visibility-graph planner (`src/argusnet/planning/planner_base.py`).
 3. Fly RTH path at max_speed_mps, maintaining min_agl_m.
 4. If terrain comms_shadow covers the RTH path, climb to the minimum altitude
    that restores comms before proceeding.

@@ -30,7 +30,7 @@ The long-term goal is a simulation-first drone world-modeling platform that can:
 This repository currently contains the foundations of that broader vision, including:
 
 - Python-based simulation, terrain, replay, export, and mission tooling
-- Rust tracking and filtering services with gRPC boundaries
+- Rust sensor-fusion and filtering services with gRPC boundaries
 - Environment-aware observation synthesis with terrain, obstacle, and line-of-sight reasoning
 - Replay-driven visualization and scene packaging workflows
 - CLI and test infrastructure for simulation and evaluation workflows
@@ -75,8 +75,8 @@ ArgusNet is intended for:
 ArgusNet is **not** intended for:
 
 - weaponization
-- autonomous engagement
-- unlawful surveillance
+- unsafe autonomous operation
+- privacy-invasive monitoring
 - cyber intrusion or takeover
 - harmful pursuit workflows
 - any deployment that violates applicable aviation, privacy, or local laws
@@ -382,7 +382,7 @@ Turn flights into persistent world knowledge:
 - keyframe store
 - landmark store
 - observation index
-- low-confidence region tracking
+- low-confidence region monitoring
 
 ### Phase 4 — Planning
 
@@ -418,9 +418,8 @@ Only after simulation is strong:
 
 ArgusNet does not aim to be:
 
-- a weapon system
-- an autonomous engagement platform
-- a harmful surveillance toolkit
+- an unsafe autonomous operation platform
+- a privacy-invasive monitoring toolkit
 - a cyber intrusion or drone takeover framework
 - a product for unlawful or unsafe deployment
 
@@ -439,6 +438,11 @@ For implementation details already present in this repository, see:
 - [Architecture & module map](docs/architecture.md)
 - [Usage guide & CLI reference](docs/usage.md)
 - [Terrain notes](docs/TERRAIN.md)
+- [Mapping contract](docs/MAPPING.md)
+- [Localization contract](docs/LOCALIZATION.md)
+- [Indexing contract](docs/INDEXING.md)
+- [Inspection contract](docs/INSPECTION.md)
+- [Mission execution contract](docs/MISSION_EXECUTION.md)
 - [Planning notes](docs/PLANNING.md)
 - [Safety notes](docs/SAFETY.md)
 - [Benchmark scenarios](docs/SCENARIOS.md)

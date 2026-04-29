@@ -6,23 +6,23 @@ authoritative.
 
 ---
 
-## Decision 1: Python `fusion.py` vs. Rust Tracking Engine (Dual Kalman)
+## Decision 1: Python Fusion Helpers vs. Rust Sensor Fusion Service
 
 **Date:** 2026-03-22
 **Status:** Accepted
 
 ### Context
 
-`src/smart_tracker/fusion.py` (and the underlying `argusnet.localization.state` module) implements
+`src/argusnet/mapping/fusion.py` and related localization utilities implement
 a full IMM Kalman filter (`IMMTrack3D`, `ManagedTrack`, `CoordinatedTurnTrack3D`). The Rust
-`argusnet-core` tracker is also a full tracking engine exposed via gRPC. Both produce track
-estimates from bearing observations. The runtime simulation loop calls Rust via
+`argusnet-core` service is also a full sensor-fusion engine exposed via gRPC. Both produce fused
+object estimates from bearing observations. The runtime simulation loop calls Rust via
 `TrackingService.ingest_frame()`; the Python filter is not on the critical path.
 
 ### Decision
 
-**Rust `argusnet-core` is the sole runtime track producer.** `fusion.py` and
-`argusnet.localization.state` are designate as:
+**Rust `argusnet-core` is the sole runtime fused-state producer.** Python fusion/localization helpers are
+designated as:
 
 1. A **test utility** — correctness reference for filter math (`test_fusion_advanced.py`).
 2. A **triangulation/initialization helper** — `triangulate_bearings`, `fuse_bearing_cluster` may
@@ -33,7 +33,7 @@ estimates from bearing observations. The runtime simulation loop calls Rust via
 
 ### Consequences
 
-- Any code reading track state must read from the Rust gRPC response (`PlatformFrame.tracks`), not
+- Any code reading fused object state must read from the Rust gRPC response, not
   from a Python `ManagedTrack`.
 - `test_fusion_advanced.py` tests are correctness reference tests, not integration tests.
 - The Python filter may be removed in a future cleanup phase after test coverage migrates to Rust.
@@ -86,7 +86,7 @@ code must:
 ### Context
 
 ADR-001 proposes separating visual terrain (for rendering) from analytic terrain (for LOS
-raycasting and altitude clamping). Currently `TerrainLayer` in `argusnet.world.terrain` serves
+raycasting and altitude clamping). Currently `TerrainLayer` in `argusnet.world.environment` serves
 all three roles. The Rust `terrain-engine` crate exists but is not depended on by any other crate.
 
 ### Decision
@@ -114,6 +114,6 @@ The `terrain-engine` crate is reserved for Rust-side analytic consumers. No chan
 
 | Decision | Rule |
 |----------|------|
-| 1 | Rust is sole runtime track producer; Python Kalman = test utility |
+| 1 | Rust is sole runtime fused-state producer; Python Kalman = test utility |
 | 2 | Safety engine logs violations, does not block (Posture A through Phase 5) |
 | 3 | Viewer uses replay `viewer_mesh`; Rust crate serves new Rust consumers only |

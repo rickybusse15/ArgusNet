@@ -7,9 +7,8 @@ All changes must follow the architecture update plan. See `docs/` for subsystem 
 ### Before making changes
 
 1. Read `CLAUDE.md` for project conventions
-2. Read `AGENT_TEAM.md` for multi-agent execution protocol
-3. Read `docs/architecture.md` for current module map
-4. Check `docs/adr/` for architecture decisions that affect your area
+2. Read `docs/architecture.md` for current module map
+3. Check `docs/adr/` for architecture decisions that affect your area
 
 ### Code Completion Standards (from architecture update Section 14)
 
@@ -75,16 +74,20 @@ Priority order: safety > architectural consistency > determinism > performance >
 pip install -e .                    # Python deps
 cargo test                          # Rust tests
 python3 -m pytest tests/ -q         # Python tests
-smart-tracker sim --duration-s 60   # Run simulation
+argusnet sim --duration-s 60        # Run simulation
 ```
 
 ## Crate / Module Map
 
 See `docs/architecture.md` for the current map. The planned evolution (docs/STATE_OWNERSHIP.md) adds:
 - `terrain-engine` — analytic terrain queries
-- `fusion-engine` — fused track authority
+- `argusnet-core` — current fused object-state authority
+- `argusnet-server` / `argusnet-proto` — current gRPC service boundary
+- `argusnet-viewer` — current replay/scene viewer
+- `mapping-engine` — planned dense belief-world updates
+- `localization-engine` — planned map-relative pose recovery
 - `trajectory-engine` — feasible path generation
 - `safety-engine` — constraint enforcement
-- `mission-gen` — procedural scenario generation
 - `planner-engine` — cooperative role-based planning
+- `indexing-engine` — planned spatial memory and retrieval
 - `eval-suite` — metrics and benchmarking

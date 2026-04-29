@@ -1,413 +1,131 @@
-# PLANNING.md — Drone Role Model and Planner-to-Trajectory Contract
+# PLANNING.md — Mapping, Localization, Inspection, and Coordination Planning
 
-This document defines the cooperative mission planning model (Sections 9 and 10 of the
-architecture update plan): drone roles, planning objectives, the contract that turns a
-planned route into an executable trajectory, replanning triggers, and deconfliction rules.
+This document describes ArgusNet planning for the current product direction: map an area, localize
+platforms within that map, inspect map-relative POIs, coordinate multiple drones, and return safely.
 
-References throughout point to the existing implementations in:
-- `src/argusnet/planning/planning.py` (`PathPlanner2D`, `PlannerConfig`, `PlannerRoute`)
-- `src/argusnet/simulation/sim.py` (`ScenarioDefinition.drone_roles`, `drone_planner_modes`,
-  `drone_target_assignments`, `adaptive_drone_controllers`)
-- `src/argusnet/simulation/behaviors.py` (`FlightEnvelope`, `TransitBehavior`, `LoiterBehavior`;
-  dynamics/sensor config now in `sensor_models.py`)
+## Current Planner Modules
 
----
+| Capability | Current implementation | Runtime status |
+|------------|------------------------|----------------|
+| 2D obstacle-aware route planning | `src/argusnet/planning/planner_base.py` (`PathPlanner2D`, `PlannerConfig`, `PlannerRoute`) | Used by simulation controllers and route helpers |
+| Coverage/frontier utilities | `src/argusnet/planning/frontier.py` | `find_gap_cells()` is wired into `scan_map_inspect`; `select_frontier_cell()` is a library helper |
+| Multi-drone coordination helpers | `src/argusnet/planning/coordination.py` | Coordinator election is wired; RF-delayed claims and formations are library helpers |
+| Inspection POI assignment | `src/argusnet/planning/poi.py` | Wired into inspection assignment, dwell, handoff, team assignment, and rescoring |
+| Deconfliction | `src/argusnet/planning/deconfliction.py` | Wired into current sim deconfliction events |
+| Mission generation | `src/argusnet/planning/inspection.py` | Generates map/inspection mission structures and validation reports |
 
-## 1. Drone Role Model
+## Planning Objectives
 
-Every drone (mobile `SimNode`) is assigned exactly one role at scenario construction time.
-The role is stored in `ScenarioDefinition.drone_roles: Mapping[str, str]` where the key is
-`node_id`.
+ArgusNet planning optimizes for useful map and inspection work under safety constraints:
 
-### Role Definitions
+- **Coverage progress**: observe unvisited or under-observed map cells inside the mission boundary.
+- **Localization confidence**: prefer actions that improve platform pose confidence before precise
+  map-relative navigation.
+- **Inspection value**: prioritize high-value POIs, overdue revisits, and POIs in poorly covered
+  regions.
+- **View quality**: choose approach paths and standoff positions that give useful sensor geometry.
+- **Energy margin**: preserve return-home reserve before accepting new mapping or inspection work.
+- **Comms continuity**: keep required peer/relay links healthy when coordination depends on them.
+- **Terrain and obstacle clearance**: reject or reroute unsafe plans.
 
-```
-Role: "primary_observer"
-  Description:
-    Maintains close sensor coverage of the highest-priority active target.
-    Orbit radius: DynamicsConfig.interceptor_follow_radius_m (55 m default).
-    Altitude offset: DynamicsConfig.interceptor_follow_altitude_offset_m (35 m default).
-  Planner mode: "follow"
-  Replanning trigger: track handoff, track loss, or stale_steps >= 2
-  Min count per mission: 1
+Ground truth can be used for simulation scoring after the fact. Planning should use mapping and
+localization state, not hidden simulation truth.
 
-Role: "secondary_baseline"
-  Description:
-    Orbits the same target at a wider standoff to maximise triangulation baseline.
-    Orbit radius: DynamicsConfig.tracker_standoff_radius_m (120 m default).
-    Altitude offset: DynamicsConfig.tracker_altitude_offset_m (70 m default).
-  Planner mode: "follow" (tracker sub-variant)
-  Replanning trigger: same as primary_observer
-  Min count per mission: 0 (recommended >= 1 for adequate localisation)
+## Planner-To-Trajectory Contract
 
-Role: "corridor_watcher"
-  Description:
-    Patrols a FlightCorridor (from MISSION_MODEL.md) to detect and hand off targets
-    entering or exiting the sensor coverage area.
-    Speed: DynamicsConfig.drone_search_speed_base_mps (28 m/s default, scaled by platform).
-  Planner mode: "search" (lawnmower or waypoint patrol along corridor centerline)
-  Replanning trigger: corridor assignment change or new target entry detected
-  Min count per mission: 0
+A route becomes executable only after it has enough context for safety and replay:
 
-Role: "relay"
-  Description:
-    Stationary or slow-loiter platform that extends comms range between drones beyond
-    MissionConstraints.comms_range_m from any ground station.
-    Altitude: chosen to maximise LOS to both ground station and furthest active drone.
-  Planner mode: "search" (loiter at computed relay point)
-  Replanning trigger: comm link quality drops below threshold or relay point becomes occluded
-  Min count per mission: 0
-
-Role: "reserve"
-  Description:
-    Grounded drone awaiting launch via LaunchEvent. Activated when an active drone
-    exhausts energy reserve or is lost.
-    Launch trigger: energy_reserve_fraction < 0.10 on any active drone with same target assignment.
-  Planner mode: assigned on activation (inherits role of the drone it replaces)
-  Replanning trigger: on launch completion
-  Min count per mission: 0
+```text
+Mapping / inspection intent
+  -> candidate POI, frontier, revisit, hold, or return-home task
+  -> candidate route or viewpoint
+  -> altitude and speed profile
+  -> safety/deconfliction checks
+  -> executable trajectory
+  -> replay/evaluation event
 ```
 
-Role assignments are validated at `GeneratedMission` construction time. At least one
-`primary_observer` must be present. If `target_count > 1`, at least two drones with
-distinct `drone_target_assignments` values must exist.
+Every installed trajectory should record:
 
----
+- drone ID;
+- task type (`map_frontier`, `localize`, `inspect_poi`, `revisit_poi`, `return_home`, `hold`);
+- route or viewpoint source;
+- planned timestamp;
+- expected duration;
+- safety validation result;
+- reason for rejection or override, when applicable.
 
-## 2. Planning Objectives
+## Coverage And Frontier Planning
 
-The planner optimises a weighted sum of the following objectives. Weights are configurable
-per mission type; defaults shown in brackets.
+`FrontierPlanner` provides two separate capabilities:
 
-```
-PlanningObjective
-  track_continuity        [1.0]  # Maximise fraction of [start_s, end_s] each required target
-                                 # has >= 1 active bearing observation per step.
-                                 # Drives drone positions to maintain sensor coverage.
+- `find_gap_cells(cmap)` is currently wired into `scan_map_inspect` as the scan-to-localization
+  gate. It detects enclosed holes in the coverage map and prevents early transition when coverage is
+  misleading.
+- `select_frontier_cell(cmap, drone_xy, claimed, drone_id)` is a library helper for future per-drone
+  next-cell selection. It is not currently called by `src/argusnet/simulation/sim.py`.
 
-  localisation_quality    [0.8]  # Minimise trace(P_position) for each active track.
-                                 # Improves by widening inter-drone baseline.
-                                 # Measured as covariance_trace from TrackState.covariance.
+`ClaimedCells` is instantiated by the simulation, but current routing does not yet use it for
+frontier assignment. A future wiring pass should connect selected cells to route generation and
+shared claim updates.
 
-  geometric_diversity     [0.5]  # Maximise angular spread of bearing vectors to each target.
-                                 # Minimum acceptable spread: pi/4 rad (45 degrees).
-                                 # Computed as min pairwise angle across all observing nodes.
+## Multi-Drone Coordination
 
-  persistence             [0.6]  # Penalise unplanned breaks in coverage (stale_steps > 0).
-                                 # Heavier weight for required objectives.
+Current coordination is intentionally lightweight:
 
-  resilience              [0.4]  # Maintain fallback coverage when any single drone fails.
-                                 # Requires at least one other drone able to observe each
-                                 # target independently.
+- `CoordinationManager.elect_coordinator()` is called once during scanning to choose a coordinator
+  by available battery.
+- `CoordinationManager.update_claimed()` and `flush_messages()` model RF-delayed claim updates, but
+  `sim.py` does not currently call them.
+- `CoordinationManager.formation_offsets()` computes line/V offsets, but `sim.py` does not
+  currently apply formation offsets to mapping routes.
 
-  terrain_clearance       [1.0]  # Hard constraint: drone AGL >= MissionConstraints.terrain_clearance_m.
-                                 # Violation cost is infinite (infeasible path rejection).
+Future coordination work should frame these helpers around map coverage distribution, localization
+support, inspection workload sharing, and safe separation.
 
-  energy_reserve          [0.3]  # Penalise routes whose estimated flight time brings
-                                 # projected energy below 0.15 (15 %) at mission end.
+## Inspection POI Assignment
 
-  comms_connectivity      [0.2]  # Penalise positions where any drone exceeds
-                                 # MissionConstraints.comms_range_m from its nearest peer
-                                 # or ground station.
-```
+`POIAssignmentContext` is the current energy-aware assignment input:
 
-The `terrain_clearance` objective is always weight 1.0 regardless of mission type and
-cannot be downweighted.
-
----
-
-## 3. Planner-to-Trajectory Contract
-
-This section defines how a `PlannerRoute` from `PathPlanner2D` is converted into an
-executable trajectory function (`TrajectoryFn: (float) -> (np.ndarray, np.ndarray)`).
-
-### 3.1 Schema: PlannedTrajectory
-
-```
-PlannedTrajectory
-  drone_id:             str
-  route:                PlannerRoute          # Output of PathPlanner2D.plan_route() or
-                                              # PathPlanner2D.route_waypoints()
-  altitude_profile:     AltitudeProfile
-  speed_mps:            float                 # Nominal cruise speed along the route
-  role:                 str                   # Role at planning time (for audit)
-  planned_at_s:         float                 # Simulation time when plan was computed
-  valid_until_s:        float                 # Staleness deadline; see Section 4
-  generation:           int                   # Monotonically increasing plan version counter
-  override_reason:      str | None            # Non-None if this plan resulted from a safety override
-```
-
-```
-AltitudeProfile
-  mode:                 str                   # "fixed_agl" | "terrain_following" | "fixed_msl"
-  base_agl_m:           float                 # Nominal AGL; maps to DynamicsConfig.drone_base_agl_m
-  min_agl_m:            float                 # Floor; must be >= terrain_clearance_m
-  max_agl_m:            float                 # Ceiling from FlightEnvelope.max_altitude_agl_m
-  terrain_following_smoothing_s: float        # Low-pass time constant from DynamicsConfig
-                                              # (default 1.5 s)
-```
-
-### 3.2 Conversion Steps
-
-Given a `PlannerRoute` (2D XY waypoints) and an `AltitudeProfile`, the conversion pipeline
-produces a `TrajectoryFn`:
-
-1. **Waypoint lift**: Each 2D waypoint `(x, y)` in `PlannerRoute.points_xy_m` is elevated
-   to 3D using `TerrainModel.height_at(x, y) + base_agl_m`. When `mode="terrain_following"`,
-   the AGL is recalculated at each simulation step using the smoothing filter from
-   `DynamicsConfig.terrain_following_smoothing_s`.
-
-2. **Speed enforcement**: Assign speed `speed_mps` along each segment. If any segment
-   requires a turn angle > 90 degrees, reduce local speed to satisfy `FlightEnvelope.min_turn_radius_m`
-   (derived from `max_bank_angle_deg`).
-
-3. **Trajectory function**: Construct a `TransitBehavior` (behaviors.py) from the lifted
-   3D waypoints with the segment speeds. The returned callable is the `TrajectoryFn` stored
-   on the `SimNode.trajectory`.
-
-4. **End-of-route behaviour**: On reaching the final waypoint, the drone transitions to
-   `LoiterBehavior` at the terminal position unless a new `PlannedTrajectory` has been
-   issued before `valid_until_s`.
-
-5. **Safety gate**: Before installing the new trajectory, assert:
-   - `route` is not `None` (PathPlanner2D returned a valid path).
-   - All lifted 3D points satisfy `z >= TerrainModel.height_at(x, y) + min_agl_m`.
-   - No point falls inside any obstacle from `ObstacleLayer.primitives`.
-   If any assertion fails, the plan is rejected (increment `safety_override_count` in
-   evaluation metrics) and the drone retains its previous trajectory.
-
-6. **Smoothing**: The converted trajectory inherits path smoothing already applied by
-   `PathPlanner2D._smooth_path()`. Additional velocity smoothing is provided by the
-   cubic Hermite interpolation inside `TransitBehavior`.
-
-### 3.3 Immutable Contract Properties
-
-The following invariants must hold for every `PlannedTrajectory` installed on a drone:
-
-- `planned_at_s <= valid_until_s` (plan is not born stale).
-- `speed_mps` is within `[FlightEnvelope.min_speed_mps, FlightEnvelope.max_speed_mps]`.
-- `base_agl_m >= min_agl_m`.
-- `route.length_m > 0` and `route.vertex_count >= 2`.
-- The drone's current position at `planned_at_s` is within `PlannerConfig.snap_m` of
-  `route.points_xy_m[0]` (plans do not teleport the drone).
-
----
-
-## 4. Timing: Replanning Triggers and Staleness Thresholds
-
-### 4.1 Staleness Threshold
-
-A `PlannedTrajectory` becomes stale when `simulation_time >= valid_until_s`. The default
-`valid_until_s` is computed as:
-
-```
-valid_until_s = planned_at_s + max(30.0, route.length_m / speed_mps * 0.5)
-```
-
-That is, a plan is valid for at least 30 seconds, or half the estimated flight time,
-whichever is larger. This prevents excessive replanning on short routes while ensuring
-long routes are reconsidered as conditions change.
-
-### 4.2 Replanning Triggers (priority order)
-
-The following events trigger immediate replanning regardless of `valid_until_s`:
-
-1. **Track loss** (`stale_steps >= DynamicsConfig.default_max_stale_steps` for the drone's
-   assigned target). Drones with role `primary_observer` or `secondary_baseline` transition
-   to a search sub-route centred on the last known position.
-
-2. **Track handoff** — a different drone has a better geometry score (lower covariance trace)
-   for the current target. The current drone is reassigned or transitioned to `secondary_baseline`.
-
-3. **Obstacle ingress warning** — the look-ahead position `t + follow_lead_s` of the
-   current `TrajectoryFn` would violate terrain clearance or enter an obstacle. Triggers
-   emergency reroute via `PathPlanner2D.plan_route()`.
-
-4. **New exclusion zone** — a `MissionZone` with `zone_type="exclusion"` is added at
-   runtime. All drones whose current routes intersect the zone are replanned.
-
-5. **Role reassignment** — the drone is given a new role by the cooperative planner
-   (e.g., a `reserve` drone is activated to replace a failed `primary_observer`).
-
-6. **Staleness expiry** — `valid_until_s` reached with no other trigger.
-
-### 4.3 Replan Cooldown
-
-To prevent oscillation, a drone may not be replanned more than once per 5 simulation
-seconds, except for triggers 3 (obstacle ingress) and 5 (role reassignment), which
-override the cooldown.
-
----
-
-## 5. Deconfliction Rules
-
-Deconfliction is evaluated in 2D XY space at each simulation step. The rules apply to
-all active (non-`reserve`) drones simultaneously.
-
-### 5.1 Separation Minimum
-
-```
-min_separation_m = 2 × PlannerConfig.drone_clearance_m   # default: 2 × 8.0 = 16 m
-```
-
-If any two drones are predicted to be within `min_separation_m` within the next
-`follow_lead_s` seconds:
-- The lower-priority drone (by role priority order: `primary_observer` > `secondary_baseline`
-  > `corridor_watcher` > `relay` > `reserve`) yields.
-- Yielding drone computes an alternate next waypoint offset 90 degrees from its current
-  heading at the minimum separation distance and replans.
-
-### 5.2 Corridor Conflict
-
-If two drones are assigned the same `FlightCorridor` traveling in opposing directions
-(`direction="bidirectional"`), they are allocated alternating time windows. Each window is
-`corridor.length_m / speed_mps` seconds long. The planner inserts a loiter hold at the
-corridor entry point for the lower-priority drone until the window clears.
-
-### 5.3 Vertical Separation
-
-When two drones must pass within `min_separation_m` in XY (unavoidable given terrain and
-obstacles), the lower-priority drone adjusts altitude to maintain a vertical separation of
-at least 20 m. This is recorded as a `comms_dropout` entry if the altitude change breaks
-LOS to its ground station.
-
-### 5.4 Exclusion Zone Enforcement
-
-A drone inside or within `PlannerConfig.drone_clearance_m` of an exclusion zone boundary
-is immediately rerouted. `PathPlanner2D` treats exclusion zones as hard obstacles by
-adding them to `ObstacleLayer` as `CylinderObstacle` primitives with radius
-`MissionZone.radius_m`.
-
----
-
-## 6. Frontier-Based Coverage Planning (Phase 3 ISR)
-
-Used in `scan_map_inspect` missions. Implementation: `src/argusnet/planning/frontier.py`.
-
-### 6.1 FrontierConfig
-
-```
-FrontierConfig
-  distance_weight:          float  # Weight on -distance term in cell score (default 1.0)
-  coverage_gradient_weight: float  # Weight on local coverage gradient (default 1.0;
-                                   # ramps 0→1 between 25%–75% overall coverage to
-                                   # prevent drone clustering during early scanning)
-  exclusion_radius_m:       float  # Radius around a drone's claimed cell that other
-                                   # drones will not target (default 120 m)
-  gap_fill_min_fraction:    float  # Maximum fraction of total grid cells that may be
-                                   # enclosed interior holes before phase transition is
-                                   # allowed (default 0.02 = 2 %)
-```
-
-### 6.2 Cell Selection Algorithm
-
-`FrontierPlanner.select_frontier_cell(drone_id, position_m, coverage_map, claimed_cells)`
-returns the uncovered grid cell that maximises:
-
-```
-score = -distance_weight × dist_m + gradient_weight × coverage_gradient
-```
-
-where `coverage_gradient` is the local coverage density in a neighbourhood around the
-candidate cell. If all candidates are within the exclusion radius of other drones' claimed
-cells, the exclusion radius is ignored and the search retries without it.
-
-### 6.3 Gap-Fill Gate
-
-Before transitioning from `scanning` to `localizing`, the simulation checks that enclosed
-interior holes in the coverage map are below `gap_fill_min_fraction` of total cells.
-
-`FrontierPlanner.find_gap_cells(coverage_map)` uses `scipy.ndimage.binary_fill_holes` to
-identify fully enclosed uncovered regions (holes completely surrounded by covered cells).
-The gate prevents declaring coverage complete when a pocket of uncovered terrain remains
-inside the mapped perimeter — a situation that would cause misleading localization results.
-
----
-
-## 7. Multi-Drone Coordination (Phase 3 ISR)
-
-Used in `scan_map_inspect` missions. Implementation: `src/argusnet/planning/coordination.py`.
-
-### 7.1 CoordinationPolicy
-
-```
-CoordinationPolicy
-  elect_coordinator:      bool   # Enable battery-based coordinator election (default True)
-  message_latency_steps:  int    # Simulated RF latency in steps; 0 = instant (default 0)
-  formation_mode:         str    # "none" | "line_abreast" | "v_formation" (default "none")
-  formation_spacing_m:    float  # Lateral spacing between drones in formation (default 80 m)
-```
-
-### 7.2 Coordinator Election
-
-`CoordinationManager.elect_coordinator(drone_ids, battery_states, capacity_wh)` returns the
-drone with the highest battery fraction at the time of election. Election is one-shot: the
-coordinator is elected once at the start of the `scanning` phase and is not re-elected
-because drone failure is not modelled.
-
-### 7.3 RF Latency Simulation
-
-When `message_latency_steps > 0`, claimed-cell updates and POI assignments are queued in
-`SharedMissionState.pending_messages` and delivered only after `message_latency_steps`
-have elapsed. `CoordinationManager.flush_messages(shared_state, current_step)` is called
-each frame to apply due messages. This simulates the effect of RF communication delay on
-cooperative coverage planning.
-
-### 7.4 Formation Offsets
-
-`CoordinationManager.formation_offsets(drone_ids, lead_heading_rad, policy)` returns a
-`Dict[str, np.ndarray]` of per-drone XY offsets from the lead position.
-
-- **`line_abreast`**: drones are spaced perpendicular to the lead heading, alternating
-  left and right: `offset = perp × (sign × rank × spacing_m)`.
-- **`v_formation`**: drones trail behind the lead and spread laterally:
-  `offset = -fwd × (rank × spacing × 0.5) + perp × (sign × rank × spacing × 0.5)`.
-
----
-
-## 8. Energy-Aware POI Assignment (Phase 3 ISR)
-
-Used in `scan_map_inspect` missions. Implementation: `src/argusnet/planning/poi.py`.
-
-### 8.1 POIAssignmentContext
-
-```
+```text
 POIAssignmentContext
-  drone_id:           str
-  position_m:         np.ndarray   # Current 3D ENU position
-  battery_wh:         float        # Remaining energy in watt-hours
-  capacity_wh:        float        # Total battery capacity
-  cruise_speed_mps:   float        # Nominal cruise speed for travel cost estimation
-  reserve_fraction:   float        # Minimum battery fraction to retain (default 0.10)
+  drone_id: str
+  drone_pos: np.ndarray
+  battery_remaining_wh: float
+  battery_capacity_wh: float
+  cruise_speed_mps: float
+  battery_reserve_fraction: float
+  timestamp_s: float
 ```
 
-### 8.2 Assignment Strategies
+`POIManager.assign_energy_aware(context)` scores pending POIs using effective priority and travel
+energy. Drones that cannot reach a POI while preserving reserve are skipped.
 
-`POIManager.assign_nearest(drone_id, position_m)` — original greedy assignment, kept for
-backward compatibility.
+Other current POI features:
 
-`POIManager.assign_energy_aware(context)` — selects the POI that maximises:
+- `trigger_handoff(from_drone_id, to_drone_id)` transfers an active POI while preserving dwell.
+- `request_team_assign(drone_id, poi_id)` lets multiple drones contribute dwell to the same POI.
+- `rescore_from_map(coverage_map)` raises priority for POIs in poorly covered cells.
 
-```
-score = effective_priority × 10 - travel_cost_wh / usable_wh
-```
+## Deconfliction And Safety
 
-where `travel_cost_wh = distance_m / cruise_speed_mps × power_w` and
-`usable_wh = battery_wh - reserve_fraction × capacity_wh`. Priority dominates; energy is
-a tiebreaker. A POI is skipped if the drone cannot afford to reach it within its energy
-budget.
+Deconfliction is evaluated before a route/viewpoint should be considered safe:
 
-### 8.3 Handoff and Team Assignment
+- preserve minimum drone-to-drone separation;
+- avoid mission exclusion zones and blocked regions;
+- keep terrain clearance above mission limits;
+- hold or reroute when a corridor or local area is temporarily occupied;
+- record `DeconflictionEvent` when a resolution is applied.
 
-`POIManager.trigger_handoff(from_drone_id, to_drone_id)` transfers an active POI from one
-drone to another, preserving accumulated dwell time.
+The current safety posture is partly logging-oriented. Future runtime work should route all motion
+through a blocking safety gate before execution.
 
-`POIManager.request_team_assign(drone_id, poi_id)` adds a second drone to help dwell on
-the same POI. Both drones credit the same POI, effectively halving the remaining dwell time
-needed.
+## Roadmap
 
-### 8.4 Coverage-Based Rescoring
-
-`POIManager.rescore_from_map(coverage_map)` boosts the priority of POIs located in
-poorly-covered grid regions by +3, directing inspection effort toward areas that received
-less scanning attention.
+1. Wire `select_frontier_cell()` and `ClaimedCells` into actual coverage routing.
+2. Connect RF-delayed shared claims to the mapping planner only after deterministic tests exist.
+3. Replace old role-oriented planning language with task types: mapping, localization support,
+   inspection, revisit, hold, and return-home.
+4. Add route/viewpoint event logs that feed `PERFORMANCE_AND_BENCHMARKING.md` metrics.
+5. Move toward a full closed-loop mission executive where planning proposes and safety validates
+   every action.
