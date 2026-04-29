@@ -24,6 +24,9 @@ use crate::ui::viewer_ui_system;
 /// Maximum number of historical positions kept in a trail.
 const TRAIL_MAX_POINTS: usize = 32;
 
+/// Logical-pixel width of the egui side panel — must match `SIDE_PANEL_WIDTH` in ui.rs.
+const SIDE_PANEL_LOGICAL_PX: f32 = 360.0;
+
 /// Marker component on the persistent GPU line-list mesh used to render the
 /// LiDAR reconstruction point cloud.  Rebuilt only when the cloud is dirty.
 #[derive(Component)]
@@ -204,27 +207,30 @@ fn setup_world(
         Transform::from_translation(eye).looking_at(focus, Vec3::Z),
     ));
 
-    // Top-down orthographic camera for the Split-mode reconstruction viewport.
+    // Perspective camera for the Split-mode reconstruction viewport.
+    // Positioned at an oblique angle so the height-mapped tiles read as a 3D surface.
     // Inactive by default; sync_split_viewports_system enables it when ViewMode::Split.
     let bounds = &scene_package.environment.bounds_xy_m;
     let cx = (bounds.x_min_m + bounds.x_max_m) * 0.5;
     let cy = (bounds.y_min_m + bounds.y_max_m) * 0.5;
-    let scene_height_m = (bounds.y_max_m - bounds.y_min_m).max(100.0);
+    let large_dim = ((bounds.x_max_m - bounds.x_min_m).max(bounds.y_max_m - bounds.y_min_m)).max(200.0);
+    // Pull camera back to the south-east at ~50° elevation so Z-height differences
+    // are clearly visible as depth in the reconstruction viewport.
+    let recon_eye = Vec3::new(cx + large_dim * 0.55, cy - large_dim * 0.75, large_dim * 0.65);
     commands.spawn((
         ReconstructionCamera,
         Camera3d::default(),
         Camera {
             order: 1,
             is_active: false,
+            clear_color: bevy::render::camera::ClearColorConfig::Custom(
+                bevy::color::Color::srgb(0.04, 0.05, 0.08),
+            ),
             ..default()
         },
-        Projection::Orthographic(bevy::render::camera::OrthographicProjection {
-            scaling_mode: bevy::render::camera::ScalingMode::FixedVertical {
-                viewport_height: scene_height_m,
-            },
-            ..bevy::render::camera::OrthographicProjection::default_3d()
-        }),
-        Transform::from_xyz(cx, cy, 5000.0).looking_at(Vec3::new(cx, cy, 0.0), Vec3::Y),
+        Transform::from_translation(recon_eye).looking_at(Vec3::new(cx, cy, 0.0), Vec3::Z),
+        // Only render layer 1 — reconstruction tiles only, no terrain clutter.
+        bevy::render::view::RenderLayers::layer(1),
     ));
 
     spawn_base_layers(
@@ -442,15 +448,22 @@ fn sync_split_viewports_system(
     };
 
     if *view_mode == ViewMode::Split {
+        // Three-column layout (all physical pixels):
+        //   [0 .. panel_px]       — egui side panel (drawn on top by bevy_egui)
+        //   [panel_px .. w/2]     — main 3D orbit viewport
+        //   [w/2 .. w]            — LiDAR reconstruction viewport
+        let scale = window.scale_factor() as f32;
+        let panel_px = (SIDE_PANEL_LOGICAL_PX * scale) as u32;
+        let mid = w / 2;
         main.viewport = Some(Viewport {
-            physical_position: UVec2::ZERO,
-            physical_size: UVec2::new(w / 2, h),
+            physical_position: UVec2::new(panel_px, 0),
+            physical_size: UVec2::new(mid.saturating_sub(panel_px), h),
             ..default()
         });
         main.is_active = true;
         recon.viewport = Some(Viewport {
-            physical_position: UVec2::new(w / 2, 0),
-            physical_size: UVec2::new(w / 2, h),
+            physical_position: UVec2::new(mid, 0),
+            physical_size: UVec2::new(w - mid, h),
             ..default()
         });
         recon.is_active = true;
@@ -1448,6 +1461,8 @@ fn setup_reconstruction_mesh(
         MeshMaterial3d(materials.add(mat)),
         Visibility::Hidden,
         ReconstructionMeshMarker,
+        // Layer 1: visible only to the ReconstructionCamera in split mode.
+        bevy::render::view::RenderLayers::layer(1),
     ));
 }
 
@@ -1486,9 +1501,10 @@ fn maintain_reconstruction_mesh_system(
         return;
     }
 
-    // Half-size of a grid cell. Base terrain resolution is 5 m → 2 m half-extent
-    // leaves a 0.5 m gap per edge, producing a crisp grid of fine tiles.
-    const HALF: f32 = 2.0;
+    // Coverage grid resolution is 50 m → half-extent 24.5 m fills each cell
+    // with a 0.5 m seam between neighbours. Height-hue colouring makes adjacent
+    // tiles visually distinct even at this coarse resolution.
+    const HALF: f32 = 24.5;
     // Sit just above terrain to avoid z-fighting without floating awkwardly.
     const Z_LIFT: f32 = 1.0;
     // Up normal for all vertices in Z-up space.

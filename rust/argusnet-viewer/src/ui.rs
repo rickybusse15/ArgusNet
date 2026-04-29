@@ -166,8 +166,8 @@ pub fn viewer_ui_system(
 
     // ── Left side panel — content switches by ActiveTab ─────────────────────
     egui::SidePanel::left("side_content")
-        .resizable(true)
-        .default_width(SIDE_PANEL_WIDTH)
+        .resizable(false)
+        .exact_width(SIDE_PANEL_WIDTH)
         .show(context, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
@@ -201,7 +201,55 @@ pub fn viewer_ui_system(
 
     // ── Screen-space overlays ────────────────────────────────────────────────
     draw_zone_badges(context, &projected_badges);
-    draw_mission_phase_hud(context, &replay_state);
+
+    // ── Split-mode divider + section labels ─────────────────────────────────
+    if *view_mode == ViewMode::Split {
+        let screen = context.screen_rect();
+        let mid_x = screen.width() * 0.5;
+
+        // Vertical divider between 3D world and reconstruction.
+        egui::Area::new(egui::Id::new("split_divider"))
+            .fixed_pos(egui::pos2(mid_x - 1.0, 0.0))
+            .order(egui::Order::Background)
+            .interactable(false)
+            .show(context, |ui| {
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(2.0, screen.height())),
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(80, 120, 200, 180),
+                );
+                ui.allocate_rect(
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(2.0, screen.height())),
+                    egui::Sense::hover(),
+                );
+            });
+
+        // Section label: right half.
+        egui::Area::new(egui::Id::new("recon_label"))
+            .fixed_pos(egui::pos2(mid_x + 8.0, TAB_BAR_HEIGHT + 6.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(context, |ui| {
+                ui.label(
+                    egui::RichText::new("LIDAR RECONSTRUCTION")
+                        .small()
+                        .color(egui::Color32::from_rgba_unmultiplied(120, 160, 255, 180)),
+                );
+            });
+
+        // Section label: middle (3D world).
+        egui::Area::new(egui::Id::new("world_label"))
+            .fixed_pos(egui::pos2(SIDE_PANEL_WIDTH + 8.0, TAB_BAR_HEIGHT + 6.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(context, |ui| {
+                ui.label(
+                    egui::RichText::new("3D WORLD")
+                        .small()
+                        .color(egui::Color32::from_rgba_unmultiplied(160, 200, 120, 180)),
+                );
+            });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1933,83 +1981,6 @@ fn draw_zone_badges(context: &egui::Context, projected_badges: &ProjectedZoneBad
                     cx += chip_text.len() as f32 * 7.0 + 4.0;
                 }
             }
-        });
-}
-
-// ---------------------------------------------------------------------------
-// Mission Phase HUD
-// ---------------------------------------------------------------------------
-
-fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
-    let Some(frame) = replay_state.current_frame() else {
-        return;
-    };
-    let Some(ref ms) = frame.scan_mission_state else {
-        return;
-    };
-
-    let (badge_text, badge_color) = match ms.phase.as_str() {
-        "scanning" => {
-            let pct = (ms.scan_coverage_fraction * 100.0) as u32;
-            (
-                format!("\u{25a6} SCANNING  {}%", pct),
-                egui::Color32::from_rgb(80, 140, 255),
-            )
-        }
-        "localizing" => (
-            "\u{25ce} LOCALIZING".to_string(),
-            egui::Color32::from_rgb(255, 210, 60),
-        ),
-        "inspecting" => {
-            let done = ms.completed_poi_count;
-            let total = ms.total_poi_count.max(1);
-            (
-                format!("\u{25cf} INSPECTING  {}/{}", done, total),
-                egui::Color32::from_rgb(255, 140, 40),
-            )
-        }
-        "egress" => {
-            let arrived = egress_arrived_count(&ms.egress_progress);
-            let total = ms.egress_progress.len().max(1);
-            (
-                format!("\u{21a9} EGRESS  {}/{}", arrived, total),
-                egui::Color32::from_rgb(255, 160, 30),
-            )
-        }
-        "complete" => (
-            "\u{2713} COMPLETE".to_string(),
-            egui::Color32::from_rgb(60, 200, 80),
-        ),
-        other => (other.to_ascii_uppercase(), egui::Color32::GRAY),
-    };
-
-    // Position just to the right of the side panel, below the tab bar.
-    egui::Area::new(egui::Id::new("phase_hud"))
-        .fixed_pos(egui::pos2(SIDE_PANEL_WIDTH + 10.0, TAB_BAR_HEIGHT + 8.0))
-        .order(egui::Order::Foreground)
-        .show(context, |ui| {
-            let galley = ui.painter().layout_no_wrap(
-                badge_text.clone(),
-                egui::FontId::proportional(14.0),
-                badge_color,
-            );
-            let text_size = galley.size();
-            let pad = egui::vec2(10.0, 5.0);
-            let rect = egui::Rect::from_min_size(ui.next_widget_position(), text_size + pad * 2.0);
-            ui.allocate_rect(rect, egui::Sense::hover());
-            let painter = ui.painter();
-            painter.rect_filled(
-                rect,
-                5.0,
-                egui::Color32::from_rgba_unmultiplied(10, 12, 18, 200),
-            );
-            painter.text(
-                rect.left_center() + egui::vec2(pad.x, 0.0),
-                egui::Align2::LEFT_CENTER,
-                &badge_text,
-                egui::FontId::proportional(14.0),
-                badge_color,
-            );
         });
 }
 
