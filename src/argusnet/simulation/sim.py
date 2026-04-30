@@ -4586,7 +4586,7 @@ def run_simulation(
         if task_type == MissionTaskType.MAP_FRONTIER:
             return _scan_phase not in ("scanning", "localizing")
         if task_type == MissionTaskType.INSPECT_TARGET:
-            return _poi_manager.all_complete()
+            return _poi_manager.all_complete
         return True
 
     _mission_executor = MissionExecutor(
