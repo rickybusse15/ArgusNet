@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use egui_extras::{Column, TableBuilder};
-use egui_plot::{Line, Plot, PlotPoints, Points, Polygon, VLine};
+use egui_plot::{HLine, Line, Plot, PlotPoints, Points, Polygon, VLine};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
 use crate::replay::{EgressProgress, MarkerKind, ReplayState, RuntimeMarker};
@@ -336,7 +336,7 @@ fn drawer_mission_content(
     ui.separator();
 
     mission_layer_presets(ui, ui_state, runtime_visibility, mission_overlay);
-    section_mission_progress(ui, replay_state, view_mode, mission_overlay);
+    section_mission_progress(ui, replay_state, view_mode);
     ui.separator();
     tab_mission_content(
         ui,
@@ -1027,8 +1027,14 @@ fn tab_mission_content(
             }
 
             // Crosshair at scene center (faint)
-            let _ = bx_mid;
-            let _ = by_mid;
+            plot_ui.vline(
+                VLine::new(bx_mid)
+                    .color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
+            );
+            plot_ui.hline(
+                HLine::new(by_mid)
+                    .color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
+            );
         });
 
     ui.separator();
@@ -1163,7 +1169,7 @@ fn tab_scene_content(
     section_scene_header(ui, scene_package, mission_zones, replay_state);
     ui.separator();
 
-    section_mission_progress(ui, replay_state, view_mode, mission_overlay);
+    section_mission_progress(ui, replay_state, view_mode);
     ui.separator();
 
     section_scenario(ui, supports_hot_swap, sim_runner);
@@ -1388,9 +1394,7 @@ fn section_mission_progress(
     ui: &mut egui::Ui,
     replay_state: &ReplayState,
     view_mode: &mut ViewMode,
-    overlay: &MissionOverlaySettings,
 ) {
-    let _ = overlay;
     let Some(frame) = replay_state.current_frame() else {
         return;
     };

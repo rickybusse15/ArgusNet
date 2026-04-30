@@ -790,47 +790,6 @@ fn draw_runtime_overlays_system(
         }
     }
 
-    // Covariance ellipsoids — draw 3 axis-aligned circles per track
-    if runtime_visibility.show_covariance_ellipsoids {
-        if let Some(frame) = replay_state.current_frame() {
-            let ell_color = Color::srgba(0.9, 0.65, 0.1, 0.55);
-            let k = 2.45_f64; // 95% confidence factor
-            let segments = 20;
-            for track in &frame.tracks {
-                if let Some(cov) = &track.covariance {
-                    let diag = crate::ui::covariance_diagonal(cov);
-                    let rx = ((diag[0].max(0.0)).sqrt() * k) as f32;
-                    let ry = ((diag[1].max(0.0)).sqrt() * k) as f32;
-                    let rz = ((diag[2].max(0.0)).sqrt() * k) as f32;
-                    let center = Vec3::from_array(track.position);
-                    // XY-plane ring
-                    for i in 0..segments {
-                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
-                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
-                        let p0 = center + Vec3::new(a0.cos() * rx, a0.sin() * ry, 0.0);
-                        let p1 = center + Vec3::new(a1.cos() * rx, a1.sin() * ry, 0.0);
-                        gizmos.line(p0, p1, ell_color);
-                    }
-                    // XZ-plane ring
-                    for i in 0..segments {
-                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
-                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
-                        let p0 = center + Vec3::new(a0.cos() * rx, 0.0, a0.sin() * rz);
-                        let p1 = center + Vec3::new(a1.cos() * rx, 0.0, a1.sin() * rz);
-                        gizmos.line(p0, p1, ell_color);
-                    }
-                    // YZ-plane ring
-                    for i in 0..segments {
-                        let a0 = std::f32::consts::TAU * i as f32 / segments as f32;
-                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / segments as f32;
-                        let p0 = center + Vec3::new(0.0, a0.cos() * ry, a0.sin() * rz);
-                        let p1 = center + Vec3::new(0.0, a1.cos() * ry, a1.sin() * rz);
-                        gizmos.line(p0, p1, ell_color);
-                    }
-                }
-            }
-        }
-    }
 }
 
 fn find_node_position_opt(frame: &crate::replay::ReplayFrame, node_id: &str) -> Option<Vec3> {

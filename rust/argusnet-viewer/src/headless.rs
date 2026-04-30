@@ -56,20 +56,27 @@ pub fn render_headless(scene_path: impl AsRef<Path>, options: HeadlessRenderOpti
             .context("record mode requires a packaged replay.json")?;
         fs::create_dir_all(record_dir)
             .with_context(|| format!("failed to create {}", record_dir.display()))?;
-        for (frame_index, frame) in replay.frames.iter().enumerate() {
+        let interval_s = 1.0_f32 / options.fps as f32;
+        let mut next_output_s = 0.0_f32;
+        let mut output_index = 0usize;
+        for frame in replay.frames.iter() {
+            if frame.timestamp_s < next_output_s {
+                continue;
+            }
+            next_output_s += interval_s;
             let image = render_frame(
                 &scene_package,
                 Some(replay),
                 Some(frame),
                 &options,
-                frame_index,
+                output_index,
             );
-            let path = record_dir.join(format!("frame_{frame_index:05}.png"));
+            let path = record_dir.join(format!("frame_{output_index:05}.png"));
             save_image(&path, &image)?;
+            output_index += 1;
         }
     }
 
-    let _ = options.fps;
     Ok(())
 }
 
