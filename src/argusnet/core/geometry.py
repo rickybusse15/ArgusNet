@@ -11,6 +11,11 @@ from argusnet.core.types import Vector3, vec3
 __all__ = [
     "Vector3",
     "vec3",
+    "Point2",
+    "Point3",
+    "Pose3",
+    "Aabb2",
+    "Aabb3",
     "BoundingBox3D",
     "normalize",
     "rotate_z",
@@ -19,6 +24,67 @@ __all__ = [
     "angle_between",
     "clamp",
 ]
+
+
+@dataclass(frozen=True)
+class Point2:
+    x_m: float
+    y_m: float
+
+    def as_np(self) -> np.ndarray:
+        return np.array([self.x_m, self.y_m], dtype=float)
+
+    @classmethod
+    def from_value(cls, value: object) -> Point2:
+        arr = np.asarray(value, dtype=float).reshape(2)
+        return cls(float(arr[0]), float(arr[1]))
+
+
+@dataclass(frozen=True)
+class Point3:
+    x_m: float
+    y_m: float
+    z_m: float
+
+    def as_np(self) -> np.ndarray:
+        return np.array([self.x_m, self.y_m, self.z_m], dtype=float)
+
+    @classmethod
+    def from_value(cls, value: object) -> Point3:
+        arr = np.asarray(value, dtype=float).reshape(3)
+        return cls(float(arr[0]), float(arr[1]), float(arr[2]))
+
+
+@dataclass(frozen=True)
+class Pose3:
+    position: Point3
+    yaw_rad: float = 0.0
+    pitch_rad: float = 0.0
+    roll_rad: float = 0.0
+
+
+@dataclass(frozen=True)
+class Aabb2:
+    min: Point2
+    max: Point2
+
+    def contains(self, point: Point2 | object) -> bool:
+        p = point if isinstance(point, Point2) else Point2.from_value(point)
+        return self.min.x_m <= p.x_m <= self.max.x_m and self.min.y_m <= p.y_m <= self.max.y_m
+
+
+@dataclass(frozen=True)
+class Aabb3:
+    min: Point3
+    max: Point3
+
+    def contains(self, point: Point3 | object) -> bool:
+        p = point if isinstance(point, Point3) else Point3.from_value(point)
+        return (
+            self.min.x_m <= p.x_m <= self.max.x_m
+            and self.min.y_m <= p.y_m <= self.max.y_m
+            and self.min.z_m <= p.z_m <= self.max.z_m
+        )
 
 
 @dataclass

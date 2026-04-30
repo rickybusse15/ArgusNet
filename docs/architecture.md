@@ -159,7 +159,7 @@ hidden truth in physical-mode tests.
 | `src/argusnet/planning/inspection.py` | Mission generation | Mission spec generation and validation |
 | `src/argusnet/simulation/sim.py` | Mission execution | Scenario construction, observation synthesis, scan-map-inspect runtime, replay generation |
 | `src/argusnet/simulation/behaviors.py` | Trajectory | Drone and synthetic-object behavior helpers |
-| `src/argusnet/evaluation/*` | Evaluation | Replay validation, export, metrics, benchmark aggregation, reports |
+| `src/argusnet/evaluation/*` | Evaluation | Replay validation, export, metrics, benchmark aggregation, benchmark scenarios, performance summaries |
 | `src/argusnet/mission/execution.py` | Mission execution | Mission loop skeleton and task model foundations |
 
 ## Rust Workspace
@@ -323,6 +323,12 @@ Recommended new ADRs:
 6. Constraint violation -> check `SAFETY.md`, mission geofence, and safety gate.
 7. Inspection failed -> check localization confidence, LOS, viewpoint safety, evidence quality, and POI state.
 8. Relocalization failed -> check indexing/keyframes, map region candidates, and coordinate frames.
+
+## Benchmark Operations
+
+Fast accepted performance baselines are stored in `tests/golden/performance/`. Pull request CI runs
+the fast Python smoke benchmarks and compiles Rust Criterion benchmarks; `.github/workflows/nightly-bench.yml`
+runs the slow multi-seed scenario sweep and uploads the generated benchmark artifacts.
 
 ## Related Documentation
 

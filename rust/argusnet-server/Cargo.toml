@@ -18,5 +18,13 @@ serde_yaml.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+hdrhistogram.workspace = true
 argusnet-core = { path = "../argusnet-core" }
 argusnet-proto = { path = "../argusnet-proto" }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "grpc_bench"
+harness = false

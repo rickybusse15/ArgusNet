@@ -1028,12 +1028,10 @@ fn tab_mission_content(
 
             // Crosshair at scene center (faint)
             plot_ui.vline(
-                VLine::new(bx_mid)
-                    .color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
+                VLine::new(bx_mid).color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
             );
             plot_ui.hline(
-                HLine::new(by_mid)
-                    .color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
+                HLine::new(by_mid).color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
             );
         });
 

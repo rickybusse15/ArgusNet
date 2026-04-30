@@ -98,6 +98,24 @@ ArgusNet should support:
 - replay, benchmarking, and evaluation
 - synthetic data generation for training perception and navigation systems
 
+## Running Benchmarks
+
+Fast Python smoke benchmarks and the canonical scenario harness are available from the CLI:
+
+```bash
+python -m pytest tests/benchmarks/ -q -m benchmark_fast --benchmark-only
+argusnet benchmark --suite fast --seeds 7 --output runs/benchmarks/fast
+```
+
+Rust microbenchmarks use Criterion:
+
+```bash
+cargo bench --workspace
+```
+
+Accepted fast-suite baselines live under `tests/golden/performance/`, and the nightly workflow runs
+the slow suite with multi-seed artifacts.
+
 ## Conceptual Architecture
 
 ```text

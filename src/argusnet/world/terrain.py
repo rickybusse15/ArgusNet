@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
+from ._cache import BoundedLRU, quantized_key
 from .environment import (
     Bounds2D,
     BuildingPrism,
@@ -267,6 +268,21 @@ class TerrainModel:
     basin_center_y_m: float = 145.0
     basin_radius_m: float = 220.0
     features: tuple[TerrainFeature, ...] = ()
+    _terrain_version: int = field(default=0, init=False, repr=False, compare=False)
+    _height_cache: BoundedLRU[tuple[int, int, int, int], float] = field(
+        default_factory=lambda: BoundedLRU(owner="TerrainModel", name="height_at", capacity=65536),
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _gradient_cache: BoundedLRU[tuple[int, int, int, int, int], np.ndarray] = field(
+        default_factory=lambda: BoundedLRU(
+            owner="TerrainModel", name="gradient_at", capacity=32768
+        ),
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def default(cls) -> TerrainModel:
@@ -301,7 +317,14 @@ class TerrainModel:
         return float(self.base_elevation_m + slope + wave + ridge - basin + feature_height)
 
     def height_at(self, x_m: float, y_m: float) -> float:
-        return max(self.analytic_height_at(x_m, y_m), self.ground_plane_m)
+        cell_m = 1.0e-6
+        qx, qy = quantized_key(float(x_m), float(y_m), cell_m=cell_m)
+        key = (self._terrain_version, qx, qy, int(round(1.0 / cell_m)))
+        cached = self._height_cache.get(key)
+        if cached is not None:
+            return cached
+        height = max(self.analytic_height_at(x_m, y_m), self.ground_plane_m)
+        return self._height_cache.put(key, height)
 
     def analytic_height_at_many(self, xy_m: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
         points = np.asarray(xy_m, dtype=float)
@@ -356,13 +379,27 @@ class TerrainModel:
 
     def gradient_at(self, x_m: float, y_m: float, delta_m: float = 0.5) -> np.ndarray:
         delta = max(delta_m, 0.05)
+        cell_m = 1.0e-6
+        qx, qy, qd = quantized_key(float(x_m), float(y_m), float(delta), cell_m=cell_m)
+        key = (self._terrain_version, qx, qy, qd, int(round(1.0 / cell_m)))
+        cached = self._gradient_cache.get(key)
+        if cached is not None:
+            return cached.copy()
         dz_dx = (self.height_at(x_m + delta, y_m) - self.height_at(x_m - delta, y_m)) / (
             2.0 * delta
         )
         dz_dy = (self.height_at(x_m, y_m + delta) - self.height_at(x_m, y_m - delta)) / (
             2.0 * delta
         )
-        return np.array([dz_dx, dz_dy], dtype=float)
+        gradient = np.array([dz_dx, dz_dy], dtype=float)
+        self._gradient_cache.put(key, gradient.copy())
+        return gradient
+
+    def cache_metrics(self) -> dict[str, dict]:
+        return {
+            "height_at": self._height_cache.metrics_dict(),
+            "gradient_at": self._gradient_cache.metrics_dict(),
+        }
 
     def curvature_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
         """Scalar surface curvature (Laplacian approximation).

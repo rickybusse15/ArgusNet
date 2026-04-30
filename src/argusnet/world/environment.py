@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ._cache import BoundedLRU, quantized_key
+
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
@@ -234,6 +236,17 @@ class TerrainLayer:
         self._tiles = dict(tiles)
         self._tile_cache: OrderedDict[tuple[int, int, int], TerrainTile] = OrderedDict()
         self._tile_cache_max_entries = 2048
+        self._terrain_version = 0
+        self._height_cache: BoundedLRU[tuple[int, int, int, int], float] = BoundedLRU(
+            owner=f"TerrainLayer:{environment_id}",
+            name="height_at",
+            capacity=131072,
+        )
+        self._gradient_cache: BoundedLRU[tuple[int, int, int, int, int], np.ndarray] = BoundedLRU(
+            owner=f"TerrainLayer:{environment_id}",
+            name="gradient_at",
+            capacity=65536,
+        )
         self._viewer_mesh_cache: dict[int, dict[str, object]] = {}
         self.source_metadata = dict(source_metadata or {"source": "height-grid"})
 
@@ -440,9 +453,15 @@ class TerrainLayer:
         return self._tile_key_for_xy(x_m, y_m) in self._tiles
 
     def height_at(self, x_m: float, y_m: float) -> float:
+        cache_cell_m = 1.0e-6
+        qx, qy = quantized_key(float(x_m), float(y_m), cell_m=cache_cell_m)
+        key = (self._terrain_version, qx, qy, int(round(1.0 / cache_cell_m)))
+        cached = self._height_cache.get(key)
+        if cached is not None:
+            return cached
         tile = self.tile_for_xy(float(x_m), float(y_m))
         if tile is None:
-            return self.ground_plane_m
+            return self._height_cache.put(key, self.ground_plane_m)
         local_x = (float(x_m) - tile.x_min_m) / tile.cell_size_m
         local_y = (float(y_m) - tile.y_min_m) / tile.cell_size_m
         col = int(np.clip(math.floor(local_x), 0, tile.heights_m.shape[1] - 2))
@@ -455,7 +474,7 @@ class TerrainLayer:
         z11 = tile.heights_m[row + 1, col + 1]
         z0 = z00 + (z10 - z00) * tx
         z1 = z01 + (z11 - z01) * tx
-        return float(max(z0 + (z1 - z0) * ty, self.ground_plane_m))
+        return self._height_cache.put(key, float(max(z0 + (z1 - z0) * ty, self.ground_plane_m)))
 
     def height_at_many(self, xy_m: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
         points = np.asarray(xy_m, dtype=float)
@@ -526,13 +545,21 @@ class TerrainLayer:
 
     def gradient_at(self, x_m: float, y_m: float, delta_m: float | None = None) -> np.ndarray:
         delta = max(delta_m or (self.base_resolution_m * 0.5), 0.25)
+        cache_cell_m = 1.0e-6
+        qx, qy, qd = quantized_key(float(x_m), float(y_m), float(delta), cell_m=cache_cell_m)
+        key = (self._terrain_version, qx, qy, qd, int(round(1.0 / cache_cell_m)))
+        cached = self._gradient_cache.get(key)
+        if cached is not None:
+            return cached.copy()
         dz_dx = (self.height_at(x_m + delta, y_m) - self.height_at(x_m - delta, y_m)) / (
             2.0 * delta
         )
         dz_dy = (self.height_at(x_m, y_m + delta) - self.height_at(x_m, y_m - delta)) / (
             2.0 * delta
         )
-        return np.array([dz_dx, dz_dy], dtype=float)
+        gradient = np.array([dz_dx, dz_dy], dtype=float)
+        self._gradient_cache.put(key, gradient.copy())
+        return gradient
 
     def gradient_at_many(
         self,
@@ -596,6 +623,18 @@ class TerrainLayer:
     def clamp_altitude(self, xy_m: Sequence[float], z_m: float, min_agl_m: float) -> float:
         ground_m = self.height_at(float(xy_m[0]), float(xy_m[1]))
         return max(float(z_m), ground_m + max(float(min_agl_m), 0.0))
+
+    def clear_caches(self) -> None:
+        self._terrain_version += 1
+        self._height_cache.clear()
+        self._gradient_cache.clear()
+        self._viewer_mesh_cache.clear()
+
+    def cache_metrics(self) -> dict[str, dict]:
+        return {
+            "height_at": self._height_cache.metrics_dict(),
+            "gradient_at": self._gradient_cache.metrics_dict(),
+        }
 
     def terrain_summary(self) -> dict[str, object]:
         min_height = min(float(tile.min_height_m) for tile in self._tiles.values())
@@ -841,6 +880,9 @@ class ObstacleLayer:
         self.tile_size_m = float(tile_size_m)
         self.primitives = tuple(primitives)
         self._primitive_by_id = {primitive.primitive_id: primitive for primitive in self.primitives}
+        self._point_collision_cache: BoundedLRU[
+            tuple[int, int, int, int], ObstaclePrimitive | None
+        ] = BoundedLRU(owner="ObstacleLayer", name="point_collides", capacity=65536)
         tile_index: dict[tuple[int, int], list[str]] = {}
         for primitive in self.primitives:
             bounds = primitive.bounds_xy_m()
@@ -881,6 +923,12 @@ class ObstacleLayer:
         )
 
     def point_collides(self, x_m: float, y_m: float, z_m: float) -> ObstaclePrimitive | None:
+        cache_cell_m = 1.0e-5
+        qx, qy, qz = quantized_key(float(x_m), float(y_m), float(z_m), cell_m=cache_cell_m)
+        key = (qx, qy, qz, len(self.primitives))
+        cached = self._point_collision_cache.get(key)
+        if cached is not None or key in self._point_collision_cache._values:
+            return cached
         epsilon_m = 1.0e-6
         candidate_bounds = Bounds2D(
             x_min_m=float(x_m) - epsilon_m,
@@ -892,8 +940,11 @@ class ObstacleLayer:
             if primitive.blocker_type not in {"building", "wall"}:
                 continue
             if primitive.point_inside(float(x_m), float(y_m), float(z_m)):
-                return primitive
-        return None
+                return self._point_collision_cache.put(key, primitive)
+        return self._point_collision_cache.put(key, None)
+
+    def cache_metrics(self) -> dict[str, dict]:
+        return {"point_collides": self._point_collision_cache.metrics_dict()}
 
     def to_metadata(self) -> list[dict[str, object]]:
         return [primitive.to_metadata() for primitive in self.primitives]
@@ -921,10 +972,31 @@ class EnvironmentModel:
     terrain: TerrainLayer
     obstacles: ObstacleLayer
     land_cover: LandCoverLayer
+    scene_version: int = 0
     query: EnvironmentQuery = field(init=False)
 
     def __post_init__(self) -> None:
         self.query = EnvironmentQuery(self)
+
+    def bump_scene_version(self) -> int:
+        self.scene_version += 1
+        if hasattr(self.terrain, "clear_caches"):
+            self.terrain.clear_caches()
+        if hasattr(self.query, "clear_caches"):
+            self.query.clear_caches()
+        return self.scene_version
+
+    def add_obstacle(self, obstacle: ObstaclePrimitive) -> None:
+        self.obstacles = ObstacleLayer(
+            bounds_xy_m=self.bounds_xy_m,
+            tile_size_m=self.obstacles.tile_size_m,
+            primitives=(*self.obstacles.primitives, obstacle),
+        )
+        self.bump_scene_version()
+
+    def set_terrain(self, terrain: TerrainLayer) -> None:
+        self.terrain = terrain
+        self.bump_scene_version()
 
     @classmethod
     def from_legacy(
@@ -991,6 +1063,7 @@ class EnvironmentModel:
             "land_cover_legend": LandCoverClass.legend(),
             "terrain": self.terrain.to_metadata(),
             "occluding_objects": self.obstacles.to_metadata(),
+            "scene_version": self.scene_version,
         }
 
 

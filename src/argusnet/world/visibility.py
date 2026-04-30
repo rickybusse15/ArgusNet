@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ._cache import BoundedLRU, quantized_key
 from .environment import Bounds2D, LandCoverClass
 from .obstacles import ForestStand, ObstaclePrimitive
 
@@ -294,6 +295,11 @@ def _grid_dda_intervals(
 class EnvironmentQuery:
     def __init__(self, environment: EnvironmentModel) -> None:
         self.environment = environment
+        self._los_cache: BoundedLRU[tuple[object, ...], VisibilityResult] = BoundedLRU(
+            owner=f"EnvironmentQuery:{environment.environment_id}",
+            name="los",
+            capacity=131072,
+        )
 
     def height_at(self, x_m: float, y_m: float) -> float:
         return self.environment.terrain.height_at(x_m, y_m)
@@ -307,6 +313,26 @@ class EnvironmentQuery:
     def query_obstacles(self, segment_aabb: Bounds2D) -> tuple[ObstaclePrimitive, ...]:
         return self.environment.obstacles.query_obstacles(segment_aabb)
 
+    def clear_caches(self) -> None:
+        self._los_cache.clear()
+
+    def cache_metrics(self) -> dict[str, dict]:
+        return {"los": self._los_cache.metrics_dict()}
+
+    @staticmethod
+    def _profile_cache_key(profile: SensorVisibilityModel) -> tuple[object, ...]:
+        return (
+            tuple(sorted(profile.hard_blockers)),
+            tuple(sorted((int(k), float(v)) for k, v in profile.attenuation_by_land_cover.items())),
+            tuple(
+                sorted(
+                    (int(k), float(v))
+                    for k, v in profile.noise_multiplier_by_land_cover.items()
+                )
+            ),
+            float(profile.vegetation_hard_block_threshold),
+        )
+
     def los(
         self,
         origin_xyz: np.ndarray,
@@ -318,15 +344,33 @@ class EnvironmentQuery:
         profile = sensor_profile or SensorVisibilityModel.optical_default()
         origin = np.asarray(origin_xyz, dtype=float).reshape(3)
         target = np.asarray(target_xyz, dtype=float).reshape(3)
+        q_values = quantized_key(
+            float(origin[0]),
+            float(origin[1]),
+            float(origin[2]),
+            float(target[0]),
+            float(target[1]),
+            float(target[2]),
+            float(terrain_clearance_m),
+            cell_m=1.0e-5,
+        )
+        cache_key = (
+            int(getattr(self.environment, "scene_version", 0)),
+            *q_values,
+            self._profile_cache_key(profile),
+        )
+        cached = self._los_cache.get(cache_key)
+        if cached is not None:
+            return cached
         distance_m = float(np.linalg.norm(target - origin))
         if distance_m <= 1.0e-9:
-            return VisibilityResult(visible=True)
+            return self._los_cache.put(cache_key, VisibilityResult(visible=True))
 
         if not self.environment.bounds_xy_m.contains_xy(
             float(origin[0]), float(origin[1])
         ) or not self.environment.bounds_xy_m.contains_xy(float(target[0]), float(target[1])):
             closest_point = self._coverage_closest_point(origin, target)
-            return VisibilityResult(
+            return self._los_cache.put(cache_key, VisibilityResult(
                 visible=False,
                 blocker_type="out_of_coverage",
                 first_hit_range_m=0.0,
@@ -334,14 +378,14 @@ class EnvironmentQuery:
                 transmittance=0.0,
                 detection_multiplier=0.0,
                 noise_multiplier=max(profile.noise_multiplier_by_land_cover.values(), default=1.0),
-            )
+            ))
 
         terrain_hit = self._terrain_intersection(
             origin, target, terrain_clearance_m=terrain_clearance_m
         )
         if terrain_hit is not None:
             blocker_type, hit_t, closest_point = terrain_hit
-            return VisibilityResult(
+            return self._los_cache.put(cache_key, VisibilityResult(
                 visible=False,
                 blocker_type=blocker_type,
                 first_hit_range_m=None if hit_t is None else hit_t * distance_m,
@@ -349,7 +393,7 @@ class EnvironmentQuery:
                 transmittance=0.0,
                 detection_multiplier=0.0,
                 noise_multiplier=2.0,
-            )
+            ))
 
         x_min_m = min(float(origin[0]), float(target[0]))
         x_max_m = max(float(origin[0]), float(target[0]))
@@ -393,7 +437,7 @@ class EnvironmentQuery:
                 nearest_closest_point = hit_point
 
         if nearest_hit_t is not None and nearest_blocker in profile.hard_blockers:
-            return VisibilityResult(
+            return self._los_cache.put(cache_key, VisibilityResult(
                 visible=False,
                 blocker_type=nearest_blocker or "building",
                 first_hit_range_m=nearest_hit_t * distance_m,
@@ -401,7 +445,7 @@ class EnvironmentQuery:
                 transmittance=0.0,
                 detection_multiplier=0.0,
                 noise_multiplier=2.0,
-            )
+            ))
 
         midpoint = (origin + target) * 0.5
         land_cover = self.land_cover_at(float(midpoint[0]), float(midpoint[1]))
@@ -411,7 +455,7 @@ class EnvironmentQuery:
         noise_multiplier = max(1.0, (1.0 / max(transmittance, 0.05)) * land_cover_noise)
 
         if transmittance < profile.vegetation_hard_block_threshold:
-            return VisibilityResult(
+            return self._los_cache.put(cache_key, VisibilityResult(
                 visible=False,
                 blocker_type="vegetation",
                 first_hit_range_m=None
@@ -421,9 +465,9 @@ class EnvironmentQuery:
                 transmittance=transmittance,
                 detection_multiplier=0.0,
                 noise_multiplier=noise_multiplier,
-            )
+            ))
 
-        return VisibilityResult(
+        return self._los_cache.put(cache_key, VisibilityResult(
             visible=True,
             blocker_type="none",
             first_hit_range_m=None
@@ -433,7 +477,7 @@ class EnvironmentQuery:
             transmittance=transmittance,
             detection_multiplier=detection_multiplier,
             noise_multiplier=noise_multiplier,
-        )
+        ))
 
     def compute_detection_probability(
         self,
