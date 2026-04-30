@@ -8,3 +8,14 @@ license.workspace = true
 nalgebra.workspace = true
 serde.workspace = true
 smallvec = { version = "1", features = ["union"] }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "fusion_bench"
+harness = false
+
+[[bench]]
+name = "association_bench"
+harness = false

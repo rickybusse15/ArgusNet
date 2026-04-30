@@ -18,6 +18,7 @@ import numpy as np
 from argusnet.core.types import (
     BearingObservation,
     HealthReport,
+    LatencyHistogram,
     NodeHealthMetrics,
     NodeState,
     ObservationRejection,
@@ -661,6 +662,16 @@ class TrackingService:
             )
             for nh in response.node_health
         ]
+        latency = None
+        if response.HasField("ingest_latency"):
+            hist = response.ingest_latency
+            latency = LatencyHistogram(
+                sample_count=int(hist.sample_count),
+                p50_s=float(hist.p50_s),
+                p95_s=float(hist.p95_s),
+                p99_s=float(hist.p99_s),
+                max_s=float(hist.max_s),
+            )
         return HealthReport(
             status=response.status,
             started_at_utc=response.started_at_utc,
@@ -670,6 +681,7 @@ class TrackingService:
             mean_ingest_latency_s=float(response.mean_ingest_latency_s),
             active_node_count=int(response.active_node_count),
             stale_node_count=int(response.stale_node_count),
+            ingest_latency=latency,
         )
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Benchmarking And Performance Harness
+
+- Added the `argusnet benchmark` CLI, canonical fast/slow scenario suites, performance summaries,
+  and fast-suite golden regression checks.
+- Added Python hot-path benchmark tests, Rust Criterion benchmark compile coverage, and nightly
+  benchmark workflow artifact upload.
+- Added terrain, gradient, LOS, and obstacle cache metrics plus per-frame simulation timing fields.
+
 ## 2026-04-29 — Documentation Reframing
 
 - Reframed documentation around ArgusNet as a map, localize, inspect, revisit, and coordination

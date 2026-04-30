@@ -23,7 +23,11 @@ dev = [
     "ruff>=0.3",
     "mypy>=1.9",
     "pytest>=8.0",
+    "pytest-benchmark>=4.0",
     "pytest-timeout>=2.3",
+    "psutil>=5.9",
+    "py-spy>=0.3",
+    "scalene>=1.5",
     "pre-commit>=3.6",
 ]
 
@@ -129,3 +133,7 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 120
+markers = [
+    "benchmark_fast: <2min smoke benchmarks for PR CI",
+    "benchmark_slow: full scenario sweep for nightly",
+]

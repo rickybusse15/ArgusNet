@@ -10,4 +10,9 @@ serde.workspace = true
 terrain-engine = { path = "../terrain-engine" }
 
 [dev-dependencies]
+criterion.workspace = true
 serde_json.workspace = true
+
+[[bench]]
+name = "safety_bench"
+harness = false
