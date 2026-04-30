@@ -58,6 +58,18 @@ from argusnet.planning.coordination import (
 from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLayer
 from argusnet.planning.frontier import ClaimedCells, FrontierPlanner
 from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
+from argusnet.mission.execution import (
+    ExecutableCommand,
+    MissionConstraints,
+    MissionExecutionContext,
+    MissionExecutor,
+    MissionState,
+    MissionTask,
+    MissionTaskStatus,
+    MissionTaskType,
+    SafetyDecision,
+    SafetyStatus,
+)
 from argusnet.planning.poi import POIAssignmentContext, POIManager
 from argusnet.sensing.imu import IMUMeasurement
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
@@ -230,9 +242,9 @@ class ScenarioOptions:
     clean_terrain: bool = False
     platform_preset: str = "baseline"
     ground_station_count: int = 7
-    target_count: int = 2
+    target_count: int = 0
     drone_count: int = 2
-    mission_mode: str = "target_tracking"  # "scan_map_inspect" | "target_tracking"
+    mission_mode: str = "scan_map_inspect"  # "scan_map_inspect" | "target_tracking"
     scan_coverage_threshold: float = 0.70  # fraction to trigger LOCALIZING phase
     poi_count: int = 3  # auto-generated POIs in scan_map_inspect mode
 
@@ -4561,6 +4573,57 @@ def run_simulation(
             _vio_prev_positions[node.node_id] = np.asarray(pos0, dtype=float)
             _vio_prev_velocities[node.node_id] = np.asarray(vel0, dtype=float)
 
+    # --- Mission executor (scan_map_inspect mode only) ---
+    # The executor observes real sim state via injected callables and tracks the
+    # high-level task lifecycle alongside the embedded state machine.
+    _executor_ref: list[object] = [None]  # populated after construction
+
+    def _is_task_complete() -> bool:
+        exc = _executor_ref[0]
+        if exc is None or exc.state.active_task is None:
+            return True
+        task_type = exc.state.active_task.task_type
+        if task_type == MissionTaskType.MAP_FRONTIER:
+            return _scan_phase not in ("scanning", "localizing")
+        if task_type == MissionTaskType.INSPECT_TARGET:
+            return _poi_manager.all_complete()
+        return True
+
+    _mission_executor = MissionExecutor(
+        state=MissionState(
+            mission_id="sim-mission",
+            tasks=[
+                MissionTask(task_id="map-frontier", task_type=MissionTaskType.MAP_FRONTIER, priority=1),
+                MissionTask(task_id="inspect-targets", task_type=MissionTaskType.INSPECT_TARGET, priority=2),
+            ],
+        ),
+        constraints=MissionConstraints(
+            geofence_radius_m=float(
+                max(
+                    scenario.map_bounds_m.get("x_max_m", 1000) - scenario.map_bounds_m.get("x_min_m", 0),
+                    scenario.map_bounds_m.get("y_max_m", 1000) - scenario.map_bounds_m.get("y_min_m", 0),
+                )
+                / 2.0
+            ),
+            battery_reserve_fraction=_battery_model.reserve_fraction,
+        ),
+        ctx=MissionExecutionContext(
+            get_localization_confidence=lambda: (
+                sum(e.confidence for e in _loc_estimates) / len(_loc_estimates)
+                if _loc_estimates else 0.0
+            ),
+            get_battery_fraction=lambda: min(
+                (v.remaining_wh / _battery_model.capacity_wh for v in _battery_states.values()),
+                default=1.0,
+            ),
+            plan_task=lambda task: ExecutableCommand(description=task.task_type.value),
+            validate_command=lambda cmd: SafetyDecision(status=SafetyStatus.OK),
+            execute_command=lambda cmd: None,
+            is_task_complete=_is_task_complete,
+        ),
+    )
+    _executor_ref[0] = _mission_executor
+
     for step in range(simulation_config.steps):
         timestamp_s = step * simulation_config.dt_s
         node_states = scenario.node_states(timestamp_s)
@@ -4936,6 +4999,11 @@ def run_simulation(
                     _egress_trajectories.clear()
         else:
             scan_frac = cov.coverage_fraction
+
+        # Advance the mission executor one step so it tracks task state alongside
+        # the sim's embedded state machine.
+        if _mission_mode == "scan_map_inspect":
+            _mission_executor.step()
 
         step_scan_mission_state: ScanMissionState | None = None
         if _mission_mode == "scan_map_inspect":

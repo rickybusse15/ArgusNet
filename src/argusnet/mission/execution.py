@@ -87,6 +87,7 @@ class MissionExecutionContext:
     plan_task: Callable[[MissionTask], ExecutableCommand]
     validate_command: Callable[[ExecutableCommand], SafetyDecision]
     execute_command: Callable[[ExecutableCommand], None]
+    is_task_complete: Callable[[], bool] = field(default_factory=lambda: lambda: True)
 
 
 # -----------------------------
@@ -158,8 +159,9 @@ class MissionExecutor:
         # 7. Execute
         self.ctx.execute_command(command)
 
-        # 8. Mark complete (stub behavior)
-        task.status = MissionTaskStatus.COMPLETE
+        # 8. Mark complete when the injected completion check confirms it
+        if self.ctx.is_task_complete():
+            task.status = MissionTaskStatus.COMPLETE
 
     # -------------------------
     # Helpers
