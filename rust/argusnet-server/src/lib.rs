@@ -3,11 +3,12 @@ use argusnet_core::{PlatformFrame, TrackerConfig, TrackingEngine};
 use argusnet_proto::pb::world_model_service_server::{WorldModelService, WorldModelServiceServer};
 use argusnet_proto::pb::{
     GetConfigRequest, GetConfigResponse, HealthRequest, HealthResponse, IngestFrameRequest,
-    IngestFrameResponse, LatestFrameRequest, LatestFrameResponse, MissionStatusRequest,
-    MissionStatusResponse, ResetRequest, ResetResponse,
+    IngestFrameResponse, LatencyHistogram, LatestFrameRequest, LatestFrameResponse,
+    MissionStatusRequest, MissionStatusResponse, ResetRequest, ResetResponse,
 };
 use chrono::Utc;
 use clap::{Parser, Subcommand};
+use hdrhistogram::Histogram;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -364,6 +365,17 @@ fn frame_response(frame: PlatformFrame) -> IngestFrameResponse {
     }
 }
 
+fn latency_histogram_to_pb(histogram: &Histogram<u64>) -> LatencyHistogram {
+    let to_seconds = |micros: u64| micros as f64 / 1_000_000.0;
+    LatencyHistogram {
+        sample_count: histogram.len(),
+        p50_s: to_seconds(histogram.value_at_quantile(0.50)),
+        p95_s: to_seconds(histogram.value_at_quantile(0.95)),
+        p99_s: to_seconds(histogram.value_at_quantile(0.99)),
+        max_s: to_seconds(histogram.max()),
+    }
+}
+
 async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
     let mut engine = TrackingEngine::new(config.clone()).map_err(|error| anyhow!(error))?;
     let started_at_utc = Utc::now().to_rfc3339();
@@ -371,7 +383,8 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
 
     tokio::spawn(async move {
         let mut processed_frame_count = 0_u64;
-        let mut total_ingest_latency_s = 0.0_f64;
+        let mut ingest_latency_us =
+            Histogram::<u64>::new(3).expect("valid ingest latency histogram");
         while let Some(command) = receiver.recv().await {
             match command {
                 EngineCommand::Ingest { request, response } => {
@@ -381,7 +394,9 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                             let frame =
                                 engine.ingest_frame(timestamp_s, node_states, observations, truths);
                             processed_frame_count += 1;
-                            total_ingest_latency_s += t0.elapsed().as_secs_f64();
+                            let elapsed_us =
+                                t0.elapsed().as_micros().clamp(1, u64::MAX as u128) as u64;
+                            let _ = ingest_latency_us.record(elapsed_us);
                             Ok(frame_response(frame))
                         }
                         Err(error) => Err(error),
@@ -421,13 +436,14 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                             .map(argusnet_proto::node_health_to_pb)
                             .collect(),
                         mean_frame_rate_hz: engine.mean_frame_rate_hz(),
-                        mean_ingest_latency_s: if processed_frame_count > 0 {
-                            total_ingest_latency_s / processed_frame_count as f64
+                        mean_ingest_latency_s: if ingest_latency_us.len() > 0 {
+                            ingest_latency_us.mean() / 1_000_000.0
                         } else {
                             0.0
                         },
                         active_node_count,
                         stale_node_count,
+                        ingest_latency: Some(latency_histogram_to_pb(&ingest_latency_us)),
                     });
                     let _ = response.send(reply);
                 }

@@ -1,0 +1,18 @@
+{
+  "schema_version": "argusnet-performance-v1",
+  "commit_sha": "golden-baseline",
+  "created_at_utc": "2026-04-29T00:00:00+00:00",
+  "command": ["argusnet", "benchmark", "--suite", "fast"],
+  "environment": {
+    "platform": "golden-portable"
+  },
+  "metrics": {
+    "performance": {
+      "wall_clock_s": 10000.0,
+      "frame_time_mean_ms": 10000.0,
+      "frame_time_p95_ms": 10000.0,
+      "frame_time_p99_ms": 10000.0,
+      "peak_rss_mb": 100000.0
+    }
+  }
+}

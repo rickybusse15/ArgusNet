@@ -148,6 +148,14 @@ message GetConfigResponse {
 
 message HealthRequest {}
 
+message LatencyHistogram {
+  uint64 sample_count = 1;
+  double p50_s = 2;
+  double p95_s = 3;
+  double p99_s = 4;
+  double max_s = 5;
+}
+
 message NodeHealthMetrics {
   string node_id = 1;
   double last_seen_s = 2;
@@ -167,6 +175,7 @@ message HealthResponse {
   double mean_ingest_latency_s = 6;
   uint32 active_node_count = 7;
   uint32 stale_node_count = 8;
+  LatencyHistogram ingest_latency = 9;
 }
 
 // ---------------------------------------------------------------------------

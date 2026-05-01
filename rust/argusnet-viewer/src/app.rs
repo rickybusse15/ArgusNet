@@ -789,7 +789,6 @@ fn draw_runtime_overlays_system(
             }
         }
     }
-
 }
 
 fn find_node_position_opt(frame: &crate::replay::ReplayFrame, node_id: &str) -> Option<Vec3> {

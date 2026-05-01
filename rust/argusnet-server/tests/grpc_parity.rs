@@ -416,7 +416,13 @@ fn minimal_config_path(tag: &str) -> PathBuf {
     path
 }
 
-fn make_observation(node_id: &str, target_id: &str, t: f64, origin: [f64; 3], target: [f64; 3]) -> BearingObservation {
+fn make_observation(
+    node_id: &str,
+    target_id: &str,
+    t: f64,
+    origin: [f64; 3],
+    target: [f64; 3],
+) -> BearingObservation {
     let dx = target[0] - origin[0];
     let dy = target[1] - origin[1];
     let dz = target[2] - origin[2];
@@ -424,8 +430,16 @@ fn make_observation(node_id: &str, target_id: &str, t: f64, origin: [f64; 3], ta
     BearingObservation {
         node_id: node_id.to_string(),
         target_id: target_id.to_string(),
-        origin: Some(Vector3 { x_m: origin[0], y_m: origin[1], z_m: origin[2] }),
-        direction: Some(Vector3 { x_m: dx / mag, y_m: dy / mag, z_m: dz / mag }),
+        origin: Some(Vector3 {
+            x_m: origin[0],
+            y_m: origin[1],
+            z_m: origin[2],
+        }),
+        direction: Some(Vector3 {
+            x_m: dx / mag,
+            y_m: dy / mag,
+            z_m: dz / mag,
+        }),
         bearing_std_rad: 0.01,
         timestamp_s: t,
         confidence: 0.9,
@@ -435,8 +449,16 @@ fn make_observation(node_id: &str, target_id: &str, t: f64, origin: [f64; 3], ta
 fn make_node(node_id: &str, t: f64, pos: [f64; 3]) -> NodeState {
     NodeState {
         node_id: node_id.to_string(),
-        position: Some(Vector3 { x_m: pos[0], y_m: pos[1], z_m: pos[2] }),
-        velocity: Some(Vector3 { x_m: 0.0, y_m: 0.0, z_m: 0.0 }),
+        position: Some(Vector3 {
+            x_m: pos[0],
+            y_m: pos[1],
+            z_m: pos[2],
+        }),
+        velocity: Some(Vector3 {
+            x_m: 0.0,
+            y_m: 0.0,
+            z_m: 0.0,
+        }),
         is_mobile: false,
         timestamp_s: t,
         health: 1.0,
@@ -499,13 +521,33 @@ async fn track_response_includes_mode_probability_cv() {
                 make_node("node-beta", t, node_b_pos),
             ],
             observations: vec![
-                make_observation("node-alpha", "tgt-1", t, node_a_pos, [tx, target_pos[1], target_pos[2]]),
-                make_observation("node-beta", "tgt-1", t, node_b_pos, [tx, target_pos[1], target_pos[2]]),
+                make_observation(
+                    "node-alpha",
+                    "tgt-1",
+                    t,
+                    node_a_pos,
+                    [tx, target_pos[1], target_pos[2]],
+                ),
+                make_observation(
+                    "node-beta",
+                    "tgt-1",
+                    t,
+                    node_b_pos,
+                    [tx, target_pos[1], target_pos[2]],
+                ),
             ],
             truths: vec![TruthState {
                 target_id: "tgt-1".to_string(),
-                position: Some(Vector3 { x_m: tx, y_m: target_pos[1], z_m: target_pos[2] }),
-                velocity: Some(Vector3 { x_m: 2.0, y_m: 0.0, z_m: 0.0 }),
+                position: Some(Vector3 {
+                    x_m: tx,
+                    y_m: target_pos[1],
+                    z_m: target_pos[2],
+                }),
+                velocity: Some(Vector3 {
+                    x_m: 2.0,
+                    y_m: 0.0,
+                    z_m: 0.0,
+                }),
                 timestamp_s: t,
             }],
         };
@@ -583,13 +625,33 @@ async fn track_response_contributing_nodes_populated() {
                 make_node("sensor-2", t, node_b_pos),
             ],
             observations: vec![
-                make_observation("sensor-1", "obj-a", t, node_a_pos, [tx, target_pos[1], target_pos[2]]),
-                make_observation("sensor-2", "obj-a", t, node_b_pos, [tx, target_pos[1], target_pos[2]]),
+                make_observation(
+                    "sensor-1",
+                    "obj-a",
+                    t,
+                    node_a_pos,
+                    [tx, target_pos[1], target_pos[2]],
+                ),
+                make_observation(
+                    "sensor-2",
+                    "obj-a",
+                    t,
+                    node_b_pos,
+                    [tx, target_pos[1], target_pos[2]],
+                ),
             ],
             truths: vec![TruthState {
                 target_id: "obj-a".to_string(),
-                position: Some(Vector3 { x_m: tx, y_m: target_pos[1], z_m: target_pos[2] }),
-                velocity: Some(Vector3 { x_m: 3.0, y_m: 0.0, z_m: 0.0 }),
+                position: Some(Vector3 {
+                    x_m: tx,
+                    y_m: target_pos[1],
+                    z_m: target_pos[2],
+                }),
+                velocity: Some(Vector3 {
+                    x_m: 3.0,
+                    y_m: 0.0,
+                    z_m: 0.0,
+                }),
                 timestamp_s: t,
             }],
         };

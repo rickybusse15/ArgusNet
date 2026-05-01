@@ -13,6 +13,7 @@ COMMAND_INGEST = "ingest"
 COMMAND_EXPORT = "export"
 COMMAND_BATCH_EXPORT = "batch-export"
 COMMAND_BUILD_SCENE = "build-scene"
+COMMAND_BENCHMARK = "benchmark"
 COMMAND_VALIDATE_SCENE = "validate-scene"
 COMMAND_VALIDATE_REPLAY = "validate-replay"
 COMMAND_INFO = "info"
@@ -28,6 +29,7 @@ ALL_COMMANDS = frozenset(
         COMMAND_EXPORT,
         COMMAND_BATCH_EXPORT,
         COMMAND_BUILD_SCENE,
+        COMMAND_BENCHMARK,
         COMMAND_VALIDATE_SCENE,
         COMMAND_VALIDATE_REPLAY,
         COMMAND_INFO,
@@ -77,6 +79,14 @@ def _import_scene_module():
             f"{PYTHON_DEPENDENCY_INSTALL_HINT}"
         ) from error
     return scene
+
+
+def _import_benchmark_module():
+    try:
+        from . import benchmark
+    except ModuleNotFoundError as error:
+        raise _module_import_hint(error, command=COMMAND_BENCHMARK) from error
+    return benchmark
 
 
 def _add_logging_args(parser: argparse.ArgumentParser) -> None:
@@ -299,6 +309,14 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
         "--buildings", nargs="*", default=None, help="Optional GeoJSON building polygons."
     )
 
+    # --- benchmark ---
+    benchmark_parser = subparsers.add_parser(
+        COMMAND_BENCHMARK,
+        help="Run canonical ArgusNet performance benchmarks.",
+    )
+    _add_logging_args(benchmark_parser)
+    _import_benchmark_module().add_cli_arguments(benchmark_parser)
+
     # --- validate-scene ---
     validate_scene_parser = subparsers.add_parser(
         COMMAND_VALIDATE_SCENE,
@@ -412,6 +430,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     if command == COMMAND_BUILD_SCENE:
         _run_build_scene(args)
+        return
+    if command == COMMAND_BENCHMARK:
+        _import_benchmark_module().run_from_args(args)
         return
 
     # Default: sim

@@ -545,17 +545,17 @@ cargo bench --workspace
 python3 -m pytest tests/ -q -m benchmark_fast
 python3 -m pytest tests/ -q --benchmark-only
 argusnet sim --duration-s 60 --seed 7
+argusnet benchmark --suite fast --seeds 7 --output runs/benchmarks/<timestamp>
 ```
 
 Current evaluation helpers live under `argusnet.evaluation.metrics`, `argusnet.evaluation.reports`,
-and `argusnet.evaluation.benchmarks`. Benchmark marker commands and specialized CLI wrappers should
-be treated as standards until they are wired into CI.
-
-Future helper:
+`argusnet.evaluation.benchmarks`, and `argusnet.evaluation.scenarios`. The shipping benchmark CLI
+runs canonical scenario suites, writes one `performance_summary.json` per scenario/seed, and writes
+an aggregate `suite_summary.json` under the requested output directory.
 
 ```bash
-python3 -m argusnet.evaluation.benchmark \
-  --suite benchmark_fast \
+argusnet benchmark \
+  --suite fast \
   --seeds 7,42,137,9999,31415 \
   --output runs/benchmarks/<timestamp>
 ```

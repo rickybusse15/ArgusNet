@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -95,6 +96,11 @@ class MappingState:
     covered_cells: int
     total_cells: int
     mean_revisits: float
+    observed_cells: int | None = None
+    unknown_cells: int | None = None
+    unsafe_cells: int | None = None
+    mean_height_uncertainty_m: float | None = None
+    mean_belief_confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +108,8 @@ class LocalizationState:
     active_localizations: int
     mean_position_std_m: float
     mean_observation_confidence: float
+    status_counts: dict[str, int] = field(default_factory=dict)
+    frame_id: str = "map"
 
 
 @dataclass(frozen=True)
@@ -122,6 +130,156 @@ class DeconflictionEvent:
     timestamp_s: float
 
 
+class BeliefCellStatus(str, Enum):
+    UNKNOWN = "unknown"
+    KNOWN_SAFE = "known_safe"
+    KNOWN_OBSTACLE = "known_obstacle"
+    UNCERTAIN = "uncertain"
+    OUTSIDE_GEOFENCE = "outside_geofence"
+
+
+@dataclass(frozen=True)
+class BeliefCell:
+    """Planning-facing belief state for one map cell."""
+
+    cell_id: str
+    ij: tuple[int, int]
+    center_xy_m: tuple[float, float]
+    height_estimate_m: float | None = None
+    height_uncertainty_m: float | None = None
+    obstacle_probability: float = 0.0
+    terrain_confidence: float = 0.0
+    coverage_count: int = 0
+    last_observed_s: float | None = None
+    inside_geofence: bool = True
+    status: str = BeliefCellStatus.UNKNOWN.value
+    source_ids: tuple[str, ...] = ()
+
+
+class LocalizationStatus(str, Enum):
+    UNLOCALIZED = "unlocalized"
+    INITIALIZING = "initializing"
+    LOCALIZED = "localized"
+    DEGRADED = "degraded"
+    LOST = "lost"
+
+
+@dataclass(frozen=True)
+class PoseEstimate:
+    """Map-relative platform pose estimate with uncertainty metadata."""
+
+    platform_id: str
+    timestamp_s: float
+    position_m: Vector3
+    orientation_rpy_rad: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    frame_id: str = "map"
+    covariance: tuple[float, ...] = ()
+    confidence: float = 0.0
+    status: str = LocalizationStatus.UNLOCALIZED.value
+    map_region_id: str | None = None
+    matched_landmark_ids: tuple[str, ...] = ()
+    relocalization_score: float = 0.0
+    failure_reason: str | None = None
+
+
+class MissionEventType(str, Enum):
+    TASK_SELECTED = "task_selected"
+    PLAN_PROPOSED = "plan_proposed"
+    SAFETY_VALIDATED = "safety_validated"
+    COMMAND_EXECUTED = "command_executed"
+    TASK_BLOCKED = "task_blocked"
+    PHASE_CHANGED = "phase_changed"
+    OPERATOR_REVIEW_REQUESTED = "operator_review_requested"
+
+
+@dataclass(frozen=True)
+class MissionEvent:
+    event_id: str
+    event_type: str
+    timestamp_s: float
+    mission_id: str = ""
+    platform_id: str | None = None
+    task_id: str | None = None
+    phase: str | None = None
+    reason: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CandidateRoute:
+    route_id: str
+    task_id: str
+    platform_id: str
+    points_xy_m: tuple[tuple[float, float], ...]
+    length_m: float
+    source: str = "planner"
+    created_at_s: float = 0.0
+    expected_duration_s: float | None = None
+    expected_energy_fraction: float | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class TrajectoryProposal:
+    trajectory_id: str
+    route_id: str
+    platform_id: str
+    points_m: tuple[tuple[float, float, float], ...]
+    speed_mps: float
+    created_at_s: float = 0.0
+    altitude_profile: str = "terrain_following"
+
+
+@dataclass(frozen=True)
+class SafetyValidationResult:
+    validation_id: str
+    subject_id: str
+    accepted: bool
+    timestamp_s: float
+    validator: str = "shadow"
+    violations: tuple[str, ...] = ()
+    clamped: bool = False
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ExecutableTrajectory:
+    command_id: str
+    trajectory_id: str
+    platform_id: str
+    issued_at_s: float
+    safety_validation_id: str
+    status: str = "pending"
+
+
+@dataclass(frozen=True)
+class IndexedArtifactRef:
+    artifact_id: str
+    artifact_type: str
+    uri: str = ""
+    timestamp_s: float = 0.0
+    frame_id: str = "map"
+    source_id: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class InspectionEvidenceRecord:
+    evidence_id: str
+    site_id: str
+    timestamp_s: float
+    platform_id: str
+    sensor_type: str
+    platform_pose: PoseEstimate | None = None
+    file_uri: str = ""
+    quality_score: float = 0.0
+    coverage_fraction: float = 0.0
+    resolution_estimate: float | None = None
+    view_angle_rad: float | None = None
+    localization_confidence: float = 0.0
+    artifact_refs: tuple[IndexedArtifactRef, ...] = ()
+
+
 @dataclass(frozen=True)
 class PlatformFrame:
     timestamp_s: float
@@ -138,6 +296,11 @@ class PlatformFrame:
     deconfliction_events: list[DeconflictionEvent] = field(default_factory=list)
     scan_mission_state: ScanMissionState | None = None
     tracking_mission_state: TrackingMissionState | None = None
+    mission_events: list[MissionEvent] = field(default_factory=list)
+    safety_events: list[SafetyValidationResult] = field(default_factory=list)
+    belief_cells: list[BeliefCell] = field(default_factory=list)
+    pose_estimates: list[PoseEstimate] = field(default_factory=list)
+    evidence_records: list[InspectionEvidenceRecord] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -152,6 +315,15 @@ class NodeHealthMetrics:
 
 
 @dataclass(frozen=True)
+class LatencyHistogram:
+    sample_count: int = 0
+    p50_s: float = 0.0
+    p95_s: float = 0.0
+    p99_s: float = 0.0
+    max_s: float = 0.0
+
+
+@dataclass(frozen=True)
 class HealthReport:
     status: str
     started_at_utc: str
@@ -161,6 +333,7 @@ class HealthReport:
     mean_ingest_latency_s: float = 0.0
     active_node_count: int = 0
     stale_node_count: int = 0
+    ingest_latency: LatencyHistogram | None = None
 
 
 ZONE_TYPE_SURVEILLANCE = "surveillance"
@@ -313,6 +486,8 @@ class TrackingMissionState:
 
 
 def to_jsonable(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
     if is_dataclass(value):
         return {
             field_info.name: to_jsonable(getattr(value, field_info.name))

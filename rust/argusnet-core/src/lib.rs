@@ -1386,7 +1386,12 @@ impl TrackingEngine {
             if let Some(managed_track) = self.tracks.get_mut(&track_id) {
                 managed_track.predict(timestamp_s);
                 if managed_track
-                    .update(estimate.position, estimate.measurement_std_m, timestamp_s, &cluster_node_ids)
+                    .update(
+                        estimate.position,
+                        estimate.measurement_std_m,
+                        timestamp_s,
+                        &cluster_node_ids,
+                    )
                     .is_err()
                 {
                     rejections.extend(self.reject_cluster(
@@ -1466,8 +1471,7 @@ impl TrackingEngine {
         for assignment in assignments {
             let cluster = &valid_clusters[assignment.cluster_index];
             accepted_observations.extend(cluster.iter().cloned());
-            let cluster_node_ids: Vec<String> =
-                cluster.iter().map(|o| o.node_id.clone()).collect();
+            let cluster_node_ids: Vec<String> = cluster.iter().map(|o| o.node_id.clone()).collect();
 
             let track_id = match assignment.track_id {
                 TrackAssignment::Existing(ref id) => id.clone(),

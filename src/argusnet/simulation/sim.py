@@ -5,6 +5,8 @@ import contextlib
 import csv
 import json
 import math
+import sys
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -12,6 +14,11 @@ from pathlib import Path
 from types import MappingProxyType
 
 import numpy as np
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - resource is unavailable on Windows.
+    resource = None  # type: ignore[assignment]
 
 from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 from argusnet.core.config import (
@@ -51,6 +58,17 @@ from argusnet.localization.vio import EKFVIO, VisualFeature
 from argusnet.mapping.coverage import CoverageMap
 from argusnet.mapping.occupancy import GridBounds
 from argusnet.mapping.world_map import WorldMap
+from argusnet.mission.execution import (
+    ExecutableCommand,
+    MissionConstraints,
+    MissionExecutionContext,
+    MissionExecutor,
+    MissionState,
+    MissionTask,
+    MissionTaskType,
+    SafetyDecision,
+    SafetyStatus,
+)
 from argusnet.planning.battery import BatteryModel, BatteryState
 from argusnet.planning.coordination import (
     CoordinationManager,
@@ -4247,6 +4265,79 @@ def _build_simulation_summary(
     }
 
 
+def _percentile(values: Sequence[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    sorted_values = sorted(float(value) for value in values)
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    rank = (len(sorted_values) - 1) * (percentile / 100.0)
+    lower = math.floor(rank)
+    upper = math.ceil(rank)
+    if lower == upper:
+        return sorted_values[lower]
+    weight = rank - lower
+    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+
+
+def _summarize_frame_times(frame_times_ms: Sequence[float]) -> dict[str, object]:
+    if not frame_times_ms:
+        return {
+            "count": 0,
+            "mean_ms": None,
+            "p95_ms": None,
+            "p99_ms": None,
+            "max_ms": None,
+        }
+    return {
+        "count": len(frame_times_ms),
+        "mean_ms": float(np.mean(frame_times_ms)),
+        "p95_ms": _percentile(frame_times_ms, 95.0),
+        "p99_ms": _percentile(frame_times_ms, 99.0),
+        "max_ms": float(max(frame_times_ms)),
+    }
+
+
+def _peak_rss_mb() -> float | None:
+    if resource is None:
+        return None
+    try:
+        rss = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except (AttributeError, OSError):
+        return None
+    if sys.platform == "darwin":
+        return rss / (1024.0 * 1024.0)
+    return rss / 1024.0
+
+
+def _cache_metrics_snapshot(scenario: ScenarioDefinition) -> dict[str, object]:
+    environment = scenario.environment
+    if environment is None:
+        return {}
+    metrics: dict[str, object] = {}
+    for name, owner in (
+        ("terrain", environment.terrain),
+        ("obstacles", environment.obstacles),
+        ("visibility", environment.query),
+    ):
+        cache_metrics = getattr(owner, "cache_metrics", None)
+        if callable(cache_metrics):
+            metrics[name] = cache_metrics()
+    return metrics
+
+
+def _cache_metric_total(cache_metrics: Mapping[str, object], names: set[str]) -> int:
+    total = 0
+    for owner_metrics in cache_metrics.values():
+        if not isinstance(owner_metrics, Mapping):
+            continue
+        for cache_name, stats in owner_metrics.items():
+            if cache_name not in names or not isinstance(stats, Mapping):
+                continue
+            total += int(stats.get("hits", 0)) + int(stats.get("misses", 0))
+    return total
+
+
 def _build_replay_metadata(
     frames: Sequence[PlatformFrame],
     scenario: ScenarioDefinition,
@@ -4676,14 +4767,46 @@ def run_simulation(
     def _validate_command(
         cmd: ExecutableCommand, drone_state: DroneRuntimeState
     ) -> SafetyDecision:
-        violations = _safety_checker.check_state(
+        others = [np.asarray(p, dtype=float) for p in drone_state.others_position_m]
+        # Check the drone's current state — catches "drone is already in
+        # violation" and prevents continuing on an unsafe trajectory.
+        cur_violations = _safety_checker.check_state(
             position=np.asarray(drone_state.position_m, dtype=float),
             velocity=np.asarray(drone_state.velocity_mps, dtype=float),
             agl_m=drone_state.agl_m,
-            other_drone_positions=[
-                np.asarray(p, dtype=float) for p in drone_state.others_position_m
-            ],
+            other_drone_positions=others,
         )
+        # Also check the command's *target* state — catches commands that
+        # would put the drone in violation (e.g. an INSPECT_TARGET hover at
+        # an illegal altitude). For TRACK_TARGET the target equals the current
+        # tick position, so this collapses to a single check.
+        target_xyz = np.array(
+            [float(cmd.target_xy_m[0]), float(cmd.target_xy_m[1]), float(cmd.target_z_m)],
+            dtype=float,
+        )
+        target_terrain_h = 0.0
+        with contextlib.suppress(Exception):
+            target_terrain_h = float(
+                scenario.terrain.height_at(float(target_xyz[0]), float(target_xyz[1]))
+            )
+        target_agl_m = float(target_xyz[2]) - target_terrain_h
+        tgt_violations = _safety_checker.check_state(
+            position=target_xyz,
+            velocity=np.asarray(drone_state.velocity_mps, dtype=float),
+            agl_m=target_agl_m,
+            other_drone_positions=others,
+        )
+        # Dedupe by constraint name so a violation present in both checks is
+        # recorded once, with the highest severity.
+        seen: dict[str, object] = {}
+        for v in list(cur_violations) + list(tgt_violations):
+            existing = seen.get(v.constraint)
+            if existing is None or (
+                getattr(v, "severity", "soft") == "hard"
+                and getattr(existing, "severity", "soft") != "hard"
+            ):
+                seen[v.constraint] = v
+        violations = list(seen.values())
         if not violations or not _safety_blocking_enabled:
             return SafetyDecision(status=SafetyStatus.OK)
         # Return-to-home is a recovery primitive: AGL floor/ceiling violations
@@ -4742,8 +4865,10 @@ def run_simulation(
         constraints=MissionConstraints(
             geofence_radius_m=float(
                 max(
-                    scenario.map_bounds_m.get("x_max_m", 1000) - scenario.map_bounds_m.get("x_min_m", 0),
-                    scenario.map_bounds_m.get("y_max_m", 1000) - scenario.map_bounds_m.get("y_min_m", 0),
+                    scenario.map_bounds_m.get("x_max_m", 1000)
+                    - scenario.map_bounds_m.get("x_min_m", 0),
+                    scenario.map_bounds_m.get("y_max_m", 1000)
+                    - scenario.map_bounds_m.get("y_min_m", 0),
                 )
                 / 2.0
             ),
@@ -4774,6 +4899,11 @@ def run_simulation(
     # tick when the safety gate rejects their controller-produced position.
     _drone_prev_resolved_pos: dict[str, np.ndarray] = {}
 
+    # Per-tick snapshot of all mobile node positions. Updated at the top of the
+    # main loop so that _drone_state_for() can populate ``others_position_m``
+    # for the safety checker's separation gate.
+    _current_mobile_positions: dict[str, tuple[float, float, float]] = {}
+
     def _drone_state_for(ns) -> DroneRuntimeState:
         """Build a DroneRuntimeState snapshot for safety/dispatch calls."""
         pos = np.asarray(ns.position, dtype=float)
@@ -4784,16 +4914,22 @@ def run_simulation(
         agl_m = float(pos[2]) - terrain_h
         bs = _battery_states.get(ns.node_id)
         batt_frac = (bs.remaining_wh / _battery_model.capacity_wh) if bs else 1.0
+        others = tuple(
+            p for nid, p in _current_mobile_positions.items() if nid != ns.node_id
+        )
         return DroneRuntimeState(
             drone_id=ns.node_id,
             position_m=(float(pos[0]), float(pos[1]), float(pos[2])),
             velocity_mps=(float(vel[0]), float(vel[1]), float(vel[2])),
             agl_m=agl_m,
             battery_fraction=batt_frac,
-            others_position_m=(),
+            others_position_m=others,
         )
 
+    _wall_clock_start = time.perf_counter()
+    _frame_times_ms: list[float] = []
     for step in range(simulation_config.steps):
+        _frame_start_ns = time.perf_counter_ns()
         timestamp_s = step * simulation_config.dt_s
         _now_s[0] = float(timestamp_s)
         node_states = scenario.node_states(timestamp_s)
@@ -4855,6 +4991,20 @@ def run_simulation(
                     ns = replace(ns, position=list(pos_ov), velocity=list(vel_ov))
                 overridden.append(ns)
             node_states = overridden
+
+        # Refresh the per-tick mobile-position snapshot so safety checks against
+        # ``min_drone_separation`` see real peer positions instead of an empty
+        # tuple. Must run after all controller / trajectory overrides and before
+        # the first dispatch call. Mutate in place so ``_drone_state_for``'s
+        # closure picks up the new positions without rebinding the name.
+        _current_mobile_positions.clear()
+        for _ns in node_states:
+            if _ns.is_mobile:
+                _current_mobile_positions[_ns.node_id] = (
+                    float(_ns.position[0]),
+                    float(_ns.position[1]),
+                    float(_ns.position[2]),
+                )
 
         # --- target_tracking: route every per-tick waypoint through the executor ---
         # Each mobile drone's controller-produced position is dispatched as a
@@ -5433,6 +5583,7 @@ def run_simulation(
         rows, errors = _build_metrics_rows(frame, truths, observation_batch)
         metrics_rows.extend(rows)
         per_track_errors.extend(errors)
+        _frame_times_ms.append((time.perf_counter_ns() - _frame_start_ns) / 1_000_000.0)
 
     if _stream_file is not None:
         _stream_file.close()
@@ -5449,6 +5600,10 @@ def run_simulation(
     if _total_frame_count != len(frames):
         summary = {**summary, "frame_count": _total_frame_count}
 
+    wall_clock_s = max(time.perf_counter() - _wall_clock_start, 0.0)
+    cache_metrics = _cache_metrics_snapshot(scenario)
+    terrain_query_count = _cache_metric_total(cache_metrics, {"height_at", "gradient_at"})
+    accepted_observation_count = int(summary.get("generation_accepted_count", 0))
     replay_metadata = _build_replay_metadata(
         frames=frames,
         scenario=scenario,
@@ -5458,6 +5613,18 @@ def run_simulation(
     )
     # Include VIO node IDs in replay metadata summary for discoverability.
     replay_metadata["vio_tracked_nodes"] = sorted(_vio_backends.keys())
+    replay_metadata["performance"] = {
+        "wall_clock_s": wall_clock_s,
+        "frame_times_ms": _summarize_frame_times(_frame_times_ms),
+        "peak_rss_mb": _peak_rss_mb(),
+        "cache_metrics": cache_metrics,
+        "terrain_queries_per_sec": (
+            terrain_query_count / wall_clock_s if wall_clock_s > 0.0 else 0.0
+        ),
+        "observations_per_sec": (
+            accepted_observation_count / wall_clock_s if wall_clock_s > 0.0 else 0.0
+        ),
+    }
 
     return SimulationResult(
         scenario_name=scenario.scenario_name,
@@ -5999,7 +6166,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_from_args(args: argparse.Namespace) -> None:
+def run_from_args(args: argparse.Namespace) -> SimulationResult:
     try:
         constants = (
             _load_simulation_constants(args.config_file)
@@ -6021,7 +6188,7 @@ def run_from_args(args: argparse.Namespace) -> None:
     )
     dt = args.dt if _arg_was_provided(args, "dt") else constants.dynamics.default_dt_s
     seed = args.seed if _arg_was_provided(args, "seed") else constants.dynamics.default_seed
-    simulate(
+    return simulate(
         steps=steps,
         dt=dt,
         seed=seed,

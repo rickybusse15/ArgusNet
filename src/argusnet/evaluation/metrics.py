@@ -16,7 +16,7 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 import numpy as np
@@ -85,6 +85,16 @@ class EvaluationReport:
     required_objectives_total: int = 0
     energy_reserve_min: float = 1.0
     energy_reserve_per_drone: dict[str, float] = field(default_factory=dict)
+
+    # Performance matrix
+    wall_clock_s: float | None = None
+    frame_time_mean_ms: float | None = None
+    frame_time_p95_ms: float | None = None
+    frame_time_p99_ms: float | None = None
+    peak_rss_mb: float | None = None
+    replay_size_mb: float | None = None
+    terrain_queries_per_sec: float | None = None
+    observations_per_sec: float | None = None
 
     # Summary
     passed: bool = False
@@ -458,6 +468,10 @@ def evaluate_replay(
     # -----------------------------------------------------------------------
     # Assemble report (pass/fail is determined separately)
     # -----------------------------------------------------------------------
+    performance_meta = meta.get("performance") if isinstance(meta, dict) else {}
+    performance_meta = performance_meta if isinstance(performance_meta, dict) else {}
+    frame_times = performance_meta.get("frame_times_ms")
+    frame_times = frame_times if isinstance(frame_times, dict) else {}
     now_utc = datetime.now(timezone.utc).isoformat()
 
     return EvaluationReport(
@@ -486,6 +500,15 @@ def evaluate_replay(
         required_objectives_total=required_total,
         energy_reserve_min=energy_min,
         energy_reserve_per_drone=energy_per_drone,
+        # Performance matrix
+        wall_clock_s=_optional_float(performance_meta.get("wall_clock_s")),
+        frame_time_mean_ms=_optional_float(frame_times.get("mean_ms")),
+        frame_time_p95_ms=_optional_float(frame_times.get("p95_ms")),
+        frame_time_p99_ms=_optional_float(frame_times.get("p99_ms")),
+        peak_rss_mb=_optional_float(performance_meta.get("peak_rss_mb")),
+        replay_size_mb=_optional_float(performance_meta.get("replay_size_mb")),
+        terrain_queries_per_sec=_optional_float(performance_meta.get("terrain_queries_per_sec")),
+        observations_per_sec=_optional_float(performance_meta.get("observations_per_sec")),
         # Summary (pass/fail computed separately)
         passed=False,
         failure_reasons=[],
@@ -543,6 +566,16 @@ def _compute_energy_reserves(frames: list[dict]) -> dict[str, float]:
         energy_per_drone[nid] = max(0.0, min(1.0, reserve))
 
     return energy_per_drone
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if np.isfinite(parsed) else None
 
 
 # ---------------------------------------------------------------------------
@@ -626,42 +659,16 @@ def check_pass_fail(
 
     passed = len(failures) == 0
 
-    # Use object.__setattr__ is not needed for frozen dataclasses when creating
-    # a new instance via dataclass replace — but we create a new instance
-    # manually so we can update passed and failure_reasons.
-    return EvaluationReport(
-        scenario_name=report.scenario_name,
-        mission_type=report.mission_type,
-        difficulty=report.difficulty,
-        seed=report.seed,
-        duration_s=report.duration_s,
-        time_to_reacquire_mean_s=report.time_to_reacquire_mean_s,
-        time_to_reacquire_p95_s=report.time_to_reacquire_p95_s,
-        track_continuity_mean=report.track_continuity_mean,
-        track_continuity_per_target=report.track_continuity_per_target,
-        localisation_rmse_m=report.localisation_rmse_m,
-        localisation_rmse_per_track=report.localisation_rmse_per_track,
-        covariance_reduction_mean=report.covariance_reduction_mean,
-        false_handoff_rate=report.false_handoff_rate,
-        infeasible_path_rejection_count=report.infeasible_path_rejection_count,
-        safety_override_count=report.safety_override_count,
-        comms_dropout_count=report.comms_dropout_count,
-        comms_dropout_duration_s=report.comms_dropout_duration_s,
-        mission_completion_rate=report.mission_completion_rate,
-        required_objectives_met=report.required_objectives_met,
-        required_objectives_total=report.required_objectives_total,
-        energy_reserve_min=report.energy_reserve_min,
-        energy_reserve_per_drone=report.energy_reserve_per_drone,
-        passed=passed,
-        failure_reasons=failures,
-        tags=report.tags,
-        generated_at_utc=report.generated_at_utc,
-    )
+    return replace(report, passed=passed, failure_reasons=failures)
 
 
 # ---------------------------------------------------------------------------
 # Serialisation helpers
 # ---------------------------------------------------------------------------
+
+
+def _float_or_none(value: float | None) -> float | None:
+    return None if value is None else float(value)
 
 
 def report_to_dict(report: EvaluationReport) -> dict:
@@ -718,6 +725,14 @@ def report_to_dict(report: EvaluationReport) -> dict:
         "energy_reserve_per_drone": {
             k: float(v) for k, v in report.energy_reserve_per_drone.items()
         },
+        "wall_clock_s": _float_or_none(report.wall_clock_s),
+        "frame_time_mean_ms": _float_or_none(report.frame_time_mean_ms),
+        "frame_time_p95_ms": _float_or_none(report.frame_time_p95_ms),
+        "frame_time_p99_ms": _float_or_none(report.frame_time_p99_ms),
+        "peak_rss_mb": _float_or_none(report.peak_rss_mb),
+        "replay_size_mb": _float_or_none(report.replay_size_mb),
+        "terrain_queries_per_sec": _float_or_none(report.terrain_queries_per_sec),
+        "observations_per_sec": _float_or_none(report.observations_per_sec),
         "passed": bool(report.passed),
         "failure_reasons": list(report.failure_reasons),
         "tags": list(report.tags),
@@ -773,6 +788,14 @@ def report_from_dict(d: dict) -> EvaluationReport:
         required_objectives_total=int(d.get("required_objectives_total", 0)),
         energy_reserve_min=float(d.get("energy_reserve_min", 1.0)),
         energy_reserve_per_drone=dict(d.get("energy_reserve_per_drone") or {}),
+        wall_clock_s=_optional_float(d.get("wall_clock_s")),
+        frame_time_mean_ms=_optional_float(d.get("frame_time_mean_ms")),
+        frame_time_p95_ms=_optional_float(d.get("frame_time_p95_ms")),
+        frame_time_p99_ms=_optional_float(d.get("frame_time_p99_ms")),
+        peak_rss_mb=_optional_float(d.get("peak_rss_mb")),
+        replay_size_mb=_optional_float(d.get("replay_size_mb")),
+        terrain_queries_per_sec=_optional_float(d.get("terrain_queries_per_sec")),
+        observations_per_sec=_optional_float(d.get("observations_per_sec")),
         passed=bool(d.get("passed", False)),
         failure_reasons=list(d.get("failure_reasons") or []),
         tags=list(d.get("tags") or []),

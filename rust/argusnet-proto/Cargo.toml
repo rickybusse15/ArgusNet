@@ -15,3 +15,11 @@ argusnet-core = { path = "../argusnet-core" }
 [build-dependencies]
 tonic-prost-build.workspace = true
 protoc-bin-vendored.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+prost.workspace = true
+
+[[bench]]
+name = "proto_bench"
+harness = false
