@@ -2144,6 +2144,7 @@ mod tests {
             inspection_events: Vec::new(),
             deconfliction_events: Vec::new(),
             scan_mission_state: None,
+            tracking_mission_state: None,
         };
 
         let rejection = RejectedObservation {

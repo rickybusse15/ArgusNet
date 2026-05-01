@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-04-30 — Executor Authority and Blocking Safety Gate
+
+- Promoted `MissionExecutor` from a passive observer to the choke-point for
+  scan_map_inspect motion intent. Per-drone POI inspection redirects and
+  return-to-home commands now flow through `MissionExecutor.dispatch()` →
+  `validate_command → execute_command`.
+- Replaced the placeholder `ExecutableCommand(description=str)` with a typed
+  command (drone_id, target_xy_m, target_z_m, task_type, reason) and added
+  `DroneRuntimeState` for safety-gate input.
+- Added severity tagging (`hard` / `soft`) to `ConstraintViolation`. The
+  blocking gate rejects `min_agl`, `max_agl`, and `min_drone_separation`;
+  soft violations log only. `RETURN_HOME` is exempt from AGL gating.
+- Rejected commands record a `SafetyEvent` on `MissionState.safety_events`,
+  insert a single-tick `HOLD` task, and surface to the replay payload as
+  `scan_mission_state.safety_events`. The replay schema is updated additively.
+- Phase A determinism preserved: identical seed produces frame-byte-identical
+  replays after wiring (only the wallclock timestamp in `meta` differs).
+
 ## 2026-04-29 — Documentation Reframing
 
 - Reframed documentation around ArgusNet as a map, localize, inspect, revisit, and coordination

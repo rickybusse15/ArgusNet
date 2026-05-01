@@ -68,8 +68,14 @@ The full closed-loop executive below is roadmap architecture. The current runtim
 - Deconfliction events are emitted through `src/argusnet/planning/deconfliction.py`.
 - The mission phase sequence is `scanning -> localizing -> inspecting -> egress -> complete`.
 
-`src/argusnet/mission/execution.py` is a foundation for the future executive. It is not yet the
-single authority for all simulation motion.
+`src/argusnet/mission/execution.py` now owns scan_map_inspect motion intent. Every per-drone
+waypoint (POI inspection redirects, egress) flows through `MissionExecutor.dispatch()` →
+`validate_command → execute_command`. The safety gate (Python `DroneConstraintChecker`) blocks
+hard violations (`min_agl`, `max_agl`, `min_drone_separation`); rejected commands record a
+`SafetyEvent` on `MissionState.safety_events`, surface to the replay's
+`scan_mission_state.safety_events` field, and insert a `HOLD` task. Phase advancement and
+POI lifecycle still live in `sim.py`; the `target_tracking` mode does not yet flow through
+the executor.
 
 ---
 

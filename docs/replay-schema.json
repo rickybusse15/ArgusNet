@@ -600,6 +600,44 @@
         },
         "scan_mission_state": {
           "$ref": "#/definitions/scan_mission_state"
+        },
+        "tracking_mission_state": {
+          "$ref": "#/definitions/tracking_mission_state"
+        }
+      }
+    },
+    "tracking_mission_state": {
+      "type": ["object", "null"],
+      "description": "State of the target_tracking mission at this frame. Present only in target_tracking missions. Currently carries the per-frame safety-event delta produced by the mission executor's dispatch loop.",
+      "additionalProperties": true,
+      "properties": {
+        "safety_events": {
+          "type": "array",
+          "description": "Safety-gate rejections recorded by the mission executor since the previous frame. Empty in nominal flights; populated when an unsafe waypoint is blocked.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "timestamp_s": {"type": "number"},
+              "drone_id": {"type": "string"},
+              "task_type": {
+                "type": "string",
+                "enum": ["map_frontier", "inspect_target", "track_target", "relocalize", "return_home", "hold"]
+              },
+              "target_xy_m": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "target_z_m": {"type": "number"},
+              "reason": {"type": "string"},
+              "violations": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            }
+          }
         }
       }
     },
@@ -704,6 +742,34 @@
           "type": "integer",
           "description": "Total number of POIs in this mission.",
           "minimum": 0
+        },
+        "safety_events": {
+          "type": "array",
+          "description": "Safety-gate rejections recorded by the mission executor since the previous frame. Empty in nominal flights; populated when an unsafe waypoint is blocked.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "timestamp_s": {"type": "number"},
+              "drone_id": {"type": "string"},
+              "task_type": {
+                "type": "string",
+                "enum": ["map_frontier", "inspect_target", "track_target", "relocalize", "return_home", "hold"]
+              },
+              "target_xy_m": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "target_z_m": {"type": "number"},
+              "reason": {"type": "string"},
+              "violations": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            }
+          }
         }
       }
     }

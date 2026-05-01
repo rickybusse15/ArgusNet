@@ -38,7 +38,9 @@ from argusnet.core.types import (
     NodeState,
     ObservationRejection,
     PlatformFrame,
+    SafetyEventRecord,
     ScanMissionState,
+    TrackingMissionState,
     TruthState,
     to_jsonable,
     vec3,
@@ -59,6 +61,7 @@ from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLa
 from argusnet.planning.frontier import ClaimedCells, FrontierPlanner
 from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
 from argusnet.mission.execution import (
+    DroneRuntimeState,
     ExecutableCommand,
     MissionConstraints,
     MissionExecutionContext,
@@ -68,8 +71,10 @@ from argusnet.mission.execution import (
     MissionTaskStatus,
     MissionTaskType,
     SafetyDecision,
+    SafetyEvent,
     SafetyStatus,
 )
+from argusnet.safety.checker import DroneConstraintChecker, DronePhysicalLimits
 from argusnet.planning.poi import POIAssignmentContext, POIManager
 from argusnet.sensing.imu import IMUMeasurement
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
@@ -4446,6 +4451,17 @@ def run_simulation(
     _frontier_planner = FrontierPlanner()
     _claimed_cells = ClaimedCells()
 
+    # Visibility-graph planner shared by the executor's goto-hover trajectories
+    # so per-waypoint paths route around hard obstacles instead of cutting
+    # straight through them.
+    _executor_planner = PathPlanner2D(
+        bounds_xy_m=scenario.environment.bounds_xy_m,
+        obstacle_layer=scenario.environment.obstacles,
+        config=PlannerConfig(),
+    )
+    _executor_clearance_m = _executor_planner.config.drone_clearance_m
+    _executor_cruise_mps = 28.0
+
     # Coordination manager (coordinator election, formation offsets, RF latency).
     _coord_policy = CoordinationPolicy()
     _coord_manager = CoordinationManager(_coord_policy)
@@ -4478,7 +4494,8 @@ def run_simulation(
     def _make_goto_hover(
         sp: np.ndarray, txy: np.ndarray, tz: float, ts: float, ta: float
     ) -> TrajectoryFn:
-        """Return a trajectory function that linearly flies sp→(txy, tz) over [ts, ta]."""
+        """Linear sp→(txy, tz) trajectory over [ts, ta]. Fallback when no
+        planned route is available (start/goal blocked, out of bounds)."""
 
         def _traj(t: float):
             if t >= ta:
@@ -4494,6 +4511,60 @@ def run_simulation(
             dt_inv = 1.0 / max(ta - ts, 1e-9)
             vel = np.array([txy[0] - sp[0], txy[1] - sp[1], tz - sp[2]]) * dt_inv
             return pos, vel
+
+        return _traj
+
+    def _make_planned_goto(
+        sp: np.ndarray, txy: np.ndarray, tz: float, ts: float
+    ) -> TrajectoryFn:
+        """Build a piecewise trajectory along PathPlanner2D-derived waypoints.
+
+        Falls back to the straight-line ``_make_goto_hover`` when the planner
+        cannot find a route (start/goal blocked, outside bounds, or the
+        clearance-expanded visibility graph has no path).
+        """
+        sp_arr = np.asarray(sp, dtype=float)
+        txy_arr = np.asarray(txy, dtype=float)
+        cruise = max(_executor_cruise_mps, 1.0)
+
+        route = _executor_planner.plan_route(
+            (float(sp_arr[0]), float(sp_arr[1])),
+            (float(txy_arr[0]), float(txy_arr[1])),
+            clearance_m=_executor_clearance_m,
+        )
+        if route is None or len(route.points_xy_m) < 2:
+            dist_m = float(np.linalg.norm(txy_arr - sp_arr[:2]))
+            t_arrive = ts + dist_m / cruise
+            return _make_goto_hover(sp_arr, txy_arr, tz, ts, t_arrive)
+
+        pts = np.asarray(route.points_xy_m, dtype=float)
+        seg_lens = np.linalg.norm(pts[1:] - pts[:-1], axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg_lens)])
+        total_len = float(cum[-1])
+        if total_len <= 1e-9:
+            return _make_goto_hover(sp_arr, txy_arr, tz, ts, ts + 1.0)
+        t_arrive = ts + total_len / cruise
+        sz = float(sp_arr[2])
+
+        def _traj(t: float):
+            if t >= t_arrive:
+                return np.array([pts[-1, 0], pts[-1, 1], tz]), np.zeros(3)
+            if t <= ts:
+                return np.array([pts[0, 0], pts[0, 1], sz]), np.zeros(3)
+            progress = (t - ts) / (t_arrive - ts)
+            target_dist = progress * total_len
+            seg_i = int(np.searchsorted(cum, target_dist, side="right") - 1)
+            seg_i = max(0, min(seg_i, len(seg_lens) - 1))
+            seg_len = float(seg_lens[seg_i])
+            seg_frac = (target_dist - cum[seg_i]) / max(seg_len, 1e-9)
+            x = pts[seg_i, 0] + seg_frac * (pts[seg_i + 1, 0] - pts[seg_i, 0])
+            y = pts[seg_i, 1] + seg_frac * (pts[seg_i + 1, 1] - pts[seg_i, 1])
+            z = sz + progress * (tz - sz)
+            seg_dir = pts[seg_i + 1] - pts[seg_i]
+            seg_norm = float(np.linalg.norm(seg_dir))
+            vxy = seg_dir / seg_norm * cruise if seg_norm > 1e-9 else np.zeros(2)
+            vz = (tz - sz) / (t_arrive - ts)
+            return np.array([x, y, z]), np.array([float(vxy[0]), float(vxy[1]), vz])
 
         return _traj
 
@@ -4574,9 +4645,16 @@ def run_simulation(
             _vio_prev_velocities[node.node_id] = np.asarray(vel0, dtype=float)
 
     # --- Mission executor (scan_map_inspect mode only) ---
-    # The executor observes real sim state via injected callables and tracks the
-    # high-level task lifecycle alongside the embedded state machine.
+    # The executor is the choke-point for motion intent: every per-drone
+    # waypoint flows through executor.dispatch() → validate_command →
+    # execute_command. Phase advancement (scanning → localizing → inspecting →
+    # egress → complete) is still owned by sim and drives task creation.
     _executor_ref: list[object] = [None]  # populated after construction
+    _now_s: list[float] = [0.0]  # current sim timestamp, updated each tick
+    _safety_checker = DroneConstraintChecker(DronePhysicalLimits.tracker_default())
+    # Phase B toggle: when True, hard violations cause REJECTED; when False
+    # (Phase A), all commands pass through but violations are still recorded.
+    _safety_blocking_enabled = True
 
     def _is_task_complete() -> bool:
         exc = _executor_ref[0]
@@ -4587,15 +4665,79 @@ def run_simulation(
             return _scan_phase not in ("scanning", "localizing")
         if task_type == MissionTaskType.INSPECT_TARGET:
             return _poi_manager.all_complete
+        if task_type == MissionTaskType.RETURN_HOME:
+            return _scan_phase == "complete"
+        if task_type == MissionTaskType.HOLD:
+            return True  # HOLD is single-tick; clears on next step()
+        if task_type == MissionTaskType.TRACK_TARGET:
+            return False  # Tracking runs for the full mission duration.
         return True
 
+    def _validate_command(
+        cmd: ExecutableCommand, drone_state: DroneRuntimeState
+    ) -> SafetyDecision:
+        violations = _safety_checker.check_state(
+            position=np.asarray(drone_state.position_m, dtype=float),
+            velocity=np.asarray(drone_state.velocity_mps, dtype=float),
+            agl_m=drone_state.agl_m,
+            other_drone_positions=[
+                np.asarray(p, dtype=float) for p in drone_state.others_position_m
+            ],
+        )
+        if not violations or not _safety_blocking_enabled:
+            return SafetyDecision(status=SafetyStatus.OK)
+        # Return-to-home is a recovery primitive: AGL floor/ceiling violations
+        # are expected en route to recovery and must not strand the drone.
+        # Geofence/separation gates still apply.
+        if cmd.task_type == MissionTaskType.RETURN_HOME:
+            blocking = [
+                v for v in violations
+                if v.severity == "hard" and v.constraint == "min_drone_separation"
+            ]
+        else:
+            blocking = [v for v in violations if v.severity == "hard"]
+        if not blocking:
+            return SafetyDecision(status=SafetyStatus.OK)
+        return SafetyDecision(
+            status=SafetyStatus.REJECTED,
+            reason="; ".join(v.description for v in blocking),
+            violations=tuple(v.constraint for v in blocking),
+        )
+
+    def _execute_command(cmd: ExecutableCommand, drone_state: DroneRuntimeState) -> None:
+        if cmd.task_type == MissionTaskType.TRACK_TARGET:
+            # In target_tracking mode the per-tick position is produced by the
+            # node controller; approval is a no-op. Rejection pins the drone
+            # via the position-override pass below.
+            return
+        start_pos = np.asarray(drone_state.position_m, dtype=float)
+        target_xy = np.array(cmd.target_xy_m, dtype=float)
+        target_z = float(cmd.target_z_m)
+        t0 = float(_now_s[0])
+        traj = _make_planned_goto(start_pos, target_xy, target_z, t0)
+        if cmd.task_type == MissionTaskType.RETURN_HOME:
+            _egress_trajectories[cmd.drone_id] = traj
+            _poi_trajectories.pop(cmd.drone_id, None)
+        else:
+            _poi_trajectories[cmd.drone_id] = traj
+
+    if _mission_mode == "target_tracking":
+        _initial_tasks = [
+            MissionTask(
+                task_id="track-targets",
+                task_type=MissionTaskType.TRACK_TARGET,
+                priority=1,
+            ),
+        ]
+    else:
+        _initial_tasks = [
+            MissionTask(task_id="map-frontier", task_type=MissionTaskType.MAP_FRONTIER, priority=1),
+            MissionTask(task_id="inspect-targets", task_type=MissionTaskType.INSPECT_TARGET, priority=2),
+        ]
     _mission_executor = MissionExecutor(
         state=MissionState(
             mission_id="sim-mission",
-            tasks=[
-                MissionTask(task_id="map-frontier", task_type=MissionTaskType.MAP_FRONTIER, priority=1),
-                MissionTask(task_id="inspect-targets", task_type=MissionTaskType.INSPECT_TARGET, priority=2),
-            ],
+            tasks=_initial_tasks,
         ),
         constraints=MissionConstraints(
             geofence_radius_m=float(
@@ -4609,23 +4751,51 @@ def run_simulation(
         ),
         ctx=MissionExecutionContext(
             get_localization_confidence=lambda: (
-                sum(e.confidence for e in _loc_estimates) / len(_loc_estimates)
-                if _loc_estimates else 0.0
+                # target_tracking does not run map-based localization; report
+                # full confidence so the executor never inserts RELOCALIZE.
+                1.0 if _mission_mode == "target_tracking"
+                else (sum(e.confidence for e in _loc_estimates) / len(_loc_estimates)
+                      if _loc_estimates else 0.0)
             ),
             get_battery_fraction=lambda: min(
                 (v.remaining_wh / _battery_model.capacity_wh for v in _battery_states.values()),
                 default=1.0,
             ),
-            plan_task=lambda task: ExecutableCommand(description=task.task_type.value),
-            validate_command=lambda cmd: SafetyDecision(status=SafetyStatus.OK),
-            execute_command=lambda cmd: None,
+            validate_command=_validate_command,
+            execute_command=_execute_command,
             is_task_complete=_is_task_complete,
+            now_s=lambda: _now_s[0],
         ),
     )
     _executor_ref[0] = _mission_executor
+    # Cursor for per-frame safety_events delta into Scan/TrackingMissionState.
+    _prev_safety_event_count = 0
+    # Snapshot of end-of-tick resolved positions, used to pin drones for one
+    # tick when the safety gate rejects their controller-produced position.
+    _drone_prev_resolved_pos: dict[str, np.ndarray] = {}
+
+    def _drone_state_for(ns) -> DroneRuntimeState:
+        """Build a DroneRuntimeState snapshot for safety/dispatch calls."""
+        pos = np.asarray(ns.position, dtype=float)
+        vel = np.asarray(ns.velocity, dtype=float)
+        terrain_h = 0.0
+        with contextlib.suppress(Exception):
+            terrain_h = float(scenario.terrain.height_at(float(pos[0]), float(pos[1])))
+        agl_m = float(pos[2]) - terrain_h
+        bs = _battery_states.get(ns.node_id)
+        batt_frac = (bs.remaining_wh / _battery_model.capacity_wh) if bs else 1.0
+        return DroneRuntimeState(
+            drone_id=ns.node_id,
+            position_m=(float(pos[0]), float(pos[1]), float(pos[2])),
+            velocity_mps=(float(vel[0]), float(vel[1]), float(vel[2])),
+            agl_m=agl_m,
+            battery_fraction=batt_frac,
+            others_position_m=(),
+        )
 
     for step in range(simulation_config.steps):
         timestamp_s = step * simulation_config.dt_s
+        _now_s[0] = float(timestamp_s)
         node_states = scenario.node_states(timestamp_s)
 
         # --- Battery consumption per drone per step ---
@@ -4685,6 +4855,42 @@ def run_simulation(
                     ns = replace(ns, position=list(pos_ov), velocity=list(vel_ov))
                 overridden.append(ns)
             node_states = overridden
+
+        # --- target_tracking: route every per-tick waypoint through the executor ---
+        # Each mobile drone's controller-produced position is dispatched as a
+        # TRACK_TARGET command. Hard-violation rejections pin the drone to its
+        # previous resolved position for one tick (HOLD), then the controller
+        # resumes on the next step.
+        if _mission_mode == "target_tracking":
+            _pinned_this_step: set[str] = set()
+            for ns in node_states:
+                if not ns.is_mobile:
+                    continue
+                cmd = ExecutableCommand(
+                    drone_id=ns.node_id,
+                    target_xy_m=(float(ns.position[0]), float(ns.position[1])),
+                    target_z_m=float(ns.position[2]),
+                    task_type=MissionTaskType.TRACK_TARGET,
+                    reason="track",
+                )
+                decision = _mission_executor.dispatch(cmd, _drone_state_for(ns))
+                if decision.status == SafetyStatus.REJECTED:
+                    _pinned_this_step.add(ns.node_id)
+            if _pinned_this_step:
+                node_states = [
+                    replace(
+                        ns,
+                        position=list(
+                            _drone_prev_resolved_pos.get(
+                                ns.node_id, np.asarray(ns.position, dtype=float)
+                            )
+                        ),
+                        velocity=[0.0, 0.0, 0.0],
+                    )
+                    if ns.node_id in _pinned_this_step
+                    else ns
+                    for ns in node_states
+                ]
 
         # --- Inter-drone deconfliction ---
         # Resolve close-approaches between mobile drones by yielding the lower-
@@ -4873,6 +5079,49 @@ def run_simulation(
                     )
                     _coordinator_elected = True
 
+                # C3: frontier-pick + claim propagation + formation offsets.
+                # FrontierPlanner.select_frontier_cell picks an uncovered cell
+                # per drone, excluding cells claimed by other drones within the
+                # exclusion radius. CoordinationManager.update_claimed pushes
+                # the claim through the RF-latency queue (immediate when
+                # message_latency_steps == 0). flush_messages applies any
+                # queued claims whose delivery step has been reached.
+                for ns in mobile_states:
+                    cell = _frontier_planner.select_frontier_cell(
+                        _world_map.coverage_map,
+                        np.array(ns.position[:2], dtype=float),
+                        _claimed_cells,
+                        ns.node_id,
+                    )
+                    if cell is not None:
+                        _claimed_cells.claim(ns.node_id, cell)
+                        _coord_manager.update_claimed(
+                            ns.node_id, cell, _shared_state, step
+                        )
+                _coord_manager.flush_messages(_shared_state, step)
+
+                # Formation offsets: with default formation_mode == "none" this
+                # is an empty dict (no-op). Non-default modes spread drones
+                # around the lead heading; consumers may apply the offsets to
+                # their target waypoints.
+                if mobile_states:
+                    _lead_id = _shared_state.coordinator_id or mobile_states[0].node_id
+                    _lead_ns = next(
+                        (m for m in mobile_states if m.node_id == _lead_id),
+                        mobile_states[0],
+                    )
+                    _lead_vxy = np.array(_lead_ns.velocity[:2], dtype=float)
+                    if float(np.linalg.norm(_lead_vxy)) > 0.1:
+                        _lead_heading = float(math.atan2(_lead_vxy[1], _lead_vxy[0]))
+                    else:
+                        _lead_heading = 0.0
+                    _drone_ids_ordered = [_lead_id] + [
+                        m.node_id for m in mobile_states if m.node_id != _lead_id
+                    ]
+                    _coord_manager.formation_offsets(
+                        _drone_ids_ordered, _lead_heading
+                    )
+
                 if scan_frac >= _scan_threshold:
                     # Gap-fill gate: only transition if enclosed interior holes
                     # are below the minimum fraction threshold.
@@ -4924,14 +5173,15 @@ def run_simulation(
                     if active_poi_id and active_poi_id != _drone_poi_assignments.get(ns.node_id):
                         _drone_poi_assignments[ns.node_id] = active_poi_id
                         poi_obj = _poi_manager._pois[active_poi_id]
-                        start_pos = np.array(ns.position, dtype=float)
-                        tgt_xy = np.array(poi_obj.position[:2], dtype=float)
-                        tgt_z = float(poi_obj.position[2])
-                        t0 = float(timestamp_s)
-                        dist_m = float(np.linalg.norm(tgt_xy - start_pos[:2]))
-                        t_arrive = t0 + dist_m / 28.0
-                        _poi_trajectories[ns.node_id] = _make_goto_hover(
-                            start_pos, tgt_xy, tgt_z, t0, t_arrive
+                        _mission_executor.dispatch(
+                            ExecutableCommand(
+                                drone_id=ns.node_id,
+                                target_xy_m=(float(poi_obj.position[0]), float(poi_obj.position[1])),
+                                target_z_m=float(poi_obj.position[2]),
+                                task_type=MissionTaskType.INSPECT_TARGET,
+                                reason=f"assigned to {active_poi_id}",
+                            ),
+                            _drone_state_for(ns),
                         )
                     # Handoff: if this drone is low and has an active POI, find a fresh drone.
                     if batt_frac < 0.30:
@@ -4971,16 +5221,29 @@ def run_simulation(
                     _scan_phase = "egress"
                     _phase_started_at_s = timestamp_s
                     _poi_trajectories.clear()
+                    # Phase advancement drives task creation: replace the queue
+                    # with a single RETURN_HOME task, then dispatch one egress
+                    # command per drone through the executor.
+                    _mission_executor.state.tasks = [
+                        MissionTask(
+                            task_id="return-home",
+                            task_type=MissionTaskType.RETURN_HOME,
+                            priority=100,
+                        )
+                    ]
+                    _mission_executor.state.active_task = None
                     for ns in mobile_states:
                         home = _drone_home_positions.get(ns.node_id)
                         if home is not None:
-                            dist_m = float(np.linalg.norm(home[:2] - np.array(ns.position[:2])))
-                            _egress_trajectories[ns.node_id] = _make_goto_hover(
-                                np.array(ns.position, dtype=float),
-                                home[:2].copy(),
-                                float(home[2]),
-                                float(timestamp_s),
-                                float(timestamp_s) + dist_m / 28.0,
+                            _mission_executor.dispatch(
+                                ExecutableCommand(
+                                    drone_id=ns.node_id,
+                                    target_xy_m=(float(home[0]), float(home[1])),
+                                    target_z_m=float(home[2]),
+                                    task_type=MissionTaskType.RETURN_HOME,
+                                    reason="phase=egress",
+                                ),
+                                _drone_state_for(ns),
                             )
 
             elif _scan_phase == "egress":
@@ -5000,10 +5263,33 @@ def run_simulation(
         else:
             scan_frac = cov.coverage_fraction
 
-        # Advance the mission executor one step so it tracks task state alongside
-        # the sim's embedded state machine.
-        if _mission_mode == "scan_map_inspect":
-            _mission_executor.step()
+        # Advance the mission executor one step so it tracks task state
+        # alongside the sim. Runs in both modes — scan_map_inspect drives
+        # phase-based task selection; target_tracking keeps the executor in
+        # ACTIVE state and clears any single-tick HOLD tasks.
+        _mission_executor.step()
+
+        # Per-frame safety-event delta — shared between scan/tracking states.
+        _new_safety_evts = _mission_executor.state.safety_events[_prev_safety_event_count:]
+        _prev_safety_event_count = len(_mission_executor.state.safety_events)
+        _safety_records = tuple(
+            SafetyEventRecord(
+                timestamp_s=evt.timestamp_s,
+                drone_id=evt.drone_id,
+                task_type=evt.task_type.value,
+                target_xy_m=tuple(evt.target_xy_m),
+                target_z_m=float(evt.target_z_m),
+                reason=evt.reason,
+                violations=tuple(evt.violations),
+            )
+            for evt in _new_safety_evts
+        )
+
+        step_tracking_mission_state: TrackingMissionState | None = None
+        if _mission_mode == "target_tracking":
+            step_tracking_mission_state = TrackingMissionState(
+                safety_events=_safety_records,
+            )
 
         step_scan_mission_state: ScanMissionState | None = None
         if _mission_mode == "scan_map_inspect":
@@ -5057,6 +5343,7 @@ def run_simulation(
                 localization_timed_out=_loc_timed_out,
                 coordinator_drone_id=_shared_state.coordinator_id,
                 egress_progress=_egress_prog,
+                safety_events=_safety_records,
             )
 
         # --- Localization quality (derived from track covariances) ---
@@ -5128,7 +5415,13 @@ def run_simulation(
             inspection_events=step_inspection_events,
             deconfliction_events=_step_deconfliction_events,
             scan_mission_state=step_scan_mission_state,
+            tracking_mission_state=step_tracking_mission_state,
         )
+
+        # Snapshot resolved end-of-tick positions for next-tick HOLD pinning.
+        for ns in node_states:
+            if ns.is_mobile:
+                _drone_prev_resolved_pos[ns.node_id] = np.array(ns.position, dtype=float)
 
         frames.append(frame)
         _total_frame_count += 1

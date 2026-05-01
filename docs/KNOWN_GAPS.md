@@ -72,7 +72,7 @@ Status labels:
 | Inspection events | **Implemented** | `InspectionEvent` populated by mission-zone coverage/violation loop |
 | Exclusion-zone route/deconfliction handling | **Partial** | Current sim and deconfliction paths handle supported cases; full mission-executive hard gating remains future work. |
 | Evidence sets, reconstructions, change records | **Planned** | Contract exists in `INSPECTION.md`; no full runtime/index-backed evidence pipeline yet. |
-| Full closed-loop mission executive | **Planned** | `src/argusnet/mission/execution.py` is a foundation; `scan_map_inspect` is the current partial runtime bridge. |
+| Full closed-loop mission executive | **Partial** | `MissionExecutor.dispatch()` is now the choke-point for scan_map_inspect motion: every per-drone waypoint flows through `validate_command → execute_command`. Phase advancement and POI lifecycle still live in `sim.py`. |
 
 ## Planning, Coordination, And Safety
 
@@ -81,12 +81,12 @@ Status labels:
 | 2D visibility-graph planner | **Implemented** | `src/argusnet/planning/planner_base.py` |
 | Route cache and obstacle expansion | **Implemented** | `PathPlanner2D`, `PlannerConfig` |
 | Frontier enclosed-gap gate | **Implemented** | `FrontierPlanner.find_gap_cells()` is wired into `scan_map_inspect`. |
-| Frontier cell selection | **Partial** | `select_frontier_cell(cmap, drone_xy, claimed, drone_id)` exists but is not called by `sim.py`. |
-| Claimed-cell RF latency helpers | **Partial** | `CoordinationManager.update_claimed()` / `flush_messages()` exist but are not called by `sim.py`. |
-| Formation offsets | **Partial** | `CoordinationManager.formation_offsets()` exists but is not called by `sim.py`. |
+| Frontier cell selection | **Implemented** | `FrontierPlanner.select_frontier_cell()` is called per drone per scanning tick to populate the `ClaimedCells` registry; the picker's exclusion-radius contract keeps drones apart. Adaptive scanning that consumes the picks for motion is a follow-up. |
+| Claimed-cell RF latency helpers | **Implemented** | `CoordinationManager.update_claimed()` is called from the scanning-phase loop and `flush_messages()` runs once per scanning tick. Default policy `message_latency_steps=0` applies claims immediately. |
+| Formation offsets | **Implemented** | `CoordinationManager.formation_offsets()` runs once per scanning tick using the elected coordinator's heading as the lead. Default `formation_mode="none"` returns `{}` (no behaviour change); non-default modes spread drones around the lead. |
 | Coordinator election | **Implemented** | `CoordinationManager.elect_coordinator()` is wired into `scan_map_inspect`. |
 | Drone deconfliction events | **Implemented** | `src/argusnet/planning/deconfliction.py` and sim replay events |
-| Blocking safety gate | **Partial** | Current safety checks/logging exist; full safety-engine blocking is roadmap work. |
+| Blocking safety gate | **Implemented** | `src/argusnet/safety/checker.py` tags violations as `hard`/`soft`; `MissionExecutor.dispatch()` rejects hard violations (`min_agl`, `max_agl`, `min_drone_separation`) and records `SafetyEvent`s. Soft violations log only. Rust `safety-engine` integration is still future work. |
 | 3D path planning | **Planned** | Current route planner is 2D; altitude is handled separately. |
 
 ## Evaluation, Benchmarking, Replay, And UI
@@ -100,6 +100,7 @@ Status labels:
 | Benchmark standards | **Implemented as documentation** | `docs/PERFORMANCE_AND_BENCHMARKING.md` |
 | CI benchmark markers and golden performance files | **Planned** | Standard is documented; not all commands/files are wired into CI. |
 | Viewer replay playback | **Implemented** | `rust/argusnet-viewer` |
+| Viewer safety-event rendering | **Implemented** | Safety-gate rejections produce error-level entries in the operator alerts panel and red vlines on the playback timeline plot. Both `scan_mission_state` and `tracking_mission_state` safety-event arrays are surfaced. |
 | Viewer headless CI/render path | **Partial** | Headless module exists; CI/render workflow is not fully documented or gated. |
 
 ## Interface Boundaries That Need Formalization
@@ -111,8 +112,14 @@ Status labels:
    inspection routing depends on it.
 4. Inspection evidence and reconstruction artifacts should be persisted through indexing before
    repeat-inspection/change-detection claims are made.
-5. The mission executive should own task state and route all motion through planning, trajectory,
-   and safety gates.
+5. The mission executive owns task state and routes all scan_map_inspect *and*
+   target_tracking motion through `MissionExecutor.dispatch()` (validate →
+   execute). target_tracking dispatches a `TRACK_TARGET` command per drone per
+   tick; rejections pin the drone to its previous resolved position for one
+   tick. Per-waypoint trajectories use `PathPlanner2D`-derived routes
+   (`_make_planned_goto`) so the per-drone path respects hard obstacles
+   instead of cutting through them; the helper falls back to a straight line
+   when a route cannot be planned (start/goal blocked or out of bounds).
 6. Rust-side world/terrain interfaces should be explicit before Rust prediction or safety consumers
    depend on terrain/obstacle data.
 
