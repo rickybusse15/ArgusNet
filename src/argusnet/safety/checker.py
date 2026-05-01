@@ -1,18 +1,38 @@
-"""Shadow safety constraint checker for ArgusNet simulation.
+"""Safety constraint checker for ArgusNet simulation.
 
 Mirrors the physical limits from rust/safety-engine/src/limits.rs in Python.
-This is a NON-BLOCKING validator — it logs violations but does not stop motion
-(Posture A from architectural decisions).
+The checker reports violations with a ``severity`` tag; the executor's
+``validate_command`` decides which severities block motion. The checker
+itself never decides — it observes and reports.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
-__all__ = ["DronePhysicalLimits", "DroneConstraintChecker", "ConstraintViolation"]
+__all__ = [
+    "DronePhysicalLimits",
+    "DroneConstraintChecker",
+    "ConstraintViolation",
+    "Severity",
+    "HARD_CONSTRAINTS",
+    "SOFT_CONSTRAINTS",
+]
+
+Severity = Literal["hard", "soft"]
+
+HARD_CONSTRAINTS: frozenset[str] = frozenset({"min_agl", "max_agl", "min_drone_separation"})
+SOFT_CONSTRAINTS: frozenset[str] = frozenset(
+    {"max_speed", "max_climb_rate", "max_descent_rate", "max_horizontal_accel"}
+)
+
+
+def _severity_for(constraint: str) -> Severity:
+    return "hard" if constraint in HARD_CONSTRAINTS else "soft"
 
 
 @dataclass(frozen=True)
@@ -56,6 +76,7 @@ class ConstraintViolation:
     commanded_value: float
     limit_value: float
     description: str
+    severity: Severity = "soft"
 
 
 class DroneConstraintChecker:
@@ -94,6 +115,7 @@ class DroneConstraintChecker:
                     description=(
                         f"Speed {speed:.1f} m/s exceeds limit {self.limits.max_speed_mps:.1f} m/s"
                     ),
+                    severity=_severity_for("max_speed"),
                 )
             )
 
@@ -105,6 +127,7 @@ class DroneConstraintChecker:
                     commanded_value=agl_m,
                     limit_value=self.limits.min_agl_m,
                     description=f"AGL {agl_m:.1f} m below floor {self.limits.min_agl_m:.1f} m",
+                    severity=_severity_for("min_agl"),
                 )
             )
 
@@ -116,6 +139,7 @@ class DroneConstraintChecker:
                     commanded_value=agl_m,
                     limit_value=self.limits.max_agl_m,
                     description=f"AGL {agl_m:.1f} m above ceiling {self.limits.max_agl_m:.1f} m",
+                    severity=_severity_for("max_agl"),
                 )
             )
 
@@ -130,6 +154,7 @@ class DroneConstraintChecker:
                     description=(
                         f"Climb rate {vz:.1f} m/s exceeds {self.limits.max_climb_rate_mps:.1f} m/s"
                     ),
+                    severity=_severity_for("max_climb_rate"),
                 )
             )
         if vz < -self.limits.max_descent_rate_mps:
@@ -142,6 +167,7 @@ class DroneConstraintChecker:
                         f"Descent rate {abs(vz):.1f} m/s exceeds "
                         f"{self.limits.max_descent_rate_mps:.1f} m/s"
                     ),
+                    severity=_severity_for("max_descent_rate"),
                 )
             )
 
@@ -158,6 +184,7 @@ class DroneConstraintChecker:
                             f"H accel {h_accel:.1f} m/s² exceeds "
                             f"{self.limits.max_horizontal_accel_mps2:.1f} m/s²"
                         ),
+                        severity=_severity_for("max_horizontal_accel"),
                     )
                 )
 
@@ -177,6 +204,7 @@ class DroneConstraintChecker:
                                 f"Drone separation {h_dist:.1f} m below min "
                                 f"{self.limits.min_drone_separation_m:.1f} m"
                             ),
+                            severity=_severity_for("min_drone_separation"),
                         )
                     )
 

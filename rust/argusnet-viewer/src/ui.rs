@@ -564,6 +564,13 @@ fn section_operator_timeline(
                             .width(2.0),
                     );
                 }
+                for safety_frame in safety_event_frame_indices(document) {
+                    plot_ui.vline(
+                        VLine::new(safety_frame as f64)
+                            .color(egui::Color32::from_rgb(220, 60, 60))
+                            .width(1.0),
+                    );
+                }
                 plot_ui.vline(
                     VLine::new(replay_state.frame_index as f64)
                         .color(egui::Color32::WHITE)
@@ -650,6 +657,30 @@ fn frame_event_count(frame: &crate::replay::ReplayFrame) -> usize {
         + frame.rejected_observations.len()
         + frame.deconfliction_events.len()
         + frame.inspection_events.len()
+        + frame_safety_event_count(frame)
+}
+
+fn frame_safety_event_count(frame: &crate::replay::ReplayFrame) -> usize {
+    let scan = frame
+        .scan_mission_state
+        .as_ref()
+        .map(|ms| ms.safety_events.len())
+        .unwrap_or(0);
+    let tracking = frame
+        .tracking_mission_state
+        .as_ref()
+        .map(|ms| ms.safety_events.len())
+        .unwrap_or(0);
+    scan + tracking
+}
+
+fn safety_event_frame_indices(document: &crate::replay::ReplayDocument) -> Vec<usize> {
+    document
+        .frames
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, frame)| (frame_safety_event_count(frame) > 0).then_some(idx))
+        .collect()
 }
 
 fn diagnostic_node_table(ui: &mut egui::Ui, replay_state: &ReplayState) {
@@ -2095,6 +2126,37 @@ fn section_safety_alerts(
                     reject_rate * 100.0,
                     frame.metrics.rejected_observation_count,
                     total_obs
+                ),
+            ));
+        }
+    }
+
+    // Safety-gate rejections recorded by the mission executor this frame.
+    // Both scan_map_inspect and target_tracking missions surface these via
+    // their respective mission-state payload.
+    let safety_events_iter = frame
+        .scan_mission_state
+        .as_ref()
+        .map(|ms| ms.safety_events.as_slice())
+        .into_iter()
+        .chain(
+            frame
+                .tracking_mission_state
+                .as_ref()
+                .map(|ms| ms.safety_events.as_slice()),
+        );
+    for events in safety_events_iter {
+        for evt in events {
+            let violations = if evt.violations.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", evt.violations.join(", "))
+            };
+            alerts.push((
+                AlertLevel::Error,
+                format!(
+                    "Safety: {} blocked ({}){}",
+                    evt.drone_id, evt.reason, violations
                 ),
             ));
         }

@@ -335,11 +335,28 @@ implicitly:
 | Speed cap | `follow_speed_cap_mps` in `PlatformPresetProfile` |
 | Collision avoidance | `src/argusnet/planning/planner_base.py` obstacle push + `DynamicsConfig.collision_push_margin_m` |
 | Physical collision below terrain | Critical rule in CLAUDE.md: "Physical collision must never push entities below terrain" |
-| Drone separation | Not formally enforced; implicit via orbit radius spacing |
+| Drone separation | Enforced by `MissionExecutor.dispatch()` via `DroneConstraintChecker` (`min_drone_separation` is a hard violation) |
 | Energy / comms | Not modelled (simulation assumes perfect comms) |
 
 The architecture update formalises these into the `DronePhysicalLimits` schema
 and the `validate_constraints` function.
+
+### 3.1 Severity tagging and the executor's blocking gate
+
+`src/argusnet/safety/checker.py` exposes a `Severity` tag (`"hard"` / `"soft"`)
+on every `ConstraintViolation` it produces. The executor's `validate_command`
+closure inside `run_simulation` rejects only hard violations:
+
+| Constraint | Severity |
+|-----------|----------|
+| `min_agl`, `max_agl`, `min_drone_separation` | `hard` (blocking) |
+| `max_speed`, `max_climb_rate`, `max_descent_rate`, `max_horizontal_accel` | `soft` (logged only) |
+
+`MissionTaskType.RETURN_HOME` is exempt from AGL gating (RTH is a recovery
+primitive); separation gating still applies. Rejections record a
+`SafetyEvent` on `MissionState.safety_events` and surface to the replay's
+`scan_mission_state.safety_events` array. A `HOLD` task is inserted at the
+front of the queue so the drone re-plans on the next tick.
 
 ---
 

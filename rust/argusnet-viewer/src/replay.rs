@@ -192,6 +192,8 @@ pub struct ReplayFrame {
     pub deconfliction_events: Vec<DeconflictionEvent>,
     #[serde(default)]
     pub scan_mission_state: Option<ScanMissionState>,
+    #[serde(default)]
+    pub tracking_mission_state: Option<TrackingMissionState>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -218,6 +220,33 @@ pub struct ScanMissionState {
     /// Per-drone return-to-home progress. Non-empty only during the egress phase.
     #[serde(default)]
     pub egress_progress: Vec<EgressProgress>,
+    /// Safety-gate rejections recorded since the previous frame.
+    #[serde(default)]
+    pub safety_events: Vec<SafetyEventRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TrackingMissionState {
+    /// Safety-gate rejections recorded since the previous frame.
+    #[serde(default)]
+    pub safety_events: Vec<SafetyEventRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SafetyEventRecord {
+    pub timestamp_s: f32,
+    pub drone_id: String,
+    pub task_type: String,
+    /// Replay JSON serialises tuples as arrays; accept either fixed-shape
+    /// `[x, y]` or a flat 2-element vec.
+    #[serde(default)]
+    pub target_xy_m: [f32; 2],
+    #[serde(default)]
+    pub target_z_m: f32,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub violations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

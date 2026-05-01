@@ -295,6 +295,7 @@ class PlatformFrame:
     inspection_events: list[InspectionEvent] = field(default_factory=list)
     deconfliction_events: list[DeconflictionEvent] = field(default_factory=list)
     scan_mission_state: ScanMissionState | None = None
+    tracking_mission_state: TrackingMissionState | None = None
     mission_events: list[MissionEvent] = field(default_factory=list)
     safety_events: list[SafetyValidationResult] = field(default_factory=list)
     belief_cells: list[BeliefCell] = field(default_factory=list)
@@ -417,6 +418,24 @@ class EgressDroneProgress:
 
 
 @dataclass(frozen=True)
+class SafetyEventRecord:
+    """Replay-facing record of a safety-gate rejection.
+
+    Emitted whenever the mission executor's safety gate rejects a proposed
+    drone command. Mirrors mission.execution.SafetyEvent but lives in core
+    types so the replay schema does not depend on the mission package.
+    """
+
+    timestamp_s: float
+    drone_id: str
+    task_type: str
+    target_xy_m: tuple[float, float]
+    target_z_m: float
+    reason: str
+    violations: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class LocalizationEstimate:
     """Drone self-localization estimate derived from map matching."""
 
@@ -449,6 +468,21 @@ class ScanMissionState:
     localization_timed_out: bool = False
     coordinator_drone_id: str | None = None  # elected by highest battery fraction (one-shot)
     egress_progress: tuple = ()  # Tuple[EgressDroneProgress, ...]; non-empty during egress
+    # Safety-gate rejections recorded since the previous frame.
+    # Empty in nominal flights; populated when the executor blocks an unsafe waypoint.
+    safety_events: tuple = ()  # Tuple[SafetyEventRecord, ...]
+
+
+@dataclass(frozen=True)
+class TrackingMissionState:
+    """Top-level mission state for target_tracking missions.
+
+    Parallel to ``ScanMissionState`` but minimal: target_tracking does not
+    have a phase machine, so today this carries the per-frame safety-event
+    delta produced by the mission executor's dispatch loop.
+    """
+
+    safety_events: tuple = ()  # Tuple[SafetyEventRecord, ...]
 
 
 def to_jsonable(value: Any) -> Any:
