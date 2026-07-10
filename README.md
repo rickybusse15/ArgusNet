@@ -454,6 +454,7 @@ A single drone flies a simulated mission over terrain and structures, collects c
 For implementation details already present in this repository, see:
 
 - [Architecture & module map](docs/architecture.md)
+- [Product and capability roadmap](docs/ROADMAP.md)
 - [Usage guide & CLI reference](docs/usage.md)
 - [Terrain notes](docs/TERRAIN.md)
 - [Mapping contract](docs/MAPPING.md)
