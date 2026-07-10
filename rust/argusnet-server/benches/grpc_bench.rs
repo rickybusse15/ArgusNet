@@ -27,6 +27,9 @@ fn args() -> ServeArgs {
         max_coast_frames: None,
         max_coast_seconds: None,
         min_quality_score: None,
+        tls_cert: None,
+        tls_key: None,
+        tls_client_ca: None,
     }
 }
 
