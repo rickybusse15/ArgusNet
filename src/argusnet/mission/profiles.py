@@ -21,9 +21,7 @@ from argusnet.core.types import (
 )
 
 SUPPORTED_SENSOR_MODALITIES = frozenset({"optical", "thermal", "any"})
-SUPPORTED_OBJECTIVE_KINDS = frozenset(
-    {"search", "acquire", "confirm", "map", "inspect", "egress"}
-)
+SUPPORTED_OBJECTIVE_KINDS = frozenset({"search", "acquire", "confirm", "map", "inspect", "egress"})
 
 
 class MissionDomain(StrEnum):
@@ -231,10 +229,7 @@ INDUSTRIAL_ASSET_SURVEY = MissionProfile(
 
 
 _PROFILES = MappingProxyType(
-    {
-        profile.profile_id: profile
-        for profile in (SAR_PERSON_SEARCH, INDUSTRIAL_ASSET_SURVEY)
-    }
+    {profile.profile_id: profile for profile in (SAR_PERSON_SEARCH, INDUSTRIAL_ASSET_SURVEY)}
 )
 
 _SCENARIO_OPTION_FIELDS = frozenset(
@@ -269,7 +264,8 @@ _SCENARIO_OPTION_FIELDS = frozenset(
 def list_mission_profiles(domain: MissionDomain | str | None = None) -> tuple[MissionProfile, ...]:
     active_domain = MissionDomain(domain) if domain is not None else None
     return tuple(
-        profile for profile in _PROFILES.values()
+        profile
+        for profile in _PROFILES.values()
         if active_domain is None or profile.domain == active_domain
     )
 
@@ -405,7 +401,8 @@ def build_profile_inspection_pois(
     if map_extent_m <= 0.0:
         raise ValueError("map_extent_m must be positive.")
     dwell = next(
-        objective.dwell_s for objective in profile.objectives
+        objective.dwell_s
+        for objective in profile.objectives
         if objective.kind == "inspect" and objective.dwell_s is not None
     )
     specs: Sequence[tuple[str, float, float, str]] = (

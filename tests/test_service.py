@@ -468,8 +468,11 @@ class SimulationCoreContractTest(unittest.TestCase):
 
     def test_search_drones_switch_into_follow_mode_after_target_detection(self) -> None:
         options = ScenarioOptions(
-            map_preset="medium", target_motion_preset="mixed", drone_mode_preset="search",
-            mission_mode="target_tracking", target_count=2,
+            map_preset="medium",
+            target_motion_preset="mixed",
+            drone_mode_preset="search",
+            mission_mode="target_tracking",
+            target_count=2,
         )
         scenario = build_default_scenario(options=options, seed=7)
 
@@ -512,8 +515,11 @@ class SimulationCoreContractTest(unittest.TestCase):
     def test_follow_interceptors_hold_radius_above_targets(self) -> None:
         scenario = build_default_scenario(
             ScenarioOptions(
-                map_preset="medium", target_motion_preset="mixed", drone_mode_preset="follow",
-                mission_mode="target_tracking", target_count=2,
+                map_preset="medium",
+                target_motion_preset="mixed",
+                drone_mode_preset="follow",
+                mission_mode="target_tracking",
+                target_count=2,
             ),
             seed=7,
         )
@@ -682,7 +688,10 @@ class SimulationCoreContractTest(unittest.TestCase):
             ScenarioDefinition(scenario_name="demo", nodes=(), targets=(target,), terrain=terrain)
         with self.assertRaisesRegex(ValueError, "at least one target"):
             ScenarioDefinition(
-                scenario_name="demo", nodes=(node,), targets=(), terrain=terrain,
+                scenario_name="demo",
+                nodes=(node,),
+                targets=(),
+                terrain=terrain,
                 options=ScenarioOptions(mission_mode="target_tracking"),
             )
         with self.assertRaisesRegex(ValueError, "steps"):

@@ -431,8 +431,7 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
         choices=["real-world", "scan-map", "split"],
         default=None,
         help=(
-            "Initial viewer mode. Defaults to split when cooperative search is on, "
-            "else real-world."
+            "Initial viewer mode. Defaults to split when cooperative search is on, else real-world."
         ),
     )
     live_parser.add_argument(
@@ -682,9 +681,7 @@ def _run_live(args: argparse.Namespace) -> None:
             children.append(subprocess.Popen(sim_cmd, cwd=root, env=environment))
         # Default the viewer to split when running a cooperative search so the
         # live reconstruction and team co-localization are visible immediately.
-        view_mode = args.view_mode or (
-            "split" if args.cooperative_search else "real-world"
-        )
+        view_mode = args.view_mode or ("split" if args.cooperative_search else "real-world")
         viewer_process = subprocess.Popen(
             [
                 str(viewer),
@@ -886,8 +883,7 @@ def _run_sim_dry_run(args: argparse.Namespace) -> None:
         unknown = unknown_config_keys(mapping)
         if unknown:
             print(
-                f"Warning: config file contains unrecognized keys (ignored): "
-                f"{', '.join(unknown)}",
+                f"Warning: config file contains unrecognized keys (ignored): {', '.join(unknown)}",
                 file=sys.stderr,
             )
     else:

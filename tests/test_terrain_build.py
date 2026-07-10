@@ -96,12 +96,7 @@ def test_dem_and_hybrid_terrain_construction() -> None:
     assert dem.source_metadata["source"] == "dem"
     assert hybrid.source_metadata["source"] == "hybrid"
     assert (
-        np.max(
-            np.abs(
-                hybrid.height_at_many([[10.0, 10.0]])
-                - dem.height_at_many([[10.0, 10.0]])
-            )
-        )
+        np.max(np.abs(hybrid.height_at_many([[10.0, 10.0]]) - dem.height_at_many([[10.0, 10.0]])))
         > 0.0
     )
 

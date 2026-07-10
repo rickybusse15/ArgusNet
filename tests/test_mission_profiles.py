@@ -125,9 +125,7 @@ def test_cli_profile_defaults_and_explicit_override(monkeypatch: pytest.MonkeyPa
 def test_profile_simulation_smoke_and_replay_metadata(
     profile_id: str, expect_scan_state: bool
 ) -> None:
-    options = build_profile_scenario_options(
-        profile_id, {"safety_blocking": False}
-    )
+    options = build_profile_scenario_options(profile_id, {"safety_blocking": False})
     scenario = build_default_scenario(options=options, seed=7)
     result = run_simulation(
         scenario,

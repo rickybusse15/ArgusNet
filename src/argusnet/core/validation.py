@@ -28,4 +28,3 @@ def assert_monotonic_timestamps(stream: Iterable[float], *, name: str = "timesta
         if previous is not None and timestamp < previous:
             raise ValidationError(f"{name} must be monotonically non-decreasing.")
         previous = timestamp
-

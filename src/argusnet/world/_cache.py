@@ -102,4 +102,3 @@ def quantized_key(*values: float, cell_m: float) -> tuple[int, ...]:
     """Quantize metre-space values into stable integer cache-key coordinates."""
     cell = max(float(cell_m), 1.0e-9)
     return tuple(int(round(float(value) / cell)) for value in values)
-

@@ -392,9 +392,7 @@ class DynamicObstacleInjectionTest(unittest.TestCase):
             top_z_m=15.0,
         )
         bounds = Bounds2D(0.0, 100.0, 0.0, 100.0)
-        obstacle_layer = ObstacleLayer(
-            bounds_xy_m=bounds, tile_size_m=32.0, primitives=(building,)
-        )
+        obstacle_layer = ObstacleLayer(bounds_xy_m=bounds, tile_size_m=32.0, primitives=(building,))
         terrain = TerrainLayer.from_height_grid(
             environment_id="flat",
             bounds_xy_m=bounds,
@@ -424,9 +422,7 @@ class DynamicObstacleInjectionTest(unittest.TestCase):
             top_z_m=15.0,
         )
         bounds = Bounds2D(0.0, 100.0, 0.0, 100.0)
-        obstacle_layer = ObstacleLayer(
-            bounds_xy_m=bounds, tile_size_m=32.0, primitives=(building,)
-        )
+        obstacle_layer = ObstacleLayer(bounds_xy_m=bounds, tile_size_m=32.0, primitives=(building,))
         terrain = TerrainLayer.from_height_grid(
             environment_id="flat",
             bounds_xy_m=bounds,

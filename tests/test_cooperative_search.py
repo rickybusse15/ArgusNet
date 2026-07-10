@@ -35,6 +35,7 @@ class _NoClaims:
     def others(self, _drone_id):
         return set()
 
+
 _BOUNDS = {"x_min_m": -2000.0, "x_max_m": 2000.0, "y_min_m": -2000.0, "y_max_m": 2000.0}
 
 
@@ -128,11 +129,7 @@ class CooperativeSearchRunTests(unittest.TestCase):
 
         # All drones launch clustered around the single grounded origin.
         first = result.frames[0]
-        drone_xy = [
-            (n.position[0], n.position[1])
-            for n in first.nodes
-            if "drone" in n.node_id
-        ]
+        drone_xy = [(n.position[0], n.position[1]) for n in first.nodes if "drone" in n.node_id]
         self.assertGreater(len(drone_xy), 1)
         xy = np.array(drone_xy)
         spread = float(np.linalg.norm(xy - xy.mean(axis=0), axis=1).max())

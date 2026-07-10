@@ -2296,9 +2296,7 @@ def _filter_obstacles_for_landscape(
             1 for x_m, y_m in points if _mask_value_at_terrain_xy(terrain, "water", x_m, y_m)
         )
         steep_hits = sum(
-            1
-            for x_m, y_m in points
-            if _mask_value_at_terrain_xy(terrain, "steep_slope", x_m, y_m)
+            1 for x_m, y_m in points if _mask_value_at_terrain_xy(terrain, "steep_slope", x_m, y_m)
         )
         water_fraction = water_hits / max(len(points), 1)
         steep_fraction = steep_hits / max(len(points), 1)
@@ -2762,9 +2760,7 @@ def cooperative_wedge_waypoints(
     return np.asarray(waypoints, dtype=float)
 
 
-def compute_wedge_coverage(
-    coverage_map, origin_xy: np.ndarray, wedge_count: int
-) -> np.ndarray:
+def compute_wedge_coverage(coverage_map, origin_xy: np.ndarray, wedge_count: int) -> np.ndarray:
     """Covered fraction of each angular wedge around ``origin_xy`` (length N)."""
     grid = coverage_map.count_grid  # (nx, ny)
     b = coverage_map.bounds
@@ -5149,9 +5145,7 @@ def run_simulation(
                     float(poi.position[0]),
                     float(poi.position[1]),
                     float(
-                        scenario.terrain.height_at(
-                            float(poi.position[0]), float(poi.position[1])
-                        )
+                        scenario.terrain.height_at(float(poi.position[0]), float(poi.position[1]))
                     )
                     + _POI_HOVER_AGL_M,
                 ),
@@ -5248,7 +5242,8 @@ def run_simulation(
         ctx=MissionExecutionContext(
             get_localization_confidence=lambda: (
                 sum(e.confidence for e in _loc_estimates) / len(_loc_estimates)
-                if _loc_estimates else 0.0
+                if _loc_estimates
+                else 0.0
             ),
             get_battery_fraction=lambda: min(
                 (v.remaining_wh / _battery_model.capacity_wh for v in _battery_states.values()),
@@ -5428,9 +5423,7 @@ def run_simulation(
                     previous_velocity=_safety_previous_velocities.get(ns.node_id),
                     dt_s=simulation_config.dt_s,
                     other_drone_positions=[
-                        peer
-                        for peer_id, peer in mobile_positions.items()
-                        if peer_id != ns.node_id
+                        peer for peer_id, peer in mobile_positions.items() if peer_id != ns.node_id
                     ],
                     energy_fraction=ns.battery_fraction,
                 )
@@ -5666,9 +5659,7 @@ def run_simulation(
                 if _coop_search_active and len(_loc_estimates) > 1:
                     # Localize to each other's search data: inverse-variance fuse
                     # the per-drone estimates into a tighter team estimate.
-                    _team = _grid_localizer.fuse_estimates(
-                        [e.drone_id for e in _loc_estimates]
-                    )
+                    _team = _grid_localizer.fuse_estimates([e.drone_id for e in _loc_estimates])
                     if _team is not None:
                         if _team_loc_best is None or (
                             _team.position_std_m < _team_loc_best.position_std_m
@@ -5678,9 +5669,7 @@ def run_simulation(
                         # the fusion (mirrors GridLocalizer.fuse_estimates gating).
                         _half_r = _grid_localizer.config.search_radius_m * 0.5
                         _contrib = tuple(
-                            e.drone_id
-                            for e in _loc_estimates
-                            if e.position_std_m < _half_r
+                            e.drone_id for e in _loc_estimates if e.position_std_m < _half_r
                         )
                         _team_loc_current = TeamLocalization(
                             position=tuple(float(v) for v in _team.position_estimate),
@@ -5705,8 +5694,7 @@ def run_simulation(
                 if _adaptive_coop:
                     if not _coop_wedge_index:
                         _coop_wedge_index = {
-                            nid: k
-                            for k, nid in enumerate(sorted(n.node_id for n in mobile_states))
+                            nid: k for k, nid in enumerate(sorted(n.node_id for n in mobile_states))
                         }
                     _wedge_count = max(len(_coop_wedge_index), 1)
                     # Re-anchor the wedge origin on the fused team estimate once the
@@ -6173,8 +6161,11 @@ def build_simulation_report_lines(result: SimulationResult) -> list[str]:
     # scan/map/inspect mission summarises coverage and POIs; a target-tracking
     # run that saw no tracks gets a diagnostic hint about why.
     scan_state = next(
-        (frame.scan_mission_state for frame in reversed(result.frames)
-         if frame.scan_mission_state is not None),
+        (
+            frame.scan_mission_state
+            for frame in reversed(result.frames)
+            if frame.scan_mission_state is not None
+        ),
         None,
     )
     if scan_state is not None:
@@ -6496,9 +6487,7 @@ def simulate(
             from argusnet.evaluation.replay import write_streaming_replay_document
 
             streaming_meta = _build_compact_replay_document(result).get("meta", {})
-            streaming_meta["frame_count"] = result.summary.get(
-                "frame_count", len(result.frames)
-            )
+            streaming_meta["frame_count"] = result.summary.get("frame_count", len(result.frames))
             write_streaming_replay_document(
                 jsonl_path=streaming_jsonl_path,
                 output_path=Path(replay_path),

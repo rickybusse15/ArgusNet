@@ -51,9 +51,7 @@ class RotatingFrameRecorder:
         self._file = segment_path.open("w", encoding="utf-8")
         self._opened_at = time.monotonic()
         self._bytes = 0
-        self._segments.append(
-            {"path": segment_path.name, "index": self._segment_index, "bytes": 0}
-        )
+        self._segments.append({"path": segment_path.name, "index": self._segment_index, "bytes": 0})
         self._write_index()
 
     def write(self, value: str) -> int:

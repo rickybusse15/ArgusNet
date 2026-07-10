@@ -110,7 +110,7 @@ class BearingObservationRoundTripTest(unittest.TestCase):
     def test_multiple_observations_preserve_identity(self) -> None:
         obs_list = [self._obs(node_id=f"node-{i}", target_id=f"tgt-{i}") for i in range(5)]
         recovered_list = [_observation_from_proto(_observation_to_proto(o)) for o in obs_list]
-        for orig, recov in zip(obs_list, recovered_list):
+        for orig, recov in zip(obs_list, recovered_list, strict=True):
             self.assertEqual(orig.node_id, recov.node_id)
             self.assertEqual(orig.target_id, recov.target_id)
 
