@@ -634,7 +634,8 @@ def _run_live(args: argparse.Namespace) -> None:
     root = Path(__file__).resolve().parents[3]
     daemon = root / "target/debug/argusnetd"
     viewer = root / "target/debug/argusnet-viewer"
-    missing = [str(path) for path in (daemon, viewer) if not path.exists()]
+    required = (viewer,) if args.connect_only else (daemon, viewer)
+    missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise SystemExit(
             "Live binaries are missing. Build with "

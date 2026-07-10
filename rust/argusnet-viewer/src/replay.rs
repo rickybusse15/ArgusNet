@@ -212,22 +212,57 @@ pub struct TargetMetadata {
     pub notes: String,
 }
 
+/// Replay JSON serializes safety events via the Python `SafetyValidationResult`
+/// schema (`accepted`, `clamped`), while the live gRPC wire uses `SafetyEvent`
+/// (`blocked`, `command_clamped`). `accepted` is the exact logical inverse of
+/// `blocked`, not a rename, so it cannot be handled with a plain `#[serde(alias)]`.
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct SafetyEvent {
+struct SafetyEventRaw {
     #[serde(alias = "validation_id")]
-    pub event_id: String,
+    event_id: String,
     #[serde(alias = "subject_id")]
+    subject_id: String,
+    timestamp_s: f32,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    violations: Vec<String>,
+    #[serde(default, alias = "clamped")]
+    command_clamped: bool,
+    #[serde(default)]
+    blocked: bool,
+    #[serde(default)]
+    accepted: Option<bool>,
+    #[serde(default)]
+    reason: String,
+}
+
+impl From<SafetyEventRaw> for SafetyEvent {
+    fn from(raw: SafetyEventRaw) -> Self {
+        let blocked = raw.accepted.map_or(raw.blocked, |accepted| !accepted);
+        SafetyEvent {
+            event_id: raw.event_id,
+            subject_id: raw.subject_id,
+            timestamp_s: raw.timestamp_s,
+            state: raw.state,
+            violations: raw.violations,
+            command_clamped: raw.command_clamped,
+            blocked,
+            reason: raw.reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(from = "SafetyEventRaw")]
+pub struct SafetyEvent {
+    pub event_id: String,
     pub subject_id: String,
     pub timestamp_s: f32,
-    #[serde(default)]
     pub state: String,
-    #[serde(default)]
     pub violations: Vec<String>,
-    #[serde(default, alias = "clamped")]
     pub command_clamped: bool,
-    #[serde(default)]
     pub blocked: bool,
-    #[serde(default)]
     pub reason: String,
 }
 

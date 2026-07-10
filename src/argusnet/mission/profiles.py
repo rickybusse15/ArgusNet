@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
@@ -24,7 +24,7 @@ SUPPORTED_SENSOR_MODALITIES = frozenset({"optical", "thermal", "any"})
 SUPPORTED_OBJECTIVE_KINDS = frozenset({"search", "acquire", "confirm", "map", "inspect", "egress"})
 
 
-class MissionDomain(StrEnum):
+class MissionDomain(str, Enum):
     SEARCH_AND_RESCUE = "search_and_rescue"
     INDUSTRIAL_SURVEY = "industrial_survey"
 
@@ -257,6 +257,11 @@ _SCENARIO_OPTION_FIELDS = frozenset(
         "enforce_flight_envelope",
         "safety_blocking",
         "frontier_exploration",
+        "coverage_resolution_m",
+        "cooperative_search",
+        "search_origin_m",
+        "adaptive_search",
+        "occlusion_aware_mapping",
     }
 )
 
