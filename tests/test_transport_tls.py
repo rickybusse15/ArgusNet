@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import grpc
 
 from argusnet.adapters.argusnet_grpc import TrackingService
 from argusnet.security.transport import (
@@ -55,6 +58,33 @@ class TestGrpcClientRefusesPlaintextOffLoopback(unittest.TestCase):
                 startup_timeout_s=0.2,
             )
         self.assertNotIsInstance(ctx.exception, TransportSecurityError)
+
+    def test_loopback_with_explicit_tls_config_still_uses_secure_channel(self):
+        # A loopback endpoint exempts the *requirement* for TLS, not an
+        # explicitly configured tls_config: argusnetd itself will serve TLS on
+        # a loopback bind if started with --tls-cert/--tls-key, so the client
+        # must still speak TLS when the caller asked for it, or it can never
+        # complete a handshake against such a daemon.
+        # ca_path content is arbitrary bytes; never parsed before the handshake.
+        tls_config = TLSConfig(ca_path=Path(__file__))
+        with (
+            patch(
+                "argusnet.adapters.argusnet_grpc.grpc.secure_channel", wraps=grpc.secure_channel
+            ) as secure,
+            patch(
+                "argusnet.adapters.argusnet_grpc.grpc.insecure_channel",
+                wraps=grpc.insecure_channel,
+            ) as insecure,
+            self.assertRaises(RuntimeError),
+        ):
+            TrackingService(
+                endpoint="127.0.0.1:1",
+                spawn_local=False,
+                tls_config=tls_config,
+                startup_timeout_s=0.2,
+            )
+        secure.assert_called_once()
+        insecure.assert_not_called()
 
 
 class TestMqttAdapterRefusesPlaintextOffLoopback(unittest.TestCase):

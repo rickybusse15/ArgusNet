@@ -128,7 +128,8 @@ impl ScenePackage {
             );
         }
 
-        let style: StyleDocument = read_json(root.join(&manifest.metadata.style))?;
+        let style_path = safe_manifest_path(&root, &manifest.metadata.style, "metadata.style")?;
+        let style: StyleDocument = read_json(style_path)?;
         if style.style_version != STYLE_FORMAT_VERSION {
             anyhow::bail!(
                 "unsupported style format {:?}; expected {}",
@@ -137,13 +138,22 @@ impl ScenePackage {
             );
         }
 
-        let environment: EnvironmentDocument =
-            read_json(root.join(&manifest.metadata.environment))?;
+        let environment_path = safe_manifest_path(
+            &root,
+            &manifest.metadata.environment,
+            "metadata.environment",
+        )?;
+        let environment: EnvironmentDocument = read_json(environment_path)?;
         let replay = match manifest.replay.as_ref() {
-            Some(entry) if root.join(&entry.path).exists() => {
-                Some(read_json::<Value>(root.join(&entry.path))?)
+            Some(entry) => {
+                let replay_path = safe_manifest_path(&root, &entry.path, "replay.path")?;
+                if replay_path.exists() {
+                    Some(read_json::<Value>(replay_path)?)
+                } else {
+                    None
+                }
             }
-            _ => None,
+            None => None,
         };
 
         let style_lookup = style
@@ -212,14 +222,56 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: PathBuf) -> Result<T> {
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
 
+/// Joins `relative` onto `root`, rejecting an absolute path or any `..`
+/// component. Manifest path fields (`metadata.style`, `metadata.environment`,
+/// `replay.path`) can come from an untrusted, shared scene package and are
+/// read directly via `fs::read_to_string` in [`read_json`] — an unescaped
+/// path here is an arbitrary file read, not just an asset-load path
+/// traversal, so this is checked before the path is ever joined and read.
+fn safe_manifest_path(root: &Path, relative: &str, field_name: &str) -> Result<PathBuf> {
+    let candidate = Path::new(relative);
+    if candidate.is_absolute()
+        || candidate
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+    {
+        anyhow::bail!(
+            "scene manifest {field_name} must be a relative path with no '..' components, got {relative:?}"
+        );
+    }
+    Ok(root.join(candidate))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
 
-    use super::ScenePackage;
+    use super::{safe_manifest_path, ScenePackage};
+
+    #[test]
+    fn safe_manifest_path_resolves_contained_relative_path() {
+        let root = Path::new("/scene-root");
+        let resolved = safe_manifest_path(root, "metadata/style.json", "metadata.style").unwrap();
+        assert_eq!(resolved, root.join("metadata/style.json"));
+    }
+
+    #[test]
+    fn safe_manifest_path_rejects_absolute_path() {
+        let root = Path::new("/scene-root");
+        assert!(safe_manifest_path(root, "/etc/passwd", "metadata.style").is_err());
+    }
+
+    #[test]
+    fn safe_manifest_path_rejects_dotdot_escape() {
+        let root = Path::new("/scene-root");
+        assert!(
+            safe_manifest_path(root, "../../../../etc/passwd", "metadata.environment").is_err()
+        );
+    }
 
     #[test]
     fn load_scene_package_reads_manifest_style_and_environment() {
@@ -299,6 +351,56 @@ mod tests {
                 .max_height_m,
             Some(42.0)
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn load_scene_package_rejects_environment_path_traversal() {
+        // Regression test for a scene package whose metadata.environment
+        // escapes the scene root: ScenePackage::load must reject it before
+        // ever reading the escaping path, not just when a layer is spawned.
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("argusnet-schema-traversal-{suffix}"));
+        fs::create_dir_all(root.join("metadata")).unwrap();
+        fs::write(
+            root.join("scene_manifest.json"),
+            serde_json::to_string_pretty(&json!({
+                "format_version": "smartscene-v1",
+                "scene_id": "evil",
+                "bounds_xy_m": {
+                    "x_min_m": -10.0,
+                    "x_max_m": 10.0,
+                    "y_min_m": -5.0,
+                    "y_max_m": 5.0
+                },
+                "runtime_crs": {"runtime_crs_id": "local-enu"},
+                "source_crs_id": "EPSG:32611",
+                "layers": [],
+                "replay": null,
+                "metadata": {
+                    "environment": "../../../../etc/passwd",
+                    "style": "metadata/style.json"
+                },
+                "build": {"source_kind": "synthetic"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("metadata/style.json"),
+            serde_json::to_string_pretty(&json!({
+                "style_version": "smartstyle-v1",
+                "layers": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(ScenePackage::load(&root).is_err());
 
         let _ = fs::remove_dir_all(root);
     }

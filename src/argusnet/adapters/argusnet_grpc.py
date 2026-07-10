@@ -478,13 +478,23 @@ class TrackingService:
             raise ValueError("TrackingService requires an endpoint or spawn_local=True.")
 
         self._tls_config = tls_config or TLSConfig.from_env(_GRPC_TLS_ENV_PREFIX)
-        if self.endpoint and not is_loopback_endpoint(self.endpoint):
-            if not self._tls_config.configured:
-                raise TransportSecurityError(
-                    f"Refusing to connect to non-loopback endpoint {self.endpoint!r} without "
-                    f"TLS. Set {_GRPC_TLS_ENV_PREFIX}_CA (and _CERT/_KEY for mTLS) or pass "
-                    "tls_config=TLSConfig(...)."
-                )
+        if (
+            self.endpoint
+            and not is_loopback_endpoint(self.endpoint)
+            and not self._tls_config.configured
+        ):
+            raise TransportSecurityError(
+                f"Refusing to connect to non-loopback endpoint {self.endpoint!r} without "
+                f"TLS. Set {_GRPC_TLS_ENV_PREFIX}_CA (and _CERT/_KEY for mTLS) or pass "
+                "tls_config=TLSConfig(...)."
+            )
+
+        # Loopback only exempts the *requirement* for TLS above; an explicitly
+        # configured tls_config (e.g. testing TLS locally, or argusnetd started
+        # with --tls-cert/--tls-key on 127.0.0.1) must still be honored, or a
+        # TLS-listening daemon would receive a plaintext connection and never
+        # become ready.
+        if self._tls_config.configured:
             credentials = grpc_channel_credentials(self._tls_config)
             self._channel = grpc.secure_channel(
                 self.endpoint, credentials, options=_GRPC_CHANNEL_OPTIONS
