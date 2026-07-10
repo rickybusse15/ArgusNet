@@ -243,6 +243,55 @@ class SafetyValidationResult:
 
 
 @dataclass(frozen=True)
+class TargetMetadata:
+    target_id: str
+    operator_label: str = ""
+    target_type: str = "unknown"
+    priority: int = 1
+    behavior: str = "unknown"
+    status: str = "active"
+    first_seen_s: float = 0.0
+    last_seen_s: float = 0.0
+    confidence: float = 1.0
+    notes: str = ""
+
+
+class PlatformLinkState(str, Enum):
+    NOMINAL = "nominal"
+    DEGRADED = "degraded"
+    LOST_LINK = "lost_link"
+    REACQUIRING = "reacquiring"
+    RETURNING_HOME = "returning_home"
+
+
+class LostLinkAction(str, Enum):
+    HOLD = "hold"
+    CLIMB_FOR_COMMS = "climb_for_comms"
+    ROUTE_VIA_RELAY = "route_via_relay"
+    RETURN_HOME = "return_home"
+    LAND = "land"
+    OPERATOR_REVIEW = "operator_review"
+
+
+@dataclass(frozen=True)
+class PlatformHealthState:
+    """Planning-facing health and data-link state for one platform."""
+
+    platform_id: str
+    timestamp_s: float
+    battery_fraction: float = 1.0
+    rssi_dbm: float | None = None
+    link_state: str = PlatformLinkState.NOMINAL.value
+    sensor_health: dict[str, float] = field(default_factory=dict)
+    gnss_confidence: float | None = None
+    vio_confidence: float | None = None
+    stale_frame_count: int = 0
+    last_seen_s: float | None = None
+    active_lost_link_action: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class ExecutableTrajectory:
     command_id: str
     trajectory_id: str
@@ -280,6 +329,65 @@ class InspectionEvidenceRecord:
     artifact_refs: tuple[IndexedArtifactRef, ...] = ()
 
 
+class InspectionSiteStatus(str, Enum):
+    PENDING = "pending"
+    PLANNED = "planned"
+    INSPECTED = "inspected"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+    NEEDS_REVISIT = "needs_revisit"
+
+
+class InspectionBlockedReason(str, Enum):
+    UNMAPPED = "unmapped"
+    OCCLUDED = "occluded"
+    UNSAFE_VIEWPOINT = "unsafe_viewpoint"
+    LOW_LOCALIZATION_CONFIDENCE = "low_localization_confidence"
+    LOW_EVIDENCE_QUALITY = "low_evidence_quality"
+    SENSOR_UNAVAILABLE = "sensor_unavailable"
+    OUTSIDE_GEOFENCE = "outside_geofence"
+
+
+@dataclass(frozen=True)
+class InspectionSite:
+    site_id: str
+    site_type: str
+    world_position_m: Vector3
+    priority: int = 1
+    required_sensor: str = "rgb"
+    confidence: float = 0.0
+    created_from: str = "operator"
+    status: str = InspectionSiteStatus.PENDING.value
+    last_inspected_at_s: float | None = None
+    blocked_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class InspectionRequest:
+    request_id: str
+    mission_id: str
+    site_ids: tuple[str, ...]
+    priority: int = 1
+    required_outputs: tuple[str, ...] = ("images", "metadata")
+    min_localization_confidence: float = 0.6
+    min_quality_score: float = 0.5
+    deadline_s: float | None = None
+
+
+@dataclass(frozen=True)
+class InspectionResult:
+    result_id: str
+    site_id: str
+    request_id: str
+    status: str
+    evidence_ids: tuple[str, ...] = ()
+    coverage_score: float = 0.0
+    quality_score: float = 0.0
+    reason: str | None = None
+    needs_revisit: bool = False
+    next_revisit_after_s: float | None = None
+
+
 @dataclass(frozen=True)
 class PlatformFrame:
     timestamp_s: float
@@ -297,9 +405,11 @@ class PlatformFrame:
     scan_mission_state: ScanMissionState | None = None
     mission_events: list[MissionEvent] = field(default_factory=list)
     safety_events: list[SafetyValidationResult] = field(default_factory=list)
+    target_metadata: list[TargetMetadata] = field(default_factory=list)
     belief_cells: list[BeliefCell] = field(default_factory=list)
     pose_estimates: list[PoseEstimate] = field(default_factory=list)
     evidence_records: list[InspectionEvidenceRecord] = field(default_factory=list)
+    platform_health: list[PlatformHealthState] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -429,6 +539,21 @@ class LocalizationEstimate:
 
 
 @dataclass(frozen=True)
+class TeamLocalization:
+    """Fused team position from cooperative co-localization.
+
+    Produced by inverse-variance fusion of the per-drone localization estimates
+    (all referenced to the shared coverage map). Present only in cooperative
+    search runs; ``None`` otherwise.
+    """
+
+    position: Vector3
+    position_std_m: float  # 1-sigma uncertainty of the fused estimate
+    confidence: float
+    contributing_node_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ScanMissionState:
     """Top-level mission state serialised into every replay frame."""
 
@@ -449,6 +574,8 @@ class ScanMissionState:
     localization_timed_out: bool = False
     coordinator_drone_id: str | None = None  # elected by highest battery fraction (one-shot)
     egress_progress: tuple = ()  # Tuple[EgressDroneProgress, ...]; non-empty during egress
+    # Cooperative co-localization: fused team position (None outside cooperative search).
+    team_localization: TeamLocalization | None = None
 
 
 def to_jsonable(value: Any) -> Any:

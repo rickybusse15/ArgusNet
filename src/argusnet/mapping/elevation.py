@@ -114,9 +114,7 @@ class ElevationMap:
                 XX.shape
             )
         else:
-            heights = np.vectorize(lambda x, y: terrain_model.height_at(float(x), float(y)))(
-                XX, YY
-            )
+            heights = np.vectorize(lambda x, y: terrain_model.height_at(float(x), float(y)))(XX, YY)
         return cls.from_array(heights, coords[0], coords[-1], coords[0], coords[-1])
 
     # ------------------------------------------------------------------

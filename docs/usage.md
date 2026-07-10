@@ -22,6 +22,98 @@ Key flags:
 - `--drone-count N`
 - `--clean-terrain`: terrain geometry without buildings/walls/vegetation
 
+The default `argusnet sim` runs `scan_map_inspect` with `--target-count 0`, so it
+reports mapping coverage and POI inspection rather than fused tracks — that is the
+intended workflow, not an empty result.
+
+### Target-tracking demo
+
+To see the Rust fusion engine produce fused tracks, run the legacy target-tracking
+mode with targets placed inside sensor range (a smaller map keeps drones close to
+their assigned targets):
+
+```bash
+argusnet sim \
+  --mission-mode target_tracking \
+  --map-preset small --target-count 2 --drone-count 4 \
+  --target-motion loiter --duration-s 60 --seed 7 \
+  --replay tracking-replay.json
+```
+
+The run ends with a `Track RMSE` summary. On a large map (`regional` and up) a
+handful of drones will not close the distance to scattered targets, so most
+observations are rejected `out_of_range` and no tracks confirm; the CLI prints a
+diagnostic hint when that happens.
+
+### Mapping run with split-view 3-D reconstruction
+
+Run a scan/map/inspect mission, package it, and open the viewer with the real
+terrain on the left and a 3-D reconstruction of the believed terrain on the right:
+
+```bash
+argusnet sim --mission-mode scan_map_inspect --map-preset xlarge \
+  --terrain-resolution-m 25 --coverage-resolution-m 30 --drone-count 8 \
+  --frontier-exploration --duration-s 180 --seed 7 --replay mapping.json
+argusnet build-scene --replay mapping.json --output scenes/mapping-scene
+argusnet-viewer --scene scenes/mapping-scene --view-mode split --autoplay
+```
+
+Cooperative search (opt-in): add `--cooperative-search` to launch every drone from
+one grounded origin and fan them out into disjoint angular wedges of the search
+area, then fuse their per-drone localizations (all referenced to the shared
+coverage map) into a team estimate. `--search-origin X,Y` sets the common origin
+(meters; defaults to the search-area center). The CLI summary reports the grounded
+origin and the team co-localization convergence.
+
+Add `--adaptive-search` to refine it: drones redirect via wedge-aware,
+coverage-balanced frontier selection (reallocating from finished wedges to the
+most under-covered one), and the wedge origin re-anchors on the fused team estimate
+— a localization→planning feedback loop that covers more ground more evenly.
+
+Add `--occlusion-aware-mapping` for dense obstacle mapping runs. The scan map and
+split-view reconstruction only mark cells with line of sight from a drone, and
+frontier/POI/egress redirects use the 2-D planner to route around hard blockers.
+The flag is opt-in so default fixed-seed replays keep their legacy behavior.
+
+The team estimate is recorded per frame in the replay
+(`scan_mission_state.team_localization`) and rendered by the viewer (a cyan beacon
+with spokes to each contributing drone), including in headless `--view-mode split`
+stills and sequences.
+
+```bash
+argusnet sim --mission-mode scan_map_inspect --map-preset medium --drone-count 6 \
+  --cooperative-search --coverage-resolution-m 40 --duration-s 120 --seed 7 \
+  --replay coop.json
+```
+
+Resolution and size:
+- `--map-preset` sets map size: `small`, `medium`, `large`, `xlarge`, `theater`,
+  `operational` (increasing extent) — larger maps exercise the 2-D path planner
+  harder.
+- `--terrain-resolution-m` sets terrain grid fidelity (smaller = higher-res).
+- `--coverage-resolution-m` sets the scan/reconstruction grid cell size (default
+  50 m; smaller gives a denser reconstruction). It is recorded additively under
+  `meta.scenario_options.coverage_resolution_m`.
+
+Viewer:
+- `--view-mode` accepts `real-world` (default), `scan-map` (reconstruction only),
+  or `split`. In split mode the left half shows the real terrain and the right
+  half is an empty area that fills with a 3-D reconstruction of the believed
+  terrain, rendered from an angled perspective camera on its own render layer
+  (no real terrain, drones, or gizmos leak into it). The `M` key cycles the modes.
+- `--autoplay` starts the timeline immediately. The reconstruction accumulates
+  from the mission's per-frame `newly_scanned_cells`, so it builds up as the
+  drones cover the map (rewinding resets it).
+
+Independent controls in split view: mouse input is routed to whichever region the
+cursor is over, so the two panes and the drawer each have their own scroll wheel.
+- Cursor over the **left** pane: right-drag orbits, middle-drag (or shift +
+  right-drag) pans, and the scroll wheel zooms the real-terrain view.
+- Cursor over the **right** pane: the same controls orbit / pan / zoom the 3-D
+  reconstruction independently, without moving the left view.
+- Cursor over the **drawer / tabs**: the scroll wheel scrolls the panel content
+  and the cameras stay put.
+
 ### Build scene
 
 ```bash

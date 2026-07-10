@@ -72,7 +72,8 @@ class LandCoverPatch:
 
 
 @dataclass(frozen=True)
-class _PresetProfile:
+class TerrainProfile:
+    name: str
     base_elevation_m: float
     relief_m: float
     slope_x: float
@@ -83,21 +84,248 @@ class _PresetProfile:
     roughness: float
     water_bias: float
     snow_bias: float
+    vegetation_bias: float = 0.5
+    urban_bias: float = 0.0
+    hydrology_strength: float = 0.5
+    smoothing_passes: int = 0
 
 
-_PRESET_PROFILES: Mapping[str, _PresetProfile] = {
-    "default": _PresetProfile(28.0, 58.0, 0.006, -0.004, 3, 2, 0.45, 0.60, 0.03, 0.65),
-    "rolling_highlands": _PresetProfile(30.0, 60.0, 0.006, -0.004, 3, 2, 0.48, 0.60, 0.03, 0.68),
-    "alpine": _PresetProfile(58.0, 150.0, 0.020, -0.015, 5, 3, 0.42, 0.90, 0.02, 0.45),
-    "coastal": _PresetProfile(8.0, 28.0, 0.001, -0.018, 1, 2, 0.75, 0.32, 0.28, 0.90),
-    "urban_flat": _PresetProfile(6.0, 12.0, 0.001, -0.001, 1, 1, 0.35, 0.18, 0.00, 1.00),
-    "desert_canyon": _PresetProfile(22.0, 92.0, 0.004, -0.002, 2, 4, 0.14, 0.78, 0.01, 0.95),
-    "lake_district": _PresetProfile(14.0, 62.0, -0.002, 0.004, 2, 3, 0.85, 0.46, 0.20, 0.78),
-    "jungle_canopy": _PresetProfile(16.0, 44.0, 0.003, -0.002, 2, 3, 0.95, 0.56, 0.06, 0.95),
-    "arctic_tundra": _PresetProfile(18.0, 46.0, 0.001, 0.002, 2, 2, 0.40, 0.38, 0.08, 0.20),
-    "military_compound": _PresetProfile(12.0, 24.0, 0.001, -0.001, 1, 1, 0.28, 0.24, 0.00, 1.00),
-    "river_valley": _PresetProfile(20.0, 70.0, 0.004, -0.003, 3, 4, 0.78, 0.50, 0.16, 0.82),
-    "mountain_pass": _PresetProfile(70.0, 185.0, 0.016, -0.010, 6, 3, 0.45, 0.88, 0.02, 0.35),
+@dataclass(frozen=True)
+class ProceduralTerrainGrid:
+    x_values_m: np.ndarray
+    y_values_m: np.ndarray
+    heights_m: np.ndarray
+    masks: Mapping[str, np.ndarray]
+    metadata: Mapping[str, object]
+
+    @property
+    def water_mask(self) -> np.ndarray:
+        return np.asarray(self.masks.get("water", np.zeros_like(self.heights_m, dtype=bool)))
+
+
+@dataclass(frozen=True)
+class LandscapeBuildConfig:
+    terrain: TerrainBuildConfig = TerrainBuildConfig()
+    land_cover_resolution_m: float | None = None
+    patches: tuple[LandCoverPatch, ...] = ()
+    obstacles: tuple[object, ...] = ()
+    suppress_vegetation: bool = False
+
+
+@dataclass(frozen=True)
+class LandscapeBuildResult:
+    terrain: TerrainLayer
+    land_cover: LandCoverLayer
+    obstacles: tuple[object, ...]
+    masks: Mapping[str, np.ndarray]
+    metadata: Mapping[str, object]
+
+
+_PRESET_PROFILES: Mapping[str, TerrainProfile] = {
+    "default": TerrainProfile(
+        "default",
+        28.0,
+        58.0,
+        0.006,
+        -0.004,
+        3,
+        2,
+        0.45,
+        0.60,
+        0.03,
+        0.65,
+        0.50,
+        0.00,
+        0.35,
+        1,
+    ),
+    "rolling_highlands": TerrainProfile(
+        "rolling_highlands",
+        30.0,
+        60.0,
+        0.006,
+        -0.004,
+        3,
+        2,
+        0.48,
+        0.60,
+        0.03,
+        0.68,
+        0.55,
+        0.00,
+        0.35,
+        1,
+    ),
+    "alpine": TerrainProfile(
+        "alpine",
+        58.0,
+        150.0,
+        0.020,
+        -0.015,
+        5,
+        3,
+        0.42,
+        0.90,
+        0.02,
+        0.45,
+        0.34,
+        0.00,
+        0.20,
+        0,
+    ),
+    "coastal": TerrainProfile(
+        "coastal",
+        8.0,
+        28.0,
+        0.001,
+        -0.018,
+        1,
+        2,
+        0.75,
+        0.32,
+        0.28,
+        0.90,
+        0.50,
+        0.10,
+        0.85,
+        2,
+    ),
+    "urban_flat": TerrainProfile(
+        "urban_flat",
+        6.0,
+        12.0,
+        0.001,
+        -0.001,
+        1,
+        1,
+        0.35,
+        0.18,
+        0.00,
+        1.00,
+        0.15,
+        0.70,
+        0.10,
+        2,
+    ),
+    "desert_canyon": TerrainProfile(
+        "desert_canyon",
+        22.0,
+        92.0,
+        0.004,
+        -0.002,
+        2,
+        4,
+        0.14,
+        0.78,
+        0.01,
+        0.95,
+        0.10,
+        0.02,
+        0.18,
+        0,
+    ),
+    "lake_district": TerrainProfile(
+        "lake_district",
+        14.0,
+        62.0,
+        -0.002,
+        0.004,
+        2,
+        3,
+        0.85,
+        0.46,
+        0.20,
+        0.78,
+        0.65,
+        0.04,
+        0.90,
+        2,
+    ),
+    "jungle_canopy": TerrainProfile(
+        "jungle_canopy",
+        16.0,
+        44.0,
+        0.003,
+        -0.002,
+        2,
+        3,
+        0.95,
+        0.56,
+        0.06,
+        0.95,
+        0.95,
+        0.00,
+        0.55,
+        1,
+    ),
+    "arctic_tundra": TerrainProfile(
+        "arctic_tundra",
+        18.0,
+        46.0,
+        0.001,
+        0.002,
+        2,
+        2,
+        0.40,
+        0.38,
+        0.08,
+        0.20,
+        0.12,
+        0.00,
+        0.45,
+        2,
+    ),
+    "military_compound": TerrainProfile(
+        "military_compound",
+        12.0,
+        24.0,
+        0.001,
+        -0.001,
+        1,
+        1,
+        0.28,
+        0.24,
+        0.00,
+        1.00,
+        0.10,
+        0.85,
+        0.08,
+        2,
+    ),
+    "river_valley": TerrainProfile(
+        "river_valley",
+        20.0,
+        70.0,
+        0.004,
+        -0.003,
+        3,
+        4,
+        0.78,
+        0.50,
+        0.16,
+        0.82,
+        0.62,
+        0.02,
+        0.95,
+        1,
+    ),
+    "mountain_pass": TerrainProfile(
+        "mountain_pass",
+        70.0,
+        185.0,
+        0.016,
+        -0.010,
+        6,
+        3,
+        0.45,
+        0.88,
+        0.02,
+        0.35,
+        0.25,
+        0.00,
+        0.35,
+        0,
+    ),
 }
 
 
@@ -188,7 +416,200 @@ def _line_gaussian(
     return cross_env * along_env
 
 
-def procedural_height_grid(
+def terrain_profile_for_preset(preset_name: str) -> TerrainProfile:
+    return _PRESET_PROFILES.get(preset_name, _PRESET_PROFILES["default"])
+
+
+def _slope_grid(heights_m: np.ndarray, resolution_m: float) -> np.ndarray:
+    dz_dy, dz_dx = np.gradient(heights_m, max(float(resolution_m), 1.0))
+    return np.arctan(np.sqrt((dz_dx * dz_dx) + (dz_dy * dz_dy)))
+
+
+def _dilate_mask(mask: np.ndarray, iterations: int = 1) -> np.ndarray:
+    dilated = np.asarray(mask, dtype=bool)
+    for _ in range(max(iterations, 0)):
+        padded = np.pad(dilated, 1, constant_values=False)
+        dilated = (
+            padded[1:-1, 1:-1]
+            | padded[:-2, 1:-1]
+            | padded[2:, 1:-1]
+            | padded[1:-1, :-2]
+            | padded[1:-1, 2:]
+            | padded[:-2, :-2]
+            | padded[:-2, 2:]
+            | padded[2:, :-2]
+            | padded[2:, 2:]
+        )
+    return dilated
+
+
+def _smooth_heights(
+    heights_m: np.ndarray,
+    *,
+    preserve_mask: np.ndarray,
+    passes: int,
+    blend: float,
+) -> np.ndarray:
+    smoothed = np.asarray(heights_m, dtype=float).copy()
+    for _ in range(max(passes, 0)):
+        padded = np.pad(smoothed, 1, mode="edge")
+        neighbor_mean = (
+            padded[1:-1, 1:-1] * 4.0
+            + padded[:-2, 1:-1]
+            + padded[2:, 1:-1]
+            + padded[1:-1, :-2]
+            + padded[1:-1, 2:]
+        ) / 8.0
+        candidate = (smoothed * (1.0 - blend)) + (neighbor_mean * blend)
+        smoothed = np.where(preserve_mask, smoothed, candidate)
+    return smoothed
+
+
+def _ellipse_mask(
+    xx: np.ndarray,
+    yy: np.ndarray,
+    *,
+    center_xy: tuple[float, float],
+    radius_x_m: float,
+    radius_y_m: float,
+) -> np.ndarray:
+    return (
+        ((xx - center_xy[0]) / max(radius_x_m, 1.0)) ** 2
+        + ((yy - center_xy[1]) / max(radius_y_m, 1.0)) ** 2
+    ) <= 1.0
+
+
+def _semantic_masks(
+    *,
+    preset_name: str,
+    profile: TerrainProfile,
+    heights_m: np.ndarray,
+    xx: np.ndarray,
+    yy: np.ndarray,
+    bounds_xy_m: Bounds2D,
+    resolution_m: float,
+    seed: int,
+    ground_plane_m: float,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    scene_scale_m = max(bounds_xy_m.width_m, bounds_xy_m.height_m, 1.0)
+    center_x = (bounds_xy_m.x_min_m + bounds_xy_m.x_max_m) * 0.5
+    center_y = (bounds_xy_m.y_min_m + bounds_xy_m.y_max_m) * 0.5
+    slopes = _slope_grid(heights_m, resolution_m)
+    h_min = float(np.min(heights_m))
+    h_max = float(np.max(heights_m))
+    elev_norm = (heights_m - h_min) / max(h_max - h_min, 1.0)
+    water_level = float(
+        np.quantile(heights_m, min(max(profile.water_bias, 0.01), 0.35))
+        if profile.water_bias > 0.0
+        else ground_plane_m
+    )
+
+    lowland_mask = (heights_m <= water_level + (profile.relief_m * 0.05)) & (slopes < 0.22)
+    water_mask = (heights_m <= ground_plane_m + 1.0) | (
+        (profile.water_bias > 0.0) & lowland_mask & (heights_m <= water_level)
+    )
+    valley_mask = lowland_mask.copy()
+
+    if preset_name in {"river_valley", "mountain_pass"}:
+        phase = (_stable_seed("river-phase", preset_name, seed) % 6283) / 1000.0
+        amplitude_m = scene_scale_m * (0.015 if preset_name == "mountain_pass" else 0.035)
+        river_y = center_y + amplitude_m * np.sin(
+            ((xx - center_x) / max(scene_scale_m * 0.23, 1.0)) + phase
+        )
+        river_width = max(resolution_m * 1.5, scene_scale_m * 0.018)
+        river_mask = np.abs(yy - river_y) <= river_width
+        river_bank_mask = np.abs(yy - river_y) <= river_width * 3.0
+        river_level = (
+            float(np.quantile(heights_m[river_mask], 0.18)) if np.any(river_mask) else water_level
+        )
+        heights_m = np.where(river_bank_mask, heights_m - profile.relief_m * 0.035, heights_m)
+        heights_m = np.where(river_mask, river_level, heights_m)
+        water_mask |= river_mask
+        valley_mask |= river_bank_mask
+
+    if preset_name == "lake_district":
+        lakes = _ellipse_mask(
+            xx,
+            yy,
+            center_xy=(center_x - scene_scale_m * 0.22, center_y + scene_scale_m * 0.16),
+            radius_x_m=scene_scale_m * 0.09,
+            radius_y_m=scene_scale_m * 0.06,
+        ) | _ellipse_mask(
+            xx,
+            yy,
+            center_xy=(center_x + scene_scale_m * 0.24, center_y - scene_scale_m * 0.17),
+            radius_x_m=scene_scale_m * 0.08,
+            radius_y_m=scene_scale_m * 0.055,
+        )
+        lake_level = float(np.quantile(heights_m[lakes], 0.28)) if np.any(lakes) else water_level
+        heights_m = np.where(
+            _dilate_mask(lakes, 1),
+            np.minimum(heights_m, lake_level + 1.5),
+            heights_m,
+        )
+        heights_m = np.where(lakes, lake_level, heights_m)
+        water_mask |= lakes
+        lowland_mask |= _dilate_mask(lakes, 2)
+
+    if preset_name == "coastal":
+        coast_limit = bounds_xy_m.y_min_m + bounds_xy_m.height_m * 0.26
+        coast_mask = yy <= coast_limit
+        shelf = yy <= bounds_xy_m.y_min_m + bounds_xy_m.height_m * 0.34
+        coast_level = max(float(ground_plane_m), water_level)
+        heights_m = np.where(shelf, np.minimum(heights_m, coast_level + 2.0), heights_m)
+        heights_m = np.where(coast_mask, coast_level, heights_m)
+        water_mask |= coast_mask
+        lowland_mask |= shelf
+
+    if preset_name in {"urban_flat", "military_compound"}:
+        pad = _ellipse_mask(
+            xx,
+            yy,
+            center_xy=(center_x, center_y),
+            radius_x_m=scene_scale_m * (0.18 if preset_name == "urban_flat" else 0.20),
+            radius_y_m=scene_scale_m * (0.15 if preset_name == "urban_flat" else 0.18),
+        )
+        pad_level = float(np.median(heights_m[pad])) if np.any(pad) else float(np.median(heights_m))
+        heights_m = np.where(
+            _dilate_mask(pad, 2),
+            (heights_m * 0.35) + (pad_level * 0.65),
+            heights_m,
+        )
+
+    water_mask = _dilate_mask(water_mask, 0)
+    if np.any(water_mask):
+        water_level_by_grid = np.minimum(heights_m, water_level)
+        heights_m = np.where(water_mask, water_level_by_grid, heights_m)
+    heights_m = _smooth_heights(
+        heights_m,
+        preserve_mask=water_mask,
+        passes=profile.smoothing_passes,
+        blend=0.28,
+    )
+    heights_m = np.maximum(heights_m, float(ground_plane_m))
+
+    slopes = _slope_grid(heights_m, resolution_m)
+    steep_slope_mask = slopes > (0.52 if profile.roughness < 0.7 else 0.62)
+    ridge_mask = (elev_norm > 0.72) | (steep_slope_mask & (elev_norm > 0.55))
+    road_mask = np.zeros_like(water_mask, dtype=bool)
+    if preset_name in {"urban_flat", "military_compound"}:
+        road_width = max(resolution_m * 1.2, scene_scale_m * 0.012)
+        road_mask = (np.abs(xx - center_x) <= road_width) | (np.abs(yy - center_y) <= road_width)
+    elif preset_name in {"river_valley", "lake_district"}:
+        road_mask = valley_mask & (~water_mask) & (slopes < 0.16)
+
+    masks = {
+        "water": water_mask.astype(bool),
+        "ridge": ridge_mask.astype(bool),
+        "valley": valley_mask.astype(bool),
+        "steep_slope": steep_slope_mask.astype(bool),
+        "lowland": lowland_mask.astype(bool),
+        "road": road_mask.astype(bool),
+    }
+    return heights_m, masks
+
+
+def procedural_terrain_grid(
     *,
     bounds_xy_m: Bounds2D,
     preset_name: str,
@@ -196,8 +617,8 @@ def procedural_height_grid(
     resolution_m: float,
     detail_strength: float = 1.0,
     ground_plane_m: float = 0.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    profile = _PRESET_PROFILES.get(preset_name, _PRESET_PROFILES["default"])
+) -> ProceduralTerrainGrid:
+    profile = terrain_profile_for_preset(preset_name)
     rng = np.random.default_rng(_stable_seed("profile", preset_name, seed))
     x_values, y_values = _grid_values(bounds_xy_m, resolution_m)
     xx, yy = np.meshgrid(x_values, y_values)
@@ -309,7 +730,67 @@ def procedural_height_grid(
         lowland = np.clip((water_level - heights) / max(profile.relief_m * 0.18, 1.0), 0.0, 1.0)
         heights -= lowland * profile.relief_m * 0.08
 
-    return x_values, y_values, np.maximum(heights, float(ground_plane_m))
+    heights = np.maximum(heights, float(ground_plane_m))
+    heights, masks = _semantic_masks(
+        preset_name=preset_name,
+        profile=profile,
+        heights_m=heights,
+        xx=xx,
+        yy=yy,
+        bounds_xy_m=bounds_xy_m,
+        resolution_m=resolution_m,
+        seed=seed,
+        ground_plane_m=ground_plane_m,
+    )
+    metadata = {
+        "generator_version": "procedural-landscape-v1",
+        "preset": preset_name,
+        "seed": int(seed),
+        "profile": {
+            "name": profile.name,
+            "base_elevation_m": profile.base_elevation_m,
+            "relief_m": profile.relief_m,
+            "roughness": profile.roughness,
+            "moisture": profile.moisture,
+            "water_bias": profile.water_bias,
+            "snow_bias": profile.snow_bias,
+            "vegetation_bias": profile.vegetation_bias,
+            "urban_bias": profile.urban_bias,
+            "hydrology_strength": profile.hydrology_strength,
+            "smoothing_passes": profile.smoothing_passes,
+        },
+        "semantic_masks": sorted(masks),
+        "mask_coverage_fraction": {
+            name: float(np.mean(mask)) for name, mask in sorted(masks.items())
+        },
+    }
+    return ProceduralTerrainGrid(
+        x_values_m=x_values,
+        y_values_m=y_values,
+        heights_m=heights,
+        masks=masks,
+        metadata=metadata,
+    )
+
+
+def procedural_height_grid(
+    *,
+    bounds_xy_m: Bounds2D,
+    preset_name: str,
+    seed: int,
+    resolution_m: float,
+    detail_strength: float = 1.0,
+    ground_plane_m: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    grid = procedural_terrain_grid(
+        bounds_xy_m=bounds_xy_m,
+        preset_name=preset_name,
+        seed=seed,
+        resolution_m=resolution_m,
+        detail_strength=detail_strength,
+        ground_plane_m=ground_plane_m,
+    )
+    return grid.x_values_m, grid.y_values_m, grid.heights_m
 
 
 def _sample_layer_to_grid(
@@ -322,6 +803,38 @@ def _sample_layer_to_grid(
     points = np.column_stack([xx.reshape(-1), yy.reshape(-1)])
     heights = terrain.height_at_many(points).reshape(xx.shape)
     return x_values, y_values, heights
+
+
+def _sample_mask_to_grid(
+    mask: np.ndarray,
+    *,
+    source_bounds: Bounds2D,
+    target_xx: np.ndarray,
+    target_yy: np.ndarray,
+) -> np.ndarray:
+    mask_array = np.asarray(mask, dtype=bool)
+    if mask_array.ndim != 2 or mask_array.size == 0:
+        return np.zeros_like(target_xx, dtype=bool)
+    rows, cols = mask_array.shape
+    col = np.clip(
+        np.rint(
+            (target_xx - source_bounds.x_min_m)
+            / max(source_bounds.width_m, 1.0e-9)
+            * max(cols - 1, 1)
+        ).astype(int),
+        0,
+        cols - 1,
+    )
+    row = np.clip(
+        np.rint(
+            (target_yy - source_bounds.y_min_m)
+            / max(source_bounds.height_m, 1.0e-9)
+            * max(rows - 1, 1)
+        ).astype(int),
+        0,
+        rows - 1,
+    )
+    return mask_array[row, col]
 
 
 def build_terrain_layer(
@@ -344,9 +857,10 @@ def build_terrain_layer(
         "detail_strength": float(config.detail_strength),
         "season_month": int(config.season_month),
     }
+    semantic_masks: Mapping[str, np.ndarray] = {}
 
     if source == "procedural":
-        _, _, heights = procedural_height_grid(
+        grid = procedural_terrain_grid(
             bounds_xy_m=bounds_xy_m,
             preset_name=config.terrain_preset,
             seed=config.effective_seed,
@@ -354,6 +868,9 @@ def build_terrain_layer(
             detail_strength=config.detail_strength,
             ground_plane_m=config.ground_plane_m,
         )
+        heights = grid.heights_m
+        semantic_masks = grid.masks
+        source_metadata.update(grid.metadata)
     else:
         dem_path = Path(str(config.dem_path))
         if not dem_path.exists():
@@ -373,7 +890,7 @@ def build_terrain_layer(
             }
         )
         if source == "hybrid":
-            _, _, detail = procedural_height_grid(
+            detail_grid = procedural_terrain_grid(
                 bounds_xy_m=bounds_xy_m,
                 preset_name=config.terrain_preset,
                 seed=config.effective_seed,
@@ -381,8 +898,19 @@ def build_terrain_layer(
                 detail_strength=1.0,
                 ground_plane_m=0.0,
             )
+            detail = detail_grid.heights_m
             detail = detail - float(np.mean(detail))
             heights = heights + detail * float(config.detail_strength)
+            semantic_masks = detail_grid.masks
+            source_metadata.update(
+                {
+                    "generator_version": "hybrid-landscape-v1",
+                    "semantic_masks": sorted(semantic_masks),
+                    "mask_coverage_fraction": {
+                        name: float(np.mean(mask)) for name, mask in sorted(semantic_masks.items())
+                    },
+                }
+            )
 
     return TerrainLayer.from_height_grid(
         environment_id=environment_id,
@@ -393,6 +921,7 @@ def build_terrain_layer(
         lod_resolutions_m=(resolution_m,),
         ground_plane_m=config.ground_plane_m,
         source_metadata=source_metadata,
+        semantic_masks=semantic_masks,
     )
 
 
@@ -407,9 +936,10 @@ def build_land_cover_layer(
     terrain_preset: str = "default",
     seed: int = 0,
     suppress_vegetation: bool = False,
+    terrain_masks: Mapping[str, np.ndarray] | None = None,
 ) -> LandCoverLayer:
     season = season or SeasonalVariation.from_month(7)
-    profile = _PRESET_PROFILES.get(terrain_preset, _PRESET_PROFILES["default"])
+    profile = terrain_profile_for_preset(terrain_preset)
     cols = max(1, int(math.ceil(bounds_xy_m.width_m / resolution_m)))
     rows = max(1, int(math.ceil(bounds_xy_m.height_m / resolution_m)))
     x_values = bounds_xy_m.x_min_m + ((np.arange(cols, dtype=float) + 0.5) * resolution_m)
@@ -433,15 +963,35 @@ def build_land_cover_layer(
 
     classes = np.full((rows, cols), int(LandCoverClass.OPEN), dtype=np.uint8)
     density = np.zeros((rows, cols), dtype=np.uint8)
+    source_masks = (
+        terrain_masks if terrain_masks is not None else getattr(terrain, "semantic_masks", {})
+    )
+    sampled_masks = {
+        name: _sample_mask_to_grid(
+            mask,
+            source_bounds=terrain.bounds_xy_m,
+            target_xx=xx,
+            target_yy=yy,
+        )
+        for name, mask in dict(source_masks).items()
+    }
 
-    water_mask = heights <= terrain.ground_plane_m + 1.0
+    water_mask = (heights <= terrain.ground_plane_m + 1.0) | sampled_masks.get(
+        "water", np.zeros((rows, cols), dtype=bool)
+    )
     if terrain_preset in {"coastal", "lake_district", "river_valley", "arctic_tundra"}:
         water_level = np.quantile(heights, min(max(profile.water_bias, 0.03), 0.30))
         water_mask |= (heights <= water_level) & (slopes < 0.16)
     classes[water_mask] = int(LandCoverClass.WATER)
 
     wetland_mask = (
-        (~water_mask) & (moisture > 0.68) & (elev_norm < 0.30) & (slopes < 0.14)
+        (~water_mask)
+        & (
+            sampled_masks.get("lowland", np.zeros((rows, cols), dtype=bool))
+            | sampled_masks.get("valley", np.zeros((rows, cols), dtype=bool))
+            | ((moisture > 0.68) & (elev_norm < 0.30))
+        )
+        & (slopes < 0.14)
     )
     if not suppress_vegetation:
         classes[wetland_mask] = int(LandCoverClass.WETLAND)
@@ -455,7 +1005,16 @@ def build_land_cover_layer(
     classes[snow_mask] = int(LandCoverClass.SNOW)
     density[snow_mask] = 40
 
-    rocky_mask = (~water_mask) & (~snow_mask) & ((slopes > 0.52) | (elev_norm > 0.78))
+    rocky_mask = (
+        (~water_mask)
+        & (~snow_mask)
+        & (
+            sampled_masks.get("steep_slope", np.zeros((rows, cols), dtype=bool))
+            | sampled_masks.get("ridge", np.zeros((rows, cols), dtype=bool))
+            | (slopes > 0.52)
+            | (elev_norm > 0.78)
+        )
+    )
     classes[rocky_mask] = int(LandCoverClass.ROCKY)
     density[rocky_mask] = 60
 
@@ -465,7 +1024,7 @@ def build_land_cover_layer(
             (~water_mask)
             & (~snow_mask)
             & (~rocky_mask)
-            & (moisture > 0.52)
+            & (moisture > max(0.35, 0.55 - (profile.vegetation_bias * 0.18)))
             & (elev_norm > 0.18)
             & (slopes < 0.45)
         )
@@ -487,6 +1046,10 @@ def build_land_cover_layer(
             density[scrub_mask],
             np.uint8(np.clip(105 * season.foliage_density_factor, 0, 255)),
         )
+
+    road_mask = sampled_masks.get("road", np.zeros((rows, cols), dtype=bool)) & (~water_mask)
+    classes[road_mask] = int(LandCoverClass.ROAD)
+    density[road_mask] = 0
 
     for obstacle in obstacles:
         if isinstance(obstacle, ForestStand):
@@ -528,10 +1091,54 @@ def build_land_cover_layer(
     )
 
 
+def build_landscape(
+    config: LandscapeBuildConfig,
+    bounds_xy_m: Bounds2D,
+    *,
+    environment_id: str = "landscape",
+) -> LandscapeBuildResult:
+    terrain = build_terrain_layer(config.terrain, bounds_xy_m, environment_id=environment_id)
+    land_cover_resolution_m = float(
+        config.land_cover_resolution_m or max(10.0, terrain.base_resolution_m * 2.0)
+    )
+    land_cover = build_land_cover_layer(
+        bounds_xy_m=bounds_xy_m,
+        terrain=terrain,
+        obstacles=config.obstacles,
+        patches=config.patches,
+        resolution_m=land_cover_resolution_m,
+        season=config.terrain.season,
+        terrain_preset=config.terrain.terrain_preset,
+        seed=config.terrain.effective_seed,
+        suppress_vegetation=config.suppress_vegetation,
+        terrain_masks=terrain.semantic_masks,
+    )
+    metadata = {
+        "generator_version": "landscape-build-v1",
+        "terrain": terrain.terrain_summary(),
+        "land_cover": land_cover.to_metadata(),
+        "obstacle_count": len(config.obstacles),
+    }
+    return LandscapeBuildResult(
+        terrain=terrain,
+        land_cover=land_cover,
+        obstacles=tuple(config.obstacles),
+        masks=terrain.semantic_masks,
+        metadata=metadata,
+    )
+
+
 __all__ = [
+    "LandscapeBuildConfig",
+    "LandscapeBuildResult",
     "LandCoverPatch",
+    "ProceduralTerrainGrid",
     "TerrainBuildConfig",
+    "TerrainProfile",
     "build_land_cover_layer",
+    "build_landscape",
     "build_terrain_layer",
+    "procedural_terrain_grid",
     "procedural_height_grid",
+    "terrain_profile_for_preset",
 ]

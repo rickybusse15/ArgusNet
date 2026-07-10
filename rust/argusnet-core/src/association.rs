@@ -272,8 +272,13 @@ fn mahalanobis_cost(
 }
 
 /// Cluster observations by ray proximity or target label.
+///
+/// Consumes the observations and moves them into clusters, so no
+/// per-observation clone happens on the ingest hot path. Iteration order (and
+/// therefore cluster membership and member order) matches the historical
+/// clone-based implementation exactly.
 pub fn cluster_observations(
-    observations: &[BearingObservation],
+    observations: Vec<BearingObservation>,
     distance_threshold_m: f64,
 ) -> Vec<Vec<BearingObservation>> {
     if observations.is_empty() {
@@ -290,7 +295,7 @@ pub fn cluster_observations(
             groups
                 .entry(observation.target_id.clone())
                 .or_default()
-                .push(observation.clone());
+                .push(observation);
         }
         let mut keys: Vec<String> = Vec::with_capacity(groups.len());
         keys.extend(groups.keys().cloned());
@@ -323,12 +328,12 @@ pub fn cluster_observations(
 
         if best_distance < distance_threshold_m {
             if let Some(cluster_index) = best_cluster {
-                clusters[cluster_index].push(observation.clone());
+                clusters[cluster_index].push(observation);
                 continue;
             }
         }
 
-        clusters.push(vec![observation.clone()]);
+        clusters.push(vec![observation]);
     }
 
     clusters
@@ -628,7 +633,7 @@ mod tests {
             make_observation("b", "asset-b", vec3(100.0, 0.0, 0.0), target_b),
             make_observation("c", "asset-a", vec3(100.0, 0.0, 0.0), target_a),
         ];
-        let clusters = cluster_observations(&observations, 50.0);
+        let clusters = cluster_observations(observations, 50.0);
         assert_eq!(clusters.len(), 2);
     }
 }

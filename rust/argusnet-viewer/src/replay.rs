@@ -192,6 +192,78 @@ pub struct ReplayFrame {
     pub deconfliction_events: Vec<DeconflictionEvent>,
     #[serde(default)]
     pub scan_mission_state: Option<ScanMissionState>,
+    #[serde(default)]
+    pub target_metadata: Vec<TargetMetadata>,
+    #[serde(default)]
+    pub safety_events: Vec<SafetyEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TargetMetadata {
+    pub target_id: String,
+    pub operator_label: String,
+    pub target_type: String,
+    pub priority: i32,
+    pub behavior: String,
+    pub status: String,
+    pub first_seen_s: f32,
+    pub last_seen_s: f32,
+    pub confidence: f32,
+    pub notes: String,
+}
+
+/// Replay JSON serializes safety events via the Python `SafetyValidationResult`
+/// schema (`accepted`, `clamped`), while the live gRPC wire uses `SafetyEvent`
+/// (`blocked`, `command_clamped`). `accepted` is the exact logical inverse of
+/// `blocked`, not a rename, so it cannot be handled with a plain `#[serde(alias)]`.
+#[derive(Debug, Clone, Deserialize, Default)]
+struct SafetyEventRaw {
+    #[serde(alias = "validation_id")]
+    event_id: String,
+    #[serde(alias = "subject_id")]
+    subject_id: String,
+    timestamp_s: f32,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    violations: Vec<String>,
+    #[serde(default, alias = "clamped")]
+    command_clamped: bool,
+    #[serde(default)]
+    blocked: bool,
+    #[serde(default)]
+    accepted: Option<bool>,
+    #[serde(default)]
+    reason: String,
+}
+
+impl From<SafetyEventRaw> for SafetyEvent {
+    fn from(raw: SafetyEventRaw) -> Self {
+        let blocked = raw.accepted.map_or(raw.blocked, |accepted| !accepted);
+        SafetyEvent {
+            event_id: raw.event_id,
+            subject_id: raw.subject_id,
+            timestamp_s: raw.timestamp_s,
+            state: raw.state,
+            violations: raw.violations,
+            command_clamped: raw.command_clamped,
+            blocked,
+            reason: raw.reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(from = "SafetyEventRaw")]
+pub struct SafetyEvent {
+    pub event_id: String,
+    pub subject_id: String,
+    pub timestamp_s: f32,
+    pub state: String,
+    pub violations: Vec<String>,
+    pub command_clamped: bool,
+    pub blocked: bool,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -218,6 +290,19 @@ pub struct ScanMissionState {
     /// Per-drone return-to-home progress. Non-empty only during the egress phase.
     #[serde(default)]
     pub egress_progress: Vec<EgressProgress>,
+    /// Fused team position from cooperative co-localization. None outside
+    /// cooperative search or before enough drones have converged.
+    #[serde(default)]
+    pub team_localization: Option<TeamLocalization>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TeamLocalization {
+    pub position: [f32; 3],
+    pub position_std_m: f32,
+    pub confidence: f32,
+    #[serde(default)]
+    pub contributing_node_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -619,7 +704,129 @@ impl TryFrom<Value> for ReplayDocument {
 mod live_stream {
     use argusnet_proto::pb;
 
-    use super::{NodeState, TrackState, TruthState};
+    use super::{
+        FrameMetrics, NodeState, ObservationState, RejectedObservation, ReplayFrame, SafetyEvent,
+        TargetMetadata, TrackState, TruthState,
+    };
+
+    fn vec3_opt(value: Option<pb::Vector3>) -> [f32; 3] {
+        let v = value.unwrap_or_default();
+        [v.x_m as f32, v.y_m as f32, v.z_m as f32]
+    }
+
+    impl From<pb::BearingObservation> for ObservationState {
+        fn from(o: pb::BearingObservation) -> Self {
+            ObservationState {
+                origin: vec3_opt(o.origin),
+                direction: vec3_opt(o.direction),
+                node_id: o.node_id,
+                target_id: o.target_id,
+                confidence: o.confidence as f32,
+                timestamp_s: o.timestamp_s as f32,
+            }
+        }
+    }
+
+    impl From<pb::ObservationRejection> for RejectedObservation {
+        fn from(r: pb::ObservationRejection) -> Self {
+            RejectedObservation {
+                origin: r.origin.map(|v| vec3_opt(Some(v))),
+                attempted_point: r.attempted_point.map(|v| vec3_opt(Some(v))),
+                closest_point: r.closest_point.map(|v| vec3_opt(Some(v))),
+                node_id: r.node_id,
+                target_id: r.target_id,
+                reason: r.reason,
+                detail: r.detail,
+                timestamp_s: r.timestamp_s as f32,
+                blocker_type: r.blocker_type,
+                first_hit_range_m: r.first_hit_range_m.map(|v| v as f32),
+            }
+        }
+    }
+
+    impl From<pb::PlatformMetrics> for FrameMetrics {
+        fn from(m: pb::PlatformMetrics) -> Self {
+            FrameMetrics {
+                mean_error_m: m.mean_error_m.map(|v| v as f32),
+                max_error_m: m.max_error_m.map(|v| v as f32),
+                active_track_count: m.active_track_count,
+                observation_count: m.observation_count,
+                accepted_observation_count: m.accepted_observation_count,
+                rejected_observation_count: m.rejected_observation_count,
+                mean_measurement_std_m: m.mean_measurement_std_m.map(|v| v as f32),
+                rejection_counts: m.rejection_counts.into_iter().collect(),
+                track_errors_m: m
+                    .track_errors_m
+                    .into_iter()
+                    .map(|(key, value)| (key, value as f32))
+                    .collect(),
+            }
+        }
+    }
+
+    /// Convert a streamed frame into the viewer's replay representation.
+    ///
+    /// Fields that only exist in replay JSON (mapping/localization/inspection
+    /// state, events) are absent on the tracker wire and default to empty.
+    pub fn frame_from_pb(frame: pb::PlatformFrame) -> ReplayFrame {
+        ReplayFrame {
+            timestamp_s: frame.timestamp_s as f32,
+            tracks: frame.tracks.into_iter().map(TrackState::from).collect(),
+            truths: frame.truths.into_iter().map(TruthState::from).collect(),
+            nodes: frame.nodes.into_iter().map(NodeState::from).collect(),
+            observations: frame
+                .observations
+                .into_iter()
+                .map(ObservationState::from)
+                .collect(),
+            rejected_observations: frame
+                .rejected_observations
+                .into_iter()
+                .map(RejectedObservation::from)
+                .collect(),
+            generation_rejections: frame
+                .generation_rejections
+                .into_iter()
+                .map(RejectedObservation::from)
+                .collect(),
+            metrics: frame.metrics.map(FrameMetrics::from).unwrap_or_default(),
+            mapping_state: None,
+            localization_state: None,
+            inspection_events: Vec::new(),
+            deconfliction_events: Vec::new(),
+            scan_mission_state: None,
+            target_metadata: frame
+                .target_metadata
+                .into_iter()
+                .map(|value| TargetMetadata {
+                    target_id: value.target_id,
+                    operator_label: value.operator_label,
+                    target_type: value.target_type,
+                    priority: value.priority,
+                    behavior: value.behavior,
+                    status: value.status,
+                    first_seen_s: value.first_seen_s as f32,
+                    last_seen_s: value.last_seen_s as f32,
+                    confidence: value.confidence as f32,
+                    notes: value.notes,
+                })
+                .collect(),
+            safety_events: frame
+                .safety_events
+                .into_iter()
+                .map(|value| SafetyEvent {
+                    event_id: value.event_id,
+                    subject_id: value.subject_id,
+                    timestamp_s: value.timestamp_s as f32,
+                    state: value.state,
+                    violations: value.violations,
+                    command_clamped: value.command_clamped,
+                    blocked: value.blocked,
+                    reason: value.reason,
+                })
+                .collect(),
+        }
+    }
 
     impl From<pb::TrackState> for TrackState {
         fn from(t: pb::TrackState) -> Self {
@@ -639,7 +846,7 @@ mod live_stream {
                 track_id: t.track_id,
                 position: [pos.x_m as f32, pos.y_m as f32, pos.z_m as f32],
                 velocity: [vel.x_m as f32, vel.y_m as f32, vel.z_m as f32],
-                measurement_std_m: t.measurement_std_m,
+                measurement_std_m: t.measurement_std_m as f32,
                 update_count: t.update_count,
                 stale_steps: t.stale_steps,
                 covariance,
@@ -670,22 +877,25 @@ mod live_stream {
                 position: [pos.x_m as f32, pos.y_m as f32, pos.z_m as f32],
                 velocity: [vel.x_m as f32, vel.y_m as f32, vel.z_m as f32],
                 is_mobile: n.is_mobile,
-                health: n.health,
+                health: n.health as f32,
                 sensor_type: n.sensor_type,
                 fov_half_angle_deg: if n.fov_half_angle_deg == 0.0 {
                     None
                 } else {
-                    Some(n.fov_half_angle_deg)
+                    Some(n.fov_half_angle_deg as f32)
                 },
                 max_range_m: if n.max_range_m == 0.0 {
                     None
                 } else {
-                    Some(n.max_range_m)
+                    Some(n.max_range_m as f32)
                 },
             }
         }
     }
 }
+
+#[cfg(feature = "live-stream")]
+pub use live_stream::frame_from_pb;
 
 #[cfg(test)]
 mod tests {

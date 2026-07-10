@@ -7,6 +7,12 @@ import unittest
 import numpy as np
 
 from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLayer
+from argusnet.safety.checker import (
+    DroneConstraintChecker,
+    DronePhysicalLimits,
+    DroneSafetyState,
+    SafetyMonitor,
+)
 from argusnet.simulation.sim import clamp_to_bounds, orbital_path
 from argusnet.world.terrain import TerrainModel
 
@@ -157,8 +163,61 @@ class DeconflictionSafetyTest(unittest.TestCase):
                 self.assertGreaterEqual(
                     sep,
                     cfg.min_separation_m,
-                    msg=f"Pair ({ids[i]},{ids[j]}) separation {sep:.2f} m < min {cfg.min_separation_m} m",
+                    msg=(
+                        f"Pair ({ids[i]},{ids[j]}) separation {sep:.2f} m "
+                        f"< min {cfg.min_separation_m} m"
+                    ),
                 )
+
+
+class BlockingSafetyMonitorTest(unittest.TestCase):
+    def test_python_defaults_match_rust_profiles(self) -> None:
+        tracker = DronePhysicalLimits.tracker_default()
+        interceptor = DronePhysicalLimits.interceptor_default()
+        self.assertEqual((tracker.max_climb_rate_mps, tracker.max_descent_rate_mps), (6.0, 4.0))
+        self.assertEqual(tracker.max_vertical_accel_mps2, 3.0)
+        self.assertEqual(tracker.min_energy_reserve_fraction, 0.25)
+        self.assertEqual(interceptor.min_energy_reserve_fraction, 0.20)
+
+    def test_checker_reports_vertical_acceleration_and_energy(self) -> None:
+        violations = DroneConstraintChecker().check_state(
+            np.array([0.0, 0.0, 100.0]),
+            np.array([0.0, 0.0, 0.0]),
+            agl_m=100.0,
+            acceleration=np.array([0.0, 0.0, 4.0]),
+            energy_fraction=0.1,
+        )
+        self.assertEqual(
+            {violation.constraint for violation in violations},
+            {"max_vertical_accel", "min_energy_reserve"},
+        )
+
+    def test_terrain_violation_aborts_holds_and_clamps(self) -> None:
+        decision = SafetyMonitor().process(
+            "drone-a",
+            np.array([10.0, 20.0, 105.0]),
+            np.array([3.0, 0.0, -2.0]),
+            terrain_height_m=100.0,
+        )
+        self.assertEqual(decision.state, DroneSafetyState.ABORT)
+        self.assertEqual(decision.position[2], 150.0)
+        np.testing.assert_array_equal(decision.velocity, np.zeros(3))
+
+    def test_repeated_nonterrain_violation_escalates(self) -> None:
+        monitor = SafetyMonitor()
+        states = [
+            monitor.process(
+                "drone-a",
+                np.array([0.0, 0.0, 100.0]),
+                np.array([50.0, 0.0, 0.0]),
+                terrain_height_m=0.0,
+            ).state
+            for _ in range(3)
+        ]
+        self.assertEqual(
+            states,
+            [DroneSafetyState.WARNING, DroneSafetyState.WARNING, DroneSafetyState.ABORT],
+        )
 
 
 if __name__ == "__main__":

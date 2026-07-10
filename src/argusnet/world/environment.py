@@ -225,6 +225,7 @@ class TerrainLayer:
         tiles: Mapping[tuple[int, int, int], TerrainTile],
         environment_id: str = "environment",
         source_metadata: Mapping[str, object] | None = None,
+        semantic_masks: Mapping[str, np.ndarray] | None = None,
     ) -> None:
         self.bounds_xy_m = bounds_xy_m
         self.tile_size_cells = int(tile_size_cells)
@@ -249,6 +250,10 @@ class TerrainLayer:
         )
         self._viewer_mesh_cache: dict[int, dict[str, object]] = {}
         self.source_metadata = dict(source_metadata or {"source": "height-grid"})
+        self.semantic_masks = {
+            str(name): np.asarray(mask, dtype=bool).copy()
+            for name, mask in (semantic_masks or {}).items()
+        }
 
     @classmethod
     def from_height_grid(
@@ -263,6 +268,7 @@ class TerrainLayer:
         interpolation: str = "bilinear",
         ground_plane_m: float = 0.0,
         source_metadata: Mapping[str, object] | None = None,
+        semantic_masks: Mapping[str, np.ndarray] | None = None,
     ) -> TerrainLayer:
         heights = np.asarray(heights_m, dtype=float)
         if heights.ndim != 2 or heights.shape[0] < 2 or heights.shape[1] < 2:
@@ -316,6 +322,7 @@ class TerrainLayer:
             tiles=tiles,
             environment_id=environment_id,
             source_metadata=source_metadata,
+            semantic_masks=semantic_masks,
         )
 
     @classmethod
@@ -647,6 +654,10 @@ class TerrainLayer:
             "ground_plane_m": self.ground_plane_m,
             "min_height_m": min_height,
             "max_height_m": max_height,
+            "semantic_masks": sorted(self.semantic_masks),
+            "mask_coverage_fraction": {
+                name: float(np.mean(mask)) for name, mask in sorted(self.semantic_masks.items())
+            },
             "source": dict(self.source_metadata),
         }
 

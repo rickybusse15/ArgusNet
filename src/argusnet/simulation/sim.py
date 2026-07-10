@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import csv
 import json
+import logging
 import math
 import sys
 import time
@@ -45,11 +46,15 @@ from argusnet.core.types import (
     NodeState,
     ObservationRejection,
     PlatformFrame,
+    SafetyValidationResult,
     ScanMissionState,
+    TargetMetadata,
+    TeamLocalization,
     TruthState,
     to_jsonable,
     vec3,
 )
+from argusnet.evaluation.recording import RotatingFrameRecorder
 from argusnet.evaluation.replay import ReplayDocument, build_replay_document, write_replay_document
 from argusnet.localization.engine import GridLocalizer, LocalizationConfig
 from argusnet.localization.vio import EKFVIO, VisualFeature
@@ -77,6 +82,7 @@ from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLa
 from argusnet.planning.frontier import ClaimedCells, FrontierPlanner
 from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
 from argusnet.planning.poi import POIAssignmentContext, POIManager
+from argusnet.safety.checker import DronePhysicalLimits, DroneSafetyState, SafetyMonitor
 from argusnet.sensing.imu import IMUMeasurement
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
 from argusnet.sensing.models.noise import atmospheric_attenuation as sensor_atmospheric_attenuation
@@ -110,8 +116,14 @@ from argusnet.world.terrain import (
 )
 from argusnet.world.weather import KNOWN_WEATHER_PRESETS, WeatherModel, weather_from_preset
 
-from .behaviors import BEHAVIOR_PRESETS
+from .behaviors import BEHAVIOR_PRESETS, EnvelopeLimitedTrajectory, FlightEnvelope
 from .behaviors import build_target_trajectory as build_behavior_trajectory
+
+_MAPPING_LOS_TARGET_CLEARANCE_M = 1.0
+# Cap on per-footprint LOS predicate evaluations when occlusion-aware mapping is
+# on. Large enough that typical coverage resolutions test every footprint cell
+# exactly; it only strides (bounding worst-case cost) at very fine resolutions.
+_COVERAGE_LOS_MAX_SAMPLES = 48
 
 # NOTE: Controller class extraction is planned for Phase 0.1.
 # Classes FollowPathController, ObservationTriggeredFollowController, and
@@ -253,6 +265,25 @@ class ScenarioOptions:
     mission_mode: str = "scan_map_inspect"  # "scan_map_inspect" | "target_tracking"
     scan_coverage_threshold: float = 0.70  # fraction to trigger LOCALIZING phase
     poi_count: int = 3  # auto-generated POIs in scan_map_inspect mode
+    coverage_resolution_m: float = 50.0  # scan/reconstruction grid cell size
+    # Cooperative search: launch all drones from one grounded origin and fan them
+    # out into disjoint angular wedges of the search area, then fuse their per-drone
+    # localizations against the shared coverage map into a team estimate.
+    cooperative_search: bool = False
+    search_origin_m: tuple[float, float] | None = None  # None -> search-area center
+    # Adaptive refinement of cooperative search: drones redirect via wedge-aware,
+    # coverage-balanced frontier selection, and the wedge origin re-anchors from the
+    # fused team estimate (a localization->planning feedback loop). No-op unless
+    # cooperative_search is also set.
+    adaptive_search: bool = False
+    enforce_flight_envelope: bool = False  # clamp drone motion to FlightEnvelope limits
+    safety_blocking: bool = False  # hard post-deconfliction safety gate
+    frontier_exploration: bool = False  # frontier-driven scan instead of pure lawnmower
+    occlusion_aware_mapping: bool = False  # gate scan coverage/reconstruction and redirects by LOS
+    mission_profile_id: str | None = None
+    mission_domain: str | None = None
+    mission_workflow: str | None = None
+    mission_tags: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.map_preset not in MAP_PRESET_SCALES:
@@ -306,6 +337,25 @@ class ScenarioOptions:
                 f"Unknown mission_mode {self.mission_mode!r}."
                 " Must be 'scan_map_inspect' or 'target_tracking'."
             )
+        if self.coverage_resolution_m <= 0.0:
+            raise ValueError("coverage_resolution_m must be greater than 0.")
+        if self.search_origin_m is not None:
+            if len(self.search_origin_m) != 2:
+                raise ValueError("search_origin_m must be an (x, y) pair.")
+            object.__setattr__(
+                self, "search_origin_m", tuple(float(v) for v in self.search_origin_m)
+            )
+        object.__setattr__(self, "mission_tags", tuple(self.mission_tags))
+        if self.mission_profile_id:
+            from argusnet.mission.profiles import get_mission_profile
+
+            profile = get_mission_profile(self.mission_profile_id)
+            if self.mission_domain != profile.domain.value:
+                raise ValueError("mission_domain does not match mission_profile_id.")
+            if self.mission_workflow != profile.workflow:
+                raise ValueError("mission_workflow does not match mission_profile_id.")
+            if self.mission_mode != profile.mission_mode:
+                raise ValueError("mission_mode does not match mission_profile_id.")
 
 
 @dataclass(frozen=True)
@@ -974,6 +1024,7 @@ class LaunchableTrajectoryController:
     terrain: object | None = None
     map_bounds_m: Mapping[str, float] | None = None
     min_operational_agl_m: float = 18.0
+    wind_scale: float = 0.35
     launched: bool = field(default=False, init=False)
     launch_time_s: float | None = field(default=None, init=False)
     launch_target_id: str | None = field(default=None, init=False)
@@ -1015,6 +1066,7 @@ class LaunchableTrajectoryController:
             terrain=self.terrain,
             map_bounds_m=self.map_bounds_m,
             min_agl_m=self.min_operational_agl_m,
+            wind_scale=self.wind_scale,
         )
 
     def trigger_launch(self, timestamp_s: float, target_id: str) -> None:
@@ -1141,6 +1193,13 @@ def collision_aware_position(
             ],
             dtype=float,
         )
+    logging.getLogger(__name__).warning(
+        "collision_aware_position: still colliding after 8 push iterations at "
+        "(%.1f, %.1f, %.1f); returning best-effort position.",
+        float(adjusted_position[0]),
+        float(adjusted_position[1]),
+        float(adjusted_position[2]),
+    )
     return adjusted_position, velocity.copy()
 
 
@@ -1164,6 +1223,12 @@ def push_waypoint_outside_obstacles(
         candidate_xy = collision.push_outside_xy(
             float(candidate_xy[0]), float(candidate_xy[1]), margin_m=1.0
         )
+    logging.getLogger(__name__).warning(
+        "push_waypoint_outside_obstacles: waypoint (%.1f, %.1f) still inside an "
+        "obstacle after 8 push iterations; using best-effort position.",
+        float(candidate_xy[0]),
+        float(candidate_xy[1]),
+    )
     return candidate_xy
 
 
@@ -2162,6 +2227,87 @@ def _preset_environment_profile(
     return ([], [], terrain_only_patches)
 
 
+def _mask_value_at_terrain_xy(
+    terrain: TerrainLayer,
+    mask_name: str,
+    x_m: float,
+    y_m: float,
+) -> bool:
+    mask = getattr(terrain, "semantic_masks", {}).get(mask_name)
+    if mask is None or not terrain.bounds_xy_m.contains_xy(float(x_m), float(y_m)):
+        return False
+    mask_array = np.asarray(mask, dtype=bool)
+    if mask_array.ndim != 2 or mask_array.size == 0:
+        return False
+    rows, cols = mask_array.shape
+    col = int(
+        np.clip(
+            round(
+                (float(x_m) - terrain.bounds_xy_m.x_min_m)
+                / max(terrain.bounds_xy_m.width_m, 1.0e-9)
+                * max(cols - 1, 1)
+            ),
+            0,
+            cols - 1,
+        )
+    )
+    row = int(
+        np.clip(
+            round(
+                (float(y_m) - terrain.bounds_xy_m.y_min_m)
+                / max(terrain.bounds_xy_m.height_m, 1.0e-9)
+                * max(rows - 1, 1)
+            ),
+            0,
+            rows - 1,
+        )
+    )
+    return bool(mask_array[row, col])
+
+
+def _obstacle_sample_points(obstacle: object) -> list[tuple[float, float]]:
+    if hasattr(obstacle, "footprint_xy_m"):
+        footprint_source = obstacle.footprint_xy_m
+        footprint = footprint_source() if callable(footprint_source) else footprint_source
+        points = np.asarray(footprint, dtype=float).reshape((-1, 2))
+        centroid = np.mean(points, axis=0)
+        return [(float(point[0]), float(point[1])) for point in points] + [
+            (float(centroid[0]), float(centroid[1]))
+        ]
+    if hasattr(obstacle, "center_x_m") and hasattr(obstacle, "center_y_m"):
+        return [(float(obstacle.center_x_m), float(obstacle.center_y_m))]
+    return []
+
+
+def _filter_obstacles_for_landscape(
+    terrain: TerrainLayer,
+    obstacles: Sequence[object],
+) -> list[object]:
+    if not getattr(terrain, "semantic_masks", {}):
+        return list(obstacles)
+    filtered: list[object] = []
+    for obstacle in obstacles:
+        blocker_type = str(getattr(obstacle, "blocker_type", ""))
+        points = _obstacle_sample_points(obstacle)
+        if not points:
+            filtered.append(obstacle)
+            continue
+        water_hits = sum(
+            1 for x_m, y_m in points if _mask_value_at_terrain_xy(terrain, "water", x_m, y_m)
+        )
+        steep_hits = sum(
+            1 for x_m, y_m in points if _mask_value_at_terrain_xy(terrain, "steep_slope", x_m, y_m)
+        )
+        water_fraction = water_hits / max(len(points), 1)
+        steep_fraction = steep_hits / max(len(points), 1)
+        if blocker_type == "vegetation" and water_fraction >= 0.5:
+            continue
+        if blocker_type in {"building", "wall"} and (water_fraction > 0.0 or steep_fraction > 0.5):
+            continue
+        filtered.append(obstacle)
+    return filtered if filtered else list(obstacles)
+
+
 def build_default_environment(
     scale: float,
     terrain_model: object,
@@ -2384,6 +2530,8 @@ def build_default_environment(
         soft_obstacles=soft_obstacles,
     )
     all_obstacles = [] if clean_terrain else list(preset_obstacles)
+    if not clean_terrain:
+        all_obstacles = _filter_obstacles_for_landscape(terrain, all_obstacles)
     active_patches = list(terrain_only_patches if clean_terrain else land_cover_patches)
     land_cover = procedural_land_cover_layer(
         bounds_xy_m=bounds,
@@ -2555,6 +2703,139 @@ def split_bounds_along_x(bounds: Mapping[str, float], count: int) -> list[dict[s
             }
         )
     return sectors
+
+
+def cooperative_wedge_waypoints(
+    origin_xy: np.ndarray,
+    bounds: Mapping[str, float],
+    wedge_index: int,
+    wedge_count: int,
+    lane_spacing_m: float,
+    r_min_m: float | None = None,
+) -> np.ndarray:
+    """Expanding radial sweep covering one angular wedge of the search area.
+
+    All drones share a single grounded ``origin_xy``; drone ``wedge_index`` of
+    ``wedge_count`` is assigned the angular slice ``[k·2π/N, (k+1)·2π/N]`` and
+    sweeps it with concentric arcs of increasing radius (a boustrophedon in polar
+    coordinates). The wedges are disjoint, so the team fans out from the common
+    origin and covers the area without overlapping — smarter than independent
+    lawnmower sectors because coverage is anchored to and expands from one datum.
+    """
+    origin = np.asarray(origin_xy, dtype=float)[:2]
+    lane = max(float(lane_spacing_m), 20.0)
+    wedge_count = max(int(wedge_count), 1)
+    theta0 = (2.0 * math.pi / wedge_count) * (wedge_index % wedge_count)
+    theta1 = theta0 + (2.0 * math.pi / wedge_count)
+
+    # Radius that reaches the farthest search-area corner from the origin.
+    corners = [
+        (bounds["x_min_m"], bounds["y_min_m"]),
+        (bounds["x_min_m"], bounds["y_max_m"]),
+        (bounds["x_max_m"], bounds["y_min_m"]),
+        (bounds["x_max_m"], bounds["y_max_m"]),
+    ]
+    r_max = max(float(np.hypot(cx - origin[0], cy - origin[1])) for cx, cy in corners)
+    r_start = lane if r_min_m is None else max(float(r_min_m), lane * 0.5)
+
+    radii = list(np.arange(r_start, r_max + lane * 0.5, lane))
+    if not radii:
+        radii = [r_max]
+
+    waypoints: list[list[float]] = [list(origin)]
+    for ring, radius in enumerate(radii):
+        # Angular step so successive arc samples are ~one lane apart.
+        dtheta = min(theta1 - theta0, lane / max(radius, 1.0))
+        n_steps = max(2, int(math.ceil((theta1 - theta0) / dtheta)) + 1)
+        angles = np.linspace(theta0, theta1, n_steps)
+        if ring % 2 == 1:
+            angles = angles[::-1]  # alternate sweep direction for a continuous path
+        for theta in angles:
+            x = origin[0] + radius * math.cos(theta)
+            y = origin[1] + radius * math.sin(theta)
+            clamped = clamp_to_bounds(np.array([x, y], dtype=float), bounds, margin_m=lane * 0.25)
+            waypoints.append([float(clamped[0]), float(clamped[1])])
+    if len(waypoints) < 2:
+        waypoints.append([float(origin[0] + lane), float(origin[1])])
+    return np.asarray(waypoints, dtype=float)
+
+
+def compute_wedge_coverage(coverage_map, origin_xy: np.ndarray, wedge_count: int) -> np.ndarray:
+    """Covered fraction of each angular wedge around ``origin_xy`` (length N)."""
+    grid = coverage_map.count_grid  # (nx, ny)
+    b = coverage_map.bounds
+    nx, ny = grid.shape
+    ii, jj = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+    xs = b.x_min_m + (ii + 0.5) * b.resolution_m
+    ys = b.y_min_m + (jj + 0.5) * b.resolution_m
+    ang = np.mod(np.arctan2(ys - origin_xy[1], xs - origin_xy[0]), 2.0 * math.pi)
+    wedge = (ang / (2.0 * math.pi) * wedge_count).astype(int) % wedge_count
+    covered = grid > 0
+    frac = np.ones(wedge_count, dtype=float)
+    for w in range(wedge_count):
+        m = wedge == w
+        tot = int(m.sum())
+        frac[w] = float((covered & m).sum()) / tot if tot else 1.0
+    return frac
+
+
+def select_cooperative_wedge_cell(
+    coverage_map,
+    drone_xy: np.ndarray,
+    claimed,
+    drone_id: str,
+    origin_xy: np.ndarray,
+    wedge_index: int,
+    wedge_count: int,
+    wedge_coverage: np.ndarray,
+    exclusion_radius_cells: int = 2,
+    home_done_threshold: float = 0.9,
+) -> tuple[int, int] | None:
+    """Pick the next cell for a drone under adaptive cooperative search.
+
+    A drone works its own angular wedge (measured from ``origin_xy``, which is the
+    fused team estimate when available) until that wedge is nearly done, then
+    reallocates to help the most under-covered wedge — coverage-balanced
+    rebalancing. Within the chosen wedge it takes the nearest uncovered cell.
+    """
+    grid = coverage_map.count_grid
+    b = coverage_map.bounds
+    ii, jj = np.where(grid == 0)
+    if len(ii) == 0:
+        return None
+    xs = b.x_min_m + (ii + 0.5) * b.resolution_m
+    ys = b.y_min_m + (jj + 0.5) * b.resolution_m
+    ang = np.mod(np.arctan2(ys - origin_xy[1], xs - origin_xy[0]), 2.0 * math.pi)
+    cell_wedge = (ang / (2.0 * math.pi) * wedge_count).astype(int) % wedge_count
+
+    mask = np.ones(len(ii), dtype=bool)
+    others = claimed.others(drone_id)
+    if others:
+        ei = np.array([c[0] for c in others], dtype=int)
+        ej = np.array([c[1] for c in others], dtype=int)
+        r = exclusion_radius_cells
+        for k in range(len(ii)):
+            if np.any((np.abs(ei - ii[k]) <= r) & (np.abs(ej - jj[k]) <= r)):
+                mask[k] = False
+    if not mask.any():
+        mask = np.ones(len(ii), dtype=bool)
+
+    home = wedge_index % wedge_count
+    if wedge_coverage[home] < home_done_threshold and (mask & (cell_wedge == home)).any():
+        target = home
+    else:
+        target, best_cov = home, 2.0
+        for w in range(wedge_count):
+            if (mask & (cell_wedge == w)).any() and wedge_coverage[w] < best_cov:
+                best_cov, target = wedge_coverage[w], w
+
+    sel = mask & (cell_wedge == target)
+    if not sel.any():
+        sel = mask
+    idxs = np.where(sel)[0]
+    d2 = (xs[idxs] - drone_xy[0]) ** 2 + (ys[idxs] - drone_xy[1]) ** 2
+    chosen = idxs[int(np.argmin(d2))]
+    return (int(ii[chosen]), int(jj[chosen]))
 
 
 def build_patrol_waypoints(
@@ -3356,6 +3637,7 @@ def build_default_scenario(
             terrain=terrain_layer,
             map_bounds_m=map_bounds_m,
             min_agl_m=constants.dynamics.aerial_target_min_agl_m,
+            wind_scale=constants.dynamics.wind_drift_scale,
         )
         target_assignments[target_id] = motion_name
         targets.append(SimTarget(target_id=target_id, trajectory=trajectory))
@@ -3596,6 +3878,7 @@ def build_default_scenario(
                     dynamics_cfg.interceptor_search_min_agl_m,
                     dynamics_cfg.interceptor_follow_min_agl_m,
                 ),
+                wind_scale=dynamics_cfg.wind_drift_scale,
                 assigned_station_id=assigned_station_id,
             )
             launchable_controllers[node_id] = launch_ctrl
@@ -3607,7 +3890,16 @@ def build_default_scenario(
                     bearing_std_rad=spec["bearing_std_rad"],
                     dropout_probability=spec["dropout_probability"],
                     max_range_m=spec["max_range_m"],
-                    trajectory=launch_ctrl,
+                    trajectory=(
+                        EnvelopeLimitedTrajectory(
+                            launch_ctrl,
+                            envelope=FlightEnvelope(
+                                max_acceleration_mps2=float(dynamics_cfg.drone_max_accel_mps2)
+                            ),
+                        )
+                        if active_options.enforce_flight_envelope
+                        else launch_ctrl
+                    ),
                     sensor_type=sensor_cfg.drone_sensor_type,
                     fov_half_angle_deg=sensor_cfg.drone_fov_half_angle_deg,
                 )
@@ -3637,38 +3929,91 @@ def build_default_scenario(
             drone_idx: sector_idx for sector_idx, (drone_idx, _) in enumerate(_drone_station_x)
         }
 
+        # Cooperative search: resolve the single grounded launch origin (a datum the
+        # whole team shares) and a small launch ring so drones do not stack on it.
+        _coop_search = active_options.cooperative_search
+        _n_scan_drones = len(drone_specs)
+        if active_options.search_origin_m is not None:
+            _search_origin_xy = np.array(active_options.search_origin_m, dtype=float)
+        else:
+            _search_origin_xy = np.array(
+                [
+                    0.5 * (map_bounds_m["x_min_m"] + map_bounds_m["x_max_m"]),
+                    0.5 * (map_bounds_m["y_min_m"] + map_bounds_m["y_max_m"]),
+                ],
+                dtype=float,
+            )
+        _search_origin_h = 0.0
+        with contextlib.suppress(Exception):
+            _search_origin_h = float(
+                terrain_layer.height_at(float(_search_origin_xy[0]), float(_search_origin_xy[1]))
+            )
+
         for index, spec in enumerate(drone_specs):
             node_id = spec["node_id"]
             drone_assignments[node_id] = "search"
             drone_target_assignments[node_id] = ""
             drone_roles_map[node_id] = "tracker"
 
-            assigned_station_idx = index % len(ground_specs)
-            assigned_station_id = ground_specs[assigned_station_idx]["node_id"]
-            station_pos = _station_positions[assigned_station_id]
+            if _coop_search:
+                # Fan out from the common origin into a disjoint angular wedge, all
+                # launched from the grounded datum so the shared frame is anchored.
+                wedge_center = (2.0 * math.pi / _n_scan_drones) * (index + 0.5)
+                launch_r = 12.0 + 4.0 * (index % 3)
+                station_pos = np.array(
+                    [
+                        _search_origin_xy[0] + launch_r * math.cos(wedge_center),
+                        _search_origin_xy[1] + launch_r * math.sin(wedge_center),
+                        _search_origin_h,
+                    ],
+                    dtype=float,
+                )
+                assigned_station_id = f"search-origin-{node_id}"
+                _wedge_wp = cooperative_wedge_waypoints(
+                    _search_origin_xy,
+                    map_bounds_m,
+                    index,
+                    _n_scan_drones,
+                    dynamics_cfg.drone_search_lane_spacing_scale * scale,
+                )
+                raw_trajectory = looped_waypoint_path(
+                    waypoints_xy=_wedge_wp,
+                    speed_mps=spec["search_speed_mps"],
+                    base_agl_m=spec["base_agl_m"],
+                    vertical_amplitude=spec["vertical_amplitude_m"],
+                    vertical_frequency=spec["vertical_frequency_rad_s"],
+                    phase=0.0,
+                    terrain=terrain_layer,
+                    obstacle_layer=environment.obstacles,
+                    min_agl_m=dynamics_cfg.interceptor_search_min_agl_m,
+                )
+            else:
+                assigned_station_idx = index % len(ground_specs)
+                assigned_station_id = ground_specs[assigned_station_idx]["node_id"]
+                station_pos = _station_positions[assigned_station_id]
 
-            # Use the sector that matches this drone's station position.
-            sector_index = _drone_to_sector[index]
+                # Use the sector that matches this drone's station position.
+                sector_index = _drone_to_sector[index]
 
-            # Scan mode: full-sector lawnmower, no target following.
-            # Use inset_fraction=0.0 so the full sector is covered (rather than
-            # the default 20% edge inset used in target-tracking search patterns).
-            # planner=None: skip route_waypoints which collapses the 20-point
-            # lawnmower into a 2-point path and can cross sector boundaries.
-            raw_trajectory = search_path(
-                sector_bounds=all_sectors[sector_index],
-                terrain=terrain_layer,
-                base_agl_m=spec["base_agl_m"],
-                vertical_amplitude_m=spec["vertical_amplitude_m"],
-                vertical_frequency_rad_s=spec["vertical_frequency_rad_s"],
-                lane_spacing_m=dynamics_cfg.drone_search_lane_spacing_scale * scale,
-                speed_mps=spec["search_speed_mps"],
-                phase=float(rng.uniform(0.0, math.tau)),
-                environment=environment,
-                planner=None,
-                min_agl_m=dynamics_cfg.interceptor_search_min_agl_m,
-                inset_fraction=0.0,
-            )
+                # Scan mode: full-sector lawnmower, no target following.
+                # Use inset_fraction=0.0 so the full sector is covered (rather than
+                # the default 20% edge inset used in target-tracking search patterns).
+                # planner=None: skip route_waypoints which collapses the 20-point
+                # lawnmower into a 2-point path and can cross sector boundaries.
+                raw_trajectory = search_path(
+                    sector_bounds=all_sectors[sector_index],
+                    terrain=terrain_layer,
+                    base_agl_m=spec["base_agl_m"],
+                    vertical_amplitude_m=spec["vertical_amplitude_m"],
+                    vertical_frequency_rad_s=spec["vertical_frequency_rad_s"],
+                    lane_spacing_m=dynamics_cfg.drone_search_lane_spacing_scale * scale,
+                    speed_mps=spec["search_speed_mps"],
+                    phase=float(rng.uniform(0.0, math.tau)),
+                    environment=environment,
+                    planner=None,
+                    min_agl_m=dynamics_cfg.interceptor_search_min_agl_m,
+                    inset_fraction=0.0,
+                )
 
             # Wrap in launch controller — drones start grounded at their station
             launch_ctrl = LaunchableTrajectoryController(
@@ -3683,6 +4028,7 @@ def build_default_scenario(
                     dynamics_cfg.interceptor_search_min_agl_m,
                     dynamics_cfg.interceptor_follow_min_agl_m,
                 ),
+                wind_scale=dynamics_cfg.wind_drift_scale,
                 assigned_station_id=assigned_station_id,
             )
             launchable_controllers[node_id] = launch_ctrl
@@ -3694,21 +4040,52 @@ def build_default_scenario(
                     bearing_std_rad=spec["bearing_std_rad"],
                     dropout_probability=spec["dropout_probability"],
                     max_range_m=spec["max_range_m"],
-                    trajectory=launch_ctrl,
+                    trajectory=(
+                        EnvelopeLimitedTrajectory(
+                            launch_ctrl,
+                            envelope=FlightEnvelope(
+                                max_acceleration_mps2=float(dynamics_cfg.drone_max_accel_mps2)
+                            ),
+                        )
+                        if active_options.enforce_flight_envelope
+                        else launch_ctrl
+                    ),
                     sensor_type=sensor_cfg.drone_sensor_type,
                     fov_half_angle_deg=sensor_cfg.drone_fov_half_angle_deg,
                 )
             )
 
-    mission_zones = generate_mission_zones(
-        map_bounds_m,
-        scale,
-        terrain_layer,
-        rng,
-        obstacles=environment.obstacles.primitives,
-    )
+    if active_options.mission_profile_id:
+        from argusnet.mission.profiles import build_profile_mission_zones
 
-    scenario_name = (
+        map_extent_m = min(
+            float(map_bounds_m["x_max_m"]) - float(map_bounds_m["x_min_m"]),
+            float(map_bounds_m["y_max_m"]) - float(map_bounds_m["y_min_m"]),
+        )
+        profile_zones = build_profile_mission_zones(
+            active_options.mission_profile_id, map_extent_m=map_extent_m
+        )
+        mission_zones = [
+            replace(
+                zone,
+                center=vec3(
+                    float(zone.center[0]),
+                    float(zone.center[1]),
+                    float(terrain_layer.height_at(float(zone.center[0]), float(zone.center[1]))),
+                ),
+            )
+            for zone in profile_zones
+        ]
+    else:
+        mission_zones = generate_mission_zones(
+            map_bounds_m,
+            scale,
+            terrain_layer,
+            rng,
+            obstacles=environment.obstacles.primitives,
+        )
+
+    scenario_name = active_options.mission_profile_id or (
         f"civilian-observation-{active_options.map_preset}-"
         f"{active_options.target_motion_preset}-{active_options.drone_mode_preset}"
     )
@@ -3819,15 +4196,21 @@ def build_observations(
                 node,
                 seed=_stable_seed(0 if seed is None else seed, "sensor", node.node_id),
             )
+        # Sensor look direction depends only on the node and timestamp, so
+        # resolve it once per node instead of once per (node, truth) pair.
+        node_sensor_dir = None
+        if node.fov_half_angle_deg < 179.0:
+            if node.sensor_direction_fn is not None:
+                node_sensor_dir = node.sensor_direction_fn(timestamp_s)
+            if node_sensor_dir is None:
+                _, vel = node.trajectory(timestamp_s)
+                speed_xy = float(np.linalg.norm(vel[:2]))
+                if speed_xy > 0.5:
+                    look = vel.copy()
+                    look[2] = -np.tan(np.radians(sensor_cfg.drone_look_down_angle_deg)) * speed_xy
+                    node_sensor_dir = look / np.linalg.norm(look)
         for truth in truths:
             attempted_count += 1
-            pair_rng = (
-                rng
-                if seed is None
-                else np.random.default_rng(
-                    _stable_seed(seed, node.node_id, truth.target_id, round(timestamp_s * 1000.0)),
-                )
-            )
             line_of_sight = truth.position - node_state.position
             range_m = float(np.linalg.norm(line_of_sight))
             if range_m < 1e-6 or range_m > node.max_range_m:
@@ -3853,18 +4236,7 @@ def build_observations(
             # --- FOV check for directional sensors ---
             fov_fraction = 0.0
             if node.fov_half_angle_deg < 179.0:
-                sensor_dir = None
-                if node.sensor_direction_fn is not None:
-                    sensor_dir = node.sensor_direction_fn(timestamp_s)
-                if sensor_dir is None:
-                    _, vel = node.trajectory(timestamp_s)
-                    speed_xy = float(np.linalg.norm(vel[:2]))
-                    if speed_xy > 0.5:
-                        look = vel.copy()
-                        look[2] = (
-                            -np.tan(np.radians(sensor_cfg.drone_look_down_angle_deg)) * speed_xy
-                        )
-                        sensor_dir = look / np.linalg.norm(look)
+                sensor_dir = node_sensor_dir
                 if sensor_dir is not None:
                     los_unit = line_of_sight / range_m
                     cos_angle = float(np.dot(los_unit, sensor_dir))
@@ -3886,6 +4258,15 @@ def build_observations(
                         )
                         continue
                     fov_fraction = angle_deg / max(node.fov_half_angle_deg, 1.0)
+            # Per-pair RNG streams are seeded independently, so deferring
+            # construction past the draw-free rejects above is draw-order safe.
+            pair_rng = (
+                rng
+                if seed is None
+                else np.random.default_rng(
+                    _stable_seed(seed, node.node_id, truth.target_id, round(timestamp_s * 1000.0)),
+                )
+            )
             if pair_rng.random() < node.dropout_probability:
                 rejection_counts[REJECT_DROPOUT] += 1
                 rejected_by_target[truth.target_id] += 1
@@ -4362,6 +4743,15 @@ def _build_replay_metadata(
             "dem_crs": scenario.options.dem_crs,
             "detail_strength": scenario.options.detail_strength,
             "terrain_resolution_m": scenario.options.terrain_resolution_m,
+            "coverage_resolution_m": scenario.options.coverage_resolution_m,
+            "cooperative_search": scenario.options.cooperative_search,
+            "adaptive_search": scenario.options.adaptive_search,
+            "occlusion_aware_mapping": scenario.options.occlusion_aware_mapping,
+            "search_origin_m": (
+                list(scenario.options.search_origin_m)
+                if scenario.options.search_origin_m is not None
+                else None
+            ),
             "season_month": scenario.options.season_month,
             "weather_preset": scenario.options.weather_preset,
             "clean_terrain": scenario.options.clean_terrain,
@@ -4369,7 +4759,21 @@ def _build_replay_metadata(
             "ground_station_count": scenario.options.ground_station_count,
             "target_count": scenario.options.target_count,
             "drone_count": scenario.options.drone_count,
+            "mission_profile_id": scenario.options.mission_profile_id,
+            "mission_domain": scenario.options.mission_domain,
+            "mission_workflow": scenario.options.mission_workflow,
+            "mission_tags": list(scenario.options.mission_tags),
         },
+        "mission_profile": (
+            {
+                "profile_id": scenario.options.mission_profile_id,
+                "domain": scenario.options.mission_domain,
+                "workflow": scenario.options.mission_workflow,
+                "tags": list(scenario.options.mission_tags),
+            }
+            if scenario.options.mission_profile_id
+            else None
+        ),
         "zones": [
             {
                 "zone_id": z.zone_id,
@@ -4433,12 +4837,17 @@ def run_simulation(
     tracker_config: TrackerConfig | None = None,
     streaming_output_path: Path | None = None,
     max_frames_in_memory: int = 500,
+    progress: Callable[[int, int], None] | None = None,
+    realtime: bool = False,
 ) -> SimulationResult:
     active_tracker_config = tracker_config or TrackerConfig()
     scenario.reset_runtime_state()
     rng = np.random.default_rng(simulation_config.seed)
     sensor_models = _build_sensor_models(scenario.nodes, seed=simulation_config.seed)
     service = TrackingService(config=active_tracker_config, retain_history=True)
+    # Persistent bidi stream: same request/response semantics as unary
+    # ingest_frame, without per-call RPC overhead across thousands of steps.
+    _ingest_stream = service.open_ingest_stream()
 
     frames: list[PlatformFrame] = []
     _total_frame_count: int = 0  # tracks count even when frames[] is a rolling window
@@ -4463,7 +4872,7 @@ def run_simulation(
         x_max_m=float(scenario.map_bounds_m["x_max_m"]),
         y_min_m=float(scenario.map_bounds_m["y_min_m"]),
         y_max_m=float(scenario.map_bounds_m["y_max_m"]),
-        resolution_m=50.0,
+        resolution_m=float(getattr(scenario.options, "coverage_resolution_m", 50.0)),
     )
     _coverage_map = CoverageMap(_coverage_bounds)
     # Auto-scale footprint so each drone covers ~5 % of the map per pass,
@@ -4520,10 +4929,50 @@ def run_simulation(
     _loc_estimates: list[LocalizationEstimate] = []
     _loc_confidence_threshold = 0.65
     _loc_timed_out: bool = False
+    # Cooperative co-localization: fuse the drones' independent estimates (all
+    # referenced to the shared coverage map that they build together) into one
+    # team estimate. Track the most-converged fusion for the run summary.
+    _coop_search_active = getattr(scenario.options, "cooperative_search", False)
+    _team_loc_best: LocalizationEstimate | None = None
+    _team_loc_current: TeamLocalization | None = None
 
     # Frontier planner + claimed-cell tracking for gap-fill gate.
     _frontier_planner = FrontierPlanner()
     _claimed_cells = ClaimedCells()
+    # Frontier-driven exploration (optional): per-drone goto overrides that
+    # redirect scanning drones toward the best uncovered cell.
+    _frontier_enabled = bool(getattr(scenario.options, "frontier_exploration", False))
+    _frontier_trajectories: dict[str, TrajectoryFn] = {}
+    _frontier_targets: dict[str, np.ndarray] = {}
+    _occ_aware = bool(getattr(scenario.options, "occlusion_aware_mapping", False))
+    _mapping_visibility_profile = SensorVisibilityModel.optical_default()
+    _redirect_planner = (
+        PathPlanner2D(
+            bounds_xy_m=scenario.environment.bounds_xy_m,
+            obstacle_layer=scenario.environment.obstacles,
+            config=PlannerConfig(),
+        )
+        if _occ_aware
+        else None
+    )
+
+    # Adaptive cooperative search: wedge-aware, coverage-balanced redirection with a
+    # team-estimate-anchored origin. Only active when both cooperative and adaptive.
+    _adaptive_coop = _coop_search_active and bool(
+        getattr(scenario.options, "adaptive_search", False)
+    )
+    if scenario.options.search_origin_m is not None:
+        _grounded_origin_xy = np.array(scenario.options.search_origin_m, dtype=float)
+    else:
+        _mb = scenario.map_bounds_m
+        _grounded_origin_xy = np.array(
+            [
+                0.5 * (float(_mb["x_min_m"]) + float(_mb["x_max_m"])),
+                0.5 * (float(_mb["y_min_m"]) + float(_mb["y_max_m"])),
+            ],
+            dtype=float,
+        )
+    _coop_wedge_index: dict[str, int] = {}  # node_id -> home wedge, assigned lazily
 
     # Coordination manager (coordinator election, formation offsets, RF latency).
     _coord_policy = CoordinationPolicy()
@@ -4539,6 +4988,8 @@ def run_simulation(
         exclusion_zones=list(scenario.mission_zones),
         corridors=list(getattr(scenario, "corridors", ())),
     )
+    _safety_monitors: dict[str, SafetyMonitor] = {}
+    _safety_previous_velocities: dict[str, np.ndarray] = {}
 
     # Inspection flags.
     _poi_rescored = False
@@ -4576,6 +5027,72 @@ def run_simulation(
 
         return _traj
 
+    def _make_routed_goto(
+        planner: PathPlanner2D,
+        sp: np.ndarray,
+        txy: np.ndarray,
+        tz: float,
+        ts: float,
+        speed_mps: float,
+    ) -> TrajectoryFn:
+        route = planner.plan_route(
+            np.asarray(sp[:2], dtype=float),
+            np.asarray(txy, dtype=float),
+            clearance_m=planner.config.drone_clearance_m,
+        )
+        if route is None or route.length_m <= 1.0e-9:
+            dist_m = float(
+                np.linalg.norm(np.asarray(txy, dtype=float) - np.asarray(sp[:2], dtype=float))
+            )
+            return _make_goto_hover(
+                sp,
+                txy,
+                tz,
+                ts,
+                ts + max(dist_m / max(speed_mps, 1.0e-9), 1.0e-3),
+            )
+
+        points = np.asarray(route.points_xy_m, dtype=float)
+        segment_vectors = points[1:] - points[:-1]
+        segment_lengths = np.linalg.norm(segment_vectors, axis=1)
+        cumulative = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+        duration_s = max(route.length_m / max(speed_mps, 1.0e-9), 1.0e-3)
+        arrival_s = ts + duration_s
+        z_rate = (float(tz) - float(sp[2])) / duration_s
+
+        def _traj(t: float):
+            if t >= arrival_s:
+                return np.array([txy[0], txy[1], tz], dtype=float), np.zeros(3)
+            frac = max(0.0, min(1.0, (t - ts) / duration_s))
+            distance_m = frac * route.length_m
+            segment_index = int(np.searchsorted(cumulative, distance_m, side="right") - 1)
+            segment_index = max(0, min(segment_index, len(segment_lengths) - 1))
+            segment_len = max(float(segment_lengths[segment_index]), 1.0e-9)
+            segment_frac = (distance_m - float(cumulative[segment_index])) / segment_len
+            xy = points[segment_index] + segment_vectors[segment_index] * segment_frac
+            z = float(sp[2]) + frac * (float(tz) - float(sp[2]))
+            xy_vel = segment_vectors[segment_index] / segment_len * float(speed_mps)
+            vel = np.array([xy_vel[0], xy_vel[1], z_rate], dtype=float)
+            return np.array([xy[0], xy[1], z], dtype=float), vel
+
+        return _traj
+
+    def _make_redirect_goto(
+        sp: np.ndarray, txy: np.ndarray, tz: float, ts: float, speed_mps: float
+    ) -> TrajectoryFn:
+        if _redirect_planner is not None:
+            return _make_routed_goto(_redirect_planner, sp, txy, tz, ts, speed_mps)
+        dist_m = float(
+            np.linalg.norm(np.asarray(txy, dtype=float) - np.asarray(sp[:2], dtype=float))
+        )
+        return _make_goto_hover(
+            sp,
+            txy,
+            tz,
+            ts,
+            ts + max(dist_m / max(speed_mps, 1.0e-9), 1.0e-3),
+        )
+
     # Auto-generate POIs spread across the map interior.
     # Each POI is placed at a valid drone-accessible altitude above the terrain
     # and rejected if it falls inside an obstacle at hover height.
@@ -4610,23 +5127,49 @@ def run_simulation(
                 positions.append(np.array([x, y, z], dtype=float))  # type: ignore[possibly-undefined]
         return positions
 
-    _poi_positions = _make_poi_positions(
-        dict(scenario.map_bounds_m),
-        _poi_count_cfg,
-        simulation_config.seed,
-        terrain=scenario.terrain,
-        obstacles=getattr(scenario.environment, "obstacles", None),
-    )
-    _pois = [
-        InspectionPOI(
-            poi_id=f"poi-{i:02d}",
-            name=f"Site {chr(65 + i % 26)}",
-            position=pos,
-            priority=_poi_count_cfg - i,
-            required_dwell_s=15.0,
+    if scenario.options.mission_profile_id and _mission_mode == "scan_map_inspect":
+        from argusnet.mission.profiles import build_profile_inspection_pois
+
+        bounds = dict(scenario.map_bounds_m)
+        map_extent_m = min(
+            float(bounds["x_max_m"]) - float(bounds["x_min_m"]),
+            float(bounds["y_max_m"]) - float(bounds["y_min_m"]),
         )
-        for i, pos in enumerate(_poi_positions)
-    ]
+        profile_pois = build_profile_inspection_pois(
+            scenario.options.mission_profile_id, map_extent_m=map_extent_m
+        )
+        _pois = [
+            replace(
+                poi,
+                position=vec3(
+                    float(poi.position[0]),
+                    float(poi.position[1]),
+                    float(
+                        scenario.terrain.height_at(float(poi.position[0]), float(poi.position[1]))
+                    )
+                    + _POI_HOVER_AGL_M,
+                ),
+            )
+            for poi in profile_pois[:_poi_count_cfg]
+        ]
+    else:
+        _poi_positions = _make_poi_positions(
+            dict(scenario.map_bounds_m),
+            _poi_count_cfg,
+            simulation_config.seed,
+            terrain=scenario.terrain,
+            obstacles=getattr(scenario.environment, "obstacles", None),
+        )
+        _pois = [
+            InspectionPOI(
+                poi_id=f"poi-{i:02d}",
+                name=f"Site {chr(65 + i % 26)}",
+                position=pos,
+                priority=_poi_count_cfg - i,
+                required_dwell_s=15.0,
+            )
+            for i, pos in enumerate(_poi_positions)
+        ]
     _poi_manager = POIManager(_pois)
 
     # Open streaming file if requested.
@@ -4634,7 +5177,7 @@ def run_simulation(
     if streaming_output_path is not None:
         streaming_output_path = Path(streaming_output_path)
         streaming_output_path.parent.mkdir(parents=True, exist_ok=True)
-        _stream_file = streaming_output_path.open("w", encoding="utf-8")
+        _stream_file = RotatingFrameRecorder(streaming_output_path)
 
     # --- VIO backends ---
     # One EKFVIO per mobile node; ground-station nodes don't need odometry.
@@ -4665,7 +5208,7 @@ def run_simulation(
         if task_type == MissionTaskType.MAP_FRONTIER:
             return _scan_phase not in ("scanning", "localizing")
         if task_type == MissionTaskType.INSPECT_TARGET:
-            return _poi_manager.all_complete()
+            return _poi_manager.all_complete
         return True
 
     _mission_executor = MissionExecutor(
@@ -4699,14 +5242,28 @@ def run_simulation(
         ctx=MissionExecutionContext(
             get_localization_confidence=lambda: (
                 sum(e.confidence for e in _loc_estimates) / len(_loc_estimates)
-                if _loc_estimates else 0.0
+                if _loc_estimates
+                else 0.0
             ),
             get_battery_fraction=lambda: min(
                 (v.remaining_wh / _battery_model.capacity_wh for v in _battery_states.values()),
                 default=1.0,
             ),
             plan_task=lambda task: ExecutableCommand(description=task.task_type.value),
-            validate_command=lambda cmd: SafetyDecision(status=SafetyStatus.OK),
+            validate_command=lambda cmd: SafetyDecision(
+                status=(
+                    SafetyStatus.REJECTED
+                    if scenario.options.safety_blocking
+                    and any(
+                        _safety_monitors.get(node.node_id, SafetyMonitor()).state(node.node_id)
+                        is DroneSafetyState.ABORT
+                        for node in scenario.nodes
+                        if node.is_mobile
+                    )
+                    else SafetyStatus.OK
+                ),
+                reason="blocking safety monitor is in abort state",
+            ),
             execute_command=lambda cmd: None,
             is_task_complete=_is_task_complete,
         ),
@@ -4730,15 +5287,25 @@ def run_simulation(
                 _battery_states[ns.node_id] = _battery_states[ns.node_id].consume(cost_wh)
                 remaining = _battery_states[ns.node_id].remaining_wh
                 frac = remaining / _battery_model.capacity_wh
-                if (
-                    frac <= _battery_model.reserve_fraction
-                    and ns.node_id not in _battery_low_warned
-                ):
+                # Wind/terrain-aware reserve: the energy needed to actually fly
+                # home from here, floored at the static reserve fraction.
+                home_pos = _drone_home_positions.get(ns.node_id)
+                if home_pos is not None:
+                    wind_vec = None
+                    if scenario.weather is not None:
+                        wind_vec = scenario.weather.wind.wind_at(float(ns.position[2]), timestamp_s)
+                    reserve_wh = _battery_model.dynamic_reserve_wh(
+                        np.asarray(ns.position, dtype=float), home_pos, wind_vec
+                    )
+                else:
+                    reserve_wh = _battery_model.capacity_wh * _battery_model.reserve_fraction
+                if remaining <= reserve_wh and ns.node_id not in _battery_low_warned:
                     _battery_low_warned.add(ns.node_id)
                     import warnings
 
                     warnings.warn(
-                        f"[Battery] {ns.node_id} at {frac * 100:.1f}% — at reserve threshold",
+                        f"[Battery] {ns.node_id} at {frac * 100:.1f}% — at reserve threshold "
+                        f"(return-home reserve {reserve_wh:.1f} Wh)",
                         stacklevel=1,
                     )
             _battery_prev_positions[ns.node_id] = np.array(ns.position, dtype=float)
@@ -4755,6 +5322,20 @@ def run_simulation(
             )
             for ns in node_states
         ]
+
+        # Override positions/velocities for drones redirected to a frontier
+        # cell (optional frontier-driven exploration). Kept active through the
+        # localizing phase so drones hold position rather than jumping back to
+        # their lawnmower trajectories.
+        if _frontier_trajectories and _scan_phase in ("scanning", "localizing"):
+            overridden = []
+            for ns in node_states:
+                traj_fn = _frontier_trajectories.get(ns.node_id)
+                if traj_fn is not None:
+                    pos_ov, vel_ov = traj_fn(timestamp_s)
+                    ns = replace(ns, position=list(pos_ov), velocity=list(vel_ov))
+                overridden.append(ns)
+            node_states = overridden
 
         # Override positions/velocities for drones redirected to a POI.
         if _poi_trajectories:
@@ -4807,6 +5388,71 @@ def run_simulation(
                     else ns
                     for ns in node_states
                 ]
+
+        # Hard safety floor runs after cooperative deconfliction. It is opt-in
+        # so legacy seeded simulations remain bit-identical.
+        _step_safety_events: list[SafetyValidationResult] = []
+        if scenario.options.safety_blocking:
+            mobile_positions = {
+                ns.node_id: np.asarray(ns.position, dtype=float)
+                for ns in node_states
+                if ns.is_mobile
+            }
+            safe_states: list[NodeState] = []
+            for ns in node_states:
+                if not ns.is_mobile:
+                    safe_states.append(ns)
+                    continue
+                position = np.asarray(ns.position, dtype=float)
+                velocity = np.asarray(ns.velocity, dtype=float)
+                terrain_height = float(scenario.terrain.height_at(position[0], position[1]))
+                role = scenario.drone_roles.get(ns.node_id, "tracker")
+                monitor = _safety_monitors.setdefault(
+                    ns.node_id,
+                    SafetyMonitor(
+                        DronePhysicalLimits.interceptor_default()
+                        if "interceptor" in role
+                        else DronePhysicalLimits.tracker_default()
+                    ),
+                )
+                decision = monitor.process(
+                    ns.node_id,
+                    position,
+                    velocity,
+                    terrain_height_m=terrain_height,
+                    previous_velocity=_safety_previous_velocities.get(ns.node_id),
+                    dt_s=simulation_config.dt_s,
+                    other_drone_positions=[
+                        peer for peer_id, peer in mobile_positions.items() if peer_id != ns.node_id
+                    ],
+                    energy_fraction=ns.battery_fraction,
+                )
+                _safety_previous_velocities[ns.node_id] = decision.velocity.copy()
+                clamped = not (
+                    np.array_equal(position, decision.position)
+                    and np.array_equal(velocity, decision.velocity)
+                )
+                if decision.violations:
+                    _step_safety_events.append(
+                        SafetyValidationResult(
+                            validation_id=f"safety-{step}-{ns.node_id}",
+                            subject_id=ns.node_id,
+                            accepted=not decision.blocked,
+                            timestamp_s=timestamp_s,
+                            validator="blocking_monitor",
+                            violations=tuple(v.constraint for v in decision.violations),
+                            clamped=clamped,
+                            reason=decision.state.value,
+                        )
+                    )
+                safe_states.append(
+                    replace(
+                        ns,
+                        position=decision.position,
+                        velocity=decision.velocity,
+                    )
+                )
+            node_states = safe_states
 
         truths = scenario.truths(timestamp_s)
 
@@ -4889,11 +5535,34 @@ def run_simulation(
         generation_accepted_by_target.update(observation_batch.accepted_by_target)
         generation_rejected_by_target.update(observation_batch.rejected_by_target)
 
-        frame = service.ingest_frame(
+        target_metadata = [
+            TargetMetadata(
+                target_id=truth.target_id,
+                operator_label=truth.target_id.replace("-", " ").title(),
+                target_type="simulated_mobile",
+                priority=3 if index == 0 else 2 if index < 3 else 1,
+                behavior=scenario.target_motion_assignments.get(truth.target_id, "unknown"),
+                status=(
+                    "observed"
+                    if observation_batch.accepted_by_target.get(truth.target_id, 0) > 0
+                    else "unobserved"
+                ),
+                first_seen_s=0.0,
+                last_seen_s=timestamp_s,
+                confidence=min(
+                    1.0,
+                    observation_batch.accepted_by_target.get(truth.target_id, 0) / 3.0,
+                ),
+            )
+            for index, truth in enumerate(truths)
+        ]
+        frame = _ingest_stream.ingest_frame(
             timestamp_s=timestamp_s,
             node_states=node_states,
             observations=observation_batch.observations,
             truths=truths,
+            target_metadata=target_metadata,
+            safety_events=_step_safety_events,
         )
         for controller in adaptive_drone_controllers:
             if hasattr(controller, "update_from_frame"):
@@ -4901,10 +5570,41 @@ def run_simulation(
 
         # --- Mapping coverage ---
         mobile_states = [ns for ns in node_states if ns.is_mobile]
+        _scan_visibility_by_node: dict[str, Callable[[float, float], bool] | None] = {}
         for ns in mobile_states:
+            visibility_predicate: Callable[[float, float], bool] | None = None
+            if _occ_aware:
+                drone_xyz = np.asarray(ns.position, dtype=float)
+                captured_drone_xyz = drone_xyz.copy()
+
+                def visibility_predicate(
+                    cx: float,
+                    cy: float,
+                    *,
+                    _drone_xyz: np.ndarray = captured_drone_xyz,
+                ) -> bool:
+                    if (
+                        float(np.linalg.norm(np.asarray([cx, cy], dtype=float) - _drone_xyz[:2]))
+                        <= _coverage_bounds.resolution_m * 0.5
+                    ):
+                        return True
+                    target_z = (
+                        float(scenario.terrain.height_at(float(cx), float(cy)))
+                        + _MAPPING_LOS_TARGET_CLEARANCE_M
+                    )
+                    return scenario.environment.query.los(
+                        _drone_xyz,
+                        np.array([cx, cy, target_z], dtype=float),
+                        _mapping_visibility_profile,
+                        terrain_clearance_m=_MAPPING_LOS_TARGET_CLEARANCE_M,
+                    ).visible
+
+            _scan_visibility_by_node[ns.node_id] = visibility_predicate
             _coverage_map.mark_circular(
                 center_xy=(float(ns.position[0]), float(ns.position[1])),
                 radius_m=_FOOTPRINT_RADIUS_M,
+                visibility_predicate=visibility_predicate,
+                los_max_samples=_COVERAGE_LOS_MAX_SAMPLES if _occ_aware else None,
             )
         cov = _coverage_map.stats
         step_mapping_state = MappingState(
@@ -4927,6 +5627,8 @@ def run_simulation(
                     drone_position=np.array(ns.position, dtype=float),
                     terrain_height=terrain_h,
                     footprint_radius_m=_FOOTPRINT_RADIUS_M,
+                    visibility_predicate=_scan_visibility_by_node.get(ns.node_id),
+                    los_max_samples=_COVERAGE_LOS_MAX_SAMPLES if _occ_aware else None,
                 )
 
             scan_frac = _world_map.coverage_fraction
@@ -4954,6 +5656,27 @@ def run_simulation(
                     _loc_estimates.append(est)
                 if _grid_localizer.any_timed_out:
                     _loc_timed_out = True
+                if _coop_search_active and len(_loc_estimates) > 1:
+                    # Localize to each other's search data: inverse-variance fuse
+                    # the per-drone estimates into a tighter team estimate.
+                    _team = _grid_localizer.fuse_estimates([e.drone_id for e in _loc_estimates])
+                    if _team is not None:
+                        if _team_loc_best is None or (
+                            _team.position_std_m < _team_loc_best.position_std_m
+                        ):
+                            _team_loc_best = _team
+                        # Drones whose estimate was tight enough to contribute to
+                        # the fusion (mirrors GridLocalizer.fuse_estimates gating).
+                        _half_r = _grid_localizer.config.search_radius_m * 0.5
+                        _contrib = tuple(
+                            e.drone_id for e in _loc_estimates if e.position_std_m < _half_r
+                        )
+                        _team_loc_current = TeamLocalization(
+                            position=tuple(float(v) for v in _team.position_estimate),
+                            position_std_m=float(_team.position_std_m),
+                            confidence=float(_team.confidence),
+                            contributing_node_ids=_contrib,
+                        )
 
             if _scan_phase == "scanning":
                 # Coordinator election (once). No re-election on coordinator failure because
@@ -4964,6 +5687,91 @@ def run_simulation(
                         drone_ids, _battery_states, _battery_model.capacity_wh
                     )
                     _coordinator_elected = True
+
+                # Frontier-driven exploration: once a drone reaches its claimed
+                # cell (or has none yet), claim the best uncovered cell and
+                # redirect the drone toward it.
+                if _adaptive_coop:
+                    if not _coop_wedge_index:
+                        _coop_wedge_index = {
+                            nid: k for k, nid in enumerate(sorted(n.node_id for n in mobile_states))
+                        }
+                    _wedge_count = max(len(_coop_wedge_index), 1)
+                    # Re-anchor the wedge origin on the fused team estimate once the
+                    # team is confident — closing the localization -> planning loop.
+                    if _team_loc_current is not None and _team_loc_current.confidence >= 0.5:
+                        _anchor = np.array(_team_loc_current.position[:2], dtype=float)
+                    else:
+                        _anchor = _grounded_origin_xy
+                    _wedge_cov = compute_wedge_coverage(
+                        _world_map.coverage_map, _anchor, _wedge_count
+                    )
+                    for ns in mobile_states:
+                        pos_xy = np.asarray(ns.position[:2], dtype=float)
+                        target = _frontier_targets.get(ns.node_id)
+                        if target is not None:
+                            if float(np.linalg.norm(pos_xy - target[:2])) > _FOOTPRINT_RADIUS_M:
+                                continue  # still en-route to the claimed cell
+                            _claimed_cells.release(ns.node_id)
+                        cell = select_cooperative_wedge_cell(
+                            _world_map.coverage_map,
+                            pos_xy,
+                            _claimed_cells,
+                            ns.node_id,
+                            _anchor,
+                            _coop_wedge_index[ns.node_id],
+                            _wedge_count,
+                            _wedge_cov,
+                        )
+                        if cell is None:
+                            _frontier_trajectories.pop(ns.node_id, None)
+                            _frontier_targets.pop(ns.node_id, None)
+                            continue
+                        _claimed_cells.claim(ns.node_id, cell)
+                        cell_x, cell_y = _coverage_bounds.ij_to_xy(cell[0], cell[1])
+                        terrain_h = 0.0
+                        if scenario.terrain is not None:
+                            with contextlib.suppress(Exception):
+                                terrain_h = float(scenario.terrain.height_at(cell_x, cell_y))
+                        target_z = terrain_h + scenario.constants.dynamics.drone_base_agl_m
+                        start_pos = np.asarray(ns.position, dtype=float)
+                        target_xy = np.array([cell_x, cell_y], dtype=float)
+                        _frontier_trajectories[ns.node_id] = _make_redirect_goto(
+                            start_pos, target_xy, target_z, float(timestamp_s), 28.0
+                        )
+                        _frontier_targets[ns.node_id] = np.array(
+                            [cell_x, cell_y, target_z], dtype=float
+                        )
+                elif _frontier_enabled:
+                    for ns in mobile_states:
+                        pos_xy = np.asarray(ns.position[:2], dtype=float)
+                        target = _frontier_targets.get(ns.node_id)
+                        if target is not None:
+                            if float(np.linalg.norm(pos_xy - target[:2])) > _FOOTPRINT_RADIUS_M:
+                                continue  # still en-route to the claimed cell
+                            _claimed_cells.release(ns.node_id)
+                        cell = _frontier_planner.select_frontier_cell(
+                            _world_map.coverage_map, pos_xy, _claimed_cells, ns.node_id
+                        )
+                        if cell is None:
+                            _frontier_trajectories.pop(ns.node_id, None)
+                            _frontier_targets.pop(ns.node_id, None)
+                            continue
+                        _claimed_cells.claim(ns.node_id, cell)
+                        cell_x, cell_y = _coverage_bounds.ij_to_xy(cell[0], cell[1])
+                        terrain_h = 0.0
+                        if scenario.terrain is not None:
+                            with contextlib.suppress(Exception):
+                                terrain_h = float(scenario.terrain.height_at(cell_x, cell_y))
+                        target_z = terrain_h + scenario.constants.dynamics.drone_base_agl_m
+                        start_pos = np.asarray(ns.position, dtype=float)
+                        target_xy = np.array([cell_x, cell_y], dtype=float)
+                        _frontier_trajectories[ns.node_id] = _make_redirect_goto(
+                            start_pos, target_xy, target_z, float(timestamp_s), 28.0
+                        )
+                        _frontier_targets[ns.node_id] = np.array(
+                            [cell_x, cell_y, target_z], dtype=float
+                        )
 
                 if scan_frac >= _scan_threshold:
                     # Gap-fill gate: only transition if enclosed interior holes
@@ -5020,10 +5828,8 @@ def run_simulation(
                         tgt_xy = np.array(poi_obj.position[:2], dtype=float)
                         tgt_z = float(poi_obj.position[2])
                         t0 = float(timestamp_s)
-                        dist_m = float(np.linalg.norm(tgt_xy - start_pos[:2]))
-                        t_arrive = t0 + dist_m / 28.0
-                        _poi_trajectories[ns.node_id] = _make_goto_hover(
-                            start_pos, tgt_xy, tgt_z, t0, t_arrive
+                        _poi_trajectories[ns.node_id] = _make_redirect_goto(
+                            start_pos, tgt_xy, tgt_z, t0, 28.0
                         )
                     # Handoff: if this drone is low and has an active POI, find a fresh drone.
                     if batt_frac < 0.30:
@@ -5066,13 +5872,12 @@ def run_simulation(
                     for ns in mobile_states:
                         home = _drone_home_positions.get(ns.node_id)
                         if home is not None:
-                            dist_m = float(np.linalg.norm(home[:2] - np.array(ns.position[:2])))
-                            _egress_trajectories[ns.node_id] = _make_goto_hover(
+                            _egress_trajectories[ns.node_id] = _make_redirect_goto(
                                 np.array(ns.position, dtype=float),
                                 home[:2].copy(),
                                 float(home[2]),
                                 float(timestamp_s),
-                                float(timestamp_s) + dist_m / 28.0,
+                                28.0,
                             )
 
             elif _scan_phase == "egress":
@@ -5149,6 +5954,7 @@ def run_simulation(
                 localization_timed_out=_loc_timed_out,
                 coordinator_drone_id=_shared_state.coordinator_id,
                 egress_progress=_egress_prog,
+                team_localization=_team_loc_current,
             )
 
         # --- Localization quality (derived from track covariances) ---
@@ -5219,6 +6025,8 @@ def run_simulation(
             localization_state=step_localization_state,
             inspection_events=step_inspection_events,
             deconfliction_events=_step_deconfliction_events,
+            safety_events=_step_safety_events,
+            target_metadata=target_metadata,
             scan_mission_state=step_scan_mission_state,
         )
 
@@ -5233,7 +6041,15 @@ def run_simulation(
         metrics_rows.extend(rows)
         per_track_errors.extend(errors)
         _frame_times_ms.append((time.perf_counter_ns() - _frame_start_ns) / 1_000_000.0)
+        if progress is not None:
+            progress(step + 1, simulation_config.steps)
+        if realtime:
+            deadline = _wall_clock_start + (step + 1) * simulation_config.dt_s
+            remaining = deadline - time.perf_counter()
+            if remaining > 0.0:
+                time.sleep(remaining)
 
+    _ingest_stream.close()
     if _stream_file is not None:
         _stream_file.close()
 
@@ -5248,6 +6064,32 @@ def run_simulation(
     # When streaming, `frames` is a rolling window; correct the total count.
     if _total_frame_count != len(frames):
         summary = {**summary, "frame_count": _total_frame_count}
+
+    if _coop_search_active:
+        _opt = scenario.options
+        if _opt.search_origin_m is not None:
+            _origin_xy = [float(_opt.search_origin_m[0]), float(_opt.search_origin_m[1])]
+        else:
+            _mb = scenario.map_bounds_m
+            _origin_xy = [
+                0.5 * (float(_mb["x_min_m"]) + float(_mb["x_max_m"])),
+                0.5 * (float(_mb["y_min_m"]) + float(_mb["y_max_m"])),
+            ]
+        summary = {
+            **summary,
+            "cooperative_search": True,
+            "adaptive_search": bool(getattr(scenario.options, "adaptive_search", False)),
+            "occlusion_aware_mapping": bool(
+                getattr(scenario.options, "occlusion_aware_mapping", False)
+            ),
+            "search_origin_m": _origin_xy,
+            "team_localization_std_m": (
+                float(_team_loc_best.position_std_m) if _team_loc_best is not None else None
+            ),
+            "team_localization_confidence": (
+                float(_team_loc_best.confidence) if _team_loc_best is not None else None
+            ),
+        }
 
     wall_clock_s = max(time.perf_counter() - _wall_clock_start, 0.0)
     cache_metrics = _cache_metrics_snapshot(scenario)
@@ -5307,14 +6149,87 @@ def build_simulation_report_lines(result: SimulationResult) -> list[str]:
         )
 
     rmse = result.summary["track_rmse_m"]
-    if rmse is None:
-        lines.append("")
-        lines.append("No fused tracks were produced.")
-    else:
-        lines.append("")
+    lines.append("")
+    if rmse is not None:
         lines.append(
             f"Track RMSE: {rmse:.2f} m across {result.summary['track_update_count']} track updates"
         )
+        return lines
+
+    # No fused tracks were produced. Rather than report that as if it were a
+    # failure, describe the outcome that actually applies to this run: a
+    # scan/map/inspect mission summarises coverage and POIs; a target-tracking
+    # run that saw no tracks gets a diagnostic hint about why.
+    scan_state = next(
+        (
+            frame.scan_mission_state
+            for frame in reversed(result.frames)
+            if frame.scan_mission_state is not None
+        ),
+        None,
+    )
+    if scan_state is not None:
+        lines.extend(_scan_mission_report_lines(scan_state, result.summary))
+    else:
+        lines.extend(_no_tracks_diagnostic_lines(result.summary))
+    return lines
+
+
+def _scan_mission_report_lines(
+    scan_state: ScanMissionState, summary: Mapping[str, object] | None = None
+) -> list[str]:
+    """Human-readable summary of a scan/map/inspect mission (no live tracks)."""
+    coverage_pct = 100.0 * scan_state.scan_coverage_fraction
+    lines = [
+        f"Scan/map/inspect mission — final phase: {scan_state.phase}.",
+        f"  Coverage: {coverage_pct:.1f}% of map "
+        f"(threshold {100.0 * scan_state.scan_coverage_threshold:.0f}%).",
+        f"  POIs inspected: {scan_state.completed_poi_count}/{scan_state.total_poi_count}.",
+    ]
+    if scan_state.localization_timed_out:
+        lines.append("  Note: at least one drone advanced on a localization timeout.")
+    if summary is not None and summary.get("cooperative_search"):
+        origin = summary.get("search_origin_m")
+        mode = "adaptive " if summary.get("adaptive_search") else ""
+        if isinstance(origin, (list, tuple)) and len(origin) == 2:
+            lines.append(
+                f"  Cooperative {mode}search grounded at origin "
+                f"({float(origin[0]):.0f}, {float(origin[1]):.0f}) m."
+            )
+        team_std = summary.get("team_localization_std_m")
+        if team_std is not None:
+            lines.append(
+                f"  Team co-localization converged to ±{float(team_std):.1f} m "
+                "(fused across drones)."
+            )
+        else:
+            lines.append("  Team co-localization: not enough converged drones to fuse.")
+    return lines
+
+
+def _no_tracks_diagnostic_lines(summary: Mapping[str, object]) -> list[str]:
+    """Explain why a target-tracking run produced no fused tracks."""
+    attempted = int(summary.get("generation_attempted_count", 0) or 0)
+    accepted = int(summary.get("generation_accepted_count", 0) or 0)
+    if attempted == 0:
+        return [
+            "No fused tracks were produced: no observations were attempted.",
+            "  This scenario has no targets in sensor range. In target-tracking mode,"
+            " add targets with --target-count.",
+        ]
+    lines = [
+        f"No fused tracks were produced: {accepted}/{attempted} observations accepted"
+        f" ({100.0 * accepted / attempted:.1f}%), too few to confirm a track.",
+    ]
+    rejection_counts = summary.get("generation_rejection_counts") or {}
+    if isinstance(rejection_counts, Mapping) and rejection_counts:
+        reason, count = max(rejection_counts.items(), key=lambda kv: kv[1])
+        lines.append(f"  Dominant rejection: {reason} ({count}).")
+        if reason == REJECT_OUT_OF_RANGE:
+            lines.append(
+                "  Targets are beyond sensor range — try a smaller --map-preset"
+                " (e.g. small) or more --drone-count."
+            )
     return lines
 
 
@@ -5345,14 +6260,17 @@ def _compact_frame(frame_dict: dict[str, object]) -> dict[str, object]:
     Applied when ``--compact`` is active:
 
     * ``generation_rejections`` key is dropped.
-    * ``rejected_observations`` key is dropped.
+    * ``rejected_observations`` is retained as an empty required schema field.
     * Covariance arrays are reduced to their diagonal elements only.
     * Position values are rounded to 2 decimal places.
     * Velocity and bearing values are rounded to 4 decimal places.
     """
     out: dict[str, object] = {}
     for key, value in frame_dict.items():
-        if key in ("generation_rejections", "rejected_observations"):
+        if key == "generation_rejections":
+            continue
+        if key == "rejected_observations":
+            out[key] = []
             continue
         if key == "tracks" and isinstance(value, list):
             compact_tracks = []
@@ -5471,10 +6389,27 @@ def simulate(
     mission_mode: str = "scan_map_inspect",
     scan_coverage_threshold: float = 0.70,
     poi_count: int = 3,
+    coverage_resolution_m: float = 50.0,
+    cooperative_search: bool = False,
+    search_origin_m: tuple[float, float] | None = None,
+    adaptive_search: bool = False,
+    enforce_flight_envelope: bool = False,
+    safety_blocking: bool = False,
+    realtime: bool = False,
+    continuous: bool = False,
+    frontier_exploration: bool = False,
+    occlusion_aware_mapping: bool = False,
     streaming: bool = False,
     max_frames_in_memory: int = 500,
+    mission_profile: str | None = None,
+    mission_profile_overrides: Mapping[str, object] | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> SimulationResult:
-    if steps is not None:
+    if continuous:
+        simulation_config = SimulationConfig(steps=sys.maxsize, dt_s=dt, seed=seed)
+        progress = None
+        realtime = True
+    elif steps is not None:
         simulation_config = SimulationConfig(steps=steps, dt_s=dt, seed=seed)
     else:
         active_duration_s = (
@@ -5482,8 +6417,14 @@ def simulate(
         )
         simulation_config = SimulationConfig.from_duration(active_duration_s, dt_s=dt, seed=seed)
 
-    scenario = build_default_scenario(
-        options=ScenarioOptions(
+    if mission_profile is not None:
+        from argusnet.mission.profiles import build_profile_scenario_options
+
+        scenario_options = build_profile_scenario_options(
+            mission_profile, overrides=mission_profile_overrides
+        )
+    else:
+        scenario_options = ScenarioOptions(
             map_preset=map_preset,
             target_motion_preset=target_motion,
             drone_mode_preset=drone_mode,
@@ -5504,7 +6445,17 @@ def simulate(
             mission_mode=mission_mode,
             scan_coverage_threshold=scan_coverage_threshold,
             poi_count=poi_count,
-        ),
+            coverage_resolution_m=coverage_resolution_m,
+            cooperative_search=cooperative_search,
+            search_origin_m=search_origin_m,
+            adaptive_search=adaptive_search,
+            enforce_flight_envelope=enforce_flight_envelope,
+            safety_blocking=safety_blocking,
+            frontier_exploration=frontier_exploration,
+            occlusion_aware_mapping=occlusion_aware_mapping,
+        )
+    scenario = build_default_scenario(
+        options=scenario_options,
         seed=seed,
         constants=constants,
     )
@@ -5519,6 +6470,8 @@ def simulate(
         tracker_config=DEFAULT_SIMULATION_TRACKER_CONFIG,
         streaming_output_path=streaming_jsonl_path,
         max_frames_in_memory=max_frames_in_memory,
+        progress=progress,
+        realtime=realtime,
     )
 
     for line in build_simulation_report_lines(result):
@@ -5533,13 +6486,25 @@ def simulate(
             # Assemble replay from the JSONL file without loading all frames.
             from argusnet.evaluation.replay import write_streaming_replay_document
 
+            streaming_meta = _build_compact_replay_document(result).get("meta", {})
+            streaming_meta["frame_count"] = result.summary.get("frame_count", len(result.frames))
             write_streaming_replay_document(
                 jsonl_path=streaming_jsonl_path,
                 output_path=Path(replay_path),
-                meta=result.replay_metadata,
+                meta=streaming_meta,
                 summary=result.summary,
             )
-            streaming_jsonl_path.unlink(missing_ok=True)
+            session_index = streaming_jsonl_path.with_suffix(".session.json")
+            segment_paths = [streaming_jsonl_path]
+            if session_index.exists():
+                session = json.loads(session_index.read_text(encoding="utf-8"))
+                segment_paths = [
+                    streaming_jsonl_path.parent / segment["path"]
+                    for segment in session.get("segments", [])
+                ]
+            for segment_path in segment_paths:
+                segment_path.unlink(missing_ok=True)
+            session_index.unlink(missing_ok=True)
             print(f"Replay written to {replay_path} (streamed)")
         elif compact or replay_subsample > 1:
             replay_document = _build_compact_replay_document(
@@ -5580,11 +6545,60 @@ def _arg_was_provided(args: argparse.Namespace, dest: str) -> bool:
     return isinstance(provided, set) and dest in provided
 
 
+def _parse_xy_pair(value: str) -> tuple[float, float]:
+    parts = value.split(",")
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError("expected 'x,y' in meters")
+    try:
+        return (float(parts[0]), float(parts[1]))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("x and y must be numbers") from exc
+
+
+def build_progress_callback(
+    *,
+    quiet: bool = False,
+    description: str = "Simulating",
+) -> Callable[[int, int], None] | None:
+    """Build a stderr progress callback for CLI runs, or None when disabled.
+
+    Progress is suppressed with --quiet, on non-TTY stderr, or when tqdm is
+    not installed, matching the optional-tqdm behavior of batch-export.
+    """
+    if quiet or not sys.stderr.isatty():
+        return None
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        return None
+
+    state: dict[str, object] = {}
+
+    def _progress(step: int, total: int) -> None:
+        bar = state.get("bar")
+        if bar is None:
+            bar = tqdm(total=total, desc=description, unit="frame", file=sys.stderr)
+            state["bar"] = bar
+        bar.update(step - bar.n)
+        if step >= total:
+            bar.close()
+            state.pop("bar", None)
+
+    return _progress
+
+
 def _load_simulation_constants(path: str) -> SimulationConstants:
-    lowered = path.lower()
-    if lowered.endswith(".json"):
-        return SimulationConstants.from_json(path)
-    return SimulationConstants.from_yaml(path)
+    from argusnet.core.config import load_config_mapping, unknown_config_keys
+
+    mapping = load_config_mapping(path)
+    unknown = unknown_config_keys(mapping)
+    if unknown:
+        logging.getLogger(__name__).warning(
+            "Config file %s contains unrecognized keys (ignored): %s",
+            path,
+            ", ".join(unknown),
+        )
+    return SimulationConstants.from_dict(mapping)
 
 
 def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -5619,6 +6633,16 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         default=None,
         action=_TrackProvidedAction,
         help="Optional YAML or JSON simulation constants override file.",
+    )
+    parser.add_argument(
+        "--mission-profile",
+        choices=[
+            "sar_person_search",
+            "industrial_asset_survey",
+        ],
+        default=None,
+        action=_TrackProvidedAction,
+        help="Apply a civilian SAR or industrial-survey mission profile.",
     )
     parser.add_argument(
         "--map-preset",
@@ -5773,6 +6797,7 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         dest="mission_mode",
         choices=["scan_map_inspect", "target_tracking"],
         default="scan_map_inspect",
+        action=_TrackProvidedAction,
         help="Mission mode: scan_map_inspect (default) or target_tracking (legacy).",
     )
     parser.add_argument(
@@ -5780,6 +6805,7 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         dest="scan_coverage_threshold",
         type=float,
         default=0.70,
+        action=_TrackProvidedAction,
         help="Coverage fraction (0-1) to trigger LOCALIZING phase (default: 0.70).",
     )
     parser.add_argument(
@@ -5787,7 +6813,116 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         dest="poi_count",
         type=int,
         default=3,
+        action=_TrackProvidedAction,
         help="Number of auto-generated POIs in scan_map_inspect mode (default: 3).",
+    )
+    parser.add_argument(
+        "--coverage-resolution-m",
+        dest="coverage_resolution_m",
+        type=float,
+        default=50.0,
+        action=_TrackProvidedAction,
+        help=(
+            "Scan/reconstruction grid cell size in meters (default: 50). Smaller values "
+            "give a higher-resolution coverage map and denser 3-D reconstruction."
+        ),
+    )
+    parser.add_argument(
+        "--cooperative-search",
+        dest="cooperative_search",
+        action=_TrackProvidedAction,
+        nargs=0,
+        const=True,
+        default=False,
+        help=(
+            "Launch all drones from one grounded origin and fan them out into disjoint "
+            "angular wedges of the search area, then fuse their localizations against the "
+            "shared coverage map (scan_map_inspect mode only). Default off."
+        ),
+    )
+    parser.add_argument(
+        "--search-origin",
+        dest="search_origin_m",
+        type=_parse_xy_pair,
+        default=None,
+        action=_TrackProvidedAction,
+        metavar="X,Y",
+        help=(
+            "Common launch origin for cooperative search as 'x,y' in meters. "
+            "Defaults to the center of the search area."
+        ),
+    )
+    parser.add_argument(
+        "--adaptive-search",
+        dest="adaptive_search",
+        action=_TrackProvidedAction,
+        nargs=0,
+        const=True,
+        default=False,
+        help=(
+            "Adaptive refinement of --cooperative-search: drones redirect via "
+            "wedge-aware, coverage-balanced frontier selection, and the wedge origin "
+            "re-anchors from the fused team estimate. No-op without --cooperative-search."
+        ),
+    )
+    parser.add_argument(
+        "--frontier-exploration",
+        dest="frontier_exploration",
+        action=_TrackProvidedAction,
+        nargs=0,
+        const=True,
+        default=False,
+        help=(
+            "Drive scanning drones with frontier-based cell selection instead of fixed "
+            "lawnmower sectors (scan_map_inspect mode only). Default off."
+        ),
+    )
+    parser.add_argument(
+        "--occlusion-aware-mapping",
+        dest="occlusion_aware_mapping",
+        action=_TrackProvidedAction,
+        nargs=0,
+        const=True,
+        default=False,
+        help=(
+            "Gate scan coverage/reconstruction with environment LOS and route mission redirects "
+            "around hard obstacles (scan_map_inspect mode only). Default off."
+        ),
+    )
+    parser.add_argument(
+        "--enforce-flight-envelope",
+        dest="enforce_flight_envelope",
+        action=_TrackProvidedAction,
+        nargs=0,
+        const=True,
+        default=False,
+        help=(
+            "Clamp drone motion to FlightEnvelope limits (max acceleration, bank-derived "
+            "turn radius, climb/descent rates). Default off to preserve legacy kinematics."
+        ),
+    )
+    parser.add_argument(
+        "--safety-blocking",
+        action=_TrackProvidedAction,
+        nargs=0,
+        const=True,
+        default=False,
+        help=(
+            "Apply the hard post-deconfliction safety monitor, clamp unsafe commands, "
+            "and hold drones when the monitor enters Abort."
+        ),
+    )
+    parser.add_argument(
+        "--realtime",
+        action="store_true",
+        default=False,
+        help="Pace simulation frames to wall-clock time for live viewing.",
+    )
+    parser.add_argument(
+        "--continuous",
+        action="store_true",
+        default=False,
+        help="Run continuously at wall-clock pace until interrupted (implies --realtime).",
     )
     parser.add_argument(
         "--streaming",
@@ -5837,6 +6972,75 @@ def run_from_args(args: argparse.Namespace) -> SimulationResult:
     )
     dt = args.dt if _arg_was_provided(args, "dt") else constants.dynamics.default_dt_s
     seed = args.seed if _arg_was_provided(args, "seed") else constants.dynamics.default_seed
+    profile_override_fields = {
+        "map_preset",
+        "target_motion_preset",
+        "drone_mode_preset",
+        "terrain_source",
+        "terrain_preset",
+        "terrain_seed",
+        "dem_path",
+        "dem_crs",
+        "detail_strength",
+        "terrain_resolution_m",
+        "season_month",
+        "weather_preset",
+        "clean_terrain",
+        "platform_preset",
+        "ground_station_count",
+        "target_count",
+        "drone_count",
+        "mission_mode",
+        "scan_coverage_threshold",
+        "poi_count",
+        "coverage_resolution_m",
+        "cooperative_search",
+        "search_origin_m",
+        "adaptive_search",
+        "enforce_flight_envelope",
+        "safety_blocking",
+        "frontier_exploration",
+        "occlusion_aware_mapping",
+    }
+    arg_to_profile_field = {
+        "target_motion": "target_motion_preset",
+        "drone_mode": "drone_mode_preset",
+        "ground_stations": "ground_station_count",
+    }
+    mission_profile_overrides: dict[str, object] = {}
+    for arg_name in (
+        "map_preset",
+        "target_motion",
+        "drone_mode",
+        "terrain_source",
+        "terrain_preset",
+        "terrain_seed",
+        "dem_path",
+        "dem_crs",
+        "detail_strength",
+        "terrain_resolution_m",
+        "season_month",
+        "weather_preset",
+        "clean_terrain",
+        "platform_preset",
+        "ground_stations",
+        "target_count",
+        "drone_count",
+        "mission_mode",
+        "scan_coverage_threshold",
+        "poi_count",
+        "coverage_resolution_m",
+        "cooperative_search",
+        "search_origin_m",
+        "adaptive_search",
+        "enforce_flight_envelope",
+        "safety_blocking",
+        "frontier_exploration",
+        "occlusion_aware_mapping",
+    ):
+        field_name = arg_to_profile_field.get(arg_name, arg_name)
+        if field_name in profile_override_fields and _arg_was_provided(args, arg_name):
+            mission_profile_overrides[field_name] = getattr(args, arg_name)
     return simulate(
         steps=steps,
         dt=dt,
@@ -5867,8 +7071,21 @@ def run_from_args(args: argparse.Namespace) -> SimulationResult:
         mission_mode=getattr(args, "mission_mode", "scan_map_inspect"),
         scan_coverage_threshold=getattr(args, "scan_coverage_threshold", 0.70),
         poi_count=getattr(args, "poi_count", 3),
+        coverage_resolution_m=getattr(args, "coverage_resolution_m", 50.0),
+        cooperative_search=getattr(args, "cooperative_search", False),
+        search_origin_m=getattr(args, "search_origin_m", None),
+        adaptive_search=getattr(args, "adaptive_search", False),
+        enforce_flight_envelope=getattr(args, "enforce_flight_envelope", False),
+        safety_blocking=getattr(args, "safety_blocking", False),
+        realtime=getattr(args, "realtime", False),
+        continuous=getattr(args, "continuous", False),
+        frontier_exploration=getattr(args, "frontier_exploration", False),
+        occlusion_aware_mapping=getattr(args, "occlusion_aware_mapping", False),
         streaming=getattr(args, "streaming", False),
         max_frames_in_memory=getattr(args, "max_frames_in_memory", 500),
+        mission_profile=getattr(args, "mission_profile", None),
+        mission_profile_overrides=mission_profile_overrides,
+        progress=build_progress_callback(quiet=getattr(args, "quiet", False)),
     )
 
 

@@ -48,6 +48,8 @@ fn request(observation_count: usize) -> IngestFrameRequest {
         node_states,
         observations,
         truths,
+        target_metadata: Vec::new(),
+        safety_events: Vec::new(),
     }
 }
 

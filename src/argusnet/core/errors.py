@@ -7,4 +7,3 @@ class ArgusNetError(Exception):
 
 class ValidationError(ArgusNetError):
     """Raised when runtime data violates a strict validation contract."""
-

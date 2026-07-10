@@ -128,9 +128,142 @@ CANONICAL_SCENARIOS: tuple[BenchmarkConfig, ...] = (
         },
         tags=("benchmark_slow",),
     ),
+    _config(
+        "sar_person_search",
+        mission_type="search",
+        difficulty=0.50,
+        duration_s=90.0,
+        map_preset="medium",
+        terrain_preset="alpine",
+        drone_count=3,
+        sim_args={"mission_profile": "sar_person_search"},
+        tags=("mission-profile", "domain:search_and_rescue", "benchmark_slow"),
+    ),
+    _config(
+        "industrial_asset_survey",
+        mission_type="inspection",
+        difficulty=0.50,
+        duration_s=120.0,
+        map_preset="medium",
+        terrain_preset="urban_flat",
+        drone_count=2,
+        sim_args={"mission_profile": "industrial_asset_survey"},
+        tags=("mission-profile", "domain:industrial_survey", "benchmark_slow"),
+    ),
 )
 
-_SCENARIOS_BY_NAME = {config.name: config for config in CANONICAL_SCENARIOS}
+OPERATIONAL_PRESETS: tuple[BenchmarkConfig, ...] = (
+    _config(
+        "mapping",
+        mission_type="mapping",
+        difficulty=0.35,
+        duration_s=90.0,
+        map_preset="medium",
+        terrain_preset="default",
+        drone_count=3,
+        sim_args={
+            "mission_mode": "scan_map_inspect",
+            "target_count": 0,
+            "poi_count": 0,
+            "scan_coverage_threshold": 0.65,
+            "frontier_exploration": True,
+        },
+        tags=("preset", "balanced-roadmap"),
+    ),
+    _config(
+        "inspection",
+        mission_type="inspection",
+        difficulty=0.45,
+        duration_s=120.0,
+        map_preset="medium",
+        terrain_preset="urban_flat",
+        drone_count=3,
+        sim_args={
+            "mission_mode": "scan_map_inspect",
+            "target_count": 0,
+            "poi_count": 5,
+            "scan_coverage_threshold": 0.55,
+            "frontier_exploration": True,
+        },
+        tags=("preset", "balanced-roadmap"),
+    ),
+    _config(
+        "target_tracking",
+        mission_type="target_tracking",
+        difficulty=0.45,
+        duration_s=90.0,
+        map_preset="medium",
+        terrain_preset="default",
+        drone_count=4,
+        sim_args={
+            "mission_mode": "target_tracking",
+            "target_count": 4,
+            "target_motion": "mixed",
+            "drone_mode": "search",
+            "ground_stations": 6,
+        },
+        tags=("preset", "balanced-roadmap"),
+    ),
+    _config(
+        "loss_of_signal",
+        mission_type="resilience",
+        difficulty=0.60,
+        duration_s=90.0,
+        map_preset="medium",
+        terrain_preset="alpine",
+        drone_count=3,
+        sim_args={
+            "mission_mode": "scan_map_inspect",
+            "target_count": 0,
+            "poi_count": 3,
+            "scan_coverage_threshold": 0.55,
+            "weather_preset": "heavy_rain",
+            "safety_blocking": True,
+        },
+        tags=("preset", "resilience", "balanced-roadmap"),
+    ),
+    _config(
+        "large_map",
+        mission_type="mapping",
+        difficulty=0.70,
+        duration_s=180.0,
+        map_preset="regional",
+        terrain_preset="alpine",
+        drone_count=6,
+        sim_args={
+            "mission_mode": "scan_map_inspect",
+            "target_count": 0,
+            "poi_count": 6,
+            "scan_coverage_threshold": 0.65,
+            "frontier_exploration": True,
+            "streaming": True,
+            "max_frames_in_memory": 500,
+        },
+        tags=("preset", "large-map", "balanced-roadmap"),
+    ),
+    _config(
+        "stress",
+        mission_type="system_stress",
+        difficulty=0.80,
+        duration_s=120.0,
+        map_preset="medium",
+        terrain_preset="urban_flat",
+        drone_count=6,
+        sim_args={
+            "mission_mode": "target_tracking",
+            "target_count": 8,
+            "target_motion": "mixed",
+            "drone_mode": "mixed",
+            "ground_stations": 10,
+            "weather_preset": "heavy_rain",
+        },
+        tags=("preset", "stress", "balanced-roadmap"),
+    ),
+)
+
+ALL_SCENARIOS: tuple[BenchmarkConfig, ...] = (*CANONICAL_SCENARIOS, *OPERATIONAL_PRESETS)
+
+_SCENARIOS_BY_NAME = {config.name: config for config in ALL_SCENARIOS}
 
 
 def benchmark_fast(duration_s: float | None = 5.0) -> list[BenchmarkConfig]:
@@ -156,7 +289,7 @@ def benchmark_slow(seeds: Sequence[int] = CANONICAL_SEEDS) -> list[BenchmarkConf
 
 
 def list_scenarios() -> list[str]:
-    return [config.name for config in CANONICAL_SCENARIOS]
+    return [config.name for config in ALL_SCENARIOS]
 
 
 def get_scenario(name: str) -> BenchmarkConfig:

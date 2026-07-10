@@ -160,4 +160,3 @@ def write_summary(
         json.dump(summary.to_dict(), handle, indent=2, sort_keys=True)
         handle.write("\n")
     return output_path
-

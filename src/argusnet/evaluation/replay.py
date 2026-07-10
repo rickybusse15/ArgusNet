@@ -252,15 +252,23 @@ def write_streaming_replay_document(
         json.dump(summary, out)
         out.write(', "frames": [\n')
         first = True
-        with open(jsonl_path, encoding="utf-8") as src:
-            for raw_line in src:
-                line = raw_line.rstrip()
-                if not line:
-                    continue
-                if not first:
-                    out.write(",\n")
-                out.write(line)
-                first = False
+        index_path = jsonl_path.with_suffix(".session.json")
+        source_paths = [jsonl_path]
+        if index_path.exists():
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            source_paths = [
+                jsonl_path.parent / segment["path"] for segment in index.get("segments", [])
+            ]
+        for source_path in source_paths:
+            with open(source_path, encoding="utf-8") as src:
+                for raw_line in src:
+                    line = raw_line.rstrip()
+                    if not line:
+                        continue
+                    if not first:
+                        out.write(",\n")
+                    out.write(line)
+                    first = False
         out.write("\n]}")
 
 

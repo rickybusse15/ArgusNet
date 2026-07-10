@@ -8,6 +8,7 @@ version = "1.0.0"
 description = "World models for autonomous aerial mapping, inspection, localization, and spatial memory"
 requires-python = ">=3.9"
 dependencies = [
+    "cryptography>=42.0,<46.0",
     "grpcio>=1.78,<2.0",
     "numpy>=2.0,<3.0",
     "protobuf>=6.31.1,<7.0",
@@ -20,6 +21,7 @@ dependencies = [
 live = ["paho-mqtt>=2.0"]
 export = ["mcap-protobuf-support>=0.5", "fiona>=1.9,<2.0"]
 dev = [
+    "tqdm>=4.66",
     "ruff>=0.3",
     "mypy>=1.9",
     "pytest>=8.0",
@@ -47,6 +49,7 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = ["*_pb2.py", "*_pb2_grpc.py"]
 
 [tool.ruff.lint]
 select = [
@@ -61,7 +64,11 @@ select = [
 
 # ---------- mypy ----------
 [tool.mypy]
-python_version = "3.10"
+# Set to the newest supported interpreter (not the minimum, which is 3.9/3.10
+# elsewhere) because numpy's bundled stubs use PEP 695 `type` statements that
+# mypy can only parse under python_version >= 3.12, regardless of what syntax
+# our own source uses.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
@@ -126,6 +133,10 @@ module = [
     "argusnet.planning.coordination",
     "argusnet.planning.inspection",
     "argusnet.planning.deconfliction",
+    "argusnet.world.procedural",
+    # Compiles dict-based profile overrides into ScenarioOptions (already
+    # duck-typed/ignored above), so the same relaxed typing applies here.
+    "argusnet.mission.profiles",
 ]
 ignore_errors = true
 

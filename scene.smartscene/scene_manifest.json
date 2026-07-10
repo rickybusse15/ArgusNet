@@ -33,13 +33,6 @@
       "semantic_kind": "buildings",
       "asset_path": "overlays/buildings.glb",
       "style_id": "buildings"
-    },
-    {
-      "id": "walls",
-      "kind": "overlay",
-      "semantic_kind": "buildings",
-      "asset_path": "overlays/walls.glb",
-      "style_id": "walls"
     }
   ],
   "replay": {

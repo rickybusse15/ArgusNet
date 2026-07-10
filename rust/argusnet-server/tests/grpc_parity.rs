@@ -94,6 +94,8 @@ fn request_from_json(value: &Value) -> IngestFrameRequest {
             .iter()
             .map(truth_from_json)
             .collect(),
+        target_metadata: Vec::new(),
+        safety_events: Vec::new(),
     }
 }
 
@@ -550,6 +552,8 @@ async fn track_response_includes_mode_probability_cv() {
                 }),
                 timestamp_s: t,
             }],
+            target_metadata: Vec::new(),
+            safety_events: Vec::new(),
         };
         let response = client
             .ingest_frame(request)
@@ -654,6 +658,8 @@ async fn track_response_contributing_nodes_populated() {
                 }),
                 timestamp_s: t,
             }],
+            target_metadata: Vec::new(),
+            safety_events: Vec::new(),
         };
         let response = client
             .ingest_frame(request)

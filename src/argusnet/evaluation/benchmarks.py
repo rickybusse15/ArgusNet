@@ -142,8 +142,7 @@ class ScenarioFamily:
     ) -> list[BenchmarkConfig]:
         """Return benchmark configs for all scenarios in deterministic order."""
         return [
-            scenario.to_config(seeds=seeds, duration_s=duration_s)
-            for scenario in self.scenarios
+            scenario.to_config(seeds=seeds, duration_s=duration_s) for scenario in self.scenarios
         ]
 
 
@@ -307,8 +306,7 @@ _FAMILY_DEFINITIONS: tuple[ScenarioFamily, ...] = (
     ScenarioFamily(
         family_id="inspection_workflow",
         purpose=(
-            "Verify map-relative POI assignment, dwell completion, egress, "
-            "and inspection events."
+            "Verify map-relative POI assignment, dwell completion, egress, and inspection events."
         ),
         primary_pass_criteria=_INSPECTION_CRITERIA,
         scenarios=(

@@ -79,6 +79,52 @@ class BatteryModel:
     def usable_capacity_wh(self) -> float:
         return self.capacity_wh * (1.0 - self.reserve_fraction)
 
+    def return_home_cost_wh(
+        self,
+        position: Vector3,
+        home: Vector3,
+        wind_vector_mps: Vector3 | None = None,
+    ) -> float:
+        """Energy (Wh) to fly from *position* back to *home*, wind-aware.
+
+        Horizontal cost uses the effective groundspeed along the homeward
+        track at fixed cruise airspeed: a headwind lowers groundspeed and
+        raises the cost, a tailwind lowers it. Groundspeed is floored at 25%
+        of cruise so a strong headwind cannot produce an unbounded estimate.
+        Vertical cost uses the climb/descent model for the altitude delta.
+        """
+        position = np.asarray(position, dtype=float)
+        home = np.asarray(home, dtype=float)
+        delta_xy = home[:2] - position[:2]
+        distance_m = float(np.linalg.norm(delta_xy))
+        ground_speed = max(self.cruise_speed_m_per_s, 0.01)
+        if wind_vector_mps is not None and distance_m > 1e-6:
+            track = delta_xy / distance_m
+            along_track_wind = float(np.dot(np.asarray(wind_vector_mps, dtype=float)[:2], track))
+            ground_speed = max(
+                self.cruise_speed_m_per_s + along_track_wind,
+                0.25 * self.cruise_speed_m_per_s,
+            )
+        travel_wh = self.travel_power_w * (distance_m / ground_speed) / 3600.0
+        return travel_wh + self.climb_cost_wh(float(home[2] - position[2]))
+
+    def dynamic_reserve_wh(
+        self,
+        position: Vector3,
+        home: Vector3,
+        wind_vector_mps: Vector3 | None = None,
+        safety_margin: float = 1.25,
+    ) -> float:
+        """Reserve energy (Wh) needed to return home safely from *position*.
+
+        The wind- and terrain-aware return cost is scaled by *safety_margin*;
+        the static reserve (``capacity_wh * reserve_fraction``) acts as a
+        floor so the dynamic estimate can only make the reserve more
+        conservative, never less.
+        """
+        dynamic = self.return_home_cost_wh(position, home, wind_vector_mps) * safety_margin
+        return max(dynamic, self.capacity_wh * self.reserve_fraction)
+
 
 @dataclass
 class BatteryState:

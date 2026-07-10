@@ -13,8 +13,12 @@ name = "argusnet-viewer"
 path = "src/main.rs"
 
 [features]
-# Enables live gRPC frame ingestion from argusnet-server (future streaming path).
-live-stream = ["dep:argusnet-proto"]
+# live-stream is on by default so a plain `cargo build --workspace` keeps the
+# viewer's `--live` flag. Build with `--no-default-features` for a lean,
+# replay-only viewer without the tokio/tonic/proto dependencies.
+default = ["live-stream"]
+# Enables live gRPC frame ingestion from argusnet-server (--live <endpoint>).
+live-stream = ["dep:argusnet-proto", "dep:tokio", "dep:tonic"]
 
 [dependencies]
 anyhow.workspace = true
@@ -27,3 +31,5 @@ egui_extras = "0.29"
 egui_plot = "0.29"
 image = { version = "0.25", default-features = false, features = ["png"] }
 argusnet-proto = { path = "../argusnet-proto", optional = true }
+tokio = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }

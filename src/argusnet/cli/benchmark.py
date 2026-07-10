@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,7 +71,17 @@ def run_from_args(args: argparse.Namespace) -> None:
     aggregate_inputs: dict[str, list[BenchmarkRun]] = {}
     run_summaries: list[dict] = []
 
-    for config, seed in iter_config_runs(configs):
+    scheduled_runs = list(iter_config_runs(configs))
+    run_iterator = scheduled_runs
+    if not getattr(args, "quiet", False) and sys.stderr.isatty():
+        try:
+            from tqdm import tqdm
+
+            run_iterator = tqdm(scheduled_runs, desc="Benchmarking", unit="run", file=sys.stderr)
+        except ImportError:
+            pass
+
+    for config, seed in run_iterator:
         run_dir = output_dir / config.name / f"seed-{seed}"
         run = BenchmarkRun(config=config, seed=seed)
         try:

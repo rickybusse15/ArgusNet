@@ -4,7 +4,8 @@ use argusnet_proto::pb::world_model_service_server::{WorldModelService, WorldMod
 use argusnet_proto::pb::{
     GetConfigRequest, GetConfigResponse, HealthRequest, HealthResponse, IngestFrameRequest,
     IngestFrameResponse, LatencyHistogram, LatestFrameRequest, LatestFrameResponse,
-    MissionStatusRequest, MissionStatusResponse, ResetRequest, ResetResponse,
+    MissionStatusRequest, MissionStatusResponse, ResetRequest, ResetResponse, WatchFramesRequest,
+    WatchFramesV2Request, WatchFramesV2Response,
 };
 use chrono::Utc;
 use clap::{Parser, Subcommand};
@@ -14,7 +15,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Instant;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tonic::{transport::Server, Request, Response, Status};
@@ -255,9 +256,22 @@ enum EngineCommand {
 #[derive(Clone, Debug)]
 struct EngineHandle {
     sender: mpsc::Sender<EngineCommand>,
+    /// Fan-out of every processed frame for passive WatchFrames subscribers.
+    frame_events: broadcast::Sender<FrameEvent>,
+    session_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct FrameEvent {
+    sequence: u64,
+    response: IngestFrameResponse,
 }
 
 impl EngineHandle {
+    fn subscribe_frames(&self) -> broadcast::Receiver<FrameEvent> {
+        self.frame_events.subscribe()
+    }
+
     async fn ingest(&self, request: IngestFrameRequest) -> Result<IngestFrameResponse, Status> {
         let (tx, rx) = oneshot::channel();
         self.sender
@@ -359,9 +373,9 @@ fn convert_request(request: IngestFrameRequest) -> Result<ConvertedRequest, Stat
     Ok((timestamp_s, node_states, observations, truths))
 }
 
-fn frame_response(frame: PlatformFrame) -> IngestFrameResponse {
+fn frame_response(frame: &PlatformFrame) -> IngestFrameResponse {
     IngestFrameResponse {
-        frame: Some(argusnet_proto::frame_to_pb(frame)),
+        frame: Some(argusnet_proto::frame_to_pb_ref(frame)),
     }
 }
 
@@ -379,7 +393,12 @@ fn latency_histogram_to_pb(histogram: &Histogram<u64>) -> LatencyHistogram {
 async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
     let mut engine = TrackingEngine::new(config.clone()).map_err(|error| anyhow!(error))?;
     let started_at_utc = Utc::now().to_rfc3339();
+    let session_id = format!("argusnetd-{started_at_utc}");
     let (sender, mut receiver) = mpsc::channel::<EngineCommand>(64);
+    // Capacity bounds memory per lagging watcher; slow subscribers skip
+    // frames (handled in watch_frames) instead of back-pressuring ingest.
+    let (frame_events, _) = broadcast::channel::<FrameEvent>(64);
+    let frame_events_publisher = frame_events.clone();
 
     tokio::spawn(async move {
         let mut processed_frame_count = 0_u64;
@@ -389,6 +408,8 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
             match command {
                 EngineCommand::Ingest { request, response } => {
                     let t0 = Instant::now();
+                    let target_metadata = request.target_metadata.clone();
+                    let safety_events = request.safety_events.clone();
                     let reply = match convert_request(request) {
                         Ok((timestamp_s, node_states, observations, truths)) => {
                             let frame =
@@ -397,18 +418,30 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                             let elapsed_us =
                                 t0.elapsed().as_micros().clamp(1, u64::MAX as u128) as u64;
                             let _ = ingest_latency_us.record(elapsed_us);
-                            Ok(frame_response(frame))
+                            let mut response = frame_response(&frame);
+                            if let Some(pb_frame) = response.frame.as_mut() {
+                                pb_frame.target_metadata = target_metadata;
+                                pb_frame.safety_events = safety_events;
+                            }
+                            Ok(response)
                         }
                         Err(error) => Err(error),
                     };
+                    // Fan the processed frame out to passive watchers; the
+                    // clone is only paid when someone is subscribed.
+                    if let Ok(ref processed) = reply {
+                        if frame_events_publisher.receiver_count() > 0 {
+                            let _ = frame_events_publisher.send(FrameEvent {
+                                sequence: processed_frame_count,
+                                response: processed.clone(),
+                            });
+                        }
+                    }
                     let _ = response.send(reply);
                 }
                 EngineCommand::Latest { response } => {
                     let reply = Ok(LatestFrameResponse {
-                        frame: engine
-                            .latest_frame()
-                            .cloned()
-                            .map(argusnet_proto::frame_to_pb),
+                        frame: engine.latest_frame().map(argusnet_proto::frame_to_pb_ref),
                     });
                     let _ = response.send(reply);
                 }
@@ -436,7 +469,7 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                             .map(argusnet_proto::node_health_to_pb)
                             .collect(),
                         mean_frame_rate_hz: engine.mean_frame_rate_hz(),
-                        mean_ingest_latency_s: if ingest_latency_us.len() > 0 {
+                        mean_ingest_latency_s: if !ingest_latency_us.is_empty() {
                             ingest_latency_us.mean() / 1_000_000.0
                         } else {
                             0.0
@@ -471,7 +504,11 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
         }
     });
 
-    Ok(EngineHandle { sender })
+    Ok(EngineHandle {
+        sender,
+        frame_events,
+        session_id,
+    })
 }
 
 #[derive(Clone)]
@@ -520,6 +557,108 @@ impl WorldModelService for GrpcTrackerService {
 
         Ok(Response::new(
             Box::pin(ReceiverStream::new(receiver)) as Self::TrackStreamStream
+        ))
+    }
+
+    type WatchFramesStream =
+        Pin<Box<dyn Stream<Item = Result<IngestFrameResponse, Status>> + Send + 'static>>;
+
+    async fn watch_frames(
+        &self,
+        _request: Request<WatchFramesRequest>,
+    ) -> Result<Response<Self::WatchFramesStream>, Status> {
+        let mut frames = self.engine.subscribe_frames();
+        let (sender, receiver) = mpsc::channel::<Result<IngestFrameResponse, Status>>(16);
+
+        tokio::spawn(async move {
+            loop {
+                match frames.recv().await {
+                    Ok(event) => {
+                        if sender.send(Ok(event.response)).await.is_err() {
+                            break; // watcher disconnected
+                        }
+                    }
+                    // Watcher fell behind the bounded fan-out buffer: skip the
+                    // missed frames and continue with the most recent ones.
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        Ok(Response::new(
+            Box::pin(ReceiverStream::new(receiver)) as Self::WatchFramesStream
+        ))
+    }
+
+    type WatchFramesV2Stream =
+        Pin<Box<dyn Stream<Item = Result<WatchFramesV2Response, Status>> + Send + 'static>>;
+
+    async fn watch_frames_v2(
+        &self,
+        request: Request<WatchFramesV2Request>,
+    ) -> Result<Response<Self::WatchFramesV2Stream>, Status> {
+        let options = request.into_inner();
+        if !options.max_rate_hz.is_finite() || options.max_rate_hz < 0.0 {
+            return Err(Status::invalid_argument(
+                "max_rate_hz must be finite and non-negative",
+            ));
+        }
+        let mut frames = self.engine.subscribe_frames();
+        let session_id = self.engine.session_id.clone();
+        let (sender, receiver) = mpsc::channel::<Result<WatchFramesV2Response, Status>>(16);
+
+        tokio::spawn(async move {
+            let min_interval = if options.max_rate_hz > 0.0 {
+                Some(std::time::Duration::from_secs_f64(
+                    1.0 / options.max_rate_hz,
+                ))
+            } else {
+                None
+            };
+            let mut last_sent = None::<Instant>;
+            let mut dropped = 0_u64;
+            loop {
+                match frames.recv().await {
+                    Ok(mut event) => {
+                        if event.sequence <= options.resume_after_sequence {
+                            continue;
+                        }
+                        if let (Some(interval), Some(previous)) = (min_interval, last_sent) {
+                            if previous.elapsed() < interval {
+                                dropped += 1;
+                                continue;
+                            }
+                        }
+                        let Some(mut frame) = event.response.frame.take() else {
+                            continue;
+                        };
+                        if !options.include_truth {
+                            frame.truths.clear();
+                        }
+                        let source_timestamp_s = frame.timestamp_s;
+                        let response = WatchFramesV2Response {
+                            sequence: event.sequence,
+                            source_timestamp_s,
+                            dropped_since_last: std::mem::take(&mut dropped),
+                            session_id: session_id.clone(),
+                            frame: Some(frame),
+                        };
+                        if sender.send(Ok(response)).await.is_err() {
+                            break;
+                        }
+                        last_sent = Some(Instant::now());
+                    }
+                    Err(broadcast::error::RecvError::Lagged(count)) => {
+                        dropped = dropped.saturating_add(count);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        Ok(Response::new(
+            Box::pin(ReceiverStream::new(receiver)) as Self::WatchFramesV2Stream
         ))
     }
 

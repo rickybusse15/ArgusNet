@@ -87,5 +87,75 @@ fn bench_ingest(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_fusion, bench_ingest);
+fn multi_target_frame(
+    nodes: &[NodeState],
+    target_count: usize,
+    timestamp_s: f64,
+) -> (Vec<BearingObservation>, Vec<TruthState>) {
+    let mut observations = Vec::with_capacity(target_count * 2);
+    let mut truths = Vec::with_capacity(target_count);
+    for index in 0..target_count {
+        let target = Vector3::new(
+            400.0 + ((index % 20) as f64) * 150.0 + 10.0 * timestamp_s,
+            300.0 + ((index / 20) as f64) * 150.0 + 5.0 * timestamp_s,
+            120.0 + ((index % 5) as f64) * 15.0,
+        );
+        let target_id = format!("target-{index:03}");
+        for observer in nodes.iter().take(2) {
+            observations.push(observation(observer, &target_id, target, timestamp_s));
+        }
+        truths.push(TruthState {
+            target_id,
+            position: target,
+            velocity: Vector3::new(10.0, 5.0, 0.0),
+            timestamp_s,
+        });
+    }
+    (observations, truths)
+}
+
+/// Steady-state ingest with many concurrent tracks: warms the engine, then
+/// measures successive frame ingests against a mature track table.
+fn bench_ingest_steady_state(c: &mut Criterion) {
+    let nodes = vec![node(0, 0.0, 0.0), node(1, 4000.0, 0.0)];
+    for mode in [AssociationMode::Labeled, AssociationMode::GNN] {
+        for target_count in [50_usize, 150] {
+            let name = format!("ingest_steady_{mode:?}_{target_count}t");
+            c.bench_function(&name, |b| {
+                b.iter_custom(|iters| {
+                    let mut config = TrackerConfig::default();
+                    config.data_association_mode = mode.clone();
+                    let mut engine = TrackingEngine::new(config).unwrap();
+                    let mut timestamp = 0.0;
+                    for _ in 0..20 {
+                        let (obs, truths) = multi_target_frame(&nodes, target_count, timestamp);
+                        engine.ingest_frame(timestamp, nodes.clone(), obs, truths);
+                        timestamp += 0.25;
+                    }
+                    // Pre-generate all measured frames so input construction
+                    // (string formatting, Vec allocation) stays untimed.
+                    let frames: Vec<_> = (0..iters)
+                        .map(|step| {
+                            let t = timestamp + step as f64 * 0.25;
+                            let (obs, truths) = multi_target_frame(&nodes, target_count, t);
+                            (t, nodes.clone(), obs, truths)
+                        })
+                        .collect();
+                    let start = std::time::Instant::now();
+                    for (t, frame_nodes, obs, truths) in frames {
+                        black_box(engine.ingest_frame(t, frame_nodes, obs, truths));
+                    }
+                    start.elapsed()
+                })
+            });
+        }
+    }
+}
+
+criterion_group!(
+    benches,
+    bench_fusion,
+    bench_ingest,
+    bench_ingest_steady_state
+);
 criterion_main!(benches);

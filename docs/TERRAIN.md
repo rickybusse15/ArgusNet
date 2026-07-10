@@ -35,6 +35,13 @@ decisions. Physics and path planning are not the viewer's responsibility.
 - `dem`: GeoTIFF DEM promoted into a runtime `TerrainLayer`.
 - `hybrid`: DEM base elevation plus deterministic procedural detail.
 
+Procedural terrain also exposes a richer landscape path through
+`procedural_terrain_grid()` and `build_landscape()`. The rich grid preserves
+the legacy height-grid contract while adding deterministic semantic masks:
+`water`, `ridge`, `valley`, `steep_slope`, `lowland`, and `road`. These masks
+feed land-cover generation, obstacle suitability checks, scene styling, and
+additive replay metadata.
+
 **Purpose:** Authoritative source for:
 - height queries used by altitude clamping (`clamp_altitude`)
 - gradient/slope used by path planning and obstacle detection

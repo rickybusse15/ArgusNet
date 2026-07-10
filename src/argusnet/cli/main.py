@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
+import os
+import subprocess
 import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -18,6 +21,9 @@ COMMAND_VALIDATE_SCENE = "validate-scene"
 COMMAND_VALIDATE_REPLAY = "validate-replay"
 COMMAND_INFO = "info"
 COMMAND_DUMP_CONFIG = "dump-config"
+COMMAND_LIVE = "live"
+COMMAND_DIAGNOSE = "diagnose"
+COMMAND_SCORECARD = "scorecard"
 
 if TYPE_CHECKING:
     from argusnet.core.frames import ENUOrigin
@@ -34,6 +40,9 @@ ALL_COMMANDS = frozenset(
         COMMAND_VALIDATE_REPLAY,
         COMMAND_INFO,
         COMMAND_DUMP_CONFIG,
+        COMMAND_LIVE,
+        COMMAND_DIAGNOSE,
+        COMMAND_SCORECARD,
     }
 )
 
@@ -138,6 +147,16 @@ def _iter_with_progress(
     return tqdm(items, desc=description, unit="format")
 
 
+def _export_format_choices() -> list[str]:
+    """Supported export formats, sourced from the registry when importable."""
+    try:
+        from argusnet.evaluation.export import EXPORT_FORMATS
+
+        return list(EXPORT_FORMATS)
+    except ImportError:
+        return ["geojson", "czml", "foxglove", "kml", "kmz", "gpx", "geopackage", "shapefile"]
+
+
 def build_parser(command: str | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="argusnet",
@@ -218,7 +237,7 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
     export_parser.add_argument(
         "--format",
         required=True,
-        choices=["geojson", "czml", "foxglove", "kml", "kmz", "gpx", "geopackage", "shapefile"],
+        choices=_export_format_choices(),
         help="Export format.",
     )
     export_parser.add_argument(
@@ -253,7 +272,10 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
     batch_export_parser.add_argument(
         "--formats",
         required=True,
-        help="Comma-separated export formats, for example 'geojson,kml,kmz'.",
+        help=(
+            "Comma-separated export formats, for example 'geojson,kml,kmz'. "
+            f"Supported: {', '.join(_export_format_choices())}."
+        ),
     )
     batch_export_parser.add_argument(
         "--output-dir", required=True, help="Directory for exported outputs."
@@ -341,6 +363,19 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
     _add_logging_args(info_parser)
     info_parser.add_argument("path", help="Path to the replay JSON file.")
 
+    # --- scorecard ---
+    scorecard_parser = subparsers.add_parser(
+        COMMAND_SCORECARD,
+        help="Generate a compact system scorecard from a replay JSON document.",
+    )
+    _add_logging_args(scorecard_parser)
+    scorecard_parser.add_argument("--replay", required=True, help="Path to replay JSON file.")
+    scorecard_parser.add_argument("--scenario-name", default=None)
+    scorecard_parser.add_argument("--mission-type", default="unknown")
+    scorecard_parser.add_argument("--difficulty", type=float, default=0.0)
+    scorecard_parser.add_argument("--seed", type=int, default=None)
+    scorecard_parser.add_argument("--output", default=None, help="Optional JSON output path.")
+
     # --- dump-config ---
     dump_config_parser = subparsers.add_parser(
         COMMAND_DUMP_CONFIG,
@@ -357,6 +392,64 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="Optional output file path (default: stdout).",
+    )
+
+    live_parser = subparsers.add_parser(
+        COMMAND_LIVE,
+        help="Start a daemon, continuous simulation, rotating recording, and live viewer.",
+    )
+    _add_logging_args(live_parser)
+    live_parser.add_argument("--scene", default="scene.smartscene")
+    live_parser.add_argument("--endpoint", default="127.0.0.1:50051")
+    live_parser.add_argument("--target-count", type=int, default=12)
+    live_parser.add_argument("--drone-count", type=int, default=8)
+    # Live defaults to a medium map so the 8 drones stay within sensor range of
+    # their targets and the viewer shows fused tracks; larger presets scatter
+    # targets out of range (see docs/usage.md target-tracking notes).
+    live_parser.add_argument("--map-preset", default="medium")
+    live_parser.add_argument("--dt", type=float, default=1.0 / 30.0)
+    live_parser.add_argument("--recording", default="argusnet-live.json")
+    live_parser.add_argument(
+        "--mission-mode",
+        choices=["scan_map_inspect", "target_tracking"],
+        default="target_tracking",
+        help="Live mission mode. Use scan_map_inspect for a live search/mapping run.",
+    )
+    live_parser.add_argument(
+        "--cooperative-search",
+        action="store_true",
+        help="Cooperative search (scan_map_inspect): one grounded origin, angular wedges, "
+        "team co-localization.",
+    )
+    live_parser.add_argument(
+        "--adaptive-search",
+        action="store_true",
+        help="Adaptive refinement of --cooperative-search (coverage-balanced wedge redirection).",
+    )
+    live_parser.add_argument(
+        "--view-mode",
+        choices=["real-world", "scan-map", "split"],
+        default=None,
+        help=(
+            "Initial viewer mode. Defaults to split when cooperative search is on, else real-world."
+        ),
+    )
+    live_parser.add_argument(
+        "--connect-only",
+        action="store_true",
+        help="Do not start a local daemon or simulator; only open the viewer.",
+    )
+
+    diagnose_parser = subparsers.add_parser(
+        COMMAND_DIAGNOSE,
+        help="Check local ArgusNet install, assets, schemas, Rust binaries, and basic readiness.",
+    )
+    _add_logging_args(diagnose_parser)
+    diagnose_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit machine-readable JSON diagnostics.",
     )
 
     return parser
@@ -416,8 +509,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     if command == COMMAND_INFO:
         _run_info(args)
         return
+    if command == COMMAND_SCORECARD:
+        _run_scorecard(args)
+        return
     if command == COMMAND_DUMP_CONFIG:
         _run_dump_config(args)
+        return
+    if command == COMMAND_DIAGNOSE:
+        _run_diagnose(args)
         return
     if command == COMMAND_INGEST:
         _run_ingest(args)
@@ -434,6 +533,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     if command == COMMAND_BENCHMARK:
         _import_benchmark_module().run_from_args(args)
         return
+    if command == COMMAND_LIVE:
+        _run_live(args)
+        return
 
     # Default: sim
     if getattr(args, "dry_run", False):
@@ -445,6 +547,168 @@ def main(argv: Sequence[str] | None = None) -> None:
 # ---------------------------------------------------------------------------
 # New commands
 # ---------------------------------------------------------------------------
+
+
+def _run_scorecard(args: argparse.Namespace) -> None:
+    replay_path = Path(args.replay)
+    if not replay_path.exists():
+        raise SystemExit(f"Error: {replay_path} does not exist.")
+    with replay_path.open(encoding="utf-8") as fh:
+        replay_doc = json.load(fh)
+
+    from argusnet.evaluation.scorecard import scorecard_from_replay
+
+    scorecard = scorecard_from_replay(
+        replay_doc,
+        scenario_name=args.scenario_name,
+        mission_type=args.mission_type,
+        difficulty=args.difficulty,
+        seed=args.seed,
+    ).to_dict()
+    rendered = json.dumps(scorecard, indent=2, sort_keys=True)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
+        print(f"Scorecard written to {args.output}")
+    else:
+        print(rendered)
+
+
+def _diagnostic_check(name: str, ok: bool, detail: str = "") -> dict[str, object]:
+    return {"name": name, "ok": bool(ok), "detail": detail}
+
+
+def _run_diagnose(args: argparse.Namespace) -> None:
+    root = Path(__file__).resolve().parents[3]
+    checks: list[dict[str, object]] = []
+
+    checks.append(_diagnostic_check("workspace", root.exists(), str(root)))
+    checks.append(_diagnostic_check("python", True, sys.version.split()[0]))
+
+    dependency_imports = {
+        **{module_name: module_name for module_name in PROJECT_DEPENDENCY_MODULES},
+        "protobuf": "google.protobuf",
+    }
+    for dependency_name in sorted(PROJECT_DEPENDENCY_MODULES):
+        import_name = dependency_imports[dependency_name]
+        found = importlib.util.find_spec(import_name) is not None
+        detail = "" if import_name == dependency_name else f"import {import_name}"
+        checks.append(_diagnostic_check(f"python dependency: {dependency_name}", found, detail))
+
+    schema_path = root / "docs/replay-schema.json"
+    checks.append(_diagnostic_check("replay schema", schema_path.exists(), str(schema_path)))
+
+    scenes_dir = root / "scenes"
+    scene_count = len(list(scenes_dir.glob("*/scene_manifest.json"))) if scenes_dir.exists() else 0
+    checks.append(_diagnostic_check("scene packages", scene_count > 0, f"{scene_count} found"))
+
+    daemon = root / "target/debug/argusnetd"
+    viewer = root / "target/debug/argusnet-viewer"
+    checks.append(_diagnostic_check("Rust daemon binary", daemon.exists(), str(daemon)))
+    checks.append(_diagnostic_check("Rust viewer binary", viewer.exists(), str(viewer)))
+
+    cargo_toml = root / "Cargo.toml"
+    checks.append(
+        _diagnostic_check("Rust workspace manifest", cargo_toml.exists(), str(cargo_toml))
+    )
+
+    pyproject = root / "pyproject.toml"
+    checks.append(_diagnostic_check("Python project manifest", pyproject.exists(), str(pyproject)))
+
+    overall_ok = all(bool(check["ok"]) for check in checks)
+    payload = {"ok": overall_ok, "checks": checks}
+    if args.as_json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    print("ArgusNet diagnostics")
+    for check in checks:
+        status = "OK" if check["ok"] else "FAIL"
+        detail = f" - {check['detail']}" if check.get("detail") else ""
+        print(f"  {status}: {check['name']}{detail}")
+    if not overall_ok:
+        raise SystemExit("Diagnostics found missing or unavailable components.")
+
+
+def _run_live(args: argparse.Namespace) -> None:
+    root = Path(__file__).resolve().parents[3]
+    daemon = root / "target/debug/argusnetd"
+    viewer = root / "target/debug/argusnet-viewer"
+    required = (viewer,) if args.connect_only else (daemon, viewer)
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        raise SystemExit(
+            "Live binaries are missing. Build with "
+            "`cargo build -p argusnet-server -p argusnet-viewer --features "
+            f"argusnet-viewer/live-stream`. Missing: {', '.join(missing)}"
+        )
+
+    children: list[subprocess.Popen] = []
+    try:
+        if not args.connect_only:
+            children.append(
+                subprocess.Popen(
+                    [str(daemon), "serve", "--listen", args.endpoint],
+                    cwd=root,
+                )
+            )
+            environment = {**os.environ, "ARGUSNET_ENDPOINT": args.endpoint}
+            sim_cmd = [
+                sys.executable,
+                "-m",
+                "argusnet",
+                "sim",
+                "--continuous",
+                "--streaming",
+                "--safety-blocking",
+                "--enforce-flight-envelope",
+                "--mission-mode",
+                args.mission_mode,
+                "--map-preset",
+                args.map_preset,
+                "--drone-count",
+                str(args.drone_count),
+                "--dt",
+                str(args.dt),
+                "--replay",
+                args.recording,
+            ]
+            if args.mission_mode == "target_tracking":
+                sim_cmd += ["--target-count", str(args.target_count)]
+            if args.cooperative_search:
+                sim_cmd.append("--cooperative-search")
+            if args.adaptive_search:
+                sim_cmd.append("--adaptive-search")
+            children.append(subprocess.Popen(sim_cmd, cwd=root, env=environment))
+        # Default the viewer to split when running a cooperative search so the
+        # live reconstruction and team co-localization are visible immediately.
+        view_mode = args.view_mode or ("split" if args.cooperative_search else "real-world")
+        viewer_process = subprocess.Popen(
+            [
+                str(viewer),
+                "--scene",
+                args.scene,
+                "--live",
+                args.endpoint,
+                "--view-mode",
+                view_mode,
+            ],
+            cwd=root,
+        )
+        children.append(viewer_process)
+        viewer_process.wait()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for child in reversed(children):
+            if child.poll() is None:
+                child.terminate()
+        for child in reversed(children):
+            if child.poll() is None:
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
 
 
 def _run_validate_scene(args: argparse.Namespace) -> None:
@@ -604,32 +868,35 @@ def _run_sim_dry_run(args: argparse.Namespace) -> None:
     def _provided(dest: str) -> bool:
         return dest in provided
 
-    constants = None
-    try:
-        from argusnet.core.config import SimulationConstants
+    from argusnet.core.config import (
+        SimulationConstants,
+        load_config_mapping,
+        unknown_config_keys,
+    )
 
-        config_file = getattr(args, "config_file", None)
-        if config_file:
-            lowered = str(config_file).lower()
-            if lowered.endswith(".json"):
-                constants = SimulationConstants.from_json(config_file)
-            else:
-                constants = SimulationConstants.from_yaml(config_file)
-        else:
-            constants = SimulationConstants.default()
-    except Exception:
-        constants = None
+    config_file = getattr(args, "config_file", None)
+    if config_file:
+        try:
+            mapping = load_config_mapping(str(config_file))
+            constants = SimulationConstants.from_dict(mapping)
+        except (OSError, ValueError, TypeError) as exc:
+            raise SystemExit(f"Dry run failed: unable to load config file: {exc}") from exc
+        unknown = unknown_config_keys(mapping)
+        if unknown:
+            print(
+                f"Warning: config file contains unrecognized keys (ignored): {', '.join(unknown)}",
+                file=sys.stderr,
+            )
+    else:
+        constants = SimulationConstants.default()
 
     print("=== Simulation Dry Run ===")
     duration_s = getattr(args, "duration_s", "default")
     dt_s = getattr(args, "dt", "default")
     seed = getattr(args, "seed", "default")
-    if constants is not None:
-        duration_s = (
-            duration_s if _provided("duration_s") else constants.dynamics.default_duration_s
-        )
-        dt_s = dt_s if _provided("dt") else constants.dynamics.default_dt_s
-        seed = seed if _provided("seed") else constants.dynamics.default_seed
+    duration_s = duration_s if _provided("duration_s") else constants.dynamics.default_duration_s
+    dt_s = dt_s if _provided("dt") else constants.dynamics.default_dt_s
+    seed = seed if _provided("seed") else constants.dynamics.default_seed
     print(f"  Duration:    {duration_s} s")
     print(f"  Time step:   {dt_s} s")
     print(f"  Seed:        {seed}")
@@ -641,15 +908,10 @@ def _run_sim_dry_run(args: argparse.Namespace) -> None:
     if getattr(args, "config_file", None):
         print(f"  Config file: {args.config_file}")
 
-    try:
-        if constants is None:
-            raise RuntimeError("constants unavailable")
-        print("\n  Config summary:")
-        print(f"    Sensor bearing std: {constants.sensor.drone_base_bearing_std_rad:.4f} rad")
-        print(f"    Drone base AGL:     {constants.dynamics.drone_base_agl_m:.0f} m")
-        print(f"    Max stale steps:    {constants.dynamics.default_max_stale_steps}")
-    except Exception:
-        pass
+    print("\n  Config summary:")
+    print(f"    Sensor bearing std: {constants.sensor.drone_base_bearing_std_rad:.4f} rad")
+    print(f"    Drone base AGL:     {constants.dynamics.drone_base_agl_m:.0f} m")
+    print(f"    Max stale steps:    {constants.dynamics.default_max_stale_steps}")
 
     print("\nDry run complete — no simulation executed.")
 

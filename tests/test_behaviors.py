@@ -22,6 +22,7 @@ import numpy as np
 from argusnet.simulation.behaviors import (
     BEHAVIOR_PRESETS,
     CompositeTrajectory,
+    EnvelopeLimitedTrajectory,
     EvasiveBehavior,
     FlightEnvelope,
     LoiterBehavior,
@@ -467,6 +468,75 @@ class TestDeterminism(unittest.TestCase):
         self.assertFalse(
             np.allclose(pos_a, pos_b), "Different seeds should produce different trajectories."
         )
+
+
+class TestEnvelopeLimitedTrajectory(unittest.TestCase):
+    DT_S = 0.25
+
+    @staticmethod
+    def _step_change_reference(t: float) -> tuple[np.ndarray, np.ndarray]:
+        """Instant 25 m/s direction reversal at t=10 — unreachable physically."""
+        if t < 10.0:
+            return np.array([25.0 * t, 0.0, 100.0]), np.array([25.0, 0.0, 0.0])
+        return np.array([250.0 - 25.0 * (t - 10.0), 0.0, 100.0]), np.array([-25.0, 0.0, 0.0])
+
+    def _rollout(self, envelope: FlightEnvelope) -> list[tuple[np.ndarray, np.ndarray]]:
+        limited = EnvelopeLimitedTrajectory(self._step_change_reference, envelope=envelope)
+        return [limited(step * self.DT_S) for step in range(int(20.0 / self.DT_S))]
+
+    def test_velocity_delta_respects_max_acceleration(self):
+        envelope = FlightEnvelope(max_acceleration_mps2=5.0)
+        states = self._rollout(envelope)
+        for (_, v_prev), (_, v_next) in zip(states, states[1:], strict=False):
+            dv = float(np.linalg.norm(v_next - v_prev))
+            self.assertLessEqual(dv, envelope.max_acceleration_mps2 * self.DT_S + 1e-9)
+
+    def test_horizontal_speed_respects_max_speed(self):
+        envelope = FlightEnvelope(max_speed_mps=20.0)
+        for _, velocity in self._rollout(envelope):
+            self.assertLessEqual(math.hypot(velocity[0], velocity[1]), 20.0 + 1e-9)
+
+    def test_climb_and_descent_rates_are_clamped(self):
+        envelope = FlightEnvelope(max_climb_rate_mps=4.0, max_descent_rate_mps=2.0)
+
+        def climb_step(t: float) -> tuple[np.ndarray, np.ndarray]:
+            z = 100.0 if t < 5.0 else 500.0
+            return np.array([0.0, 0.0, z]), np.zeros(3)
+
+        limited = EnvelopeLimitedTrajectory(climb_step, envelope=envelope)
+        for step in range(80):
+            _, velocity = limited(step * self.DT_S)
+            self.assertLessEqual(velocity[2], 4.0 + 1e-9)
+            self.assertGreaterEqual(velocity[2], -2.0 - 1e-9)
+
+    def test_repeated_evaluation_at_same_time_is_stable(self):
+        limited = EnvelopeLimitedTrajectory(self._step_change_reference)
+        limited(0.0)
+        pos_a, vel_a = limited(0.25)
+        pos_b, vel_b = limited(0.25)
+        np.testing.assert_array_equal(pos_a, pos_b)
+        np.testing.assert_array_equal(vel_a, vel_b)
+
+    def test_reset_state_restarts_tracking(self):
+        limited = EnvelopeLimitedTrajectory(self._step_change_reference)
+        first_pos, _ = limited(0.0)
+        limited(0.25)
+        limited.reset_state()
+        pos_after_reset, _ = limited(0.0)
+        np.testing.assert_array_equal(first_pos, pos_after_reset)
+
+    def test_tracks_reference_when_within_limits(self):
+        """A gentle reference inside the envelope should be followed closely."""
+
+        def gentle(t: float) -> tuple[np.ndarray, np.ndarray]:
+            return np.array([10.0 * t, 0.0, 100.0]), np.array([10.0, 0.0, 0.0])
+
+        limited = EnvelopeLimitedTrajectory(gentle, envelope=FlightEnvelope())
+        for step in range(200):
+            t = step * self.DT_S
+            position, _ = limited(t)
+            ref_position, _ = gentle(t)
+            self.assertLess(float(np.linalg.norm(position - ref_position)), 5.0)
 
 
 if __name__ == "__main__":

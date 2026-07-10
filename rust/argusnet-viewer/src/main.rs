@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use argusnet_viewer::{render_headless, CameraPreset, HeadlessRenderOptions};
+use argusnet_viewer::{render_headless, CameraPreset, HeadlessRenderOptions, ViewMode};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -41,6 +41,24 @@ struct Args {
     height: u32,
     #[arg(long, default_value_t = 30)]
     fps: u32,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = ViewMode::RealWorld,
+        help = "Initial view for the interactive viewer: real-world terrain, scan-map \
+                reconstruction, or split (terrain left / reconstruction right)."
+    )]
+    view_mode: ViewMode,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Start the replay timeline playing immediately (fills the scan-map \
+                reconstruction without pressing Space)."
+    )]
+    autoplay: bool,
+    #[cfg(feature = "live-stream")]
+    #[arg(long, help = "Subscribe to live frames from this argusnetd endpoint.")]
+    live: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -56,8 +74,13 @@ fn main() -> Result<()> {
                 width: args.width,
                 height: args.height,
                 fps: args.fps,
+                view_mode: args.view_mode,
             },
         );
     }
-    argusnet_viewer::run(args.scene)
+    #[cfg(feature = "live-stream")]
+    if let Some(endpoint) = args.live {
+        return argusnet_viewer::run_live(args.scene, endpoint, args.view_mode, args.autoplay);
+    }
+    argusnet_viewer::run(args.scene, args.view_mode, args.autoplay)
 }
