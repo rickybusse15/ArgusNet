@@ -128,6 +128,16 @@ def shade_terrain_colors(
                 color = np.array([0.74, 0.78, 0.70], dtype=np.float32)
             elif cover == int(LandCoverClass.FOREST):
                 color = np.array([0.62, 0.72, 0.52], dtype=np.float32)
+            elif cover == int(LandCoverClass.SCRUB):
+                color = np.array([0.68, 0.68, 0.42], dtype=np.float32)
+            elif cover == int(LandCoverClass.WETLAND):
+                color = np.array([0.52, 0.67, 0.58], dtype=np.float32)
+            elif cover == int(LandCoverClass.ROCKY):
+                color = np.array([0.58, 0.55, 0.50], dtype=np.float32)
+            elif cover == int(LandCoverClass.SNOW):
+                color = np.array([0.90, 0.94, 0.96], dtype=np.float32)
+            elif cover == int(LandCoverClass.ROAD):
+                color = np.array([0.64, 0.62, 0.57], dtype=np.float32)
         main_shade = max(float(np.dot(normals[index], light)), 0.0)
         fill_shade = max(float(np.dot(normals[index], fill_light)), 0.0) * 0.15
         shade = 0.65 + (0.25 * main_shade) + fill_shade

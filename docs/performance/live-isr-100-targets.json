@@ -1,0 +1,35 @@
+{
+  "benchmark_id": "live-isr-100-targets-30hz-v1",
+  "description": "Reference end-to-end workload for ArgusNet live ISR acceptance.",
+  "workload": {
+    "target_count": 100,
+    "drone_count": 12,
+    "ground_station_count": 16,
+    "input_rate_hz": 30,
+    "duration_s": 1800,
+    "association_mode": "gnn",
+    "include_truth_on_operator_stream": false
+  },
+  "queues": {
+    "server_broadcast_frames": 64,
+    "subscriber_frames": 16,
+    "viewer_handoff_frames": 256,
+    "viewer_history_frames": 10000
+  },
+  "acceptance": {
+    "minimum_sustained_input_hz": 30,
+    "p95_end_to_end_latency_ms": 33,
+    "p99_end_to_end_latency_ms": 66,
+    "maximum_nominal_viewer_lag_frames": 2,
+    "bounded_memory_required": true,
+    "explicit_drop_accounting_required": true
+  },
+  "result_metadata_required": [
+    "timestamp_utc",
+    "os",
+    "cpu",
+    "memory_bytes",
+    "build_profile",
+    "git_revision"
+  ]
+}

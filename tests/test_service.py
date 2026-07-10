@@ -12,7 +12,15 @@ import numpy as np
 import argusnet.cli.main as cli_module
 from argusnet.adapters.argusnet_grpc import TrackerConfig, TrackingService
 from argusnet.core.config import SimulationConstants
-from argusnet.core.types import BearingObservation, NodeState, TruthState, to_jsonable, vec3
+from argusnet.core.types import (
+    BearingObservation,
+    NodeState,
+    SafetyValidationResult,
+    TargetMetadata,
+    TruthState,
+    to_jsonable,
+    vec3,
+)
 from argusnet.evaluation.replay import load_replay_document
 from argusnet.simulation.sim import (
     AERIAL_TARGET_MIN_AGL_M,
@@ -947,6 +955,114 @@ class TestTrackStream(unittest.TestCase):
         frames = list(self.service.track_stream(self._frame_inputs(steps=4)))
         timestamps = [f.timestamp_s for f in frames]
         self.assertEqual(timestamps, sorted(timestamps))
+
+
+class TestWatchFrames(unittest.TestCase):
+    """watch_frames() passively receives frames ingested by another client."""
+
+    def test_watcher_receives_frames_ingested_by_another_client(self) -> None:
+        import threading
+        import time as time_module
+
+        ingestor = TrackingService(retain_history=False)
+        self.addCleanup(ingestor.close)
+        watcher = TrackingService(endpoint=ingestor.endpoint, spawn_local=False)
+        self.addCleanup(watcher.close)
+
+        received: list = []
+        subscribed = threading.Event()
+
+        def _watch() -> None:
+            stream = watcher.watch_frames()
+            subscribed.set()
+            for frame in stream:
+                received.append(frame)
+                if len(received) >= 3:
+                    break
+
+        thread = threading.Thread(target=_watch, daemon=True)
+        thread.start()
+        self.assertTrue(subscribed.wait(timeout=5.0))
+        # The broadcast only delivers frames processed after the subscription
+        # attaches server-side; a short grace period avoids missing the first.
+        time_module.sleep(0.3)
+
+        target_pos = vec3(50.0, 40.0, 20.0)
+        for step in range(6):
+            t = float(step) * 0.25
+            nodes = [
+                NodeState("gs-a", vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, t),
+                NodeState("gs-b", vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), False, t),
+            ]
+            obs = [
+                bearing("gs-a", "asset-a", nodes[0].position, target_pos, t),
+                bearing("gs-b", "asset-a", nodes[1].position, target_pos, t),
+            ]
+            ingestor.ingest_frame(
+                timestamp_s=t,
+                node_states=nodes,
+                observations=obs,
+                truths=[TruthState("asset-a", target_pos, vec3(0.0, 0.0, 0.0), t)],
+            )
+
+        thread.join(timeout=10.0)
+        self.assertGreaterEqual(len(received), 3)
+        timestamps = [frame.timestamp_s for frame in received]
+        self.assertEqual(timestamps, sorted(timestamps))
+        # Watched frames are full PlatformFrames with fused content.
+        self.assertTrue(any(frame.observations for frame in received))
+
+    def test_v2_filters_truth_and_preserves_operational_events(self) -> None:
+        import threading
+        import time as time_module
+
+        ingestor = TrackingService(retain_history=False)
+        self.addCleanup(ingestor.close)
+        watcher = TrackingService(endpoint=ingestor.endpoint, spawn_local=False)
+        self.addCleanup(watcher.close)
+        received: list = []
+
+        def _watch() -> None:
+            for item in watcher.watch_frames_v2(include_truth=False):
+                received.append(item)
+                break
+
+        thread = threading.Thread(target=_watch, daemon=True)
+        thread.start()
+        time_module.sleep(0.3)
+        t = 1.0
+        target = vec3(50.0, 40.0, 20.0)
+        nodes = [
+            NodeState("gs-a", vec3(0, 0, 0), vec3(0, 0, 0), False, t),
+            NodeState("gs-b", vec3(100, 0, 0), vec3(0, 0, 0), False, t),
+        ]
+        ingestor.ingest_frame(
+            t,
+            nodes,
+            [bearing("gs-a", "asset-a", nodes[0].position, target, t)],
+            [TruthState("asset-a", target, vec3(0, 0, 0), t)],
+            target_metadata=[TargetMetadata("asset-a", operator_label="Asset A", priority=3)],
+            safety_events=[
+                SafetyValidationResult(
+                    "safety-1",
+                    "drone-a",
+                    False,
+                    t,
+                    violations=("min_agl",),
+                    clamped=True,
+                    reason="abort",
+                )
+            ],
+        )
+        thread.join(timeout=5.0)
+        self.assertEqual(1, len(received))
+        frame, sequence, dropped, session_id = received[0]
+        self.assertEqual([], frame.truths)
+        self.assertEqual("Asset A", frame.target_metadata[0].operator_label)
+        self.assertEqual(("min_agl",), frame.safety_events[0].violations)
+        self.assertGreater(sequence, 0)
+        self.assertEqual(0, dropped)
+        self.assertTrue(session_id.startswith("argusnetd-"))
 
 
 if __name__ == "__main__":

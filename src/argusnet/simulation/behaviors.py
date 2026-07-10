@@ -61,6 +61,111 @@ class FlightEnvelope:
         bank_rad = math.radians(max(self.max_bank_angle_deg, 1.0))
         return speed_mps**2 / (g * math.tan(bank_rad))
 
+    @property
+    def max_lateral_acceleration_mps2(self) -> float:
+        """Bank-limited lateral acceleration: a_lat = g * tan(bank_angle)."""
+        g = 9.80665
+        bank_rad = math.radians(max(self.max_bank_angle_deg, 1.0))
+        return g * math.tan(bank_rad)
+
+
+class EnvelopeLimitedTrajectory:
+    """Stateful wrapper enforcing :class:`FlightEnvelope` limits on a trajectory.
+
+    Wraps any ``TrajectoryFn`` and tracks its reference position with a
+    pursuit integrator. Each step the commanded velocity toward the reference
+    is clamped to the envelope's horizontal speed, climb/descent rates, total
+    acceleration, and bank-derived lateral acceleration (which enforces the
+    minimum turn radius at the current speed).
+
+    Evaluation times are assumed monotonically non-decreasing, as produced by
+    the simulation loop; repeated evaluations at the same timestamp return the
+    cached state. Implements the ``reset_state`` protocol and forwards other
+    attribute access to the wrapped trajectory (mirroring
+    ``WeatherAdjustedTrajectory``).
+    """
+
+    def __init__(
+        self,
+        trajectory: TrajectoryFn,
+        envelope: FlightEnvelope | None = None,
+    ) -> None:
+        self.trajectory = trajectory
+        self.envelope = envelope if envelope is not None else FlightEnvelope()
+        self._last_t: float | None = None
+        self._position: np.ndarray | None = None
+        self._velocity: np.ndarray | None = None
+
+    def reset_state(self) -> None:
+        self._last_t = None
+        self._position = None
+        self._velocity = None
+        if hasattr(self.trajectory, "reset_state"):
+            self.trajectory.reset_state()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.trajectory, name)
+
+    def __call__(self, t: float) -> tuple[np.ndarray, np.ndarray]:
+        ref_position, ref_velocity = self.trajectory(t)
+        if self._last_t is None:
+            self._last_t = float(t)
+            self._position = np.asarray(ref_position, dtype=float).copy()
+            self._velocity = self._clamp_velocity(np.asarray(ref_velocity, dtype=float))
+            return self._position.copy(), self._velocity.copy()
+
+        dt = float(t) - self._last_t
+        if dt <= 1.0e-9:
+            return self._position.copy(), self._velocity.copy()
+
+        # Velocity that would reach the reference position within this step,
+        # clamped to achievable speed, then rate-limited by acceleration.
+        desired_velocity = self._clamp_velocity(
+            (np.asarray(ref_position, dtype=float) - self._position) / dt
+        )
+        acceleration = self._clamp_acceleration((desired_velocity - self._velocity) / dt)
+        new_velocity = self._clamp_velocity(self._velocity + acceleration * dt)
+        self._position = self._position + new_velocity * dt
+        self._velocity = new_velocity
+        self._last_t = float(t)
+        return self._position.copy(), self._velocity.copy()
+
+    def _clamp_velocity(self, velocity: np.ndarray) -> np.ndarray:
+        limited = np.asarray(velocity, dtype=float).copy()
+        speed_xy = math.hypot(float(limited[0]), float(limited[1]))
+        if speed_xy > self.envelope.max_speed_mps:
+            scale = self.envelope.max_speed_mps / speed_xy
+            limited[0] *= scale
+            limited[1] *= scale
+        limited[2] = min(
+            max(float(limited[2]), -self.envelope.max_descent_rate_mps),
+            self.envelope.max_climb_rate_mps,
+        )
+        return limited
+
+    def _clamp_acceleration(self, acceleration: np.ndarray) -> np.ndarray:
+        limited = np.asarray(acceleration, dtype=float).copy()
+        magnitude = float(np.linalg.norm(limited))
+        if magnitude > self.envelope.max_acceleration_mps2:
+            limited *= self.envelope.max_acceleration_mps2 / magnitude
+
+        # Bank-angle limit on the horizontal acceleration component that is
+        # perpendicular to the current track — this enforces the minimum turn
+        # radius r = v^2 / (g * tan(bank)) at the current speed.
+        velocity_xy = self._velocity[:2] if self._velocity is not None else np.zeros(2)
+        speed_xy = float(np.linalg.norm(velocity_xy))
+        if speed_xy > 1.0:
+            track = velocity_xy / speed_xy
+            accel_xy = limited[:2]
+            along = float(np.dot(accel_xy, track))
+            perpendicular = accel_xy - along * track
+            perpendicular_mag = float(np.linalg.norm(perpendicular))
+            lateral_max = self.envelope.max_lateral_acceleration_mps2
+            if perpendicular_mag > lateral_max:
+                perpendicular *= lateral_max / perpendicular_mag
+                limited[:2] = along * track + perpendicular
+        return limited
+
 
 @dataclass(frozen=True)
 class TurbulenceModel:

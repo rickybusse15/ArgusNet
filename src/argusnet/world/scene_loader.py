@@ -176,6 +176,11 @@ def _build_landcover_meshes_from_environment(environment) -> Sequence[SceneLayer
         int(LandCoverClass.FOREST): "landcover-forest",
         int(LandCoverClass.WATER): "landcover-water",
         int(LandCoverClass.URBAN): "landcover-urban",
+        int(LandCoverClass.SCRUB): "landcover-scrub",
+        int(LandCoverClass.WETLAND): "landcover-wetland",
+        int(LandCoverClass.ROCKY): "landcover-rocky",
+        int(LandCoverClass.SNOW): "landcover-snow",
+        int(LandCoverClass.ROAD): "landcover-road",
     }
     grouped = defaultdict(list)
     style = default_style()

@@ -6,6 +6,7 @@ more sensor footprints, and computes coverage completeness metrics.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -92,9 +93,40 @@ class CoverageMap:
         self,
         center_xy: tuple[float, float],
         radius_m: float,
+        visibility_predicate: Callable[[float, float], bool] | None = None,
+        los_max_samples: int | None = None,
     ) -> None:
-        fp = circular_footprint(center_xy, radius_m, self.bounds.resolution_m)
-        self.mark(fp)
+        # Vectorized equivalent of mark(circular_footprint(...)): same arange
+        # cell centres, same inclusive bounds test, same index truncation.
+        cx, cy = center_xy
+        res = self.bounds.resolution_m
+        xs = np.arange(cx - radius_m, cx + radius_m + res, res)
+        ys = np.arange(cy - radius_m, cy + radius_m + res, res)
+        grid_x, grid_y = np.meshgrid(xs, ys, indexing="ij")
+        inside = (grid_x - cx) ** 2 + (grid_y - cy) ** 2 <= radius_m**2
+        mark_x = grid_x[inside]
+        mark_y = grid_y[inside]
+        if visibility_predicate is not None and mark_x.size:
+            # Cap the number of (expensive) LOS tests per footprint by
+            # deterministically striding the candidate cells. Only cells that
+            # actually pass the predicate are marked, so the "marked ⟹ visible"
+            # invariant holds; the cap only bites at very fine resolutions where
+            # a footprint spans many cells. `None` / large cap ⇒ exact behavior.
+            if los_max_samples is not None and mark_x.size > los_max_samples:
+                stride = int(np.ceil(mark_x.size / los_max_samples))
+                mark_x = mark_x[::stride]
+                mark_y = mark_y[::stride]
+            visible = np.fromiter(
+                (
+                    bool(visibility_predicate(float(x_m), float(y_m)))
+                    for x_m, y_m in zip(mark_x, mark_y, strict=False)
+                ),
+                dtype=bool,
+                count=mark_x.size,
+            )
+            mark_x = mark_x[visible]
+            mark_y = mark_y[visible]
+        self._mark_xy_arrays(mark_x, mark_y)
 
     def mark_rectangular(
         self,
@@ -103,8 +135,31 @@ class CoverageMap:
         height_m: float,
         yaw_rad: float = 0.0,
     ) -> None:
-        fp = rectangular_footprint(center_xy, width_m, height_m, self.bounds.resolution_m, yaw_rad)
-        self.mark(fp)
+        cx, cy = center_xy
+        res = self.bounds.resolution_m
+        hw, hh = width_m / 2, height_m / 2
+        cos_y, sin_y = np.cos(yaw_rad), np.sin(yaw_rad)
+        us = np.arange(-hw, hw + res, res)
+        vs = np.arange(-hh, hh + res, res)
+        grid_u, grid_v = np.meshgrid(us, vs, indexing="ij")
+        xs = cx + cos_y * grid_u - sin_y * grid_v
+        ys = cy + sin_y * grid_u + cos_y * grid_v
+        self._mark_xy_arrays(xs.ravel(), ys.ravel())
+
+    def _mark_xy_arrays(self, xs: np.ndarray, ys: np.ndarray) -> None:
+        """Increment counts for cell-centre coordinate arrays (bounds-checked)."""
+        b = self.bounds
+        keep = (xs >= b.x_min_m) & (xs <= b.x_max_m) & (ys >= b.y_min_m) & (ys <= b.y_max_m)
+        if not keep.any():
+            return
+        xs = xs[keep]
+        ys = ys[keep]
+        nx, ny = self._count.shape
+        i = ((xs - b.x_min_m) / b.resolution_m).astype(np.int64)
+        j = ((ys - b.y_min_m) / b.resolution_m).astype(np.int64)
+        np.clip(i, 0, nx - 1, out=i)
+        np.clip(j, 0, ny - 1, out=j)
+        np.add.at(self._count, (i, j), 1)
 
     def count_at(self, x: float, y: float) -> int:
         i, j = self.bounds.xy_to_ij(x, y)

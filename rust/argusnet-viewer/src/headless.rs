@@ -7,6 +7,7 @@ use image::{ImageBuffer, Rgba, RgbaImage};
 
 use crate::replay::{ReplayDocument, ReplayFrame};
 use crate::schema::{Bounds2d, ScenePackage};
+use crate::state::ViewMode;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum CameraPreset {
@@ -24,6 +25,10 @@ pub struct HeadlessRenderOptions {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// RealWorld draws only the schematic; ScanMap/Split additionally draw the
+    /// accumulated scan-map reconstruction, so the believed terrain and team
+    /// co-localization are captured in the still / sequence (CI-renderable).
+    pub view_mode: ViewMode,
 }
 
 pub fn render_headless(scene_path: impl AsRef<Path>, options: HeadlessRenderOptions) -> Result<()> {
@@ -40,12 +45,18 @@ pub fn render_headless(scene_path: impl AsRef<Path>, options: HeadlessRenderOpti
         .context("failed to parse packaged replay.json")?;
 
     if let Some(output) = options.output.as_ref() {
+        // Render the final frame so a single still shows the complete mission
+        // (fully accumulated reconstruction, converged team localization).
+        let last_index = replay
+            .as_ref()
+            .map(|doc| doc.frames.len().saturating_sub(1))
+            .unwrap_or(0);
         let image = render_frame(
             &scene_package,
             replay.as_ref(),
-            replay.as_ref().and_then(|doc| doc.frames.first()),
+            replay.as_ref().and_then(|doc| doc.frames.last()),
             &options,
-            0,
+            last_index,
         );
         save_image(output, &image)?;
     }
@@ -122,6 +133,23 @@ fn render_frame(
         Rgba([48, 61, 72, 255]),
     );
 
+    // Scan-map reconstruction: accumulate every scanned cell up to this frame's
+    // time and draw it under the entities, colored by believed terrain height.
+    if options.view_mode != ViewMode::RealWorld {
+        if let (Some(replay), Some(frame)) = (replay, frame) {
+            draw_reconstruction(
+                &mut image,
+                replay,
+                frame.timestamp_s,
+                &view,
+                options.camera,
+                &scene_package.environment.bounds_xy_m,
+                options.width,
+                options.height,
+            );
+        }
+    }
+
     if let Some(replay) = replay {
         draw_track_trails(
             &mut image,
@@ -174,9 +202,108 @@ fn render_frame(
             );
             draw_circle(&mut image, x, y, 7, color);
         }
+
+        // Team co-localization: cyan beacon at the fused estimate with spokes to
+        // each contributing drone's own estimate.
+        if let Some(mission) = &frame.scan_mission_state {
+            if let Some(team) = &mission.team_localization {
+                let bounds = &scene_package.environment.bounds_xy_m;
+                let (tx, ty) = project_point(
+                    team.position,
+                    &view,
+                    options.camera,
+                    bounds,
+                    options.width,
+                    options.height,
+                );
+                let cyan = Rgba([27, 175, 122, 255]);
+                for est in &mission.localization_estimates {
+                    if !team
+                        .contributing_node_ids
+                        .iter()
+                        .any(|id| id == &est.drone_id)
+                    {
+                        continue;
+                    }
+                    let (ex, ey) = project_point(
+                        est.position_estimate,
+                        &view,
+                        options.camera,
+                        bounds,
+                        options.width,
+                        options.height,
+                    );
+                    draw_line(&mut image, tx, ty, ex, ey, Rgba([27, 175, 122, 150]));
+                }
+                draw_circle(&mut image, tx, ty, 6, cyan);
+                draw_circle(&mut image, tx, ty, 3, Rgba([255, 255, 255, 255]));
+            }
+        }
     }
 
     image
+}
+
+/// Height-mapped color ramp (blue-purple low → yellow-green high) for the
+/// reconstruction, mirroring the interactive viewer's palette.
+fn height_color(t: f32) -> Rgba<u8> {
+    let t = t.clamp(0.0, 1.0);
+    let stops = [
+        [68.0, 1.0, 84.0],
+        [59.0, 82.0, 139.0],
+        [33.0, 145.0, 140.0],
+        [94.0, 201.0, 98.0],
+        [253.0, 231.0, 37.0],
+    ];
+    let seg = t * (stops.len() - 1) as f32;
+    let i = (seg as usize).min(stops.len() - 2);
+    let f = seg - i as f32;
+    let lerp = |a: f32, b: f32| (a + (b - a) * f) as u8;
+    Rgba([
+        lerp(stops[i][0], stops[i + 1][0]),
+        lerp(stops[i][1], stops[i + 1][1]),
+        lerp(stops[i][2], stops[i + 1][2]),
+        220,
+    ])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_reconstruction(
+    image: &mut RgbaImage,
+    replay: &ReplayDocument,
+    up_to_ts: f32,
+    view: &Bounds2d,
+    camera: CameraPreset,
+    scene_bounds: &Bounds2d,
+    width: u32,
+    height: u32,
+) {
+    // Accumulate every scanned cell (x, y, terrain_height) up to this timestamp.
+    let mut cells: Vec<[f32; 3]> = Vec::new();
+    for frame in replay.frames.iter() {
+        if frame.timestamp_s > up_to_ts {
+            break;
+        }
+        let Some(mission) = &frame.scan_mission_state else {
+            continue;
+        };
+        for triple in mission.newly_scanned_cells.chunks_exact(3) {
+            cells.push([triple[0], triple[1], triple[2]]);
+        }
+    }
+    if cells.is_empty() {
+        return;
+    }
+    let (mut zmin, mut zmax) = (f32::INFINITY, f32::NEG_INFINITY);
+    for c in &cells {
+        zmin = zmin.min(c[2]);
+        zmax = zmax.max(c[2]);
+    }
+    let zspan = (zmax - zmin).max(1.0);
+    for c in &cells {
+        let (x, y) = project_point(*c, view, camera, scene_bounds, width, height);
+        draw_square(image, x, y, 2, height_color((c[2] - zmin) / zspan));
+    }
 }
 
 fn view_bounds(
@@ -461,6 +588,7 @@ mod tests {
                 width: 640,
                 height: 360,
                 fps: 30,
+                view_mode: ViewMode::RealWorld,
             },
         )
         .unwrap();
@@ -468,6 +596,98 @@ mod tests {
         assert!(still.exists());
         assert!(record_dir.join("frame_00000.png").exists());
         assert!(record_dir.join("frame_00001.png").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn headless_scan_map_renders_reconstruction_and_team_localization() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("argusnet-headless-scan-{suffix}"));
+        fs::create_dir_all(root.join("metadata")).unwrap();
+        fs::write(
+            root.join("scene_manifest.json"),
+            serde_json::to_string_pretty(&json!({
+                "format_version": "smartscene-v1",
+                "scene_id": "demo",
+                "bounds_xy_m": {"x_min_m": -100.0, "x_max_m": 100.0, "y_min_m": -100.0, "y_max_m": 100.0},
+                "runtime_crs": {},
+                "source_crs_id": "local",
+                "layers": [],
+                "replay": {"path": "replay.json"},
+                "metadata": {"environment": "metadata/environment.json", "style": "metadata/style.json"},
+                "build": {"source_kind": "synthetic"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("metadata/style.json"),
+            serde_json::to_string_pretty(&json!({"style_version": "smartstyle-v1", "layers": []}))
+                .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("metadata/environment.json"),
+            serde_json::to_string_pretty(&json!({
+                "runtime_crs": {},
+                "bounds_xy_m": {"x_min_m": -100.0, "x_max_m": 100.0, "y_min_m": -100.0, "y_max_m": 100.0}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("replay.json"),
+            serde_json::to_string_pretty(&json!({
+                "frames": [{
+                    "timestamp_s": 0.0,
+                    "tracks": [], "truths": [],
+                    "nodes": [{"node_id": "drone-a", "position": [0.0, 0.0, 30.0], "velocity": [0.0, 0.0, 0.0], "is_mobile": true}],
+                    "scan_mission_state": {
+                        "phase": "scanning", "scan_coverage_fraction": 0.5, "scan_coverage_threshold": 0.7,
+                        "localization_estimates": [{"drone_id": "drone-a", "timestamp_s": 0.0, "position_estimate": [10.0, 10.0, 30.0], "heading_rad": 0.0, "position_std_m": 2.0, "confidence": 0.9}],
+                        "poi_statuses": [], "completed_poi_count": 0, "total_poi_count": 0,
+                        "newly_scanned_cells": [-40.0, -40.0, 5.0, 0.0, 0.0, 60.0, 40.0, 40.0, 120.0],
+                        "team_localization": {"position": [5.0, 5.0, 30.0], "position_std_m": 1.0, "confidence": 0.95, "contributing_node_ids": ["drone-a"]}
+                    }
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let still = root.join("scan.png");
+        render_headless(
+            &root,
+            HeadlessRenderOptions {
+                output: Some(still.clone()),
+                record_dir: None,
+                camera: CameraPreset::TopDown,
+                target_id: None,
+                width: 400,
+                height: 400,
+                fps: 30,
+                view_mode: ViewMode::Split,
+            },
+        )
+        .unwrap();
+
+        let img = image::open(&still).unwrap().to_rgba8();
+        // Lowest scanned cell renders as the ramp's deep purple (68, 1, 84) — a
+        // color nothing else in the schematic draws, so it proves the
+        // reconstruction rendered.
+        let has_recon = img
+            .pixels()
+            .any(|p| p[0] < 120 && p[1] < 40 && p[2] > 60 && p[2] < 130);
+        assert!(has_recon, "expected reconstruction pixels in scan-map render");
+        // Team beacon renders cyan (27, 175, 122).
+        let has_team = img
+            .pixels()
+            .any(|p| p[0] < 70 && p[1] > 150 && p[2] > 90 && p[2] < 155);
+        assert!(has_team, "expected team-localization beacon in scan-map render");
 
         let _ = fs::remove_dir_all(root);
     }

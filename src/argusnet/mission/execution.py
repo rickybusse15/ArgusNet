@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, List, Optional
 
+from argusnet.core.types import PlatformHealthState, PlatformLinkState
+from argusnet.mission.health import PlatformHealthMonitor
 
 # -----------------------------
 # Core enums and data classes
@@ -23,9 +25,12 @@ class MissionStatus(str, Enum):
 class MissionTaskType(str, Enum):
     MAP_FRONTIER = "map_frontier"
     INSPECT_TARGET = "inspect_target"
+    INSPECT_POI = "inspect_poi"
     RELOCALIZE = "relocalize"
+    REVISIT = "revisit"
     RETURN_HOME = "return_home"
     HOLD = "hold"
+    OPERATOR_REVIEW = "operator_review"
 
 
 class MissionTaskStatus(str, Enum):
@@ -45,6 +50,8 @@ class SafetyStatus(str, Enum):
 class MissionConstraints:
     geofence_radius_m: float
     battery_reserve_fraction: float = 0.2
+    localization_confidence_min: float = 0.5
+    comms_required: bool = True
 
 
 @dataclass
@@ -53,7 +60,7 @@ class MissionTask:
     task_type: MissionTaskType
     priority: int = 1
     status: MissionTaskStatus = MissionTaskStatus.PENDING
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 @dataclass
@@ -64,15 +71,15 @@ class ExecutableCommand:
 @dataclass
 class SafetyDecision:
     status: SafetyStatus
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 @dataclass
 class MissionState:
     mission_id: str
     status: MissionStatus = MissionStatus.CREATED
-    tasks: List[MissionTask] = field(default_factory=list)
-    active_task: Optional[MissionTask] = None
+    tasks: list[MissionTask] = field(default_factory=list)
+    active_task: MissionTask | None = None
 
 
 # -----------------------------
@@ -88,6 +95,8 @@ class MissionExecutionContext:
     validate_command: Callable[[ExecutableCommand], SafetyDecision]
     execute_command: Callable[[ExecutableCommand], None]
     is_task_complete: Callable[[], bool] = field(default_factory=lambda: lambda: True)
+    get_platform_health: Callable[[], PlatformHealthState | None] | None = None
+    on_health_update: Callable[[PlatformHealthState], None] | None = None
 
 
 # -----------------------------
@@ -103,10 +112,18 @@ class MissionExecutor:
     It orchestrates them via injected callables.
     """
 
-    def __init__(self, state: MissionState, constraints: MissionConstraints, ctx: MissionExecutionContext):
+    def __init__(
+        self,
+        state: MissionState,
+        constraints: MissionConstraints,
+        ctx: MissionExecutionContext,
+    ):
         self.state = state
         self.constraints = constraints
         self.ctx = ctx
+        self.health_monitor = PlatformHealthMonitor(
+            battery_return_fraction=constraints.battery_reserve_fraction
+        )
 
     # -------------------------
     # Core loop step
@@ -115,7 +132,8 @@ class MissionExecutor:
     def step(self) -> None:
         """Execute one iteration of the mission loop."""
 
-        if self.state.status in {MissionStatus.COMPLETED, MissionStatus.ABORTED, MissionStatus.FAILED}:
+        terminal_states = {MissionStatus.COMPLETED, MissionStatus.ABORTED, MissionStatus.FAILED}
+        if self.state.status in terminal_states:
             return
 
         # 1. Ensure active state
@@ -131,13 +149,24 @@ class MissionExecutor:
             self._force_return_home("battery low")
             return
 
-        # 3. Localization gate
+        # 3. Data-link / platform health gate
+        if self.constraints.comms_required:
+            health = self._current_health()
+            if health is not None:
+                if health.link_state == PlatformLinkState.RETURNING_HOME.value:
+                    self._force_return_home(health.reason or "platform health requires return-home")
+                    return
+                if self.health_monitor.should_hold_or_return(health):
+                    self._activate_hold(health.reason or "platform health degraded")
+                    return
+
+        # 4. Localization gate
         localization_conf = self.ctx.get_localization_confidence()
-        if localization_conf < 0.5:
+        if localization_conf < self.constraints.localization_confidence_min:
             self._activate_relocalization()
             return
 
-        # 4. Select task
+        # 5. Select task
         task = self._select_task()
         if task is None:
             self.state.status = MissionStatus.COMPLETED
@@ -146,20 +175,20 @@ class MissionExecutor:
         self.state.active_task = task
         task.status = MissionTaskStatus.ACTIVE
 
-        # 5. Plan
+        # 6. Plan
         command = self.ctx.plan_task(task)
 
-        # 6. Safety validation
+        # 7. Safety validation
         decision = self.ctx.validate_command(command)
         if decision.status == SafetyStatus.REJECTED:
             task.status = MissionTaskStatus.BLOCKED
             task.reason = decision.reason
             return
 
-        # 7. Execute
+        # 8. Execute
         self.ctx.execute_command(command)
 
-        # 8. Mark complete when the injected completion check confirms it
+        # 9. Mark complete when the injected completion check confirms it
         if self.ctx.is_task_complete():
             task.status = MissionTaskStatus.COMPLETE
 
@@ -167,7 +196,7 @@ class MissionExecutor:
     # Helpers
     # -------------------------
 
-    def _select_task(self) -> Optional[MissionTask]:
+    def _select_task(self) -> MissionTask | None:
         pending = [t for t in self.state.tasks if t.status == MissionTaskStatus.PENDING]
         if not pending:
             return None
@@ -176,11 +205,50 @@ class MissionExecutor:
     def _force_return_home(self, reason: str) -> None:
         self.state.status = MissionStatus.RETURNING_HOME
         self.state.tasks = [
-            MissionTask(task_id="return_home", task_type=MissionTaskType.RETURN_HOME, priority=100)
+            MissionTask(
+                task_id="return_home",
+                task_type=MissionTaskType.RETURN_HOME,
+                priority=100,
+                reason=reason,
+            )
         ]
 
     def _activate_relocalization(self) -> None:
+        if any(
+            t.task_type == MissionTaskType.RELOCALIZE
+            and t.status in {MissionTaskStatus.PENDING, MissionTaskStatus.ACTIVE}
+            for t in self.state.tasks
+        ):
+            return
         self.state.tasks.insert(
             0,
             MissionTask(task_id="relocalize", task_type=MissionTaskType.RELOCALIZE, priority=100),
         )
+
+    def _activate_hold(self, reason: str) -> None:
+        if any(
+            t.task_type == MissionTaskType.HOLD
+            and t.status in {MissionTaskStatus.PENDING, MissionTaskStatus.ACTIVE}
+            for t in self.state.tasks
+        ):
+            return
+        self.state.tasks.insert(
+            0,
+            MissionTask(
+                task_id="hold_for_health",
+                task_type=MissionTaskType.HOLD,
+                priority=95,
+                reason=reason,
+            ),
+        )
+
+    def _current_health(self) -> PlatformHealthState | None:
+        if self.ctx.get_platform_health is None:
+            return None
+        raw = self.ctx.get_platform_health()
+        if raw is None:
+            return None
+        classified = self.health_monitor.classify(raw)
+        if self.ctx.on_health_update is not None:
+            self.ctx.on_health_update(classified)
+        return classified

@@ -7,6 +7,7 @@ are used by the localization engine.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -52,6 +53,8 @@ class WorldMap:
         drone_position: np.ndarray,
         terrain_height: float,
         footprint_radius_m: float,
+        visibility_predicate: Callable[[float, float], bool] | None = None,
+        los_max_samples: int | None = None,
     ) -> None:
         """Register one sensor footprint from a drone.
 
@@ -59,9 +62,19 @@ class WorldMap:
             drone_position: Drone XYZ in metres.
             terrain_height: Terrain height directly below the drone (metres).
             footprint_radius_m: Circular footprint radius on the ground.
+            visibility_predicate: Optional predicate that returns whether a
+                candidate map cell is visible from this drone position.
+            los_max_samples: Optional cap on LOS predicate evaluations per
+                footprint (deterministic striding); only cells that pass the
+                predicate are recorded, so occluded cells never get height.
         """
         cx, cy = float(drone_position[0]), float(drone_position[1])
-        self._coverage.mark_circular(center_xy=(cx, cy), radius_m=footprint_radius_m)
+        self._coverage.mark_circular(
+            center_xy=(cx, cy),
+            radius_m=footprint_radius_m,
+            visibility_predicate=visibility_predicate,
+            los_max_samples=los_max_samples,
+        )
 
         # Record terrain height in cells within footprint.
         # Use (i, j) = (x_index, y_index) to match CoverageMap convention.
@@ -76,6 +89,30 @@ class WorldMap:
         gi, gj = np.meshgrid(i_range, j_range, indexing="ij")
         dist_sq = (gi - ci) ** 2 + (gj - cj) ** 2
         mask = dist_sq <= r_cells**2
+        if visibility_predicate is not None and mask.any():
+            flat_i = gi[mask]
+            flat_j = gj[mask]
+            if los_max_samples is not None and flat_i.size > los_max_samples:
+                stride = int(np.ceil(flat_i.size / los_max_samples))
+                keep = np.zeros(flat_i.size, dtype=bool)
+                keep[::stride] = True
+            else:
+                keep = np.ones(flat_i.size, dtype=bool)
+            cx_grid, cy_grid = np.vectorize(b.ij_to_xy, otypes=[float, float])(
+                flat_i[keep], flat_j[keep]
+            )
+            visible = np.fromiter(
+                (
+                    bool(visibility_predicate(float(x_m), float(y_m)))
+                    for x_m, y_m in zip(cx_grid, cy_grid, strict=False)
+                ),
+                dtype=bool,
+                count=cx_grid.size,
+            )
+            filtered_mask = np.zeros_like(mask, dtype=bool)
+            keep_positions = np.flatnonzero(mask)[keep][visible]
+            filtered_mask.ravel()[keep_positions] = True
+            mask = filtered_mask
         np.add.at(self._height_sum, (gi[mask], gj[mask]), terrain_height)
         np.add.at(self._height_count, (gi[mask], gj[mask]), 1)
         self._scan_count += 1

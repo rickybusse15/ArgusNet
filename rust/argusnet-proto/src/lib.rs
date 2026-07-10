@@ -269,7 +269,10 @@ pub fn track_to_pb(track: TrackState) -> pb::TrackState {
         confidence: track.quality_score.unwrap_or(0.0),
         mode_probability_cv: track.mode_probability_cv.unwrap_or(1.0),
         last_seen_s: track.timestamp_s,
-        contributing_nodes: track.contributing_node_ids,
+        // Move out of the Arc when this TrackState holds the last reference;
+        // otherwise fall back to cloning the shared list.
+        contributing_nodes: std::sync::Arc::try_unwrap(track.contributing_node_ids)
+            .unwrap_or_else(|shared| (*shared).clone()),
     }
 }
 
@@ -290,7 +293,7 @@ pub fn track_from_pb(track: pb::TrackState) -> Result<TrackState, String> {
         } else {
             Some(track.mode_probability_cv)
         },
-        contributing_node_ids: track.contributing_nodes,
+        contributing_node_ids: std::sync::Arc::new(track.contributing_nodes),
     })
 }
 
@@ -338,6 +341,143 @@ pub fn metrics_from_pb(metrics: pb::PlatformMetrics) -> PlatformMetrics {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reference-based conversions.
+//
+// Used when the caller shares the core frame (e.g. the server keeps an
+// Arc<PlatformFrame> for latest-frame queries) and cannot move out of it.
+// The by-value functions above stay move-based for callers that own the data.
+// ---------------------------------------------------------------------------
+
+pub fn node_state_to_pb_ref(node: &NodeState) -> pb::NodeState {
+    pb::NodeState {
+        node_id: node.node_id.clone(),
+        position: Some(vec3_to_pb(node.position)),
+        velocity: Some(vec3_to_pb(node.velocity)),
+        is_mobile: node.is_mobile,
+        timestamp_s: node.timestamp_s,
+        health: node.health,
+        sensor_type: "optical".to_string(),
+        fov_half_angle_deg: 180.0,
+        max_range_m: 0.0,
+    }
+}
+
+pub fn observation_to_pb_ref(observation: &BearingObservation) -> pb::BearingObservation {
+    pb::BearingObservation {
+        node_id: observation.node_id.clone(),
+        target_id: observation.target_id.clone(),
+        origin: Some(vec3_to_pb(observation.origin)),
+        direction: Some(vec3_to_pb(observation.direction)),
+        bearing_std_rad: observation.bearing_std_rad,
+        timestamp_s: observation.timestamp_s,
+        confidence: observation.confidence,
+    }
+}
+
+pub fn rejection_to_pb_ref(rejection: &ObservationRejection) -> pb::ObservationRejection {
+    pb::ObservationRejection {
+        node_id: rejection.node_id.clone(),
+        target_id: rejection.target_id.clone(),
+        timestamp_s: rejection.timestamp_s,
+        reason: rejection.reason.clone(),
+        detail: rejection.detail.clone(),
+        origin: rejection.origin.map(vec3_to_pb),
+        attempted_point: rejection.attempted_point.map(vec3_to_pb),
+        closest_point: rejection.closest_point.map(vec3_to_pb),
+        blocker_type: rejection.blocker_type.clone(),
+        first_hit_range_m: rejection.first_hit_range_m,
+    }
+}
+
+pub fn truth_to_pb_ref(truth: &TruthState) -> pb::TruthState {
+    pb::TruthState {
+        target_id: truth.target_id.clone(),
+        position: Some(vec3_to_pb(truth.position)),
+        velocity: Some(vec3_to_pb(truth.velocity)),
+        timestamp_s: truth.timestamp_s,
+    }
+}
+
+pub fn track_to_pb_ref(track: &TrackState) -> pb::TrackState {
+    pb::TrackState {
+        track_id: track.track_id.clone(),
+        timestamp_s: track.timestamp_s,
+        position: Some(vec3_to_pb(track.position)),
+        velocity: Some(vec3_to_pb(track.velocity)),
+        covariance_row_major: covariance_to_vec(track.covariance),
+        measurement_std_m: track.measurement_std_m,
+        update_count: track.update_count,
+        stale_steps: track.stale_steps,
+        lifecycle_state: track.lifecycle_state.clone(),
+        quality_score: track.quality_score,
+        acceleration_mps2: vec![0.0, 0.0, 0.0],
+        confidence: track.quality_score.unwrap_or(0.0),
+        mode_probability_cv: track.mode_probability_cv.unwrap_or(1.0),
+        last_seen_s: track.timestamp_s,
+        contributing_nodes: (*track.contributing_node_ids).clone(),
+    }
+}
+
+pub fn metrics_to_pb_ref(metrics: &PlatformMetrics) -> pb::PlatformMetrics {
+    pb::PlatformMetrics {
+        mean_error_m: metrics.mean_error_m,
+        max_error_m: metrics.max_error_m,
+        active_track_count: metrics.active_track_count,
+        observation_count: metrics.observation_count,
+        accepted_observation_count: metrics.accepted_observation_count,
+        rejected_observation_count: metrics.rejected_observation_count,
+        mean_measurement_std_m: metrics.mean_measurement_std_m,
+        track_errors_m: metrics
+            .track_errors_m
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect(),
+        rejection_counts: metrics
+            .rejection_counts
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect(),
+        accepted_observations_by_target: metrics
+            .accepted_observations_by_target
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect(),
+        rejected_observations_by_target: metrics
+            .rejected_observations_by_target
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect(),
+    }
+}
+
+pub fn frame_to_pb_ref(frame: &PlatformFrame) -> pb::PlatformFrame {
+    pb::PlatformFrame {
+        timestamp_s: frame.timestamp_s,
+        nodes: frame.nodes.iter().map(node_state_to_pb_ref).collect(),
+        observations: frame
+            .observations
+            .iter()
+            .map(observation_to_pb_ref)
+            .collect(),
+        rejected_observations: frame
+            .rejected_observations
+            .iter()
+            .map(rejection_to_pb_ref)
+            .collect(),
+        tracks: frame.tracks.iter().map(track_to_pb_ref).collect(),
+        truths: frame.truths.iter().map(truth_to_pb_ref).collect(),
+        metrics: Some(metrics_to_pb_ref(&frame.metrics)),
+        generation_rejections: frame
+            .generation_rejections
+            .iter()
+            .map(rejection_to_pb_ref)
+            .collect(),
+        target_metadata: Vec::new(),
+        safety_events: Vec::new(),
+    }
+}
+
 pub fn frame_to_pb(frame: PlatformFrame) -> pb::PlatformFrame {
     pb::PlatformFrame {
         timestamp_s: frame.timestamp_s,
@@ -360,6 +500,8 @@ pub fn frame_to_pb(frame: PlatformFrame) -> pb::PlatformFrame {
             .into_iter()
             .map(rejection_to_pb)
             .collect(),
+        target_metadata: Vec::new(),
+        safety_events: Vec::new(),
     }
 }
 
@@ -489,6 +631,8 @@ mod tests {
                 rejected_observations_by_target: Default::default(),
             })),
             generation_rejections: Vec::new(),
+            target_metadata: Vec::new(),
+            safety_events: Vec::new(),
         })
         .expect("frame");
 
@@ -507,6 +651,8 @@ mod tests {
             truths: Vec::new(),
             metrics: None,
             generation_rejections: Vec::new(),
+            target_metadata: Vec::new(),
+            safety_events: Vec::new(),
         })
         .expect("frame");
 

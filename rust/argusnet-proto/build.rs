@@ -9,6 +9,9 @@ fn main() {
         .expect("repo root");
     let proto_file = repo_root.join("proto/argusnet/v1/world_model.proto");
     let proto_root = repo_root.join("proto");
+    // The proto lives outside this package dir, so cargo won't notice edits
+    // to it without an explicit rerun trigger.
+    println!("cargo:rerun-if-changed={}", proto_file.display());
     tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)

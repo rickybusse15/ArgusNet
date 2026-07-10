@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import contextlib
+import os
+import queue
 import shutil
 import socket
 import subprocess
@@ -24,6 +26,8 @@ from argusnet.core.types import (
     ObservationRejection,
     PlatformFrame,
     PlatformMetrics,
+    SafetyValidationResult,
+    TargetMetadata,
     TrackState,
     TruthState,
 )
@@ -292,6 +296,62 @@ def _truth_from_proto(truth: tracker_pb2.TruthState) -> TruthState:
     )
 
 
+def _target_metadata_to_proto(value: TargetMetadata) -> tracker_pb2.TargetMetadata:
+    return tracker_pb2.TargetMetadata(
+        target_id=value.target_id,
+        operator_label=value.operator_label,
+        target_type=value.target_type,
+        priority=value.priority,
+        behavior=value.behavior,
+        status=value.status,
+        first_seen_s=value.first_seen_s,
+        last_seen_s=value.last_seen_s,
+        confidence=value.confidence,
+        notes=value.notes,
+    )
+
+
+def _target_metadata_from_proto(value: tracker_pb2.TargetMetadata) -> TargetMetadata:
+    return TargetMetadata(
+        target_id=value.target_id,
+        operator_label=value.operator_label,
+        target_type=value.target_type or "unknown",
+        priority=value.priority,
+        behavior=value.behavior or "unknown",
+        status=value.status or "active",
+        first_seen_s=value.first_seen_s,
+        last_seen_s=value.last_seen_s,
+        confidence=value.confidence,
+        notes=value.notes,
+    )
+
+
+def _safety_event_to_proto(value: SafetyValidationResult) -> tracker_pb2.SafetyEvent:
+    return tracker_pb2.SafetyEvent(
+        event_id=value.validation_id,
+        subject_id=value.subject_id,
+        timestamp_s=value.timestamp_s,
+        state=value.reason or ("nominal" if value.accepted else "abort"),
+        violations=value.violations,
+        command_clamped=value.clamped,
+        blocked=not value.accepted,
+        reason=value.reason or "",
+    )
+
+
+def _safety_event_from_proto(value: tracker_pb2.SafetyEvent) -> SafetyValidationResult:
+    return SafetyValidationResult(
+        validation_id=value.event_id,
+        subject_id=value.subject_id,
+        accepted=not value.blocked,
+        timestamp_s=value.timestamp_s,
+        validator="blocking_monitor",
+        violations=tuple(value.violations),
+        clamped=value.command_clamped,
+        reason=value.reason or value.state or None,
+    )
+
+
 def _track_from_proto(track: tracker_pb2.TrackState) -> TrackState:
     covariance = np.asarray(track.covariance_row_major, dtype=float).reshape(6, 6)
     return TrackState(
@@ -348,6 +408,8 @@ def _frame_from_proto(frame: tracker_pb2.PlatformFrame) -> PlatformFrame:
         generation_rejections=[
             _rejection_from_proto(rejection) for rejection in frame.generation_rejections
         ],
+        target_metadata=[_target_metadata_from_proto(value) for value in frame.target_metadata],
+        safety_events=[_safety_event_from_proto(value) for value in frame.safety_events],
     )
 
 
@@ -385,6 +447,8 @@ class TrackingService:
         daemon_path: str | None = None,
         startup_timeout_s: float = 20.0,
     ) -> None:
+        if endpoint is None:
+            endpoint = os.environ.get("ARGUSNET_ENDPOINT") or None
         self.config = config or TrackerConfig()
         self.retain_history = (
             self.config.retain_history if retain_history is None else retain_history
@@ -574,12 +638,16 @@ class TrackingService:
         node_states: Sequence[NodeState] | None = None,
         observations: Iterable[BearingObservation] = (),
         truths: Sequence[TruthState] | None = None,
+        target_metadata: Sequence[TargetMetadata] = (),
+        safety_events: Sequence[SafetyValidationResult] = (),
     ) -> PlatformFrame:
         request = tracker_pb2.IngestFrameRequest(
             timestamp_s=float(timestamp_s),
             node_states=[_node_to_proto(node) for node in (node_states or ())],
             observations=[_observation_to_proto(observation) for observation in observations],
             truths=[_truth_to_proto(truth) for truth in (truths or ())],
+            target_metadata=[_target_metadata_to_proto(value) for value in target_metadata],
+            safety_events=[_safety_event_to_proto(value) for value in safety_events],
         )
         response = self._stub.IngestFrame(request)
         if not response.HasField("frame"):
@@ -630,6 +698,53 @@ class TrackingService:
             if self.retain_history:
                 self.history.append(frame)
             yield frame
+
+    def open_ingest_stream(self) -> IngestStream:
+        """Open a persistent lockstep ingest stream over the ``TrackStream`` RPC.
+
+        Each ``ingest_frame`` call on the returned stream sends one frame and
+        blocks for its response, matching the unary ``ingest_frame`` semantics
+        while amortizing per-call RPC overhead across the whole run. Close the
+        stream (or use it as a context manager) when done.
+        """
+        return IngestStream(self)
+
+    def watch_frames(self) -> Iterator[PlatformFrame]:
+        """Passively subscribe to every frame the daemon processes.
+
+        Uses the server-streaming ``WatchFrames`` RPC: frames ingested by any
+        client (unary or streaming) are fanned out to watchers. The iterator
+        blocks waiting for the next frame and ends when the daemon shuts down
+        or the stream is cancelled. Watching does not mutate this service's
+        node/track caches, so a watcher can run alongside an ingesting client.
+        """
+        for response in self._stub.WatchFrames(tracker_pb2.WatchFramesRequest()):
+            if not response.HasField("frame"):
+                continue
+            yield _frame_from_proto(response.frame)
+
+    def watch_frames_v2(
+        self,
+        *,
+        include_truth: bool = False,
+        max_rate_hz: float = 0.0,
+        resume_after_sequence: int = 0,
+    ) -> Iterator[tuple[PlatformFrame, int, int, str]]:
+        """Subscribe with truth filtering, throttling, sequence and drop metadata."""
+        request = tracker_pb2.WatchFramesV2Request(
+            include_truth=include_truth,
+            max_rate_hz=max_rate_hz,
+            resume_after_sequence=resume_after_sequence,
+        )
+        for response in self._stub.WatchFramesV2(request):
+            if not response.HasField("frame"):
+                continue
+            yield (
+                _frame_from_proto(response.frame),
+                int(response.sequence),
+                int(response.dropped_since_last),
+                response.session_id,
+            )
 
     def latest_frame(self) -> PlatformFrame | None:
         if self._latest_frame is not None:
@@ -683,6 +798,79 @@ class TrackingService:
             stale_node_count=int(response.stale_node_count),
             ingest_latency=latency,
         )
+
+
+class IngestStream:
+    """Lockstep frame ingestion over a persistent bidirectional TrackStream RPC.
+
+    Sends one ``IngestFrameRequest`` per ``ingest_frame`` call and blocks for
+    the matching response, so callers see the same request/response semantics
+    as ``TrackingService.ingest_frame`` without per-call RPC setup overhead.
+    """
+
+    _CLOSE = object()
+
+    def __init__(self, service: TrackingService) -> None:
+        self._service = service
+        self._requests: queue.Queue[object] = queue.Queue()
+        self._closed = False
+
+        def _request_iter() -> Iterator[tracker_pb2.IngestFrameRequest]:
+            while True:
+                item = self._requests.get()
+                if item is IngestStream._CLOSE:
+                    return
+                yield item  # type: ignore[misc]
+
+        self._responses = service._stub.TrackStream(_request_iter())
+
+    def ingest_frame(
+        self,
+        timestamp_s: float,
+        node_states: Sequence[NodeState] | None = None,
+        observations: Iterable[BearingObservation] = (),
+        truths: Sequence[TruthState] | None = None,
+        target_metadata: Sequence[TargetMetadata] = (),
+        safety_events: Sequence[SafetyValidationResult] = (),
+    ) -> PlatformFrame:
+        if self._closed:
+            raise RuntimeError("ingest stream is closed")
+        request = tracker_pb2.IngestFrameRequest(
+            timestamp_s=float(timestamp_s),
+            node_states=[_node_to_proto(node) for node in (node_states or ())],
+            observations=[_observation_to_proto(observation) for observation in observations],
+            truths=[_truth_to_proto(truth) for truth in (truths or ())],
+            target_metadata=[_target_metadata_to_proto(value) for value in target_metadata],
+            safety_events=[_safety_event_to_proto(value) for value in safety_events],
+        )
+        self._requests.put(request)
+        response = next(self._responses)
+        if not response.HasField("frame"):
+            raise RuntimeError("tracking daemon returned an empty frame response")
+        frame = _frame_from_proto(response.frame)
+        service = self._service
+        service._latest_frame = frame
+        service.nodes = {node.node_id: node for node in frame.nodes}
+        service.tracks = {track.track_id: track for track in frame.tracks}
+        if service.retain_history:
+            service.history.append(frame)
+        return frame
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._requests.put(IngestStream._CLOSE)
+        with contextlib.suppress(Exception):
+            # Drain the response iterator so the RPC terminates cleanly.
+            for _ in self._responses:
+                pass
+
+    def __enter__(self) -> IngestStream:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
 
 
 # ArgusNet canonical aliases

@@ -8,9 +8,12 @@ import tifffile
 
 from argusnet.world.environment import Bounds2D, LandCoverClass
 from argusnet.world.procedural import (
+    LandscapeBuildConfig,
     TerrainBuildConfig,
     build_land_cover_layer,
+    build_landscape,
     build_terrain_layer,
+    procedural_terrain_grid,
 )
 
 
@@ -131,3 +134,87 @@ def test_seasonal_land_cover_adds_snow() -> None:
     ]
 
     assert LandCoverClass.SNOW in sampled_classes
+
+
+def test_procedural_terrain_grid_exposes_semantic_masks() -> None:
+    bounds = Bounds2D(-250.0, 250.0, -200.0, 200.0)
+    grid = procedural_terrain_grid(
+        bounds_xy_m=bounds,
+        preset_name="river_valley",
+        seed=21,
+        resolution_m=10.0,
+    )
+
+    assert grid.metadata["generator_version"] == "procedural-landscape-v1"
+    for name in ("water", "ridge", "valley", "steep_slope", "lowland", "road"):
+        assert name in grid.masks
+        assert grid.masks[name].shape == grid.heights_m.shape
+    assert np.any(grid.masks["water"])
+    assert np.any(grid.masks["valley"])
+
+
+def test_terrain_layer_metadata_preserves_mask_summary() -> None:
+    bounds = Bounds2D(-150.0, 150.0, -150.0, 150.0)
+    terrain = build_terrain_layer(
+        TerrainBuildConfig(
+            terrain_preset="lake_district",
+            terrain_seed=17,
+            terrain_resolution_m=10.0,
+        ),
+        bounds,
+        environment_id="masked-terrain",
+    )
+    summary = terrain.terrain_summary()
+
+    assert "water" in summary["semantic_masks"]
+    assert summary["source"]["generator_version"] == "procedural-landscape-v1"
+    assert summary["mask_coverage_fraction"]["water"] > 0.0
+
+
+def test_mask_driven_land_cover_adds_roads_for_urban_flat() -> None:
+    bounds = Bounds2D(-180.0, 180.0, -180.0, 180.0)
+    terrain = build_terrain_layer(
+        TerrainBuildConfig(
+            terrain_preset="urban_flat",
+            terrain_seed=5,
+            terrain_resolution_m=10.0,
+        ),
+        bounds,
+        environment_id="urban-masks",
+    )
+    land_cover = build_land_cover_layer(
+        bounds_xy_m=bounds,
+        terrain=terrain,
+        obstacles=(),
+        resolution_m=20.0,
+        terrain_preset="urban_flat",
+        seed=5,
+    )
+    sampled_classes = [
+        land_cover.land_cover_at(float(x), float(y))
+        for x in np.linspace(bounds.x_min_m, bounds.x_max_m, 12)
+        for y in np.linspace(bounds.y_min_m, bounds.y_max_m, 12)
+    ]
+
+    assert LandCoverClass.ROAD in sampled_classes
+
+
+def test_build_landscape_returns_coherent_layers() -> None:
+    bounds = Bounds2D(-120.0, 120.0, -120.0, 120.0)
+    result = build_landscape(
+        LandscapeBuildConfig(
+            terrain=TerrainBuildConfig(
+                terrain_preset="coastal",
+                terrain_seed=3,
+                terrain_resolution_m=10.0,
+            ),
+            land_cover_resolution_m=20.0,
+        ),
+        bounds,
+        environment_id="coastal-landscape",
+    )
+
+    assert result.terrain.environment_id == "coastal-landscape"
+    assert result.land_cover.bounds_xy_m == bounds
+    assert "water" in result.masks
+    assert result.metadata["generator_version"] == "landscape-build-v1"

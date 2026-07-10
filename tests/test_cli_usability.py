@@ -15,8 +15,10 @@ from pathlib import Path
 
 from argusnet.cli.main import (
     ALL_COMMANDS,
+    COMMAND_DIAGNOSE,
     COMMAND_DUMP_CONFIG,
     COMMAND_INFO,
+    COMMAND_SCORECARD,
     COMMAND_VALIDATE_REPLAY,
     COMMAND_VALIDATE_SCENE,
     build_parser,
@@ -116,6 +118,7 @@ class TestNormalizeArgv(unittest.TestCase):
             COMMAND_VALIDATE_REPLAY,
             COMMAND_INFO,
             COMMAND_DUMP_CONFIG,
+            COMMAND_DIAGNOSE,
         ):
             result = normalize_argv([cmd, "arg"])
             self.assertEqual(result[0], cmd)
@@ -129,6 +132,8 @@ class TestNormalizeArgv(unittest.TestCase):
         self.assertIn("validate-replay", ALL_COMMANDS)
         self.assertIn("info", ALL_COMMANDS)
         self.assertIn("dump-config", ALL_COMMANDS)
+        self.assertIn("diagnose", ALL_COMMANDS)
+        self.assertIn("scorecard", ALL_COMMANDS)
 
 
 class TestBuildParser(unittest.TestCase):
@@ -161,6 +166,18 @@ class TestBuildParser(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["dump-config", "--format", "yaml"])
         self.assertEqual(args.format, "yaml")
+
+    def test_diagnose_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["diagnose", "--json"])
+        self.assertEqual(args.command, COMMAND_DIAGNOSE)
+        self.assertTrue(args.as_json)
+
+    def test_scorecard_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["scorecard", "--replay", "/tmp/replay.json"])
+        self.assertEqual(args.command, COMMAND_SCORECARD)
+        self.assertEqual(args.replay, "/tmp/replay.json")
 
     def test_export_accepts_kml_gpx(self):
         parser = build_parser()
@@ -451,6 +468,40 @@ class TestDumpConfig(unittest.TestCase):
             with open(path) as f:
                 parsed = json.loads(f.read())
             self.assertIn("sensor", parsed)
+        finally:
+            os.unlink(path)
+
+
+class TestConfigValidation(unittest.TestCase):
+    def test_unknown_config_keys_reports_dotted_paths(self):
+        from argusnet.core.config import unknown_config_keys
+
+        mapping = {
+            "dynamics": {"default_duration_s": 42.0, "defualt_dt_s": 0.2},
+            "sensr": {},
+            "map_preset_scales": {},
+        }
+        self.assertEqual(unknown_config_keys(mapping), ["dynamics.defualt_dt_s", "sensr"])
+
+    def test_unknown_config_keys_empty_for_valid_mapping(self):
+        from argusnet.core.config import unknown_config_keys
+
+        self.assertEqual(unknown_config_keys({"dynamics": {"default_duration_s": 1.0}}), [])
+
+    def test_dry_run_rejects_invalid_config_file(self):
+        import argparse
+
+        from argusnet.cli.main import _run_sim_dry_run
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            f.write("not json")
+            path = f.name
+
+        try:
+            args = argparse.Namespace(config_file=path, _provided_sim_args=set())
+            with self.assertRaises(SystemExit) as ctx:
+                _run_sim_dry_run(args)
+            self.assertIn("unable to load config file", str(ctx.exception))
         finally:
             os.unlink(path)
 

@@ -35,7 +35,7 @@ impl Default for RuntimeOverlayVisibility {
     fn default() -> Self {
         Self {
             tracks: true,
-            truths: true,
+            truths: false,
             nodes: true,
             observations: false,
             rejection_markers: false,
@@ -165,14 +165,14 @@ impl Default for ViewerUiState {
 pub struct ReconstructionCamera;
 
 /// Which rendering layer the viewer shows.
-#[derive(Debug, Clone, PartialEq, Eq, Resource, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Resource, Default, clap::ValueEnum)]
 pub enum ViewMode {
     /// Show the real terrain GLB (default).
     #[default]
     RealWorld,
     /// Hide terrain, show the accumulated LiDAR reconstruction only.
     ScanMap,
-    /// Show terrain + reconstruction overlay simultaneously.
+    /// Left half real terrain, right half the accumulated reconstruction.
     Split,
 }
 

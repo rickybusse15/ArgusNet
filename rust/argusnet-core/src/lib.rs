@@ -8,6 +8,11 @@ use std::collections::{BTreeMap, HashMap};
 pub type Matrix6 = SMatrix<f64, 6, 6>;
 pub type Vector6 = SVector<f64, 6>;
 
+/// Upper bound on a track covariance trace before it is reset to an
+/// uninformative diagonal. Far beyond anything reached in normal operation;
+/// exists to stop numerical blow-up during pathological long coasts.
+const MAX_COVARIANCE_TRACE: f64 = 1.0e12;
+
 #[derive(Clone, Debug)]
 pub struct NodeHealthTracker {
     pub node_id: String,
@@ -383,7 +388,8 @@ pub struct TrackState {
     /// IMM CV-model weight in [0, 1]. None when not using an IMM filter.
     pub mode_probability_cv: Option<f64>,
     /// Node IDs whose observations contributed to the most recent update.
-    pub contributing_node_ids: Vec<String>,
+    /// Shared with the owning track so per-frame snapshots don't deep-clone.
+    pub contributing_node_ids: std::sync::Arc<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -497,6 +503,10 @@ impl KalmanTrack3D {
 
         self.state = transition * self.state;
         self.covariance = transition * self.covariance * transition.transpose() + process_noise;
+        let trace = self.covariance.trace();
+        if !trace.is_finite() || trace > MAX_COVARIANCE_TRACE {
+            self.covariance = Matrix6::from_diagonal_element(MAX_COVARIANCE_TRACE / 6.0);
+        }
         self.timestamp_s = timestamp_s;
     }
 
@@ -515,8 +525,7 @@ impl KalmanTrack3D {
         let innovation = position - (measurement_matrix * self.state);
         let innovation_cov =
             measurement_matrix * self.covariance * measurement_matrix.transpose() + measurement_cov;
-        let innovation_cov_decomp = innovation_cov
-            .cholesky()
+        let innovation_cov_decomp = cholesky_with_recondition(innovation_cov)
             .ok_or_else(|| "innovation covariance is not positive-definite".to_string())?;
         let kalman_gain = innovation_cov_decomp
             .solve(&(measurement_matrix * self.covariance.transpose()))
@@ -657,6 +666,10 @@ impl CoordinatedTurnTrack3D {
         process_noise[(6, 6)] = self.turn_rate_std.powi(2) * dt;
 
         self.covariance = transition * self.covariance * transition.transpose() + process_noise;
+        let trace = self.covariance.trace();
+        if !trace.is_finite() || trace > MAX_COVARIANCE_TRACE {
+            self.covariance = Matrix7::from_diagonal_element(MAX_COVARIANCE_TRACE / 7.0);
+        }
         self.timestamp_s = timestamp_s;
     }
 
@@ -675,8 +688,7 @@ impl CoordinatedTurnTrack3D {
         let innovation = position - (measurement_matrix * self.state);
         let innovation_cov =
             measurement_matrix * self.covariance * measurement_matrix.transpose() + measurement_cov;
-        let innovation_cov_decomp = innovation_cov
-            .cholesky()
+        let innovation_cov_decomp = cholesky_with_recondition(innovation_cov)
             .ok_or_else(|| "innovation covariance is not positive-definite".to_string())?;
         let kalman_gain = innovation_cov_decomp
             .solve(&(measurement_matrix * self.covariance.transpose()))
@@ -900,15 +912,31 @@ impl IMMTrack3D {
             lifecycle_state,
             quality_score,
             mode_probability_cv: Some(self.mode_probabilities[0]),
-            contributing_node_ids: Vec::new(), // filled in by ManagedTrack::snapshot
+            contributing_node_ids: std::sync::Arc::default(), // filled in by ManagedTrack::snapshot
         }
     }
 }
 
+/// Cholesky factorization with a symmetrize-and-jitter retry.
+///
+/// The retry only runs when the plain factorization fails (a numerically
+/// degenerate covariance), so healthy tracks see bit-identical arithmetic.
+#[inline]
+fn cholesky_with_recondition(
+    matrix: Matrix3<f64>,
+) -> Option<nalgebra::Cholesky<f64, nalgebra::Const<3>>> {
+    if let Some(decomposition) = matrix.cholesky() {
+        return Some(decomposition);
+    }
+    let symmetrized = (matrix + matrix.transpose()) * 0.5;
+    let scale = symmetrized.diagonal().amax().abs().max(1.0);
+    let jitter = Matrix3::identity() * (scale * 1.0e-9 + 1.0e-9);
+    (symmetrized + jitter).cholesky()
+}
+
 #[inline]
 fn gaussian_likelihood(innovation: &Vector3<f64>, covariance: &Matrix3<f64>) -> f64 {
-    covariance
-        .cholesky()
+    cholesky_with_recondition(*covariance)
         .map(|decomp| {
             let logdet = 2.0
                 * decomp
@@ -968,7 +996,8 @@ pub(crate) struct ManagedTrack {
     update_history: Vec<bool>,
     quality_score: f64,
     /// Node IDs whose observations were fused in the most recent update.
-    pub(crate) contributing_node_ids: Vec<String>,
+    /// Arc-shared with snapshots; rebuilt only when membership changes.
+    pub(crate) contributing_node_ids: std::sync::Arc<Vec<String>>,
 }
 
 impl ManagedTrack {
@@ -996,7 +1025,7 @@ impl ManagedTrack {
             last_update_time_s: timestamp_s,
             update_history: vec![true],
             quality_score: 0.5,
-            contributing_node_ids: Vec::new(),
+            contributing_node_ids: std::sync::Arc::default(),
         }
     }
 
@@ -1009,7 +1038,7 @@ impl ManagedTrack {
         position: Vector3<f64>,
         measurement_std_m: f64,
         timestamp_s: f64,
-        node_ids: &[String],
+        node_ids: &[&str],
     ) -> Result<(), String> {
         self.filter_state
             .update_position(position, measurement_std_m)?;
@@ -1020,8 +1049,19 @@ impl ManagedTrack {
         self.update_history.push(true);
         self.trim_update_history();
         self.update_lifecycle();
-        self.contributing_node_ids.clear();
-        self.contributing_node_ids.extend_from_slice(node_ids);
+        // Rebuild the shared node-ID list only when membership changed; the
+        // common steady state (same contributing nodes every frame) is
+        // allocation-free.
+        let unchanged = self.contributing_node_ids.len() == node_ids.len()
+            && self
+                .contributing_node_ids
+                .iter()
+                .map(String::as_str)
+                .eq(node_ids.iter().copied());
+        if !unchanged {
+            self.contributing_node_ids =
+                std::sync::Arc::new(node_ids.iter().map(|node_id| node_id.to_string()).collect());
+        }
         Ok(())
     }
 
@@ -1107,7 +1147,7 @@ impl ManagedTrack {
             Some(self.lifecycle_state.as_str().to_string()),
             Some(self.quality_score),
         );
-        state.contributing_node_ids = self.contributing_node_ids.clone();
+        state.contributing_node_ids = std::sync::Arc::clone(&self.contributing_node_ids);
         state
     }
 }
@@ -1118,7 +1158,7 @@ pub struct TrackingEngine {
     near_parallel_rejection_angle_rad: f64,
     nodes: HashMap<String, NodeState>,
     tracks: HashMap<String, ManagedTrack>,
-    latest_frame: Option<PlatformFrame>,
+    latest_frame: Option<std::sync::Arc<PlatformFrame>>,
     node_health: HashMap<String, NodeHealthTracker>,
     frame_timestamps: Vec<f64>,
     next_track_index: u64,
@@ -1150,7 +1190,7 @@ impl TrackingEngine {
     }
 
     pub fn latest_frame(&self) -> Option<&PlatformFrame> {
-        self.latest_frame.as_ref()
+        self.latest_frame.as_deref()
     }
 
     pub fn reset(&mut self) {
@@ -1209,7 +1249,7 @@ impl TrackingEngine {
         node_states: Vec<NodeState>,
         observations: Vec<BearingObservation>,
         truths: Vec<TruthState>,
-    ) -> PlatformFrame {
+    ) -> std::sync::Arc<PlatformFrame> {
         for node in node_states {
             self.nodes.insert(node.node_id.clone(), node);
         }
@@ -1258,25 +1298,14 @@ impl TrackingEngine {
             }
         }
 
-        let mut track_ids = Vec::with_capacity(self.tracks.len());
-        track_ids.extend(self.tracks.keys().cloned());
-        track_ids.sort();
-        let mut track_states = Vec::with_capacity(track_ids.len());
-        track_states.extend(
-            track_ids
-                .iter()
-                .filter_map(|track_id| self.tracks.get(track_id).map(ManagedTrack::snapshot)),
-        );
+        // Snapshot then sort by id (ids are unique HashMap keys, so this is
+        // equivalent to the former sorted-key lookup without cloning key Vecs).
+        let mut track_states: Vec<TrackState> =
+            self.tracks.values().map(ManagedTrack::snapshot).collect();
+        track_states.sort_by(|a, b| a.track_id.cmp(&b.track_id));
 
-        let mut node_ids = Vec::with_capacity(self.nodes.len());
-        node_ids.extend(self.nodes.keys().cloned());
-        node_ids.sort();
-        let mut nodes = Vec::with_capacity(node_ids.len());
-        nodes.extend(
-            node_ids
-                .iter()
-                .filter_map(|node_id| self.nodes.get(node_id).cloned()),
-        );
+        let mut nodes: Vec<NodeState> = self.nodes.values().cloned().collect();
+        nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
 
         // Update per-node health trackers
         for obs in &accepted_observations {
@@ -1304,6 +1333,9 @@ impl TrackingEngine {
             generation_rejections: Vec::new(),
         };
 
+        // Share the frame instead of deep-cloning it: the engine keeps one Arc
+        // for latest-frame queries and callers get the other.
+        let frame = std::sync::Arc::new(frame);
         self.latest_frame = Some(frame.clone());
         frame
     }
@@ -1381,8 +1413,8 @@ impl TrackingEngine {
             };
 
             accepted_observations.extend(deduped_cluster.iter().cloned());
-            let cluster_node_ids: Vec<String> =
-                deduped_cluster.iter().map(|o| o.node_id.clone()).collect();
+            let cluster_node_ids: SmallVec<[&str; 8]> =
+                deduped_cluster.iter().map(|o| o.node_id.as_str()).collect();
             if let Some(managed_track) = self.tracks.get_mut(&track_id) {
                 managed_track.predict(timestamp_s);
                 if managed_track
@@ -1428,7 +1460,7 @@ impl TrackingEngine {
         use crate::association::{cluster_observations, GNNAssociator, TrackAssignment};
 
         let clusters = cluster_observations(
-            &prefiltered_observations,
+            prefiltered_observations,
             self.config.cluster_distance_threshold_m,
         );
         let mut valid_clusters = Vec::with_capacity(clusters.len());
@@ -1471,7 +1503,8 @@ impl TrackingEngine {
         for assignment in assignments {
             let cluster = &valid_clusters[assignment.cluster_index];
             accepted_observations.extend(cluster.iter().cloned());
-            let cluster_node_ids: Vec<String> = cluster.iter().map(|o| o.node_id.clone()).collect();
+            let cluster_node_ids: SmallVec<[&str; 8]> =
+                cluster.iter().map(|o| o.node_id.as_str()).collect();
 
             let track_id = match assignment.track_id {
                 TrackAssignment::Existing(ref id) => id.clone(),
@@ -1529,7 +1562,7 @@ impl TrackingEngine {
         use crate::association::{cluster_observations, JPDAAssociator};
 
         let clusters = cluster_observations(
-            &prefiltered_observations,
+            prefiltered_observations,
             self.config.cluster_distance_threshold_m,
         );
         let mut valid_clusters = Vec::with_capacity(clusters.len());
@@ -2133,5 +2166,161 @@ mod tests {
         assert_eq!(1, second.tracks.len());
         let third = engine.ingest_frame(2.0, Vec::new(), Vec::new(), vec![truth]);
         assert_eq!(0, third.tracks.len());
+    }
+
+    /// Long-duration multi-track numerical stability stress test.
+    ///
+    /// Runs hundreds of concurrent tracks for hundreds of frames with
+    /// periodic observation dropouts (forcing coast/re-acquire cycles) and
+    /// asserts every published state and covariance stays finite. Scale via
+    /// ARGUSNET_STRESS_TARGETS / ARGUSNET_STRESS_FRAMES for nightly runs.
+    #[test]
+    fn many_tracks_remain_finite_over_long_run() {
+        let target_count: usize = std::env::var("ARGUSNET_STRESS_TARGETS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(150);
+        let frame_count: usize = std::env::var("ARGUSNET_STRESS_FRAMES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(400);
+        let dt = 0.25;
+
+        let mut engine = TrackingEngine::new(TrackerConfig::default()).unwrap();
+        let observer_a = vec3(0.0, 0.0, 0.0);
+        let observer_b = vec3(4000.0, 0.0, 0.0);
+        let observers = vec![
+            NodeState {
+                node_id: "ground-a".to_string(),
+                position: observer_a,
+                velocity: Vector3::zeros(),
+                is_mobile: false,
+                timestamp_s: 0.0,
+                health: 1.0,
+            },
+            NodeState {
+                node_id: "ground-b".to_string(),
+                position: observer_b,
+                velocity: Vector3::zeros(),
+                is_mobile: false,
+                timestamp_s: 0.0,
+                health: 1.0,
+            },
+        ];
+
+        let truth_at = |index: usize, time_s: f64| -> Vector3<f64> {
+            let lane = (index % 25) as f64;
+            let column = (index / 25) as f64;
+            vec3(
+                500.0 + column * 120.0 + 12.0 * time_s,
+                300.0 + lane * 90.0 + 6.0 * time_s,
+                150.0 + 10.0 * ((index % 7) as f64),
+            )
+        };
+
+        let mut max_live_tracks = 0usize;
+        for frame_index in 0..frame_count {
+            let time_s = frame_index as f64 * dt;
+            let mut observations = Vec::new();
+            let mut truths = Vec::new();
+            for target_index in 0..target_count {
+                let position = truth_at(target_index, time_s);
+                let target_id = format!("asset-{target_index:04}");
+                truths.push(TruthState {
+                    target_id: target_id.clone(),
+                    position,
+                    velocity: vec3(12.0, 6.0, 0.0),
+                    timestamp_s: time_s,
+                });
+                // Deterministic dropouts: each target goes dark for stretches,
+                // forcing coasting and (past the coast limit) re-acquisition.
+                if (frame_index + target_index) % 23 < 3 {
+                    continue;
+                }
+                observations.push(bearing(
+                    "ground-a", &target_id, observer_a, position, time_s,
+                ));
+                observations.push(bearing(
+                    "ground-b", &target_id, observer_b, position, time_s,
+                ));
+            }
+
+            let frame = engine.ingest_frame(time_s, observers.clone(), observations, truths);
+            max_live_tracks = max_live_tracks.max(frame.tracks.len());
+            for track in &frame.tracks {
+                assert!(
+                    track.position.iter().all(|value| value.is_finite()),
+                    "non-finite position at frame {frame_index} for {}",
+                    track.track_id
+                );
+                assert!(
+                    track.velocity.iter().all(|value| value.is_finite()),
+                    "non-finite velocity at frame {frame_index} for {}",
+                    track.track_id
+                );
+                let covariance_trace: f64 = (0..6).map(|axis| track.covariance[(axis, axis)]).sum();
+                assert!(
+                    covariance_trace.is_finite() && covariance_trace >= 0.0,
+                    "bad covariance trace at frame {frame_index} for {}",
+                    track.track_id
+                );
+            }
+        }
+
+        // The engine should sustain tracks on the large majority of targets.
+        assert!(
+            max_live_tracks >= target_count * 8 / 10,
+            "expected at least 80% of {target_count} targets tracked, peaked at {max_live_tracks}"
+        );
+    }
+
+    #[test]
+    fn cholesky_recondition_recovers_degenerate_matrix() {
+        // Rank-deficient PSD matrix: plain Cholesky fails, recondition succeeds.
+        let degenerate = Matrix3::new(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+        assert!(degenerate.cholesky().is_none());
+        assert!(cholesky_with_recondition(degenerate).is_some());
+
+        // A healthy matrix is factored without modification.
+        let healthy = Matrix3::identity() * 4.0;
+        assert!(cholesky_with_recondition(healthy).is_some());
+
+        // An indefinite matrix with a strongly negative eigenvalue stays rejected.
+        let indefinite = Matrix3::from_diagonal(&Vector3::new(1.0, 1.0, -1.0e6));
+        assert!(cholesky_with_recondition(indefinite).is_none());
+    }
+
+    #[test]
+    fn gaussian_likelihood_survives_singular_covariance() {
+        let innovation = Vector3::new(1.0, 2.0, 3.0);
+        let singular = Matrix3::zeros();
+        let likelihood = gaussian_likelihood(&innovation, &singular);
+        assert!(likelihood.is_finite());
+        assert!(likelihood >= 0.0);
+    }
+
+    #[test]
+    fn cv_covariance_stays_finite_over_long_coast() {
+        let mut track = KalmanTrack3D::initialize(0.0, vec3(0.0, 0.0, 100.0), 30.0, 15.0);
+        for step in 1..=100_000 {
+            track.predict(step as f64 * 0.25);
+        }
+        let trace = track.covariance.trace();
+        assert!(trace.is_finite());
+        assert!(trace <= MAX_COVARIANCE_TRACE);
+        assert!(track.state.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn update_succeeds_after_covariance_reset() {
+        let mut track = KalmanTrack3D::initialize(0.0, vec3(0.0, 0.0, 100.0), 30.0, 15.0);
+        // Force the pathological-coast reset, then confirm updates still work.
+        for step in 1..=100_000 {
+            track.predict(step as f64 * 0.25);
+        }
+        let result = track.update_position(vec3(5.0, 5.0, 105.0), 10.0);
+        assert!(result.is_ok());
+        assert!(track.covariance.trace().is_finite());
+        assert!(track.state.iter().all(|value| value.is_finite()));
     }
 }

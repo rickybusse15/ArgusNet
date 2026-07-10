@@ -291,6 +291,15 @@ class DynamicsConfig:
     drone_search_lane_spacing_scale: float = 80.0
     """Lane spacing multiplier for search-mode lawnmower patterns (multiplied by scale)."""
 
+    # -- Weather coupling --
+
+    wind_drift_scale: float = 0.35
+    """Scale applied to per-step wind drift on drone and target trajectories.
+
+    Trajectories are position-controlled, so steady wind does not accumulate
+    into unbounded drift; this factor scales the residual per-step displacement
+    (0 disables wind drift, 1 applies the full raw wind vector per step)."""
+
     # -- Launch controller --
 
     launch_climb_duration_s: float = 8.0
@@ -651,6 +660,55 @@ class SimulationConstants:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def load_config_mapping(path: str) -> dict[str, Any]:
+    """Load a JSON or YAML constants-override file as a plain mapping.
+
+    YAML support falls back to JSON parsing when PyYAML is unavailable,
+    matching ``SimulationConstants.from_yaml``.
+    """
+    lowered = path.lower()
+    if lowered.endswith(".json"):
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    else:
+        try:
+            import yaml  # type: ignore[import-untyped]
+
+            with open(path, encoding="utf-8") as fh:
+                data = yaml.safe_load(fh)
+        except ImportError:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a mapping at the top level of {path}.")
+    return data
+
+
+def unknown_config_keys(d: dict[str, Any]) -> list[str]:
+    """Return dotted paths of keys that ``SimulationConstants.from_dict`` ignores.
+
+    Unknown keys are accepted for forward compatibility, but callers (e.g. the
+    CLI) can use this to warn about likely typos in override files.
+    """
+    subconfig_types: dict[str, type] = {
+        "sensor": SensorConfig,
+        "dynamics": DynamicsConfig,
+        "ground_station_layout": GroundStationLayoutConfig,
+        "target_trajectories": TargetTrajectoryConfig,
+    }
+    known_top_level = set(subconfig_types) | {"map_preset_scales", "platform_presets"}
+    unknown: list[str] = []
+    for key, value in d.items():
+        if key not in known_top_level:
+            unknown.append(key)
+            continue
+        sub_cls = subconfig_types.get(key)
+        if sub_cls is not None and isinstance(value, dict):
+            valid_names = {f.name for f in fields(sub_cls)}
+            unknown.extend(f"{key}.{sub_key}" for sub_key in value if sub_key not in valid_names)
+    return sorted(unknown)
 
 
 def _subconfig_from_dict(cls: type, d: dict[str, Any]) -> Any:

@@ -54,6 +54,10 @@ MissionConstraints
 Mission labels should stay aligned with mapping, localization, inspection, revisit, exclusion, and
 safe return.
 
+Domain-specific presets for civilian search-and-rescue and industrial inspection are defined in
+[MISSION_PROFILES.md](MISSION_PROFILES.md). Profiles compile into these generic mission primitives;
+they do not introduce a second execution or fusion model.
+
 ## Mission Outputs
 
 ```text

@@ -5,7 +5,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use bevy::prelude::*;
+use bevy::render::camera::ClearColorConfig;
+use bevy::render::view::RenderLayers;
 use bevy_egui::{EguiContexts, EguiPlugin};
+
+/// Render layer holding only the scan-map reconstruction mesh. The reconstruction
+/// camera renders this layer alone, so the Split-mode right pane shows the believed
+/// terrain on an otherwise empty background (no real terrain, drones, or gizmos).
+const RECON_LAYER: usize = 1;
 
 use crate::mission_zones::{self, build_projected_badges_system, ProjectedZoneBadges};
 use crate::orbit_camera::{OrbitCamera, OrbitCameraPlugin};
@@ -58,8 +65,27 @@ struct ReloadedSceneBundle {
     should_reframe_camera: bool,
 }
 
-pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
-    let (scene_package, working_scene_root) = initialize_scene_package(scene_path.as_ref())?;
+pub fn run(scene_path: impl AsRef<Path>, initial_view_mode: ViewMode, autoplay: bool) -> Result<()> {
+    run_inner(scene_path.as_ref(), None, initial_view_mode, autoplay)
+}
+
+#[cfg(feature = "live-stream")]
+pub fn run_live(
+    scene_path: impl AsRef<Path>,
+    endpoint: String,
+    initial_view_mode: ViewMode,
+    autoplay: bool,
+) -> Result<()> {
+    run_inner(scene_path.as_ref(), Some(endpoint), initial_view_mode, autoplay)
+}
+
+fn run_inner(
+    scene_path: &Path,
+    live_endpoint: Option<String>,
+    initial_view_mode: ViewMode,
+    autoplay: bool,
+) -> Result<()> {
+    let (scene_package, working_scene_root) = initialize_scene_package(scene_path)?;
     let replay_document = scene_package
         .replay
         .clone()
@@ -85,11 +111,19 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
 
     let asset_root = working_scene_root.asset_root.clone();
 
-    App::new()
-        .insert_resource(ClearColor(Color::srgb(0.18, 0.20, 0.22)))
+    let mut replay_state = ReplayState::new(replay_document);
+    // Autoplay starts the timeline immediately so the scan-map reconstruction
+    // accumulates without the operator pressing Space (has no effect on a
+    // single-frame replay).
+    if autoplay {
+        replay_state.playing = true;
+    }
+
+    let mut app = App::new();
+    app.insert_resource(ClearColor(Color::srgb(0.18, 0.20, 0.22)))
         .insert_resource(scene_package)
         .insert_resource(working_scene_root)
-        .insert_resource(ReplayState::new(replay_document))
+        .insert_resource(replay_state)
         .insert_resource(layer_visibility)
         .insert_resource(RuntimeOverlayVisibility::default())
         .insert_resource(CurrentRuntimeMarkers::default())
@@ -105,7 +139,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
         .insert_resource(ProjectedZoneBadges::default())
         .insert_resource(MissionOverlaySettings::default())
         .insert_resource(ReconstructionCloud::default())
-        .insert_resource(ViewMode::default())
+        .insert_resource(initial_view_mode)
         .insert_resource(ViewerUiState::default())
         .add_plugins(
             DefaultPlugins
@@ -144,6 +178,7 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
                 build_projected_badges_system,
                 draw_scan_grid_system,
                 draw_poi_markers_system,
+                draw_team_localization_system,
                 update_reconstruction_system,
                 maintain_reconstruction_mesh_system,
                 draw_coord_frame_system,
@@ -154,8 +189,26 @@ pub fn run(scene_path: impl AsRef<Path>) -> Result<()> {
         .add_systems(
             Update,
             viewer_ui_system.in_set(bevy_egui::EguiSet::BeginPass),
-        )
-        .run();
+        );
+
+    #[cfg(feature = "live-stream")]
+    if let Some(endpoint) = live_endpoint {
+        app.insert_resource(crate::live::connect(endpoint));
+        app.add_systems(
+            Update,
+            crate::live::ingest_live_frames_system.before(advance_playback_system),
+        );
+        app.add_systems(
+            Update,
+            crate::live::live_status_ui_system
+                .in_set(bevy_egui::EguiSet::BeginPass)
+                .after(viewer_ui_system),
+        );
+    }
+    #[cfg(not(feature = "live-stream"))]
+    let _ = live_endpoint;
+
+    app.run();
 
     Ok(())
 }
@@ -202,29 +255,50 @@ fn setup_world(
         orbit,
         Camera3d::default(),
         Transform::from_translation(eye).looking_at(focus, Vec3::Z),
+        // Sees the world (layer 0) plus the reconstruction (RECON_LAYER) so the
+        // scan-map overlay still shows in RealWorld/ScanMap and the Split left pane.
+        RenderLayers::from_layers(&[0, RECON_LAYER]),
     ));
 
-    // Top-down orthographic camera for the Split-mode reconstruction viewport.
-    // Inactive by default; sync_split_viewports_system enables it when ViewMode::Split.
+    // Angled 3-D perspective camera for the Split-mode reconstruction viewport.
+    // Renders only RECON_LAYER, so the right pane is an empty area that fills with
+    // a 3-D reconstruction of the believed terrain as the mission scans it.
+    // Inactive by default; sync_split_viewports_system enables it in ViewMode::Split.
     let bounds = &scene_package.environment.bounds_xy_m;
-    let cx = (bounds.x_min_m + bounds.x_max_m) * 0.5;
-    let cy = (bounds.y_min_m + bounds.y_max_m) * 0.5;
-    let scene_height_m = (bounds.y_max_m - bounds.y_min_m).max(100.0);
+    let span = (bounds.x_max_m - bounds.x_min_m)
+        .max(bounds.y_max_m - bounds.y_min_m)
+        .max(200.0);
+    // Independent orbit controller for the reconstruction pane, framed at a lower
+    // pitch than the main camera so the believed terrain reads as 3-D relief. It is
+    // driven only when the cursor is over the right (Split) viewport, so the right
+    // pane can be rotated, panned, and zoomed without moving the main view.
+    let mut recon_orbit = OrbitCamera::from_bounds(
+        &scene_package.environment.bounds_xy_m,
+        terrain_summary.and_then(|summary| summary.min_height_m),
+        terrain_summary.and_then(|summary| summary.max_height_m),
+    );
+    recon_orbit.pitch = 0.6;
+    let recon_eye = recon_orbit.eye_position();
+    let recon_focus = recon_orbit.focus;
+    let recon_far = (recon_orbit.max_radius + span) * 1.3;
     commands.spawn((
         ReconstructionCamera,
+        recon_orbit,
         Camera3d::default(),
         Camera {
             order: 1,
             is_active: false,
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.04, 0.05, 0.07)),
             ..default()
         },
-        Projection::Orthographic(bevy::render::camera::OrthographicProjection {
-            scaling_mode: bevy::render::camera::ScalingMode::FixedVertical {
-                viewport_height: scene_height_m,
-            },
-            ..bevy::render::camera::OrthographicProjection::default_3d()
+        Projection::Perspective(PerspectiveProjection {
+            fov: 45.0_f32.to_radians(),
+            near: 1.0,
+            far: recon_far,
+            ..default()
         }),
-        Transform::from_xyz(cx, cy, 5000.0).looking_at(Vec3::new(cx, cy, 0.0), Vec3::Y),
+        Transform::from_translation(recon_eye).looking_at(recon_focus, Vec3::Z),
+        RenderLayers::layer(RECON_LAYER),
     ));
 
     spawn_base_layers(
@@ -1318,17 +1392,66 @@ fn draw_poi_markers_system(
         return;
     }
     for est in &mission.localization_estimates {
+        // Z-up world, matching every other overlay (x, y, z).
         let pos = Vec3::new(
             est.position_estimate[0],
+            est.position_estimate[1],
             est.position_estimate[2],
-            -est.position_estimate[1],
         );
-        let radius = est.position_std_m;
+        let radius = est.position_std_m.max(5.0);
         let alpha = 0.5 * est.confidence;
         let color = Color::hsla(200.0, 0.8, 0.6, alpha);
         let isometry = bevy::math::Isometry3d::new(pos, Quat::IDENTITY);
         gizmos.circle(isometry, radius, color);
     }
+}
+
+/// Draws the fused team position from cooperative co-localization: a beacon at the
+/// team estimate, its uncertainty ring, and spokes to each drone whose estimate was
+/// fused in — making "the drones localize to each other's search data" visible.
+fn draw_team_localization_system(
+    mut gizmos: Gizmos,
+    replay_state: Res<ReplayState>,
+    overlay: Res<MissionOverlaySettings>,
+) {
+    if !overlay.show_loc_ellipses {
+        return;
+    }
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    let Some(mission) = &frame.scan_mission_state else {
+        return;
+    };
+    let Some(team) = &mission.team_localization else {
+        return;
+    };
+
+    let team_pos = Vec3::new(team.position[0], team.position[1], team.position[2]);
+    // Cyan beacon, brightening as the fused estimate gains confidence.
+    let beacon = Color::hsla(185.0, 0.9, 0.55, 0.4 + 0.55 * team.confidence.clamp(0.0, 1.0));
+
+    // Spokes from the team estimate to each contributing drone's own estimate.
+    for est in &mission.localization_estimates {
+        if !team.contributing_node_ids.iter().any(|id| id == &est.drone_id) {
+            continue;
+        }
+        let drone_pos = Vec3::new(
+            est.position_estimate[0],
+            est.position_estimate[1],
+            est.position_estimate[2],
+        );
+        gizmos.line(team_pos, drone_pos, Color::hsla(185.0, 0.8, 0.6, 0.35));
+    }
+
+    // Uncertainty ring (true 1-sigma, floored so a tight fusion is still visible).
+    let ring = bevy::math::Isometry3d::new(team_pos, Quat::IDENTITY);
+    gizmos.circle(ring, team.position_std_m.max(8.0), beacon);
+
+    // Vertical beacon stalk + top sphere so the datum is findable from any angle.
+    gizmos.line(team_pos, team_pos + Vec3::Z * 90.0, beacon);
+    let top = bevy::math::Isometry3d::new(team_pos + Vec3::Z * 90.0, Quat::IDENTITY);
+    gizmos.sphere(top, 10.0, beacon);
 }
 
 /// Accumulates newly-scanned cell points from the replay into the persistent
@@ -1370,6 +1493,26 @@ fn update_reconstruction_system(
     }
 }
 
+/// Infers the coverage grid cell size (meters) from the reconstruction points as the
+/// smallest positive gap between distinct x-coordinates. Falls back to 50 m (the default
+/// coverage resolution) when there are too few points to establish spacing.
+fn infer_cell_size(points: &[[f32; 3]]) -> f32 {
+    let mut xs: Vec<f32> = points.iter().map(|p| p[0]).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut best = f32::INFINITY;
+    for w in xs.windows(2) {
+        let d = w[1] - w[0];
+        if d > 0.5 && d < best {
+            best = d;
+        }
+    }
+    if best.is_finite() {
+        best
+    } else {
+        50.0
+    }
+}
+
 /// Spawns the persistent GPU line-list mesh used for the reconstruction cloud.
 /// Called once at startup; the mesh geometry is empty until `maintain_reconstruction_mesh_system`
 /// fills it.
@@ -1405,6 +1548,9 @@ fn setup_reconstruction_mesh(
         MeshMaterial3d(materials.add(mat)),
         Visibility::Hidden,
         ReconstructionMeshMarker,
+        // Reconstruction-only layer: the main camera sees it (layers 0+RECON) but
+        // the reconstruction camera sees ONLY this, keeping its pane empty of terrain.
+        RenderLayers::layer(RECON_LAYER),
     ));
 }
 
@@ -1443,9 +1589,11 @@ fn maintain_reconstruction_mesh_system(
         return;
     }
 
-    // Half-size of a grid cell. Base terrain resolution is 5 m → 2 m half-extent
-    // leaves a 0.5 m gap per edge, producing a crisp grid of fine tiles.
-    const HALF: f32 = 2.0;
+    // Tile half-extent, inferred from the actual cell spacing so the reconstruction
+    // renders as a near-continuous believed-terrain surface at any coverage
+    // resolution. A 4% gap per edge keeps the grid crisp without visible seams.
+    let cell = infer_cell_size(&reconstruction.points);
+    let half = cell * 0.48;
     // Sit just above terrain to avoid z-fighting without floating awkwardly.
     const Z_LIFT: f32 = 1.0;
     // Up normal for all vertices in Z-up space.
@@ -1472,10 +1620,10 @@ fn maintain_reconstruction_mesh_system(
         let base = positions.len() as u32;
         let z = pt[2] + Z_LIFT;
         // Quad corners (CCW from below → correct winding for Z-up top face).
-        positions.push([pt[0] - HALF, pt[1] - HALF, z]);
-        positions.push([pt[0] + HALF, pt[1] - HALF, z]);
-        positions.push([pt[0] + HALF, pt[1] + HALF, z]);
-        positions.push([pt[0] - HALF, pt[1] + HALF, z]);
+        positions.push([pt[0] - half, pt[1] - half, z]);
+        positions.push([pt[0] + half, pt[1] - half, z]);
+        positions.push([pt[0] + half, pt[1] + half, z]);
+        positions.push([pt[0] - half, pt[1] + half, z]);
         for _ in 0..4 {
             normals.push(NORMAL);
             colors.push(rgba);
@@ -2143,6 +2291,8 @@ mod tests {
             inspection_events: Vec::new(),
             deconfliction_events: Vec::new(),
             scan_mission_state: None,
+            target_metadata: Vec::new(),
+            safety_events: Vec::new(),
         };
 
         let rejection = RejectedObservation {

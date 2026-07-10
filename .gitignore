@@ -38,6 +38,9 @@ replay.json
 replay_*.json
 *_replay.json
 *_large.json
+*.frames.jsonl
+*.frames.session.json
+*.bak
 
 # large datasets
 *.dataset.json

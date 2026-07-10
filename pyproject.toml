@@ -20,6 +20,7 @@ dependencies = [
 live = ["paho-mqtt>=2.0"]
 export = ["mcap-protobuf-support>=0.5", "fiona>=1.9,<2.0"]
 dev = [
+    "tqdm>=4.66",
     "ruff>=0.3",
     "mypy>=1.9",
     "pytest>=8.0",

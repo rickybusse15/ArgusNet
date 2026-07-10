@@ -139,11 +139,12 @@ impl ScenePackage {
 
         let environment: EnvironmentDocument =
             read_json(root.join(&manifest.metadata.environment))?;
-        let replay = manifest
-            .replay
-            .as_ref()
-            .map(|entry| read_json::<Value>(root.join(&entry.path)))
-            .transpose()?;
+        let replay = match manifest.replay.as_ref() {
+            Some(entry) if root.join(&entry.path).exists() => {
+                Some(read_json::<Value>(root.join(&entry.path))?)
+            }
+            _ => None,
+        };
 
         let style_lookup = style
             .layers

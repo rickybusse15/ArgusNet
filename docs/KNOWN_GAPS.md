@@ -44,10 +44,11 @@ Status labels:
 |------------|--------|------------------------|
 | Coverage map | **Implemented** | `src/argusnet/mapping/coverage.py` |
 | World map from scan observations | **Implemented** | `src/argusnet/mapping/world_map.py` |
+| Occlusion-aware scan coverage | **Implemented (opt-in)** | `--occlusion-aware-mapping` gates coverage/reconstruction through `EnvironmentQuery.los()` |
 | Replay `MappingState` | **Implemented** | `argusnet.core.types.MappingState`, populated in `src/argusnet/simulation/sim.py` |
 | Elevation/occupancy/semantic/uncertainty modules | **Partial** | Modules exist under `src/argusnet/mapping/*`; closed-loop runtime integration is incomplete. |
 | Belief-world planning authority | **Planned** | `BeliefWorldModel` / `WorldBeliefQuery` are roadmap contracts, not the current sim authority. |
-| Truth-isolation tests for physical-mode mapping | **Planned** | Needed before claiming physical-mode belief planning. |
+| Truth-isolation tests for physical-mode mapping | **Implemented (opt-in)** | `tests/test_occlusion_aware_mapping.py` covers LOS-gated reconstruction and obstacle-routed redirects. |
 
 ## Localization
 
@@ -81,12 +82,13 @@ Status labels:
 | 2D visibility-graph planner | **Implemented** | `src/argusnet/planning/planner_base.py` |
 | Route cache and obstacle expansion | **Implemented** | `PathPlanner2D`, `PlannerConfig` |
 | Frontier enclosed-gap gate | **Implemented** | `FrontierPlanner.find_gap_cells()` is wired into `scan_map_inspect`. |
-| Frontier cell selection | **Partial** | `select_frontier_cell(cmap, drone_xy, claimed, drone_id)` exists but is not called by `sim.py`. |
+| Frontier cell selection | **Implemented (opt-in)** | `select_frontier_cell()` redirects scanning drones when `--frontier-exploration` is set; the default scan remains sector lawnmower. |
+| Obstacle-routed mission redirects | **Implemented (opt-in)** | `--occlusion-aware-mapping` routes frontier/adaptive/POI/egress redirects through `PathPlanner2D` with straight-line fallback. |
 | Claimed-cell RF latency helpers | **Partial** | `CoordinationManager.update_claimed()` / `flush_messages()` exist but are not called by `sim.py`. |
 | Formation offsets | **Partial** | `CoordinationManager.formation_offsets()` exists but is not called by `sim.py`. |
 | Coordinator election | **Implemented** | `CoordinationManager.elect_coordinator()` is wired into `scan_map_inspect`. |
 | Drone deconfliction events | **Implemented** | `src/argusnet/planning/deconfliction.py` and sim replay events |
-| Blocking safety gate | **Partial** | Current safety checks/logging exist; full safety-engine blocking is roadmap work. |
+| Blocking safety gate | **Implemented (opt-in)** | `--safety-blocking` runs after deconfliction, clamps commands, emits events, and holds Abort-state drones. |
 | 3D path planning | **Planned** | Current route planner is 2D; altitude is handled separately. |
 
 ## Evaluation, Benchmarking, Replay, And UI
@@ -100,6 +102,7 @@ Status labels:
 | Benchmark standards | **Implemented as documentation** | `docs/PERFORMANCE_AND_BENCHMARKING.md` |
 | CI benchmark markers and golden performance files | **Planned** | Standard is documented; not all commands/files are wired into CI. |
 | Viewer replay playback | **Implemented** | `rust/argusnet-viewer` |
+| Viewer live streaming | **Implemented** | Legacy `WatchFrames` plus operator-focused `WatchFramesV2`, reconnect, bounded queues/history, truth filtering, sequence/drop telemetry |
 | Viewer headless CI/render path | **Partial** | Headless module exists; CI/render workflow is not fully documented or gated. |
 
 ## Interface Boundaries That Need Formalization
@@ -125,3 +128,4 @@ Status labels:
 | Rust generated/conversion boundary | `rust/argusnet-proto`, `rust/argusnet-server`, `rust/argusnet-core` |
 | Replay schema | `docs/replay-schema.json`; additive changes preferred |
 | Mapping/localization/inspection over gRPC | Not currently part of the proto runtime contract |
+| Operational target metadata and safety events | Additive fields on live/replay frames; supported by V2 live clients |

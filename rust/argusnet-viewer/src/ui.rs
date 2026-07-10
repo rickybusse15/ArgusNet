@@ -347,6 +347,7 @@ fn drawer_mission_content(
     );
     ui.separator();
     section_safety_alerts(ui, replay_state, mission_zones);
+    section_targets(ui, replay_state);
     section_selection(ui, selection);
     ui.separator();
     section_runtime_overlays(ui, runtime_visibility, mission_overlay);
@@ -389,7 +390,7 @@ fn apply_layer_preset(
         MapLayerPreset::Operator => {
             runtime_visibility.nodes = true;
             runtime_visibility.tracks = true;
-            runtime_visibility.truths = true;
+            runtime_visibility.truths = false;
             runtime_visibility.zones = true;
             runtime_visibility.radar_rings = true;
             runtime_visibility.observations = false;
@@ -415,7 +416,7 @@ fn apply_layer_preset(
         MapLayerPreset::Safety => {
             runtime_visibility.nodes = true;
             runtime_visibility.tracks = true;
-            runtime_visibility.truths = true;
+            runtime_visibility.truths = false;
             runtime_visibility.zones = true;
             runtime_visibility.radar_rings = true;
             runtime_visibility.observations = true;
@@ -2069,6 +2070,27 @@ fn section_safety_alerts(
         }
     }
 
+    for event in &frame.safety_events {
+        let state = if event.state.is_empty() {
+            event.reason.as_str()
+        } else {
+            event.state.as_str()
+        };
+        alerts.push((
+            if event.blocked {
+                AlertLevel::Error
+            } else {
+                AlertLevel::Warning
+            },
+            format!(
+                "Safety {}: {} [{}]",
+                event.subject_id,
+                state,
+                event.violations.join(", ")
+            ),
+        ));
+    }
+
     for truth in &frame.truths {
         let truth_pos = Vec3::from_array(truth.position);
         let has_nearby_track = frame.tracks.iter().any(|t| {
@@ -2124,6 +2146,43 @@ fn section_safety_alerts(
         }
     });
     ui.separator();
+}
+
+fn section_targets(ui: &mut egui::Ui, replay_state: &ReplayState) {
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+    ui.collapsing(format!("Targets ({})", frame.target_metadata.len()), |ui| {
+        if frame.target_metadata.is_empty() {
+            ui.label("No operational target metadata in this frame.");
+            return;
+        }
+        egui::Grid::new("operational_target_table")
+            .striped(true)
+            .num_columns(5)
+            .show(ui, |ui| {
+                ui.strong("Priority");
+                ui.strong("Target");
+                ui.strong("Type");
+                ui.strong("Status");
+                ui.strong("Confidence");
+                ui.end_row();
+                let mut targets = frame.target_metadata.iter().collect::<Vec<_>>();
+                targets.sort_by_key(|target| std::cmp::Reverse(target.priority));
+                for target in targets {
+                    ui.label(target.priority.to_string());
+                    ui.label(if target.operator_label.is_empty() {
+                        &target.target_id
+                    } else {
+                        &target.operator_label
+                    });
+                    ui.label(&target.target_type);
+                    ui.label(&target.status);
+                    ui.label(format!("{:.0}%", target.confidence * 100.0));
+                    ui.end_row();
+                }
+            });
+    });
 }
 
 #[derive(Clone, Copy)]

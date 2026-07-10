@@ -117,6 +117,8 @@ message PlatformFrame {
   repeated TruthState truths = 6;
   PlatformMetrics metrics = 7;
   repeated ObservationRejection generation_rejections = 8;
+  repeated TargetMetadata target_metadata = 9;
+  repeated SafetyEvent safety_events = 10;
 }
 
 message IngestFrameRequest {
@@ -124,6 +126,8 @@ message IngestFrameRequest {
   repeated NodeState node_states = 2;
   repeated BearingObservation observations = 3;
   repeated TruthState truths = 4;
+  repeated TargetMetadata target_metadata = 5;
+  repeated SafetyEvent safety_events = 6;
 }
 
 message IngestFrameResponse {
@@ -209,9 +213,53 @@ message MissionStatusResponse {
   repeated string active_track_ids = 6;
 }
 
+message TargetMetadata {
+  string target_id = 1;
+  string operator_label = 2;
+  string target_type = 3;
+  int32 priority = 4;
+  string behavior = 5;
+  string status = 6;
+  double first_seen_s = 7;
+  double last_seen_s = 8;
+  double confidence = 9;
+  string notes = 10;
+}
+
+message SafetyEvent {
+  string event_id = 1;
+  string subject_id = 2;
+  double timestamp_s = 3;
+  string state = 4;
+  repeated string violations = 5;
+  bool command_clamped = 6;
+  bool blocked = 7;
+  string reason = 8;
+}
+
+message WatchFramesRequest {}
+
+message WatchFramesV2Request {
+  bool include_truth = 1;
+  double max_rate_hz = 2;          // 0 = unlimited
+  uint64 resume_after_sequence = 3;
+}
+
+message WatchFramesV2Response {
+  uint64 sequence = 1;
+  double source_timestamp_s = 2;
+  uint64 dropped_since_last = 3;
+  string session_id = 4;
+  PlatformFrame frame = 5;
+}
+
 service WorldModelService {
   rpc IngestFrame(IngestFrameRequest) returns (IngestFrameResponse);
   rpc TrackStream(stream IngestFrameRequest) returns (stream IngestFrameResponse);
+  // Passive subscription: streams every processed frame without ingesting.
+  // Lagging subscribers skip frames rather than back-pressuring the engine.
+  rpc WatchFrames(WatchFramesRequest) returns (stream IngestFrameResponse);
+  rpc WatchFramesV2(WatchFramesV2Request) returns (stream WatchFramesV2Response);
   rpc LatestFrame(LatestFrameRequest) returns (LatestFrameResponse);
   rpc Reset(ResetRequest) returns (ResetResponse);
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);

@@ -615,6 +615,13 @@
             "$ref": "#/definitions/safety_validation_result"
           }
         },
+        "target_metadata": {
+          "type": "array",
+          "description": "Operator-facing identity, priority, behavior, status, and confidence for targets.",
+          "items": {
+            "$ref": "#/definitions/target_metadata"
+          }
+        },
         "belief_cells": {
           "type": "array",
           "description": "Optional planning-facing belief cells sampled for replay/UI.",
@@ -663,6 +670,23 @@
         "phase": {"type": ["string", "null"]},
         "reason": {"type": ["string", "null"]},
         "details": {"type": "object"}
+      }
+    },
+    "target_metadata": {
+      "type": "object",
+      "required": ["target_id"],
+      "additionalProperties": true,
+      "properties": {
+        "target_id": {"type": "string"},
+        "operator_label": {"type": "string"},
+        "target_type": {"type": "string"},
+        "priority": {"type": "integer"},
+        "behavior": {"type": "string"},
+        "status": {"type": "string"},
+        "first_seen_s": {"type": "number"},
+        "last_seen_s": {"type": "number"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "notes": {"type": "string"}
       }
     },
     "safety_validation_result": {
@@ -794,6 +818,28 @@
           "type": ["string", "null"],
           "description": "Node ID of the elected mission coordinator drone (highest battery fraction at election time). Null if no coordinator has been elected yet.",
           "default": null
+        },
+        "team_localization": {
+          "type": ["object", "null"],
+          "description": "Fused team position from cooperative co-localization (inverse-variance fusion of the per-drone estimates). Null outside cooperative search or before enough drones converge.",
+          "default": null,
+          "additionalProperties": true,
+          "properties": {
+            "position": {
+              "type": "array",
+              "description": "World-space [x_m, y_m, z_m] of the fused team estimate.",
+              "items": {"type": "number"},
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "position_std_m": {"type": "number", "minimum": 0},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "contributing_node_ids": {
+              "type": "array",
+              "description": "Drone IDs whose estimates were fused into the team position.",
+              "items": {"type": "string"}
+            }
+          }
         },
         "poi_statuses": {
           "type": "array",

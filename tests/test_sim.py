@@ -5,8 +5,8 @@ import unittest
 import numpy as np
 
 from argusnet.core.types import PlatformFrame, PlatformMetrics, TruthState
-from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
 from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLayer
+from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
 from argusnet.simulation.sim import (
     DRONE_MODE_PRESETS,
     REJECT_OBJECT_OCCLUSION,
@@ -485,6 +485,40 @@ class MultiDroneDeconflictionIntegrationTest(unittest.TestCase):
 
             for k in positions:
                 positions[k] = adjusted[k][0]
+
+
+class FrontierExplorationTest(unittest.TestCase):
+    """The frontier_exploration option must redirect scanning drones."""
+
+    @staticmethod
+    def _drone_positions(frontier: bool) -> dict[str, list]:
+        from argusnet.simulation.sim import (
+            SimulationConfig,
+            build_default_scenario,
+            run_simulation,
+        )
+
+        scenario = build_default_scenario(
+            options=ScenarioOptions(frontier_exploration=frontier),
+            seed=7,
+        )
+        result = run_simulation(scenario, SimulationConfig(steps=120, dt_s=0.25, seed=7))
+        final_frame = result.frames[-1]
+        return {node.node_id: list(node.position) for node in final_frame.nodes if node.is_mobile}
+
+    def test_frontier_flag_changes_drone_paths(self):
+        lawnmower = self._drone_positions(frontier=False)
+        frontier = self._drone_positions(frontier=True)
+        self.assertEqual(set(lawnmower), set(frontier))
+        moved = [
+            node_id
+            for node_id in lawnmower
+            if not np.allclose(lawnmower[node_id], frontier[node_id])
+        ]
+        self.assertTrue(moved, "frontier_exploration should alter at least one drone trajectory")
+
+    def test_frontier_flag_default_off(self):
+        self.assertFalse(ScenarioOptions().frontier_exploration)
 
 
 if __name__ == "__main__":

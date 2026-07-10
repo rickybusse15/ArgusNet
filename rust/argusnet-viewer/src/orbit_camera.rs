@@ -1,7 +1,10 @@
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use bevy_egui::EguiContexts;
 
 use crate::schema::Bounds2d;
+use crate::state::{ReconstructionCamera, ViewMode};
 
 const MIN_PITCH_RAD: f32 = 0.1;
 const MAX_PITCH_RAD: f32 = 1.4;
@@ -55,13 +58,18 @@ impl OrbitCamera {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut mouse_motion: EventReader<MouseMotion>,
     mut mouse_wheel: EventReader<MouseWheel>,
-    mut query: Query<(&mut OrbitCamera, &mut Transform)>,
+    mut contexts: EguiContexts,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    view_mode: Res<ViewMode>,
+    mut query: Query<(&mut OrbitCamera, &mut Transform, Option<&ReconstructionCamera>)>,
 ) {
+    // Accumulate input deltas. Always drain the readers so events never pile up.
     let mut orbit_delta = Vec2::ZERO;
     let mut pan_delta = Vec2::ZERO;
     for event in mouse_motion.read() {
@@ -83,27 +91,51 @@ fn update_orbit_camera(
         scroll_delta += event.y;
     }
 
-    for (mut camera, mut transform) in &mut query {
-        if orbit_delta.length_squared() > 0.0 {
-            camera.yaw -= orbit_delta.x * 0.005;
-            camera.pitch =
-                (camera.pitch + orbit_delta.y * 0.004).clamp(MIN_PITCH_RAD, MAX_PITCH_RAD);
+    // When the pointer is over an egui panel (the drawer / tabs), let egui consume
+    // the scroll so the panel scrolls on its own — the cameras stay put.
+    let over_ui = contexts.ctx_mut().is_pointer_over_area();
+
+    // Route input to the pane under the cursor. In Split mode the left half drives
+    // the main camera and the right half drives the reconstruction camera; in every
+    // other mode only the main camera is active and takes the whole window.
+    let window = windows.get_single().ok();
+    let cursor = window.and_then(|w| w.cursor_position());
+    let half_width = window.map(|w| w.width() * 0.5).unwrap_or(f32::MAX);
+    let cursor_over_recon = matches!(*view_mode, ViewMode::Split)
+        && cursor.map(|c| c.x >= half_width).unwrap_or(false);
+
+    for (mut camera, mut transform, is_recon) in &mut query {
+        let is_target = !over_ui
+            && if cursor_over_recon {
+                is_recon.is_some()
+            } else {
+                is_recon.is_none()
+            };
+
+        if is_target {
+            if orbit_delta.length_squared() > 0.0 {
+                camera.yaw -= orbit_delta.x * 0.005;
+                camera.pitch =
+                    (camera.pitch + orbit_delta.y * 0.004).clamp(MIN_PITCH_RAD, MAX_PITCH_RAD);
+            }
+
+            if pan_delta.length_squared() > 0.0 {
+                let forward = (camera.focus - camera.eye_position()).normalize_or_zero();
+                let right = forward.cross(Vec3::Z).normalize_or_zero();
+                let up = right.cross(forward).normalize_or_zero();
+                let pan_scale = camera.radius * 0.0025;
+                camera.focus += ((-pan_delta.x * right) + (pan_delta.y * up)) * pan_scale;
+            }
+
+            if scroll_delta.abs() > f32::EPSILON {
+                let zoom_factor = (1.0 - (scroll_delta * 0.1)).clamp(0.2, 4.0);
+                camera.radius =
+                    (camera.radius * zoom_factor).clamp(camera.min_radius, camera.max_radius);
+            }
         }
 
-        if pan_delta.length_squared() > 0.0 {
-            let forward = (camera.focus - camera.eye_position()).normalize_or_zero();
-            let right = forward.cross(Vec3::Z).normalize_or_zero();
-            let up = right.cross(forward).normalize_or_zero();
-            let pan_scale = camera.radius * 0.0025;
-            camera.focus += ((-pan_delta.x * right) + (pan_delta.y * up)) * pan_scale;
-        }
-
-        if scroll_delta.abs() > f32::EPSILON {
-            let zoom_factor = (1.0 - (scroll_delta * 0.1)).clamp(0.2, 4.0);
-            camera.radius =
-                (camera.radius * zoom_factor).clamp(camera.min_radius, camera.max_radius);
-        }
-
+        // Keep every camera's transform in sync with its orbit parameters so both
+        // panes render correctly even on frames where they receive no input.
         transform.translation = camera.eye_position();
         transform.look_at(camera.focus, Vec3::Z);
     }
