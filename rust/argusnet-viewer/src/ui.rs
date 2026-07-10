@@ -551,24 +551,24 @@ fn section_operator_timeline(
                 plot_ui.line(
                     Line::new(obs_points)
                         .color(egui::Color32::from_rgb(95, 150, 220))
-                        .width(1.5),
+                        .width(1.5_f32),
                 );
                 plot_ui.line(
                     Line::new(event_points)
                         .color(egui::Color32::from_rgb(245, 180, 70))
-                        .width(1.5),
+                        .width(1.5_f32),
                 );
                 for (frame_idx, phase) in &phase_transitions {
                     plot_ui.vline(
                         VLine::new(*frame_idx as f64)
                             .color(phase_vline_color(phase.as_str()))
-                            .width(2.0),
+                            .width(2.0_f32),
                     );
                 }
                 plot_ui.vline(
                     VLine::new(replay_state.frame_index as f64)
                         .color(egui::Color32::WHITE)
-                        .width(2.0),
+                        .width(2.0_f32),
                 );
             });
     }
@@ -872,7 +872,7 @@ fn tab_mission_content(
             plot_ui.line(
                 Line::new(border)
                     .color(egui::Color32::from_rgba_unmultiplied(100, 120, 160, 180))
-                    .width(1.5),
+                    .width(1.5_f32),
             );
 
             // Mission zones
@@ -893,12 +893,16 @@ fn tab_mission_content(
                         [cx + r * a.cos(), cy + r * a.sin()]
                     })
                     .collect();
-                plot_ui.line(Line::new(PlotPoints::new(circle)).color(color).width(1.5));
+                plot_ui.line(
+                    Line::new(PlotPoints::new(circle))
+                        .color(color)
+                        .width(1.5_f32),
+                );
                 // Zone label dot at center
                 plot_ui.points(
                     Points::new(PlotPoints::new(vec![[cx, cy]]))
                         .color(color)
-                        .radius(3.0),
+                        .radius(3.0_f32),
                 );
             }
 
@@ -913,7 +917,7 @@ fn tab_mission_content(
                 plot_ui.points(
                     Points::new(PlotPoints::new(scan_pts))
                         .color(egui::Color32::from_rgba_unmultiplied(220, 200, 40, 120))
-                        .radius(1.5),
+                        .radius(1.5_f32),
                 );
             }
 
@@ -998,7 +1002,11 @@ fn tab_mission_content(
                                 [px + r * a.cos(), py + r * a.sin()]
                             })
                             .collect();
-                        plot_ui.line(Line::new(PlotPoints::new(circle)).color(color).width(2.0));
+                        plot_ui.line(
+                            Line::new(PlotPoints::new(circle))
+                                .color(color)
+                                .width(2.0_f32),
+                        );
                     }
                 }
 
@@ -1021,7 +1029,7 @@ fn tab_mission_content(
                         plot_ui.line(
                             Line::new(PlotPoints::new(trail_xy))
                                 .color(egui::Color32::from_rgba_unmultiplied(180, 180, 80, 80))
-                                .width(1.0),
+                                .width(1.0_f32),
                         );
                     }
                 }
@@ -1645,12 +1653,12 @@ fn section_playback_timeline(ui: &mut egui::Ui, replay_state: &ReplayState) {
                 plot_ui.line(line);
                 for (frame_idx, phase) in &phase_transitions {
                     let color = phase_vline_color(phase.as_str());
-                    plot_ui.vline(VLine::new(*frame_idx as f64).color(color).width(2.0));
+                    plot_ui.vline(VLine::new(*frame_idx as f64).color(color).width(2.0_f32));
                 }
                 plot_ui.vline(
                     VLine::new(current_frame)
                         .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180))
-                        .width(1.5),
+                        .width(1.5_f32),
                 );
             });
         if !phase_transitions.is_empty() {

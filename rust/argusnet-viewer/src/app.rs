@@ -159,7 +159,7 @@ fn run_inner(
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "ArgusNet Viewer".into(),
-                        resolution: (1440.0, 920.0).into(),
+                        resolution: (1440.0_f32, 920.0_f32).into(),
                         ..default()
                     }),
                     ..default()
