@@ -434,11 +434,82 @@ impl WorkingSceneRoot {
         }
     }
 
-    pub fn asset_path_for(&self, scene_root: &Path, relative_path: &str) -> String {
+    /// Resolves `relative_path` against `scene_root`, returning `None` if the
+    /// result would escape `asset_root` (an absolute path, or `..`
+    /// components that break out of the scene package). Scene manifests can
+    /// come from an untrusted, shared package, so a `None` here must be
+    /// treated as a rejection, not silently passed through to the caller.
+    ///
+    /// `..` components are rejected explicitly rather than left to
+    /// `strip_prefix` below: `Path` methods are purely lexical and never
+    /// resolve `..`, so e.g. `scene-0001/../../../etc/passwd` still has
+    /// `asset_root` as a literal component prefix and would otherwise pass.
+    pub fn asset_path_for(&self, scene_root: &Path, relative_path: &str) -> Option<String> {
+        if Path::new(relative_path)
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
+        {
+            return None;
+        }
         let rooted = scene_root.join(relative_path);
-        let Ok(relative) = rooted.strip_prefix(&self.asset_root) else {
-            return relative_path.replace('\\', "/");
-        };
-        relative.to_string_lossy().replace('\\', "/")
+        let relative = rooted.strip_prefix(&self.asset_root).ok()?;
+        Some(relative.to_string_lossy().replace('\\', "/"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn working_root() -> WorkingSceneRoot {
+        WorkingSceneRoot {
+            original_scene_root: PathBuf::from("/assets/scene-0001"),
+            asset_root: PathBuf::from("/assets"),
+            current_scene_root: PathBuf::from("/assets/scene-0001"),
+            revision: 0,
+            is_synthetic: false,
+        }
+    }
+
+    #[test]
+    fn asset_path_for_resolves_contained_relative_path() {
+        let root = working_root();
+        let scene_root = PathBuf::from("/assets/scene-0001");
+        assert_eq!(
+            root.asset_path_for(&scene_root, "terrain/mesh.glb")
+                .as_deref(),
+            Some("scene-0001/terrain/mesh.glb")
+        );
+    }
+
+    #[test]
+    fn asset_path_for_rejects_absolute_path() {
+        let root = working_root();
+        let scene_root = PathBuf::from("/assets/scene-0001");
+        assert_eq!(root.asset_path_for(&scene_root, "/etc/passwd"), None);
+    }
+
+    #[test]
+    fn asset_path_for_rejects_dotdot_escape() {
+        let root = working_root();
+        let scene_root = PathBuf::from("/assets/scene-0001");
+        assert_eq!(
+            root.asset_path_for(&scene_root, "../../../../etc/passwd"),
+            None
+        );
+    }
+
+    #[test]
+    fn asset_path_for_rejects_dotdot_within_an_otherwise_contained_path() {
+        // Regression test: `strip_prefix` is purely lexical and does not
+        // resolve `..`, so `scene-0001/../../../../etc/passwd` still has
+        // `/assets` as a literal component prefix. Without the explicit
+        // `..`-component check this would be silently accepted.
+        let root = working_root();
+        let scene_root = PathBuf::from("/assets/scene-0001");
+        assert_eq!(
+            root.asset_path_for(&scene_root, "terrain/../../../../etc/passwd"),
+            None
+        );
     }
 }

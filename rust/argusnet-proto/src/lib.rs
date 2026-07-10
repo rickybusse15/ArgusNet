@@ -166,6 +166,13 @@ pub fn node_state_to_pb(node: NodeState) -> pb::NodeState {
         sensor_type: "optical".to_string(),
         fov_half_angle_deg: 180.0,
         max_range_m: 0.0,
+        // Signed-envelope identity is verified and stripped at the Python
+        // ingestion boundary before frames reach the core tracker; it is
+        // never reconstructed on the way back out.
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 
@@ -192,6 +199,10 @@ pub fn observation_to_pb(observation: BearingObservation) -> pb::BearingObservat
         bearing_std_rad: observation.bearing_std_rad,
         timestamp_s: observation.timestamp_s,
         confidence: observation.confidence,
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 
@@ -360,6 +371,10 @@ pub fn node_state_to_pb_ref(node: &NodeState) -> pb::NodeState {
         sensor_type: "optical".to_string(),
         fov_half_angle_deg: 180.0,
         max_range_m: 0.0,
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 
@@ -372,6 +387,10 @@ pub fn observation_to_pb_ref(observation: &BearingObservation) -> pb::BearingObs
         bearing_std_rad: observation.bearing_std_rad,
         timestamp_s: observation.timestamp_s,
         confidence: observation.confidence,
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 

@@ -24,7 +24,9 @@ build/
 # Rust
 # ----------------------
 target/
-Cargo.lock
+# Cargo.lock is intentionally committed: this workspace only produces
+# binaries/services (argusnetd, the viewer), not a published library, so the
+# lockfile should stay reproducible across CI and local builds.
 
 # ----------------------
 # Generated outputs

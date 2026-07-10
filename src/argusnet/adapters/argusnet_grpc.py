@@ -8,7 +8,6 @@ import socket
 import subprocess
 import tempfile
 import time
-import warnings
 import weakref
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -31,8 +30,16 @@ from argusnet.core.types import (
     TrackState,
     TruthState,
 )
+from argusnet.security.transport import (
+    TLSConfig,
+    TransportSecurityError,
+    grpc_channel_credentials,
+    is_loopback_endpoint,
+)
 from argusnet.v1 import world_model_pb2 as tracker_pb2
 from argusnet.v1 import world_model_pb2_grpc as tracker_pb2_grpc
+
+_GRPC_TLS_ENV_PREFIX = "ARGUSNET_GRPC_TLS"
 
 REJECT_UNKNOWN_NODE = "unknown_node"
 REJECT_INVALID_TARGET = "invalid_target_id"
@@ -446,6 +453,7 @@ class TrackingService:
         spawn_local: bool | None = None,
         daemon_path: str | None = None,
         startup_timeout_s: float = 20.0,
+        tls_config: TLSConfig | None = None,
     ) -> None:
         if endpoint is None:
             endpoint = os.environ.get("ARGUSNET_ENDPOINT") or None
@@ -469,18 +477,20 @@ class TrackingService:
         if self.endpoint is None:
             raise ValueError("TrackingService requires an endpoint or spawn_local=True.")
 
-        if (
-            self.endpoint
-            and not self.endpoint.startswith("127.0.0.1")
-            and not self.endpoint.startswith("localhost")
-            and not self.endpoint.startswith("[::1]")
-        ):
-            warnings.warn(
-                f"Connecting to non-localhost endpoint {self.endpoint!r} without TLS. "
-                "Data will be transmitted in plaintext.",
-                stacklevel=2,
+        self._tls_config = tls_config or TLSConfig.from_env(_GRPC_TLS_ENV_PREFIX)
+        if self.endpoint and not is_loopback_endpoint(self.endpoint):
+            if not self._tls_config.configured:
+                raise TransportSecurityError(
+                    f"Refusing to connect to non-loopback endpoint {self.endpoint!r} without "
+                    f"TLS. Set {_GRPC_TLS_ENV_PREFIX}_CA (and _CERT/_KEY for mTLS) or pass "
+                    "tls_config=TLSConfig(...)."
+                )
+            credentials = grpc_channel_credentials(self._tls_config)
+            self._channel = grpc.secure_channel(
+                self.endpoint, credentials, options=_GRPC_CHANNEL_OPTIONS
             )
-        self._channel = grpc.insecure_channel(self.endpoint, options=_GRPC_CHANNEL_OPTIONS)
+        else:
+            self._channel = grpc.insecure_channel(self.endpoint, options=_GRPC_CHANNEL_OPTIONS)
         self._stub = tracker_pb2_grpc.WorldModelServiceStub(self._channel)
         self._finalizer = weakref.finalize(
             self,
@@ -532,6 +542,14 @@ class TrackingService:
 
     @staticmethod
     def _render_tracker_config_yaml(config: TrackerConfig) -> str:
+        # data_association_mode is interpolated unquoted below; TrackerConfig.__post_init__
+        # already restricts it to this fixed set, but re-check here so the YAML can never be
+        # corrupted even if that invariant is bypassed (e.g. via object.__setattr__).
+        if config.data_association_mode not in {"labeled", "gnn", "jpda"}:
+            raise ValueError(
+                f"data_association_mode must be one of labeled, gnn, jpda; "
+                f"got {config.data_association_mode!r}."
+            )
         return "\n".join(
             [
                 f"min_observations: {config.min_observations}",

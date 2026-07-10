@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from argusnet.core.frames import ENUOrigin
+from argusnet.core.io_limits import read_text_capped
 from argusnet.core.types import PlatformFrame, to_jsonable
 
 ReplayDocument = dict[str, object]
@@ -255,7 +256,7 @@ def write_streaming_replay_document(
         index_path = jsonl_path.with_suffix(".session.json")
         source_paths = [jsonl_path]
         if index_path.exists():
-            index = json.loads(index_path.read_text(encoding="utf-8"))
+            index = json.loads(read_text_capped(index_path))
             source_paths = [
                 jsonl_path.parent / segment["path"] for segment in index.get("segments", [])
             ]
@@ -273,7 +274,6 @@ def write_streaming_replay_document(
 
 
 def load_replay_document(path: str) -> ReplayDocument:
-    with open(path, encoding="utf-8") as handle:
-        document = json.load(handle)
+    document = json.loads(read_text_capped(path))
     validate_replay_document(document)
     return document

@@ -2,19 +2,39 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import math
+import os
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from argusnet.core.errors import ValidationError
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
 from argusnet.core.types import BearingObservation, NodeState, TruthState, Vector3, vec3
+from argusnet.core.validation import assert_finite, assert_unit_interval
+from argusnet.security.identity import DeviceRegistry, EnvelopeVerifier
+from argusnet.security.transport import (
+    TLSConfig,
+    TransportSecurityError,
+    is_loopback_host,
+    mqtt_tls_kwargs,
+)
 
 logger = logging.getLogger(__name__)
+
+# MQTT broker payloads are untrusted network input; cap raw message size before
+# touching json.loads to bound memory/CPU spent on a single malicious message.
+_DEFAULT_MQTT_MAX_PAYLOAD_BYTES = 64 * 1024
+
+# Keys carrying the signed-envelope identity, stripped before the remaining
+# payload is treated as the signed content and before it is parsed as an
+# observation/node-state body.
+_ENVELOPE_KEYS = frozenset({"device_id", "sequence", "signature"})
 
 
 # ---------------------------------------------------------------------------
@@ -70,15 +90,28 @@ def parse_mqtt_observation(
     if missing:
         raise ValueError(f"MQTT payload missing required keys: {sorted(missing)}")
 
-    # Observer position in local ENU
     lat = float(payload.get("lat_deg", 0.0))
     lon = float(payload.get("lon_deg", 0.0))
     alt = float(payload.get("alt_m", 0.0))
+    azimuth_deg = float(payload["azimuth_deg"])
+    elevation_deg = float(payload["elevation_deg"])
+    bearing_std_rad = float(payload["bearing_std_rad"])
+    timestamp_s = float(payload["timestamp_unix_s"])
+    confidence = float(payload.get("confidence", 1.0))
+
+    assert_finite([lat, lon, alt], name="observer position")
+    assert_finite([azimuth_deg, elevation_deg], name="bearing angles")
+    if not math.isfinite(bearing_std_rad) or bearing_std_rad <= 0.0:
+        raise ValidationError("bearing_std_rad must be finite and > 0.")
+    assert_finite(timestamp_s, name="timestamp_unix_s")
+    assert_unit_interval(confidence, name="confidence")
+
+    # Observer position in local ENU
     origin_enu = wgs84_to_enu(lat, lon, alt, enu_origin)
 
     # Convert azimuth/elevation to a unit direction vector in ENU
-    az_rad = math.radians(float(payload["azimuth_deg"]))
-    el_rad = math.radians(float(payload["elevation_deg"]))
+    az_rad = math.radians(azimuth_deg)
+    el_rad = math.radians(elevation_deg)
     cos_el = math.cos(el_rad)
     # Azimuth: 0=North (positive Y), 90=East (positive X)
     dx = cos_el * math.sin(az_rad)
@@ -91,9 +124,9 @@ def parse_mqtt_observation(
         target_id=str(payload.get("target_id", "unknown")),
         origin=origin_enu,
         direction=direction,
-        bearing_std_rad=float(payload["bearing_std_rad"]),
-        timestamp_s=float(payload["timestamp_unix_s"]),
-        confidence=float(payload.get("confidence", 1.0)),
+        bearing_std_rad=bearing_std_rad,
+        timestamp_s=timestamp_s,
+        confidence=confidence,
     )
 
 
@@ -111,24 +144,29 @@ def parse_mqtt_node_state(
         timestamp_unix_s         (float)
         health                   (float, optional) — default 1.0
     """
-    pos = wgs84_to_enu(
-        float(payload["lat_deg"]),
-        float(payload["lon_deg"]),
-        float(payload["alt_m"]),
-        enu_origin,
-    )
-    vel = vec3(
-        float(payload.get("vx_ms", 0.0)),
-        float(payload.get("vy_ms", 0.0)),
-        float(payload.get("vz_ms", 0.0)),
-    )
+    lat = float(payload["lat_deg"])
+    lon = float(payload["lon_deg"])
+    alt = float(payload["alt_m"])
+    vx = float(payload.get("vx_ms", 0.0))
+    vy = float(payload.get("vy_ms", 0.0))
+    vz = float(payload.get("vz_ms", 0.0))
+    timestamp_s = float(payload["timestamp_unix_s"])
+    health = float(payload.get("health", 1.0))
+
+    assert_finite([lat, lon, alt], name="node position")
+    assert_finite([vx, vy, vz], name="node velocity")
+    assert_finite(timestamp_s, name="timestamp_unix_s")
+    assert_finite(health, name="health")
+
+    pos = wgs84_to_enu(lat, lon, alt, enu_origin)
+    vel = vec3(vx, vy, vz)
     return NodeState(
         node_id=str(payload["node_id"]),
         position=pos,
         velocity=vel,
         is_mobile=bool(payload.get("is_mobile", True)),
-        timestamp_s=float(payload["timestamp_unix_s"]),
-        health=float(payload.get("health", 1.0)),
+        timestamp_s=timestamp_s,
+        health=health,
     )
 
 
@@ -155,6 +193,9 @@ class MQTTIngestionAdapter:
     observation_topic: str = "argusnet/observations"
     node_topic: str = "argusnet/nodes"
     enu_origin: ENUOrigin = field(default_factory=lambda: ENUOrigin(0.0, 0.0, 0.0))
+    tls_config: TLSConfig | None = None
+    device_registry: DeviceRegistry | None = None
+    payload_max_bytes: int = _DEFAULT_MQTT_MAX_PAYLOAD_BYTES
 
     _client: Any = field(default=None, init=False, repr=False)
     _on_frame: OnFrameCallback | None = field(default=None, init=False, repr=False)
@@ -163,8 +204,30 @@ class MQTTIngestionAdapter:
     )
     _pending_nodes: dict[str, NodeState] = field(default_factory=dict, init=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _verifier: EnvelopeVerifier | None = field(default=None, init=False, repr=False)
 
     def start(self, on_frame: OnFrameCallback) -> None:
+        # Checked before importing the optional paho-mqtt dependency so a
+        # misconfigured deployment fails on the actual problem (missing TLS /
+        # device registry), not on an unrelated missing package.
+        tls_config = self.tls_config or TLSConfig.from_env("ARGUSNET_MQTT_TLS")
+        if not is_loopback_host(self.broker):
+            if not tls_config.configured:
+                raise TransportSecurityError(
+                    f"Refusing to connect to non-loopback MQTT broker {self.broker!r} without "
+                    "TLS. Set ARGUSNET_MQTT_TLS_CA (and _CERT/_KEY for mTLS) or pass "
+                    "tls_config=TLSConfig(...)."
+                )
+            if self.device_registry is None:
+                raise TransportSecurityError(
+                    "Refusing to connect to a non-loopback MQTT broker without a "
+                    "device_registry: observations would be accepted from any publisher "
+                    "under any claimed node_id."
+                )
+
+        if self.device_registry is not None:
+            self._verifier = EnvelopeVerifier(self.device_registry)
+
         try:
             import paho.mqtt.client as mqtt
         except ImportError as exc:
@@ -174,6 +237,12 @@ class MQTTIngestionAdapter:
 
         self._on_frame = on_frame
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        if tls_config.configured:
+            self._client.tls_set(**mqtt_tls_kwargs(tls_config))
+        username = os.environ.get("ARGUSNET_MQTT_USERNAME")
+        password = os.environ.get("ARGUSNET_MQTT_PASSWORD")
+        if username:
+            self._client.username_pw_set(username, password)
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.connect(self.broker, self.port, keepalive=60)
@@ -195,11 +264,29 @@ class MQTTIngestionAdapter:
         )
 
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
+        if len(msg.payload) > self.payload_max_bytes:
+            logger.warning(
+                "Dropping oversized MQTT payload on %s: %d bytes > %d byte cap",
+                msg.topic,
+                len(msg.payload),
+                self.payload_max_bytes,
+            )
+            return
+
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             logger.warning("Failed to decode MQTT payload on %s: %s", msg.topic, exc)
             return
+
+        if not isinstance(payload, dict):
+            logger.warning("Dropping non-object MQTT payload on %s", msg.topic)
+            return
+
+        if self._verifier is not None:
+            payload = self._verify_envelope(payload, msg.topic)
+            if payload is None:
+                return
 
         try:
             if msg.topic == self.observation_topic:
@@ -210,8 +297,52 @@ class MQTTIngestionAdapter:
                 node = parse_mqtt_node_state(payload, self.enu_origin)
                 with self._lock:
                     self._pending_nodes[node.node_id] = node
-        except (KeyError, ValueError, TypeError) as exc:
+        except (KeyError, ValueError, TypeError, ValidationError) as exc:
             logger.warning("Failed to parse MQTT payload on %s: %s", msg.topic, exc)
+
+    def _verify_envelope(self, payload: dict[str, Any], topic: str) -> dict[str, Any] | None:
+        """Verify the signed envelope and return the un-signed body, or None to drop."""
+        assert self._verifier is not None  # for type checkers; guarded by caller
+        missing = {"device_id", "sequence", "signature"} - payload.keys()
+        if missing:
+            logger.warning(
+                "Dropping unsigned MQTT payload on %s: missing envelope fields %s",
+                topic,
+                sorted(missing),
+            )
+            return None
+
+        try:
+            device_id = str(payload["device_id"])
+            sequence = int(payload["sequence"])
+            signature = base64.b64decode(payload["signature"], validate=True)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Dropping malformed MQTT envelope on %s: %s", topic, exc)
+            return None
+
+        body = {k: v for k, v in payload.items() if k not in _ENVELOPE_KEYS}
+        timestamp_s = body.get("timestamp_unix_s")
+        if not isinstance(timestamp_s, (int, float)):
+            logger.warning("Dropping MQTT envelope on %s: missing/invalid timestamp_unix_s", topic)
+            return None
+
+        result = self._verifier.verify(
+            device_id=device_id,
+            sequence=sequence,
+            timestamp_s=float(timestamp_s),
+            payload=body,
+            signature=signature,
+        )
+        if not result.accepted:
+            logger.warning(
+                "Rejected MQTT envelope on %s from device %r: %s (%s)",
+                topic,
+                device_id,
+                result.reason.value if result.reason else "unknown",
+                result.detail,
+            )
+            return None
+        return body
 
     def flush_pending(self) -> tuple[list[NodeState], list[BearingObservation]]:
         """Remove and return buffered observations and node states."""

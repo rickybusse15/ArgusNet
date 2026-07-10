@@ -44,6 +44,13 @@ message NodeState {
   string sensor_type = 7;       // e.g. "optical", "thermal", "radar"
   double fov_half_angle_deg = 8; // 0 = unset (use platform default 180)
   double max_range_m = 9;        // 0 = unset (use platform default unlimited)
+
+  // Signed-envelope identity fields (comms security). Empty signature means
+  // this NodeState arrived over the legacy/unsigned local-only path.
+  string device_id = 10;
+  uint64 sequence = 11;
+  bytes signature = 12;
+  string signer_pubkey_id = 13;
 }
 
 message BearingObservation {
@@ -54,6 +61,13 @@ message BearingObservation {
   double bearing_std_rad = 5;
   double timestamp_s = 6;
   double confidence = 7;
+
+  // Signed-envelope identity fields (comms security). Empty signature means
+  // this observation arrived over the legacy/unsigned local-only path.
+  string device_id = 8;
+  uint64 sequence = 9;
+  bytes signature = 10;
+  string signer_pubkey_id = 11;
 }
 
 message ObservationRejection {

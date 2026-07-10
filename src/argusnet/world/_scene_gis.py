@@ -12,6 +12,12 @@ from argusnet.core.frames import ENUOrigin, wgs84_to_enu
 
 from .environment import Bounds2D, EnvironmentCRS
 
+# Bound on decoded DEM pixel count (rows * cols), checked before `.asarray()`
+# materializes the raster. At float32 this caps a single DEM around 1 GiB;
+# an untrusted GeoTIFF with a huge declared raster size otherwise decodes
+# unbounded, a decompression-bomb-style memory exhaustion risk.
+_MAX_DEM_PIXELS = 256_000_000
+
 
 def lazy_import_tifffile():
     try:
@@ -175,6 +181,12 @@ def project_dem_to_runtime(
 
     with tifffile.TiffFile(str(dem_path)) as handle:
         page = handle.pages[0]
+        pixel_count = math.prod(page.shape)
+        if pixel_count > _MAX_DEM_PIXELS:
+            raise ValueError(
+                f"DEM {dem_path} has {pixel_count} pixels, exceeding the "
+                f"{_MAX_DEM_PIXELS} pixel limit."
+            )
         heights = page.asarray().astype(np.float32)
         nodata_value = _extract_nodata_value(page)
         if nodata_value is not None:
