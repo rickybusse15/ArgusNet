@@ -65,7 +65,11 @@ struct ReloadedSceneBundle {
     should_reframe_camera: bool,
 }
 
-pub fn run(scene_path: impl AsRef<Path>, initial_view_mode: ViewMode, autoplay: bool) -> Result<()> {
+pub fn run(
+    scene_path: impl AsRef<Path>,
+    initial_view_mode: ViewMode,
+    autoplay: bool,
+) -> Result<()> {
     run_inner(scene_path.as_ref(), None, initial_view_mode, autoplay)
 }
 
@@ -76,7 +80,12 @@ pub fn run_live(
     initial_view_mode: ViewMode,
     autoplay: bool,
 ) -> Result<()> {
-    run_inner(scene_path.as_ref(), Some(endpoint), initial_view_mode, autoplay)
+    run_inner(
+        scene_path.as_ref(),
+        Some(endpoint),
+        initial_view_mode,
+        autoplay,
+    )
 }
 
 fn run_inner(
@@ -1429,11 +1438,20 @@ fn draw_team_localization_system(
 
     let team_pos = Vec3::new(team.position[0], team.position[1], team.position[2]);
     // Cyan beacon, brightening as the fused estimate gains confidence.
-    let beacon = Color::hsla(185.0, 0.9, 0.55, 0.4 + 0.55 * team.confidence.clamp(0.0, 1.0));
+    let beacon = Color::hsla(
+        185.0,
+        0.9,
+        0.55,
+        0.4 + 0.55 * team.confidence.clamp(0.0, 1.0),
+    );
 
     // Spokes from the team estimate to each contributing drone's own estimate.
     for est in &mission.localization_estimates {
-        if !team.contributing_node_ids.iter().any(|id| id == &est.drone_id) {
+        if !team
+            .contributing_node_ids
+            .iter()
+            .any(|id| id == &est.drone_id)
+        {
             continue;
         }
         let drone_pos = Vec3::new(

@@ -8,7 +8,7 @@
 //! backoff.
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -136,8 +136,8 @@ fn stream_worker(
 
     runtime.block_on(async move {
         loop {
-            match WorldModelServiceClient::connect(url.clone()).await {
-                Ok(mut client) => match client
+            if let Ok(mut client) = WorldModelServiceClient::connect(url.clone()).await {
+                if let Ok(response) = client
                     .watch_frames_v2(WatchFramesV2Request {
                         include_truth: false,
                         max_rate_hz: 0.0,
@@ -145,31 +145,21 @@ fn stream_worker(
                     })
                     .await
                 {
-                    Ok(response) => {
-                        status.store(LiveConnectionStatus::Connected.as_u8(), Ordering::Relaxed);
-                        let mut stream = response.into_inner();
-                        loop {
-                            match stream.message().await {
-                                Ok(Some(message)) => {
-                                    let Some(frame) = message.frame else {
-                                        continue;
-                                    };
-                                    latest_sequence.store(message.sequence, Ordering::Relaxed);
-                                    total_dropped
-                                        .fetch_add(message.dropped_since_last, Ordering::Relaxed);
-                                    total_received.fetch_add(1, Ordering::Relaxed);
-                                    match sender.try_send(frame_from_pb(frame)) {
-                                        Ok(()) | Err(TrySendError::Full(_)) => {}
-                                        Err(TrySendError::Disconnected(_)) => return,
-                                    }
-                                }
-                                Ok(None) | Err(_) => break, // stream ended or errored
-                            }
+                    status.store(LiveConnectionStatus::Connected.as_u8(), Ordering::Relaxed);
+                    let mut stream = response.into_inner();
+                    while let Ok(Some(message)) = stream.message().await {
+                        let Some(frame) = message.frame else {
+                            continue;
+                        };
+                        latest_sequence.store(message.sequence, Ordering::Relaxed);
+                        total_dropped.fetch_add(message.dropped_since_last, Ordering::Relaxed);
+                        total_received.fetch_add(1, Ordering::Relaxed);
+                        match sender.try_send(frame_from_pb(frame)) {
+                            Ok(()) | Err(TrySendError::Full(_)) => {}
+                            Err(TrySendError::Disconnected(_)) => return,
                         }
                     }
-                    Err(_) => {}
-                },
-                Err(_) => {}
+                }
             }
             status.store(
                 LiveConnectionStatus::Reconnecting.as_u8(),
@@ -188,24 +178,19 @@ pub fn ingest_live_frames_system(live: ResMut<LiveStream>, mut replay_state: Res
     let mut appended = 0_u64;
     {
         let receiver = live.receiver.lock().expect("live receiver poisoned");
-        loop {
-            match receiver.try_recv() {
-                Ok(frame) => {
-                    let document = replay_state.document.get_or_insert_with(|| ReplayDocument {
-                        meta: None,
-                        summary: None,
-                        frames: Vec::new(),
-                    });
-                    document.frames.push(frame);
-                    if document.frames.len() > LIVE_HISTORY_CAPACITY {
-                        let excess = document.frames.len() - LIVE_HISTORY_CAPACITY;
-                        document.frames.drain(..excess);
-                        replay_state.frame_index = replay_state.frame_index.saturating_sub(excess);
-                    }
-                    appended += 1;
-                }
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        while let Ok(frame) = receiver.try_recv() {
+            let document = replay_state.document.get_or_insert_with(|| ReplayDocument {
+                meta: None,
+                summary: None,
+                frames: Vec::new(),
+            });
+            document.frames.push(frame);
+            if document.frames.len() > LIVE_HISTORY_CAPACITY {
+                let excess = document.frames.len() - LIVE_HISTORY_CAPACITY;
+                document.frames.drain(..excess);
+                replay_state.frame_index = replay_state.frame_index.saturating_sub(excess);
             }
+            appended += 1;
         }
     }
     if appended > 0 {

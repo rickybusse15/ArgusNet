@@ -67,7 +67,11 @@ fn update_orbit_camera(
     mut contexts: EguiContexts,
     windows: Query<&Window, With<PrimaryWindow>>,
     view_mode: Res<ViewMode>,
-    mut query: Query<(&mut OrbitCamera, &mut Transform, Option<&ReconstructionCamera>)>,
+    mut query: Query<(
+        &mut OrbitCamera,
+        &mut Transform,
+        Option<&ReconstructionCamera>,
+    )>,
 ) {
     // Accumulate input deltas. Always drain the readers so events never pile up.
     let mut orbit_delta = Vec2::ZERO;
@@ -101,8 +105,8 @@ fn update_orbit_camera(
     let window = windows.get_single().ok();
     let cursor = window.and_then(|w| w.cursor_position());
     let half_width = window.map(|w| w.width() * 0.5).unwrap_or(f32::MAX);
-    let cursor_over_recon = matches!(*view_mode, ViewMode::Split)
-        && cursor.map(|c| c.x >= half_width).unwrap_or(false);
+    let cursor_over_recon =
+        matches!(*view_mode, ViewMode::Split) && cursor.map(|c| c.x >= half_width).unwrap_or(false);
 
     for (mut camera, mut transform, is_recon) in &mut query {
         let is_target = !over_ui

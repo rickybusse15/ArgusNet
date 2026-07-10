@@ -760,7 +760,6 @@ mod live_stream {
                     .into_iter()
                     .map(|(key, value)| (key, value as f32))
                     .collect(),
-                ..FrameMetrics::default()
             }
         }
     }

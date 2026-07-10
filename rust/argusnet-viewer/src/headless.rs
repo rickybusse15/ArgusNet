@@ -682,12 +682,18 @@ mod tests {
         let has_recon = img
             .pixels()
             .any(|p| p[0] < 120 && p[1] < 40 && p[2] > 60 && p[2] < 130);
-        assert!(has_recon, "expected reconstruction pixels in scan-map render");
+        assert!(
+            has_recon,
+            "expected reconstruction pixels in scan-map render"
+        );
         // Team beacon renders cyan (27, 175, 122).
         let has_team = img
             .pixels()
             .any(|p| p[0] < 70 && p[1] > 150 && p[2] > 90 && p[2] < 155);
-        assert!(has_team, "expected team-localization beacon in scan-map render");
+        assert!(
+            has_team,
+            "expected team-localization beacon in scan-map render"
+        );
 
         let _ = fs::remove_dir_all(root);
     }

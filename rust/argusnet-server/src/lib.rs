@@ -469,7 +469,7 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
                             .map(argusnet_proto::node_health_to_pb)
                             .collect(),
                         mean_frame_rate_hz: engine.mean_frame_rate_hz(),
-                        mean_ingest_latency_s: if ingest_latency_us.len() > 0 {
+                        mean_ingest_latency_s: if !ingest_latency_us.is_empty() {
                             ingest_latency_us.mean() / 1_000_000.0
                         } else {
                             0.0
