@@ -414,6 +414,130 @@ hardware-in-the-loop, and other approved adapters. Required platform controls:
 - simulation-only, HIL, and live-operation mode separation; and
 - no external execution path that bypasses safety validation.
 
+## Engineering Rules and Definition of Done
+
+The Architectural Principles above state intent. This section states the enforceable
+rules that carry that intent into day-to-day work. A change that violates one of
+these is a defect regardless of the feature it delivers, and reviewers should block
+on it. These rules operationalize `docs/STATE_OWNERSHIP.md`,
+`docs/ARCHITECTURE_DECISIONS.md`, and `docs/PERFORMANCE_AND_BENCHMARKING.md`.
+
+### Universal Definition of Done
+
+A change is *done* only when all of the following hold:
+
+- Behavior is covered by at least one test at the appropriate level (unit,
+  integration, replay, truth-isolation, or scenario).
+- Determinism is preserved: a fixed seed + config yields the same replay hash, or
+  the hash change is intentional, reviewed, and the baseline is updated in the same
+  commit with a one-line reason.
+- State ownership is unchanged, or the `docs/STATE_OWNERSHIP.md` table is updated in
+  the same commit.
+- No ground-truth value became a hidden input to planning, safety, localization,
+  belief-mapping, or operator-mode visualization (truth-isolation still passes).
+- Schema changes (proto, replay, scene, evidence) are additive, or a migration plus
+  version bump plus reader/writer/viewer update ship together.
+- The `docs/KNOWN_GAPS.md` status label and the relevant subsystem doc are updated
+  to match reality.
+- Any public Python symbol that moved keeps a re-export from its old module (the
+  `environment.py` backward-compatibility rule).
+
+### Vertical-slice rule
+
+Favor one state contract + one scenario + one visualization + one safety condition +
+one measurable acceptance test over broad horizontal edits. A pillar item is not
+"started" until it has a runtime wiring path. A module that exists but sits on no
+execution path is tracked as **Planned** in KNOWN_GAPS, never **Implemented**.
+
+### Truth-isolation rule (hard gate)
+
+Simulation ground truth (`TruthState`, true poses, true object/weather state) may be
+read only by (a) observation synthesis and (b) evaluation/metrics. Any read of a
+truth-typed value from planning, safety, localization, belief-mapping, or
+operator-mode viewer code fails review. Every new motion-producing path routes
+through the safety gate before execution — there is no "temporary" bypass.
+
+### Event-first rule
+
+Every consequential decision — task selection, route/trajectory choice, safety
+accept/reject/modify, operator override, execution outcome — is recorded as a typed,
+versioned replay event *as* it takes effect, not reconstructed afterward. If it is
+not in the event stream, it did not happen for audit purposes.
+
+### Cross-language boundary rule
+
+Per ADR Decision 1: Rust owns fused object-state, safety math, and latency-critical
+runtime; Python owns scenario, orchestration, analysis, and export. Do not
+reimplement fusion or safety math in the Python hot loop except as a clearly labeled
+test/reference utility. New math that will run per-frame in production belongs in
+Rust behind a typed boundary.
+
+### Codebase organization rules
+
+**Dependency direction is one-way.** `core/types` (contracts) ← subsystems (`world`,
+`sensing`, `mapping`, `localization`, `planning`, `mission`) ← `simulation` /
+`adapters` (orchestration) ← `cli`. Contracts never import subsystems; subsystems
+never import the simulation loop; nothing imports `cli`. An import that reverses this
+is a defect.
+
+**Where new code goes.**
+
+- New shared runtime/replay state → a frozen dataclass in `core/types.py`.
+- New domain logic → the owning subsystem package, never `simulation/sim.py`.
+- New observation generation → behind the `ObservationSource` contract, not inline in
+  `build_observations()`.
+- New viewer feature → the matching viewer module (state / render / interaction /
+  panel), not `app.rs` or `ui.rs`.
+
+**Monolith decomposition targets (active debt — do not grow these).**
+
+| File | Approx. size | Split into |
+|---|---|---|
+| `src/argusnet/simulation/sim.py` | ~7,100 lines | scenario construction, dynamics, observation synthesis, mission loop, replay assembly |
+| `rust/argusnet-viewer/src/ui.rs` | ~2,900 | panel modules with stable UI-facing state |
+| `rust/argusnet-viewer/src/app.rs` | ~2,700 | state / render / interaction |
+| `rust/argusnet-core/src/lib.rs` | ~2,300 | filter, association, health, service boundary |
+| `src/argusnet/planning/inspection.py` | ~1,500 | request model, viewpoint planning, evidence/quality |
+| `src/argusnet/simulation/behaviors.py` | ~1,300 | per-behavior modules |
+
+Guideline: a new Python module over ~800 lines or a Rust module over ~1,000 lines
+warrants a decomposition note in its PR; adding to a listed monolith requires
+justification and must not deepen its responsibilities.
+
+**Naming and units.** Meters for distance, radians for internal angles (CLI degree
+flags labeled), Z above datum. When a frame or unit is ambiguous, encode it in the
+name or a typed wrapper. IDs are stable and typed, not positional indices.
+
+### Performance rules and budgets
+
+These make `docs/PERFORMANCE_AND_BENCHMARKING.md` enforceable.
+
+- **Benchmark before merge.** Any change to a hot path — per-frame sim step, fusion
+  ingest, terrain query, LOS/occlusion, planner cost, replay assembly, viewer frame —
+  reports Level-0 or Level-1 numbers (median / p95 / p99, input size, seed, commit
+  SHA) before and after. No numbers, no merge for hot-path changes.
+- **Complexity budget.** Per-frame cost must not scale worse than linearly in
+  drones × objects without an explicit, documented justification.
+- **Terrain access.** Batched terrain reads go through the cached `height_at_many()`
+  path; no new per-point Python loop over terrain on a hot path.
+- **No hidden state.** Hot paths make no unbounded per-frame heap allocation and hold
+  no hidden global mutable state.
+- **Viewer parity.** The viewer holds its interactive frame-rate target; geometry may
+  be simplified for display but must reflect the same belief state (Principle 6).
+- **Scale before claiming a win.** Profile on the large-map (theater/operational)
+  scenarios, not only the default small scene.
+- **Determinism is a CI gate.** The replay-hash check and a headless reconstruction
+  render run in CI. The baseline has drifted and been hand-updated repeatedly; treat
+  an unexplained hash change as a failure to investigate, not a baseline to bump.
+
+### Review and merge gate checklist
+
+Every nontrivial PR confirms: tests at the right level; determinism preserved or
+baseline intentionally updated; truth-isolation intact; schema additive or migrated;
+state-ownership doc current; `KNOWN_GAPS.md` / subsystem doc updated; hot-path
+benchmarks attached when relevant; backward-compat re-exports kept; and a safety
+decision recorded for any new motion path.
+
 ## Delivery Phases
 
 The phases below describe dependency order, not fixed calendar estimates.
@@ -547,6 +671,20 @@ The first implementation tranche should be deliberately architectural:
 11. Establish the scenario matrix and physical-mode truth-isolation gate.
 12. Integrate the in-progress transport/security work as a protected foundation,
     not an isolated feature branch.
+
+### Standing engineering debt (repay alongside feature work)
+
+These are known, verifiable gaps that the rules above should stop from recurring:
+
+- Wire CI regression gates for the replay-determinism hash and a headless
+  reconstruction render. `ci.yml` and `nightly-bench.yml` exist but do not currently
+  gate on either; the reconstruction baseline has been hand-updated repeatedly, which
+  is exactly the drift the determinism gate is meant to catch.
+- Repair the shipped `scene.smartscene`, which fails `validate-scene`, and add a test
+  that keeps checked-in scene packages valid.
+- Land the standing performance budgets: profile the large-map
+  (theater/operational) scenarios and record golden Level-1 numbers so regressions
+  are detectable rather than anecdotal.
 
 ## Governance
 

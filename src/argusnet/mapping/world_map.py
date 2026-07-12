@@ -42,6 +42,12 @@ class WorldMap:
         self._ny = ny
         self._height_sum: np.ndarray = np.zeros((nx, ny), dtype=np.float64)
         self._height_count: np.ndarray = np.zeros((nx, ny), dtype=np.int32)
+        # Dense per-cell observed terrain height (NaN where never observed).
+        # Populated from the sensor footprint during ingest when a per-cell
+        # terrain height function is supplied; this is the belief-mapping layer
+        # the runtime belief query and viewer reconstruction read back, so
+        # neither has to consult simulation truth directly.
+        self._obs_height: np.ndarray = np.full((nx, ny), np.nan, dtype=np.float64)
         self._scan_count: int = 0
 
     # ------------------------------------------------------------------
@@ -55,6 +61,7 @@ class WorldMap:
         footprint_radius_m: float,
         visibility_predicate: Callable[[float, float], bool] | None = None,
         los_max_samples: int | None = None,
+        terrain_height_at_many: Callable[[np.ndarray], np.ndarray] | None = None,
     ) -> None:
         """Register one sensor footprint from a drone.
 
@@ -67,14 +74,30 @@ class WorldMap:
             los_max_samples: Optional cap on LOS predicate evaluations per
                 footprint (deterministic striding); only cells that pass the
                 predicate are recorded, so occluded cells never get height.
+            terrain_height_at_many: Optional vectorized ``(N,2)->(N,)`` terrain
+                height sampler. When supplied, the observed-height belief layer
+                (:pyattr:`observed_height_grid`) is filled at the centres of the
+                exact cells this footprint covered, so downstream belief/viewer
+                consumers read observed heights instead of raw truth. When
+                omitted, only the legacy nadir-height mean grid is updated.
         """
         cx, cy = float(drone_position[0]), float(drone_position[1])
-        self._coverage.mark_circular(
+        marked_i, marked_j = self._coverage.mark_circular(
             center_xy=(cx, cy),
             radius_m=footprint_radius_m,
             visibility_predicate=visibility_predicate,
             los_max_samples=los_max_samples,
         )
+        if terrain_height_at_many is not None and marked_i.size:
+            b = self.bounds
+            xs = b.x_min_m + (marked_i + 0.5) * b.resolution_m
+            ys = b.y_min_m + (marked_j + 0.5) * b.resolution_m
+            heights = np.asarray(
+                terrain_height_at_many(np.stack([xs, ys], axis=1)), dtype=float
+            ).ravel()
+            # Constant per cell (terrain is static), so overwrite is exact and
+            # idempotent — no float accumulation, unlike the nadir mean grid.
+            self._obs_height[marked_i, marked_j] = heights
 
         # Record terrain height in cells within footprint.
         # Use (i, j) = (x_index, y_index) to match CoverageMap convention.
@@ -128,6 +151,18 @@ class WorldMap:
     @property
     def coverage_fraction(self) -> float:
         return self._coverage.stats.coverage_fraction
+
+    @property
+    def observed_height_grid(self) -> np.ndarray:
+        """Dense per-cell observed terrain height (NaN where never observed).
+
+        This is the belief-mapping height layer: it is filled from the sensor
+        footprint during ingest (see ``add_scan_observation``'s
+        ``terrain_height_at_many``), so consumers read what the platforms
+        observed rather than consulting simulation truth. Shape is (nx, ny).
+        The live array is returned for read-only use; do not mutate it.
+        """
+        return self._obs_height
 
     @property
     def mean_height_grid(self) -> np.ndarray:

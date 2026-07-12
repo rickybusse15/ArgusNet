@@ -72,6 +72,15 @@ def rectangular_footprint(
     return pts
 
 
+def _unique_cells(i: np.ndarray, j: np.ndarray, ny: int) -> tuple[np.ndarray, np.ndarray]:
+    """Deduplicate parallel ``(i, j)`` index arrays into unique cells."""
+    if i.size == 0:
+        empty = np.empty(0, dtype=np.int64)
+        return empty, empty
+    flat = np.unique(i.astype(np.int64) * ny + j.astype(np.int64))
+    return flat // ny, flat % ny
+
+
 class CoverageMap:
     """Tracks how many times each cell in a grid has been observed."""
 
@@ -95,7 +104,7 @@ class CoverageMap:
         radius_m: float,
         visibility_predicate: Callable[[float, float], bool] | None = None,
         los_max_samples: int | None = None,
-    ) -> None:
+    ) -> tuple[np.ndarray, np.ndarray]:
         # Vectorized equivalent of mark(circular_footprint(...)): same arange
         # cell centres, same inclusive bounds test, same index truncation.
         cx, cy = center_xy
@@ -126,7 +135,8 @@ class CoverageMap:
             )
             mark_x = mark_x[visible]
             mark_y = mark_y[visible]
-        self._mark_xy_arrays(mark_x, mark_y)
+        i, j = self._mark_xy_arrays(mark_x, mark_y)
+        return _unique_cells(i, j, self._count.shape[1])
 
     def mark_rectangular(
         self,
@@ -146,12 +156,18 @@ class CoverageMap:
         ys = cy + sin_y * grid_u + cos_y * grid_v
         self._mark_xy_arrays(xs.ravel(), ys.ravel())
 
-    def _mark_xy_arrays(self, xs: np.ndarray, ys: np.ndarray) -> None:
-        """Increment counts for cell-centre coordinate arrays (bounds-checked)."""
+    def _mark_xy_arrays(self, xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Increment counts for cell-centre coordinate arrays (bounds-checked).
+
+        Returns the marked ``(i, j)`` cell indices (with duplicates, in mark
+        order) so callers can record co-located data — e.g. observed terrain
+        heights — against exactly the cells that were stamped.
+        """
         b = self.bounds
         keep = (xs >= b.x_min_m) & (xs <= b.x_max_m) & (ys >= b.y_min_m) & (ys <= b.y_max_m)
+        empty = np.empty(0, dtype=np.int64)
         if not keep.any():
-            return
+            return empty, empty
         xs = xs[keep]
         ys = ys[keep]
         nx, ny = self._count.shape
@@ -160,6 +176,7 @@ class CoverageMap:
         np.clip(i, 0, nx - 1, out=i)
         np.clip(j, 0, ny - 1, out=j)
         np.add.at(self._count, (i, j), 1)
+        return i, j
 
     def count_at(self, x: float, y: float) -> int:
         i, j = self.bounds.xy_to_ij(x, y)

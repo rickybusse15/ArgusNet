@@ -44,6 +44,7 @@ from argusnet.core.types import (
     MappingState,
     MissionZone,
     NodeState,
+    ObservationBatch,
     ObservationRejection,
     PlatformFrame,
     SafetyValidationResult,
@@ -58,6 +59,11 @@ from argusnet.evaluation.recording import RotatingFrameRecorder
 from argusnet.evaluation.replay import ReplayDocument, build_replay_document, write_replay_document
 from argusnet.localization.engine import GridLocalizer, LocalizationConfig
 from argusnet.localization.vio import EKFVIO, VisualFeature
+from argusnet.mapping.belief import (
+    BELIEF_QUERY_CONTRACT_VERSION,
+    BeliefQuery,
+    WorldBeliefQuery,
+)
 from argusnet.mapping.coverage import CoverageMap
 from argusnet.mapping.occupancy import GridBounds
 from argusnet.mapping.world_map import WorldMap
@@ -87,6 +93,12 @@ from argusnet.sensing.imu import IMUMeasurement
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
 from argusnet.sensing.models.noise import atmospheric_attenuation as sensor_atmospheric_attenuation
 from argusnet.sensing.models.noise import detection_probability as sensor_detection_probability
+from argusnet.sensing.observation_source import (
+    OBSERVATION_SOURCE_CONTRACT_VERSION,
+    AnalyticObservationSource,
+    ObservationRequest,
+    ObservationSource,
+)
 from argusnet.world.environment import (
     Bounds2D,
     BuildingPrism,
@@ -232,15 +244,10 @@ class SimTarget:
         )
 
 
-@dataclass(frozen=True)
-class ObservationBatch:
-    observations: list[BearingObservation]
-    attempted_count: int
-    rejection_counts: dict[str, int]
-    accepted_by_target: dict[str, int]
-    rejected_by_target: dict[str, int]
-    accepted_by_node_target: dict[tuple[str, str], int]
-    generation_rejections: list[ObservationRejection] = field(default_factory=list)
+# ``ObservationBatch`` now lives in ``argusnet.core.types`` (the contracts layer,
+# alongside ``BearingObservation``/``ObservationRejection``) and is the output
+# contract of an ``ObservationSource``. Imported above and re-exported here for
+# backward compatibility with existing ``from argusnet.simulation.sim`` importers.
 
 
 @dataclass(frozen=True)
@@ -356,6 +363,50 @@ class ScenarioOptions:
                 raise ValueError("mission_workflow does not match mission_profile_id.")
             if self.mission_mode != profile.mission_mode:
                 raise ValueError("mission_mode does not match mission_profile_id.")
+
+
+# ---------------------------------------------------------------------------
+# Curated demo scenarios
+# ---------------------------------------------------------------------------
+
+# Curated, in-range ``target_tracking`` demo. A default ``argusnet sim`` runs
+# ``scan_map_inspect`` with no targets, and even ``--mission-mode target_tracking``
+# on the default ``regional`` map (~4.3 km) leaves targets far outside a drone's
+# ``drone_base_max_range_m`` (650 m) sensor range, so no track ever confirms. This
+# bundle uses the ``small`` map (720 m x 690 m) so targets stay in range and the
+# tracking/fusion pipeline produces confirmed fused tracks out of the box.
+TRACKING_DEMO_DEFAULTS: Mapping[str, object] = MappingProxyType(
+    {
+        "mission_mode": "target_tracking",
+        "map_preset": "small",
+        "target_count": 3,
+        "drone_count": 4,
+        "target_motion_preset": "loiter",
+        "drone_mode_preset": "mixed",
+    }
+)
+
+# ScenarioOptions field -> argparse dest, for applying the demo bundle to parsed
+# CLI args while honouring explicitly-provided flags.
+_DEMO_FIELD_TO_ARG_DEST: Mapping[str, str] = MappingProxyType(
+    {
+        "mission_mode": "mission_mode",
+        "map_preset": "map_preset",
+        "target_count": "target_count",
+        "drone_count": "drone_count",
+        "target_motion_preset": "target_motion",
+        "drone_mode_preset": "drone_mode",
+    }
+)
+
+
+def tracking_demo_options(**overrides: object) -> ScenarioOptions:
+    """Return the curated in-range ``target_tracking`` demo scenario options.
+
+    Produces confirmed fused tracks out of the box (see ``TRACKING_DEMO_DEFAULTS``
+    and ``docs/USAGE.md``). Any keyword overrides the corresponding curated field.
+    """
+    return ScenarioOptions(**{**TRACKING_DEMO_DEFAULTS, **overrides})
 
 
 @dataclass(frozen=True)
@@ -4839,8 +4890,14 @@ def run_simulation(
     max_frames_in_memory: int = 500,
     progress: Callable[[int, int], None] | None = None,
     realtime: bool = False,
+    observation_source: ObservationSource | None = None,
+    belief_query_factory: Callable[[WorldMap], BeliefQuery] | None = None,
 ) -> SimulationResult:
     active_tracker_config = tracker_config or TrackerConfig()
+    # Observation synthesis goes through the versioned ObservationSource contract.
+    # The default analytic backend delegates to build_observations; callers may
+    # inject an alternative source (higher-fidelity, recorded, or live adapter).
+    active_observation_source = observation_source or AnalyticObservationSource(build_observations)
     scenario.reset_runtime_state()
     rng = np.random.default_rng(simulation_config.seed)
     sensor_models = _build_sensor_models(scenario.nodes, seed=simulation_config.seed)
@@ -4923,6 +4980,33 @@ def run_simulation(
 
     # WorldMap wraps the existing coverage map and adds terrain height tracking.
     _world_map = WorldMap(_coverage_bounds)
+
+    # Sensor-ingest terrain sampler: the one place the mapping layer reads terrain
+    # truth (a downward mapping sensor observing the ground it covers). Vectorized
+    # (N,2)->(N,) so per-cell observed heights are stamped without a Python loop.
+    def _belief_terrain_height_at_many(points: np.ndarray) -> np.ndarray:
+        terrain = scenario.terrain
+        if terrain is None:
+            return np.zeros(len(points), dtype=float)
+        try:
+            return np.asarray(terrain.height_at_many(points), dtype=float).ravel()
+        except Exception:
+            return np.array(
+                [float(terrain.height_at(float(x), float(y))) for x, y in points],
+                dtype=float,
+            )
+
+    # Runtime belief-query interface over the live world map. Consumers (viewer
+    # reconstruction, mapping summary; planners next) read belief through this
+    # facade instead of raw arrays or simulation truth.
+    if belief_query_factory is not None:
+        _belief_query: BeliefQuery = belief_query_factory(_world_map)
+    else:
+        # Heights come from the world map; coverage from the sim's primary map so
+        # the belief summary stays consistent with MappingState's coverage fields.
+        _belief_query = WorldBeliefQuery(
+            _world_map, coverage_map=_coverage_map, source_id="grid", version="1.0"
+        )
 
     # GridLocalizer estimates drone self-pose against the built coverage map.
     _grid_localizer = GridLocalizer(LocalizationConfig())
@@ -5517,18 +5601,20 @@ def run_simulation(
                 for ns in node_states
             ]
 
-        observation_batch = build_observations(
-            rng=rng,
-            nodes=scenario.nodes,
-            truths=truths,
-            timestamp_s=timestamp_s,
-            terrain=scenario.terrain,
-            occluding_objects=scenario.occluding_objects,
-            environment=scenario.environment,
-            weather=scenario.weather,
-            sensor_models=sensor_models,
-            constants=scenario.constants,
-            seed=simulation_config.seed,
+        observation_batch = active_observation_source.observe(
+            ObservationRequest(
+                rng=rng,
+                nodes=scenario.nodes,
+                truths=truths,
+                timestamp_s=timestamp_s,
+                terrain=scenario.terrain,
+                occluding_objects=scenario.occluding_objects,
+                environment=scenario.environment,
+                weather=scenario.weather,
+                sensor_models=sensor_models,
+                constants=scenario.constants,
+                seed=simulation_config.seed,
+            )
         )
         generation_attempted_count += observation_batch.attempted_count
         generation_rejection_counts.update(observation_batch.rejection_counts)
@@ -5629,9 +5715,22 @@ def run_simulation(
                     footprint_radius_m=_FOOTPRINT_RADIUS_M,
                     visibility_predicate=_scan_visibility_by_node.get(ns.node_id),
                     los_max_samples=_COVERAGE_LOS_MAX_SAMPLES if _occ_aware else None,
+                    terrain_height_at_many=_belief_terrain_height_at_many,
                 )
 
             scan_frac = _world_map.coverage_fraction
+
+            # Mapping consumer #2: fill the additive MappingState belief fields
+            # from the runtime belief query (previously always null).
+            _bsum = _belief_query.belief_summary()
+            step_mapping_state = replace(
+                step_mapping_state,
+                observed_cells=_bsum.observed_cells,
+                unknown_cells=_bsum.unknown_cells,
+                unsafe_cells=_bsum.unsafe_cells,
+                mean_height_uncertainty_m=_bsum.mean_height_uncertainty_m,
+                mean_belief_confidence=_bsum.mean_belief_confidence,
+            )
 
             # Localization runs every step from the start, building fidelity
             # progressively as the coverage map fills in.  Confidence starts
@@ -5911,11 +6010,13 @@ def run_simulation(
             if _new_mask.any():
                 _ii, _jj = np.where(_new_mask)
                 _b = _coverage_bounds
+                # Reconstruction consumes believed terrain heights from the runtime
+                # belief query (what the platforms observed), not simulation truth.
+                _belief_h = _belief_query.height_estimate_grid()
                 for _ci, _cj in zip(_ii.tolist(), _jj.tolist(), strict=False):
                     _cx, _cy = _b.ij_to_xy(int(_ci), int(_cj))
-                    _th = 0.0
-                    with contextlib.suppress(Exception):
-                        _th = float(scenario.terrain.height_at(float(_cx), float(_cy)))
+                    _bh = float(_belief_h[int(_ci), int(_cj)])
+                    _th = _bh if math.isfinite(_bh) else 0.0
                     _newly_covered.append((round(_cx, 1), round(_cy, 1), round(_th, 1)))
             # Advance the previous grid snapshot
             _prev_coverage_count_grid = _curr_grid.copy()
@@ -6064,6 +6165,18 @@ def run_simulation(
     # When streaming, `frames` is a rolling window; correct the total count.
     if _total_frame_count != len(frames):
         summary = {**summary, "frame_count": _total_frame_count}
+
+    # Observation-source and belief-query provenance (report/programmatic only;
+    # not written to the hashed replay).
+    summary = {
+        **summary,
+        "observation_source_id": active_observation_source.source_id,
+        "observation_source_version": active_observation_source.version,
+        "observation_source_contract_version": OBSERVATION_SOURCE_CONTRACT_VERSION,
+        "belief_query_id": _belief_query.source_id,
+        "belief_query_version": _belief_query.version,
+        "belief_query_contract_version": BELIEF_QUERY_CONTRACT_VERSION,
+    }
 
     if _coop_search_active:
         _opt = scenario.options
@@ -6216,6 +6329,7 @@ def _no_tracks_diagnostic_lines(summary: Mapping[str, object]) -> list[str]:
             "No fused tracks were produced: no observations were attempted.",
             "  This scenario has no targets in sensor range. In target-tracking mode,"
             " add targets with --target-count.",
+            "  For a ready-made in-range demo, run: argusnet sim --demo tracking",
         ]
     lines = [
         f"No fused tracks were produced: {accepted}/{attempted} observations accepted"
@@ -6230,6 +6344,7 @@ def _no_tracks_diagnostic_lines(summary: Mapping[str, object]) -> list[str]:
                 "  Targets are beyond sensor range — try a smaller --map-preset"
                 " (e.g. small) or more --drone-count."
             )
+    lines.append("  For a ready-made in-range demo, run: argusnet sim --demo tracking")
     return lines
 
 
@@ -6801,6 +6916,17 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Mission mode: scan_map_inspect (default) or target_tracking (legacy).",
     )
     parser.add_argument(
+        "--demo",
+        choices=["tracking"],
+        default=None,
+        action=_TrackProvidedAction,
+        help=(
+            "Apply a curated demo scenario. 'tracking' runs an in-range "
+            "target_tracking scene that produces confirmed fused tracks out of the "
+            "box. Explicit flags (e.g. --duration-s, --drone-count) still override."
+        ),
+    )
+    parser.add_argument(
         "--scan-threshold",
         dest="scan_coverage_threshold",
         type=float,
@@ -6951,6 +7077,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def run_from_args(args: argparse.Namespace) -> SimulationResult:
+    # Curated demo shortcut: seed the relevant args with the in-range tracking
+    # bundle, but never clobber a flag the user passed explicitly.
+    if getattr(args, "demo", None) == "tracking":
+        for field_name, value in TRACKING_DEMO_DEFAULTS.items():
+            dest = _DEMO_FIELD_TO_ARG_DEST[field_name]
+            if not _arg_was_provided(args, dest):
+                setattr(args, dest, value)
+
     try:
         constants = (
             _load_simulation_constants(args.config_file)

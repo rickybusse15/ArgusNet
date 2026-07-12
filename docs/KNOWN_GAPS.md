@@ -36,7 +36,7 @@ Status labels:
 | Labeled/GNN/JPDA association | **Implemented** | `rust/argusnet-core` |
 | Python Kalman/triangulation utilities | **Partial** | `src/argusnet/mapping/fusion.py` and localization helpers are utility/reference paths, not runtime fusion authority. |
 | Clutter / false-alarm generation | **Partial** | Parameters exist; scenario-wide clutter generation remains limited. |
-| Formal observation-source interface | **Planned** | `build_observations()` remains a large runtime function. |
+| Versioned observation-source interface | **Implemented** | `argusnet.sensing.observation_source` (`ObservationSource` protocol, `ObservationRequest`, `AnalyticObservationSource`); `run_simulation()` synthesizes every step through it and accepts an injectable `observation_source`. `build_observations()` remains the default analytic backend behind the seam. |
 
 ## Mapping
 
@@ -47,7 +47,8 @@ Status labels:
 | Occlusion-aware scan coverage | **Implemented (opt-in)** | `--occlusion-aware-mapping` gates coverage/reconstruction through `EnvironmentQuery.los()` |
 | Replay `MappingState` | **Implemented** | `argusnet.core.types.MappingState`, populated in `src/argusnet/simulation/sim.py` |
 | Elevation/occupancy/semantic/uncertainty modules | **Partial** | Modules exist under `src/argusnet/mapping/*`; closed-loop runtime integration is incomplete. |
-| Belief-world planning authority | **Planned** | `BeliefWorldModel` / `WorldBeliefQuery` are roadmap contracts, not the current sim authority. |
+| Runtime belief-query interface | **Implemented** | `argusnet.mapping.belief` (`BeliefQuery` protocol, `WorldBeliefQuery`, `BeliefSummary`, `BELIEF_QUERY_CONTRACT_VERSION`). `run_simulation()` builds it over the live world map; the viewer terrain reconstruction reads believed heights through it and `MappingState` belief fields are populated from `belief_summary()`. Sensor ingest stamps a dense observed-height layer so belief consumers never read terrain truth. |
+| Belief-world planning authority | **Partial** | The belief query is the runtime authority for the terrain reconstruction and mapping summary; planners still read the coverage map directly (next belief consumer). |
 | Truth-isolation tests for physical-mode mapping | **Implemented (opt-in)** | `tests/test_occlusion_aware_mapping.py` covers LOS-gated reconstruction and obstacle-routed redirects. |
 
 ## Localization
@@ -67,6 +68,7 @@ Status labels:
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
 | Scan-map-inspect mission phases | **Implemented** | `src/argusnet/simulation/sim.py`: `scanning`, `localizing`, `inspecting`, `egress`, `complete` |
+| Curated in-range target-tracking demo | **Implemented (opt-in)** | `--demo tracking` / `tracking_demo_options()` in `sim.py` place targets inside sensor range so fused tracks confirm out of the box; the default large-map behavior (no tracks) is unchanged. |
 | POI model and lifecycle | **Implemented** | `InspectionPOI`, `POIStatus`, `POIManager` |
 | Energy-aware POI assignment | **Implemented** | `src/argusnet/planning/poi.py` |
 | POI handoff, team assignment, rescoring | **Implemented** | `POIManager` and current sim wiring |
@@ -107,9 +109,15 @@ Status labels:
 
 ## Interface Boundaries That Need Formalization
 
-1. Observation generation should move behind a versioned observation-source contract.
-2. Mapping should expose a runtime belief query interface before planners depend on
-   belief-world semantics in physical-mode tests.
+1. ~~Observation generation should move behind a versioned observation-source contract.~~
+   **Done** — `argusnet.sensing.observation_source`, wired as the default synthesis
+   path in `run_simulation()` (see the Sensing And Fusion table).
+2. ~~Mapping should expose a runtime belief query interface before planners depend on
+   belief-world semantics in physical-mode tests.~~
+   **Done** — `argusnet.mapping.belief` (`BeliefQuery` protocol + `WorldBeliefQuery`
+   backend), constructed in `run_simulation()` and consumed by the viewer terrain
+   reconstruction and the `MappingState` belief summary (see the Mapping table).
+   Planner consumption of belief-world semantics is the next step behind the same seam.
 3. Localization should expose a richer pose/covariance/status interface before precision
    inspection routing depends on it.
 4. Inspection evidence and reconstruction artifacts should be persisted through indexing before

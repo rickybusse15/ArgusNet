@@ -1,5 +1,11 @@
 """ArgusNet mapping package."""
 
+from argusnet.mapping.belief import (
+    BELIEF_QUERY_CONTRACT_VERSION,
+    BeliefQuery,
+    BeliefSummary,
+    WorldBeliefQuery,
+)
 from argusnet.mapping.coverage import (
     CoverageMap,
     CoverageStats,
@@ -18,4 +24,8 @@ __all__ = [
     "circular_footprint",
     "rectangular_footprint",
     "WorldMap",
+    "BELIEF_QUERY_CONTRACT_VERSION",
+    "BeliefQuery",
+    "BeliefSummary",
+    "WorldBeliefQuery",
 ]
