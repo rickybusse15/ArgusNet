@@ -52,7 +52,12 @@ The current codebase has a partial mapping runtime used by `scan_map_inspect`:
 - `src/argusnet/simulation/sim.py` populates `MappingState` each frame and uses `WorldMap.coverage_map` for scan-map-inspect phase transitions.
 - `FrontierPlanner.find_gap_cells()` is currently wired as the enclosed-hole gate before the mission leaves the scanning phase.
 
-The richer `BeliefWorldModel` and `WorldBeliefQuery` terminology below is the roadmap contract. Today, `CoverageMap`, `WorldMap`, and `MappingState` are the implemented bridge toward that contract.
+`WorldBeliefQuery` (section 10) is now a runtime interface, not just roadmap terminology:
+`run_simulation()` builds it over the live `WorldMap`, the viewer terrain reconstruction
+reads believed heights through it, and `MappingState`'s belief fields are populated from
+`belief_summary()`. The richer `BeliefWorldModel` planning authority remains the roadmap
+goal; `CoverageMap`, `WorldMap`, `WorldBeliefQuery`, and `MappingState` are the implemented
+bridge toward it.
 
 ---
 
@@ -238,7 +243,15 @@ WorldBeliefQuery
   safe_corridor_between(a, b) -> route candidate
 ```
 
-The existing analytic terrain interface remains useful for simulation and prior terrain, but physical planning should depend on `WorldBeliefQuery` or an equivalent runtime belief interface.
+This interface is implemented as `argusnet.mapping.belief.WorldBeliefQuery` behind the
+`BeliefQuery` protocol (versioned by `BELIEF_QUERY_CONTRACT_VERSION`). It is constructed
+at runtime in `run_simulation()` and today drives the viewer terrain reconstruction (which
+reads believed heights, not truth) and the `MappingState` belief summary via
+`belief_summary()`. The believed heights come from a dense observed-height layer that the
+sensor ingest fills from the footprint — so the truth read stays inside observation
+synthesis and belief consumers read only the belief. The existing analytic terrain
+interface remains useful for simulation and prior terrain, but physical planning should
+depend on `WorldBeliefQuery` or an equivalent runtime belief interface.
 
 ---
 

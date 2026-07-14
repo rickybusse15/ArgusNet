@@ -1,14 +1,25 @@
-"""Planning-facing belief-world query helpers.
+"""Runtime belief-world query interface for mapping.
 
-This module adapts the current coverage/world-map runtime into the roadmap
-``WorldBeliefQuery`` contract without making planners depend on raw arrays or
-simulation truth.
+This module is the versioned seam between the coverage/world-map runtime and any
+belief consumer — the viewer's terrain reconstruction today, planners and mission
+routing next. It exposes coverage, observed terrain height, occupancy, and
+geofence *belief* without letting consumers touch raw arrays or simulation truth:
+the truth read stays inside observation synthesis (the world-map sensor ingest),
+and everything downstream reads back through this facade.
+
+Contract:
+
+* :class:`BeliefQuery` is the runtime protocol consumers depend on.
+* :class:`WorldBeliefQuery` is the default backend over a :class:`WorldMap`.
+* Every backend exposes ``source_id`` / ``version`` for provenance/lineage, and
+  ``BELIEF_QUERY_CONTRACT_VERSION`` versions the interface shape itself.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 
@@ -17,7 +28,19 @@ from argusnet.mapping.coverage import CoverageMap
 from argusnet.mapping.occupancy import GridBounds, OccupancyGrid
 from argusnet.mapping.world_map import WorldMap
 
+# Version of the BeliefQuery interface shape (query surface / summary semantics),
+# distinct from an individual backend's ``version``. Bump on breaking changes.
+BELIEF_QUERY_CONTRACT_VERSION = "1.0"
+
 GeofencePredicate = Callable[[float, float], bool]
+
+__all__ = [
+    "BELIEF_QUERY_CONTRACT_VERSION",
+    "BeliefQuery",
+    "BeliefSummary",
+    "FrontierCandidate",
+    "WorldBeliefQuery",
+]
 
 
 @dataclass(frozen=True)
@@ -30,8 +53,46 @@ class FrontierCandidate:
     risk_cost: float
 
 
+@dataclass(frozen=True)
+class BeliefSummary:
+    """Aggregate belief statistics over the mapped area (a query result).
+
+    Cheap to compute (vectorized over the coverage/height grids) so the mission
+    loop can attach it to every replay frame.
+    """
+
+    total_cells: int
+    observed_cells: int
+    unknown_cells: int
+    unsafe_cells: int
+    frontier_cells: int
+    coverage_fraction: float
+    mean_belief_confidence: float
+    mean_height_uncertainty_m: float | None
+
+
+@runtime_checkable
+class BeliefQuery(Protocol):
+    """Runtime interface a belief backend exposes to mapping/planning consumers."""
+
+    source_id: str
+    version: str
+
+    def height_estimate_grid(self) -> np.ndarray:
+        """Dense believed terrain height (NaN where unobserved), shape (nx, ny)."""
+        ...
+
+    def belief_summary(self) -> BeliefSummary:
+        """Aggregate belief statistics over the mapped area."""
+        ...
+
+
 class WorldBeliefQuery:
-    """Read-only query facade for coverage, height, occupancy, and geofence belief."""
+    """Default :class:`BeliefQuery` backend over coverage/world-map runtime state.
+
+    Beyond the protocol surface it offers richer per-cell queries (height,
+    occupancy, geofence, frontier scoring) for planning consumers.
+    """
 
     def __init__(
         self,
@@ -42,6 +103,8 @@ class WorldBeliefQuery:
         geofence: GeofencePredicate | None = None,
         last_observed_s_grid: np.ndarray | None = None,
         semantic_label_at: Callable[[float, float], str | None] | None = None,
+        source_id: str = "grid",
+        version: str = "1.0",
     ) -> None:
         if world_map is None and coverage_map is None:
             raise ValueError("WorldBeliefQuery requires a WorldMap or CoverageMap.")
@@ -52,13 +115,76 @@ class WorldBeliefQuery:
         self.geofence = geofence
         self.last_observed_s_grid = last_observed_s_grid
         self.semantic_label_at = semantic_label_at
+        self.source_id = source_id
+        self.version = version
 
     def height_estimate_at(self, x_m: float, y_m: float) -> float | None:
         if self.world_map is None:
             return None
         i, j = self.bounds.xy_to_ij(x_m, y_m)
+        # Prefer the dense observed-height belief layer; fall back to the legacy
+        # nadir-height mean grid for callers that did not supply per-cell heights.
+        observed = float(self.world_map.observed_height_grid[i, j])
+        if np.isfinite(observed):
+            return observed
         value = float(self.world_map.mean_height_grid[i, j])
         return value if np.isfinite(value) else None
+
+    def height_estimate_grid(self) -> np.ndarray:
+        """Dense believed terrain height (NaN where unobserved), shape (nx, ny).
+
+        Combines the observed-height belief layer with the legacy nadir mean grid
+        so the estimate is defined wherever either source has data.
+        """
+        if self.world_map is None:
+            return np.full((self.bounds.nx, self.bounds.ny), np.nan, dtype=np.float64)
+        observed = np.asarray(self.world_map.observed_height_grid, dtype=np.float64)
+        mean = self.world_map.mean_height_grid
+        grid: np.ndarray = np.where(np.isfinite(observed), observed, mean)
+        return grid
+
+    def belief_summary(self) -> BeliefSummary:
+        """Vectorized aggregate belief statistics over the mapped area."""
+        counts = self.coverage_map.count_grid
+        observed_mask = counts > 0
+        total_cells = int(counts.size)
+        observed_cells = int(observed_mask.sum())
+
+        # Per-cell coverage confidence, discounted by obstacle probability when an
+        # occupancy grid is available. Vectorized; no per-cell Python callback.
+        coverage_conf = np.clip(counts / 5.0, 0.0, 1.0)
+        if self.occupancy_grid is not None:
+            obstacle_p = np.clip(np.asarray(self.occupancy_grid.occupancy_grid), 0.0, 1.0)
+        else:
+            obstacle_p = np.zeros_like(coverage_conf)
+        confidence = np.maximum(0.0, coverage_conf * (1.0 - obstacle_p))
+        mean_conf = float(confidence[observed_mask].mean()) if observed_cells else 0.0
+        unsafe_cells = int((observed_mask & (obstacle_p >= 0.4)).sum())
+
+        # Height uncertainty proxy: resolution / sqrt(visits) over observed cells.
+        if observed_cells:
+            unc = self.bounds.resolution_m / np.sqrt(counts[observed_mask])
+            mean_height_unc: float | None = float(unc.mean())
+        else:
+            mean_height_unc = None
+
+        # Frontier cells: unobserved cells 4/8-adjacent to observed area.
+        frontier_cells = 0
+        if observed_cells and observed_cells < total_cells:
+            padded = np.pad(observed_mask, 1, constant_values=False)
+            neighbour = padded[:-2, 1:-1] | padded[2:, 1:-1] | padded[1:-1, :-2] | padded[1:-1, 2:]
+            frontier_cells = int((~observed_mask & neighbour).sum())
+
+        return BeliefSummary(
+            total_cells=total_cells,
+            observed_cells=observed_cells,
+            unknown_cells=total_cells - observed_cells,
+            unsafe_cells=unsafe_cells,
+            frontier_cells=frontier_cells,
+            coverage_fraction=(observed_cells / total_cells) if total_cells else 0.0,
+            mean_belief_confidence=mean_conf,
+            mean_height_uncertainty_m=mean_height_unc,
+        )
 
     def height_uncertainty_at(self, x_m: float, y_m: float) -> float | None:
         visits = self.coverage_at(x_m, y_m)

@@ -44,9 +44,10 @@ inspection documentation.
 
 | State | Defined In | Populated By | Consumers | Notes |
 |-------|------------|--------------|-----------|-------|
-| `MappingState` | `argusnet.core.types` | `src/argusnet/simulation/sim.py` from `CoverageMap` / `WorldMap` | replay schema, viewer, evaluation/docs | Contains coverage fraction, covered cells, total cells, mean revisits. |
-| `CoverageMap` | `src/argusnet/mapping/coverage.py` | `WorldMap.add_scan_observation()` and scan loop | frontier gap gate, POI rescoring, mapping metrics | Mutable mapping runtime owned by Python sim. |
-| `WorldMap` | `src/argusnet/mapping/world_map.py` | scan loop | feature extraction, coverage region queries, mapping state | Current bridge toward a richer belief world. |
+| `MappingState` | `argusnet.core.types` | `src/argusnet/simulation/sim.py` from `CoverageMap` / `WorldMap` / `WorldBeliefQuery` | replay schema, viewer, evaluation/docs | Coverage fraction, covered/total cells, mean revisits, plus belief fields (observed/unknown/unsafe cells, mean belief confidence, mean height uncertainty) filled from `belief_summary()` during scan-map-inspect. |
+| `CoverageMap` | `src/argusnet/mapping/coverage.py` | `WorldMap.add_scan_observation()` and scan loop | frontier gap gate, POI rescoring, mapping metrics, belief query | Mutable mapping runtime owned by Python sim. `mark_circular()` returns the marked cells so co-located data (observed heights) can be stamped on exactly the covered set. |
+| `WorldMap` | `src/argusnet/mapping/world_map.py` | scan loop (sensor ingest) | feature extraction, coverage region queries, belief query | Bridge toward a richer belief world. Holds a dense observed-height belief layer (`observed_height_grid`) filled from the footprint during ingest — the one place mapping reads terrain truth. |
+| `WorldBeliefQuery` | `src/argusnet/mapping/belief.py` | `run_simulation()` over the live `WorldMap` | viewer terrain reconstruction, `MappingState` belief summary (planners next) | Runtime belief-query interface (`BeliefQuery` protocol, `BELIEF_QUERY_CONTRACT_VERSION`). Read-only; belief consumers query it instead of raw arrays or truth. |
 | `LocalizationState` | `argusnet.core.types` | `src/argusnet/simulation/sim.py` from `GridLocalizer` estimates | replay schema, viewer, docs | Aggregate active localizations, mean position std, mean confidence. |
 | `LocalizationEstimate` | `argusnet.core.types` | `GridLocalizer.update()` results copied into `ScanMissionState` | replay/viewer/evaluation | Per-drone map-relative estimate for `scan_map_inspect`. |
 | `GridLocalizer` | `src/argusnet/localization/engine.py` | Python sim loop | mission phase gate, replay state | Uses `LocalizationConfig.localization_timeout_steps`; timeout can force confidence for mission progress. |
@@ -93,8 +94,9 @@ inspection documentation.
 
 ## Current Gaps To Keep Visible
 
-- `BeliefWorldModel` and `WorldBeliefQuery` are roadmap contracts; the current bridge is
-  `CoverageMap`, `WorldMap`, and `MappingState`.
+- `WorldBeliefQuery` is now a runtime interface (built in `run_simulation()`, consumed by the
+  viewer reconstruction and `MappingState` belief summary). The `BeliefWorldModel` planning
+  authority remains a roadmap contract; planner consumption of the belief query is the next step.
 - Persistent inspection site records, evidence sets, reconstructions, and change records are roadmap
   inspection contracts; the current runtime uses `InspectionPOI`, `POIStatus`, and
   `InspectionEvent`.

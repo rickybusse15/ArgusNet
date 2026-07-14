@@ -17,10 +17,13 @@ Key flags:
 - `--map-preset`: `small`, `medium`, `large`, `xlarge`, `regional`, `theater`, `operational`
 - `--terrain-preset`: `alpine`, `coastal`, `urban_flat`, `desert_canyon`, `rolling_highlands`, `lake_district`, `jungle_canopy`, `arctic_tundra`, `river_valley`
 - `--platform-preset`: `baseline`, `wide_area`
-- `--mission-mode`: `scan_map_inspect` for the map/localize/inspect workflow
+- `--mission-mode`: `scan_map_inspect` for the map/localize/inspect workflow, or
+  `target_tracking` for the legacy fused-track workflow
 - `--drone-mode`: `follow`, `search`, `mixed`
 - `--drone-count N`
 - `--clean-terrain`: terrain geometry without buildings/walls/vegetation
+- `--demo tracking`: curated in-range target-tracking scene that confirms fused
+  tracks out of the box (explicit flags still override)
 
 The default `argusnet sim` runs `scan_map_inspect` with `--target-count 0`, so it
 reports mapping coverage and POI inspection rather than fused tracks — that is the
@@ -28,14 +31,23 @@ intended workflow, not an empty result.
 
 ### Target-tracking demo
 
-To see the Rust fusion engine produce fused tracks, run the legacy target-tracking
-mode with targets placed inside sensor range (a smaller map keeps drones close to
-their assigned targets):
+To see the Rust fusion engine produce fused tracks out of the box, use the curated
+demo shortcut:
+
+```bash
+argusnet sim --demo tracking --duration-s 60 --replay tracking-replay.json
+```
+
+`--demo tracking` seeds an in-range `target_tracking` scene (`--map-preset small`,
+3 targets, 4 drones, `loiter` motion) whose targets stay inside drone sensor range,
+so tracks confirm. Any explicit flag still wins, e.g. `--demo tracking
+--drone-count 6` or `--demo tracking --map-preset medium`. The equivalent manual
+form is:
 
 ```bash
 argusnet sim \
   --mission-mode target_tracking \
-  --map-preset small --target-count 2 --drone-count 4 \
+  --map-preset small --target-count 3 --drone-count 4 \
   --target-motion loiter --duration-s 60 --seed 7 \
   --replay tracking-replay.json
 ```
@@ -43,7 +55,7 @@ argusnet sim \
 The run ends with a `Track RMSE` summary. On a large map (`regional` and up) a
 handful of drones will not close the distance to scattered targets, so most
 observations are rejected `out_of_range` and no tracks confirm; the CLI prints a
-diagnostic hint when that happens.
+diagnostic hint (pointing at `--demo tracking`) when that happens.
 
 ### Mapping run with split-view 3-D reconstruction
 

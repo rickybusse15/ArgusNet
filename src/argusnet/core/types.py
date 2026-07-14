@@ -54,6 +54,24 @@ class ObservationRejection:
 
 
 @dataclass(frozen=True)
+class ObservationBatch:
+    """Observations synthesized for a single simulation step, plus generation stats.
+
+    This is the output contract of an ``ObservationSource`` (see
+    ``argusnet.sensing.observation_source``). Kept here in the contracts layer so
+    the source interface and the simulation loop share one owner for it.
+    """
+
+    observations: list[BearingObservation]
+    attempted_count: int
+    rejection_counts: dict[str, int]
+    accepted_by_target: dict[str, int]
+    rejected_by_target: dict[str, int]
+    accepted_by_node_target: dict[tuple[str, str], int]
+    generation_rejections: list[ObservationRejection] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class TruthState:
     target_id: str
     position: Vector3
