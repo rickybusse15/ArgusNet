@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "World models for autonomous aerial mapping, inspection, localization, and spatial memory"
 requires-python = ">=3.9"
 dependencies = [
-    "cryptography>=42.0,<46.0",
+    "cryptography>=42.0,<50.0",
     "grpcio>=1.78,<2.0",
     "numpy>=2.0,<3.0",
     "protobuf>=6.31.1,<7.0",
