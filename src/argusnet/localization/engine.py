@@ -11,7 +11,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from argusnet.core.types import LocalizationEstimate, Vector3
+from argusnet.core.types import LocalizationEstimate, LocalizationStatus, PoseEstimate, Vector3
+
+# Grid localization estimates only (x, y); altitude is held by the trajectory
+# controller and not estimated here, so the pose covariance carries a fixed
+# nominal 1-sigma altitude-hold term rather than a measured one.
+Z_HOLD_STD_M = 1.0
 
 
 @dataclass(frozen=True)
@@ -25,6 +30,8 @@ class LocalizationConfig:
     confidence_decay: float = 0.50  # carry-over confidence between steps
     annealing_rate: float = 0.02  # per-step fractional radius shrink
     localization_timeout_steps: int = 200  # steps before forced convergence; 0 = disabled
+    localized_confidence: float = 0.6  # confidence at/above which status is LOCALIZED
+    lost_confidence: float = 0.1  # confidence below which a prior fix is considered LOST
 
 
 class GridLocalizer:
@@ -41,12 +48,25 @@ class GridLocalizer:
     map becomes more discriminative, so confidence increases naturally.
     """
 
-    def __init__(self, config: LocalizationConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: LocalizationConfig | None = None,
+        *,
+        source_id: str = "grid",
+        version: str = "1.0",
+    ) -> None:
         self.config = config or LocalizationConfig()
         self._estimates: dict[str, LocalizationEstimate] = {}
         self._step_counts: dict[str, int] = {}
         self._timed_out: set[str] = set()
+        # Per-drone pose contract state (see PoseEstimate): flattened row-major
+        # 3x3 position covariance (m^2) and the current LocalizationStatus value.
+        self._covariances: dict[str, tuple[float, ...]] = {}
+        self._statuses: dict[str, str] = {}
         self._rng = np.random.default_rng(42)
+        # Provenance for the LocalizationQuery contract.
+        self.source_id = source_id
+        self.version = version
 
     def update(
         self,
@@ -88,6 +108,8 @@ class GridLocalizer:
                 position_std_m=cfg.search_radius_m,
                 confidence=0.0,
             )
+            self._covariances[drone_id] = self._isotropic_cov(cfg.search_radius_m)
+            self._statuses[drone_id] = LocalizationStatus.UNLOCALIZED.value
             self._estimates[drone_id] = est
             return est
 
@@ -110,10 +132,13 @@ class GridLocalizer:
         est_xy = (positions * weights[:, None]).sum(axis=0)
         est_position = np.array([est_xy[0], est_xy[1], float(nominal_position[2])], dtype=float)
 
-        # Position std = weighted std of particle cloud.
+        # Position std = weighted std of particle cloud; the full weighted 2x2
+        # covariance is the pose contract's uncertainty (isotropic std is its
+        # scalar summary, kept for the legacy LocalizationEstimate).
         diff = positions - est_xy
         var = (weights[:, None] * diff**2).sum(axis=0)
         position_std = float(np.sqrt(var.mean()))
+        cov_xy = np.einsum("k,ki,kj->ij", weights, diff, diff)
 
         # Confidence: rises as coverage fills in and std shrinks.
         prev_conf = self._estimates.get(drone_id, None)
@@ -132,13 +157,24 @@ class GridLocalizer:
             self._timed_out.add(drone_id)
             confidence = 1.0
 
+        confidence = float(np.clip(confidence, 0.0, 1.0))
+        status = self._classify_status(
+            self._statuses.get(drone_id, LocalizationStatus.UNLOCALIZED.value),
+            confidence=confidence,
+            position_std=position_std,
+            coverage_fraction=coverage_fraction,
+            timed_out=drone_id in self._timed_out,
+        )
+        self._statuses[drone_id] = status
+        self._covariances[drone_id] = self._cov_3x3(cov_xy)
+
         est = LocalizationEstimate(
             drone_id=drone_id,
             timestamp_s=timestamp_s,
             position_estimate=est_position,
             heading_rad=heading_rad,
             position_std_m=float(position_std),
-            confidence=float(np.clip(confidence, 0.0, 1.0)),
+            confidence=confidence,
         )
         self._estimates[drone_id] = est
         return est
@@ -213,10 +249,112 @@ class GridLocalizer:
             self._estimates.clear()
             self._step_counts.clear()
             self._timed_out.clear()
+            self._covariances.clear()
+            self._statuses.clear()
         else:
             self._estimates.pop(drone_id, None)
             self._step_counts.pop(drone_id, None)
             self._timed_out.discard(drone_id)
+            self._covariances.pop(drone_id, None)
+            self._statuses.pop(drone_id, None)
 
     def all_estimates(self) -> list[LocalizationEstimate]:
         return list(self._estimates.values())
+
+    # ------------------------------------------------------------------
+    # Pose / covariance / status contract (LocalizationQuery)
+    # ------------------------------------------------------------------
+
+    def _classify_status(
+        self,
+        prev: str,
+        *,
+        confidence: float,
+        position_std: float,
+        coverage_fraction: float,
+        timed_out: bool,
+    ) -> str:
+        """Map estimate quality onto the LocalizationStatus model (LOCALIZATION.md §8)."""
+        cfg = self.config
+        if timed_out:
+            return LocalizationStatus.LOCALIZED.value
+        if coverage_fraction < cfg.min_coverage_to_localize:
+            return LocalizationStatus.UNLOCALIZED.value
+        if confidence >= cfg.localized_confidence and position_std <= cfg.convergence_threshold_m:
+            return LocalizationStatus.LOCALIZED.value
+        was_localized = prev in (
+            LocalizationStatus.LOCALIZED.value,
+            LocalizationStatus.DEGRADED.value,
+        )
+        if was_localized:
+            # A previously trusted fix that fell below threshold is degrading; if it
+            # collapses entirely it is lost.
+            if confidence < cfg.lost_confidence or position_std > cfg.search_radius_m:
+                return LocalizationStatus.LOST.value
+            return LocalizationStatus.DEGRADED.value
+        if confidence < cfg.lost_confidence:
+            return LocalizationStatus.UNLOCALIZED.value
+        return LocalizationStatus.INITIALIZING.value
+
+    def _cov_3x3(self, cov_xy: np.ndarray) -> tuple[float, ...]:
+        """Flatten a 2x2 XY covariance into a row-major 3x3 position covariance."""
+        m: np.ndarray = np.zeros((3, 3), dtype=float)
+        m[:2, :2] = cov_xy
+        m[2, 2] = Z_HOLD_STD_M**2
+        return tuple(float(v) for v in m.flatten())
+
+    def _isotropic_cov(self, std_m: float) -> tuple[float, ...]:
+        return self._cov_3x3(np.diag([std_m**2, std_m**2]))
+
+    def _build_pose(self, drone_id: str) -> PoseEstimate | None:
+        est = self._estimates.get(drone_id)
+        if est is None:
+            return None
+        status = self._statuses.get(drone_id, LocalizationStatus.UNLOCALIZED.value)
+        failure_reason = None
+        if status == LocalizationStatus.LOST.value:
+            failure_reason = "position uncertainty diverged beyond the search radius"
+        elif status == LocalizationStatus.DEGRADED.value:
+            failure_reason = "confidence fell below the localized threshold"
+        return PoseEstimate(
+            platform_id=drone_id,
+            timestamp_s=est.timestamp_s,
+            position_m=np.array(est.position_estimate, dtype=float),
+            orientation_rpy_rad=(0.0, 0.0, float(est.heading_rad)),
+            frame_id="map",
+            covariance=self._covariances.get(drone_id, ()),
+            confidence=float(est.confidence),
+            status=status,
+            relocalization_score=float(est.confidence),
+            failure_reason=failure_reason,
+        )
+
+    def current_pose(self, platform_id: str) -> PoseEstimate | None:
+        """Map-relative pose estimate with covariance and status, or None."""
+        return self._build_pose(platform_id)
+
+    def current_covariance(self, platform_id: str) -> tuple[float, ...]:
+        """Flattened row-major 3x3 position covariance (m^2)."""
+        return self._covariances.get(platform_id, ())
+
+    def localization_status(self, platform_id: str) -> str:
+        return self._statuses.get(platform_id, LocalizationStatus.UNLOCALIZED.value)
+
+    def confidence(self, platform_id: str) -> float:
+        est = self._estimates.get(platform_id)
+        return float(est.confidence) if est is not None else 0.0
+
+    def is_localized(self, platform_id: str, threshold: float | None = None) -> bool:
+        """True when the platform has a trustworthy fix.
+
+        With no threshold, uses the status model (LOCALIZED); with a threshold,
+        compares the scalar confidence.
+        """
+        if threshold is None:
+            return self.localization_status(platform_id) == LocalizationStatus.LOCALIZED.value
+        return self.confidence(platform_id) >= threshold
+
+    def pose_estimates(self) -> tuple[PoseEstimate, ...]:
+        """All current per-platform poses, ordered by platform id for determinism."""
+        poses = [self._build_pose(did) for did in sorted(self._estimates)]
+        return tuple(p for p in poses if p is not None)

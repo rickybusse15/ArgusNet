@@ -77,8 +77,12 @@ pose-recovery architecture:
   modules are foundations for richer relocalization, but they are not the current scan mission
   authority.
 
-The richer pose/covariance/status model below is the roadmap contract. Current replay state is a
-smaller confidence/std bridge.
+The richer pose/covariance/status model below is now a runtime interface, not just roadmap
+terminology: `argusnet.localization.query.LocalizationQuery` (implemented by `GridLocalizer`)
+exposes per-platform `PoseEstimate`s with a 3x3 position covariance and a `LocalizationStatus`,
+and `run_simulation()` surfaces them as `ScanMissionState.pose_estimates`. The scalar
+`LocalizationEstimate` confidence/std remains as a compact companion. Planner/safety consumption
+of the status model (§8) is the next step.
 
 ---
 
@@ -371,6 +375,12 @@ LocalizationQuery
   matched_landmarks(platform_id) -> list
   needs_relocalization(platform_id) -> bool
 ```
+
+The core of this interface is implemented as `argusnet.localization.query.LocalizationQuery`
+(versioned by `LOCALIZATION_QUERY_CONTRACT_VERSION`), with `GridLocalizer` as the default
+backend: `current_pose`, `current_covariance`, `localization_status`, `confidence`,
+`is_localized`, and `pose_estimates`. Region/landmark/relocalization-candidate queries remain
+roadmap surface pending the pose-graph and relocalization runtime.
 
 The system should also expose a relocalization command:
 

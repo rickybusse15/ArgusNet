@@ -50,7 +50,9 @@ inspection documentation.
 | `WorldBeliefQuery` | `src/argusnet/mapping/belief.py` | `run_simulation()` over the live `WorldMap` | viewer terrain reconstruction, `MappingState` belief summary (planners next) | Runtime belief-query interface (`BeliefQuery` protocol, `BELIEF_QUERY_CONTRACT_VERSION`). Read-only; belief consumers query it instead of raw arrays or truth. |
 | `LocalizationState` | `argusnet.core.types` | `src/argusnet/simulation/sim.py` from `GridLocalizer` estimates | replay schema, viewer, docs | Aggregate active localizations, mean position std, mean confidence. |
 | `LocalizationEstimate` | `argusnet.core.types` | `GridLocalizer.update()` results copied into `ScanMissionState` | replay/viewer/evaluation | Per-drone map-relative estimate for `scan_map_inspect`. |
-| `GridLocalizer` | `src/argusnet/localization/engine.py` | Python sim loop | mission phase gate, replay state | Uses `LocalizationConfig.localization_timeout_steps`; timeout can force confidence for mission progress. |
+| `GridLocalizer` | `src/argusnet/localization/engine.py` | Python sim loop | mission phase gate, replay state, `LocalizationQuery` | Uses `LocalizationConfig.localization_timeout_steps`; timeout can force confidence for mission progress. Also the default `LocalizationQuery` backend: produces `PoseEstimate` (3x3 covariance + `LocalizationStatus`) per drone. |
+| `PoseEstimate` | `argusnet.core.types` | `GridLocalizer` via `LocalizationQuery.current_pose()`; surfaced in `ScanMissionState.pose_estimates` | replay/viewer/evaluation (routing/safety next) | Map-relative pose with covariance, status, and failure_reason. Richer companion to `LocalizationEstimate`. |
+| `LocalizationQuery` | `src/argusnet/localization/query.py` | `run_simulation()` (the `GridLocalizer` instance) | pose replay surface, provenance (planners/safety next) | Runtime pose/covariance/status interface (`LOCALIZATION_QUERY_CONTRACT_VERSION`). Read-only. |
 | `InspectionPOI` | `argusnet.core.types` | scenario defaults / mission setup | `POIManager`, replay scan mission state | Map-relative point of interest for the current inspection runtime. |
 | `POIStatus` | `argusnet.core.types` | `POIManager` | replay/viewer/evaluation | Status is `pending`, `active`, or `complete`. |
 | `InspectionEvent` | `argusnet.core.types` | `src/argusnet/simulation/sim.py` mission-zone coverage loop | replay schema, viewer/evaluation | Includes entered/coverage/exited style events and current violation events. |
@@ -102,7 +104,9 @@ inspection documentation.
   `InspectionEvent`.
 - RF latency and formation coordination helpers exist as library code but are not wired into the
   current simulation loop.
-- Rich localization status/covariance/pose-graph semantics are roadmap work; current replay state is
-  aggregate confidence/std plus per-drone `LocalizationEstimate`.
+- Pose/covariance/status localization is now a runtime interface (`LocalizationQuery` +
+  `PoseEstimate`, surfaced as `ScanMissionState.pose_estimates`). Pose-graph / loop-closure /
+  relocalization-candidate semantics remain roadmap work, and planner/safety consumption of the
+  status model is the next step.
 - Mission execution has a skeleton package and a partial `scan_map_inspect` runtime path; the full
   closed-loop executive is still roadmap architecture.

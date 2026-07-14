@@ -197,6 +197,7 @@ class PoseEstimate:
     map_region_id: str | None = None
     matched_landmark_ids: tuple[str, ...] = ()
     relocalization_score: float = 0.0
+    failure_reason: str | None = None  # populated for degraded/lost fixes
     failure_reason: str | None = None
 
 
@@ -594,6 +595,9 @@ class ScanMissionState:
     egress_progress: tuple = ()  # Tuple[EgressDroneProgress, ...]; non-empty during egress
     # Cooperative co-localization: fused team position (None outside cooperative search).
     team_localization: TeamLocalization | None = None
+    # Per-drone map-relative pose with covariance + status (LocalizationQuery
+    # contract); richer companion to the scalar localization_estimates above.
+    pose_estimates: tuple = ()  # Tuple[PoseEstimate, ...]
 
 
 def to_jsonable(value: Any) -> Any:

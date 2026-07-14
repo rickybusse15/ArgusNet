@@ -57,11 +57,11 @@ Status labels:
 |------------|--------|------------------------|
 | Grid localization for scan-map-inspect | **Implemented** | `src/argusnet/localization/engine.py` `GridLocalizer` |
 | Localization timeout gate | **Implemented** | `LocalizationConfig.localization_timeout_steps`; mission state records team-level timeout. |
-| Replay `LocalizationState` and estimates | **Implemented** | `argusnet.core.types.LocalizationState`, `LocalizationEstimate`, populated in `sim.py` |
+| Replay `LocalizationState` and estimates | **Implemented** | `argusnet.core.types.LocalizationState`, `LocalizationEstimate`, and per-drone `PoseEstimate`s (`ScanMissionState.pose_estimates`), populated in `sim.py` |
 | VIO interfaces and simple backends | **Partial** | `src/argusnet/localization/vio.py` |
 | Relocalization helpers | **Partial** | `src/argusnet/localization/relocalization.py`; not fully wired into mission execution. |
 | Pose graph / loop closure modules | **Partial** | Foundations exist; full runtime pose graph is not the current localization authority. |
-| Rich pose/covariance/status localization contract | **Planned** | `LOCALIZATION.md` documents the roadmap model. |
+| Rich pose/covariance/status localization contract | **Implemented** | `argusnet.localization.query` (`LocalizationQuery` protocol, `LOCALIZATION_QUERY_CONTRACT_VERSION`); `GridLocalizer` produces `PoseEstimate`s with a real 3x3 position covariance (from the weighted particle cloud) and a `LocalizationStatus` (unlocalized/initializing/localized/degraded/lost). `run_simulation()` surfaces them additively as `ScanMissionState.pose_estimates`. Precision inspection routing / safety consumption is the next step behind the seam. |
 
 ## Inspection And Mission Execution
 
@@ -118,8 +118,11 @@ Status labels:
    backend), constructed in `run_simulation()` and consumed by the viewer terrain
    reconstruction and the `MappingState` belief summary (see the Mapping table).
    Planner consumption of belief-world semantics is the next step behind the same seam.
-3. Localization should expose a richer pose/covariance/status interface before precision
-   inspection routing depends on it.
+3. ~~Localization should expose a richer pose/covariance/status interface before precision
+   inspection routing depends on it.~~
+   **Done** — `argusnet.localization.query` (`LocalizationQuery` protocol) + `GridLocalizer`
+   producing `PoseEstimate` (covariance + status), surfaced as `ScanMissionState.pose_estimates`
+   (see the Localization table). Inspection-routing/safety consumption is the next step.
 4. Inspection evidence and reconstruction artifacts should be persisted through indexing before
    repeat-inspection/change-detection claims are made.
 5. The mission executive should own task state and route all motion through planning, trajectory,
