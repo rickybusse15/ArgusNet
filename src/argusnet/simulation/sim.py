@@ -5736,8 +5736,13 @@ def run_simulation(
             # Localization runs every step from the start, building fidelity
             # progressively as the coverage map fills in.  Confidence starts
             # near 0 at low coverage and rises naturally as more area is scanned.
+            # Once the mission leaves scanning/localizing the localizer stops
+            # refreshing, so _loc_estimates (and the poses derived from them) go
+            # stale; this flag lets us avoid surfacing stale poses as current.
+            _loc_estimates_fresh = False
             if _scan_phase in ("scanning", "localizing"):
                 _loc_estimates = []
+                _loc_estimates_fresh = True
                 for ns in mobile_states:
                     spd = float(np.linalg.norm(ns.velocity[:2]))
                     heading = (
@@ -6044,11 +6049,18 @@ def run_simulation(
                 else ()
             )
             # Rich pose contract: map each scalar localization estimate to a
-            # PoseEstimate (covariance + status) via the LocalizationQuery.
-            _pose_estimates = tuple(
-                p
-                for p in (_grid_localizer.current_pose(e.drone_id) for e in _loc_estimates)
-                if p is not None
+            # PoseEstimate (covariance + status) via the LocalizationQuery. Only
+            # surface poses on steps where the localizer actually ran, so
+            # inspection/egress frames don't replay a frozen "current" pose while
+            # the drones keep flying.
+            _pose_estimates = (
+                tuple(
+                    p
+                    for p in (_grid_localizer.current_pose(e.drone_id) for e in _loc_estimates)
+                    if p is not None
+                )
+                if _loc_estimates_fresh
+                else ()
             )
             step_scan_mission_state = ScanMissionState(
                 phase=_scan_phase,

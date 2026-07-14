@@ -214,6 +214,20 @@ class RuntimeSurfacingTests(unittest.TestCase):
 
         self.assertEqual(poses(self._run()), poses(self._run()))
 
+    def test_poses_not_surfaced_after_localization_stops(self) -> None:
+        # Once the mission leaves scanning/localizing the localizer stops
+        # refreshing; stale poses must not be replayed as "current".
+        result = self._run(duration_s=120.0)
+        frames = [f.scan_mission_state for f in result.frames if f.scan_mission_state is not None]
+        self.assertTrue(any(sm.pose_estimates for sm in frames), "some frames should surface poses")
+        post_localization_empty = [
+            sm
+            for sm in frames
+            if sm.phase in ("inspecting", "egress", "complete") and not sm.pose_estimates
+        ]
+        self.assertTrue(post_localization_empty, "post-localization frames must not replay poses")
+        self.assertEqual(frames[-1].pose_estimates, ())  # no frozen pose lingers to the end
+
 
 if __name__ == "__main__":
     unittest.main()
