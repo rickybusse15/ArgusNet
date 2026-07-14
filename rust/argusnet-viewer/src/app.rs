@@ -404,7 +404,15 @@ fn spawn_base_layers(
 ) {
     layer_entities.entities_by_layer.clear();
     for layer in &scene_package.manifest.layers {
-        let asset_path = working_scene_root.asset_path_for(&scene_package.root, &layer.asset_path);
+        let Some(asset_path) =
+            working_scene_root.asset_path_for(&scene_package.root, &layer.asset_path)
+        else {
+            warn!(
+                "Refusing to load layer {:?}: asset_path {:?} escapes the scene root",
+                layer.id, layer.asset_path
+            );
+            continue;
+        };
         let handle: Handle<Scene> = asset_server.load(format!("{asset_path}#Scene0"));
         let visibility = if *layer_visibility.base_layers.get(&layer.id).unwrap_or(&true) {
             Visibility::Visible

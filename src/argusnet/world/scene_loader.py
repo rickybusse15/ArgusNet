@@ -6,7 +6,7 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import numpy as np
 
@@ -83,6 +83,46 @@ def _solid_mesh_elevations(
     return base_z, top_z
 
 
+def _safe_relative_asset_path(relative_path: str, *, field_name: str) -> None:
+    """Reject absolute paths and ``..`` traversal in a scene manifest path field.
+
+    Scene manifests may come from an untrusted, shared scene package. Every
+    path field (layer ``asset_path``, ``metadata.environment``/``style``,
+    ``replay.path``) is later joined onto the scene package's directory to
+    resolve a file to read; without this check an absolute path or a ``..``
+    component lets the manifest point outside the package (path traversal).
+    """
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise ValueError(f"Scene manifest {field_name} must be a non-empty string.")
+    if PurePosixPath(relative_path).is_absolute() or PureWindowsPath(relative_path).is_absolute():
+        raise ValueError(f"Scene manifest {field_name} must be a relative path: {relative_path!r}")
+    normalized = PurePosixPath(relative_path.replace("\\", "/"))
+    if ".." in normalized.parts:
+        raise ValueError(f"Scene manifest {field_name} must not contain '..': {relative_path!r}")
+
+
+def resolve_scene_asset_path(
+    scene_root: str | Path, relative_path: str, *, field_name: str = "asset_path"
+) -> Path:
+    """Resolve ``relative_path`` against ``scene_root``, refusing any escape.
+
+    Re-checks the string-level rules from :func:`_safe_relative_asset_path`
+    and additionally verifies the resolved path stays within ``scene_root``
+    on the filesystem (catches escapes that survive the string check, e.g.
+    via a symlinked intermediate directory).
+    """
+    _safe_relative_asset_path(relative_path, field_name=field_name)
+    root = Path(scene_root).resolve()
+    resolved = (root / relative_path).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(
+            f"Scene manifest {field_name} escapes the scene root: {relative_path!r}"
+        ) from None
+    return resolved
+
+
 def validate_scene_manifest(document: Mapping[str, object]) -> None:
     if document.get("format_version") != SCENE_FORMAT_VERSION:
         raise ValueError("Scene manifest format_version must be smartscene-v1.")
@@ -102,18 +142,38 @@ def validate_scene_manifest(document: Mapping[str, object]) -> None:
         metadata.get("style"), str
     ):
         raise ValueError("Scene manifest metadata must include environment and style paths.")
-    for layer in layers:
+    _safe_relative_asset_path(str(metadata.get("environment")), field_name="metadata.environment")
+    _safe_relative_asset_path(str(metadata.get("style")), field_name="metadata.style")
+    for index, layer in enumerate(layers):
         if not isinstance(layer, Mapping):
             raise ValueError("Scene manifest layers must be mappings.")
         if not isinstance(layer.get("id"), str) or not isinstance(layer.get("asset_path"), str):
             raise ValueError("Each scene manifest layer must include id and asset_path.")
         if not isinstance(layer.get("style_id"), str):
             raise ValueError("Each scene manifest layer must include style_id.")
+        _safe_relative_asset_path(
+            str(layer.get("asset_path")), field_name=f"layers[{index}].asset_path"
+        )
+    replay = document.get("replay")
+    if isinstance(replay, Mapping) and isinstance(replay.get("path"), str) and replay["path"]:
+        _safe_relative_asset_path(str(replay["path"]), field_name="replay.path")
 
 
 def load_scene_manifest(path: str | Path) -> dict[str, object]:
-    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    manifest_path = Path(path)
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
     validate_scene_manifest(document)
+    scene_root = manifest_path.parent
+    metadata = document["metadata"]
+    resolve_scene_asset_path(scene_root, metadata["environment"], field_name="metadata.environment")
+    resolve_scene_asset_path(scene_root, metadata["style"], field_name="metadata.style")
+    for index, layer in enumerate(document["layers"]):
+        resolve_scene_asset_path(
+            scene_root, layer["asset_path"], field_name=f"layers[{index}].asset_path"
+        )
+    replay = document.get("replay")
+    if isinstance(replay, Mapping) and isinstance(replay.get("path"), str) and replay["path"]:
+        resolve_scene_asset_path(scene_root, replay["path"], field_name="replay.path")
     return document
 
 

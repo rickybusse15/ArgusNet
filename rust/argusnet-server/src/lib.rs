@@ -11,14 +11,24 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use hdrhistogram::Histogram;
 use serde::Deserialize;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
+use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{transport::Server, Request, Response, Status};
+
+/// Bound on a single decoded gRPC message (request or response). Prevents an
+/// unbounded `IngestFrameRequest`/stream message from exhausting daemon memory.
+const MAX_DECODED_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+/// Bound on concurrent in-flight requests per connection, so one client can't
+/// open unbounded `TrackStream`/`WatchFrames` streams and starve others.
+const MAX_CONCURRENT_REQUESTS_PER_CONNECTION: usize = 64;
+/// Per-request timeout; a stalled client can't hold engine resources forever.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Parser)]
 #[command(name = "argusnetd", about = "ArgusNet Rust tracking daemon.")]
@@ -82,6 +92,16 @@ pub struct ServeArgs {
     pub max_coast_seconds: Option<f64>,
     #[arg(long)]
     pub min_quality_score: Option<f64>,
+    /// Server certificate (PEM). Required, with --tls-key, to bind a non-loopback address.
+    #[arg(long, env = "ARGUSNET_TLS_CERT")]
+    pub tls_cert: Option<PathBuf>,
+    /// Server private key (PEM), matching --tls-cert.
+    #[arg(long, env = "ARGUSNET_TLS_KEY")]
+    pub tls_key: Option<PathBuf>,
+    /// CA (PEM) used to verify client certificates. Presence enables mTLS
+    /// (client certs required) rather than server-only TLS.
+    #[arg(long, env = "ARGUSNET_TLS_CLIENT_CA")]
+    pub tls_client_ca: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -701,20 +721,87 @@ impl WorldModelService for GrpcTrackerService {
     }
 }
 
+/// True for loopback addresses (127.0.0.0/8, ::1) — the only case the daemon
+/// will serve without TLS, since it has no other authentication.
+fn is_loopback(address: &SocketAddr) -> bool {
+    match address.ip() {
+        IpAddr::V4(ip) => ip.is_loopback(),
+        IpAddr::V6(ip) => ip.is_loopback(),
+    }
+}
+
+fn load_server_tls_config(args: &ServeArgs) -> Result<Option<ServerTlsConfig>> {
+    let (Some(cert_path), Some(key_path)) = (&args.tls_cert, &args.tls_key) else {
+        if args.tls_cert.is_some() || args.tls_key.is_some() {
+            return Err(anyhow!(
+                "--tls-cert and --tls-key must both be set to enable TLS"
+            ));
+        }
+        return Ok(None);
+    };
+    let cert = std::fs::read(cert_path)
+        .map_err(|error| anyhow!("failed to read --tls-cert {}: {error}", cert_path.display()))?;
+    let key = std::fs::read(key_path)
+        .map_err(|error| anyhow!("failed to read --tls-key {}: {error}", key_path.display()))?;
+    let mut tls = ServerTlsConfig::new().identity(Identity::from_pem(cert, key));
+
+    if let Some(ca_path) = &args.tls_client_ca {
+        let ca = std::fs::read(ca_path).map_err(|error| {
+            anyhow!(
+                "failed to read --tls-client-ca {}: {error}",
+                ca_path.display()
+            )
+        })?;
+        tls = tls.client_ca_root(Certificate::from_pem(ca));
+    }
+
+    Ok(Some(tls))
+}
+
 pub async fn serve(args: ServeArgs) -> Result<()> {
     let config = load_tracker_config(&args)?;
-    let engine = spawn_engine(config).await?;
-    let service = GrpcTrackerService { engine };
     let address: SocketAddr = args
         .listen
         .parse()
         .map_err(|error| anyhow!("invalid listen address {}: {error}", args.listen))?;
 
-    Server::builder()
-        .add_service(WorldModelServiceServer::new(service))
+    let tls_config = load_server_tls_config(&args)?;
+    if tls_config.is_none() && !is_loopback(&address) {
+        return Err(anyhow!(
+            "refusing to bind non-loopback address {address} without TLS: the daemon has no \
+             other authentication. Pass --tls-cert/--tls-key (and --tls-client-ca for mTLS), \
+             or bind a loopback address instead."
+        ));
+    }
+
+    let engine = spawn_engine(config).await?;
+    let service = GrpcTrackerService { engine };
+
+    let mut server = Server::builder();
+    if let Some(tls_config) = tls_config {
+        server = server.tls_config(tls_config)?;
+    } else {
+        tracing_unauthenticated_bind_warning(&address);
+    }
+
+    server
+        .timeout(REQUEST_TIMEOUT)
+        .concurrency_limit_per_connection(MAX_CONCURRENT_REQUESTS_PER_CONNECTION)
+        .add_service(
+            WorldModelServiceServer::new(service)
+                .max_decoding_message_size(MAX_DECODED_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_DECODED_MESSAGE_BYTES),
+        )
         .serve(address)
         .await?;
     Ok(())
+}
+
+fn tracing_unauthenticated_bind_warning(address: &SocketAddr) {
+    eprintln!(
+        "argusnetd: WARNING: serving {address} without TLS. This endpoint is unauthenticated; \
+         only bind loopback addresses without --tls-cert/--tls-key."
+    );
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
@@ -761,6 +848,9 @@ mod tests {
             max_coast_frames: None,
             max_coast_seconds: None,
             min_quality_score: None,
+            tls_cert: None,
+            tls_key: None,
+            tls_client_ca: None,
         };
 
         let config = load_tracker_config(&args).unwrap();

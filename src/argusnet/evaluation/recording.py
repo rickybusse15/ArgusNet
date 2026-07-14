@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import TextIO
 
+from argusnet.core.io_limits import read_text_capped
+
 
 class RotatingFrameRecorder:
     """File-like JSONL writer that rotates by elapsed time or encoded bytes."""
@@ -78,7 +80,7 @@ class RotatingFrameRecorder:
         os.fsync(self._file.fileno())
         self._file.close()
         self._write_index()
-        payload = json.loads(self.index_path.read_text(encoding="utf-8"))
+        payload = json.loads(read_text_capped(self.index_path))
         payload["active"] = False
         temporary = self.index_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")

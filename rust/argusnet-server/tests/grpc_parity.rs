@@ -49,6 +49,10 @@ fn node_from_json(value: &Value) -> NodeState {
         sensor_type: value["sensor_type"].as_str().unwrap_or("").to_string(),
         fov_half_angle_deg: value["fov_half_angle_deg"].as_f64().unwrap_or(0.0),
         max_range_m: value["max_range_m"].as_f64().unwrap_or(0.0),
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 
@@ -61,6 +65,10 @@ fn observation_from_json(value: &Value) -> BearingObservation {
         bearing_std_rad: value["bearing_std_rad"].as_f64().expect("bearing_std_rad"),
         timestamp_s: value["timestamp_s"].as_f64().expect("timestamp_s"),
         confidence: value["confidence"].as_f64().expect("confidence"),
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 
@@ -326,6 +334,9 @@ async fn grpc_daemon_matches_golden_fixture_and_streaming() {
         max_coast_frames: None,
         max_coast_seconds: None,
         min_quality_score: None,
+        tls_cert: None,
+        tls_key: None,
+        tls_client_ca: None,
     }));
 
     let mut client = loop {
@@ -445,6 +456,10 @@ fn make_observation(
         bearing_std_rad: 0.01,
         timestamp_s: t,
         confidence: 0.9,
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 
@@ -467,6 +482,10 @@ fn make_node(node_id: &str, t: f64, pos: [f64; 3]) -> NodeState {
         sensor_type: "optical".to_string(),
         fov_half_angle_deg: 180.0,
         max_range_m: 2000.0,
+        device_id: String::new(),
+        sequence: 0,
+        signature: Vec::new(),
+        signer_pubkey_id: String::new(),
     }
 }
 
@@ -499,6 +518,9 @@ async fn track_response_includes_mode_probability_cv() {
         max_coast_frames: None,
         max_coast_seconds: None,
         min_quality_score: None,
+        tls_cert: None,
+        tls_key: None,
+        tls_client_ca: None,
     }));
 
     let mut client = loop {
@@ -605,6 +627,9 @@ async fn track_response_contributing_nodes_populated() {
         max_coast_frames: None,
         max_coast_seconds: None,
         min_quality_score: None,
+        tls_cert: None,
+        tls_key: None,
+        tls_client_ca: None,
     }));
 
     let mut client = loop {
@@ -689,6 +714,114 @@ async fn track_response_contributing_nodes_populated() {
             }
         }
     }
+
+    server_handle.abort();
+    let _ = fs::remove_file(config_path);
+}
+
+fn base_serve_args(listen: String, config: Option<PathBuf>) -> argusnet_server::ServeArgs {
+    argusnet_server::ServeArgs {
+        listen,
+        config,
+        min_observations: None,
+        max_stale_steps: None,
+        min_confidence: None,
+        max_bearing_std_rad: None,
+        max_timestamp_skew_s: None,
+        min_intersection_angle_deg: None,
+        data_association_mode: None,
+        cv_process_accel_std: None,
+        ct_process_accel_std: None,
+        ct_turn_rate_std: None,
+        innovation_window: None,
+        innovation_scale_factor: None,
+        innovation_max_scale: None,
+        adaptive_measurement_noise: None,
+        chi_squared_gate_threshold: None,
+        cluster_distance_threshold_m: None,
+        near_parallel_rejection_angle_deg: None,
+        confirmation_m: None,
+        confirmation_n: None,
+        max_coast_frames: None,
+        max_coast_seconds: None,
+        min_quality_score: None,
+        tls_cert: None,
+        tls_key: None,
+        tls_client_ca: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_refuses_non_loopback_bind_without_tls() {
+    // Port 0 (OS-assigned) with a non-loopback host: the refusal happens
+    // before any socket is bound, so this never actually listens on 0.0.0.0.
+    let args = base_serve_args("0.0.0.0:0".to_string(), None);
+    let error = argusnet_server::serve(args)
+        .await
+        .expect_err("non-loopback bind without TLS must be refused");
+    assert!(
+        error.to_string().contains("refusing to bind"),
+        "unexpected error message: {error}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_ingest_frame_is_rejected() {
+    let config_path = minimal_config_path("oversized-frame");
+    let address = allocate_endpoint();
+    let server_handle = tokio::spawn(argusnet_server::serve(base_serve_args(
+        address.clone(),
+        Some(config_path.clone()),
+    )));
+
+    let mut client = loop {
+        match WorldModelServiceClient::connect(format!("http://{address}")).await {
+            Ok(c) => break c,
+            Err(_) => sleep(Duration::from_millis(100)).await,
+        }
+    };
+
+    // A single node_id well past the server's 16 MiB decode cap. The client
+    // has no matching encode-size limit, so this reaches the wire and must be
+    // rejected by the server's `max_decoding_message_size` guard rather than
+    // being accepted and processed (which would allow a memory-exhaustion DoS).
+    let oversized_id = "x".repeat(20 * 1024 * 1024);
+    let request = IngestFrameRequest {
+        timestamp_s: 0.0,
+        node_states: vec![NodeState {
+            node_id: oversized_id,
+            position: Some(Vector3 {
+                x_m: 0.0,
+                y_m: 0.0,
+                z_m: 0.0,
+            }),
+            velocity: Some(Vector3 {
+                x_m: 0.0,
+                y_m: 0.0,
+                z_m: 0.0,
+            }),
+            is_mobile: false,
+            timestamp_s: 0.0,
+            health: 1.0,
+            sensor_type: "optical".to_string(),
+            fov_half_angle_deg: 180.0,
+            max_range_m: 0.0,
+            device_id: String::new(),
+            sequence: 0,
+            signature: Vec::new(),
+            signer_pubkey_id: String::new(),
+        }],
+        observations: Vec::new(),
+        truths: Vec::new(),
+        target_metadata: Vec::new(),
+        safety_events: Vec::new(),
+    };
+
+    let result = client.ingest_frame(request).await;
+    assert!(
+        result.is_err(),
+        "oversized IngestFrameRequest should be rejected, not processed"
+    );
 
     server_handle.abort();
     let _ = fs::remove_file(config_path);

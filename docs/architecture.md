@@ -346,3 +346,4 @@ runs the slow multi-seed scenario sweep and uploads the generated benchmark arti
 | `PLANNING.md` | Mapping, localization, inspection, and coordination planning |
 | `SCENARIOS.md` | Evaluation scenarios and metric definitions |
 | `PERFORMANCE_AND_BENCHMARKING.md` | Benchmark levels, data-layout, caching, CI, and regression standards |
+| `ROADMAP.md` | Long-term product, capability, UI, and delivery roadmap |

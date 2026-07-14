@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import argusnet.cli.main as cli
+from argusnet.security.identity import DeviceRegistry
 
 
 class CliImportBehaviorTest(unittest.TestCase):
@@ -80,6 +81,75 @@ class CliImportBehaviorTest(unittest.TestCase):
                 ]
             )
         self.assertIn("directory", str(context.exception))
+
+
+class IngestMqttDeviceRegistryTest(unittest.TestCase):
+    """`ingest --mqtt-broker` must be able to load a DeviceRegistry, since
+    MQTTIngestionAdapter now refuses a non-loopback broker without one."""
+
+    def _run_ingest(self, argv, env=None):
+        adapter_cls = unittest.mock.Mock()
+        with (
+            patch("argusnet.sensing.ingestion.frame_stream.MQTTIngestionAdapter", adapter_cls),
+            patch("argusnet.sensing.ingestion.frame_stream.LiveIngestionRunner"),
+            patch("argusnet.adapters.argusnet_grpc.TrackingService"),
+            patch.object(
+                DeviceRegistry, "from_directory", return_value=unittest.mock.sentinel.registry
+            ) as from_directory,
+            patch.dict("os.environ", env or {}, clear=False),
+        ):
+            args = cli.parse_args(argv)
+            cli._run_ingest(args)
+        return adapter_cls, from_directory
+
+    def test_cli_flag_loads_device_registry(self):
+        adapter_cls, from_directory = self._run_ingest(
+            [
+                "ingest",
+                "--mqtt-broker",
+                "mqtt.example.com",
+                "--enu-origin",
+                "0,0,0",
+                "--device-registry",
+                "/some/registry/dir",
+            ]
+        )
+        from_directory.assert_called_once_with("/some/registry/dir")
+        self.assertIs(
+            adapter_cls.call_args.kwargs["device_registry"], unittest.mock.sentinel.registry
+        )
+
+    def test_env_var_fallback_loads_device_registry(self):
+        adapter_cls, from_directory = self._run_ingest(
+            ["ingest", "--mqtt-broker", "mqtt.example.com", "--enu-origin", "0,0,0"],
+            env={"ARGUSNET_MQTT_DEVICE_REGISTRY": "/env/registry/dir"},
+        )
+        from_directory.assert_called_once_with("/env/registry/dir")
+        self.assertIs(
+            adapter_cls.call_args.kwargs["device_registry"], unittest.mock.sentinel.registry
+        )
+
+    def test_cli_flag_takes_precedence_over_env_var(self):
+        adapter_cls, from_directory = self._run_ingest(
+            [
+                "ingest",
+                "--mqtt-broker",
+                "mqtt.example.com",
+                "--enu-origin",
+                "0,0,0",
+                "--device-registry",
+                "/flag/registry/dir",
+            ],
+            env={"ARGUSNET_MQTT_DEVICE_REGISTRY": "/env/registry/dir"},
+        )
+        from_directory.assert_called_once_with("/flag/registry/dir")
+
+    def test_no_registry_configured_passes_none(self):
+        adapter_cls, from_directory = self._run_ingest(
+            ["ingest", "--mqtt-broker", "mqtt.example.com", "--enu-origin", "0,0,0"]
+        )
+        from_directory.assert_not_called()
+        self.assertIsNone(adapter_cls.call_args.kwargs["device_registry"])
 
 
 if __name__ == "__main__":

@@ -22,6 +22,10 @@ fn request(observation_count: usize) -> IngestFrameRequest {
             sensor_type: "optical".to_string(),
             fov_half_angle_deg: 180.0,
             max_range_m: 2000.0,
+            device_id: String::new(),
+            sequence: 0,
+            signature: Vec::new(),
+            signer_pubkey_id: String::new(),
         })
         .collect();
     let observations = (0..observation_count)
@@ -33,6 +37,10 @@ fn request(observation_count: usize) -> IngestFrameRequest {
             bearing_std_rad: 0.02,
             timestamp_s: 1.0,
             confidence: 0.95,
+            device_id: String::new(),
+            sequence: 0,
+            signature: Vec::new(),
+            signer_pubkey_id: String::new(),
         })
         .collect();
     let truths = (0..4)

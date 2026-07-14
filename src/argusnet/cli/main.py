@@ -204,6 +204,15 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
         "--node-topic", default="argusnet/nodes", help="MQTT topic for node states."
     )
     ingest_parser.add_argument(
+        "--device-registry",
+        default=None,
+        help=(
+            "Path to a directory of <device_id>.pub Ed25519 public-key files, used to "
+            "verify signed MQTT envelopes. Required for a non-loopback --mqtt-broker; "
+            "falls back to ARGUSNET_MQTT_DEVICE_REGISTRY if unset."
+        ),
+    )
+    ingest_parser.add_argument(
         "--replay-speed",
         type=float,
         default=1.0,
@@ -938,12 +947,19 @@ def _run_ingest(args: argparse.Namespace) -> None:
             loop=args.replay_loop,
         )
     else:
+        device_registry = None
+        registry_path = args.device_registry or os.environ.get("ARGUSNET_MQTT_DEVICE_REGISTRY")
+        if registry_path:
+            from argusnet.security.identity import DeviceRegistry
+
+            device_registry = DeviceRegistry.from_directory(registry_path)
         adapter = MQTTIngestionAdapter(
             broker=args.mqtt_broker,
             port=args.mqtt_port,
             observation_topic=args.observation_topic,
             node_topic=args.node_topic,
             enu_origin=enu_origin,
+            device_registry=device_registry,
         )
 
     service = TrackingService(
