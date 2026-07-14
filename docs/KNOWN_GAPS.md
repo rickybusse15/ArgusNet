@@ -91,7 +91,8 @@ Status labels:
 | Coordinator election | **Implemented** | `CoordinationManager.elect_coordinator()` is wired into `scan_map_inspect`. |
 | Drone deconfliction events | **Implemented** | `src/argusnet/planning/deconfliction.py` and sim replay events |
 | Blocking safety gate | **Implemented (opt-in)** | `--safety-blocking` runs after deconfliction, clamps commands, emits events, and holds Abort-state drones. |
-| 3D path planning | **Planned** | Current route planner is 2D; altitude is handled separately. |
+| 3D route altitude profiling | **Implemented** | `src/argusnet/planning/planner_3d.py` `AltitudeProfiler` lifts a 2D route into gradient-limited 3D waypoints with terrain- and obstacle-top clearance (`tests/test_planner_3d.py`). |
+| 3D route candidates in the mission loop | **Partial** | `AltitudeProfiler` is a standalone, injectable seam; `sim.py` still derives altitude from behaviour profiles and does not yet consume it. |
 
 ## Evaluation, Benchmarking, Replay, And UI
 
