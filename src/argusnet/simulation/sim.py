@@ -58,6 +58,7 @@ from argusnet.core.types import (
 from argusnet.evaluation.recording import RotatingFrameRecorder
 from argusnet.evaluation.replay import ReplayDocument, build_replay_document, write_replay_document
 from argusnet.localization.engine import GridLocalizer, LocalizationConfig
+from argusnet.localization.query import LOCALIZATION_QUERY_CONTRACT_VERSION
 from argusnet.localization.vio import EKFVIO, VisualFeature
 from argusnet.mapping.belief import (
     BELIEF_QUERY_CONTRACT_VERSION,
@@ -6042,11 +6043,19 @@ def run_simulation(
                 if _scan_phase == "egress"
                 else ()
             )
+            # Rich pose contract: map each scalar localization estimate to a
+            # PoseEstimate (covariance + status) via the LocalizationQuery.
+            _pose_estimates = tuple(
+                p
+                for p in (_grid_localizer.current_pose(e.drone_id) for e in _loc_estimates)
+                if p is not None
+            )
             step_scan_mission_state = ScanMissionState(
                 phase=_scan_phase,
                 scan_coverage_fraction=scan_frac,
                 scan_coverage_threshold=_scan_threshold,
                 localization_estimates=list(_loc_estimates),
+                pose_estimates=_pose_estimates,
                 poi_statuses=_enriched_poi_statuses,
                 completed_poi_count=_poi_manager.completed_count,
                 total_poi_count=_poi_manager.total_count,
@@ -6176,6 +6185,9 @@ def run_simulation(
         "belief_query_id": _belief_query.source_id,
         "belief_query_version": _belief_query.version,
         "belief_query_contract_version": BELIEF_QUERY_CONTRACT_VERSION,
+        "localization_query_id": _grid_localizer.source_id,
+        "localization_query_version": _grid_localizer.version,
+        "localization_query_contract_version": LOCALIZATION_QUERY_CONTRACT_VERSION,
     }
 
     if _coop_search_active:
