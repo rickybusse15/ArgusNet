@@ -144,6 +144,34 @@ def test_obstacle_beside_path_is_ignored() -> None:
     assert np.allclose(route.altitudes_m, 20.0)
 
 
+def test_narrow_obstacle_between_samples_is_cleared() -> None:
+    # A strip 1 m wide, sitting at x=55 between the 10 m-spaced samples at
+    # x=50/60. Point-only sampling would miss it; segment testing must not.
+    strip = BuildingPrism("strip", _rect(54.5, 55.5, -30.0, 30.0), 0.0, 40.0)
+    config = Route3DConfig(
+        cruise_agl_m=20.0,
+        min_terrain_clearance_m=10.0,
+        obstacle_clearance_m=12.0,
+        max_climb_gradient=5.0,
+        sample_spacing_m=10.0,
+        decimate_tolerance_m=0.0,
+    )
+    profiler = AltitudeProfiler(
+        terrain=_FlatTerrain(0.0), obstacle_layer=_layer([strip]), config=config
+    )
+    route = profiler.profile_route(_straight(100.0))
+    assert route is not None
+    needed_m = 40.0 + 12.0
+    assert route.max_altitude_m >= needed_m - 1e-6
+    # Densely re-sample the flown polyline; altitude over the strip must clear it.
+    crossed = False
+    for x_m, y_m, z_m in _resample_xyz(route.points_xyz_m, spacing_m=0.25):
+        if strip.point_inside(float(x_m), float(y_m), 20.0):
+            crossed = True
+            assert z_m >= needed_m - 1e-6
+    assert crossed  # the resampling really does pass over the strip
+
+
 # --- gradient feasibility ---------------------------------------------------
 
 

@@ -269,36 +269,44 @@ class AltitudeProfiler:
         )
 
     def _obstacle_floor(self, samples_xy: np.ndarray) -> np.ndarray:
-        """Return, per sample, the altitude needed to clear obstacles above it.
+        """Return, per sample, the altitude needed to clear obstacles on the path.
 
-        A sample "above" an obstacle means its XY lies inside the obstacle
-        footprint; the required altitude is the obstacle top plus the configured
-        vertical clearance. Samples over open ground get ``-inf`` so they are
-        governed purely by the terrain floor.
+        Each *segment* between consecutive samples is tested against obstacle
+        footprints, not just the sample points, so a footprint crossed entirely
+        between two samples (a thin wall or vegetation strip narrower than the
+        sample spacing) is still detected. Both endpoints of a crossing segment
+        are raised to the obstacle top plus the configured clearance; since the
+        flown path between them is the straight line joining the endpoints, it
+        clears the obstacle. Segments over open ground stay at ``-inf`` so they
+        are governed purely by the terrain floor.
         """
         required: np.ndarray = np.full(samples_xy.shape[0], -np.inf, dtype=float)
-        if self.obstacle_layer is None:
+        if self.obstacle_layer is None or samples_xy.shape[0] < 2:
             return required
 
         clearance_m = self.config.obstacle_clearance_m
-        for index, point_xy in enumerate(samples_xy):
-            x_m = float(point_xy[0])
-            y_m = float(point_xy[1])
-            epsilon_m = 1.0e-6
-            candidate_bounds = Bounds2D(
-                x_min_m=x_m - epsilon_m,
-                x_max_m=x_m + epsilon_m,
-                y_min_m=y_m - epsilon_m,
-                y_max_m=y_m + epsilon_m,
+        epsilon_m = 1.0e-6
+        for index in range(samples_xy.shape[0] - 1):
+            start_xy = samples_xy[index]
+            end_xy = samples_xy[index + 1]
+            segment_bounds = Bounds2D(
+                x_min_m=min(float(start_xy[0]), float(end_xy[0])) - epsilon_m,
+                x_max_m=max(float(start_xy[0]), float(end_xy[0])) + epsilon_m,
+                y_min_m=min(float(start_xy[1]), float(end_xy[1])) - epsilon_m,
+                y_max_m=max(float(start_xy[1]), float(end_xy[1])) + epsilon_m,
             )
-            for primitive in self.obstacle_layer.query_obstacles(candidate_bounds):
+            for primitive in self.obstacle_layer.query_obstacles(segment_bounds):
                 if primitive.blocker_type not in self.config.obstacle_types:
                     continue
-                # The vertical mid-point is always within [base_z, top_z], so a
-                # positive test means the XY sample is inside the footprint.
+                # A horizontal probe at the vertical mid-point (always within
+                # [base_z, top_z]) reduces the 3D hit test to a footprint crossing.
                 mid_z_m = 0.5 * (primitive.base_z_m + primitive.top_z_m)
-                if primitive.point_inside(x_m, y_m, mid_z_m):
-                    required[index] = max(required[index], primitive.top_z_m + clearance_m)
+                origin = np.array([float(start_xy[0]), float(start_xy[1]), mid_z_m])
+                target = np.array([float(end_xy[0]), float(end_xy[1]), mid_z_m])
+                if primitive.first_hit_t(origin, target) is not None:
+                    top_clearance_m = primitive.top_z_m + clearance_m
+                    required[index] = max(required[index], top_clearance_m)
+                    required[index + 1] = max(required[index + 1], top_clearance_m)
         return required
 
     def _slope_limited_envelope(self, desired_z: np.ndarray, arc_len_m: np.ndarray) -> np.ndarray:
