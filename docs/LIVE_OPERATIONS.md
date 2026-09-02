@@ -13,6 +13,25 @@ an existing endpoint.
 The viewer uses `WatchFramesV2`, automatically reconnects, retains the newest 10,000 frames,
 and displays sequence and drop counters. Legacy `WatchFrames` clients remain supported.
 
+## Connecting to a remote daemon
+
+`argusnet-viewer --live` streams in plaintext only over loopback. Subscribing to any other
+endpoint requires the CA that signed the daemon certificate, and fails before the window opens
+otherwise:
+
+```bash
+argusnet-viewer --scene scene.smartscene \
+  --live tracker.internal:50051 \
+  --live-tls-ca /etc/argusnet/ca.pem \
+  --live-tls-cert /etc/argusnet/viewer.pem \
+  --live-tls-key /etc/argusnet/viewer.key
+```
+
+`--live-tls-cert`/`--live-tls-key` are only needed when the daemon was started with
+`--tls-client-ca` (mandatory mTLS). Add `--live-tls-domain` when the certificate name differs
+from the endpoint host. All four also read from `ARGUSNET_TLS_CLIENT_CA`, `ARGUSNET_TLS_CERT`,
+and `ARGUSNET_TLS_KEY`, matching `argusnetd`'s own flags. See `SECURITY.md`.
+
 ## Operator semantics
 
 - Targets are scenario/operator-described objects of interest.

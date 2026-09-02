@@ -77,20 +77,26 @@ pub fn run(
 pub fn run_live(
     scene_path: impl AsRef<Path>,
     endpoint: String,
+    tls: crate::live::LiveTlsConfig,
     initial_view_mode: ViewMode,
     autoplay: bool,
 ) -> Result<()> {
     run_inner(
         scene_path.as_ref(),
-        Some(endpoint),
+        Some((endpoint, tls)),
         initial_view_mode,
         autoplay,
     )
 }
 
+#[cfg(feature = "live-stream")]
+type LiveEndpoint = Option<(String, crate::live::LiveTlsConfig)>;
+#[cfg(not(feature = "live-stream"))]
+type LiveEndpoint = Option<String>;
+
 fn run_inner(
     scene_path: &Path,
-    live_endpoint: Option<String>,
+    live_endpoint: LiveEndpoint,
     initial_view_mode: ViewMode,
     autoplay: bool,
 ) -> Result<()> {
@@ -201,8 +207,10 @@ fn run_inner(
         );
 
     #[cfg(feature = "live-stream")]
-    if let Some(endpoint) = live_endpoint {
-        app.insert_resource(crate::live::connect(endpoint));
+    if let Some((endpoint, tls)) = live_endpoint {
+        // Refuses plaintext off loopback, so this fails before the window opens
+        // rather than silently streaming in the clear.
+        app.insert_resource(crate::live::connect(endpoint, tls)?);
         app.add_systems(
             Update,
             crate::live::ingest_live_frames_system.before(advance_playback_system),
