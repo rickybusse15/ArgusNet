@@ -60,7 +60,15 @@ Python loop.
 
 ### Decision
 
-**Adopt Posture A for Phases 1–5:** The safety engine validates but does NOT block motion.
+**Adopt Posture A for Phases 1–5:** by default the safety engine validates but
+does NOT block motion.
+
+> **Amended 2026-09-02.** `--safety-blocking` has since been implemented as an
+> opt-in gate: when set, `sim.py` runs `SafetyMonitor.process` after deconfliction
+> and *clamps* the commanded position and velocity, holding drones in the Abort
+> state. `docs/KNOWN_GAPS.md` records it as "Implemented (opt-in)". Posture A
+> remains the default so seeded runs stay reproducible; the paragraph below
+> describes that default path.
 
 Specifically:
 
@@ -81,7 +89,12 @@ code must:
 ## Decision 3: Single `TerrainLayer` Serving Physical + LOS + Visual Roles
 
 **Date:** 2026-03-22
-**Status:** Accepted
+**Status:** Superseded by [ADR-005](adr/005-rust-runtime-authority.md) (2026-09-02)
+
+> Superseded. This decision named the Python `TerrainLayer` authoritative and
+> reserved `terrain-engine` for hypothetical Rust consumers. ADR-005 makes
+> `argusnet-world` the single terrain authority for the simulation, the safety
+> engine and the viewer. The text below records the boundary as it stood.
 
 ### Context
 
@@ -115,5 +128,5 @@ The `terrain-engine` crate is reserved for Rust-side analytic consumers. No chan
 | Decision | Rule |
 |----------|------|
 | 1 | Rust is sole runtime fused-state producer; Python Kalman = test utility |
-| 2 | Safety engine logs violations, does not block (Posture A through Phase 5) |
-| 3 | Viewer uses replay `viewer_mesh`; Rust crate serves new Rust consumers only |
+| 2 | Safety engine logs violations, does not block by default; `--safety-blocking` opts into clamping |
+| 3 | **Superseded by ADR-005.** Was: viewer uses replay `viewer_mesh`; Rust crate serves new Rust consumers only |

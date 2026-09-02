@@ -1,4 +1,4 @@
-# ADR 001: Performance Benchmarking Rollout
+# ADR-004: Performance Benchmarking Rollout
 
 ## Status
 

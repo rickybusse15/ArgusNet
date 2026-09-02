@@ -22,7 +22,7 @@ Status labels:
 | Weather affecting sensing | **Implemented** | `src/argusnet/world/visibility.py`, `src/argusnet/world/weather.py` |
 | Weather affecting vehicle dynamics | **Planned** | Wind/weather are not fully coupled to drone dynamics. |
 | CRS/geodetic transforms | **Partial** | `src/argusnet/core/frames.py` and `EnvironmentCRS`; most sim scenarios remain local-frame. |
-| Rust world/terrain runtime integration | **Partial** | `terrain-engine` exists, but Python sim terrain remains authoritative for current runtime. |
+| Rust world/terrain runtime integration | **Partial** | `terrain-engine` exists, but Python sim terrain remains authoritative for current runtime. [ADR-005](adr/005-rust-runtime-authority.md) makes `argusnet-world` the single authority; not yet implemented. |
 
 ## Sensing And Fusion
 
@@ -95,12 +95,12 @@ Status labels:
 
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
-| Replay schema | **Implemented** | `docs/replay-schema.json`, `src/argusnet/evaluation/replay.py` |
+| Replay schema | **Implemented** | `docs/replay-schema.json`, `src/argusnet/evaluation/replay.py`. Enforced with `jsonschema` and guarded end-to-end by `tests/test_replay_contract.py` plus `replay.rs::contract_fixture_tests`. |
 | Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py` |
 | Benchmark aggregation | **Implemented** | `src/argusnet/evaluation/benchmarks.py` |
 | Reports/export helpers | **Implemented** | `src/argusnet/evaluation/reports.py`, `export.py` |
 | Benchmark standards | **Implemented as documentation** | `docs/PERFORMANCE_AND_BENCHMARKING.md` |
-| CI benchmark markers and golden performance files | **Planned** | Standard is documented; not all commands/files are wired into CI. |
+| CI benchmark markers and golden performance files | **Implemented** | Deterministic work-counter gate runs on every PR; timing comparison is opt-in (`ARGUSNET_RUN_PERF_TIMING`). Baseline profile in `docs/performance/baseline-profile-2026-09.md`. |
 | Viewer replay playback | **Implemented** | `rust/argusnet-viewer` |
 | Viewer live streaming | **Implemented** | Legacy `WatchFrames` plus operator-focused `WatchFramesV2`, reconnect, bounded queues/history, truth filtering, sequence/drop telemetry |
 | Viewer headless CI/render path | **Partial** | Headless module exists; CI/render workflow is not fully documented or gated. |
