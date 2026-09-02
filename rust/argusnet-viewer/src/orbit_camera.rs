@@ -48,6 +48,18 @@ impl OrbitCamera {
         }
     }
 
+    /// Far plane that keeps the whole scene inside the frustum at full zoom-out.
+    ///
+    /// Bevy's default perspective projection uses `far: 1000.0`, which is far
+    /// shorter than the multi-kilometre scenes ArgusNet renders — the `regional`
+    /// preset alone spans 4.3 km and frames its camera ~6.3 km back. A camera
+    /// spawned without an explicit `Projection` therefore clips the entire
+    /// terrain away at the default zoom. Both viewer cameras derive their far
+    /// plane from this one function so they cannot drift apart again.
+    pub fn far_plane(&self, scene_span_m: f32) -> f32 {
+        (self.max_radius + scene_span_m) * 1.3
+    }
+
     pub fn eye_position(&self) -> Vec3 {
         let horizontal = self.radius * self.pitch.cos();
         Vec3::new(
@@ -181,5 +193,37 @@ mod tests {
         };
 
         assert!(camera.eye_position().z > 100.0);
+    }
+
+    /// Regression: the `regional` preset (the CLI default) spans 4320 m x 4140 m,
+    /// which frames the camera ~6.3 km from focus — well beyond Bevy's default
+    /// `far` of 1000 m. A camera spawned without an explicit `Projection` clipped
+    /// the whole scene away. Both viewer cameras now size `far` from the scene.
+    #[test]
+    fn far_plane_clears_the_scene_at_default_and_maximum_zoom() {
+        let bounds = Bounds2d {
+            x_min_m: -2160.0,
+            x_max_m: 2160.0,
+            y_min_m: -1980.0,
+            y_max_m: 2160.0,
+        };
+        let camera = OrbitCamera::from_bounds(&bounds, Some(0.0), Some(237.0));
+        let span = (bounds.x_max_m - bounds.x_min_m).max(bounds.y_max_m - bounds.y_min_m);
+        let far = camera.far_plane(span);
+
+        // The bug this guards: Bevy's default far plane is shorter than the
+        // distance the camera is framed at.
+        assert!(
+            camera.radius > 1000.0,
+            "test scene must be larger than Bevy's default far plane to be meaningful"
+        );
+        assert!(
+            far > camera.eye_position().distance(camera.focus),
+            "far plane {far} must clear the default framing distance"
+        );
+        assert!(
+            far > camera.max_radius + span,
+            "far plane {far} must still clear the scene when zoomed fully out"
+        );
     }
 }

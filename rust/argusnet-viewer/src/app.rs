@@ -259,10 +259,26 @@ fn setup_world(
         Transform::from_xyz(2000.0, 1200.0, 2600.0).looking_at(Vec3::ZERO, Vec3::Z),
     ));
 
+    let bounds = &scene_package.environment.bounds_xy_m;
+    let span = (bounds.x_max_m - bounds.x_min_m)
+        .max(bounds.y_max_m - bounds.y_min_m)
+        .max(200.0);
+
+    // The main camera must set its projection explicitly. Without it Bevy applies
+    // `PerspectiveProjection::default()` (far = 1000 m), which is shorter than the
+    // distance this camera is framed at on every preset larger than `small`, so the
+    // terrain is clipped away entirely. See `OrbitCamera::far_plane`.
+    let main_far = orbit.far_plane(span);
     commands.spawn((
         MainCamera,
         orbit,
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            fov: 45.0_f32.to_radians(),
+            near: 1.0,
+            far: main_far,
+            ..default()
+        }),
         Transform::from_translation(eye).looking_at(focus, Vec3::Z),
         // Sees the world (layer 0) plus the reconstruction (RECON_LAYER) so the
         // scan-map overlay still shows in RealWorld/ScanMap and the Split left pane.
@@ -273,10 +289,7 @@ fn setup_world(
     // Renders only RECON_LAYER, so the right pane is an empty area that fills with
     // a 3-D reconstruction of the believed terrain as the mission scans it.
     // Inactive by default; sync_split_viewports_system enables it in ViewMode::Split.
-    let bounds = &scene_package.environment.bounds_xy_m;
-    let span = (bounds.x_max_m - bounds.x_min_m)
-        .max(bounds.y_max_m - bounds.y_min_m)
-        .max(200.0);
+    //
     // Independent orbit controller for the reconstruction pane, framed at a lower
     // pitch than the main camera so the believed terrain reads as 3-D relief. It is
     // driven only when the cursor is over the right (Split) viewport, so the right
@@ -289,7 +302,7 @@ fn setup_world(
     recon_orbit.pitch = 0.6;
     let recon_eye = recon_orbit.eye_position();
     let recon_focus = recon_orbit.focus;
-    let recon_far = (recon_orbit.max_radius + span) * 1.3;
+    let recon_far = recon_orbit.far_plane(span);
     commands.spawn((
         ReconstructionCamera,
         recon_orbit,
@@ -1295,10 +1308,9 @@ fn draw_sensor_overlays_system(
 fn draw_scan_grid_system(
     mut gizmos: Gizmos,
     replay_state: Res<ReplayState>,
-    _reconstruction: Res<ReconstructionCloud>,
     overlay: Res<MissionOverlaySettings>,
-    _view_mode: Res<ViewMode>,
     scene_package: Res<ScenePackage>,
+    mission_zones: Res<LoadedMissionZones>,
 ) {
     if !overlay.show_scan_grid {
         return;
@@ -1336,14 +1348,14 @@ fn draw_scan_grid_system(
             let footprint_r = 75.0_f32;
             let footprint_color = Color::hsla(52.0, 1.0, 0.88, 0.65);
             const LIFT_M: f32 = 1.5;
-            let terrain_mesh = replay_state
-                .document
-                .as_ref()
-                .and_then(|doc| doc.terrain_viewer_mesh());
+            // The terrain mesh is parsed once at load and kept in `LoadedMissionZones`
+            // (see `setup_world` and `reload_rebuilt_scene`). Re-deriving it from the
+            // replay JSON here deserialized the whole heightmap every frame.
+            let terrain_mesh = mission_zones.terrain_mesh.as_ref();
             for node in &frame.nodes {
                 if node.is_mobile {
                     let local_ground = footprint_ground_z_m(
-                        terrain_mesh.as_ref(),
+                        terrain_mesh,
                         ground_z,
                         [node.position[0], node.position[1]],
                     );

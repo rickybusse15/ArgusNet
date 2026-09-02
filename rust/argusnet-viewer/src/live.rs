@@ -1,7 +1,7 @@
 //! Live gRPC frame ingestion (feature = "live-stream").
 //!
 //! A dedicated OS thread owns a small tokio runtime, subscribes to the
-//! daemon's `WatchFrames` fan-out, converts protobuf frames into the viewer's
+//! daemon's `WatchFramesV2` fan-out, converts protobuf frames into the viewer's
 //! replay representation, and hands them to the Bevy side over a std mpsc
 //! channel. The Bevy system drains the channel each tick, so the render loop
 //! never blocks on the network. Connection loss triggers reconnect with

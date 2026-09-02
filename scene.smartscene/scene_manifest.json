@@ -35,9 +35,6 @@
       "style_id": "buildings"
     }
   ],
-  "replay": {
-    "path": "replay/replay.json"
-  },
   "metadata": {
     "environment": "metadata/environment.json",
     "style": "metadata/style.json"

@@ -140,6 +140,15 @@ impl TerrainViewerMesh {
     }
 }
 
+/// Fallback stale-step threshold, used only when a replay carries no
+/// `meta.platform.max_stale_steps`.
+///
+/// Mirrors `TrackerConfig::default().max_stale_steps` in `argusnet-core`. The
+/// viewer cannot read that constant directly because `argusnet-core` is only in
+/// the dependency graph under the `live-stream` feature; the duplication goes
+/// away when the shared value types move into their own crate.
+pub const DEFAULT_MAX_STALE_STEPS: u32 = 8;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReplayDocument {
     pub meta: Option<Value>,
@@ -154,6 +163,22 @@ impl ReplayDocument {
             .and_then(|m| m.get("zones"))
             .and_then(|v| serde_json::from_value::<Vec<MissionZone>>(v.clone()).ok())
             .unwrap_or_default()
+    }
+
+    /// Stale-step threshold the tracker was actually configured with for this run.
+    ///
+    /// Replays record it under `meta.platform.max_stale_steps`, so the viewer reads
+    /// the run's own value instead of mirroring a constant by hand. The previous
+    /// hardcoded `5` had already drifted from `TrackerConfig`'s default of `8` and
+    /// from the `6` that seeded replays carry, so tracks were flagged stale in the
+    /// alert panel well before the tracker itself considered them stale.
+    pub fn max_stale_steps(&self) -> Option<u32> {
+        self.meta
+            .as_ref()
+            .and_then(|m| m.get("platform"))
+            .and_then(|platform| platform.get("max_stale_steps"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value as u32)
     }
 
     pub fn terrain_viewer_mesh(&self) -> Option<TerrainViewerMesh> {
@@ -534,6 +559,17 @@ impl ReplayState {
         }
     }
 
+    /// Stale-step threshold for the loaded run.
+    ///
+    /// Falls back to [`DEFAULT_MAX_STALE_STEPS`] when the replay predates the
+    /// `meta.platform` block or when running live without a loaded document.
+    pub fn max_stale_steps(&self) -> u32 {
+        self.document
+            .as_ref()
+            .and_then(|document| document.max_stale_steps())
+            .unwrap_or(DEFAULT_MAX_STALE_STEPS)
+    }
+
     pub fn frame_count(&self) -> usize {
         self.document
             .as_ref()
@@ -901,7 +937,32 @@ pub use live_stream::frame_from_pb;
 mod tests {
     use serde_json::json;
 
-    use super::{MarkerKind, ReplayDocument, ReplayState};
+    use super::{MarkerKind, ReplayDocument, ReplayState, DEFAULT_MAX_STALE_STEPS};
+
+    #[test]
+    fn stale_threshold_comes_from_the_replays_own_tracker_config() {
+        let document: ReplayDocument = serde_json::from_value(json!({
+            "meta": {"dt_s": 0.25, "platform": {"min_observations": 2, "max_stale_steps": 6}},
+            "frames": [{"timestamp_s": 0.0, "tracks": [], "truths": [], "nodes": []}]
+        }))
+        .unwrap();
+        let replay = ReplayState::new(Some(document));
+        // The value the run recorded wins over any constant compiled into the viewer.
+        assert_eq!(replay.max_stale_steps(), 6);
+    }
+
+    #[test]
+    fn stale_threshold_falls_back_when_replay_predates_platform_meta() {
+        let document: ReplayDocument = serde_json::from_value(json!({
+            "meta": {"dt_s": 0.25},
+            "frames": [{"timestamp_s": 0.0, "tracks": [], "truths": [], "nodes": []}]
+        }))
+        .unwrap();
+        let replay = ReplayState::new(Some(document));
+        assert_eq!(replay.max_stale_steps(), DEFAULT_MAX_STALE_STEPS);
+        // Guards the drift this replaced: the viewer hardcoded 5 against a core default of 8.
+        assert_eq!(DEFAULT_MAX_STALE_STEPS, 8);
+    }
 
     #[test]
     fn replay_state_advances_and_stops_at_last_frame() {

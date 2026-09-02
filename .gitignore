@@ -59,6 +59,11 @@ replays/
 # Large binary assets
 # ----------------------
 *.glb
+
+# ...except the bundled sample scene, which is intentionally tracked so the
+# viewer has something to open out of the box. Without these negations the
+# package only stays in the tree because it was force-added.
+!scene.smartscene/**
 *.gltf
 *.bin
 *.fbx

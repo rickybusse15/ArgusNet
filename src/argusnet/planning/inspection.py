@@ -1,4 +1,4 @@
-"""Mission generation module for the Smart Trajectory Tracker platform.
+"""Mission generation module for the ArgusNet platform.
 
 Implements procedural mission generation based on the schema defined in
 docs/MISSION_MODEL.md. Produces fully resolved ``GeneratedMission`` instances

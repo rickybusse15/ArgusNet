@@ -47,10 +47,6 @@ const PLATFORM_PRESETS: &[&str] = &["baseline", "wide_area"];
 const MOTION_PRESETS: &[&str] = &["sinusoid", "racetrack", "waypoint_patrol", "mixed"];
 const DRONE_MODES: &[&str] = &["inspect", "search", "mixed"];
 
-/// Stale step threshold: nodes/tracks exceeding this many missed updates are
-/// flagged in the alert panel. Mirrors `TrackerConfig.max_stale_steps` from
-/// `rust/argusnet-core/src/lib.rs`; keep in sync if that default changes.
-const STALE_THRESHOLD: u32 = 5;
 /// Node health fraction below which a node is flagged in the alert panel.
 /// Health is computed in `argusnet_grpc.py` as `1.0 - dropout_probability * 0.5`.
 const HEALTH_ALERT_THRESHOLD: f32 = 0.3;
@@ -348,7 +344,7 @@ fn drawer_mission_content(
     ui.separator();
     section_safety_alerts(ui, replay_state, mission_zones);
     section_targets(ui, replay_state);
-    section_selection(ui, selection);
+    section_selection(ui, selection, replay_state.max_stale_steps());
     ui.separator();
     section_runtime_overlays(ui, runtime_visibility, mission_overlay);
     ui.separator();
@@ -767,7 +763,7 @@ fn diagnostic_track_table(
                         ui.label(track.update_count.to_string());
                     });
                     row.col(|ui| {
-                        let color = if track.stale_steps > STALE_THRESHOLD {
+                        let color = if track.stale_steps > replay_state.max_stale_steps() {
                             egui::Color32::RED
                         } else if track.stale_steps > 0 {
                             egui::Color32::YELLOW
@@ -1190,7 +1186,7 @@ fn tab_scene_content(
 
     section_safety_alerts(ui, replay_state, mission_zones);
 
-    section_selection(ui, selection);
+    section_selection(ui, selection, replay_state.max_stale_steps());
     ui.separator();
 
     section_layers(ui, scene_package, layer_visibility);
@@ -1884,7 +1880,7 @@ fn section_track_summary(
                         ui.label("-");
                     }
                     ui.label(format!("{}", track.update_count));
-                    let stale_color = if track.stale_steps > STALE_THRESHOLD {
+                    let stale_color = if track.stale_steps > replay_state.max_stale_steps() {
                         egui::Color32::RED
                     } else if track.stale_steps > 0 {
                         egui::Color32::YELLOW
@@ -1922,7 +1918,7 @@ fn section_track_summary(
 // Section: Selection Inspector
 // ---------------------------------------------------------------------------
 
-fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
+fn section_selection(ui: &mut egui::Ui, selection: &SelectionState, max_stale_steps: u32) {
     ui.heading("Selection");
     let (Some(kind), Some(label), Some(position)) = (
         &selection.selected_kind,
@@ -1959,7 +1955,7 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState) {
                 kv_row(ui, "Update count", &format!("{}", updates));
             }
             if let Some(stale) = selection.selected_stale_steps {
-                let color = if stale > STALE_THRESHOLD {
+                let color = if stale > max_stale_steps {
                     egui::Color32::RED
                 } else if stale > 0 {
                     egui::Color32::YELLOW
@@ -2054,7 +2050,7 @@ fn section_safety_alerts(
     }
 
     for track in &frame.tracks {
-        if track.stale_steps > STALE_THRESHOLD {
+        if track.stale_steps > replay_state.max_stale_steps() {
             alerts.push((
                 AlertLevel::Warning,
                 format!(

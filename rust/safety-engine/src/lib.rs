@@ -1,4 +1,4 @@
-//! Safety constraint engine for the Smart Trajectory Tracker.
+//! Safety constraint engine for ArgusNet.
 //!
 //! This crate provides:
 //! - [`limits`]: `DronePhysicalLimits` — complete physical envelope for one drone platform.
