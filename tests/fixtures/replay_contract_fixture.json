@@ -1,0 +1,1248 @@
+{
+ "meta": {
+  "scenario_name": "civilian-observation-small-mixed-mixed",
+  "generated_at_utc": "2026-09-02T20:05:18.435903+00:00",
+  "frame_count": 3,
+  "dt_s": 0.25,
+  "seed": 7,
+  "node_ids": [
+   "drone-east",
+   "drone-north",
+   "ground-alpha",
+   "ground-bravo",
+   "ground-charlie"
+  ],
+  "track_ids": [
+   "asset-lynx"
+  ],
+  "schema_version": "2.0",
+  "terrain": {
+   "kind": "tiled-heightmap-v1",
+   "base_resolution_m": 5.0,
+   "tile_size_cells": 256,
+   "lod_resolutions_m": [
+    5.0
+   ],
+   "ground_plane_m": 0.0,
+   "min_height_m": 2.3995802638546895,
+   "max_height_m": 232.25122249465457,
+   "semantic_masks": [
+    "lowland",
+    "ridge",
+    "road",
+    "steep_slope",
+    "valley",
+    "water"
+   ],
+   "mask_coverage_fraction": {
+    "lowland": 0.003621930042173158,
+    "ridge": 0.20109154056065492,
+    "road": 0.0,
+    "steep_slope": 0.32741255271644754,
+    "valley": 0.003621930042173158,
+    "water": 0.0024807740014884646
+   },
+   "source": {
+    "source": "procedural",
+    "preset": "alpine",
+    "seed": 701002222,
+    "detail_strength": 1.0,
+    "season_month": 7,
+    "generator_version": "procedural-landscape-v1",
+    "profile": {
+     "name": "alpine",
+     "base_elevation_m": 58.0,
+     "relief_m": 150.0,
+     "roughness": 0.9,
+     "moisture": 0.42,
+     "water_bias": 0.02,
+     "snow_bias": 0.45,
+     "vegetation_bias": 0.34,
+     "urban_bias": 0.0,
+     "hydrology_strength": 0.2,
+     "smoothing_passes": 0
+    },
+    "semantic_masks": [
+     "lowland",
+     "ridge",
+     "road",
+     "steep_slope",
+     "valley",
+     "water"
+    ],
+    "mask_coverage_fraction": {
+     "lowland": 0.003621930042173158,
+     "ridge": 0.20109154056065492,
+     "road": 0.0,
+     "steep_slope": 0.32741255271644754,
+     "valley": 0.003621930042173158,
+     "water": 0.0024807740014884646
+    }
+   },
+   "xy_bounds_m": {
+    "x_min_m": -360.0,
+    "x_max_m": 360.0,
+    "y_min_m": -330.0,
+    "y_max_m": 360.0
+   }
+  },
+  "occluding_objects": [
+   {
+    "object_id": "pine-stand-west",
+    "kind": "forest-stand-v1",
+    "blocker_type": "vegetation",
+    "footprint_xy_m": [
+     [
+      -250.0,
+      35.0
+     ],
+     [
+      -150.0,
+      30.0
+     ],
+     [
+      -120.0,
+      135.0
+     ],
+     [
+      -205.0,
+      185.0
+     ],
+     [
+      -275.0,
+      125.0
+     ]
+    ],
+    "base_elevation_m": 24.2730559817143,
+    "top_elevation_m": 181.56266382299876,
+    "density": 0.58
+   },
+   {
+    "object_id": "hangar-south",
+    "kind": "box-v1",
+    "blocker_type": "building",
+    "center_x_m": 20.0,
+    "center_y_m": -35.0,
+    "length_m": 72.0,
+    "width_m": 42.0,
+    "yaw_rad": 0.12,
+    "base_elevation_m": 75.13604022977925,
+    "top_elevation_m": 137.162490181416,
+    "footprint_xy_m": [
+     [
+      -13.227154537671879,
+      -60.158620815332284
+     ],
+     [
+      58.255067243806494,
+      -51.539341890530096
+     ],
+     [
+      53.22715453767188,
+      -9.841379184667712
+     ],
+     [
+      -18.255067243806494,
+      -18.460658109469904
+     ]
+    ]
+   }
+  ],
+  "environment_id": "procedural-1.00",
+  "crs_id": "local-enu",
+  "environment_bounds_m": {
+   "x_min_m": -360.0,
+   "x_max_m": 360.0,
+   "y_min_m": -330.0,
+   "y_max_m": 360.0
+  },
+  "terrain_summary": {
+   "kind": "tiled-heightmap-v1",
+   "base_resolution_m": 5.0,
+   "tile_size_cells": 256,
+   "lod_resolutions_m": [
+    5.0
+   ],
+   "ground_plane_m": 0.0,
+   "min_height_m": 2.3995802638546895,
+   "max_height_m": 232.25122249465457,
+   "semantic_masks": [
+    "lowland",
+    "ridge",
+    "road",
+    "steep_slope",
+    "valley",
+    "water"
+   ],
+   "mask_coverage_fraction": {
+    "lowland": 0.003621930042173158,
+    "ridge": 0.20109154056065492,
+    "road": 0.0,
+    "steep_slope": 0.32741255271644754,
+    "valley": 0.003621930042173158,
+    "water": 0.0024807740014884646
+   },
+   "source": {
+    "source": "procedural",
+    "preset": "alpine",
+    "seed": 701002222,
+    "detail_strength": 1.0,
+    "season_month": 7,
+    "generator_version": "procedural-landscape-v1",
+    "profile": {
+     "name": "alpine",
+     "base_elevation_m": 58.0,
+     "relief_m": 150.0,
+     "roughness": 0.9,
+     "moisture": 0.42,
+     "water_bias": 0.02,
+     "snow_bias": 0.45,
+     "vegetation_bias": 0.34,
+     "urban_bias": 0.0,
+     "hydrology_strength": 0.2,
+     "smoothing_passes": 0
+    },
+    "semantic_masks": [
+     "lowland",
+     "ridge",
+     "road",
+     "steep_slope",
+     "valley",
+     "water"
+    ],
+    "mask_coverage_fraction": {
+     "lowland": 0.003621930042173158,
+     "ridge": 0.20109154056065492,
+     "road": 0.0,
+     "steep_slope": 0.32741255271644754,
+     "valley": 0.003621930042173158,
+     "water": 0.0024807740014884646
+    }
+   }
+  },
+  "land_cover": {
+   "kind": "tiled-landcover-v1",
+   "base_resolution_m": 10.0,
+   "tile_size_cells": 256,
+   "xy_bounds_m": {
+    "x_min_m": -360.0,
+    "x_max_m": 360.0,
+    "y_min_m": -330.0,
+    "y_max_m": 360.0
+   },
+   "legend": {
+    "open": 0,
+    "urban": 1,
+    "forest": 2,
+    "water": 3,
+    "scrub": 4,
+    "wetland": 5,
+    "rocky": 6,
+    "snow": 7,
+    "road": 8
+   }
+  },
+  "land_cover_legend": {
+   "open": 0,
+   "urban": 1,
+   "forest": 2,
+   "water": 3,
+   "scrub": 4,
+   "wetland": 5,
+   "rocky": 6,
+   "snow": 7,
+   "road": 8
+  },
+  "platform": {
+   "min_observations": 2,
+   "max_stale_steps": 6
+  },
+  "scenario_options": {
+   "map_preset": "small",
+   "target_motion_preset": "mixed",
+   "drone_mode_preset": "mixed",
+   "terrain_source": "procedural",
+   "terrain_preset": "alpine",
+   "terrain_seed": null,
+   "dem_path": null,
+   "dem_crs": null,
+   "detail_strength": 1.0,
+   "terrain_resolution_m": null,
+   "coverage_resolution_m": 50.0,
+   "cooperative_search": false,
+   "adaptive_search": false,
+   "occlusion_aware_mapping": false,
+   "search_origin_m": null,
+   "season_month": 7,
+   "weather_preset": "clear",
+   "clean_terrain": false,
+   "platform_preset": "baseline",
+   "ground_station_count": 3,
+   "target_count": 1,
+   "drone_count": 2,
+   "mission_profile_id": null,
+   "mission_domain": null,
+   "mission_workflow": null,
+   "mission_tags": []
+  },
+  "mission_profile": null,
+  "zones": [
+   {
+    "zone_id": "zone-0",
+    "zone_type": "surveillance",
+    "center": [
+     200.09750226151968,
+     35.18216773131379,
+     209.27496938336986
+    ],
+    "radius_m": 32.2988621324884,
+    "priority": 2,
+    "label": "surveillance-0"
+   },
+   {
+    "zone_id": "zone-1",
+    "zone_type": "objective",
+    "center": [
+     137.28085973455325,
+     -31.11859474875367,
+     94.48572404575089
+    ],
+    "radius_m": 34.78150735625978,
+    "priority": 1,
+    "label": "objective-1"
+   },
+   {
+    "zone_id": "zone-2",
+    "zone_type": "patrol",
+    "center": [
+     56.75983743323385,
+     -139.12682223521625,
+     65.2591911479123
+    ],
+    "radius_m": 53.772090111524186,
+    "priority": 3,
+    "label": "patrol-2"
+   }
+  ],
+  "enu_origin": {
+   "latitude_deg": 37.7749,
+   "longitude_deg": -122.4194,
+   "altitude_m": 0.0
+  },
+  "requested_duration_s": 12.0,
+  "actual_duration_s": 12.0,
+  "target_motion_assignments": {
+   "asset-lynx": "mixed"
+  },
+  "drone_planner_modes": {
+   "drone-east": "follow",
+   "drone-north": "search"
+  },
+  "drone_target_assignments": {
+   "drone-east": "asset-lynx",
+   "drone-north": "asset-lynx"
+  },
+  "drone_roles": {
+   "drone-east": "interceptor",
+   "drone-north": "tracker"
+  },
+  "observation_generation": {
+   "attempted_count": 245,
+   "accepted_count": 47,
+   "rejected_count": 198,
+   "acceptance_rate": 0.19183673469387755,
+   "rejection_counts": {
+    "building_occlusion": 7,
+    "dropout": 77,
+    "outside_fov": 18,
+    "terrain_occlusion": 83,
+    "vegetation_occlusion": 13
+   },
+   "accepted_by_target": {
+    "asset-lynx": 47
+   },
+   "rejected_by_target": {
+    "asset-lynx": 198
+   }
+  },
+  "vio_tracked_nodes": [
+   "drone-east",
+   "drone-north"
+  ],
+  "performance": {
+   "wall_clock_s": 0.668551903000207,
+   "frame_times_ms": {
+    "count": 49,
+    "mean_ms": 13.622742163265304,
+    "p95_ms": 23.4627262,
+    "p99_ms": 24.820442319999998,
+    "max_ms": 25.296646
+   },
+   "peak_rss_mb": 88.22265625,
+   "cache_metrics": {
+    "terrain": {
+     "height_at": {
+      "owner": "TerrainLayer:procedural-alpine",
+      "name": "height_at",
+      "capacity": 131072,
+      "size": 6846,
+      "hits": 2820,
+      "misses": 6846,
+      "evictions": 0
+     },
+     "gradient_at": {
+      "owner": "TerrainLayer:procedural-alpine",
+      "name": "gradient_at",
+      "capacity": 65536,
+      "size": 0,
+      "hits": 0,
+      "misses": 0,
+      "evictions": 0
+     }
+    },
+    "obstacles": {
+     "point_collides": {
+      "owner": "ObstacleLayer",
+      "name": "point_collides",
+      "capacity": 65536,
+      "size": 555,
+      "hits": 29,
+      "misses": 555,
+      "evictions": 0
+     }
+    },
+    "visibility": {
+     "los": {
+      "owner": "EnvironmentQuery:procedural-1.00",
+      "name": "los",
+      "capacity": 131072,
+      "size": 760,
+      "hits": 2,
+      "misses": 760,
+      "evictions": 0
+     }
+    }
+   },
+   "terrain_queries_per_sec": 14458.114555687695,
+   "observations_per_sec": 70.30119843961532
+  },
+  "_fixture_note": "Trimmed from a real `argusnet sim` run so the checked-in file stays small: 3 frames carrying tracks/observations, generation_rejections dropped, and meta.terrain.viewer_mesh removed. Field shapes are exactly as the writer emits them. Regenerate with tests/fixtures/README-replay-contract.md."
+ },
+ "summary": {
+  "mean_error_m": 16.140070708897852,
+  "peak_error_m": 29.36215348829671,
+  "mean_observations_per_frame": 0.3877551020408163,
+  "mean_active_tracks": 0.3673469387755102,
+  "mean_accepted_observations_per_frame": 0.3877551020408163,
+  "mean_rejected_observations_per_frame": 0.6122448979591837,
+  "total_accepted_observations": 19,
+  "total_rejected_observations": 30,
+  "observation_rejection_rate": 0.6122448979591837,
+  "rejection_counts": {
+   "bearing_noise_too_high": 1,
+   "insufficient_cluster_observations": 28,
+   "low_confidence": 1
+  }
+ },
+ "frames": [
+  {
+   "timestamp_s": 0.5,
+   "nodes": [
+    {
+     "node_id": "ground-alpha",
+     "position": [
+      -259.2,
+      -205.8,
+      74.38714232222699
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 0.5,
+     "health": 0.9925,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "ground-bravo",
+     "position": [
+      251.99999999999997,
+      -81.60000000000001,
+      102.25381102769313
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 0.5,
+     "health": 0.99,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "ground-charlie",
+     "position": [
+      -28.8,
+      270.29999999999995,
+      118.19624075424154
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 0.5,
+     "health": 0.9875,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "drone-east",
+     "position": [
+      -259.2,
+      -205.8,
+      76.97015013472699
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      10.107421875
+     ],
+     "is_mobile": true,
+     "timestamp_s": 0.5,
+     "health": 0.96,
+     "sensor_type": "optical",
+     "fov_half_angle_deg": 55.0,
+     "max_range_m": 650.0,
+     "battery_fraction": 0.9998564995659722
+    },
+    {
+     "node_id": "drone-north",
+     "position": [
+      251.99999999999997,
+      -81.60000000000001,
+      104.97158446519313
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      10.634765625
+     ],
+     "is_mobile": true,
+     "timestamp_s": 0.5,
+     "health": 0.9575,
+     "sensor_type": "optical",
+     "fov_half_angle_deg": 55.0,
+     "max_range_m": 650.0,
+     "battery_fraction": 0.9998490125868057
+    }
+   ],
+   "observations": [
+    {
+     "node_id": "drone-north",
+     "target_id": "asset-lynx",
+     "origin": [
+      251.99999999999997,
+      -81.60000000000001,
+      104.97158446519313
+     ],
+     "direction": [
+      -0.6973999636064269,
+      0.468156599312808,
+      0.542644164514483
+     ],
+     "bearing_std_rad": 0.025944250371781937,
+     "timestamp_s": 0.5,
+     "confidence": 0.4078786131340808
+    },
+    {
+     "node_id": "ground-alpha",
+     "target_id": "asset-lynx",
+     "origin": [
+      -259.2,
+      -205.8,
+      74.38714232222699
+     ],
+     "direction": [
+      0.7355527805479798,
+      0.5506842403045186,
+      0.39459976496238675
+     ],
+     "bearing_std_rad": 0.028654408077826737,
+     "timestamp_s": 0.5,
+     "confidence": 0.21391923641375538
+    }
+   ],
+   "rejected_observations": [],
+   "tracks": [
+    {
+     "track_id": "asset-lynx",
+     "timestamp_s": 0.5,
+     "position": [
+      68.35810606146194,
+      41.10931455390261,
+      248.6382807059876
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "covariance": [
+      96.101013524025,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      96.101013524025,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      96.101013524025,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      400.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      400.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      400.0
+     ],
+     "measurement_std_m": 9.803112440649908,
+     "update_count": 1,
+     "stale_steps": 0,
+     "lifecycle_state": "tentative",
+     "quality_score": 0.5,
+     "mode_probability_cv": 0.8,
+     "contributing_node_ids": []
+    }
+   ],
+   "truths": [
+    {
+     "target_id": "asset-lynx",
+     "position": [
+      59.72514937781031,
+      38.46799291662263,
+      236.37465677653822
+     ],
+     "velocity": [
+      -4.190852802351838,
+      -17.011383035750498,
+      2.091524806695175
+     ],
+     "timestamp_s": 0.5
+    }
+   ],
+   "metrics": {
+    "mean_error_m": 15.228295800132468,
+    "max_error_m": 15.228295800132468,
+    "active_track_count": 1,
+    "observation_count": 2,
+    "accepted_observation_count": 2,
+    "rejected_observation_count": 0,
+    "mean_measurement_std_m": 9.803112440649908,
+    "track_errors_m": {
+     "asset-lynx": 15.228295800132468
+    },
+    "rejection_counts": {},
+    "accepted_observations_by_target": {
+     "asset-lynx": 2
+    },
+    "rejected_observations_by_target": {}
+   },
+   "mapping_state": {
+    "coverage_fraction": 0.11428571428571428,
+    "covered_cells": 24,
+    "total_cells": 210,
+    "mean_revisits": 3.0,
+    "observed_cells": null,
+    "unknown_cells": null,
+    "unsafe_cells": null,
+    "mean_height_uncertainty_m": null,
+    "mean_belief_confidence": null
+   },
+   "localization_state": {
+    "active_localizations": 1,
+    "mean_position_std_m": 9.803112440649908,
+    "mean_observation_confidence": 0.3108989247739181,
+    "status_counts": {},
+    "frame_id": "map"
+   },
+   "inspection_events": [],
+   "deconfliction_events": [],
+   "scan_mission_state": null,
+   "mission_events": [],
+   "safety_events": [],
+   "target_metadata": [
+    {
+     "target_id": "asset-lynx",
+     "operator_label": "Asset Lynx",
+     "target_type": "simulated_mobile",
+     "priority": 3,
+     "behavior": "mixed",
+     "status": "observed",
+     "first_seen_s": 0.0,
+     "last_seen_s": 0.5,
+     "confidence": 0.6666666666666666,
+     "notes": ""
+    }
+   ],
+   "belief_cells": [],
+   "pose_estimates": [],
+   "evidence_records": [],
+   "platform_health": []
+  },
+  {
+   "timestamp_s": 0.75,
+   "nodes": [
+    {
+     "node_id": "ground-alpha",
+     "position": [
+      -259.2,
+      -205.8,
+      74.38714232222699
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 0.75,
+     "health": 0.9925,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "ground-bravo",
+     "position": [
+      251.99999999999997,
+      -81.60000000000001,
+      102.25381102769313
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 0.75,
+     "health": 0.99,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "ground-charlie",
+     "position": [
+      -28.8,
+      270.29999999999995,
+      118.19624075424154
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 0.75,
+     "health": 0.9875,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "drone-east",
+     "position": [
+      -259.2,
+      -205.8,
+      80.07256712691449
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      14.65576171875
+     ],
+     "is_mobile": true,
+     "timestamp_s": 0.75,
+     "health": 0.96,
+     "sensor_type": "optical",
+     "fov_half_angle_deg": 55.0,
+     "max_range_m": 650.0,
+     "battery_fraction": 0.9996841430664063
+    },
+    {
+     "node_id": "drone-north",
+     "position": [
+      251.99999999999997,
+      -81.60000000000001,
+      108.23586669175563
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      15.42041015625
+     ],
+     "is_mobile": true,
+     "timestamp_s": 0.75,
+     "health": 0.9575,
+     "sensor_type": "optical",
+     "fov_half_angle_deg": 55.0,
+     "max_range_m": 650.0,
+     "battery_fraction": 0.9996676635742189
+    }
+   ],
+   "observations": [],
+   "rejected_observations": [
+    {
+     "node_id": "drone-north",
+     "target_id": "asset-lynx",
+     "timestamp_s": 0.75,
+     "reason": "insufficient_cluster_observations",
+     "detail": "Requires at least 2 observations.",
+     "origin": [
+      251.99999999999997,
+      -81.60000000000001,
+      108.23586669175563
+     ],
+     "attempted_point": null,
+     "closest_point": null,
+     "blocker_type": "",
+     "first_hit_range_m": null
+    }
+   ],
+   "tracks": [
+    {
+     "track_id": "asset-lynx",
+     "timestamp_s": 0.75,
+     "position": [
+      68.35810606146194,
+      41.109314553902614,
+      248.63828070598763
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "covariance": [
+      121.12161899277498,
+      0.0,
+      0.0,
+      100.16484375,
+      0.0,
+      0.0,
+      0.0,
+      121.12161899277498,
+      2.4637703791862645e-28,
+      0.0,
+      100.16484375,
+      0.0,
+      0.0,
+      2.4637703791862645e-28,
+      121.12161899277498,
+      0.0,
+      0.0,
+      100.16484375,
+      100.16484375,
+      0.0,
+      0.0,
+      401.31875,
+      0.0,
+      0.0,
+      0.0,
+      100.16484375,
+      0.0,
+      0.0,
+      401.31875,
+      0.0,
+      0.0,
+      0.0,
+      100.16484375,
+      0.0,
+      0.0,
+      401.31875
+     ],
+     "measurement_std_m": 9.803112440649908,
+     "update_count": 1,
+     "stale_steps": 1,
+     "lifecycle_state": "tentative",
+     "quality_score": 0.5,
+     "mode_probability_cv": 0.78,
+     "contributing_node_ids": []
+    }
+   ],
+   "truths": [
+    {
+     "target_id": "asset-lynx",
+     "position": [
+      58.239224266527714,
+      33.73124948476936,
+      233.0436800935846
+     ],
+     "velocity": [
+      -6.209379147972643,
+      -16.381315193771172,
+      2.087938781261546
+     ],
+     "timestamp_s": 0.75
+    }
+   ],
+   "metrics": {
+    "mean_error_m": 20.00047952436581,
+    "max_error_m": 20.00047952436581,
+    "active_track_count": 1,
+    "observation_count": 0,
+    "accepted_observation_count": 0,
+    "rejected_observation_count": 1,
+    "mean_measurement_std_m": 9.803112440649908,
+    "track_errors_m": {
+     "asset-lynx": 20.00047952436581
+    },
+    "rejection_counts": {
+     "insufficient_cluster_observations": 1
+    },
+    "accepted_observations_by_target": {},
+    "rejected_observations_by_target": {
+     "asset-lynx": 1
+    }
+   },
+   "mapping_state": {
+    "coverage_fraction": 0.11428571428571428,
+    "covered_cells": 24,
+    "total_cells": 210,
+    "mean_revisits": 4.0,
+    "observed_cells": null,
+    "unknown_cells": null,
+    "unsafe_cells": null,
+    "mean_height_uncertainty_m": null,
+    "mean_belief_confidence": null
+   },
+   "localization_state": {
+    "active_localizations": 1,
+    "mean_position_std_m": 11.005526747628892,
+    "mean_observation_confidence": 0.4172059627088621,
+    "status_counts": {},
+    "frame_id": "map"
+   },
+   "inspection_events": [],
+   "deconfliction_events": [],
+   "scan_mission_state": null,
+   "mission_events": [],
+   "safety_events": [],
+   "target_metadata": [
+    {
+     "target_id": "asset-lynx",
+     "operator_label": "Asset Lynx",
+     "target_type": "simulated_mobile",
+     "priority": 3,
+     "behavior": "mixed",
+     "status": "observed",
+     "first_seen_s": 0.0,
+     "last_seen_s": 0.75,
+     "confidence": 0.3333333333333333,
+     "notes": ""
+    }
+   ],
+   "belief_cells": [],
+   "pose_estimates": [],
+   "evidence_records": [],
+   "platform_health": []
+  },
+  {
+   "timestamp_s": 1.0,
+   "nodes": [
+    {
+     "node_id": "ground-alpha",
+     "position": [
+      -259.2,
+      -205.8,
+      74.38714232222699
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 1.0,
+     "health": 0.9925,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "ground-bravo",
+     "position": [
+      251.99999999999997,
+      -81.60000000000001,
+      102.25381102769313
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 1.0,
+     "health": 0.99,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "ground-charlie",
+     "position": [
+      -28.8,
+      270.29999999999995,
+      118.19624075424154
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "is_mobile": false,
+     "timestamp_s": 1.0,
+     "health": 0.9875,
+     "sensor_type": "radar",
+     "fov_half_angle_deg": 180.0,
+     "max_range_m": 780.0,
+     "battery_fraction": -1.0
+    },
+    {
+     "node_id": "drone-east",
+     "position": [
+      -259.2,
+      -205.8,
+      84.26995482222699
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      18.8671875
+     ],
+     "is_mobile": true,
+     "timestamp_s": 1.0,
+     "health": 0.96,
+     "sensor_type": "optical",
+     "fov_half_angle_deg": 55.0,
+     "max_range_m": 650.0,
+     "battery_fraction": 0.9994509548611111
+    },
+    {
+     "node_id": "drone-north",
+     "position": [
+      251.99999999999997,
+      -81.60000000000001,
+      112.65224852769313
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      19.8515625
+     ],
+     "is_mobile": true,
+     "timestamp_s": 1.0,
+     "health": 0.9575,
+     "sensor_type": "optical",
+     "fov_half_angle_deg": 55.0,
+     "max_range_m": 650.0,
+     "battery_fraction": 0.999422309027778
+    }
+   ],
+   "observations": [],
+   "rejected_observations": [
+    {
+     "node_id": "drone-east",
+     "target_id": "asset-lynx",
+     "timestamp_s": 1.0,
+     "reason": "insufficient_cluster_observations",
+     "detail": "Requires at least 2 observations.",
+     "origin": [
+      -259.2,
+      -205.8,
+      84.26995482222699
+     ],
+     "attempted_point": null,
+     "closest_point": null,
+     "blocker_type": "",
+     "first_hit_range_m": null
+    }
+   ],
+   "tracks": [
+    {
+     "track_id": "asset-lynx",
+     "timestamp_s": 1.0,
+     "position": [
+      68.35810606146195,
+      41.10931455390261,
+      248.6382807059876
+     ],
+     "velocity": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "covariance": [
+      196.3161990709,
+      0.0,
+      9.572353768313847e-29,
+      200.68859375,
+      0.0,
+      0.0,
+      0.0,
+      196.3161990709,
+      0.0,
+      0.0,
+      200.68859375,
+      0.0,
+      9.572353768313847e-29,
+      0.0,
+      196.3161990709,
+      0.0,
+      0.0,
+      200.68859375,
+      200.68859375,
+      0.0,
+      0.0,
+      402.75437500000004,
+      0.0,
+      0.0,
+      0.0,
+      200.68859375,
+      0.0,
+      0.0,
+      402.75437500000004,
+      0.0,
+      0.0,
+      0.0,
+      200.68859375,
+      0.0,
+      0.0,
+      402.75437500000004
+     ],
+     "measurement_std_m": 9.803112440649908,
+     "update_count": 1,
+     "stale_steps": 2,
+     "lifecycle_state": "tentative",
+     "quality_score": 0.3333333333333333,
+     "mode_probability_cv": 0.763,
+     "contributing_node_ids": []
+    }
+   ],
+   "truths": [
+    {
+     "target_id": "asset-lynx",
+     "position": [
+      56.18932488100562,
+      29.215390869096343,
+      232.97541295339707
+     ],
+     "velocity": [
+      -8.130970232484705,
+      -15.500938492875777,
+      2.0829217868821095
+     ],
+     "timestamp_s": 1.0
+    }
+   ],
+   "metrics": {
+    "mean_error_m": 23.1272584253509,
+    "max_error_m": 23.1272584253509,
+    "active_track_count": 1,
+    "observation_count": 0,
+    "accepted_observation_count": 0,
+    "rejected_observation_count": 1,
+    "mean_measurement_std_m": 9.803112440649908,
+    "track_errors_m": {
+     "asset-lynx": 23.1272584253509
+    },
+    "rejection_counts": {
+     "insufficient_cluster_observations": 1
+    },
+    "accepted_observations_by_target": {},
+    "rejected_observations_by_target": {
+     "asset-lynx": 1
+    }
+   },
+   "mapping_state": {
+    "coverage_fraction": 0.11428571428571428,
+    "covered_cells": 24,
+    "total_cells": 210,
+    "mean_revisits": 5.0,
+    "observed_cells": null,
+    "unknown_cells": null,
+    "unsafe_cells": null,
+    "mean_height_uncertainty_m": null,
+    "mean_belief_confidence": null
+   },
+   "localization_state": {
+    "active_localizations": 1,
+    "mean_position_std_m": 14.011288273063974,
+    "mean_observation_confidence": 0.15,
+    "status_counts": {},
+    "frame_id": "map"
+   },
+   "inspection_events": [],
+   "deconfliction_events": [],
+   "scan_mission_state": null,
+   "mission_events": [],
+   "safety_events": [],
+   "target_metadata": [
+    {
+     "target_id": "asset-lynx",
+     "operator_label": "Asset Lynx",
+     "target_type": "simulated_mobile",
+     "priority": 3,
+     "behavior": "mixed",
+     "status": "observed",
+     "first_seen_s": 0.0,
+     "last_seen_s": 1.0,
+     "confidence": 0.3333333333333333,
+     "notes": ""
+    }
+   ],
+   "belief_cells": [],
+   "pose_estimates": [],
+   "evidence_records": [],
+   "platform_health": []
+  }
+ ]
+}

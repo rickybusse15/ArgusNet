@@ -39,6 +39,11 @@ target/
 replay.json
 replay_*.json
 *_replay.json
+# ...but test fixtures under tests/ are inputs, not outputs. Without this,
+# `replay_*.json` silently swallowed tests/fixtures/replay_contract_fixture.json
+# on `git add -A`, so the cross-language contract test passed locally and failed
+# in CI with FileNotFoundError.
+!tests/fixtures/**
 *_large.json
 *.frames.jsonl
 *.frames.session.json
