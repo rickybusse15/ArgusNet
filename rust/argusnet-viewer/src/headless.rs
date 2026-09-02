@@ -287,7 +287,7 @@ fn draw_reconstruction(
         let Some(mission) = &frame.scan_mission_state else {
             continue;
         };
-        for triple in mission.newly_scanned_cells.chunks_exact(3) {
+        for triple in mission.newly_scanned_cells.as_chunks::<3>().0 {
             cells.push([triple[0], triple[1], triple[2]]);
         }
     }

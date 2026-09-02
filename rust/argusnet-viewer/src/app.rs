@@ -1524,7 +1524,7 @@ fn update_reconstruction_system(
     // Python emits a flat [x0,y0,h0, x1,y1,h1, ...] array; chunk into triples.
     // Viewer is Z-up: Python (x=east, y=north, h=terrain_height) maps directly.
     let prev_len = reconstruction.points.len();
-    for triple in mission.newly_scanned_cells.chunks_exact(3) {
+    for triple in mission.newly_scanned_cells.as_chunks::<3>().0 {
         let z = triple[2];
         reconstruction.points.push([triple[0], triple[1], z]);
         if z > reconstruction.max_z {
