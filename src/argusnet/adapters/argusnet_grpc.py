@@ -372,6 +372,8 @@ def _track_from_proto(track: tracker_pb2.TrackState) -> TrackState:
         stale_steps=int(track.stale_steps),
         lifecycle_state=str(track.lifecycle_state) if track.HasField("lifecycle_state") else None,
         quality_score=_optional_double(track, "quality_score"),
+        mode_probability_cv=float(track.mode_probability_cv),
+        contributing_node_ids=tuple(track.contributing_nodes),
     )
 
 

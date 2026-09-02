@@ -2327,6 +2327,7 @@ mod tests {
                 sensor_type: "optical".into(),
                 fov_half_angle_deg: None,
                 max_range_m: None,
+                battery_fraction: None,
             }],
             observations: Vec::new(),
             rejected_observations: Vec::new(),

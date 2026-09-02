@@ -4,13 +4,18 @@
   "title": "Replay Document",
   "description": "Schema for Smart Trajectory Tracker replay documents that capture simulation frames, track states, observations, and metrics.",
   "type": "object",
-  "required": ["meta", "frames"],
+  "required": [
+    "meta",
+    "frames"
+  ],
   "additionalProperties": true,
   "properties": {
     "meta": {
       "type": "object",
       "description": "Metadata about the replay session including scenario configuration and timing.",
-      "required": ["dt_s"],
+      "required": [
+        "dt_s"
+      ],
       "additionalProperties": true,
       "properties": {
         "scenario_name": {
@@ -66,11 +71,17 @@
       "additionalProperties": true,
       "properties": {
         "mean_error_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "Mean position error across all frames in meters."
         },
         "peak_error_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "Maximum position error across all frames in meters."
         },
         "mean_observations_per_frame": {
@@ -148,7 +159,11 @@
     "enu_origin": {
       "type": "object",
       "description": "ENU coordinate origin defined in geodetic coordinates.",
-      "required": ["latitude_deg", "longitude_deg", "altitude_m"],
+      "required": [
+        "latitude_deg",
+        "longitude_deg",
+        "altitude_m"
+      ],
       "additionalProperties": false,
       "properties": {
         "latitude_deg": {
@@ -172,7 +187,13 @@
     "node_state": {
       "type": "object",
       "description": "State of a sensor node at a particular time step.",
-      "required": ["node_id", "position", "velocity", "is_mobile", "timestamp_s"],
+      "required": [
+        "node_id",
+        "position",
+        "velocity",
+        "is_mobile",
+        "timestamp_s"
+      ],
       "additionalProperties": true,
       "properties": {
         "node_id": {
@@ -204,7 +225,10 @@
         "sensor_type": {
           "type": "string",
           "description": "Type of sensor on the node.",
-          "enum": ["optical", "radar"]
+          "enum": [
+            "optical",
+            "radar"
+          ]
         },
         "fov_half_angle_deg": {
           "type": "number",
@@ -222,7 +246,14 @@
     "bearing_observation": {
       "type": "object",
       "description": "A bearing-only observation from a sensor node toward a target.",
-      "required": ["node_id", "target_id", "origin", "direction", "bearing_std_rad", "timestamp_s"],
+      "required": [
+        "node_id",
+        "target_id",
+        "origin",
+        "direction",
+        "bearing_std_rad",
+        "timestamp_s"
+      ],
       "additionalProperties": true,
       "properties": {
         "node_id": {
@@ -261,7 +292,12 @@
     "observation_rejection": {
       "type": "object",
       "description": "Record of a rejected observation with diagnostic information.",
-      "required": ["node_id", "target_id", "timestamp_s", "reason"],
+      "required": [
+        "node_id",
+        "target_id",
+        "timestamp_s",
+        "reason"
+      ],
       "additionalProperties": true,
       "properties": {
         "node_id": {
@@ -308,22 +344,34 @@
         },
         "origin": {
           "oneOf": [
-            { "$ref": "#/definitions/vector3" },
-            { "type": "null" }
+            {
+              "$ref": "#/definitions/vector3"
+            },
+            {
+              "type": "null"
+            }
           ],
           "description": "Origin of the attempted observation ray, if available."
         },
         "attempted_point": {
           "oneOf": [
-            { "$ref": "#/definitions/vector3" },
-            { "type": "null" }
+            {
+              "$ref": "#/definitions/vector3"
+            },
+            {
+              "type": "null"
+            }
           ],
           "description": "Point the observation was attempting to reach."
         },
         "closest_point": {
           "oneOf": [
-            { "$ref": "#/definitions/vector3" },
-            { "type": "null" }
+            {
+              "$ref": "#/definitions/vector3"
+            },
+            {
+              "type": "null"
+            }
           ],
           "description": "Closest point on the obstruction surface."
         },
@@ -332,7 +380,10 @@
           "description": "Type of object that blocked the observation (e.g., building, terrain)."
         },
         "first_hit_range_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "Range in meters to the first hit point along the observation ray."
         }
       }
@@ -340,7 +391,12 @@
     "truth_state": {
       "type": "object",
       "description": "Ground truth state of a target at a particular time step.",
-      "required": ["target_id", "position", "velocity", "timestamp_s"],
+      "required": [
+        "target_id",
+        "position",
+        "velocity",
+        "timestamp_s"
+      ],
       "additionalProperties": true,
       "properties": {
         "target_id": {
@@ -364,7 +420,16 @@
     "track_state": {
       "type": "object",
       "description": "Estimated state of a track maintained by the fusion engine.",
-      "required": ["track_id", "timestamp_s", "position", "velocity", "covariance", "measurement_std_m", "update_count", "stale_steps"],
+      "required": [
+        "track_id",
+        "timestamp_s",
+        "position",
+        "velocity",
+        "covariance",
+        "measurement_std_m",
+        "update_count",
+        "stale_steps"
+      ],
       "additionalProperties": true,
       "properties": {
         "track_id": {
@@ -401,68 +466,169 @@
           "type": "integer",
           "description": "Number of consecutive time steps without a measurement update.",
           "minimum": 0
+        },
+        "mode_probability_cv": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "IMM constant-velocity model weight. Drives the viewer's IMM readout."
+        },
+        "contributing_node_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Node IDs that contributed to the most recent update."
         }
       }
     },
     "mapping_state": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Cumulative sensor coverage metrics at this simulation step.",
       "additionalProperties": true,
       "properties": {
-        "coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1},
-        "covered_cells": {"type": "integer", "minimum": 0},
-        "total_cells": {"type": "integer", "minimum": 0},
-        "mean_revisits": {"type": "number", "minimum": 0}
+        "coverage_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "covered_cells": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_cells": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mean_revisits": {
+          "type": "number",
+          "minimum": 0
+        }
       }
     },
     "localization_state": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Aggregated localization quality across active tracks.",
       "additionalProperties": true,
       "properties": {
-        "active_localizations": {"type": "integer", "minimum": 0},
-        "mean_position_std_m": {"type": "number", "minimum": 0},
-        "mean_observation_confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        "active_localizations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mean_position_std_m": {
+          "type": "number",
+          "minimum": 0
+        },
+        "mean_observation_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
       }
     },
     "inspection_event": {
       "type": "object",
       "description": "Record of a mobile node entering, updating coverage in, or exiting a mission zone.",
-      "required": ["zone_id", "node_id", "event_type", "timestamp_s"],
+      "required": [
+        "zone_id",
+        "node_id",
+        "event_type",
+        "timestamp_s"
+      ],
       "additionalProperties": true,
       "properties": {
-        "zone_id": {"type": "string"},
-        "node_id": {"type": "string"},
-        "event_type": {"type": "string", "enum": ["entered", "coverage_updated", "exited", "violation"]},
-        "timestamp_s": {"type": "number"},
-        "zone_coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1}
+        "zone_id": {
+          "type": "string"
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "entered",
+            "coverage_updated",
+            "exited",
+            "violation"
+          ]
+        },
+        "timestamp_s": {
+          "type": "number"
+        },
+        "zone_coverage_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
       }
     },
     "deconfliction_event": {
       "type": "object",
       "description": "Record of a yielded position resolution between two drones predicted to violate minimum separation.",
-      "required": ["yielding_drone_id", "conflicting_drone_id", "predicted_separation_m", "resolution", "timestamp_s"],
+      "required": [
+        "yielding_drone_id",
+        "conflicting_drone_id",
+        "predicted_separation_m",
+        "resolution",
+        "timestamp_s"
+      ],
       "additionalProperties": true,
       "properties": {
-        "yielding_drone_id": {"type": "string"},
-        "conflicting_drone_id": {"type": "string"},
-        "predicted_separation_m": {"type": "number", "minimum": 0},
-        "resolution": {"type": "string", "enum": ["lateral_offset", "vertical_offset", "corridor_hold"]},
-        "timestamp_s": {"type": "number"}
+        "yielding_drone_id": {
+          "type": "string"
+        },
+        "conflicting_drone_id": {
+          "type": "string"
+        },
+        "predicted_separation_m": {
+          "type": "number",
+          "minimum": 0
+        },
+        "resolution": {
+          "type": "string",
+          "enum": [
+            "lateral_offset",
+            "vertical_offset",
+            "corridor_hold"
+          ]
+        },
+        "timestamp_s": {
+          "type": "number"
+        }
       }
     },
     "platform_metrics": {
       "type": "object",
       "description": "Per-frame metrics about tracking performance.",
-      "required": ["active_track_count", "observation_count", "accepted_observation_count", "rejected_observation_count"],
+      "required": [
+        "active_track_count",
+        "observation_count",
+        "accepted_observation_count",
+        "rejected_observation_count"
+      ],
       "additionalProperties": true,
       "properties": {
         "mean_error_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "Mean position error across all active tracks in meters."
         },
         "max_error_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "Maximum position error across all active tracks in meters."
         },
         "active_track_count": {
@@ -486,7 +652,10 @@
           "minimum": 0
         },
         "mean_measurement_std_m": {
-          "type": ["number", "null"],
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "Mean measurement standard deviation across active tracks in meters."
         },
         "track_errors_m": {
@@ -525,7 +694,15 @@
     "frame": {
       "type": "object",
       "description": "A single simulation frame capturing the full state at one time step.",
-      "required": ["timestamp_s", "nodes", "observations", "rejected_observations", "tracks", "truths", "metrics"],
+      "required": [
+        "timestamp_s",
+        "nodes",
+        "observations",
+        "rejected_observations",
+        "tracks",
+        "truths",
+        "metrics"
+      ],
       "additionalProperties": true,
       "properties": {
         "timestamp_s": {
@@ -647,10 +824,16 @@
     },
     "mission_event": {
       "type": "object",
-      "required": ["event_id", "event_type", "timestamp_s"],
+      "required": [
+        "event_id",
+        "event_type",
+        "timestamp_s"
+      ],
       "additionalProperties": true,
       "properties": {
-        "event_id": {"type": "string"},
+        "event_id": {
+          "type": "string"
+        },
         "event_type": {
           "type": "string",
           "enum": [
@@ -663,121 +846,352 @@
             "operator_review_requested"
           ]
         },
-        "timestamp_s": {"type": "number"},
-        "mission_id": {"type": "string"},
-        "platform_id": {"type": ["string", "null"]},
-        "task_id": {"type": ["string", "null"]},
-        "phase": {"type": ["string", "null"]},
-        "reason": {"type": ["string", "null"]},
-        "details": {"type": "object"}
+        "timestamp_s": {
+          "type": "number"
+        },
+        "mission_id": {
+          "type": "string"
+        },
+        "platform_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "details": {
+          "type": "object"
+        }
       }
     },
     "target_metadata": {
       "type": "object",
-      "required": ["target_id"],
+      "required": [
+        "target_id"
+      ],
       "additionalProperties": true,
       "properties": {
-        "target_id": {"type": "string"},
-        "operator_label": {"type": "string"},
-        "target_type": {"type": "string"},
-        "priority": {"type": "integer"},
-        "behavior": {"type": "string"},
-        "status": {"type": "string"},
-        "first_seen_s": {"type": "number"},
-        "last_seen_s": {"type": "number"},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "notes": {"type": "string"}
+        "target_id": {
+          "type": "string"
+        },
+        "operator_label": {
+          "type": "string"
+        },
+        "target_type": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "behavior": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "first_seen_s": {
+          "type": "number"
+        },
+        "last_seen_s": {
+          "type": "number"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "notes": {
+          "type": "string"
+        }
       }
     },
     "safety_validation_result": {
       "type": "object",
-      "required": ["validation_id", "subject_id", "accepted", "timestamp_s"],
+      "required": [
+        "validation_id",
+        "subject_id",
+        "accepted",
+        "timestamp_s"
+      ],
       "additionalProperties": true,
       "properties": {
-        "validation_id": {"type": "string"},
-        "subject_id": {"type": "string"},
-        "accepted": {"type": "boolean"},
-        "timestamp_s": {"type": "number"},
-        "validator": {"type": "string"},
-        "violations": {"type": "array", "items": {"type": "string"}},
-        "clamped": {"type": "boolean"},
-        "reason": {"type": ["string", "null"]}
+        "validation_id": {
+          "type": "string"
+        },
+        "subject_id": {
+          "type": "string"
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "timestamp_s": {
+          "type": "number"
+        },
+        "validator": {
+          "type": "string"
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "clamped": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "belief_cell": {
       "type": "object",
-      "required": ["cell_id", "ij", "center_xy_m", "coverage_count", "inside_geofence", "status"],
+      "required": [
+        "cell_id",
+        "ij",
+        "center_xy_m",
+        "coverage_count",
+        "inside_geofence",
+        "status"
+      ],
       "additionalProperties": true,
       "properties": {
-        "cell_id": {"type": "string"},
-        "ij": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
-        "center_xy_m": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
-        "height_estimate_m": {"type": ["number", "null"]},
-        "height_uncertainty_m": {"type": ["number", "null"]},
-        "obstacle_probability": {"type": "number", "minimum": 0, "maximum": 1},
-        "terrain_confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "coverage_count": {"type": "integer", "minimum": 0},
-        "last_observed_s": {"type": ["number", "null"]},
-        "inside_geofence": {"type": "boolean"},
+        "cell_id": {
+          "type": "string"
+        },
+        "ij": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "center_xy_m": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "height_estimate_m": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "height_uncertainty_m": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "obstacle_probability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "terrain_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "coverage_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_observed_s": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "inside_geofence": {
+          "type": "boolean"
+        },
         "status": {
           "type": "string",
-          "enum": ["unknown", "known_safe", "known_obstacle", "uncertain", "outside_geofence"]
+          "enum": [
+            "unknown",
+            "known_safe",
+            "known_obstacle",
+            "uncertain",
+            "outside_geofence"
+          ]
         }
       }
     },
     "pose_estimate": {
       "type": "object",
-      "required": ["platform_id", "timestamp_s", "position_m", "confidence", "status"],
+      "required": [
+        "platform_id",
+        "timestamp_s",
+        "position_m",
+        "confidence",
+        "status"
+      ],
       "additionalProperties": true,
       "properties": {
-        "platform_id": {"type": "string"},
-        "timestamp_s": {"type": "number"},
-        "position_m": {"$ref": "#/definitions/vector3"},
-        "orientation_rpy_rad": {"type": "array", "items": {"type": "number"}},
-        "frame_id": {"type": "string"},
-        "covariance": {"$ref": "#/definitions/covariance_flat"},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "platform_id": {
+          "type": "string"
+        },
+        "timestamp_s": {
+          "type": "number"
+        },
+        "position_m": {
+          "$ref": "#/definitions/vector3"
+        },
+        "orientation_rpy_rad": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "frame_id": {
+          "type": "string"
+        },
+        "covariance": {
+          "$ref": "#/definitions/covariance_flat"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
         "status": {
           "type": "string",
-          "enum": ["unlocalized", "initializing", "localized", "degraded", "lost"]
+          "enum": [
+            "unlocalized",
+            "initializing",
+            "localized",
+            "degraded",
+            "lost"
+          ]
         },
-        "map_region_id": {"type": ["string", "null"]},
-        "matched_landmark_ids": {"type": "array", "items": {"type": "string"}},
-        "relocalization_score": {"type": "number"},
-        "failure_reason": {"type": ["string", "null"]}
+        "map_region_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "matched_landmark_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relocalization_score": {
+          "type": "number"
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "inspection_evidence_record": {
       "type": "object",
-      "required": ["evidence_id", "site_id", "timestamp_s", "platform_id", "sensor_type"],
+      "required": [
+        "evidence_id",
+        "site_id",
+        "timestamp_s",
+        "platform_id",
+        "sensor_type"
+      ],
       "additionalProperties": true,
       "properties": {
-        "evidence_id": {"type": "string"},
-        "site_id": {"type": "string"},
-        "timestamp_s": {"type": "number"},
-        "platform_id": {"type": "string"},
-        "sensor_type": {"type": "string"},
-        "file_uri": {"type": "string"},
-        "quality_score": {"type": "number", "minimum": 0, "maximum": 1},
-        "coverage_fraction": {"type": "number", "minimum": 0, "maximum": 1},
-        "resolution_estimate": {"type": ["number", "null"]},
-        "view_angle_rad": {"type": ["number", "null"]},
-        "localization_confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        "evidence_id": {
+          "type": "string"
+        },
+        "site_id": {
+          "type": "string"
+        },
+        "timestamp_s": {
+          "type": "number"
+        },
+        "platform_id": {
+          "type": "string"
+        },
+        "sensor_type": {
+          "type": "string"
+        },
+        "file_uri": {
+          "type": "string"
+        },
+        "quality_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "coverage_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "resolution_estimate": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "view_angle_rad": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "localization_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
       }
     },
     "scan_mission_state": {
-      "type": ["object", "null"],
-      "description": "State of the scan-map-inspect mission (scanning → localizing → inspecting → egress → complete) at this frame. Present only in scan_map_inspect missions.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "State of the scan-map-inspect mission (scanning \u2192 localizing \u2192 inspecting \u2192 egress \u2192 complete) at this frame. Present only in scan_map_inspect missions.",
       "additionalProperties": true,
       "properties": {
         "phase": {
           "type": "string",
           "description": "Current mission phase.",
-          "enum": ["scanning", "localizing", "inspecting", "egress", "complete"]
+          "enum": [
+            "scanning",
+            "localizing",
+            "inspecting",
+            "egress",
+            "complete"
+          ]
         },
         "scan_coverage_fraction": {
           "type": "number",
-          "description": "Fraction of the map grid that has been scanned (0.0–1.0).",
+          "description": "Fraction of the map grid that has been scanned (0.0\u20131.0).",
           "minimum": 0,
           "maximum": 1
         },
@@ -794,7 +1208,9 @@
         "newly_scanned_cells": {
           "type": "array",
           "description": "Flat array of (x_m, y_m, terrain_height_m) triples for cells newly covered this frame. The viewer accumulates these into a persistent point cloud.",
-          "items": {"type": "number"}
+          "items": {
+            "type": "number"
+          }
         },
         "localization_estimates": {
           "type": "array",
@@ -803,9 +1219,18 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "drone_id": {"type": "string"},
-              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-              "position_std_m": {"type": "number", "minimum": 0}
+              "drone_id": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "position_std_m": {
+                "type": "number",
+                "minimum": 0
+              }
             }
           }
         },
@@ -815,12 +1240,18 @@
           "default": false
         },
         "coordinator_drone_id": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Node ID of the elected mission coordinator drone (highest battery fraction at election time). Null if no coordinator has been elected yet.",
           "default": null
         },
         "team_localization": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "description": "Fused team position from cooperative co-localization (inverse-variance fusion of the per-drone estimates). Null outside cooperative search or before enough drones converge.",
           "default": null,
           "additionalProperties": true,
@@ -828,16 +1259,27 @@
             "position": {
               "type": "array",
               "description": "World-space [x_m, y_m, z_m] of the fused team estimate.",
-              "items": {"type": "number"},
+              "items": {
+                "type": "number"
+              },
               "minItems": 3,
               "maxItems": 3
             },
-            "position_std_m": {"type": "number", "minimum": 0},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "position_std_m": {
+              "type": "number",
+              "minimum": 0
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
             "contributing_node_ids": {
               "type": "array",
               "description": "Drone IDs whose estimates were fused into the team position.",
-              "items": {"type": "string"}
+              "items": {
+                "type": "string"
+              }
             }
           }
         },
@@ -848,12 +1290,23 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "poi_id": {"type": "string"},
-              "status": {"type": "string", "enum": ["pending", "active", "complete"]},
+              "poi_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "active",
+                  "complete"
+                ]
+              },
               "position": {
                 "type": "array",
                 "description": "World-space [x_m, y_m, z_m] position of this POI.",
-                "items": {"type": "number"},
+                "items": {
+                  "type": "number"
+                },
                 "minItems": 3,
                 "maxItems": 3
               }
@@ -867,12 +1320,19 @@
             "type": "object",
             "additionalProperties": true,
             "properties": {
-              "drone_id": {"type": "string"},
-              "distance_to_home_m": {"type": "number", "minimum": 0},
+              "drone_id": {
+                "type": "string"
+              },
+              "distance_to_home_m": {
+                "type": "number",
+                "minimum": 0
+              },
               "home_position": {
                 "type": "array",
                 "description": "World-space [x_m, y_m, z_m] of the drone's home station.",
-                "items": {"type": "number"},
+                "items": {
+                  "type": "number"
+                },
                 "minItems": 3,
                 "maxItems": 3
               }

@@ -1802,6 +1802,7 @@ fn section_node_summary(ui: &mut egui::Ui, replay_state: &ReplayState) {
                 ui.strong("Health");
                 ui.strong("Mobile");
                 ui.strong("Alt (m)");
+                ui.strong("Battery");
                 ui.end_row();
 
                 for node in &frame.nodes {
@@ -1812,6 +1813,14 @@ fn section_node_summary(ui: &mut egui::Ui, replay_state: &ReplayState) {
                     ui.colored_label(health_color, format!("{:.0}%", health_pct));
                     ui.label(if node.is_mobile { "Yes" } else { "No" });
                     ui.label(format!("{:.1}", node.position[2]));
+                    // Replay-only: `pb::NodeState` carries no battery field yet.
+                    match node.battery_fraction {
+                        Some(fraction) => ui.colored_label(
+                            health_color_egui(fraction),
+                            format!("{:.0}%", fraction * 100.0),
+                        ),
+                        None => ui.label("-"),
+                    };
                     ui.end_row();
                 }
             });
