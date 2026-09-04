@@ -1,0 +1,15 @@
+# Pinned so the Rust toolchain is a deliberate choice rather than "whatever is
+# stable on the day CI runs".
+#
+# Without this, CI installed `stable` on every run. When Rust 1.98 added
+# `clippy::chunks_exact_to_as_chunks`, `cargo clippy -- -D warnings` began
+# failing on code that had not changed -- `main` went red on a day nobody pushed
+# to it, and the failure was not reproducible on a contributor machine running
+# an older toolchain.
+#
+# Bump this deliberately, in its own commit, so any new lint arrives as a
+# reviewed change rather than a surprise.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

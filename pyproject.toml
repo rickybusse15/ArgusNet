@@ -27,8 +27,13 @@ dev = [
     # -- the artifact CLAUDE.md calls the simulation/viewer contract -- was never
     # actually enforced in CI.
     "jsonschema>=4.21",
-    "ruff>=0.3",
-    "mypy>=1.9",
+    # Upper-bounded deliberately. `mypy>=1.9` alone let CI install 2.x, which
+    # introduced errors in unchanged code (`planning/poi.py`) and turned `main`
+    # red with no commit behind it. Ruff's lint set likewise shifts between
+    # minor releases pre-1.0. Bump these on purpose, not on a schedule set by
+    # someone else's release calendar.
+    "ruff>=0.16,<0.17",
+    "mypy>=2.3,<3",
     "pytest>=8.0",
     "pytest-benchmark>=4.0",
     "pytest-timeout>=2.3",

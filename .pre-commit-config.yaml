@@ -1,13 +1,20 @@
+# Hook versions are kept in step with the bounds in `pyproject.toml` so a local
+# `pre-commit run` and CI reach the same verdict. They were previously frozen at
+# v0.3.0 / v1.9.0 -- the *floors* of the `[dev]` ranges -- while CI installed
+# whatever was newest, so the hooks could pass on code CI would reject.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.0
+    rev: v0.16.5
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.9.0
+    rev: v2.3.1
     hooks:
       - id: mypy
-        additional_dependencies: [numpy]
-        args: [--ignore-missing-imports]
+        # Mirrors the CI invocation in `.github/workflows/ci.yml`. `follow_imports`
+        # comes from `pyproject.toml`; the dependency list is what mypy needs to
+        # resolve the annotations it does check.
+        additional_dependencies: [numpy, types-protobuf]
+        args: [--ignore-missing-imports, --follow-imports=skip]
