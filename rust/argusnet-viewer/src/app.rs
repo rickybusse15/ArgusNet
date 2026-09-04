@@ -4,10 +4,13 @@ use std::process::{Child, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{ClearColorConfig, Viewport};
+use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
-use bevy::render::camera::ClearColorConfig;
-use bevy::render::view::RenderLayers;
-use bevy_egui::{EguiContexts, EguiPlugin};
+use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
 /// Render layer holding only the scan-map reconstruction mesh. The reconstruction
 /// camera renders this layer alone, so the Split-mode right pane shows the believed
@@ -165,14 +168,14 @@ fn run_inner(
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "ArgusNet Viewer".into(),
-                        resolution: (1440.0_f32, 920.0_f32).into(),
+                        resolution: (1440_u32, 920_u32).into(),
                         ..default()
                     }),
                     ..default()
                 }),
         )
-        .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin)
-        .add_plugins(EguiPlugin)
+        .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(EguiPlugin::default())
         .add_plugins(OrbitCameraPlugin)
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
         .add_systems(
@@ -201,10 +204,10 @@ fn run_inner(
             )
                 .chain(),
         )
-        .add_systems(
-            Update,
-            viewer_ui_system.in_set(bevy_egui::EguiSet::BeginPass),
-        );
+        // bevy_egui 0.42 replaced `EguiSet::BeginPass` inside `Update` with a
+        // dedicated schedule that runs between egui's begin/end pass, so UI
+        // systems must be registered there rather than ordered within `Update`.
+        .add_systems(EguiPrimaryContextPass, viewer_ui_system);
 
     #[cfg(feature = "live-stream")]
     if let Some((endpoint, tls)) = live_endpoint {
@@ -216,10 +219,8 @@ fn run_inner(
             crate::live::ingest_live_frames_system.before(advance_playback_system),
         );
         app.add_systems(
-            Update,
-            crate::live::live_status_ui_system
-                .in_set(bevy_egui::EguiSet::BeginPass)
-                .after(viewer_ui_system),
+            EguiPrimaryContextPass,
+            crate::live::live_status_ui_system.after(viewer_ui_system),
         );
     }
     #[cfg(not(feature = "live-stream"))]
@@ -253,15 +254,19 @@ fn setup_world(
         focus: orbit.focus,
     });
 
-    commands.insert_resource(AmbientLight {
+    // 0.19 split ambient light in two: `AmbientLight` is now a per-camera
+    // component override, and `GlobalAmbientLight` is the scene-wide resource
+    // this previously was.
+    commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.95, 0.96, 0.98),
         brightness: 350.0,
+        ..default()
     });
 
     commands.spawn((
         DirectionalLight {
             illuminance: 12000.0,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_xyz(2000.0, 1200.0, 2600.0).looking_at(Vec3::ZERO, Vec3::Z),
@@ -434,14 +439,18 @@ fn spawn_base_layers(
             );
             continue;
         };
-        let handle: Handle<Scene> = asset_server.load(format!("{asset_path}#Scene0"));
+        let handle: Handle<WorldAsset> = asset_server.load(format!("{asset_path}#Scene0"));
         let visibility = if *layer_visibility.base_layers.get(&layer.id).unwrap_or(&true) {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
         let entity = commands
-            .spawn((Name::new(layer.id.clone()), SceneRoot(handle), visibility))
+            .spawn((
+                Name::new(layer.id.clone()),
+                WorldAssetRoot(handle),
+                visibility,
+            ))
             .id();
         layer_entities
             .entities_by_layer
@@ -483,7 +492,12 @@ fn keyboard_playback_system(
     mut camera_query: Query<&mut OrbitCamera>,
 ) {
     // Don't capture keys when egui wants keyboard input (e.g. text fields).
-    if contexts.ctx_mut().wants_keyboard_input() {
+    // `ctx_mut` is fallible in bevy_egui 0.42; if there is no context yet there
+    // is no text field to steal the key either, so fall through to playback.
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+    if ctx.egui_wants_keyboard_input() {
         return;
     }
 
@@ -540,16 +554,15 @@ fn sync_split_viewports_system(
     mut main_cam: Query<&mut Camera, (With<MainCamera>, Without<ReconstructionCamera>)>,
     mut recon_cam: Query<&mut Camera, With<ReconstructionCamera>>,
 ) {
-    use bevy::render::camera::Viewport;
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let w = window.physical_width();
     let h = window.physical_height();
-    let Ok(mut main) = main_cam.get_single_mut() else {
+    let Ok(mut main) = main_cam.single_mut() else {
         return;
     };
-    let Ok(mut recon) = recon_cam.get_single_mut() else {
+    let Ok(mut recon) = recon_cam.single_mut() else {
         return;
     };
 
@@ -1059,13 +1072,13 @@ fn pick_runtime_marker_system(
         return;
     }
 
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let Some(cursor_position) = window.cursor_position() else {
         return;
     };
-    let Ok((camera, camera_transform)) = camera_query.get_single() else {
+    let Ok((camera, camera_transform)) = camera_query.single() else {
         return;
     };
 
@@ -1568,7 +1581,6 @@ fn setup_reconstruction_mesh(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     use bevy::render::mesh::PrimitiveTopology;
-    use bevy::render::render_asset::RenderAssetUsages;
 
     // Initialise with a degenerate triangle so the GPU allocator never encounters
     // a zero-vertex buffer (Bevy's MeshAllocator panics on divide-by-zero).
@@ -1687,7 +1699,7 @@ fn maintain_reconstruction_mesh_system(
     }
 
     for handle in handles {
-        if let Some(mesh) = meshes.get_mut(&handle) {
+        if let Some(mut mesh) = meshes.get_mut(&handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors.clone());
@@ -2142,7 +2154,7 @@ fn reload_rebuilt_scene(
 
     let old_entities: Vec<_> = layer_entities.entities_by_layer.values().copied().collect();
     for entity in old_entities {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 
     *scene_package = bundle.scene_package;
@@ -2250,7 +2262,7 @@ fn reframe_camera_for_scene(
     scene_package: &ScenePackage,
     camera_query: &mut Query<(&mut OrbitCamera, &mut Transform), With<MainCamera>>,
 ) {
-    let Ok((mut orbit, mut transform)) = camera_query.get_single_mut() else {
+    let Ok((mut orbit, mut transform)) = camera_query.single_mut() else {
         return;
     };
 

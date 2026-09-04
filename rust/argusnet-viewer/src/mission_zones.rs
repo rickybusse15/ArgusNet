@@ -1079,7 +1079,7 @@ pub fn build_projected_badges_system(
         return;
     }
 
-    let Ok((camera, camera_transform)) = camera_query.get_single() else {
+    let Ok((camera, camera_transform)) = camera_query.single() else {
         return;
     };
 

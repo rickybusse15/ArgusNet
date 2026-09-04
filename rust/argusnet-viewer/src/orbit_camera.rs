@@ -74,8 +74,8 @@ impl OrbitCamera {
 fn update_orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut mouse_motion: EventReader<MouseMotion>,
-    mut mouse_wheel: EventReader<MouseWheel>,
+    mut mouse_motion: MessageReader<MouseMotion>,
+    mut mouse_wheel: MessageReader<MouseWheel>,
     mut contexts: EguiContexts,
     windows: Query<&Window, With<PrimaryWindow>>,
     view_mode: Res<ViewMode>,
@@ -109,12 +109,17 @@ fn update_orbit_camera(
 
     // When the pointer is over an egui panel (the drawer / tabs), let egui consume
     // the scroll so the panel scrolls on its own — the cameras stay put.
-    let over_ui = contexts.ctx_mut().is_pointer_over_area();
+    // `ctx_mut` is fallible in bevy_egui 0.42; treat a missing context as
+    // "pointer is not over UI" so camera input still works if egui is not ready.
+    let over_ui = contexts
+        .ctx_mut()
+        .map(|ctx| ctx.is_pointer_over_egui())
+        .unwrap_or(false);
 
     // Route input to the pane under the cursor. In Split mode the left half drives
     // the main camera and the right half drives the reconstruction camera; in every
     // other mode only the main camera is active and takes the whole window.
-    let window = windows.get_single().ok();
+    let window = windows.single().ok();
     let cursor = window.and_then(|w| w.cursor_position());
     let half_width = window.map(|w| w.width() * 0.5).unwrap_or(f32::MAX);
     let cursor_over_recon =

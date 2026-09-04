@@ -361,9 +361,13 @@ pub fn live_status_ui_system(mut contexts: EguiContexts, live: Res<LiveStream>) 
         LiveConnectionStatus::Connecting => egui::Color32::YELLOW,
         LiveConnectionStatus::Reconnecting => egui::Color32::from_rgb(255, 150, 60),
     };
+    // No egui context yet means no frame to draw the status badge into.
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
     egui::Area::new(egui::Id::new("argusnet_live_status"))
         .anchor(egui::Align2::LEFT_TOP, [12.0, 58.0])
-        .show(contexts.ctx_mut(), |ui| {
+        .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.colored_label(color, "● LIVE");
