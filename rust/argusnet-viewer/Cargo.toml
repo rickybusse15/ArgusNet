@@ -25,10 +25,10 @@ anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-bevy = "0.19.1"
-bevy_egui = "0.42.0"
-egui_extras = "0.36"
-egui_plot = "0.37"
+bevy.workspace = true
+bevy_egui.workspace = true
+egui_extras.workspace = true
+egui_plot.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 argusnet-proto = { path = "../argusnet-proto", optional = true }
 tokio = { workspace = true, optional = true }

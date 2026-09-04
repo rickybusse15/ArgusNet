@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Viewport};
-use bevy::light::GlobalAmbientLight;
+use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
@@ -263,19 +263,32 @@ fn setup_world(
         ..default()
     });
 
+    let bounds = &scene_package.environment.bounds_xy_m;
+    let span = (bounds.x_max_m - bounds.x_min_m)
+        .max(bounds.y_max_m - bounds.y_min_m)
+        .max(200.0);
+
+    // Cascades must be sized to the scene. The builder's defaults are tuned for
+    // a character-scale world (Unity-like: first bound 10 m, maximum 150 m), so
+    // on a multi-kilometre site every shadow past ~150 m of the camera simply
+    // vanished. Spanning the scene keeps distant terrain shadowed; the first
+    // bound stays short so near geometry still gets usable texel density.
     commands.spawn((
         DirectionalLight {
             illuminance: 12000.0,
             shadow_maps_enabled: true,
             ..default()
         },
+        CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            minimum_distance: 1.0,
+            maximum_distance: span,
+            first_cascade_far_bound: (span / 20.0).max(50.0),
+            overlap_proportion: 0.2,
+        }
+        .build(),
         Transform::from_xyz(2000.0, 1200.0, 2600.0).looking_at(Vec3::ZERO, Vec3::Z),
     ));
-
-    let bounds = &scene_package.environment.bounds_xy_m;
-    let span = (bounds.x_max_m - bounds.x_min_m)
-        .max(bounds.y_max_m - bounds.y_min_m)
-        .max(200.0);
 
     // The main camera must set its projection explicitly. Without it Bevy applies
     // `PerspectiveProjection::default()` (far = 1000 m), which is shorter than the
