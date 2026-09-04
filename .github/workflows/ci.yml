@@ -2,8 +2,11 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every branch, not just PRs into main: a PR stacked on another feature
+  # branch would otherwise get no CI at all, and retargeting it later does not
+  # retroactively trigger a run.
   pull_request:
-    branches: [main]
+    branches: ['**']
 
 permissions:
   contents: read
