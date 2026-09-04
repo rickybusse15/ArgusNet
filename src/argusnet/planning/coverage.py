@@ -1,4 +1,4 @@
-"""Cooperative mission planning model for the Smart Trajectory Tracker.
+"""Cooperative mission planning model for ArgusNet.
 
 Implements the drone role model, planning objectives, planner-to-trajectory
 contract, replanning triggers, and deconfliction rules described in

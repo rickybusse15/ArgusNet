@@ -85,6 +85,37 @@ impl<'de, V: Visitor<'de, Value = Option<Vec<f64>>>> Visitor<'de> for OptionVisi
     }
 }
 
+/// Accept `null` where the replay schema permits it but the viewer wants a value.
+///
+/// Python dataclasses serialize an unset optional as JSON `null`, and
+/// `docs/replay-schema.json` explicitly allows it (for example
+/// `SafetyValidationResult.reason` is typed `["string", "null"]`).
+/// `#[serde(default)]` alone does **not** cover this: it handles a *missing*
+/// key, not a present-but-null one, so a single null field aborted parsing of
+/// the entire replay.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// Read an optional range where `0.0` carries the proto's "unset" meaning.
+///
+/// `world_model.proto` documents `double max_range_m = 9;  // 0 = unset`, and the
+/// live path honours it (`frame_from_pb` maps `0.0` to `None`). The replay path
+/// deserialized it straight into `Some(0.0)`, which the viewer would draw as a
+/// zero-radius radar ring and a zero-length FOV cone instead of falling back to
+/// its default range.
+fn optional_positive_range<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<f32>::deserialize(deserializer)?;
+    Ok(value.filter(|range| *range > 0.0))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct MissionZone {
     pub zone_id: String,
@@ -140,6 +171,15 @@ impl TerrainViewerMesh {
     }
 }
 
+/// Fallback stale-step threshold, used only when a replay carries no
+/// `meta.platform.max_stale_steps`.
+///
+/// Mirrors `TrackerConfig::default().max_stale_steps` in `argusnet-core`. The
+/// viewer cannot read that constant directly because `argusnet-core` is only in
+/// the dependency graph under the `live-stream` feature; the duplication goes
+/// away when the shared value types move into their own crate.
+pub const DEFAULT_MAX_STALE_STEPS: u32 = 8;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReplayDocument {
     pub meta: Option<Value>,
@@ -154,6 +194,22 @@ impl ReplayDocument {
             .and_then(|m| m.get("zones"))
             .and_then(|v| serde_json::from_value::<Vec<MissionZone>>(v.clone()).ok())
             .unwrap_or_default()
+    }
+
+    /// Stale-step threshold the tracker was actually configured with for this run.
+    ///
+    /// Replays record it under `meta.platform.max_stale_steps`, so the viewer reads
+    /// the run's own value instead of mirroring a constant by hand. The previous
+    /// hardcoded `5` had already drifted from `TrackerConfig`'s default of `8` and
+    /// from the `6` that seeded replays carry, so tracks were flagged stale in the
+    /// alert panel well before the tracker itself considered them stale.
+    pub fn max_stale_steps(&self) -> Option<u32> {
+        self.meta
+            .as_ref()
+            .and_then(|m| m.get("platform"))
+            .and_then(|platform| platform.get("max_stale_steps"))
+            .and_then(|value| value.as_u64())
+            .map(|value| value as u32)
     }
 
     pub fn terrain_viewer_mesh(&self) -> Option<TerrainViewerMesh> {
@@ -223,9 +279,9 @@ struct SafetyEventRaw {
     #[serde(alias = "subject_id")]
     subject_id: String,
     timestamp_s: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     state: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     violations: Vec<String>,
     #[serde(default, alias = "clamped")]
     command_clamped: bool,
@@ -233,7 +289,7 @@ struct SafetyEventRaw {
     blocked: bool,
     #[serde(default)]
     accepted: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     reason: String,
 }
 
@@ -374,8 +430,13 @@ pub struct NodeState {
     pub sensor_type: String,
     #[serde(default)]
     pub fov_half_angle_deg: Option<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional_positive_range")]
     pub max_range_m: Option<f32>,
+    /// Remaining battery, 0.0-1.0. Written by the simulation on every node;
+    /// the viewer previously had no field for it, so the drone battery readout
+    /// promised by `docs/VIEWER_UI.md` could never populate.
+    #[serde(default)]
+    pub battery_fraction: Option<f32>,
 }
 
 fn default_health() -> f32 {
@@ -532,6 +593,17 @@ impl ReplayState {
             document,
             ..Self::default()
         }
+    }
+
+    /// Stale-step threshold for the loaded run.
+    ///
+    /// Falls back to [`DEFAULT_MAX_STALE_STEPS`] when the replay predates the
+    /// `meta.platform` block or when running live without a loaded document.
+    pub fn max_stale_steps(&self) -> u32 {
+        self.document
+            .as_ref()
+            .and_then(|document| document.max_stale_steps())
+            .unwrap_or(DEFAULT_MAX_STALE_STEPS)
     }
 
     pub fn frame_count(&self) -> usize {
@@ -889,6 +961,10 @@ mod live_stream {
                 } else {
                     Some(n.max_range_m as f32)
                 },
+                // `pb::NodeState` has no battery field, so live frames cannot
+                // carry it. Adding one to `world_model.proto` is an additive
+                // change; until then the battery readout is replay-only.
+                battery_fraction: None,
             }
         }
     }
@@ -901,7 +977,99 @@ pub use live_stream::frame_from_pb;
 mod tests {
     use serde_json::json;
 
-    use super::{MarkerKind, ReplayDocument, ReplayState};
+    use super::{MarkerKind, ReplayDocument, ReplayState, DEFAULT_MAX_STALE_STEPS};
+
+    /// Regression: `SafetyValidationResult.reason` is `str | None` in Python and
+    /// serializes to JSON `null`, which `docs/replay-schema.json` explicitly
+    /// permits. `#[serde(default)]` covers a *missing* key, not a null one, so a
+    /// single null field aborted deserialization of the entire replay.
+    #[test]
+    fn a_null_safety_reason_does_not_abort_the_whole_replay() {
+        let document: ReplayDocument = serde_json::from_value(json!({
+            "meta": {"dt_s": 0.25},
+            "frames": [{
+                "timestamp_s": 0.0, "tracks": [], "truths": [], "nodes": [],
+                "safety_events": [{
+                    "validation_id": "s-1", "subject_id": "drone-0", "timestamp_s": 0.0,
+                    "accepted": true, "violations": null, "clamped": false,
+                    "reason": null, "state": null
+                }]
+            }]
+        }))
+        .expect("a null reason must not fail the replay");
+        let event = &document.frames[0].safety_events[0];
+        assert_eq!(event.reason, "");
+        assert!(event.violations.is_empty());
+    }
+
+    /// Regression: `world_model.proto` documents `max_range_m` as "0 = unset" and
+    /// the live path honours it, but the replay path produced `Some(0.0)` -- drawn
+    /// as a zero-radius radar ring and a zero-length FOV cone.
+    #[test]
+    fn zero_max_range_means_unset_on_the_replay_path_too() {
+        let document: ReplayDocument = serde_json::from_value(json!({
+            "meta": {"dt_s": 0.25},
+            "frames": [{
+                "timestamp_s": 0.0, "tracks": [], "truths": [],
+                "nodes": [
+                    {"node_id": "unset", "position": [0.0, 0.0, 0.0],
+                     "velocity": [0.0, 0.0, 0.0], "is_mobile": true, "max_range_m": 0.0},
+                    {"node_id": "set", "position": [0.0, 0.0, 0.0],
+                     "velocity": [0.0, 0.0, 0.0], "is_mobile": true, "max_range_m": 650.0}
+                ]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(document.frames[0].nodes[0].max_range_m, None);
+        assert_eq!(document.frames[0].nodes[1].max_range_m, Some(650.0));
+    }
+
+    /// Regression: the simulation writes `battery_fraction` on every node, but the
+    /// viewer had no field for it, so the drone battery readout documented in
+    /// `docs/VIEWER_UI.md` could never populate.
+    #[test]
+    fn battery_fraction_survives_the_replay_boundary() {
+        let document: ReplayDocument = serde_json::from_value(json!({
+            "meta": {"dt_s": 0.25},
+            "frames": [{
+                "timestamp_s": 0.0, "tracks": [], "truths": [],
+                "nodes": [
+                    {"node_id": "drone-0", "position": [0.0, 0.0, 0.0],
+                     "velocity": [0.0, 0.0, 0.0], "is_mobile": true, "battery_fraction": 0.62},
+                    {"node_id": "ground-0", "position": [0.0, 0.0, 0.0],
+                     "velocity": [0.0, 0.0, 0.0], "is_mobile": false}
+                ]
+            }]
+        }))
+        .unwrap();
+        assert_eq!(document.frames[0].nodes[0].battery_fraction, Some(0.62));
+        assert_eq!(document.frames[0].nodes[1].battery_fraction, None);
+    }
+
+    #[test]
+    fn stale_threshold_comes_from_the_replays_own_tracker_config() {
+        let document: ReplayDocument = serde_json::from_value(json!({
+            "meta": {"dt_s": 0.25, "platform": {"min_observations": 2, "max_stale_steps": 6}},
+            "frames": [{"timestamp_s": 0.0, "tracks": [], "truths": [], "nodes": []}]
+        }))
+        .unwrap();
+        let replay = ReplayState::new(Some(document));
+        // The value the run recorded wins over any constant compiled into the viewer.
+        assert_eq!(replay.max_stale_steps(), 6);
+    }
+
+    #[test]
+    fn stale_threshold_falls_back_when_replay_predates_platform_meta() {
+        let document: ReplayDocument = serde_json::from_value(json!({
+            "meta": {"dt_s": 0.25},
+            "frames": [{"timestamp_s": 0.0, "tracks": [], "truths": [], "nodes": []}]
+        }))
+        .unwrap();
+        let replay = ReplayState::new(Some(document));
+        assert_eq!(replay.max_stale_steps(), DEFAULT_MAX_STALE_STEPS);
+        // Guards the drift this replaced: the viewer hardcoded 5 against a core default of 8.
+        assert_eq!(DEFAULT_MAX_STALE_STEPS, 8);
+    }
 
     #[test]
     fn replay_state_advances_and_stops_at_last_frame() {
@@ -1056,5 +1224,119 @@ mod tests {
         let sampled = mesh.sample_height(0.0, 0.0).expect("sampled height");
         assert!((sampled - 16.0).abs() < 1.0e-6);
         assert_eq!(mesh.sample_height(20.1, 0.0), None);
+    }
+}
+
+/// Reader half of the cross-language replay contract test.
+///
+/// Deserializes the same fixture `tests/test_replay_contract.py` validates on the
+/// writer side, so a change to either the Python writer or this reader that
+/// breaks the other fails a test. See `tests/fixtures/README-replay-contract.md`.
+#[cfg(test)]
+mod contract_fixture_tests {
+    use super::*;
+
+    fn fixture() -> ReplayDocument {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/replay_contract_fixture.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("failed to read {path}: {error}"));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|error| panic!("viewer cannot deserialize the replay fixture: {error}"))
+    }
+
+    #[test]
+    fn the_viewer_can_read_what_the_simulation_writes() {
+        let document = fixture();
+        assert!(!document.frames.is_empty(), "fixture must carry frames");
+        assert!(document.meta.is_some(), "fixture must carry meta");
+    }
+
+    #[test]
+    fn nodes_populate_the_fields_the_operator_panels_display() {
+        let document = fixture();
+        let nodes: Vec<&NodeState> = document
+            .frames
+            .iter()
+            .flat_map(|f| f.nodes.iter())
+            .collect();
+        assert!(!nodes.is_empty(), "fixture must carry nodes");
+
+        for node in &nodes {
+            assert!(!node.node_id.is_empty());
+            assert!(!node.sensor_type.is_empty());
+            assert!(node.health.is_finite());
+        }
+
+        // Battery is the field the viewer had no home for, so the readout
+        // documented in docs/VIEWER_UI.md could never populate.
+        let mobile: Vec<&&NodeState> = nodes.iter().filter(|n| n.is_mobile).collect();
+        assert!(!mobile.is_empty(), "fixture must carry mobile nodes");
+        for node in mobile {
+            let fraction = node
+                .battery_fraction
+                .unwrap_or_else(|| panic!("node {} lost its battery_fraction", node.node_id));
+            assert!(
+                (0.0..=1.0).contains(&fraction),
+                "implausible battery {fraction}"
+            );
+        }
+
+        // `0 = unset` must never survive as `Some(0.0)`.
+        for node in &nodes {
+            assert_ne!(node.max_range_m, Some(0.0));
+        }
+    }
+
+    #[test]
+    fn tracks_populate_the_fields_the_track_tables_display() {
+        let document = fixture();
+        let tracks: Vec<&TrackState> = document
+            .frames
+            .iter()
+            .flat_map(|f| f.tracks.iter())
+            .collect();
+        assert!(!tracks.is_empty(), "fixture must exercise tracks");
+        for track in &tracks {
+            assert!(!track.track_id.is_empty());
+            assert!(track.measurement_std_m.is_finite());
+        }
+
+        // The IMM readout was blank in replay mode because `_track_from_proto`
+        // dropped this on the way out of the gRPC response, even though the
+        // viewer declares the field and the proto carries it.
+        assert!(
+            tracks.iter().any(|t| t.mode_probability_cv.is_some()),
+            "no track carries mode_probability_cv; the viewer's IMM readout is dead again"
+        );
+        for track in &tracks {
+            if let Some(weight) = track.mode_probability_cv {
+                assert!(
+                    (0.0..=1.0).contains(&weight),
+                    "implausible IMM weight {weight}"
+                );
+            }
+        }
+    }
+
+    /// `covariance` is written flat (36 numbers) by `to_jsonable`, which flattens
+    /// any `ndim > 1` array. The reader accepts flat or nested; this pins that the
+    /// writer's actual shape stays readable.
+    #[test]
+    fn track_covariance_arrives_in_a_shape_the_viewer_accepts() {
+        let document = fixture();
+        let covariances: Vec<&Vec<f64>> = document
+            .frames
+            .iter()
+            .flat_map(|f| f.tracks.iter())
+            .filter_map(|t| t.covariance.as_ref())
+            .collect();
+        assert!(!covariances.is_empty(), "fixture must carry covariances");
+        for covariance in covariances {
+            assert_eq!(covariance.len(), 36, "expected a flattened 6x6 covariance");
+            assert!(covariance.iter().all(|value| value.is_finite()));
+        }
     }
 }

@@ -42,7 +42,16 @@ class TestLoadReplayDocumentSizeCap(unittest.TestCase):
             "observations": [],
             "rejected_observations": [],
             "nodes": [],
-            "metrics": {},
+            # `platform_metrics` requires these four. The document is named
+            # "valid", and only stayed valid because `jsonschema` was undeclared
+            # so validation silently fell back to a check that ignores nested
+            # required properties.
+            "metrics": {
+                "active_track_count": 0,
+                "observation_count": 0,
+                "accepted_observation_count": 0,
+                "rejected_observation_count": 0,
+            },
         }
         return {
             "meta": {"dt_s": 0.1, "frame_count": 1},

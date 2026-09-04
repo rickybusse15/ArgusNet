@@ -304,6 +304,9 @@ All nontrivial architecture changes require an ADR in `docs/adr/`.
 | 001 | Separation of Visual and Analytic Terrain | proposed; partially implemented by terrain/viewer separation |
 | 002 | Unified Fused Object State Authority | proposed; current runtime already uses Rust as fusion authority |
 | 003 | Mission Intent Must Pass Through Feasibility Pipeline | proposed; current sim has partial safety logging and legacy paths |
+| 004 | Performance Benchmarking Rollout | accepted (renumbered from a second ADR-001) |
+| 005 | Rust as the Runtime Authority | accepted; supersedes Decision 3 of `ARCHITECTURE_DECISIONS.md` |
+| 006 | Determinism Re-baseline for the Rust Runtime | accepted |
 
 Recommended new ADRs:
 

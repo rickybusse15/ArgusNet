@@ -25,7 +25,6 @@ __all__ = [
     "PlatformMetrics",
     "HealthReport",
     "MissionZone",
-    "LaunchEvent",
     "vec3",
     "to_jsonable",
     # core frames
@@ -123,7 +122,6 @@ _EXPORTS = {
     "PlatformMetrics": ("argusnet.core.types", "PlatformMetrics"),
     "HealthReport": ("argusnet.core.types", "HealthReport"),
     "MissionZone": ("argusnet.core.types", "MissionZone"),
-    "LaunchEvent": ("argusnet.core.types", "LaunchEvent"),
     "vec3": ("argusnet.core.types", "vec3"),
     "to_jsonable": ("argusnet.core.types", "to_jsonable"),
     # core/frames

@@ -32,9 +32,10 @@ jobs:
         run: python -m pytest tests/ -q --timeout=120
       - name: Fast benchmark smoke
         run: python -m pytest tests/benchmarks/ -q -m benchmark_fast --benchmark-only --benchmark-json=bench.json
-      - name: Compare against golden
-        env:
-          ARGUSNET_RUN_PERF_REGRESSION: "1"
+      # Work counters are deterministic and machine-independent, so this gate
+      # runs on every PR. The timing half stays opt-in (ARGUSNET_RUN_PERF_TIMING)
+      # because absolute wall-clock baselines do not transfer between runners.
+      - name: Performance regression (deterministic work counters)
         run: python -m pytest tests/test_performance_regression.py -q
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

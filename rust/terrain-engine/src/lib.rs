@@ -1,6 +1,6 @@
 //! # terrain-engine
 //!
-//! 3D terrain query library for the Smart Trajectory Tracker.
+//! 3D terrain query library for ArgusNet.
 //!
 //! All coordinates are in **meters** using a local ENU (East-North-Up) frame.
 //! Horizontal axes: X = East, Y = North. Vertical axis: Z = Up (altitude above datum).

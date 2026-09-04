@@ -25,6 +25,17 @@ class POIAssignmentContext:
     timestamp_s: float = 0.0
 
 
+def _xy(position: np.ndarray) -> np.ndarray:
+    """Horizontal (x, y) components of a position.
+
+    Exists to give the slice an annotated operand: the project's mypy settings use
+    ``follow_imports = "skip"``, so ``InspectionPOI.position`` -- imported from
+    ``argusnet.core.types`` -- resolves to an unknown type that cannot be indexed
+    directly at the call site.
+    """
+    return position[:2]
+
+
 class POIManager:
     """Tracks the lifecycle of all InspectionPOIs.
 
@@ -104,7 +115,7 @@ class POIManager:
 
         # Sort by priority desc, then distance asc.
         def sort_key(poi: InspectionPOI) -> tuple[int, float]:
-            dist = float(np.linalg.norm(np.array(poi.position[:2]) - np.array(drone_pos[:2])))
+            dist = float(np.linalg.norm(np.array(_xy(poi.position)) - np.array(drone_pos[:2])))
             return (-poi.priority, dist)
 
         pending.sort(key=sort_key)
@@ -236,7 +247,7 @@ class POIManager:
             if self._statuses[poi_id].status != "pending":
                 continue
             try:
-                density = world_map.coverage_in_region(poi.position[:2], radius_m=50.0)
+                density = world_map.coverage_in_region(_xy(poi.position), radius_m=50.0)
             except Exception:
                 density = 1.0
             boost = int(round((1.0 - float(density)) * 3))
@@ -252,7 +263,7 @@ class POIManager:
         if poi_id is None:
             return
         poi = self._pois[poi_id]
-        dist = float(np.linalg.norm(np.array(poi.position[:2]) - np.array(drone_pos[:2])))
+        dist = float(np.linalg.norm(np.array(_xy(poi.position)) - np.array(drone_pos[:2])))
         if dist <= 30.0:
             self._dwell_acc[poi_id] = self._dwell_acc.get(poi_id, 0.0) + dt_s
 

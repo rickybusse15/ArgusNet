@@ -144,14 +144,23 @@ impl ScenePackage {
             "metadata.environment",
         )?;
         let environment: EnvironmentDocument = read_json(environment_path)?;
+        // A manifest that declares `replay.path` is asserting the file is there.
+        // Silently falling back to `None` turned a packaging mistake into a viewer
+        // that opens on an empty timeline with no indication why -- both bundled
+        // sample scenes shipped that way. A scene with no replay is legitimate
+        // (live mode streams its frames); a scene that *claims* one is not.
         let replay = match manifest.replay.as_ref() {
             Some(entry) => {
                 let replay_path = safe_manifest_path(&root, &entry.path, "replay.path")?;
-                if replay_path.exists() {
-                    Some(read_json::<Value>(replay_path)?)
-                } else {
-                    None
+                if !replay_path.exists() {
+                    anyhow::bail!(
+                        "scene manifest declares replay.path {:?}, but {} does not exist; \
+                         omit the `replay` key for a scene that carries no replay",
+                        entry.path,
+                        replay_path.display()
+                    );
                 }
+                Some(read_json::<Value>(replay_path)?)
             }
             None => None,
         };
@@ -350,6 +359,63 @@ mod tests {
                 .unwrap()
                 .max_height_m,
             Some(42.0)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Regression: both bundled sample scenes declared `replay.path` pointing at a
+    /// `replay/replay.json` that was never packaged. `load` swallowed the miss and
+    /// returned `replay: None`, so `argusnet live --scene ...` -- the command in
+    /// `docs/LIVE_OPERATIONS.md` -- opened on an empty timeline with no diagnostic.
+    #[test]
+    fn load_scene_package_rejects_a_declared_but_missing_replay() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("argusnet-schema-missing-replay-{suffix}"));
+        fs::create_dir_all(root.join("metadata")).unwrap();
+        fs::write(
+            root.join("scene_manifest.json"),
+            serde_json::to_string_pretty(&json!({
+                "format_version": "smartscene-v1",
+                "scene_id": "demo",
+                "bounds_xy_m": {"x_min_m": -10.0, "x_max_m": 10.0, "y_min_m": -5.0, "y_max_m": 5.0},
+                "runtime_crs": {"runtime_crs_id": "local-enu"},
+                "source_crs_id": "local-enu",
+                "layers": [],
+                "replay": {"path": "replay/replay.json"},
+                "metadata": {
+                    "environment": "metadata/environment.json",
+                    "style": "metadata/style.json"
+                },
+                "build": {"source_kind": "synthetic"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("metadata/style.json"),
+            serde_json::to_string_pretty(&json!({"style_version": "smartstyle-v1", "layers": []}))
+                .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("metadata/environment.json"),
+            serde_json::to_string_pretty(&json!({
+                "bounds_xy_m": {"x_min_m": -10.0, "x_max_m": 10.0, "y_min_m": -5.0, "y_max_m": 5.0},
+                "runtime_crs": {"runtime_crs_id": "local-enu"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = ScenePackage::load(&root).expect_err("missing replay must not load silently");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("replay.path"),
+            "error should name the offending manifest key, got: {message}"
         );
 
         let _ = fs::remove_dir_all(root);

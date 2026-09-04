@@ -1,18 +1,42 @@
 {
-  "schema_version": "argusnet-performance-v1",
-  "commit_sha": "golden-baseline",
-  "created_at_utc": "2026-04-29T00:00:00+00:00",
-  "command": ["argusnet", "benchmark", "--suite", "fast"],
-  "environment": {
-    "platform": "golden-portable"
-  },
-  "metrics": {
-    "performance": {
-      "wall_clock_s": 10000.0,
-      "frame_time_mean_ms": 10000.0,
-      "frame_time_p95_ms": 10000.0,
-      "frame_time_p99_ms": 10000.0,
-      "peak_rss_mb": 100000.0
+  "scenario": "search_acquisition",
+  "seed": 7,
+  "duration_s": 1.0,
+  "work": {
+    "frame_count": 5,
+    "total_accepted_observations": 15,
+    "total_rejected_observations": 4,
+    "cache": {
+      "obstacles.point_collides": {
+        "hits": 0,
+        "misses": 9,
+        "evictions": 0
+      },
+      "terrain.gradient_at": {
+        "hits": 0,
+        "misses": 0,
+        "evictions": 0
+      },
+      "terrain.height_at": {
+        "hits": 385,
+        "misses": 8513,
+        "evictions": 0
+      },
+      "visibility.los": {
+        "hits": 6,
+        "misses": 108,
+        "evictions": 0
+      }
     }
+  },
+  "timing_reference": {
+    "note": "Recorded for reference. Only compared when ARGUSNET_RUN_PERF_TIMING=1 marks this machine as calibrated.",
+    "machine": "Linux x86_64",
+    "python": "3.11.15",
+    "wall_clock_s": 0.28789125200000854,
+    "frame_time_mean_ms": 57.3753234,
+    "frame_time_p95_ms": 58.908123200000006,
+    "frame_time_p99_ms": 58.930690240000004,
+    "peak_rss_mb": 112.96875
   }
 }

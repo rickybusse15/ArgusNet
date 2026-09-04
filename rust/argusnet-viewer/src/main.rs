@@ -59,6 +59,24 @@ struct Args {
     #[cfg(feature = "live-stream")]
     #[arg(long, help = "Subscribe to live frames from this argusnetd endpoint.")]
     live: Option<String>,
+    /// CA (PEM) that signed the daemon certificate. Required, unless the endpoint
+    /// is loopback, to stream from `--live`.
+    #[cfg(feature = "live-stream")]
+    #[arg(long, env = "ARGUSNET_TLS_CLIENT_CA")]
+    live_tls_ca: Option<PathBuf>,
+    /// Client certificate (PEM) for mTLS, paired with --live-tls-key.
+    #[cfg(feature = "live-stream")]
+    #[arg(long, env = "ARGUSNET_TLS_CERT")]
+    live_tls_cert: Option<PathBuf>,
+    /// Client private key (PEM), matching --live-tls-cert.
+    #[cfg(feature = "live-stream")]
+    #[arg(long, env = "ARGUSNET_TLS_KEY")]
+    live_tls_key: Option<PathBuf>,
+    /// Name to verify against the daemon certificate, when it differs from the
+    /// endpoint host.
+    #[cfg(feature = "live-stream")]
+    #[arg(long)]
+    live_tls_domain: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -80,7 +98,13 @@ fn main() -> Result<()> {
     }
     #[cfg(feature = "live-stream")]
     if let Some(endpoint) = args.live {
-        return argusnet_viewer::run_live(args.scene, endpoint, args.view_mode, args.autoplay);
+        let tls = argusnet_viewer::live::LiveTlsConfig {
+            ca_cert: args.live_tls_ca,
+            client_cert: args.live_tls_cert,
+            client_key: args.live_tls_key,
+            domain_name: args.live_tls_domain,
+        };
+        return argusnet_viewer::run_live(args.scene, endpoint, tls, args.view_mode, args.autoplay);
     }
     argusnet_viewer::run(args.scene, args.view_mode, args.autoplay)
 }

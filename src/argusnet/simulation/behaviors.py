@@ -1,4 +1,4 @@
-"""Realistic target behavior models for the Smart Trajectory Tracker.
+"""Realistic target behavior models for ArgusNet.
 
 Provides pluggable trajectory generators (loiter, transit, evasive, search
 pattern) that all satisfy the ``TrajectoryFn`` protocol used by the simulation

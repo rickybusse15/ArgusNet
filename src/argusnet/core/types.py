@@ -73,6 +73,13 @@ class TrackState:
     stale_steps: int
     lifecycle_state: str | None = None
     quality_score: float | None = None
+    #: IMM constant-velocity model weight in [0, 1]. Produced by the Rust tracker
+    #: and read by the viewer's IMM readout, which stayed blank in replay mode for
+    #: as long as this was dropped on the way out of the gRPC response.
+    mode_probability_cv: float | None = None
+    #: Node IDs that contributed to the most recent update. Drives the viewer's
+    #: contributing-node overlay, dead in replay mode for the same reason.
+    contributing_node_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

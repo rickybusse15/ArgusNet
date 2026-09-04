@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "argusnet"
 version = "1.0.0"
 description = "World models for autonomous aerial mapping, inspection, localization, and spatial memory"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "cryptography>=42.0,<46.0",
     "grpcio>=1.78,<2.0",
@@ -22,6 +22,11 @@ live = ["paho-mqtt>=2.0"]
 export = ["mcap-protobuf-support>=0.5", "fiona>=1.9,<2.0"]
 dev = [
     "tqdm>=4.66",
+    # Without this, `validate_replay_document` silently falls through to the
+    # permissive `_manual_schema_validation` fallback, so `docs/replay-schema.json`
+    # -- the artifact CLAUDE.md calls the simulation/viewer contract -- was never
+    # actually enforced in CI.
+    "jsonschema>=4.21",
     "ruff>=0.3",
     "mypy>=1.9",
     "pytest>=8.0",

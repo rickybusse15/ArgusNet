@@ -35,7 +35,6 @@ Roadmap contracts belong in the subsystem docs; this file should reflect impleme
 | Platform metrics | `argusnet.core.types.PlatformMetrics`, `rust/argusnet-core` | Rust `argusnet-core` | sim, replay, evaluation, viewer | Per-frame fusion/observation metrics. |
 | Node health | `argusnet.core.types.NodeHealthMetrics`, `HealthReport`, `rust/argusnet-core` | Rust health monitor | service users, tests | Polled service state, not replay frame state unless explicitly exported. |
 | Mission zones | `argusnet.core.types.MissionZone` | Scenario/mission generation | sim, planner/deconfliction, replay, viewer | Exclusion and objective zones are runtime constraints where supported, not only UI annotations. |
-| Launch events | `argusnet.core.types.LaunchEvent` | Mission generation / scenario setup | sim/replay/viewer | Replayable mission event state. |
 
 ## Scan-Map-Inspect State
 
@@ -63,8 +62,8 @@ inspection documentation.
 |-------|-------|----------------|
 | `PathPlanner2D`, `PlannerConfig`, `PlannerRoute` | `src/argusnet/planning/planner_base.py` | Current 2D visibility-graph route planning. |
 | `FrontierPlanner.find_gap_cells()` | `src/argusnet/planning/frontier.py` | Wired into `scan_map_inspect` as the scanning phase transition gate. |
-| `FrontierPlanner.select_frontier_cell()` | `src/argusnet/planning/frontier.py` | Library capability; not currently called by `sim.py`. |
-| `ClaimedCells` | `src/argusnet/planning/frontier.py` | Instantiated by `sim.py`; not currently used for runtime frontier selection. |
+| `FrontierPlanner.select_frontier_cell()` | `src/argusnet/planning/frontier.py` | Wired into `scan_map_inspect` scanning redirects behind `--frontier-exploration` (`sim.py`). The default scan remains the sector lawnmower. |
+| `ClaimedCells` | `src/argusnet/planning/frontier.py` | Claimed/released per drone around `select_frontier_cell()` so two drones do not target the same cell (`sim.py`). |
 | `CoordinationManager.elect_coordinator()` | `src/argusnet/planning/coordination.py` | Wired into scan-map-inspect coordinator election. |
 | `CoordinationManager.update_claimed()` / `flush_messages()` | `src/argusnet/planning/coordination.py` | Library capability; not currently called by `sim.py`. |
 | `CoordinationManager.formation_offsets()` | `src/argusnet/planning/coordination.py` | Library capability; not currently called by `sim.py`. |

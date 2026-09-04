@@ -61,6 +61,13 @@ cryptographic identity layer on top:
   non-loopback address unless `--tls-cert`/`--tls-key` (and optionally
   `--tls-client-ca` for mandatory mTLS) are supplied — same flags are also
   readable from `ARGUSNET_TLS_CERT`/`ARGUSNET_TLS_KEY`/`ARGUSNET_TLS_CLIENT_CA`.
+- **gRPC viewer client** (`argusnet-viewer --live`, `rust/argusnet-viewer/src/live.rs`):
+  refuses to subscribe to a non-loopback endpoint unless `--live-tls-ca` (+
+  `--live-tls-cert`/`--live-tls-key` for mTLS) is supplied — also readable from
+  `ARGUSNET_TLS_CLIENT_CA`/`ARGUSNET_TLS_CERT`/`ARGUSNET_TLS_KEY`. Use
+  `--live-tls-domain` when the certificate name differs from the endpoint host.
+  The check runs before the window opens, so a misconfigured endpoint fails
+  loudly instead of streaming the world model in the clear.
 - **MQTT**: `MQTTIngestionAdapter` refuses to connect to a non-loopback broker
   without TLS (`ARGUSNET_MQTT_TLS_CA`/`_CERT`/`_KEY`) and without a
   `device_registry` configured; broker credentials are read from
@@ -71,11 +78,11 @@ cryptographic identity layer on top:
 ### Loopback/local fast path
 
 Single-machine simulation and tests do not require keys or certificates:
-loopback gRPC (`127.0.0.1`/`localhost`/`::1`) and a loopback MQTT broker keep
-working unauthenticated and in plaintext, matching the existing local
-simulation workflow. The moment an endpoint is non-loopback, the checks above
-apply and plaintext/unauthenticated connections are refused rather than merely
-warned about.
+loopback gRPC (`127.0.0.1`/`localhost`/`::1`) — including the viewer's `--live`
+subscription — and a loopback MQTT broker keep working unauthenticated and in
+plaintext, matching the existing local simulation workflow. The moment an
+endpoint is non-loopback, the checks above apply and plaintext/unauthenticated
+connections are refused rather than merely warned about.
 
 ### Daemon resource limits
 
