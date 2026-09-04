@@ -74,14 +74,30 @@ pub fn viewer_ui_system(
     mut ui_state: ResMut<ViewerUiState>,
     reconstruction: Res<ReconstructionCloud>,
 ) {
-    let context = contexts.ctx_mut();
+    // `ctx_mut` is fallible in bevy_egui 0.42: no primary context means there is
+    // no frame to draw into yet.
+    let Ok(context) = contexts.ctx_mut() else {
+        return;
+    };
+    let context = context.clone();
     let supports_hot_swap = scene_package.is_synthetic_source();
     ui_state.focused_entity_label = selection.selected_label.clone();
-    configure_operator_style(context);
+    configure_operator_style(&context);
 
-    egui::TopBottomPanel::top("operator_status_bar")
-        .exact_height(TOP_STATUS_HEIGHT)
-        .show(context, |ui| {
+    // egui 0.36 unified `TopBottomPanel`/`SidePanel` into `Panel`, which attaches
+    // to a `Ui` rather than to the `Context`. The shell therefore opens one
+    // screen-sized root `Ui` and nests the operator panels inside it; panel order
+    // still determines nesting, outermost first.
+    let mut root = egui::Ui::new(
+        context.clone(),
+        egui::Id::new("argusnet_operator_shell"),
+        egui::UiBuilder::new().max_rect(context.viewport_rect()),
+    );
+    let root = &mut root;
+
+    egui::Panel::top("operator_status_bar")
+        .exact_size(TOP_STATUS_HEIGHT)
+        .show(root, |ui| {
             top_status_bar(
                 ui,
                 &scene_package,
@@ -91,18 +107,18 @@ pub fn viewer_ui_system(
             );
         });
 
-    egui::TopBottomPanel::bottom("operator_timeline")
-        .exact_height(BOTTOM_TIMELINE_HEIGHT)
-        .show(context, |ui| {
+    egui::Panel::bottom("operator_timeline")
+        .exact_size(BOTTOM_TIMELINE_HEIGHT)
+        .show(root, |ui| {
             section_operator_timeline(ui, &mut replay_state, &mut ui_state);
         });
 
     if ui_state.drawer_open {
-        egui::SidePanel::right("operator_drawer")
+        egui::Panel::right("operator_drawer")
             .resizable(true)
-            .default_width(DRAWER_WIDTH)
-            .width_range(320.0..=540.0)
-            .show(context, |ui| {
+            .default_size(DRAWER_WIDTH)
+            .size_range(320.0..=540.0)
+            .show(root, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| match ui_state.mode {
@@ -143,18 +159,20 @@ pub fn viewer_ui_system(
             });
     }
 
-    draw_zone_badges(context, &projected_badges);
-    draw_mission_phase_hud(context, &replay_state);
+    draw_zone_badges(&context, &projected_badges);
+    draw_mission_phase_hud(&context, &replay_state);
 }
 
 fn configure_operator_style(context: &egui::Context) {
-    let mut style = (*context.style()).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(9.0, 4.0);
-    style.visuals.widgets.active.rounding = 4.0.into();
-    style.visuals.widgets.hovered.rounding = 4.0.into();
-    style.visuals.widgets.inactive.rounding = 4.0.into();
-    context.set_style(style);
+    // egui 0.36 keeps a `Style` per theme and dropped `Context::set_style`, so
+    // mutate every theme in place instead of replacing one global style.
+    context.all_styles_mut(|style| {
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(9.0, 4.0);
+        style.visuals.widgets.active.corner_radius = 4.into();
+        style.visuals.widgets.hovered.corner_radius = 4.into();
+        style.visuals.widgets.inactive.corner_radius = 4.into();
+    });
 }
 
 fn top_status_bar(
@@ -542,27 +560,27 @@ fn section_operator_timeline(
             .allow_drag(false)
             .allow_scroll(false)
             .show_axes([false, true])
-            .label_formatter(|_, _| String::new())
+            .label_formatter(|_| None)
             .show(ui, |plot_ui| {
                 plot_ui.line(
-                    Line::new(obs_points)
+                    Line::new("", obs_points)
                         .color(egui::Color32::from_rgb(95, 150, 220))
                         .width(1.5_f32),
                 );
                 plot_ui.line(
-                    Line::new(event_points)
+                    Line::new("", event_points)
                         .color(egui::Color32::from_rgb(245, 180, 70))
                         .width(1.5_f32),
                 );
                 for (frame_idx, phase) in &phase_transitions {
                     plot_ui.vline(
-                        VLine::new(*frame_idx as f64)
+                        VLine::new("", *frame_idx as f64)
                             .color(phase_vline_color(phase.as_str()))
                             .width(2.0_f32),
                     );
                 }
                 plot_ui.vline(
-                    VLine::new(replay_state.frame_index as f64)
+                    VLine::new("", replay_state.frame_index as f64)
                         .color(egui::Color32::WHITE)
                         .width(2.0_f32),
                 );
@@ -866,7 +884,7 @@ fn tab_mission_content(
                 [bx_min, by_min],
             ]);
             plot_ui.line(
-                Line::new(border)
+                Line::new("", border)
                     .color(egui::Color32::from_rgba_unmultiplied(100, 120, 160, 180))
                     .width(1.5_f32),
             );
@@ -890,13 +908,13 @@ fn tab_mission_content(
                     })
                     .collect();
                 plot_ui.line(
-                    Line::new(PlotPoints::new(circle))
+                    Line::new("", PlotPoints::new(circle))
                         .color(color)
                         .width(1.5_f32),
                 );
                 // Zone label dot at center
                 plot_ui.points(
-                    Points::new(PlotPoints::new(vec![[cx, cy]]))
+                    Points::new("", PlotPoints::new(vec![[cx, cy]]))
                         .color(color)
                         .radius(3.0_f32),
                 );
@@ -911,7 +929,7 @@ fn tab_mission_content(
                     .map(|p| [p[0] as f64, p[1] as f64])
                     .collect();
                 plot_ui.points(
-                    Points::new(PlotPoints::new(scan_pts))
+                    Points::new("", PlotPoints::new(scan_pts))
                         .color(egui::Color32::from_rgba_unmultiplied(220, 200, 40, 120))
                         .radius(1.5_f32),
                 );
@@ -949,7 +967,7 @@ fn tab_mission_content(
                             ny + base_w * (heading - std::f64::consts::FRAC_PI_2 - 0.5).sin(),
                         ];
                         plot_ui.polygon(
-                            Polygon::new(PlotPoints::new(vec![tip, left, right])).fill_color(
+                            Polygon::new("", PlotPoints::new(vec![tip, left, right])).fill_color(
                                 egui::Color32::from_rgba_unmultiplied(
                                     color.r(),
                                     color.g(),
@@ -962,12 +980,15 @@ fn tab_mission_content(
                         // Static sensor: small square
                         let s = (bx_max - bx_min) * 0.008;
                         plot_ui.polygon(
-                            Polygon::new(PlotPoints::new(vec![
-                                [nx - s, ny - s],
-                                [nx + s, ny - s],
-                                [nx + s, ny + s],
-                                [nx - s, ny + s],
-                            ]))
+                            Polygon::new(
+                                "",
+                                PlotPoints::new(vec![
+                                    [nx - s, ny - s],
+                                    [nx + s, ny - s],
+                                    [nx + s, ny + s],
+                                    [nx - s, ny + s],
+                                ]),
+                            )
                             .fill_color(
                                 egui::Color32::from_rgba_unmultiplied(
                                     color.r(),
@@ -999,7 +1020,7 @@ fn tab_mission_content(
                             })
                             .collect();
                         plot_ui.line(
-                            Line::new(PlotPoints::new(circle))
+                            Line::new("", PlotPoints::new(circle))
                                 .color(color)
                                 .width(2.0_f32),
                         );
@@ -1023,7 +1044,7 @@ fn tab_mission_content(
                         let trail_xy: Vec<[f64; 2]> =
                             trail_3d.iter().map(|p| [p.x as f64, p.y as f64]).collect();
                         plot_ui.line(
-                            Line::new(PlotPoints::new(trail_xy))
+                            Line::new("", PlotPoints::new(trail_xy))
                                 .color(egui::Color32::from_rgba_unmultiplied(180, 180, 80, 80))
                                 .width(1.0_f32),
                         );
@@ -1033,10 +1054,12 @@ fn tab_mission_content(
 
             // Crosshair at scene center (faint)
             plot_ui.vline(
-                VLine::new(bx_mid).color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
+                VLine::new("", bx_mid)
+                    .color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
             );
             plot_ui.hline(
-                HLine::new(by_mid).color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
+                HLine::new("", by_mid)
+                    .color(egui::Color32::from_rgba_unmultiplied(120, 120, 120, 60)),
             );
         });
 
@@ -1065,7 +1088,7 @@ fn tab_mission_content(
                 .show(ui, |ui| {
                     for (i, node) in mobile_nodes.iter().enumerate() {
                         egui::Frame::group(ui.style())
-                            .inner_margin(egui::Margin::same(6.0))
+                            .inner_margin(egui::Margin::same(6))
                             .show(ui, |ui| {
                                 ui.set_min_width(140.0);
 
@@ -1621,7 +1644,7 @@ fn section_playback_timeline(ui: &mut egui::Ui, replay_state: &ReplayState) {
             .enumerate()
             .map(|(i, f)| [i as f64, f.metrics.observation_count as f64])
             .collect();
-        let line = Line::new(points);
+        let line = Line::new("", points);
 
         let mut phase_transitions: Vec<(usize, String)> = Vec::new();
         let mut last_phase = String::new();
@@ -1644,15 +1667,19 @@ fn section_playback_timeline(ui: &mut egui::Ui, replay_state: &ReplayState) {
             .allow_drag(false)
             .allow_scroll(false)
             .show_axes([false, true])
-            .label_formatter(|_, _| String::new())
+            .label_formatter(|_| None)
             .show(ui, |plot_ui| {
                 plot_ui.line(line);
                 for (frame_idx, phase) in &phase_transitions {
                     let color = phase_vline_color(phase.as_str());
-                    plot_ui.vline(VLine::new(*frame_idx as f64).color(color).width(2.0_f32));
+                    plot_ui.vline(
+                        VLine::new("", *frame_idx as f64)
+                            .color(color)
+                            .width(2.0_f32),
+                    );
                 }
                 plot_ui.vline(
-                    VLine::new(current_frame)
+                    VLine::new("", current_frame)
                         .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180))
                         .width(1.5_f32),
                 );
