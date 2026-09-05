@@ -52,7 +52,10 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libudev-dev
+          # mesa-vulkan-drivers supplies lavapipe, a software Vulkan
+          # implementation. The runner has no GPU and wgpu has no software
+          # fallback of its own, so the headless render step below needs it.
+          sudo apt-get install -y pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers
       # No toolchain action: `rust-toolchain.toml` pins the version, and rustup
       # (preinstalled on the runner) installs it on first use. This keeps CI on
       # the same compiler contributors run, so a new lint in a future stable
@@ -66,6 +69,31 @@ jobs:
         run: cargo build --workspace
       - name: Test
         run: cargo test --workspace
+      # Renders a scene through the real Bevy pipeline with no window. This is
+      # the only check that exercises rendering at all: every other test runs
+      # logic that never reaches a shader, so a regression that leaves the world
+      # invisible passes them all. Kept out of `cargo test` so contributors
+      # without a Vulkan driver can still run the suite.
+      - name: Headless render smoke test
+        run: |
+          python3 -m pip install --quiet pillow
+          ./target/debug/argusnet-viewer \
+            --scene scene.smartscene \
+            --headless \
+            --output /tmp/argusnet-headless.png \
+            --width 640 --height 480 --camera isometric
+          python3 - <<'PY'
+          from PIL import Image
+
+          image = Image.open("/tmp/argusnet-headless.png").convert("RGB")
+          colors = image.getcolors(maxcolors=1 << 20) or []
+          # A render that failed comes back uniform: all zero when the target was
+          # never written, or a single clear colour when the camera drew nothing.
+          # Real terrain produces thousands of distinct shades.
+          top = sorted(colors, reverse=True)[:3]
+          assert len(colors) > 50, f"headless render looks empty: {top}"
+          print(f"headless render OK: {len(colors)} distinct colours")
+          PY
       - name: Benchmark compile check
         run: cargo bench --workspace --no-run
       - name: Clippy
