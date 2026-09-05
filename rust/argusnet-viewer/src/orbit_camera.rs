@@ -7,7 +7,7 @@ use crate::schema::Bounds2d;
 use crate::state::{ReconstructionCamera, ViewMode};
 
 const MIN_PITCH_RAD: f32 = 0.1;
-const MAX_PITCH_RAD: f32 = 1.4;
+pub(crate) const MAX_PITCH_RAD: f32 = 1.4;
 
 pub struct OrbitCameraPlugin;
 
@@ -76,7 +76,7 @@ fn update_orbit_camera(
     keys: Res<ButtonInput<KeyCode>>,
     mut mouse_motion: MessageReader<MouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
-    mut contexts: EguiContexts,
+    contexts: Option<EguiContexts>,
     windows: Query<&Window, With<PrimaryWindow>>,
     view_mode: Res<ViewMode>,
     mut query: Query<(
@@ -109,11 +109,15 @@ fn update_orbit_camera(
 
     // When the pointer is over an egui panel (the drawer / tabs), let egui consume
     // the scroll so the panel scrolls on its own — the cameras stay put.
-    // `ctx_mut` is fallible in bevy_egui 0.42; treat a missing context as
-    // "pointer is not over UI" so camera input still works if egui is not ready.
+    // `ctx_mut` is fallible in bevy_egui 0.42, and headless installs no egui at
+    // all; treat both as "pointer is not over UI" so camera input still works.
     let over_ui = contexts
-        .ctx_mut()
-        .map(|ctx| ctx.is_pointer_over_egui())
+        .and_then(|mut contexts| {
+            contexts
+                .ctx_mut()
+                .ok()
+                .map(|ctx| ctx.is_pointer_over_egui())
+        })
         .unwrap_or(false);
 
     // Route input to the pane under the cursor. In Split mode the left half drives

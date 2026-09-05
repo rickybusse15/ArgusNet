@@ -1,15 +1,48 @@
-use std::fs;
+//! Headless rendering: the viewer's own pipeline, no window.
+//!
+//! This used to be a hand-written CPU rasterizer — ~700 lines drawing a flat 2-D
+//! schematic that shared no code with the 3-D view, so every visual change had
+//! to be made twice and the CI stills looked nothing like the product. It now
+//! drives the real Bevy app into an offscreen image, so a still is what an
+//! operator would see.
+//!
+//! The capture is a render-graph readback, adapted from Bevy's own
+//! `examples/app/headless_renderer.rs`: a node copies the render target texture
+//! into a mapped buffer, and the bytes cross into the main world over a channel.
+//! The simpler `Screenshot::image()` API does not work here — it captures
+//! nothing for a camera rendering to an offscreen image, yielding a uniformly
+//! black PNG.
+//!
+//! Rendering needs a GPU adapter. wgpu has no software fallback of its own; on a
+//! machine without one install a software Vulkan driver (`mesa-vulkan-drivers`
+//! provides lavapipe), which is what CI does.
+
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use clap::ValueEnum;
-use image::{ImageBuffer, Rgba, RgbaImage};
+use bevy::app::AppExit;
+use bevy::camera::RenderTarget;
+use bevy::image::TextureFormatPixelInfo;
+use bevy::prelude::*;
+use bevy::render::render_asset::RenderAssets;
+use bevy::render::render_resource::{
+    Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Extent3d, MapMode, PollType,
+    TexelCopyBufferInfo, TexelCopyBufferLayout, TextureFormat, TextureUsages,
+};
+use bevy::render::renderer::{RenderDevice, RenderQueue};
+use bevy::render::{Extract, Render, RenderApp, RenderSystems};
+use crossbeam_channel::{Receiver, Sender};
 
-use crate::replay::{ReplayDocument, ReplayFrame};
-use crate::schema::{Bounds2d, ScenePackage};
-use crate::state::ViewMode;
+use bevy::world_serialization::WorldAssetRoot;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+use crate::app::{run_headless, MainCamera};
+use crate::replay::ReplayState;
+use crate::state::{ReconstructionCamera, ViewMode};
+
+/// Camera framing for a headless render.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum CameraPreset {
     TopDown,
     Isometric,
@@ -25,676 +58,676 @@ pub struct HeadlessRenderOptions {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
-    /// RealWorld draws only the schematic; ScanMap/Split additionally draw the
+    /// RealWorld draws the world alone; ScanMap/Split additionally show the
     /// accumulated scan-map reconstruction, so the believed terrain and team
-    /// co-localization are captured in the still / sequence (CI-renderable).
+    /// co-localization are captured in the still / sequence.
     pub view_mode: ViewMode,
 }
 
+/// What a headless run should produce, after validation.
+#[derive(Clone, Debug, Resource)]
+pub struct HeadlessRequest {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub output: Option<PathBuf>,
+    pub record_dir: Option<PathBuf>,
+    pub camera: CameraPreset,
+    pub target_id: Option<String>,
+}
+
+impl HeadlessRenderOptions {
+    /// Splits out the render request, rejecting a run that would produce
+    /// nothing. Kept separate from [`render_headless`] so the validation is
+    /// testable without a GPU.
+    fn into_request(self) -> Result<(ViewMode, HeadlessRequest)> {
+        if self.output.is_none() && self.record_dir.is_none() {
+            bail!("headless rendering requires --output or --record-dir");
+        }
+        Ok((
+            self.view_mode,
+            HeadlessRequest {
+                width: self.width.max(16),
+                height: self.height.max(16),
+                fps: self.fps.max(1),
+                output: self.output,
+                record_dir: self.record_dir,
+                camera: self.camera,
+                target_id: self.target_id,
+            },
+        ))
+    }
+}
+
 pub fn render_headless(scene_path: impl AsRef<Path>, options: HeadlessRenderOptions) -> Result<()> {
-    if options.output.is_none() && options.record_dir.is_none() {
-        bail!("headless rendering requires --output or --record-dir");
-    }
-
-    let scene_package = ScenePackage::load(scene_path)?;
-    let replay = scene_package
-        .replay
-        .clone()
-        .map(ReplayDocument::try_from)
-        .transpose()
-        .context("failed to parse packaged replay.json")?;
-
-    if let Some(output) = options.output.as_ref() {
-        // Render the final frame so a single still shows the complete mission
-        // (fully accumulated reconstruction, converged team localization).
-        let last_index = replay
-            .as_ref()
-            .map(|doc| doc.frames.len().saturating_sub(1))
-            .unwrap_or(0);
-        let image = render_frame(
-            &scene_package,
-            replay.as_ref(),
-            replay.as_ref().and_then(|doc| doc.frames.last()),
-            &options,
-            last_index,
-        );
-        save_image(output, &image)?;
-    }
-
-    if let Some(record_dir) = options.record_dir.as_ref() {
-        let replay = replay
-            .as_ref()
-            .context("record mode requires a packaged replay.json")?;
-        fs::create_dir_all(record_dir)
-            .with_context(|| format!("failed to create {}", record_dir.display()))?;
-        let interval_s = 1.0_f32 / options.fps as f32;
-        let mut next_output_s = 0.0_f32;
-        let mut output_index = 0usize;
-        for frame in replay.frames.iter() {
-            if frame.timestamp_s < next_output_s {
-                continue;
-            }
-            next_output_s += interval_s;
-            let image = render_frame(
-                &scene_package,
-                Some(replay),
-                Some(frame),
-                &options,
-                output_index,
-            );
-            let path = record_dir.join(format!("frame_{output_index:05}.png"));
-            save_image(&path, &image)?;
-            output_index += 1;
-        }
-    }
-
-    Ok(())
+    let (view_mode, request) = options.into_request()?;
+    run_headless(scene_path.as_ref(), view_mode, request)
 }
 
-fn save_image(path: &Path, image: &RgbaImage) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    image
-        .save(path)
-        .with_context(|| format!("failed to write {}", path.display()))
+// ---------------------------------------------------------------------------
+// Render-world plumbing
+// ---------------------------------------------------------------------------
+
+/// Receives finished frames in the main world.
+#[derive(Resource, Deref)]
+struct MainWorldReceiver(Receiver<Vec<u8>>);
+
+/// Sends finished frames out of the render world.
+#[derive(Resource, Deref)]
+struct RenderWorldSender(Sender<Vec<u8>>);
+
+/// The offscreen image the cameras render into, plus its extent. Systems that
+/// need the render size prefer this over the (absent) window.
+#[derive(Resource, Clone)]
+pub struct HeadlessTarget {
+    pub image: Handle<Image>,
+    pub width: u32,
+    pub height: u32,
 }
 
-fn render_frame(
-    scene_package: &ScenePackage,
-    replay: Option<&ReplayDocument>,
-    frame: Option<&ReplayFrame>,
-    options: &HeadlessRenderOptions,
-    frame_index: usize,
-) -> RgbaImage {
-    let mut image: RgbaImage =
-        ImageBuffer::from_pixel(options.width, options.height, Rgba([245, 242, 234, 255]));
-    draw_background(&mut image);
-    let view = view_bounds(
-        &scene_package.environment.bounds_xy_m,
-        frame,
-        options.camera,
-        options.target_id.as_deref(),
-    );
-
-    draw_border(
-        &mut image,
-        options.width,
-        options.height,
-        Rgba([48, 61, 72, 255]),
-    );
-    draw_rect_outline(
-        &mut image,
-        24,
-        24,
-        options.width as i32 - 24,
-        options.height as i32 - 24,
-        Rgba([48, 61, 72, 255]),
-    );
-
-    // Scan-map reconstruction: accumulate every scanned cell up to this frame's
-    // time and draw it under the entities, colored by believed terrain height.
-    if options.view_mode != ViewMode::RealWorld {
-        if let (Some(replay), Some(frame)) = (replay, frame) {
-            draw_reconstruction(
-                &mut image,
-                replay,
-                frame.timestamp_s,
-                &view,
-                options.camera,
-                &scene_package.environment.bounds_xy_m,
-                options.width,
-                options.height,
-            );
-        }
-    }
-
-    if let Some(replay) = replay {
-        draw_track_trails(
-            &mut image,
-            replay,
-            frame_index,
-            &view,
-            options.camera,
-            &scene_package.environment.bounds_xy_m,
-            options.width,
-            options.height,
-        );
-    }
-
-    if let Some(frame) = frame {
-        for truth in &frame.truths {
-            let (x, y) = project_point(
-                truth.position,
-                &view,
-                options.camera,
-                &scene_package.environment.bounds_xy_m,
-                options.width,
-                options.height,
-            );
-            draw_circle(&mut image, x, y, 6, Rgba([66, 148, 93, 255]));
-        }
-        for node in &frame.nodes {
-            let (x, y) = project_point(
-                node.position,
-                &view,
-                options.camera,
-                &scene_package.environment.bounds_xy_m,
-                options.width,
-                options.height,
-            );
-            draw_square(&mut image, x, y, 7, Rgba([43, 112, 187, 255]));
-        }
-        for track in &frame.tracks {
-            let color = if options.target_id.as_deref() == Some(track.track_id.as_str()) {
-                Rgba([198, 44, 44, 255])
-            } else {
-                Rgba([227, 123, 48, 255])
-            };
-            let (x, y) = project_point(
-                track.position,
-                &view,
-                options.camera,
-                &scene_package.environment.bounds_xy_m,
-                options.width,
-                options.height,
-            );
-            draw_circle(&mut image, x, y, 7, color);
-        }
-
-        // Team co-localization: cyan beacon at the fused estimate with spokes to
-        // each contributing drone's own estimate.
-        if let Some(mission) = &frame.scan_mission_state {
-            if let Some(team) = &mission.team_localization {
-                let bounds = &scene_package.environment.bounds_xy_m;
-                let (tx, ty) = project_point(
-                    team.position,
-                    &view,
-                    options.camera,
-                    bounds,
-                    options.width,
-                    options.height,
-                );
-                let cyan = Rgba([27, 175, 122, 255]);
-                for est in &mission.localization_estimates {
-                    if !team
-                        .contributing_node_ids
-                        .iter()
-                        .any(|id| id == &est.drone_id)
-                    {
-                        continue;
-                    }
-                    let (ex, ey) = project_point(
-                        est.position_estimate,
-                        &view,
-                        options.camera,
-                        bounds,
-                        options.width,
-                        options.height,
-                    );
-                    draw_line(&mut image, tx, ty, ex, ey, Rgba([27, 175, 122, 150]));
-                }
-                draw_circle(&mut image, tx, ty, 6, cyan);
-                draw_circle(&mut image, tx, ty, 3, Rgba([255, 255, 255, 255]));
-            }
-        }
-    }
-
-    image
+/// Copies one render target texture into a CPU-mappable buffer each frame.
+#[derive(Clone, Component)]
+struct ImageCopier {
+    buffer: Buffer,
+    enabled: Arc<AtomicBool>,
+    src_image: Handle<Image>,
 }
 
-/// Height-mapped color ramp (blue-purple low → yellow-green high) for the
-/// reconstruction, mirroring the interactive viewer's palette.
-fn height_color(t: f32) -> Rgba<u8> {
-    let t = t.clamp(0.0, 1.0);
-    let stops = [
-        [68.0, 1.0, 84.0],
-        [59.0, 82.0, 139.0],
-        [33.0, 145.0, 140.0],
-        [94.0, 201.0, 98.0],
-        [253.0, 231.0, 37.0],
-    ];
-    let seg = t * (stops.len() - 1) as f32;
-    let i = (seg as usize).min(stops.len() - 2);
-    let f = seg - i as f32;
-    let lerp = |a: f32, b: f32| (a + (b - a) * f) as u8;
-    Rgba([
-        lerp(stops[i][0], stops[i + 1][0]),
-        lerp(stops[i][1], stops[i + 1][1]),
-        lerp(stops[i][2], stops[i + 1][2]),
-        220,
-    ])
+impl ImageCopier {
+    fn new(src_image: Handle<Image>, size: Extent3d, render_device: &RenderDevice) -> Self {
+        let padded_bytes_per_row = RenderDevice::align_copy_bytes_per_row(size.width as usize * 4);
+        let buffer = render_device.create_buffer(&BufferDescriptor {
+            label: Some("argusnet-headless-readback"),
+            size: padded_bytes_per_row as u64 * size.height as u64,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            buffer,
+            src_image,
+            enabled: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw_reconstruction(
-    image: &mut RgbaImage,
-    replay: &ReplayDocument,
-    up_to_ts: f32,
-    view: &Bounds2d,
-    camera: CameraPreset,
-    scene_bounds: &Bounds2d,
-    width: u32,
-    height: u32,
+#[derive(Clone, Default, Resource, Deref, DerefMut)]
+struct ImageCopiers(Vec<ImageCopier>);
+
+/// Everything a headless run adds to the app: the render-world readback, the
+/// offscreen target, and the capture state machine. Bundled as one plugin so
+/// the channel and buffer types stay private to this module.
+pub struct HeadlessRenderPlugin(pub HeadlessRequest);
+
+impl Plugin for HeadlessRenderPlugin {
+    fn build(&self, app: &mut App) {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        app.insert_resource(MainWorldReceiver(receiver))
+            .insert_resource(HeadlessCapture::new(&self.0))
+            .insert_resource(self.0.clone())
+            .add_systems(PostStartup, setup_headless_target_system)
+            .add_systems(Last, headless_capture_system);
+
+        let render_app = app.sub_app_mut(RenderApp);
+        render_app
+            .insert_resource(RenderWorldSender(sender))
+            .add_systems(ExtractSchedule, image_copy_extract)
+            // Both run after the render graph has finished for the frame.
+            //
+            // Bevy's headless example puts the copy *inside* the RenderGraph
+            // schedule, where it is an unordered sibling of the graph's own
+            // nodes and can execute before the camera has drawn — which yielded
+            // a texture that was still untouched (all zero) whenever the scene
+            // contained geometry. Running it in `Render` after
+            // `RenderSystems::Render` guarantees the whole graph, final output
+            // write included, has already happened.
+            .add_systems(
+                Render,
+                (image_copy_driver, receive_image_from_buffer)
+                    .chain()
+                    .after(RenderSystems::Render),
+            );
+    }
+}
+
+fn image_copy_extract(mut commands: Commands, image_copiers: Extract<Query<&ImageCopier>>) {
+    commands.insert_resource(ImageCopiers(image_copiers.iter().cloned().collect()));
+}
+
+fn image_copy_driver(
+    render_device: Res<RenderDevice>,
+    image_copiers: Res<ImageCopiers>,
+    render_queue: Res<RenderQueue>,
+    gpu_images: Res<RenderAssets<bevy::render::texture::GpuImage>>,
 ) {
-    // Accumulate every scanned cell (x, y, terrain_height) up to this timestamp.
-    let mut cells: Vec<[f32; 3]> = Vec::new();
-    for frame in replay.frames.iter() {
-        if frame.timestamp_s > up_to_ts {
-            break;
+    for image_copier in image_copiers.iter() {
+        if !image_copier.enabled() {
+            continue;
         }
-        let Some(mission) = &frame.scan_mission_state else {
+        let Some(src_image) = gpu_images.get(&image_copier.src_image) else {
             continue;
         };
-        for triple in mission.newly_scanned_cells.as_chunks::<3>().0 {
-            cells.push([triple[0], triple[1], triple[2]]);
-        }
-    }
-    if cells.is_empty() {
-        return;
-    }
-    let (mut zmin, mut zmax) = (f32::INFINITY, f32::NEG_INFINITY);
-    for c in &cells {
-        zmin = zmin.min(c[2]);
-        zmax = zmax.max(c[2]);
-    }
-    let zspan = (zmax - zmin).max(1.0);
-    for c in &cells {
-        let (x, y) = project_point(*c, view, camera, scene_bounds, width, height);
-        draw_square(image, x, y, 2, height_color((c[2] - zmin) / zspan));
+
+        let mut encoder =
+            render_device.create_command_encoder(&CommandEncoderDescriptor::default());
+
+        let block_dimensions = src_image.texture_descriptor.format.block_dimensions();
+        let Some(block_size) = src_image.texture_descriptor.format.block_copy_size(None) else {
+            continue;
+        };
+
+        // `copy_texture_to_buffer` only copies rows aligned to
+        // COPY_BYTES_PER_ROW_ALIGNMENT, so the buffer can be wider than the
+        // image. `unpad_rows` trims that back on the way out.
+        let padded_bytes_per_row = RenderDevice::align_copy_bytes_per_row(
+            (src_image.texture_descriptor.size.width as usize / block_dimensions.0 as usize)
+                * block_size as usize,
+        );
+        let Some(bytes_per_row) = std::num::NonZero::<u32>::new(padded_bytes_per_row as u32) else {
+            continue;
+        };
+
+        encoder.copy_texture_to_buffer(
+            src_image.texture.as_image_copy(),
+            TexelCopyBufferInfo {
+                buffer: &image_copier.buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row.into()),
+                    rows_per_image: None,
+                },
+            },
+            src_image.texture_descriptor.size,
+        );
+
+        render_queue.submit(std::iter::once(encoder.finish()));
     }
 }
 
-fn view_bounds(
-    scene_bounds: &Bounds2d,
-    frame: Option<&ReplayFrame>,
-    camera: CameraPreset,
-    target_id: Option<&str>,
-) -> Bounds2d {
-    if camera != CameraPreset::FollowTarget {
-        return scene_bounds.clone();
-    }
-    let Some(frame) = frame else {
-        return scene_bounds.clone();
-    };
-    let focus = target_id
-        .and_then(|id| {
-            frame
-                .tracks
-                .iter()
-                .find(|track| track.track_id == id)
-                .map(|track| [track.position[0], track.position[1]])
-                .or_else(|| {
-                    frame
-                        .truths
-                        .iter()
-                        .find(|truth| truth.target_id == id)
-                        .map(|truth| [truth.position[0], truth.position[1]])
-                })
-        })
-        .or_else(|| {
-            frame
-                .tracks
-                .first()
-                .map(|track| [track.position[0], track.position[1]])
-        });
-    let Some([cx, cy]) = focus else {
-        return scene_bounds.clone();
-    };
-    let span = scene_bounds
-        .span_xy()
-        .into_iter()
-        .fold(0.0_f32, f32::max)
-        .max(200.0)
-        * 0.35;
-    Bounds2d {
-        x_min_m: cx - span,
-        x_max_m: cx + span,
-        y_min_m: cy - span,
-        y_max_m: cy + span,
-    }
-}
-
-fn draw_background(image: &mut RgbaImage) {
-    let height = image.height().max(1);
-    for y in 0..image.height() {
-        let blend = y as f32 / height as f32;
-        let r = (245.0 - 18.0 * blend) as u8;
-        let g = (242.0 - 10.0 * blend) as u8;
-        let b = (234.0 - 2.0 * blend) as u8;
-        for x in 0..image.width() {
-            image.put_pixel(x, y, Rgba([r, g, b, 255]));
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn draw_track_trails(
-    image: &mut RgbaImage,
-    replay: &ReplayDocument,
-    frame_index: usize,
-    view: &Bounds2d,
-    camera: CameraPreset,
-    scene_bounds: &Bounds2d,
-    width: u32,
-    height: u32,
+fn receive_image_from_buffer(
+    image_copiers: Res<ImageCopiers>,
+    render_device: Res<RenderDevice>,
+    sender: Res<RenderWorldSender>,
 ) {
-    let mut positions: std::collections::HashMap<String, Vec<[f32; 3]>> =
-        std::collections::HashMap::new();
-    for frame in replay.frames.iter().take(frame_index + 1) {
-        for track in &frame.tracks {
-            positions
-                .entry(track.track_id.clone())
-                .or_default()
-                .push(track.position);
+    for image_copier in image_copiers.0.iter() {
+        if !image_copier.enabled() {
+            continue;
+        }
+        let buffer_slice = image_copier.buffer.slice(..);
+
+        // Mapping is asynchronous and `get_mapped_range` panics if called early,
+        // so hand the completion through a channel and block on it.
+        let (sync_sender, sync_receiver) = crossbeam_channel::bounded(1);
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            let _ = sync_sender.send(result);
+        });
+
+        if render_device.poll(PollType::wait_indefinitely()).is_err() {
+            continue;
+        }
+        match sync_receiver.recv() {
+            Ok(Ok(())) => {}
+            // A failed map leaves nothing to read; the next frame retries.
+            _ => {
+                image_copier.buffer.unmap();
+                continue;
+            }
+        }
+
+        // Fails only if the main world has already torn down the receiver.
+        let _ = sender.send(buffer_slice.get_mapped_range().to_vec());
+        image_copier.buffer.unmap();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Capture
+// ---------------------------------------------------------------------------
+
+/// Where a headless capture has got to.
+///
+/// The readback runs every frame and the channel always carries the most recent
+/// frame, so this walks a state machine rather than capturing at a fixed frame
+/// number: wait for every layer asset to finish loading, let the scene settle,
+/// then save. A fixed frame count would race asset loading and silently write an
+/// empty world — Bevy's own example warns the first frames are transparent, then
+/// black, before the scene appears.
+#[derive(Resource)]
+struct HeadlessCapture {
+    output: Option<PathBuf>,
+    record_dir: Option<PathBuf>,
+    fps: u32,
+    phase: CapturePhase,
+    next_index: usize,
+    next_time_s: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CapturePhase {
+    WaitingForAssets,
+    /// Rendering until the output stops changing.
+    Settling {
+        seen: u32,
+        stable: u32,
+        last_hash: Option<u64>,
+        min_frames: u32,
+    },
+    Capture,
+    Done,
+}
+
+impl CapturePhase {
+    fn settling(min_frames: u32) -> Self {
+        Self::Settling {
+            seen: 0,
+            stable: 0,
+            last_hash: None,
+            min_frames,
         }
     }
-    for history in positions.values() {
-        for segment in history.windows(2) {
-            let (x0, y0) = project_point(segment[0], view, camera, scene_bounds, width, height);
-            let (x1, y1) = project_point(segment[1], view, camera, scene_bounds, width, height);
-            draw_line(image, x0, y0, x1, y1, Rgba([227, 123, 48, 180]));
+}
+
+/// Consecutive identical frames that count as "the scene has finished drawing".
+const STABLE_FRAMES_REQUIRED: u32 = 10;
+
+/// Frames to render before stability is even considered, on the first capture.
+///
+/// Stability alone is not a sufficient signal. Bevy specializes render pipelines
+/// lazily on first use, and until that finishes the camera clears the target but
+/// draws nothing — so the output sits *unchanged* at the clear colour for a long
+/// stretch that looks exactly like a settled frame. On the software rasterizer
+/// CI uses this takes several seconds; capturing on stability alone reliably
+/// saves an empty image. This floor covers the compile, and the stability check
+/// then catches whatever is slower still.
+const WARMUP_FRAMES: u32 = 300;
+
+/// Frames before stability counts on subsequent captures in a `--record-dir`
+/// run. Pipelines are warm by then, so only the frame's own contents need to
+/// catch up.
+const MIN_SETTLE_FRAMES: u32 = 8;
+
+/// Upper bound, so a scene that never settles (an animated overlay, say) still
+/// produces an image instead of hanging.
+const MAX_SETTLE_FRAMES: u32 = 2000;
+
+impl HeadlessCapture {
+    fn new(request: &HeadlessRequest) -> Self {
+        Self {
+            output: request.output.clone(),
+            record_dir: request.record_dir.clone(),
+            fps: request.fps,
+            phase: CapturePhase::WaitingForAssets,
+            next_index: 0,
+            next_time_s: 0.0,
         }
     }
 }
 
-fn project_point(
-    point: [f32; 3],
-    view: &Bounds2d,
-    camera: CameraPreset,
-    scene_bounds: &Bounds2d,
-    width: u32,
-    height: u32,
-) -> (i32, i32) {
-    let margin = 40.0_f32;
-    let inner_width = (width as f32 - margin * 2.0).max(1.0);
-    let inner_height = (height as f32 - margin * 2.0).max(1.0);
-    let tx = ((point[0] - view.x_min_m) / (view.x_max_m - view.x_min_m).max(1.0)).clamp(0.0, 1.0);
-    let ty = ((point[1] - view.y_min_m) / (view.y_max_m - view.y_min_m).max(1.0)).clamp(0.0, 1.0);
-    let mut sx = margin + tx * inner_width;
-    let mut sy = height as f32 - margin - ty * inner_height;
+/// The main camera, excluding the reconstruction camera that also carries an
+/// `OrbitCamera`.
+type MainCameraQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut crate::orbit_camera::OrbitCamera),
+    (With<MainCamera>, Without<ReconstructionCamera>),
+>;
 
-    if camera == CameraPreset::Isometric {
-        let center = scene_bounds.center_xy();
-        sx += (point[1] - center[1]) * 0.08;
-        sy -= point[2] * 0.35;
-        sy -= (point[0] - center[0]) * 0.04;
+/// Builds the offscreen target and points both cameras at it.
+///
+/// Runs in `PostStartup` so `setup_world` has already spawned the cameras: the
+/// interactive setup stays untouched and headless only retargets what it made.
+fn setup_headless_target_system(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    render_device: Res<RenderDevice>,
+    request: Res<HeadlessRequest>,
+    replay_state: Res<ReplayState>,
+    mut main_cam: MainCameraQuery,
+    recon_cam: Query<Entity, With<ReconstructionCamera>>,
+) {
+    let size = Extent3d {
+        width: request.width,
+        height: request.height,
+        ..default()
+    };
+
+    let mut render_target_image =
+        Image::new_target_texture(size.width, size.height, TextureFormat::Rgba8UnormSrgb, None);
+    // `new_target_texture` sets TEXTURE_BINDING | COPY_DST | RENDER_ATTACHMENT;
+    // reading the frame back out needs COPY_SRC on top of those.
+    render_target_image.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    let handle = images.add(render_target_image);
+
+    commands.spawn(ImageCopier::new(handle.clone(), size, &render_device));
+
+    if let Ok((entity, mut orbit)) = main_cam.single_mut() {
+        commands
+            .entity(entity)
+            .insert(RenderTarget::Image(handle.clone().into()));
+        apply_camera_preset(&mut orbit, &request, replay_state.as_ref());
+    }
+    // The reconstruction camera shares the image; Split mode gives the two of
+    // them viewports over it, exactly as they share a window.
+    if let Ok(entity) = recon_cam.single() {
+        commands
+            .entity(entity)
+            .insert(RenderTarget::Image(handle.clone().into()));
     }
 
-    (sx.round() as i32, sy.round() as i32)
+    commands.insert_resource(HeadlessTarget {
+        image: handle,
+        width: size.width,
+        height: size.height,
+    });
 }
 
-fn draw_border(image: &mut RgbaImage, width: u32, height: u32, color: Rgba<u8>) {
-    draw_rect_outline(image, 0, 0, width as i32 - 1, height as i32 - 1, color);
-}
+/// Frames the orbit camera per `--camera`, leaving `from_bounds`' scene-sized
+/// radius intact so a preset changes the angle, not the framing distance.
+///
+/// Pitch is positive-is-above (`eye_position` puts the eye at
+/// `focus.z + radius * sin(pitch)`) and the interactive camera clamps it to
+/// [`MIN_PITCH_RAD`, `MAX_PITCH_RAD`], stopping short of straight down where
+/// `look_at` against the Z-up reference vector degenerates. Presets stay inside
+/// that range rather than inventing their own — a negative pitch would put the
+/// camera underground, looking up at the underside of the terrain.
+fn apply_camera_preset(
+    orbit: &mut crate::orbit_camera::OrbitCamera,
+    request: &HeadlessRequest,
+    replay_state: &ReplayState,
+) {
+    use crate::orbit_camera::MAX_PITCH_RAD;
 
-fn draw_rect_outline(image: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, color: Rgba<u8>) {
-    draw_line(image, x0, y0, x1, y0, color);
-    draw_line(image, x1, y0, x1, y1, color);
-    draw_line(image, x1, y1, x0, y1, color);
-    draw_line(image, x0, y1, x0, y0, color);
-}
+    /// Classic isometric elevation, inside the interactive pitch limits.
+    const ISOMETRIC_PITCH_RAD: f32 = 0.6;
 
-fn draw_square(image: &mut RgbaImage, cx: i32, cy: i32, radius: i32, color: Rgba<u8>) {
-    for y in (cy - radius)..=(cy + radius) {
-        for x in (cx - radius)..=(cx + radius) {
-            put_pixel(image, x, y, color);
+    match request.camera {
+        CameraPreset::TopDown => {
+            orbit.yaw = 0.0;
+            orbit.pitch = MAX_PITCH_RAD;
         }
-    }
-}
-
-fn draw_circle(image: &mut RgbaImage, cx: i32, cy: i32, radius: i32, color: Rgba<u8>) {
-    let radius_sq = radius * radius;
-    for y in (cy - radius)..=(cy + radius) {
-        for x in (cx - radius)..=(cx + radius) {
-            let dx = x - cx;
-            let dy = y - cy;
-            if dx * dx + dy * dy <= radius_sq {
-                put_pixel(image, x, y, color);
+        CameraPreset::Isometric => {
+            orbit.yaw = std::f32::consts::FRAC_PI_4;
+            orbit.pitch = ISOMETRIC_PITCH_RAD;
+        }
+        CameraPreset::FollowTarget => {
+            orbit.yaw = std::f32::consts::FRAC_PI_4;
+            orbit.pitch = ISOMETRIC_PITCH_RAD;
+            if let Some(target_id) = request.target_id.as_deref() {
+                if let Some(marker) = replay_state
+                    .current_markers()
+                    .into_iter()
+                    .find(|marker| marker.label == target_id)
+                {
+                    orbit.focus = marker.position;
+                    orbit.radius = (orbit.radius * 0.25).max(orbit.min_radius);
+                }
             }
         }
     }
 }
 
-fn draw_line(image: &mut RgbaImage, mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: Rgba<u8>) {
-    let dx = (x1 - x0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let dy = -(y1 - y0).abs();
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
+/// Drives the capture state machine described on [`HeadlessCapture`].
+fn headless_capture_system(
+    mut capture: ResMut<HeadlessCapture>,
+    mut replay_state: ResMut<ReplayState>,
+    target: Option<Res<HeadlessTarget>>,
+    receiver: Res<MainWorldReceiver>,
+    asset_server: Res<AssetServer>,
+    layer_roots: Query<&WorldAssetRoot>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(target) = target else {
+        return;
+    };
 
-    loop {
-        put_pixel(image, x0, y0, color);
-        if x0 == x1 && y0 == y1 {
-            break;
+    // The render world produces a frame every tick; only the newest is useful.
+    let mut latest = None;
+    while let Ok(data) = receiver.try_recv() {
+        latest = Some(data);
+    }
+
+    match capture.phase {
+        CapturePhase::WaitingForAssets => {
+            let pending = layer_roots
+                .iter()
+                .any(|root| !asset_server.is_loaded_with_dependencies(&root.0));
+            if pending {
+                return;
+            }
+            // A single still shows the completed mission, so jump to the final
+            // frame rather than capturing an empty opening one.
+            if capture.record_dir.is_none() {
+                let last = replay_state.frame_count().saturating_sub(1);
+                replay_state.step_to(last);
+            } else {
+                replay_state.step_to(0);
+            }
+            capture.phase = CapturePhase::settling(WARMUP_FRAMES);
         }
-        let e2 = err * 2;
-        if e2 >= dy {
-            err += dy;
-            x0 += sx;
+        CapturePhase::Settling {
+            seen,
+            stable,
+            last_hash,
+            min_frames,
+        } => {
+            let Some(frame) = latest.as_ref() else {
+                return;
+            };
+            let hash = frame_hash(frame);
+            let stable = if last_hash == Some(hash) {
+                stable + 1
+            } else {
+                0
+            };
+            let seen = seen + 1;
+
+            capture.phase = if seen >= MAX_SETTLE_FRAMES {
+                warn!("headless render did not settle after {seen} frames; capturing anyway");
+                CapturePhase::Capture
+            } else if seen >= min_frames && stable >= STABLE_FRAMES_REQUIRED {
+                CapturePhase::Capture
+            } else {
+                CapturePhase::Settling {
+                    seen,
+                    stable,
+                    last_hash: Some(hash),
+                    min_frames,
+                }
+            };
         }
-        if e2 <= dx {
-            err += dx;
-            y0 += sy;
+        CapturePhase::Capture => {
+            let Some(frame) = latest else {
+                // Nothing has arrived yet; try again next tick.
+                return;
+            };
+
+            if let Some(output) = capture.output.take() {
+                if let Err(error) = save_frame(&output, &frame, target.width, target.height) {
+                    error!("failed to write {}: {error:#}", output.display());
+                }
+                if capture.record_dir.is_none() {
+                    capture.phase = CapturePhase::Done;
+                    return;
+                }
+            }
+
+            let Some(record_dir) = capture.record_dir.clone() else {
+                capture.phase = CapturePhase::Done;
+                return;
+            };
+            let index = capture.next_index;
+            let path = record_dir.join(format!("frame_{index:05}.png"));
+            if let Err(error) = save_frame(&path, &frame, target.width, target.height) {
+                error!("failed to write {}: {error:#}", path.display());
+            }
+            capture.next_index += 1;
+            capture.next_time_s += 1.0 / capture.fps as f32;
+
+            match frame_at_or_after(replay_state.as_ref(), capture.next_time_s) {
+                Some(index) => {
+                    replay_state.step_to(index);
+                    capture.phase = CapturePhase::settling(MIN_SETTLE_FRAMES);
+                }
+                None => capture.phase = CapturePhase::Done,
+            }
+        }
+        CapturePhase::Done => {
+            exit.write(AppExit::Success);
         }
     }
 }
 
-fn put_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>) {
-    if x < 0 || y < 0 {
-        return;
+/// Cheap identity for a rendered frame, used to detect that the output has
+/// stopped changing.
+fn frame_hash(frame: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    frame.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// First frame index at or after `time_s`, or `None` once the replay is
+/// exhausted — which is what ends a `--record-dir` run.
+fn frame_at_or_after(replay_state: &ReplayState, time_s: f32) -> Option<usize> {
+    let document = replay_state.document.as_ref()?;
+    document
+        .frames
+        .iter()
+        .position(|frame| frame.timestamp_s >= time_s)
+}
+
+/// Trims the row padding wgpu's copy alignment adds, so the bytes match the
+/// image's real width.
+fn unpad_rows(padded: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let row_bytes = width as usize * TextureFormat::Rgba8UnormSrgb.pixel_size().unwrap_or(4);
+    let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
+    if row_bytes == aligned_row_bytes {
+        return padded.to_vec();
     }
-    let (x, y) = (x as u32, y as u32);
-    if x < image.width() && y < image.height() {
-        image.put_pixel(x, y, color);
+    padded
+        .chunks(aligned_row_bytes)
+        .take(height as usize)
+        .flat_map(|row| &row[..row_bytes.min(row.len())])
+        .copied()
+        .collect()
+}
+
+fn save_frame(path: &Path, padded: &[u8], width: u32, height: u32) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    let pixels = unpad_rows(padded, width, height);
+    let image = image::RgbaImage::from_raw(width, height, pixels)
+        .context("readback buffer does not match the render target size")?;
+    image
+        .save(path)
+        .with_context(|| format!("failed to save {}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use serde_json::json;
-
     use super::*;
 
-    #[test]
-    fn headless_renderer_writes_png_outputs() {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("argusnet-headless-{suffix}"));
-        fs::create_dir_all(root.join("metadata")).unwrap();
-        fs::write(
-            root.join("scene_manifest.json"),
-            serde_json::to_string_pretty(&json!({
-                "format_version": "smartscene-v1",
-                "scene_id": "demo",
-                "bounds_xy_m": {
-                    "x_min_m": -100.0,
-                    "x_max_m": 100.0,
-                    "y_min_m": -100.0,
-                    "y_max_m": 100.0
-                },
-                "runtime_crs": {},
-                "source_crs_id": "local",
-                "layers": [],
-                "replay": {"path": "replay.json"},
-                "metadata": {
-                    "environment": "metadata/environment.json",
-                    "style": "metadata/style.json"
-                },
-                "build": {"source_kind": "synthetic"}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            root.join("metadata/style.json"),
-            serde_json::to_string_pretty(&json!({
-                "style_version": "smartstyle-v1",
-                "layers": []
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            root.join("metadata/environment.json"),
-            serde_json::to_string_pretty(&json!({
-                "runtime_crs": {},
-                "bounds_xy_m": {
-                    "x_min_m": -100.0,
-                    "x_max_m": 100.0,
-                    "y_min_m": -100.0,
-                    "y_max_m": 100.0
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            root.join("replay.json"),
-            serde_json::to_string_pretty(&json!({
-                "frames": [
-                    {
-                        "timestamp_s": 0.0,
-                        "tracks": [{"track_id": "t1", "position": [0.0, 0.0, 10.0], "velocity": [0.0, 0.0, 0.0]}],
-                        "truths": [{"target_id": "truth-1", "position": [10.0, 10.0, 12.0], "velocity": [0.0, 0.0, 0.0]}],
-                        "nodes": [{"node_id": "n1", "position": [-20.0, -20.0, 2.0], "velocity": [0.0, 0.0, 0.0], "is_mobile": false}]
-                    },
-                    {
-                        "timestamp_s": 1.0,
-                        "tracks": [{"track_id": "t1", "position": [20.0, 0.0, 10.0], "velocity": [0.0, 0.0, 0.0]}],
-                        "truths": [],
-                        "nodes": []
-                    }
-                ]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let still = root.join("still.png");
-        let record_dir = root.join("frames");
-        render_headless(
-            &root,
-            HeadlessRenderOptions {
-                output: Some(still.clone()),
-                record_dir: Some(record_dir.clone()),
-                camera: CameraPreset::TopDown,
-                target_id: None,
-                width: 640,
-                height: 360,
-                fps: 30,
-                view_mode: ViewMode::RealWorld,
-            },
-        )
-        .unwrap();
-
-        assert!(still.exists());
-        assert!(record_dir.join("frame_00000.png").exists());
-        assert!(record_dir.join("frame_00001.png").exists());
-
-        let _ = fs::remove_dir_all(root);
+    fn options() -> HeadlessRenderOptions {
+        HeadlessRenderOptions {
+            output: None,
+            record_dir: None,
+            camera: CameraPreset::TopDown,
+            target_id: None,
+            width: 640,
+            height: 360,
+            fps: 30,
+            view_mode: ViewMode::RealWorld,
+        }
     }
 
     #[test]
-    fn headless_scan_map_renders_reconstruction_and_team_localization() {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("argusnet-headless-scan-{suffix}"));
-        fs::create_dir_all(root.join("metadata")).unwrap();
-        fs::write(
-            root.join("scene_manifest.json"),
-            serde_json::to_string_pretty(&json!({
-                "format_version": "smartscene-v1",
-                "scene_id": "demo",
-                "bounds_xy_m": {"x_min_m": -100.0, "x_max_m": 100.0, "y_min_m": -100.0, "y_max_m": 100.0},
-                "runtime_crs": {},
-                "source_crs_id": "local",
-                "layers": [],
-                "replay": {"path": "replay.json"},
-                "metadata": {"environment": "metadata/environment.json", "style": "metadata/style.json"},
-                "build": {"source_kind": "synthetic"}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            root.join("metadata/style.json"),
-            serde_json::to_string_pretty(&json!({"style_version": "smartstyle-v1", "layers": []}))
-                .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            root.join("metadata/environment.json"),
-            serde_json::to_string_pretty(&json!({
-                "runtime_crs": {},
-                "bounds_xy_m": {"x_min_m": -100.0, "x_max_m": 100.0, "y_min_m": -100.0, "y_max_m": 100.0}
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            root.join("replay.json"),
-            serde_json::to_string_pretty(&json!({
-                "frames": [{
-                    "timestamp_s": 0.0,
-                    "tracks": [], "truths": [],
-                    "nodes": [{"node_id": "drone-a", "position": [0.0, 0.0, 30.0], "velocity": [0.0, 0.0, 0.0], "is_mobile": true}],
-                    "scan_mission_state": {
-                        "phase": "scanning", "scan_coverage_fraction": 0.5, "scan_coverage_threshold": 0.7,
-                        "localization_estimates": [{"drone_id": "drone-a", "timestamp_s": 0.0, "position_estimate": [10.0, 10.0, 30.0], "heading_rad": 0.0, "position_std_m": 2.0, "confidence": 0.9}],
-                        "poi_statuses": [], "completed_poi_count": 0, "total_poi_count": 0,
-                        "newly_scanned_cells": [-40.0, -40.0, 5.0, 0.0, 0.0, 60.0, 40.0, 40.0, 120.0],
-                        "team_localization": {"position": [5.0, 5.0, 30.0], "position_std_m": 1.0, "confidence": 0.95, "contributing_node_ids": ["drone-a"]}
-                    }
-                }]
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+    fn rejects_a_run_that_would_write_nothing() {
+        let err = options().into_request().unwrap_err();
+        assert!(err.to_string().contains("--output or --record-dir"));
+    }
 
-        let still = root.join("scan.png");
-        render_headless(
-            &root,
-            HeadlessRenderOptions {
-                output: Some(still.clone()),
-                record_dir: None,
-                camera: CameraPreset::TopDown,
-                target_id: None,
-                width: 400,
-                height: 400,
-                fps: 30,
-                view_mode: ViewMode::Split,
-            },
-        )
-        .unwrap();
-
-        let img = image::open(&still).unwrap().to_rgba8();
-        // Lowest scanned cell renders as the ramp's deep purple (68, 1, 84) — a
-        // color nothing else in the schematic draws, so it proves the
-        // reconstruction rendered.
-        let has_recon = img
-            .pixels()
-            .any(|p| p[0] < 120 && p[1] < 40 && p[2] > 60 && p[2] < 130);
-        assert!(
-            has_recon,
-            "expected reconstruction pixels in scan-map render"
+    #[test]
+    fn carries_the_cli_surface_into_the_request() {
+        let opts = HeadlessRenderOptions {
+            output: Some(PathBuf::from("still.png")),
+            record_dir: Some(PathBuf::from("frames")),
+            camera: CameraPreset::Isometric,
+            target_id: Some("truth-1".into()),
+            width: 1280,
+            height: 720,
+            fps: 12,
+            view_mode: ViewMode::Split,
+        };
+        let (view_mode, request) = opts.into_request().unwrap();
+        assert_eq!(view_mode, ViewMode::Split);
+        assert_eq!(request.output, Some(PathBuf::from("still.png")));
+        assert_eq!(request.record_dir, Some(PathBuf::from("frames")));
+        assert_eq!(request.camera, CameraPreset::Isometric);
+        assert_eq!(request.target_id.as_deref(), Some("truth-1"));
+        assert_eq!(
+            (request.width, request.height, request.fps),
+            (1280, 720, 12)
         );
-        // Team beacon renders cyan (27, 175, 122).
-        let has_team = img
-            .pixels()
-            .any(|p| p[0] < 70 && p[1] > 150 && p[2] > 90 && p[2] < 155);
-        assert!(
-            has_team,
-            "expected team-localization beacon in scan-map render"
-        );
+    }
 
-        let _ = fs::remove_dir_all(root);
+    #[test]
+    fn either_output_alone_is_enough() {
+        let mut still = options();
+        still.output = Some(PathBuf::from("a.png"));
+        assert!(still.into_request().is_ok());
+
+        let mut sequence = options();
+        sequence.record_dir = Some(PathBuf::from("frames"));
+        assert!(sequence.into_request().is_ok());
+    }
+
+    #[test]
+    fn degenerate_extents_are_clamped_rather_than_producing_an_empty_image() {
+        let mut opts = options();
+        opts.output = Some(PathBuf::from("a.png"));
+        opts.width = 0;
+        opts.height = 0;
+        opts.fps = 0;
+        let (_, request) = opts.into_request().unwrap();
+        assert_eq!((request.width, request.height), (16, 16));
+        // fps divides the record interval, so zero would be a division by zero.
+        assert_eq!(request.fps, 1);
+    }
+
+    #[test]
+    fn unpadded_rows_are_returned_unchanged() {
+        // 64 px * 4 bytes = 256, already the alignment, so no padding to trim.
+        let width = 64;
+        let height = 2;
+        let data: Vec<u8> = (0..width * 4 * height).map(|i| i as u8).collect();
+        assert_eq!(unpad_rows(&data, width as u32, height as u32), data);
+    }
+
+    #[test]
+    fn padding_is_trimmed_back_to_the_image_width() {
+        // 3 px * 4 bytes = 12, which wgpu pads out to 256 per row.
+        let width = 3u32;
+        let height = 2u32;
+        let row_bytes = width as usize * 4;
+        let aligned = RenderDevice::align_copy_bytes_per_row(row_bytes);
+        assert!(aligned > row_bytes, "expected this width to need padding");
+
+        let mut padded = vec![0u8; aligned * height as usize];
+        for row in 0..height as usize {
+            for byte in 0..row_bytes {
+                padded[row * aligned + byte] = (row * row_bytes + byte) as u8;
+            }
+        }
+
+        let trimmed = unpad_rows(&padded, width, height);
+        assert_eq!(trimmed.len(), row_bytes * height as usize);
+        let expected: Vec<u8> = (0..row_bytes * height as usize).map(|i| i as u8).collect();
+        assert_eq!(trimmed, expected);
     }
 }
