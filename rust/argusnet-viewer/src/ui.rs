@@ -8,8 +8,9 @@ use crate::replay::{EgressProgress, MarkerKind, ReplayState, RuntimeMarker};
 use crate::schema::ScenePackage;
 use crate::state::{
     CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MapLayerPreset,
-    MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility, SelectionState,
-    SimulationRunner, ViewMode, ViewerMode, ViewerUiState, ZoneFocus, ZoneOverlapModel,
+    MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility, SelectionDetails,
+    SelectionState, SimulationRunner, ViewMode, ViewerMode, ViewerUiState, ZoneFocus,
+    ZoneOverlapModel,
 };
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
@@ -81,7 +82,7 @@ pub fn viewer_ui_system(
     };
     let context = context.clone();
     let supports_hot_swap = scene_package.is_synthetic_source();
-    ui_state.focused_entity_label = selection.selected_label.clone();
+    ui_state.focused_entity_label = selection.label().map(str::to_owned);
     configure_operator_style(&context);
 
     // egui 0.36 unified `TopBottomPanel`/`SidePanel` into `Panel`, which attaches
@@ -1956,41 +1957,41 @@ fn section_track_summary(
 
 fn section_selection(ui: &mut egui::Ui, selection: &SelectionState, max_stale_steps: u32) {
     ui.heading("Selection");
-    let (Some(kind), Some(label), Some(position)) = (
-        &selection.selected_kind,
-        &selection.selected_label,
-        &selection.selected_position,
-    ) else {
+    let Some(selected) = selection.selected.as_ref() else {
         ui.label("Click a marker to inspect it.");
         return;
     };
 
-    ui.strong(format!("{kind}: {label}"));
+    let position = selected.position;
+    ui.strong(format!(
+        "{}: {}",
+        selected.details.kind_label(),
+        selected.label
+    ));
     ui.label(format!(
         "Position: x={:.1} y={:.1} z={:.1} m",
         position.x, position.y, position.z
     ));
-    if let Some(vel) = &selection.selected_velocity {
-        let speed = vel.length();
-        ui.label(format!(
-            "Velocity: [{:.1}, {:.1}, {:.1}] m/s (speed {:.1} m/s)",
-            vel.x, vel.y, vel.z, speed
-        ));
-        if speed > 0.1 {
-            let heading_deg = vel.y.atan2(vel.x).to_degrees();
-            ui.label(format!("Heading: {:.1}\u{00b0}", heading_deg));
-        }
+    let vel = selected.velocity;
+    let speed = vel.length();
+    ui.label(format!(
+        "Velocity: [{:.1}, {:.1}, {:.1}] m/s (speed {:.1} m/s)",
+        vel.x, vel.y, vel.z, speed
+    ));
+    if speed > 0.1 {
+        let heading_deg = vel.y.atan2(vel.x).to_degrees();
+        ui.label(format!("Heading: {:.1}\u{00b0}", heading_deg));
     }
 
-    match kind.as_str() {
-        "Track" => {
-            if let Some(std_m) = selection.selected_measurement_std_m {
+    match &selected.details {
+        SelectionDetails::Track(track) => {
+            if let Some(std_m) = track.measurement_std_m {
                 kv_row(ui, "Meas. std", &format!("{:.2} m", std_m));
             }
-            if let Some(updates) = selection.selected_update_count {
+            if let Some(updates) = track.update_count {
                 kv_row(ui, "Update count", &format!("{}", updates));
             }
-            if let Some(stale) = selection.selected_stale_steps {
+            if let Some(stale) = track.stale_steps {
                 let color = if stale > max_stale_steps {
                     egui::Color32::RED
                 } else if stale > 0 {
@@ -2003,10 +2004,10 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState, max_stale_st
                     ui.colored_label(color, format!("{}", stale));
                 });
             }
-            if let Some(err) = selection.selected_track_error_m {
+            if let Some(err) = track.track_error_m {
                 kv_row(ui, "Track error", &format!("{:.2} m", err));
             }
-            if let Some(diag) = &selection.selected_covariance_diag {
+            if let Some(diag) = &track.covariance_diag {
                 ui.label(format!(
                     "Cov diag: \u{03c3}x={:.2} \u{03c3}y={:.2} \u{03c3}z={:.2} m",
                     diag[0].sqrt(),
@@ -2014,7 +2015,7 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState, max_stale_st
                     diag[2].sqrt()
                 ));
             }
-            if let Some(p_cv) = selection.selected_mode_probability_cv {
+            if let Some(p_cv) = track.mode_probability_cv {
                 let p_ct = 1.0 - p_cv;
                 kv_row(
                     ui,
@@ -2022,44 +2023,39 @@ fn section_selection(ui: &mut egui::Ui, selection: &SelectionState, max_stale_st
                     &format!("CV {:.0}% / CT {:.0}%", p_cv * 100.0, p_ct * 100.0),
                 );
             }
-            if !selection.selected_contributing_nodes.is_empty() {
-                kv_row(
-                    ui,
-                    "Updated by",
-                    &selection.selected_contributing_nodes.join(", "),
-                );
+            if !track.contributing_nodes.is_empty() {
+                kv_row(ui, "Updated by", &track.contributing_nodes.join(", "));
             }
         }
-        "Node" => {
-            if let Some(health) = selection.selected_health {
+        SelectionDetails::Node(node) => {
+            if let Some(health) = node.health {
                 ui.horizontal(|ui| {
                     ui.label("Health:");
                     ui.colored_label(health_color_egui(health), format!("{:.0}%", health * 100.0));
                 });
             }
-            if let Some(sensor) = &selection.selected_sensor_type {
+            if let Some(sensor) = &node.sensor_type {
                 kv_row(ui, "Sensor", sensor);
             }
-            if let Some(mobile) = selection.selected_is_mobile {
+            if let Some(mobile) = node.is_mobile {
                 kv_row(ui, "Mobile", if mobile { "Yes" } else { "No" });
             }
-            if let Some(fov) = selection.selected_fov_half_angle_deg {
+            if let Some(fov) = node.fov_half_angle_deg {
                 kv_row(
                     ui,
                     "FOV",
                     &format!("{:.0}\u{00b0} (half {:.0}\u{00b0})", fov * 2.0, fov),
                 );
             }
-            if let Some(range) = selection.selected_max_range_m {
+            if let Some(range) = node.max_range_m {
                 kv_row(ui, "Max range", &format!("{:.0} m", range));
             }
         }
-        "Truth" => {
-            if let Some(dist) = selection.selected_nearest_track_dist_m {
+        SelectionDetails::Truth(truth) => {
+            if let Some(dist) = truth.nearest_track_dist_m {
                 kv_row(ui, "Nearest track", &format!("{:.2} m", dist));
             }
         }
-        _ => {}
     }
 }
 

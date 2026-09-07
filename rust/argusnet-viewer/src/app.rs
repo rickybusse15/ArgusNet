@@ -26,8 +26,9 @@ use crate::replay::{
 use crate::schema::ScenePackage;
 use crate::state::{
     CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
-    LoadedMissionZones, MissionOverlaySettings, ReconstructionCamera, ReconstructionCloud,
-    RuntimeOverlayVisibility, SelectionState, SimPhase, SimulationRunner, ViewMode, ViewerUiState,
+    LoadedMissionZones, MissionOverlaySettings, NodeDetails, ReconstructionCamera,
+    ReconstructionCloud, RuntimeOverlayVisibility, Selection, SelectionDetails, SelectionState,
+    SimPhase, SimulationRunner, TrackDetails, TruthDetails, ViewMode, ViewerUiState,
     WorkingSceneRoot, ZoneFocus,
 };
 use crate::ui::viewer_ui_system;
@@ -242,16 +243,16 @@ fn run_inner(
                 sync_base_layer_visibility_system,
                 pick_runtime_marker_system,
                 draw_runtime_overlays_system,
-                draw_sensor_overlays_system,
+                draw_sensor_overlays_system.run_if(sensor_overlays_enabled),
                 mission_zones::draw_mission_zones_system,
                 build_projected_badges_system,
-                draw_scan_grid_system,
-                draw_poi_markers_system,
-                draw_team_localization_system,
+                draw_scan_grid_system.run_if(scan_grid_enabled),
+                draw_poi_markers_system.run_if(poi_markers_enabled),
+                draw_team_localization_system.run_if(loc_ellipses_enabled),
                 update_reconstruction_system,
                 maintain_reconstruction_mesh_system,
-                draw_coord_frame_system,
-                draw_egress_paths_system,
+                draw_coord_frame_system.run_if(coord_frame_enabled),
+                draw_egress_paths_system.run_if(egress_paths_enabled),
             )
                 .chain(),
         );
@@ -276,6 +277,44 @@ fn run_inner(
     app.run();
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Overlay run conditions
+// ---------------------------------------------------------------------------
+//
+// The overlay systems below draw only through `Gizmos`, which is immediate
+// mode: skipping a frame draws nothing and leaves no state behind, so gating
+// them on their own toggle is safe and saves the whole iteration when an
+// operator has the overlay switched off.
+//
+// `maintain_reconstruction_mesh_system` is deliberately *not* gated this way.
+// It owns real state — it hides the reconstruction mesh and clears the cloud's
+// dirty flag — so it has to keep running when its overlay is off, or the mesh
+// would stay on screen and the dirty flag would never clear.
+
+fn scan_grid_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
+    overlay.show_scan_grid
+}
+
+fn poi_markers_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
+    overlay.show_poi_markers || overlay.show_loc_ellipses
+}
+
+fn loc_ellipses_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
+    overlay.show_loc_ellipses
+}
+
+fn coord_frame_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
+    overlay.show_coord_frame
+}
+
+fn egress_paths_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
+    overlay.show_egress_paths
+}
+
+fn sensor_overlays_enabled(visibility: Res<RuntimeOverlayVisibility>) -> bool {
+    visibility.radar_rings || visibility.fov_cones
 }
 
 fn setup_world(
@@ -663,7 +702,11 @@ fn sync_current_markers_system(
     mut frame_metrics: ResMut<CurrentFrameMetrics>,
     mut selection: ResMut<SelectionState>,
 ) {
-    markers.markers = replay_state.current_markers();
+    // Interpolated rather than raw: replay frames arrive at the simulation's
+    // tick rate, so drawing them directly makes platforms jump once per tick and
+    // sit still in between. Seeking zeroes the blend, so scrubbing still lands on
+    // exact recorded frames.
+    markers.markers = replay_state.interpolated_markers();
 
     if let Some(frame) = replay_state.current_frame() {
         frame_metrics.metrics = Some(frame.metrics.clone());
@@ -671,99 +714,85 @@ fn sync_current_markers_system(
         frame_metrics.metrics = None;
     }
 
-    let sel_label = selection.selected_label.clone();
-    let sel_kind = selection.selected_kind.clone();
-    if let (Some(selected_label), Some(selected_kind)) = (sel_label, sel_kind) {
-        if let Some(marker) = markers.markers.iter().find(|m| m.label == selected_label) {
-            selection.selected_position = Some(marker.position);
-            selection.selected_velocity = Some(marker.velocity);
-        } else {
-            selection.clear();
-            return;
-        }
-        if let Some(frame) = replay_state.current_frame() {
-            match selected_kind.as_str() {
-                "Track" => {
-                    if let Some(track) = frame.tracks.iter().find(|t| t.track_id == selected_label)
-                    {
-                        selection.selected_measurement_std_m = Some(track.measurement_std_m);
-                        selection.selected_update_count = Some(track.update_count);
-                        selection.selected_stale_steps = Some(track.stale_steps);
-                        selection.selected_track_error_m = frame_metrics
-                            .metrics
-                            .as_ref()
-                            .and_then(|m| m.track_errors_m.get(&selected_label).copied());
-                        selection.selected_covariance_diag = track
-                            .covariance
-                            .as_ref()
-                            .map(|cov| crate::ui::covariance_diagonal(cov));
-                        selection.selected_mode_probability_cv = track.mode_probability_cv;
-                        selection.selected_contributing_nodes = track.contributing_node_ids.clone();
-                        selection.selected_health = None;
-                        selection.selected_sensor_type = None;
-                        selection.selected_fov_half_angle_deg = None;
-                        selection.selected_max_range_m = None;
-                        selection.selected_is_mobile = None;
-                        selection.selected_nearest_track_dist_m = None;
-                    }
-                }
-                "Node" => {
-                    if let Some(node) = frame.nodes.iter().find(|n| n.node_id == selected_label) {
-                        selection.selected_health = Some(node.health);
-                        selection.selected_sensor_type = Some(node.sensor_type.clone());
-                        selection.selected_fov_half_angle_deg = node.fov_half_angle_deg;
-                        selection.selected_max_range_m = node.max_range_m;
-                        selection.selected_is_mobile = Some(node.is_mobile);
-                    }
-                    selection.selected_measurement_std_m = None;
-                    selection.selected_update_count = None;
-                    selection.selected_stale_steps = None;
-                    selection.selected_track_error_m = None;
-                    selection.selected_covariance_diag = None;
-                    selection.selected_nearest_track_dist_m = None;
-                }
-                "Truth" => {
-                    // Find nearest track distance for truth inspection
-                    if let Some(truth) = frame.truths.iter().find(|t| t.target_id == selected_label)
-                    {
-                        let truth_pos = Vec3::from_array(truth.position);
-                        let nearest_dist = frame
-                            .tracks
-                            .iter()
-                            .map(|t| truth_pos.distance(Vec3::from_array(t.position)))
-                            .fold(f32::INFINITY, f32::min);
-                        if nearest_dist < f32::INFINITY {
-                            selection.selected_nearest_track_dist_m = Some(nearest_dist);
-                        } else {
-                            selection.selected_nearest_track_dist_m = None;
-                        }
-                    }
-                    selection.selected_health = None;
-                    selection.selected_measurement_std_m = None;
-                    selection.selected_update_count = None;
-                    selection.selected_stale_steps = None;
-                    selection.selected_track_error_m = None;
-                    selection.selected_covariance_diag = None;
-                    selection.selected_sensor_type = None;
-                    selection.selected_fov_half_angle_deg = None;
-                    selection.selected_max_range_m = None;
-                    selection.selected_is_mobile = None;
-                }
-                _ => {
-                    selection.selected_health = None;
-                    selection.selected_measurement_std_m = None;
-                    selection.selected_update_count = None;
-                    selection.selected_stale_steps = None;
-                    selection.selected_track_error_m = None;
-                    selection.selected_covariance_diag = None;
-                    selection.selected_sensor_type = None;
-                    selection.selected_fov_half_angle_deg = None;
-                    selection.selected_max_range_m = None;
-                    selection.selected_is_mobile = None;
-                    selection.selected_nearest_track_dist_m = None;
-                }
-            }
-        }
+    // Re-resolve the selection against the new frame. Each kind builds its own
+    // detail variant, so there is no need to null the other kinds' fields —
+    // which is what the previous flat struct required, and inconsistently did.
+    let Some(selected_label) = selection.label().map(str::to_owned) else {
+        return;
+    };
+    let Some(marker) = markers
+        .markers
+        .iter()
+        .find(|m| m.label == selected_label)
+        .cloned()
+    else {
+        // The selected entity is gone from this frame.
+        selection.clear();
+        return;
+    };
+    let Some(frame) = replay_state.current_frame() else {
+        return;
+    };
+
+    let details = match marker.kind {
+        MarkerKind::Track => frame
+            .tracks
+            .iter()
+            .find(|t| t.track_id == selected_label)
+            .map(|track| {
+                SelectionDetails::Track(TrackDetails {
+                    measurement_std_m: Some(track.measurement_std_m),
+                    update_count: Some(track.update_count),
+                    stale_steps: Some(track.stale_steps),
+                    track_error_m: frame_metrics
+                        .metrics
+                        .as_ref()
+                        .and_then(|m| m.track_errors_m.get(&selected_label).copied()),
+                    covariance_diag: track
+                        .covariance
+                        .as_ref()
+                        .map(|cov| crate::ui::covariance_diagonal(cov)),
+                    mode_probability_cv: track.mode_probability_cv,
+                    contributing_nodes: track.contributing_node_ids.clone(),
+                })
+            }),
+        MarkerKind::Node => frame
+            .nodes
+            .iter()
+            .find(|n| n.node_id == selected_label)
+            .map(|node| {
+                SelectionDetails::Node(NodeDetails {
+                    health: Some(node.health),
+                    sensor_type: Some(node.sensor_type.clone()),
+                    fov_half_angle_deg: node.fov_half_angle_deg,
+                    max_range_m: node.max_range_m,
+                    is_mobile: Some(node.is_mobile),
+                })
+            }),
+        MarkerKind::Truth => frame
+            .truths
+            .iter()
+            .find(|t| t.target_id == selected_label)
+            .map(|truth| {
+                let truth_pos = Vec3::from_array(truth.position);
+                let nearest = frame
+                    .tracks
+                    .iter()
+                    .map(|t| truth_pos.distance(Vec3::from_array(t.position)))
+                    .fold(f32::INFINITY, f32::min);
+                SelectionDetails::Truth(TruthDetails {
+                    nearest_track_dist_m: nearest.is_finite().then_some(nearest),
+                })
+            }),
+    };
+
+    if let Some(details) = details {
+        selection.selected = Some(Selection {
+            label: selected_label,
+            position: marker.position,
+            velocity: marker.velocity,
+            details,
+        });
     }
 }
 
@@ -1172,13 +1201,18 @@ fn pick_runtime_marker_system(
     }
 
     if let Some((marker, _)) = best_match {
-        selection.selected_kind = Some(match marker.kind {
-            MarkerKind::Track => "Track".to_string(),
-            MarkerKind::Truth => "Truth".to_string(),
-            MarkerKind::Node => "Node".to_string(),
+        // Details are empty here and filled in by `sync_current_markers_system`
+        // against the current frame; picking only establishes what is selected.
+        selection.selected = Some(Selection {
+            label: marker.label.clone(),
+            position: marker.position,
+            velocity: marker.velocity,
+            details: match marker.kind {
+                MarkerKind::Track => SelectionDetails::Track(TrackDetails::default()),
+                MarkerKind::Truth => SelectionDetails::Truth(TruthDetails::default()),
+                MarkerKind::Node => SelectionDetails::Node(NodeDetails::default()),
+            },
         });
-        selection.selected_label = Some(marker.label.clone());
-        selection.selected_position = Some(marker.position);
     } else {
         selection.clear();
     }
@@ -2807,5 +2841,84 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod overlay_gating_tests {
+    use super::*;
+
+    /// The run conditions read resources, so exercise them through a World the
+    /// same way the schedule does.
+    fn run_condition<M>(system: impl IntoSystem<(), bool, M>, world: &mut World) -> bool {
+        let mut system = IntoSystem::into_system(system);
+        system.initialize(world);
+        system
+            .run((), world)
+            .expect("run condition should not fail")
+    }
+
+    #[test]
+    fn gizmo_overlays_are_skipped_when_their_toggle_is_off() {
+        let mut world = World::new();
+        world.insert_resource(MissionOverlaySettings {
+            show_scan_grid: false,
+            show_poi_markers: false,
+            show_loc_ellipses: false,
+            show_reconstruction: false,
+            show_coord_frame: false,
+            show_egress_paths: false,
+        });
+        assert!(!run_condition(scan_grid_enabled, &mut world));
+        assert!(!run_condition(poi_markers_enabled, &mut world));
+        assert!(!run_condition(loc_ellipses_enabled, &mut world));
+        assert!(!run_condition(coord_frame_enabled, &mut world));
+        assert!(!run_condition(egress_paths_enabled, &mut world));
+    }
+
+    #[test]
+    fn poi_markers_run_for_either_of_the_two_overlays_they_draw() {
+        let mut world = World::new();
+        // That system draws POI markers *and* localization ellipses, so it must
+        // run when either is on — gating it on `show_poi_markers` alone would
+        // silently drop the ellipses.
+        world.insert_resource(MissionOverlaySettings {
+            show_poi_markers: false,
+            show_loc_ellipses: true,
+            ..Default::default()
+        });
+        assert!(run_condition(poi_markers_enabled, &mut world));
+
+        world.insert_resource(MissionOverlaySettings {
+            show_poi_markers: true,
+            show_loc_ellipses: false,
+            ..Default::default()
+        });
+        assert!(run_condition(poi_markers_enabled, &mut world));
+    }
+
+    #[test]
+    fn sensor_overlays_run_for_either_rings_or_cones() {
+        let mut world = World::new();
+        world.insert_resource(RuntimeOverlayVisibility {
+            radar_rings: false,
+            fov_cones: false,
+            ..Default::default()
+        });
+        assert!(!run_condition(sensor_overlays_enabled, &mut world));
+
+        world.insert_resource(RuntimeOverlayVisibility {
+            radar_rings: true,
+            fov_cones: false,
+            ..Default::default()
+        });
+        assert!(run_condition(sensor_overlays_enabled, &mut world));
+
+        world.insert_resource(RuntimeOverlayVisibility {
+            radar_rings: false,
+            fov_cones: true,
+            ..Default::default()
+        });
+        assert!(run_condition(sensor_overlays_enabled, &mut world));
     }
 }

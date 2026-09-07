@@ -657,11 +657,67 @@ impl ReplayState {
         }
     }
 
+    /// How far playback has advanced into the current frame, in `0.0..=1.0`.
+    ///
+    /// `advance` already tracks this as `accumulator_s`; expressing it as a
+    /// fraction of the frame step turns it into the blend factor between the
+    /// current frame and the next. Seeking zeroes the accumulator, so a paused
+    /// or scrubbed timeline reports 0 and shows the frame exactly as recorded.
+    pub fn interpolation_alpha(&self) -> f32 {
+        let frame_step = self.frame_step_s();
+        if frame_step <= 0.0 {
+            return 0.0;
+        }
+        (self.accumulator_s / frame_step).clamp(0.0, 1.0)
+    }
+
+    /// Markers positioned between the current frame and the next.
+    ///
+    /// Replay frames arrive at the simulation's tick rate — a quarter second by
+    /// default — while the viewer renders far faster, so drawing frame contents
+    /// directly makes every platform jump on a tick boundary and freeze between
+    /// them. Blending toward the next frame's pose spreads that motion across
+    /// the frames actually rendered.
+    ///
+    /// An entity present now but absent from the next frame holds its current
+    /// pose rather than blending toward nothing, so a track that ends does not
+    /// slide to the origin on its way out.
+    pub fn interpolated_markers(&self) -> Vec<RuntimeMarker> {
+        let mut markers = self.current_markers();
+        let alpha = self.interpolation_alpha();
+        if alpha <= 0.0 {
+            return markers;
+        }
+        let Some(document) = self.document.as_ref() else {
+            return markers;
+        };
+        let Some(next_frame) = document.frames.get(self.frame_index + 1) else {
+            return markers;
+        };
+
+        let next = Self::frame_markers(next_frame);
+        for marker in markers.iter_mut() {
+            let Some(target) = next
+                .iter()
+                .find(|candidate| candidate.kind == marker.kind && candidate.label == marker.label)
+            else {
+                continue;
+            };
+            marker.position = marker.position.lerp(target.position, alpha);
+            marker.velocity = marker.velocity.lerp(target.velocity, alpha);
+        }
+        markers
+    }
+
     pub fn current_markers(&self) -> Vec<RuntimeMarker> {
         let Some(frame) = self.current_frame() else {
             return Vec::new();
         };
+        Self::frame_markers(frame)
+    }
 
+    /// Markers for one frame exactly as recorded, with no blending.
+    fn frame_markers(frame: &ReplayFrame) -> Vec<RuntimeMarker> {
         let mut markers =
             Vec::with_capacity(frame.tracks.len() + frame.truths.len() + frame.nodes.len());
         for track in &frame.tracks {
@@ -972,6 +1028,95 @@ mod live_stream {
 
 #[cfg(feature = "live-stream")]
 pub use live_stream::frame_from_pb;
+
+#[cfg(test)]
+mod interpolation_tests {
+    use super::*;
+
+    /// Two frames a second apart, one track moving 100 m along +X.
+    fn moving_track_replay() -> ReplayState {
+        let document: ReplayDocument = serde_json::from_value(serde_json::json!({
+            "frames": [
+                {
+                    "timestamp_s": 0.0,
+                    "tracks": [{"track_id": "t1", "position": [0.0, 0.0, 0.0], "velocity": [100.0, 0.0, 0.0]}],
+                    "truths": [], "nodes": []
+                },
+                {
+                    "timestamp_s": 1.0,
+                    "tracks": [{"track_id": "t1", "position": [100.0, 0.0, 0.0], "velocity": [100.0, 0.0, 0.0]}],
+                    "truths": [], "nodes": []
+                }
+            ]
+        }))
+        .expect("fixture parses");
+        ReplayState::new(Some(document))
+    }
+
+    #[test]
+    fn a_seeked_frame_is_shown_exactly() {
+        let mut replay = moving_track_replay();
+        replay.step_to(0);
+        assert_eq!(replay.interpolation_alpha(), 0.0);
+        assert_eq!(replay.interpolated_markers()[0].position.x, 0.0);
+    }
+
+    #[test]
+    fn playback_blends_toward_the_next_frame() {
+        let mut replay = moving_track_replay();
+        replay.playing = true;
+        // Half a frame step in: halfway between the two recorded positions.
+        replay.advance(0.5);
+        assert!((replay.interpolation_alpha() - 0.5).abs() < 1e-6);
+        let x = replay.interpolated_markers()[0].position.x;
+        assert!((x - 50.0).abs() < 1e-3, "expected midpoint, got {x}");
+    }
+
+    #[test]
+    fn interpolation_never_overshoots_the_next_frame() {
+        let mut replay = moving_track_replay();
+        replay.playing = true;
+        // Far more than one frame step; alpha must saturate rather than run past
+        // the next frame's pose.
+        replay.accumulator_s = 10.0;
+        assert_eq!(replay.interpolation_alpha(), 1.0);
+        let x = replay.interpolated_markers()[0].position.x;
+        assert!(
+            (x - 100.0).abs() < 1e-3,
+            "expected next-frame pose, got {x}"
+        );
+    }
+
+    #[test]
+    fn an_entity_absent_from_the_next_frame_holds_its_pose() {
+        let document: ReplayDocument = serde_json::from_value(serde_json::json!({
+            "frames": [
+                {
+                    "timestamp_s": 0.0,
+                    "tracks": [{"track_id": "ending", "position": [10.0, 20.0, 30.0], "velocity": [0.0, 0.0, 0.0]}],
+                    "truths": [], "nodes": []
+                },
+                {"timestamp_s": 1.0, "tracks": [], "truths": [], "nodes": []}
+            ]
+        }))
+        .expect("fixture parses");
+        let mut replay = ReplayState::new(Some(document));
+        replay.playing = true;
+        replay.advance(0.5);
+        // Must not slide toward the origin on the way out.
+        let marker = &replay.interpolated_markers()[0];
+        assert_eq!(marker.position, Vec3::new(10.0, 20.0, 30.0));
+    }
+
+    #[test]
+    fn the_final_frame_has_nothing_to_blend_toward() {
+        let mut replay = moving_track_replay();
+        replay.step_to(1);
+        replay.accumulator_s = 0.5;
+        let x = replay.interpolated_markers()[0].position.x;
+        assert!((x - 100.0).abs() < 1e-3);
+    }
+}
 
 #[cfg(test)]
 mod tests {
