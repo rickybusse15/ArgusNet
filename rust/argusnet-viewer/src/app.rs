@@ -17,6 +17,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 /// terrain on an otherwise empty background (no real terrain, drones, or gizmos).
 const RECON_LAYER: usize = 1;
 
+use crate::headless::{HeadlessRequest, HeadlessTarget};
 use crate::mission_zones::{self, build_projected_badges_system, ProjectedZoneBadges};
 use crate::orbit_camera::{OrbitCamera, OrbitCameraPlugin};
 use crate::replay::{
@@ -58,7 +59,7 @@ struct SimulationProcess {
 }
 
 #[derive(Component)]
-struct MainCamera;
+pub struct MainCamera;
 
 struct ReloadedSceneBundle {
     scene_package: ScenePackage,
@@ -73,7 +74,7 @@ pub fn run(
     initial_view_mode: ViewMode,
     autoplay: bool,
 ) -> Result<()> {
-    run_inner(scene_path.as_ref(), None, initial_view_mode, autoplay)
+    run_inner(scene_path.as_ref(), None, initial_view_mode, autoplay, None)
 }
 
 #[cfg(feature = "live-stream")]
@@ -89,6 +90,7 @@ pub fn run_live(
         Some((endpoint, tls)),
         initial_view_mode,
         autoplay,
+        None,
     )
 }
 
@@ -97,11 +99,31 @@ type LiveEndpoint = Option<(String, crate::live::LiveTlsConfig)>;
 #[cfg(not(feature = "live-stream"))]
 type LiveEndpoint = Option<String>;
 
+/// Renders the scene through the real pipeline with no window, saving PNGs.
+///
+/// This is the same App as the interactive viewer — same systems, same
+/// materials, same camera — driven by `ScheduleRunnerPlugin` into an offscreen
+/// image instead of a surface, so a CI still shows what an operator sees.
+pub fn run_headless(
+    scene_path: impl AsRef<Path>,
+    initial_view_mode: ViewMode,
+    request: HeadlessRequest,
+) -> Result<()> {
+    run_inner(
+        scene_path.as_ref(),
+        None,
+        initial_view_mode,
+        false,
+        Some(request),
+    )
+}
+
 fn run_inner(
     scene_path: &Path,
     live_endpoint: LiveEndpoint,
     initial_view_mode: ViewMode,
     autoplay: bool,
+    headless: Option<HeadlessRequest>,
 ) -> Result<()> {
     let (scene_package, working_scene_root) = initialize_scene_package(scene_path)?;
     let replay_document = scene_package
@@ -157,25 +179,54 @@ fn run_inner(
         .insert_resource(ProjectedZoneBadges::default())
         .insert_resource(MissionOverlaySettings::default())
         .insert_resource(ReconstructionCloud::default())
-        .insert_resource(initial_view_mode)
         .insert_resource(ViewerUiState::default())
-        .add_plugins(
+        .insert_resource(initial_view_mode);
+
+    let asset_plugin = AssetPlugin {
+        file_path: asset_root.to_string_lossy().into_owned(),
+        ..default()
+    };
+    if let Some(request) = headless {
+        // No window at all: winit panics without a display server, and
+        // ScheduleRunnerPlugin drives the loop in its place.
+        //
+        // egui is left out entirely — there is no surface for it to draw on, and
+        // its context pass panics on unapplied texture deltas when nothing
+        // renders them. The two systems that consult `EguiContexts` to see
+        // whether the UI owns the pointer or keyboard take it as an `Option`, so
+        // they degrade to "the UI is not consuming this" rather than failing
+        // parameter validation when the plugin is absent.
+        app.add_plugins(
             DefaultPlugins
-                .set(AssetPlugin {
-                    file_path: asset_root.to_string_lossy().into_owned(),
+                .set(asset_plugin)
+                .set(WindowPlugin {
+                    primary_window: None,
+                    exit_condition: bevy::window::ExitCondition::DontExit,
                     ..default()
                 })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "ArgusNet Viewer".into(),
-                        resolution: (1440_u32, 920_u32).into(),
-                        ..default()
-                    }),
-                    ..default()
-                }),
+                .disable::<bevy::winit::WinitPlugin>(),
         )
-        .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        ))
+        .add_plugins(crate::headless::HeadlessRenderPlugin(request));
+    } else {
+        app.add_plugins(DefaultPlugins.set(asset_plugin).set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "ArgusNet Viewer".into(),
+                resolution: (1440_u32, 920_u32).into(),
+                ..default()
+            }),
+            ..default()
+        }))
         .add_plugins(EguiPlugin::default())
+        // bevy_egui 0.42 replaced `EguiSet::BeginPass` inside `Update` with a
+        // dedicated schedule that runs between egui's begin/end pass, so UI
+        // systems must be registered there rather than ordered within `Update`.
+        .add_systems(EguiPrimaryContextPass, viewer_ui_system);
+    }
+
+    app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .add_plugins(OrbitCameraPlugin)
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
         .add_systems(
@@ -203,11 +254,7 @@ fn run_inner(
                 draw_egress_paths_system,
             )
                 .chain(),
-        )
-        // bevy_egui 0.42 replaced `EguiSet::BeginPass` inside `Update` with a
-        // dedicated schedule that runs between egui's begin/end pass, so UI
-        // systems must be registered there rather than ordered within `Update`.
-        .add_systems(EguiPrimaryContextPass, viewer_ui_system);
+        );
 
     #[cfg(feature = "live-stream")]
     if let Some((endpoint, tls)) = live_endpoint {
@@ -499,19 +546,22 @@ fn advance_playback_system(time: Res<Time>, mut replay_state: ResMut<ReplayState
 fn keyboard_playback_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut replay_state: ResMut<ReplayState>,
-    mut contexts: EguiContexts,
+    contexts: Option<EguiContexts>,
     mut view_mode: ResMut<ViewMode>,
     home: Res<CameraHomePosition>,
     mut camera_query: Query<&mut OrbitCamera>,
 ) {
     // Don't capture keys when egui wants keyboard input (e.g. text fields).
-    // `ctx_mut` is fallible in bevy_egui 0.42; if there is no context yet there
-    // is no text field to steal the key either, so fall through to playback.
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-    if ctx.egui_wants_keyboard_input() {
-        return;
+    // `ctx_mut` is fallible in bevy_egui 0.42, and headless installs no egui at
+    // all; in either case there is no text field to steal the key, so fall
+    // through to playback. The whole param is optional because a missing plugin
+    // fails parameter validation outright, not just context lookup.
+    if let Some(mut contexts) = contexts {
+        if let Ok(ctx) = contexts.ctx_mut() {
+            if ctx.egui_wants_keyboard_input() {
+                return;
+            }
+        }
     }
 
     // R: reset camera to home position (works even with no replay loaded).
@@ -564,14 +614,21 @@ fn keyboard_playback_system(
 fn sync_split_viewports_system(
     view_mode: Res<ViewMode>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    headless_target: Option<Res<HeadlessTarget>>,
     mut main_cam: Query<&mut Camera, (With<MainCamera>, Without<ReconstructionCamera>)>,
     mut recon_cam: Query<&mut Camera, With<ReconstructionCamera>>,
 ) {
-    let Ok(window) = windows.single() else {
-        return;
+    // Headless has no window, so the offscreen image supplies the extent the
+    // two cameras split between them.
+    let (w, h) = match headless_target.as_ref() {
+        Some(target) => (target.width, target.height),
+        None => {
+            let Ok(window) = windows.single() else {
+                return;
+            };
+            (window.physical_width(), window.physical_height())
+        }
     };
-    let w = window.physical_width();
-    let h = window.physical_height();
     let Ok(mut main) = main_cam.single_mut() else {
         return;
     };

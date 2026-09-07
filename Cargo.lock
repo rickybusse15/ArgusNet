@@ -309,6 +309,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "clap",
+ "crossbeam-channel",
  "egui_extras",
  "egui_plot",
  "image",
