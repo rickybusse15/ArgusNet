@@ -6,8 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::{ClearColorConfig, Viewport};
+use bevy::camera::{ClearColorConfig, Exposure, Viewport};
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
+use bevy::pbr::{DistanceFog, FogFalloff};
+use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
@@ -232,27 +235,49 @@ fn run_inner(
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
         .add_systems(
             Update,
+            // Grouped into ordered stages rather than one flat list. The stages
+            // still run in sequence — later ones read what earlier ones write —
+            // but the grouping says which systems belong together, and keeps the
+            // tuple under the arity `.chain()` accepts.
             (
-                advance_playback_system,
-                keyboard_playback_system,
-                sync_split_viewports_system,
-                spawn_simulation_system,
-                poll_simulation_system,
-                mission_zones::refresh_zone_overlap_model_system,
-                sync_current_markers_system,
-                sync_base_layer_visibility_system,
-                pick_runtime_marker_system,
-                draw_runtime_overlays_system,
-                draw_sensor_overlays_system.run_if(sensor_overlays_enabled),
-                mission_zones::draw_mission_zones_system,
-                build_projected_badges_system,
-                draw_scan_grid_system.run_if(scan_grid_enabled),
-                draw_poi_markers_system.run_if(poi_markers_enabled),
-                draw_team_localization_system.run_if(loc_ellipses_enabled),
-                update_reconstruction_system,
-                maintain_reconstruction_mesh_system,
-                draw_coord_frame_system.run_if(coord_frame_enabled),
-                draw_egress_paths_system.run_if(egress_paths_enabled),
+                // Advance time and take operator input.
+                (
+                    advance_playback_system,
+                    keyboard_playback_system,
+                    sync_split_viewports_system,
+                )
+                    .chain(),
+                // Pull in whatever the simulation produced.
+                (spawn_simulation_system, poll_simulation_system).chain(),
+                // Derive this frame's view of the world.
+                (
+                    mission_zones::refresh_zone_overlap_model_system,
+                    sync_current_markers_system,
+                    sync_base_layer_visibility_system,
+                    pick_runtime_marker_system,
+                    sync_fog_to_camera_system,
+                )
+                    .chain(),
+                // Reconstruction owns real state, so it runs regardless of its
+                // overlay toggle — see the note on the run conditions below.
+                (
+                    update_reconstruction_system,
+                    maintain_reconstruction_mesh_system,
+                )
+                    .chain(),
+                // Immediate-mode overlays, each gated on its own toggle.
+                (
+                    draw_runtime_overlays_system,
+                    draw_sensor_overlays_system.run_if(sensor_overlays_enabled),
+                    mission_zones::draw_mission_zones_system,
+                    build_projected_badges_system,
+                    draw_scan_grid_system.run_if(scan_grid_enabled),
+                    draw_poi_markers_system.run_if(poi_markers_enabled),
+                    draw_team_localization_system.run_if(loc_ellipses_enabled),
+                    draw_coord_frame_system.run_if(coord_frame_enabled),
+                    draw_egress_paths_system.run_if(egress_paths_enabled),
+                )
+                    .chain(),
             )
                 .chain(),
         );
@@ -277,6 +302,44 @@ fn run_inner(
     app.run();
 
     Ok(())
+}
+
+/// Keeps fog distances tracking the orbit camera.
+///
+/// `DistanceFog` measures from the camera, and this camera sits outside the
+/// scene looking in: at the default framing it is roughly 1.5 scene-widths away,
+/// and zooming changes that by an order of magnitude. Fixed distances therefore
+/// cannot work — tuned for the default view they black out a zoomed-in one, and
+/// tuned for close range they never engage at all. Anchoring the band to the
+/// camera's own distance keeps the near edge of the terrain clear and lets the
+/// far edge recede, at every zoom level.
+fn sync_fog_to_camera_system(
+    mut fog_q: Query<(&mut DistanceFog, &OrbitCamera), With<MainCamera>>,
+    scene_package: Res<ScenePackage>,
+) {
+    let Ok((mut fog, orbit)) = fog_q.single_mut() else {
+        return;
+    };
+    let bounds = &scene_package.environment.bounds_xy_m;
+    let span = (bounds.x_max_m - bounds.x_min_m)
+        .max(bounds.y_max_m - bounds.y_min_m)
+        .max(200.0);
+
+    let (start, end) = fog_band(orbit.radius, span);
+    fog.falloff = FogFalloff::Linear { start, end };
+}
+
+/// Near and far fog distances for a camera `radius` from the centre of a scene
+/// `span` metres across.
+///
+/// The terrain occupies roughly `radius - span/2 ..= radius + span/2` in view
+/// depth. The haze starts a little past the near edge so the foreground stays
+/// readable, and finishes beyond the far edge so the horizon fades out instead
+/// of ending on a line.
+fn fog_band(radius: f32, span: f32) -> (f32, f32) {
+    let near_edge = (radius - span * 0.5).max(1.0);
+    let far_edge = radius + span * 0.5;
+    (near_edge + span * 0.15, far_edge + span * 0.35)
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +455,48 @@ fn setup_world(
             ..default()
         }),
         Transform::from_translation(eye).looking_at(focus, Vec3::Z),
+        // Filmic tonemapping, mapping the HDR range down for display. AcesFitted
+        // is analytic; the LUT-based tonemappers (AgX, TonyMcMapface,
+        // BlenderFilmic) would need Bevy's `tonemapping_luts` feature, and
+        // without it they silently fall back to a placeholder LUT. Keeping to an
+        // analytic curve holds the trimmed feature set from the dependency pass.
+        Tonemapping::AcesFitted,
+        // Bloom carries `#[require(Hdr)]`, so this is what puts the camera on an
+        // HDR intermediate target — a prerequisite for anything emissive to
+        // read as bright rather than merely pale.
+        //
+        // `NATURAL` thresholds at zero, which blooms *everything*, so plain white
+        // building roofs smeared as hard as a beacon would. Thresholding just
+        // above display white restricts the glow to genuinely over-bright
+        // (emissive) surfaces, which is where the mission-control look wants it —
+        // tracks and zones, not terrain features that happen to be pale.
+        Bloom {
+            prefilter: BloomPrefilter {
+                threshold: 1.0,
+                threshold_softness: 0.4,
+            },
+            ..Bloom::NATURAL
+        },
+        // Slightly more exposure than Bevy's default (EV100 9.7), to offset the
+        // midtones AcesFitted pulls down. EV100 is inverse: a *higher* number
+        // stops the camera down, so `Exposure::OVERCAST` (12) — despite matching
+        // this scene's 12 000 lux key light by name — renders it about two stops
+        // darker and crushes the terrain to black.
+        Exposure { ev100: 9.0 },
+        // Depth cueing, so a 4 km site does not render every ridge at identical
+        // contrast. The distances are filled in per-frame by
+        // `sync_fog_to_camera_system`: fog is measured from the camera, and the
+        // camera orbits *outside* the scene, so any fixed distance derived from
+        // the scene span alone either swallows the whole terrain or never
+        // reaches it.
+        DistanceFog {
+            color: Color::srgb(0.18, 0.20, 0.22),
+            falloff: FogFalloff::Linear {
+                start: 0.0,
+                end: f32::MAX,
+            },
+            ..default()
+        },
         // Sees the world (layer 0) plus the reconstruction (RECON_LAYER) so the
         // scan-map overlay still shows in RealWorld/ScanMap and the Split left pane.
         RenderLayers::from_layers(&[0, RECON_LAYER]),
@@ -2920,5 +3025,48 @@ mod overlay_gating_tests {
             ..Default::default()
         });
         assert!(run_condition(sensor_overlays_enabled, &mut world));
+    }
+}
+
+#[cfg(test)]
+mod fog_tests {
+    use super::fog_band;
+
+    const SPAN: f32 = 4320.0;
+
+    #[test]
+    fn the_band_straddles_the_terrain_rather_than_starting_at_the_camera() {
+        // Default framing: the camera orbits outside the scene, so fog must not
+        // begin until well into it. Deriving the band from the span alone — the
+        // first attempt — put the start at 1512 m and blacked out the whole site.
+        let radius = SPAN * 1.5;
+        let (start, end) = fog_band(radius, SPAN);
+        let near_edge = radius - SPAN * 0.5;
+        let far_edge = radius + SPAN * 0.5;
+        assert!(
+            start > near_edge,
+            "fog must clear the near edge of the terrain"
+        );
+        assert!(start < far_edge, "fog must engage before the far edge");
+        assert!(end > far_edge, "fog must extend past the far edge");
+    }
+
+    #[test]
+    fn the_band_tracks_zoom() {
+        // Fog distances are measured from the camera, so zooming in has to pull
+        // the band in with it or the effect either vanishes or swallows the view.
+        let (near_start, near_end) = fog_band(SPAN * 0.6, SPAN);
+        let (far_start, far_end) = fog_band(SPAN * 3.0, SPAN);
+        assert!(far_start > near_start);
+        assert!(far_end > near_end);
+    }
+
+    #[test]
+    fn a_camera_inside_the_scene_still_gets_a_valid_band() {
+        // Zoomed close enough that `radius - span/2` goes negative; the band must
+        // stay positive and ordered rather than inverting.
+        let (start, end) = fog_band(1.0, SPAN);
+        assert!(start > 0.0);
+        assert!(end > start);
     }
 }
