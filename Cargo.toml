@@ -22,9 +22,18 @@ codegen-units = 1
 
 [workspace.dependencies]
 anyhow = "1.0"
+# The viewer is the only consumer today, but these live here with every other
+# shared dep so a second crate cannot drift onto a different Bevy.
+# default-features = false drops the 2d, ui and audio buckets: the viewer draws
+# only 3d and renders its UI through egui. "3d" already brings bevy_gltf,
+# bevy_pbr, bevy_gizmos_render, bevy_anti_alias and bevy_post_process.
+bevy = { version = "0.19.1", default-features = false, features = ["3d", "png"] }
+bevy_egui = "0.42.0"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 criterion = { version = "0.5", features = ["html_reports"] }
+egui_extras = "0.36"
+egui_plot = "0.37"
 hdrhistogram = "7"
 nalgebra = "0.33"
 prost = "0.14"
