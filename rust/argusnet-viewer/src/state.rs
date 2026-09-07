@@ -188,49 +188,81 @@ pub struct CurrentFrameMetrics {
 
 #[derive(Debug, Clone, Resource, Default)]
 pub struct SelectionState {
-    pub selected_kind: Option<String>,
-    pub selected_label: Option<String>,
-    pub selected_position: Option<Vec3>,
-    pub selected_velocity: Option<Vec3>,
-    pub selected_health: Option<f32>,
-    pub selected_measurement_std_m: Option<f32>,
-    pub selected_update_count: Option<u32>,
-    pub selected_stale_steps: Option<u32>,
-    pub selected_track_error_m: Option<f32>,
-    // Node-specific fields
-    pub selected_sensor_type: Option<String>,
-    pub selected_fov_half_angle_deg: Option<f32>,
-    pub selected_max_range_m: Option<f32>,
-    pub selected_is_mobile: Option<bool>,
-    // Track-specific fields
-    pub selected_covariance_diag: Option<[f64; 3]>,
+    pub selected: Option<Selection>,
+}
+
+/// One selected entity: what every kind has, plus the part that differs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Selection {
+    pub label: String,
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub details: SelectionDetails,
+}
+
+/// The per-kind half of a selection.
+///
+/// This was previously one flat struct of seventeen `Option` fields covering
+/// every kind at once, which meant each match arm had to remember to null the
+/// other kinds' entries by hand — and two of them, `mode_probability_cv` and
+/// `contributing_nodes`, were in fact never cleared, so a track's values
+/// outlived it in the resource. Nothing displayed them, because rendering is
+/// gated on the selected kind, but the state was wrong and the next reader of
+/// those fields would have inherited the bug. As an enum the mistake is not
+/// expressible: a selection carries its own kind's data and no other's.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SelectionDetails {
+    Track(TrackDetails),
+    Truth(TruthDetails),
+    Node(NodeDetails),
+}
+
+impl SelectionDetails {
+    /// Human-readable kind, used as the inspector's heading.
+    pub fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Track(_) => "Track",
+            Self::Truth(_) => "Truth",
+            Self::Node(_) => "Node",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackDetails {
+    pub measurement_std_m: Option<f32>,
+    pub update_count: Option<u32>,
+    pub stale_steps: Option<u32>,
+    pub track_error_m: Option<f32>,
+    pub covariance_diag: Option<[f64; 3]>,
     /// IMM CV-model probability for the selected track.
-    pub selected_mode_probability_cv: Option<f32>,
-    /// Node IDs that contributed to the selected track's last update.
-    pub selected_contributing_nodes: Vec<String>,
-    // Truth-specific fields
-    pub selected_nearest_track_dist_m: Option<f32>,
+    pub mode_probability_cv: Option<f32>,
+    /// Node IDs that contributed to the track's last update.
+    pub contributing_nodes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TruthDetails {
+    pub nearest_track_dist_m: Option<f32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NodeDetails {
+    pub health: Option<f32>,
+    pub sensor_type: Option<String>,
+    pub fov_half_angle_deg: Option<f32>,
+    pub max_range_m: Option<f32>,
+    pub is_mobile: Option<bool>,
 }
 
 impl SelectionState {
     pub fn clear(&mut self) {
-        self.selected_kind = None;
-        self.selected_label = None;
-        self.selected_position = None;
-        self.selected_velocity = None;
-        self.selected_health = None;
-        self.selected_measurement_std_m = None;
-        self.selected_update_count = None;
-        self.selected_stale_steps = None;
-        self.selected_track_error_m = None;
-        self.selected_sensor_type = None;
-        self.selected_fov_half_angle_deg = None;
-        self.selected_max_range_m = None;
-        self.selected_is_mobile = None;
-        self.selected_covariance_diag = None;
-        self.selected_mode_probability_cv = None;
-        self.selected_contributing_nodes.clear();
-        self.selected_nearest_track_dist_m = None;
+        self.selected = None;
+    }
+
+    /// Label of the current selection, if any.
+    pub fn label(&self) -> Option<&str> {
+        self.selected.as_ref().map(|s| s.label.as_str())
     }
 }
 
@@ -511,5 +543,76 @@ mod tests {
             root.asset_path_for(&scene_root, "terrain/../../../../etc/passwd"),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn track_selection() -> Selection {
+        Selection {
+            label: "t1".into(),
+            position: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            details: SelectionDetails::Track(TrackDetails {
+                mode_probability_cv: Some(0.8),
+                contributing_nodes: vec!["n1".into(), "n2".into()],
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn selecting_another_kind_cannot_inherit_the_previous_kind_s_data() {
+        let mut state = SelectionState {
+            selected: Some(track_selection()),
+        };
+
+        // The flat-struct version required each arm to null the other kinds'
+        // fields by hand, and missed `mode_probability_cv` and
+        // `contributing_nodes`, so a track's values survived into the next
+        // selection. Replacing the whole variant makes that unrepresentable.
+        state.selected = Some(Selection {
+            label: "drone-a".into(),
+            position: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            details: SelectionDetails::Node(NodeDetails {
+                health: Some(0.5),
+                ..Default::default()
+            }),
+        });
+
+        match &state.selected.as_ref().unwrap().details {
+            SelectionDetails::Node(node) => assert_eq!(node.health, Some(0.5)),
+            other => panic!("expected node details, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kind_label_tracks_the_variant() {
+        assert_eq!(
+            SelectionDetails::Track(TrackDetails::default()).kind_label(),
+            "Track"
+        );
+        assert_eq!(
+            SelectionDetails::Truth(TruthDetails::default()).kind_label(),
+            "Truth"
+        );
+        assert_eq!(
+            SelectionDetails::Node(NodeDetails::default()).kind_label(),
+            "Node"
+        );
+    }
+
+    #[test]
+    fn clearing_drops_the_selection_entirely() {
+        let mut state = SelectionState {
+            selected: Some(track_selection()),
+        };
+        assert_eq!(state.label(), Some("t1"));
+        state.clear();
+        assert!(state.selected.is_none());
+        assert_eq!(state.label(), None);
     }
 }
