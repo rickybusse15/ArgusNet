@@ -1,5 +1,5 @@
+use argusnet_world::{GridTerrain, TerrainQuery};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use terrain_engine::{GridTerrain, TerrainQuery};
 
 fn terrain() -> GridTerrain {
     let cols = 513;
@@ -58,5 +58,39 @@ fn bench_gradient_and_los(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_height, bench_gradient_and_los);
+fn bench_tiled_world(c: &mut Criterion) {
+    use argusnet_world::{obstacles::Bounds2d, tiled::TiledTerrain, visibility};
+    let bounds = Bounds2d::new(0.0, 512.0, 0.0, 512.0);
+    let grid: Vec<Vec<f64>> = (0..129)
+        .map(|y| {
+            (0..129)
+                .map(|x| 20.0 + (x as f64 / 8.0).sin() * (y as f64 / 8.0).cos() * 10.0)
+                .collect()
+        })
+        .collect();
+    let world = TiledTerrain::from_grid(bounds, &grid, 4.0, 32, 0.0, &[4.0, 8.0]).unwrap();
+    c.bench_function("tiled_height_4096", |b| {
+        b.iter(|| {
+            (0..4096)
+                .map(|i| world.height_at(black_box((i % 128) as f64 * 4.0), (i / 128) as f64 * 4.0))
+                .sum::<f64>()
+        })
+    });
+    c.bench_function("tiled_dda_los", |b| {
+        b.iter(|| {
+            visibility::terrain_intersection(
+                &world,
+                black_box([500.0, 500.0, 22.0]),
+                [1.0, 1.0, 22.0],
+                1.0,
+            )
+        })
+    });
+}
+criterion_group!(
+    benches,
+    bench_height,
+    bench_gradient_and_los,
+    bench_tiled_world
+);
 criterion_main!(benches);

@@ -132,44 +132,7 @@ fn default_priority() -> u32 {
     1
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct TerrainViewerMesh {
-    pub x_min_m: f32,
-    pub x_max_m: f32,
-    pub y_min_m: f32,
-    pub y_max_m: f32,
-    pub rows: usize,
-    pub cols: usize,
-    pub heights_m: Vec<Vec<f32>>,
-}
-
-impl TerrainViewerMesh {
-    pub fn sample_height(&self, x_m: f32, y_m: f32) -> Option<f32> {
-        if self.rows < 2 || self.cols < 2 || self.heights_m.len() < 2 {
-            return None;
-        }
-        if x_m < self.x_min_m || x_m > self.x_max_m || y_m < self.y_min_m || y_m > self.y_max_m {
-            return None;
-        }
-        let span_x = (self.x_max_m - self.x_min_m).max(1.0);
-        let span_y = (self.y_max_m - self.y_min_m).max(1.0);
-        let tx =
-            ((x_m - self.x_min_m) / span_x).clamp(0.0, 1.0) * (self.cols.saturating_sub(1) as f32);
-        let ty =
-            ((y_m - self.y_min_m) / span_y).clamp(0.0, 1.0) * (self.rows.saturating_sub(1) as f32);
-        let col = tx.floor().min((self.cols.saturating_sub(2)) as f32) as usize;
-        let row = ty.floor().min((self.rows.saturating_sub(2)) as f32) as usize;
-        let ax = tx - (col as f32);
-        let ay = ty - (row as f32);
-        let z00 = *self.heights_m.get(row)?.get(col)?;
-        let z10 = *self.heights_m.get(row)?.get(col + 1)?;
-        let z01 = *self.heights_m.get(row + 1)?.get(col)?;
-        let z11 = *self.heights_m.get(row + 1)?.get(col + 1)?;
-        let z0 = z00 + ((z10 - z00) * ax);
-        let z1 = z01 + ((z11 - z01) * ax);
-        Some(z0 + ((z1 - z0) * ay))
-    }
-}
+pub use argusnet_world::raster::TerrainRaster as TerrainViewerMesh;
 
 /// Fallback stale-step threshold, used only when a replay carries no
 /// `meta.platform.max_stale_steps`.
@@ -548,7 +511,7 @@ pub struct DeconflictionEvent {
     pub timestamp_s: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MarkerKind {
     Track,
     Truth,
@@ -1366,9 +1329,9 @@ mod tests {
         .unwrap();
 
         let mesh = document.terrain_viewer_mesh().expect("terrain mesh");
-        let sampled = mesh.sample_height(0.0, 0.0).expect("sampled height");
+        let sampled = mesh.height_at(0.0, 0.0).expect("sampled height");
         assert!((sampled - 16.0).abs() < 1.0e-6);
-        assert_eq!(mesh.sample_height(20.1, 0.0), None);
+        assert_eq!(mesh.height_at(20.1, 0.0), None);
     }
 }
 

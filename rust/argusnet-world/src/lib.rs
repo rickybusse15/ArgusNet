@@ -1,4 +1,4 @@
-//! # terrain-engine
+//! # argusnet-world
 //!
 //! 3D terrain query library for ArgusNet.
 //!
@@ -490,11 +490,7 @@ impl GridTerrain {
         let h01 = self.heights[row1 * self.cols + col0];
         let h11 = self.heights[row1 * self.cols + col1];
 
-        // Standard bilinear interpolation formula.
-        h00 * (1.0 - tx) * (1.0 - ty)
-            + h10 * tx * (1.0 - ty)
-            + h01 * (1.0 - tx) * ty
-            + h11 * tx * ty
+        tiled::bilinear_cell([h00, h10, h01, h11], tx, ty)
     }
 
     /// Compute [`TerrainBounds`] from the grid extent and height range.
@@ -800,3 +796,11 @@ mod tests {
         );
     }
 }
+
+pub mod analytic;
+pub mod index;
+pub mod tiled;
+pub mod visibility;
+
+pub mod land_cover;
+pub mod raster;

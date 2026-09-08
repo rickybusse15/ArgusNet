@@ -1,7 +1,7 @@
+use argusnet_world::{FlatTerrain, TerrainBounds};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use safety_engine::limits::DronePhysicalLimits;
 use safety_engine::validator::{validate_constraints, DroneCommandedState, DroneObservedState};
-use terrain_engine::{FlatTerrain, TerrainBounds};
 
 fn terrain() -> FlatTerrain {
     FlatTerrain::new(

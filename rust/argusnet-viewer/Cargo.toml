@@ -21,6 +21,7 @@ default = ["live-stream"]
 live-stream = ["dep:argusnet-proto", "dep:tokio", "dep:tonic"]
 
 [dependencies]
+argusnet-world = { path = "../argusnet-world" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

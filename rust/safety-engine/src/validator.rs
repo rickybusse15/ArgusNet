@@ -17,8 +17,8 @@
 //! 9. Communications
 //! 10. Gimbal limits
 
+use argusnet_world::TerrainQuery;
 use serde::{Deserialize, Serialize};
-use terrain_engine::TerrainQuery;
 
 use crate::limits::DronePhysicalLimits;
 
@@ -294,7 +294,7 @@ pub fn validate_constraints(
 mod tests {
     use super::*;
     use crate::limits::DronePhysicalLimits;
-    use terrain_engine::{FlatTerrain, TerrainBounds};
+    use argusnet_world::{FlatTerrain, TerrainBounds};
 
     fn make_flat() -> FlatTerrain {
         FlatTerrain::new(

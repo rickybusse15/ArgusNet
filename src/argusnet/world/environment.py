@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from argusnet._native_world import NativeHandle, call, sample
+
 from ._cache import BoundedLRU, quantized_key
 
 
@@ -154,24 +156,10 @@ class SeasonalVariation:
 
 
 def _build_pyramid(grid: np.ndarray, reducer: str) -> tuple[np.ndarray, ...]:
-    levels = [np.asarray(grid, dtype=float)]
-    current = levels[0]
-    while current.shape[0] > 2 or current.shape[1] > 2:
-        next_rows = max(2, int(math.ceil((current.shape[0] - 1) / 2.0)) + 1)
-        next_cols = max(2, int(math.ceil((current.shape[1] - 1) / 2.0)) + 1)
-        reduced = np.empty((next_rows, next_cols), dtype=float)
-        for row in range(next_rows):
-            row_start = min(row * 2, current.shape[0] - 2)
-            row_slice = current[row_start : min(row_start + 3, current.shape[0]), :]
-            for col in range(next_cols):
-                col_start = min(col * 2, current.shape[1] - 2)
-                block = row_slice[:, col_start : min(col_start + 3, current.shape[1])]
-                reduced[row, col] = float(np.max(block) if reducer == "max" else np.min(block))
-        levels.append(reduced)
-        current = reduced
-        if current.shape == (2, 2):
-            break
-    return tuple(levels)
+    return tuple(
+        np.asarray(level, dtype=float)
+        for level in call("pyramid", grid=grid, maximum=reducer == "max")
+    )
 
 
 @dataclass(frozen=True)
@@ -249,6 +237,25 @@ class TerrainLayer:
             capacity=65536,
         )
         self._viewer_mesh_cache: dict[int, dict[str, object]] = {}
+        self._native = NativeHandle(
+            "terrain_new",
+            bounds=bounds_xy_m.to_metadata(),
+            tile_size_cells=self.tile_size_cells,
+            base_resolution_m=self.base_resolution_m,
+            floor_m=self.ground_plane_m,
+            tiles=[
+                {
+                    "tx": t.tx,
+                    "ty": t.ty,
+                    "lod": t.lod,
+                    "x_min_m": t.x_min_m,
+                    "y_min_m": t.y_min_m,
+                    "cell_size_m": t.cell_size_m,
+                    "heights_m": t.heights_m,
+                }
+                for t in self._tiles.values()
+            ],
+        )
         self.source_metadata = dict(source_metadata or {"source": "height-grid"})
         self.semantic_masks = {
             str(name): np.asarray(mask, dtype=bool).copy()
@@ -270,53 +277,27 @@ class TerrainLayer:
         source_metadata: Mapping[str, object] | None = None,
         semantic_masks: Mapping[str, np.ndarray] | None = None,
     ) -> TerrainLayer:
-        heights = np.asarray(heights_m, dtype=float)
-        if heights.ndim != 2 or heights.shape[0] < 2 or heights.shape[1] < 2:
-            raise ValueError("heights_m must be a 2D array with at least shape (2, 2).")
-        heights = np.maximum(heights, ground_plane_m)
-        tiles: dict[tuple[int, int, int], TerrainTile] = {}
-        grid_rows, grid_cols = heights.shape
-        cell_size_m = float(resolution_m)
-        span_cells_y = grid_rows - 1
-        span_cells_x = grid_cols - 1
-        tile_cols = int(math.ceil(span_cells_x / tile_size_cells))
-        tile_rows = int(math.ceil(span_cells_y / tile_size_cells))
-
-        for ty in range(tile_rows):
-            for tx in range(tile_cols):
-                row_start = ty * tile_size_cells
-                col_start = tx * tile_size_cells
-                row_end = min(row_start + tile_size_cells, span_cells_y)
-                col_end = min(col_start + tile_size_cells, span_cells_x)
-                tile_heights = heights[row_start : row_end + 1, col_start : col_end + 1]
-                target_shape = (tile_size_cells + 1, tile_size_cells + 1)
-                if tile_heights.shape != target_shape:
-                    padded = np.empty(target_shape, dtype=float)
-                    padded[: tile_heights.shape[0], : tile_heights.shape[1]] = tile_heights
-                    padded[tile_heights.shape[0] :, : tile_heights.shape[1]] = tile_heights[-1:, :]
-                    padded[:, tile_heights.shape[1] :] = padded[
-                        :, tile_heights.shape[1] - 1 : tile_heights.shape[1]
-                    ]
-                    tile_heights = padded
-                x_min_m = bounds_xy_m.x_min_m + (tx * tile_size_cells * cell_size_m)
-                y_min_m = bounds_xy_m.y_min_m + (ty * tile_size_cells * cell_size_m)
-                tiles[(0, tx, ty)] = TerrainTile(
-                    tx=tx,
-                    ty=ty,
-                    lod=0,
-                    x_min_m=x_min_m,
-                    y_min_m=y_min_m,
-                    cell_size_m=cell_size_m,
-                    heights_m=tile_heights,
-                    min_pyramid=_build_pyramid(tile_heights, "min"),
-                    max_pyramid=_build_pyramid(tile_heights, "max"),
-                )
-
+        raw_tiles = call(
+            "terrain_build",
+            bounds=bounds_xy_m.to_metadata(),
+            grid=heights_m,
+            resolution=resolution_m,
+            tile_size_cells=tile_size_cells,
+            floor=ground_plane_m,
+            lods=list(lod_resolutions_m or (resolution_m,)),
+        )
+        tiles = {}
+        for raw in raw_tiles:
+            raw["heights_m"] = np.asarray(raw["heights_m"], dtype=float)
+            raw["min_pyramid"] = tuple(np.asarray(g, dtype=float) for g in raw["min_pyramid"])
+            raw["max_pyramid"] = tuple(np.asarray(g, dtype=float) for g in raw["max_pyramid"])
+            tile = TerrainTile(**raw)
+            tiles[(tile.lod, tile.tx, tile.ty)] = tile
         return cls(
             bounds_xy_m=bounds_xy_m,
             tile_size_cells=tile_size_cells,
-            base_resolution_m=cell_size_m,
-            lod_resolutions_m=tuple(lod_resolutions_m or (cell_size_m,)),
+            base_resolution_m=resolution_m,
+            lod_resolutions_m=lod_resolutions_m or (resolution_m,),
             interpolation=interpolation,
             ground_plane_m=ground_plane_m,
             tiles=tiles,
@@ -466,89 +447,10 @@ class TerrainLayer:
         cached = self._height_cache.get(key)
         if cached is not None:
             return cached
-        tile = self.tile_for_xy(float(x_m), float(y_m))
-        if tile is None:
-            return self._height_cache.put(key, self.ground_plane_m)
-        local_x = (float(x_m) - tile.x_min_m) / tile.cell_size_m
-        local_y = (float(y_m) - tile.y_min_m) / tile.cell_size_m
-        col = int(np.clip(math.floor(local_x), 0, tile.heights_m.shape[1] - 2))
-        row = int(np.clip(math.floor(local_y), 0, tile.heights_m.shape[0] - 2))
-        tx = _clamp01(local_x - col)
-        ty = _clamp01(local_y - row)
-        z00 = tile.heights_m[row, col]
-        z10 = tile.heights_m[row, col + 1]
-        z01 = tile.heights_m[row + 1, col]
-        z11 = tile.heights_m[row + 1, col + 1]
-        z0 = z00 + (z10 - z00) * tx
-        z1 = z01 + (z11 - z01) * tx
-        return self._height_cache.put(key, float(max(z0 + (z1 - z0) * ty, self.ground_plane_m)))
+        return self._height_cache.put(key, sample(self._native, [x_m, y_m]))
 
     def height_at_many(self, xy_m: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
-        points = np.asarray(xy_m, dtype=float)
-        if points.shape == (2,):
-            points = points.reshape(1, 2)
-            scalar_input = True
-        else:
-            scalar_input = False
-        if points.ndim < 2 or points.shape[-1] != 2:
-            raise ValueError("xy_m must have shape (..., 2).")
-        original_shape = points.shape[:-1]
-        flat = points.reshape(-1, 2)
-        heights = np.full(flat.shape[0], self.ground_plane_m, dtype=float)
-        in_bounds = (
-            (flat[:, 0] >= self.bounds_xy_m.x_min_m)
-            & (flat[:, 0] <= self.bounds_xy_m.x_max_m)
-            & (flat[:, 1] >= self.bounds_xy_m.y_min_m)
-            & (flat[:, 1] <= self.bounds_xy_m.y_max_m)
-        )
-        if not np.any(in_bounds):
-            return heights[0] if scalar_input else heights.reshape(original_shape)
-
-        span_m = self.tile_size_cells * self.base_resolution_m
-        max_tx = max(0, int(math.ceil(self.bounds_xy_m.width_m / span_m)) - 1)
-        max_ty = max(0, int(math.ceil(self.bounds_xy_m.height_m / span_m)) - 1)
-        candidate_indices = np.nonzero(in_bounds)[0]
-        candidate_points = flat[candidate_indices]
-        tx_values = np.clip(
-            np.floor((candidate_points[:, 0] - self.bounds_xy_m.x_min_m) / span_m).astype(int),
-            0,
-            max_tx,
-        )
-        ty_values = np.clip(
-            np.floor((candidate_points[:, 1] - self.bounds_xy_m.y_min_m) / span_m).astype(int),
-            0,
-            max_ty,
-        )
-        tile_pairs = np.column_stack([tx_values, ty_values])
-        for tx, ty in np.unique(tile_pairs, axis=0):
-            tile = self._tiles.get((0, int(tx), int(ty)))
-            if tile is None:
-                continue
-            member_mask = (tx_values == tx) & (ty_values == ty)
-            ids = candidate_indices[member_mask]
-            tile_points = flat[ids]
-            local_x = (tile_points[:, 0] - tile.x_min_m) / tile.cell_size_m
-            local_y = (tile_points[:, 1] - tile.y_min_m) / tile.cell_size_m
-            col = np.clip(
-                np.floor(local_x).astype(int),
-                0,
-                tile.heights_m.shape[1] - 2,
-            )
-            row = np.clip(
-                np.floor(local_y).astype(int),
-                0,
-                tile.heights_m.shape[0] - 2,
-            )
-            frac_x = np.clip(local_x - col, 0.0, 1.0)
-            frac_y = np.clip(local_y - row, 0.0, 1.0)
-            z00 = tile.heights_m[row, col]
-            z10 = tile.heights_m[row, col + 1]
-            z01 = tile.heights_m[row + 1, col]
-            z11 = tile.heights_m[row + 1, col + 1]
-            z0 = z00 + (z10 - z00) * frac_x
-            z1 = z01 + (z11 - z01) * frac_x
-            heights[ids] = np.maximum(z0 + (z1 - z0) * frac_y, self.ground_plane_m)
-        return heights[0] if scalar_input else heights.reshape(original_shape)
+        return sample(self._native, xy_m)
 
     def gradient_at(self, x_m: float, y_m: float, delta_m: float | None = None) -> np.ndarray:
         delta = max(delta_m or (self.base_resolution_m * 0.5), 0.25)
@@ -558,13 +460,7 @@ class TerrainLayer:
         cached = self._gradient_cache.get(key)
         if cached is not None:
             return cached.copy()
-        dz_dx = (self.height_at(x_m + delta, y_m) - self.height_at(x_m - delta, y_m)) / (
-            2.0 * delta
-        )
-        dz_dy = (self.height_at(x_m, y_m + delta) - self.height_at(x_m, y_m - delta)) / (
-            2.0 * delta
-        )
-        gradient = np.array([dz_dx, dz_dy], dtype=float)
+        gradient = sample(self._native, [x_m, y_m], method="gradients", delta=delta)
         self._gradient_cache.put(key, gradient.copy())
         return gradient
 
@@ -573,41 +469,15 @@ class TerrainLayer:
         xy_m: np.ndarray | Sequence[Sequence[float]],
         delta_m: float | None = None,
     ) -> np.ndarray:
-        points = np.asarray(xy_m, dtype=float)
-        if points.shape == (2,):
-            points = points.reshape(1, 2)
-            scalar_input = True
-        else:
-            scalar_input = False
-        if points.ndim < 2 or points.shape[-1] != 2:
-            raise ValueError("xy_m must have shape (..., 2).")
-        delta = max(delta_m or (self.base_resolution_m * 0.5), 0.25)
-        px = points.copy()
-        mx = points.copy()
-        py = points.copy()
-        my = points.copy()
-        px[..., 0] += delta
-        mx[..., 0] -= delta
-        py[..., 1] += delta
-        my[..., 1] -= delta
-        dz_dx = (self.height_at_many(px) - self.height_at_many(mx)) / (2.0 * delta)
-        dz_dy = (self.height_at_many(py) - self.height_at_many(my)) / (2.0 * delta)
-        gradients = np.stack([dz_dx, dz_dy], axis=-1)
-        return gradients[0] if scalar_input else gradients
+        return sample(
+            self._native,
+            xy_m,
+            method="gradients",
+            delta=max(delta_m or self.base_resolution_m * 0.5, 0.25),
+        )
 
     def curvature_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
-        """Scalar surface curvature (Laplacian approximation).
-
-        Positive = convex (hilltop), negative = concave (valley).
-        """
-        d = max(delta_m, 0.1)
-        return (
-            self.height_at(x_m + d, y_m)
-            + self.height_at(x_m - d, y_m)
-            + self.height_at(x_m, y_m + d)
-            + self.height_at(x_m, y_m - d)
-            - 4.0 * self.height_at(x_m, y_m)
-        ) / (d * d)
+        return sample(self._native, [x_m, y_m], method="curvature", delta=max(delta_m, 0.1))
 
     def slope_rad_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
         """Slope magnitude in radians at the given point."""
@@ -729,6 +599,13 @@ class LandCoverLayer:
         self.tile_size_cells = int(tile_size_cells)
         self.base_resolution_m = float(base_resolution_m)
         self._tiles = dict(tiles)
+        self._native = NativeHandle(
+            "land_cover_new",
+            bounds=bounds_xy_m.to_metadata(),
+            tile_size_cells=self.tile_size_cells,
+            resolution=self.base_resolution_m,
+            tiles=list(self._tiles.values()),
+        )
 
     @classmethod
     def from_rasters(
@@ -813,44 +690,10 @@ class LandCoverLayer:
         return self._tiles.get((tx, ty))
 
     def land_cover_at(self, x_m: float, y_m: float) -> LandCoverClass:
-        tile = self._tile_for_xy(float(x_m), float(y_m))
-        if tile is None:
-            return LandCoverClass.OPEN
-        local_x = int(
-            np.clip(
-                math.floor((float(x_m) - tile.x_min_m) / tile.cell_size_m),
-                0,
-                tile.classes.shape[1] - 1,
-            )
-        )
-        local_y = int(
-            np.clip(
-                math.floor((float(y_m) - tile.y_min_m) / tile.cell_size_m),
-                0,
-                tile.classes.shape[0] - 1,
-            )
-        )
-        return LandCoverClass(int(tile.classes[local_y, local_x]))
+        return LandCoverClass(call("land_cover", handle=self._native.id, point=[x_m, y_m])[0])
 
     def density_at(self, x_m: float, y_m: float) -> float:
-        tile = self._tile_for_xy(float(x_m), float(y_m))
-        if tile is None or tile.density is None:
-            return 0.0
-        local_x = int(
-            np.clip(
-                math.floor((float(x_m) - tile.x_min_m) / tile.cell_size_m),
-                0,
-                tile.density.shape[1] - 1,
-            )
-        )
-        local_y = int(
-            np.clip(
-                math.floor((float(y_m) - tile.y_min_m) / tile.cell_size_m),
-                0,
-                tile.density.shape[0] - 1,
-            )
-        )
-        return float(tile.density[local_y, local_x]) / 255.0
+        return float(call("land_cover", handle=self._native.id, point=[x_m, y_m])[1])
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -894,44 +737,20 @@ class ObstacleLayer:
         self._point_collision_cache: BoundedLRU[
             tuple[int, int, int, int], ObstaclePrimitive | None
         ] = BoundedLRU(owner="ObstacleLayer", name="point_collides", capacity=65536)
-        tile_index: dict[tuple[int, int], list[str]] = {}
-        for primitive in self.primitives:
-            bounds = primitive.bounds_xy_m()
-            tx_min = int(math.floor((bounds.x_min_m - self.bounds_xy_m.x_min_m) / self.tile_size_m))
-            tx_max = int(math.floor((bounds.x_max_m - self.bounds_xy_m.x_min_m) / self.tile_size_m))
-            ty_min = int(math.floor((bounds.y_min_m - self.bounds_xy_m.y_min_m) / self.tile_size_m))
-            ty_max = int(math.floor((bounds.y_max_m - self.bounds_xy_m.y_min_m) / self.tile_size_m))
-            for ty in range(ty_min, ty_max + 1):
-                for tx in range(tx_min, tx_max + 1):
-                    tile_index.setdefault((tx, ty), []).append(primitive.primitive_id)
-        self._tile_index = {
-            key: tuple(sorted(set(primitive_ids))) for key, primitive_ids in tile_index.items()
-        }
+        self._native = NativeHandle(
+            "obstacles_new",
+            bounds=bounds_xy_m.to_metadata(),
+            tile_size_m=self.tile_size_m,
+            handles=[p._native.id for p in self.primitives],
+        )
 
     @classmethod
     def empty(cls, *, bounds_xy_m: Bounds2D, tile_size_m: float) -> ObstacleLayer:
         return cls(bounds_xy_m=bounds_xy_m, tile_size_m=tile_size_m, primitives=())
 
     def query_obstacles(self, segment_bounds: Bounds2D) -> tuple[ObstaclePrimitive, ...]:
-        tx_min = int(
-            math.floor((segment_bounds.x_min_m - self.bounds_xy_m.x_min_m) / self.tile_size_m)
-        )
-        tx_max = int(
-            math.floor((segment_bounds.x_max_m - self.bounds_xy_m.x_min_m) / self.tile_size_m)
-        )
-        ty_min = int(
-            math.floor((segment_bounds.y_min_m - self.bounds_xy_m.y_min_m) / self.tile_size_m)
-        )
-        ty_max = int(
-            math.floor((segment_bounds.y_max_m - self.bounds_xy_m.y_min_m) / self.tile_size_m)
-        )
-        primitive_ids: list[str] = []
-        for ty in range(ty_min, ty_max + 1):
-            for tx in range(tx_min, tx_max + 1):
-                primitive_ids.extend(self._tile_index.get((tx, ty), ()))
-        return tuple(
-            self._primitive_by_id[primitive_id] for primitive_id in sorted(set(primitive_ids))
-        )
+        ids = call("obstacles_query", handle=self._native.id, bounds=segment_bounds.to_metadata())
+        return tuple(self._primitive_by_id[id_] for id_ in ids)
 
     def point_collides(self, x_m: float, y_m: float, z_m: float) -> ObstaclePrimitive | None:
         cache_cell_m = 1.0e-5

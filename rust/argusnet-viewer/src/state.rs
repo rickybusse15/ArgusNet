@@ -17,6 +17,7 @@ pub struct LayerVisibilityState {
 
 #[derive(Debug, Clone, Resource)]
 pub struct RuntimeOverlayVisibility {
+    pub diagnostic_glyphs: bool,
     pub tracks: bool,
     pub truths: bool,
     pub nodes: bool,
@@ -34,6 +35,7 @@ pub struct RuntimeOverlayVisibility {
 impl Default for RuntimeOverlayVisibility {
     fn default() -> Self {
         Self {
+            diagnostic_glyphs: false,
             tracks: true,
             truths: false,
             nodes: true,

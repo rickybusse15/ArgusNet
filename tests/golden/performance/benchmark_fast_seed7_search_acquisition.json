@@ -18,8 +18,8 @@
         "evictions": 0
       },
       "terrain.height_at": {
-        "hits": 385,
-        "misses": 8513,
+        "hits": 73,
+        "misses": 326,
         "evictions": 0
       },
       "visibility.los": {
@@ -31,12 +31,12 @@
   },
   "timing_reference": {
     "note": "Recorded for reference. Only compared when ARGUSNET_RUN_PERF_TIMING=1 marks this machine as calibrated.",
-    "machine": "Linux x86_64",
-    "python": "3.11.15",
-    "wall_clock_s": 0.28789125200000854,
-    "frame_time_mean_ms": 57.3753234,
-    "frame_time_p95_ms": 58.908123200000006,
-    "frame_time_p99_ms": 58.930690240000004,
-    "peak_rss_mb": 112.96875
+    "machine": "Darwin arm64",
+    "python": "3.12.13",
+    "wall_clock_s": 0.02970766698126681,
+    "frame_time_mean_ms": 5.8715584000000005,
+    "frame_time_p95_ms": 6.9819244,
+    "frame_time_p99_ms": 7.03551768,
+    "peak_rss_mb": 162.8125
   }
 }

@@ -2,8 +2,8 @@
 //!
 //! Ported from `src/argusnet/world/obstacles.py` as the first of the three
 //! layers this crate absorbs on the way to being the single world authority
-//! (terrain, obstacles, line-of-sight). Python remains authoritative until the
-//! rest of that migration lands; this side is not yet wired into the runtime.
+//! (terrain, obstacles, line-of-sight). Python calls this implementation through
+//! the native world bindings; the viewer consumes the same world crate.
 //!
 //! # Shape model
 //!
@@ -57,44 +57,7 @@ const MAX_PUSH_ITERATIONS: usize = 6;
 // Bounds2d
 // ---------------------------------------------------------------------------
 
-/// Axis-aligned horizontal extent of a footprint, metres.
-///
-/// Distinct from [`crate::TerrainBounds`], which also carries elevation: an
-/// obstacle's vertical extent is its own `base_z_m`/`top_z_m` pair.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Bounds2d {
-    pub x_min_m: f64,
-    pub x_max_m: f64,
-    pub y_min_m: f64,
-    pub y_max_m: f64,
-}
-
-impl Bounds2d {
-    pub fn new(x_min_m: f64, x_max_m: f64, y_min_m: f64, y_max_m: f64) -> Self {
-        Self {
-            x_min_m,
-            x_max_m,
-            y_min_m,
-            y_max_m,
-        }
-    }
-
-    #[inline]
-    pub fn contains_xy(&self, x_m: f64, y_m: f64) -> bool {
-        x_m >= self.x_min_m && x_m <= self.x_max_m && y_m >= self.y_min_m && y_m <= self.y_max_m
-    }
-
-    /// Widen by `margin_m` on every side. Used to pre-filter candidates before
-    /// running the exact test.
-    pub fn expanded(&self, margin_m: f64) -> Self {
-        Self {
-            x_min_m: self.x_min_m - margin_m,
-            x_max_m: self.x_max_m + margin_m,
-            y_min_m: self.y_min_m - margin_m,
-            y_max_m: self.y_max_m + margin_m,
-        }
-    }
-}
+pub use argusnet_types::Bounds2d;
 
 // ---------------------------------------------------------------------------
 // Blocker classification
@@ -559,7 +522,7 @@ fn distance_3d(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 /// Whether `point` lies on the closed segment `start -> end`.
-fn point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
+pub fn point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
     let segment = [end[0] - start[0], end[1] - start[1]];
     let relative = [point[0] - start[0], point[1] - start[1]];
     let cross = ((segment[0] * relative[1]) - (segment[1] * relative[0])).abs();
@@ -597,7 +560,7 @@ pub fn point_in_polygon(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
 }
 
 /// Intersection parameters of two segments, if they meet within both spans.
-fn segment_intersection_parameters(
+pub fn segment_intersection_parameters(
     a0: [f64; 2],
     a1: [f64; 2],
     b0: [f64; 2],
@@ -621,7 +584,7 @@ fn segment_intersection_parameters(
 /// Splits the segment at every edge crossing, then classifies each span by its
 /// midpoint. That handles concave footprints, where a single segment can enter
 /// and leave more than once.
-fn segment_polygon_intervals(
+pub fn segment_polygon_intervals(
     origin: [f64; 2],
     target: [f64; 2],
     polygon: &[[f64; 2]],
@@ -657,7 +620,7 @@ fn segment_polygon_intervals(
     intervals
 }
 
-fn nearest_point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> [f64; 2] {
+pub fn nearest_point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> [f64; 2] {
     let segment = [end[0] - start[0], end[1] - start[1]];
     let length_squared = dot2(segment, segment);
     if length_squared <= 1.0e-12 {
@@ -669,7 +632,7 @@ fn nearest_point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> 
 }
 
 /// Shoelace area. Positive for counter-clockwise winding.
-fn signed_polygon_area(polygon: &[[f64; 2]]) -> f64 {
+pub fn signed_polygon_area(polygon: &[[f64; 2]]) -> f64 {
     let mut total = 0.0;
     for index in 0..polygon.len() {
         let a = polygon[index];
@@ -680,7 +643,7 @@ fn signed_polygon_area(polygon: &[[f64; 2]]) -> f64 {
 }
 
 /// Unit normal pointing away from the interior, given the winding direction.
-fn edge_outward_normal(start: [f64; 2], end: [f64; 2], is_ccw: bool) -> [f64; 2] {
+pub fn edge_outward_normal(start: [f64; 2], end: [f64; 2], is_ccw: bool) -> [f64; 2] {
     let edge = [end[0] - start[0], end[1] - start[1]];
     let length = edge[0].hypot(edge[1]).max(EPSILON_M);
     if is_ccw {

@@ -671,14 +671,14 @@ pub fn sample_terrain_height(
 ) -> f32 {
     terrain_mesh
         .as_ref()
-        .and_then(|mesh| mesh.sample_height(x_m, y_m))
+        .and_then(|mesh| mesh.height_at(x_m, y_m))
         .unwrap_or(fallback_height)
 }
 
 /// Try to sample terrain height; returns `None` when a mesh exists but the
 /// point is outside its coverage. Used to skip segments that leak off-map.
 fn try_terrain_height(terrain_mesh: &Option<TerrainViewerMesh>, x_m: f32, y_m: f32) -> Option<f32> {
-    terrain_mesh.as_ref()?.sample_height(x_m, y_m)
+    terrain_mesh.as_ref()?.height_at(x_m, y_m)
 }
 
 pub fn average_zone_height(zones: &[MissionZone], zone_indices: &[usize]) -> f32 {

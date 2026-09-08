@@ -52,7 +52,7 @@ be labeled as planned until the referenced code exists.
 
 | Subsystem | Python modules | Rust crates | Docs |
 |-----------|----------------|-------------|------|
-| World Model | `src/argusnet/world/*` | `terrain-engine`, planned `world-engine` | `TERRAIN.md` |
+| World Model | `src/argusnet/world/*` | `argusnet-world`, `argusnet-native` | `TERRAIN.md` |
 | Sensing/Fusion | `src/argusnet/sensing/*`, `src/argusnet/adapters/argusnet_grpc.py` | `argusnet-core`, `argusnet-server`, `argusnet-proto` | `FUSION.md` |
 | Localization | `src/argusnet/localization/*`, replay state in `argusnet.core.types` | planned `localization-engine` | `LOCALIZATION.md` |
 | Mapping | `src/argusnet/mapping/*`, replay state in `argusnet.core.types` | planned `mapping-engine` | `MAPPING.md` |
@@ -170,8 +170,9 @@ hidden truth in physical-mode tests.
 | `argusnet-server` | Sensing/Fusion | gRPC daemon and config loading |
 | `argusnet-proto` | Sensing/Fusion | Protobuf bindings and Rust conversion helpers |
 | `argusnet-viewer` | Evaluation / UI | Bevy app, replay loading, terrain/mission-zone display, egui UI |
-| `terrain-engine` | World | Rust terrain query/interpolation helpers |
-| `safety-engine` | Safety | Rust constraint validator and monitor foundations |
+| `argusnet-world` | World | Authoritative terrain, obstacle, land-cover and visibility queries |
+| `argusnet-native` | Python bridge | Owned world/safety handles and batched native queries |
+| `safety-engine` | Safety | Runtime constraint validators and stateful safety monitors |
 | planned `world-engine` | World / Mapping | Obstacle/world query acceleration |
 | planned `mapping-engine` | Mapping | Dense belief tile updates |
 | planned `localization-engine` | Localization | Map-relative pose recovery and confidence state |
@@ -307,6 +308,13 @@ All nontrivial architecture changes require an ADR in `docs/adr/`.
 | 004 | Performance Benchmarking Rollout | accepted (renumbered from a second ADR-001) |
 | 005 | Rust as the Runtime Authority | accepted; supersedes Decision 3 of `ARCHITECTURE_DECISIONS.md` |
 | 006 | Determinism Re-baseline for the Rust Runtime | accepted |
+| [007](adr/007-runtime-composition-and-snapshots.md) | Deterministic Runtime Composition and Snapshot Boundaries | accepted design; staged implementation |
+| [008](adr/008-world-aware-streaming-and-compatibility.md) | World-Aware Streaming and Versioned Compatibility | accepted design; RPCs not yet implemented |
+
+The [remaining migration delivery plan](migration/DELIVERY_PLAN.md),
+[protocol contract](migration/ARCHITECTURE_AND_PROTOCOLS.md) and
+[verification/rollout gates](migration/VERIFICATION_AND_ROLLOUT.md) govern the Rust
+migration. Planned APIs there are distinct from current implemented ownership.
 
 Recommended new ADRs:
 

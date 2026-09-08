@@ -1,0 +1,12 @@
+{
+  "grid_shape": [
+    200,
+    200
+  ],
+  "particles": 200,
+  "radius_m": 30.0,
+  "repetitions": 50,
+  "legacy_median_ms": 1.598708491655998,
+  "native_median_ms": 0.04150001041125506,
+  "speedup": 38.52308652005586
+}

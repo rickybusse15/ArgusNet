@@ -7,7 +7,7 @@ import unittest
 import numpy as np
 
 from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLayer
-from argusnet.safety.checker import (
+from argusnet.safety.native import (
     DroneConstraintChecker,
     DronePhysicalLimits,
     DroneSafetyState,

@@ -467,3 +467,11 @@ For implementation details already present in this repository, see:
 - [Benchmark scenarios](docs/SCENARIOS.md)
 - [Performance and benchmarking standard](docs/PERFORMANCE_AND_BENCHMARKING.md)
 - [Changelog](docs/changelog.md)
+
+### Native world library
+
+Python simulation and the Bevy viewer share `argusnet-world` for terrain and
+visibility. Source installs (`pip install -e .`) require the pinned Rust toolchain
+and build the native world/safety library. Binary wheels include that library.
+See [terrain authority](docs/TERRAIN.md#phase-3-runtime-authority) for ownership
+and development details.

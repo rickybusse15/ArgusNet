@@ -251,3 +251,31 @@ Queries for coordinates outside `TerrainBounds`:
 
 This matches the conservative fallback in `EnvironmentQuery` where
 `out_of_coverage` is treated as a hard blocker.
+
+## Phase 3 runtime authority
+
+`rust/argusnet-world` now implements analytic terrain, tiled heightfields, LOD
+sampling, min/max pyramids, obstacle primitives and their deterministic tile
+index, land-cover sampling, two-level DDA visibility and detection attenuation.
+The viewer's replay raster is an adapter in this crate and shares the bilinear
+kernel with runtime tiles; `TerrainViewerMesh::sample_height` is removed.
+
+Python terrain/obstacle classes retain their constructors, metadata and public
+imports for scenario authoring and export. Their query methods call
+`argusnet-native`; there is no fallback Python evaluator. Terrain preset values
+remain declarative Python configuration. GIS import, procedural scenario shaping
+and the simulation tick loop are later-phase work.
+
+`pip install -e .` compiles and installs the native library using the pinned Rust
+toolchain. A wheel includes it. For checkout development, use
+`cargo build -p argusnet-native`; `ARGUSNET_NATIVE_LIBRARY` can select an explicit
+artifact while iterating. The package never starts Cargo at query time.
+
+Native handles own snapshots of world data. Replace a terrain or obstacle layer
+through `EnvironmentModel.set_terrain` / `add_obstacle` to change the world and
+invalidate LOS caches; mutating exported NumPy arrays is not a world update.
+
+DDA now handles negative directions and clipped ray parameters correctly. A
+nearer non-blocking object also no longer masks a farther hard blocker. These
+are deliberate visibility corrections; baseline analytic heights remain within
+1e-9 metres of the frozen pre-port results.

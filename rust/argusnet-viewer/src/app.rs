@@ -237,7 +237,7 @@ fn run_inner(
 
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .add_plugins(OrbitCameraPlugin)
-        .add_plugins(GradientSkyPlugin)
+        .add_plugins((GradientSkyPlugin, crate::marker_meshes::MarkerMeshPlugin))
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
         .add_systems(
             Update,
@@ -259,6 +259,7 @@ fn run_inner(
                 (
                     mission_zones::refresh_zone_overlap_model_system,
                     sync_current_markers_system,
+                    crate::marker_meshes::sync_marker_meshes,
                     sync_base_layer_visibility_system,
                     pick_runtime_marker_system,
                     sync_fog_to_camera_system,
@@ -982,45 +983,27 @@ fn draw_runtime_overlays_system(
         .fold(f32::NEG_INFINITY, f32::max);
     let alt_span = (alt_max - alt_min).max(1.0);
 
-    // Retrieve measurement_std_m for each track from the current frame.
-    let frame_tracks: Vec<(String, f32)> = replay_state
-        .current_frame()
-        .map(|f| {
-            f.tracks
-                .iter()
-                .map(|t| (t.track_id.clone(), t.measurement_std_m))
-                .collect()
-        })
-        .unwrap_or_default();
-
     for marker in &markers.markers {
         if !is_marker_visible(marker, &runtime_visibility) {
             continue;
         }
 
-        // Item 5: pick color based on measurement_std_m for track markers.
-        let base_color = marker_color(marker.kind, &scene_package);
-        let (draw_color, radius_scale) = if marker.kind == crate::replay::MarkerKind::Track {
-            let std_m = frame_tracks
-                .iter()
-                .find(|(id, _)| id == &marker.label)
-                .map(|(_, s)| *s)
-                .unwrap_or(0.0);
-            let conf_color = if std_m < 5.0 {
-                Color::srgba(0.2, 0.9, 0.2, 1.0) // green
-            } else if std_m < 20.0 {
-                Color::srgba(0.95, 0.85, 0.1, 1.0) // yellow
-            } else if std_m < 50.0 {
-                Color::srgba(0.95, 0.5, 0.1, 1.0) // orange
-            } else {
-                Color::srgba(0.95, 0.15, 0.15, 1.0) // red
-            };
-            let scale = 1.0 + std_m.min(50.0) / 50.0;
-            (conf_color, scale)
+        let (draw_color, radius_scale) = marker_appearance(marker, &replay_state, &scene_package);
+        if runtime_visibility.diagnostic_glyphs {
+            draw_marker_scaled(&mut gizmos, &glyphs, marker, draw_color, radius_scale);
         } else {
-            (base_color, 1.0)
-        };
-        draw_marker_scaled(&mut gizmos, &glyphs, marker, draw_color, radius_scale);
+            let pixels = match marker.kind {
+                MarkerKind::Track => TRACK_GLYPH_PX,
+                MarkerKind::Truth => TRUTH_GLYPH_PX,
+                MarkerKind::Node => NODE_GLYPH_PX,
+            };
+            draw_velocity_leader(
+                &mut gizmos,
+                marker,
+                draw_color,
+                glyphs.radius(marker.position, pixels) * radius_scale,
+            );
+        }
 
         // Item 15: trail with alpha fading and altitude-based hue coloring.
         let trail_points = replay_state.trail_points(marker, TRAIL_MAX_POINTS);
@@ -1434,6 +1417,11 @@ fn draw_marker_scaled(
         }
     }
 
+    draw_velocity_leader(gizmos, marker, color, r);
+}
+
+fn draw_velocity_leader(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color, r: f32) {
+    let pos = marker.position;
     // Velocity leader. The direction is the real world-space heading, but the
     // length is expressed in glyph radii rather than metres: at default framing
     // the old 15 m maximum was under three pixels, so speed was unreadable
@@ -1456,7 +1444,36 @@ const MAX_LEADER_SPEED_MPS: f32 = 60.0;
 /// Length of a full-speed velocity leader, in glyph radii.
 const LEADER_RADII_AT_MAX_SPEED: f32 = 4.0;
 
-fn is_marker_visible(
+pub(crate) fn marker_appearance(
+    marker: &RuntimeMarker,
+    replay_state: &ReplayState,
+    scene_package: &ScenePackage,
+) -> (Color, f32) {
+    let base_color = marker_color(marker.kind, scene_package);
+    let (draw_color, radius_scale) = if marker.kind == crate::replay::MarkerKind::Track {
+        let std_m = replay_state
+            .current_frame()
+            .and_then(|f| f.tracks.iter().find(|t| t.track_id == marker.label))
+            .map(|t| t.measurement_std_m)
+            .unwrap_or(0.0);
+        let conf_color = if std_m < 5.0 {
+            Color::srgba(0.2, 0.9, 0.2, 1.0) // green
+        } else if std_m < 20.0 {
+            Color::srgba(0.95, 0.85, 0.1, 1.0) // yellow
+        } else if std_m < 50.0 {
+            Color::srgba(0.95, 0.5, 0.1, 1.0) // orange
+        } else {
+            Color::srgba(0.95, 0.15, 0.15, 1.0) // red
+        };
+        let scale = 1.0 + std_m.min(50.0) / 50.0;
+        (conf_color, scale)
+    } else {
+        (base_color, 1.0)
+    };
+    (draw_color, radius_scale)
+}
+
+pub(crate) fn is_marker_visible(
     marker: &RuntimeMarker,
     runtime_visibility: &RuntimeOverlayVisibility,
 ) -> bool {
@@ -1516,13 +1533,13 @@ fn draw_sensor_overlays_system(
                     let z0 = mission_zones
                         .terrain_mesh
                         .as_ref()
-                        .and_then(|m| m.sample_height(c0[0], c0[1]))
+                        .and_then(|m| m.height_at(c0[0], c0[1]))
                         .unwrap_or(pos.z)
                         + 1.5;
                     let z1 = mission_zones
                         .terrain_mesh
                         .as_ref()
-                        .and_then(|m| m.sample_height(c1[0], c1[1]))
+                        .and_then(|m| m.height_at(c1[0], c1[1]))
                         .unwrap_or(pos.z)
                         + 1.5;
                     let p0 = Vec3::new(c0[0], c0[1], z0);
@@ -1673,7 +1690,7 @@ fn footprint_ground_z_m(
     xy_m: [f32; 2],
 ) -> f32 {
     terrain_mesh
-        .and_then(|mesh| mesh.sample_height(xy_m[0], xy_m[1]))
+        .and_then(|mesh| mesh.height_at(xy_m[0], xy_m[1]))
         .unwrap_or(fallback_ground_z)
 }
 

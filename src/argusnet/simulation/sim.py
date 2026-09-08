@@ -82,7 +82,7 @@ from argusnet.planning.deconfliction import DeconflictionConfig, DeconflictionLa
 from argusnet.planning.frontier import ClaimedCells, FrontierPlanner
 from argusnet.planning.planner_base import PathPlanner2D, PlannerConfig
 from argusnet.planning.poi import POIAssignmentContext, POIManager
-from argusnet.safety.checker import DronePhysicalLimits, DroneSafetyState, SafetyMonitor
+from argusnet.safety.native import DronePhysicalLimits, DroneSafetyState, SafetyMonitor
 from argusnet.sensing.imu import IMUMeasurement
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
 from argusnet.sensing.models.noise import atmospheric_attenuation as sensor_atmospheric_attenuation
@@ -5252,7 +5252,8 @@ def run_simulation(
                     SafetyStatus.REJECTED
                     if scenario.options.safety_blocking
                     and any(
-                        _safety_monitors.get(node.node_id, SafetyMonitor()).state(node.node_id)
+                        node.node_id in _safety_monitors
+                        and _safety_monitors[node.node_id].state(node.node_id)
                         is DroneSafetyState.ABORT
                         for node in scenario.nodes
                         if node.is_mobile
@@ -5404,14 +5405,14 @@ def run_simulation(
                 velocity = np.asarray(ns.velocity, dtype=float)
                 terrain_height = float(scenario.terrain.height_at(position[0], position[1]))
                 role = scenario.drone_roles.get(ns.node_id, "tracker")
-                monitor = _safety_monitors.setdefault(
-                    ns.node_id,
-                    SafetyMonitor(
+                monitor = _safety_monitors.get(ns.node_id)
+                if monitor is None:
+                    monitor = SafetyMonitor(
                         DronePhysicalLimits.interceptor_default()
                         if "interceptor" in role
                         else DronePhysicalLimits.tracker_default()
-                    ),
-                )
+                    )
+                    _safety_monitors[ns.node_id] = monitor
                 decision = monitor.process(
                     ns.node_id,
                     position,

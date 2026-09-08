@@ -31,12 +31,12 @@
   },
   "timing_reference": {
     "note": "Recorded for reference. Only compared when ARGUSNET_RUN_PERF_TIMING=1 marks this machine as calibrated.",
-    "machine": "Linux x86_64",
-    "python": "3.11.15",
-    "wall_clock_s": 0.02707829199994194,
-    "frame_time_mean_ms": 5.183816,
-    "frame_time_p95_ms": 6.0182916,
-    "frame_time_p99_ms": 6.044778320000001,
-    "peak_rss_mb": 99.703125
+    "machine": "Darwin arm64",
+    "python": "3.12.13",
+    "wall_clock_s": 0.01193783400231041,
+    "frame_time_mean_ms": 2.3032336,
+    "frame_time_p95_ms": 3.5531504,
+    "frame_time_p99_ms": 3.7650636800000004,
+    "peak_rss_mb": 151.125
   }
 }
