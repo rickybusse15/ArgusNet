@@ -157,12 +157,20 @@ class OcclusionShowcaseTests(unittest.TestCase):
     with tall, dense obstacles — the "mapping through dense obstacles" payoff."""
 
     def test_tall_dense_obstacles_produce_more_occlusion_than_open_terrain(self) -> None:
-        open_shadow = _shadow_cell_count("coastal")  # flat, effectively no blockers
+        open_shadow = _shadow_cell_count("coastal")  # flat, a single soft canopy
         dense_shadow = _shadow_cell_count("military_compound")  # tall buildings + walls
 
-        # Dense obstacles must shadow substantially more ground than open terrain.
-        self.assertGreaterEqual(dense_shadow, 12)
-        self.assertGreater(dense_shadow, 2 * open_shadow)
+        # Dense obstacles must shadow more ground than open terrain.
+        #
+        # These bounds were re-baselined when the edge-crossing denominator in
+        # `_point_in_polygon` was corrected. The previous clamp inflated every
+        # rotated footprint -- the compound's yaw=0.18 hangars measured 2260 m^2
+        # against a true 1792 m^2 -- which in turn inflated this shadow count
+        # from 6 to 28 (and open terrain from 4 to 6). With correct footprints
+        # the margin over open terrain is real but thin, so this asserts the
+        # direction rather than the previous 2x ratio.
+        self.assertGreaterEqual(dense_shadow, 6)
+        self.assertGreater(dense_shadow, open_shadow)
 
 
 class ObstacleRoutedRedirectTests(unittest.TestCase):

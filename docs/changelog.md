@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — Point-In-Polygon Correctness For Rotated Footprints
+
+- World: fixed the edge-crossing test in `_point_in_polygon` (`src/argusnet/world/obstacles.py`).
+  The denominator was clamped with `max((b.y - a.y), 1.0e-12)`, which replaced the real signed
+  height of every *downward* edge with a tiny positive number. For those edges `x_cross` blew up to
+  ±1e12 and the crossing test degenerated into "toggle iff the edge moves leftward in x",
+  independent of the query point. The enclosing `(a.y > p.y) != (b.y > p.y)` test already
+  guarantees a non-zero denominator, so the clamp was never needed.
+- Impact: any footprint with a non-axis-aligned edge was mis-classified. Axis-aligned rectangles
+  were unaffected (their vertical edges have a zero `(b.x - a.x)` numerator), which is why the
+  existing suite missed it. Measured on the shipped `scene.smartscene` over a 60x60 grid per
+  footprint: rotated `box-v1` hangars (yaw 0.12/0.18) disagreed with a reference even-odd crossing
+  on 16.0–18.5% of probes and diagonal `wall-v1` segments on 35.6–35.8%, for 7,766 of 54,000 probes
+  overall; axis-aligned `polygon-prism-v1` warehouses disagreed on 0%. After the fix, 0 of 54,000.
+  The yaw=0.18 hangar footprint measured 2260 m² against its true 1792 m².
+- Blast radius: `_point_in_polygon` also backs `_segment_polygon_intervals`, so `path_length_inside`
+  and `first_hit_t` — line-of-sight occlusion and path collision — were affected, as was land-cover
+  rasterisation via `build_land_cover_layer`. The bug also defeated `push_outside_xy`, which emitted
+  "still inside an obstacle after 8 push iterations" warnings on `military_compound`; those are gone.
+- Tests: added `RotatedFootprintPointInPolygonTest` covering a triangle, a diamond, and `OrientedBox`
+  at five non-zero yaws, each compared against an independent even-odd oracle across a ~2,000-point
+  grid (boundary-adjacent probes skipped as legitimately ambiguous), plus rotated-box coverage for
+  `point_inside`, `push_outside_xy`, `path_length_inside`, and `first_hit_t`.
+- Goldens (ADR-005 re-baseline): `benchmark_fast_seed7_intercept_stress`
+  (`total_rejected_observations` 3 → 5, `terrain.height_at.hits` 1275 → 1276) and
+  `benchmark_fast_seed7_search_acquisition` (`total_accepted_observations` 15 → 16) moved because
+  correct footprints change occlusion and collision. `benchmark_fast_seed7_baseline_coverage` is
+  unchanged. The canonical `sim --duration-s 60 --seed 7` replay hash is also unchanged
+  (`cc66136b…`) — the default scenario has no rotated footprints in its line-of-sight paths.
+- Tests: re-baselined the occlusion showcase thresholds, which were propped up by the inflated
+  footprints (`military_compound` shadow 28 → 6 cells, `coastal` 6 → 4).
+
 ## Unreleased — Obstacle-Aware Mapping And Redirects
 
 - Sim: new opt-in `--occlusion-aware-mapping` gates scan coverage and the split-view reconstruction
@@ -16,8 +48,9 @@
   very fine `--coverage-resolution-m`, bounding worst-case cost. Marked cells are still genuinely
   visible (invariant preserved).
 - Tests: showcase test confirming occlusion scales with obstacle height/density — `military_compound`
-  (tall buildings + walls) shadows ~4–5× more ground than open `coastal` terrain; near-nadir mapping
-  over flat/undulating terrain is barely occluded (expected).
+  (tall buildings + walls) shadows more ground than open `coastal` terrain; near-nadir mapping
+  over flat/undulating terrain is barely occluded (expected). (The previously recorded ~4–5× ratio
+  was an artifact of the `_point_in_polygon` footprint bug fixed below; the true margin is smaller.)
 
 ## Unreleased — Adaptive Cooperative Search And Headless View Modes
 
