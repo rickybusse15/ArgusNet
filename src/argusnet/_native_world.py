@@ -65,6 +65,18 @@ def _library():
         ctypes.POINTER(ctypes.c_double),
     ]
     lib.argusnet_sample.restype = ctypes.c_int
+    lib.argusnet_score_footprints.argtypes = [
+        ctypes.POINTER(ctypes.c_int32),
+        ctypes.c_size_t,
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.c_double,
+        ctypes.c_double,
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_double),
+    ]
+    lib.argusnet_score_footprints.restype = ctypes.c_int
     return lib
 
 
@@ -126,3 +138,28 @@ def sample(handle: NativeHandle, points, *, analytic=False, method="heights", de
     if code:
         raise ValueError("Invalid native terrain query or expired handle")
     return values if shape else float(values)
+
+
+def score_footprints(grid, bounds, radius_m, positions):
+    """One coverage snapshot and one native call for the whole particle batch."""
+    grid = np.ascontiguousarray(grid, dtype=np.int32)
+    points = np.ascontiguousarray(positions, dtype=np.float64)
+    if grid.shape != (bounds.nx, bounds.ny) or points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError("Invalid coverage grid or particle shape")
+    origin = np.array([bounds.x_min_m, bounds.y_min_m], dtype=np.float64)
+    result = np.empty(len(points), dtype=np.float64)
+    double_ptr = ctypes.POINTER(ctypes.c_double)
+    code = _library().argusnet_score_footprints(
+        grid.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+        bounds.nx,
+        bounds.ny,
+        origin.ctypes.data_as(double_ptr),
+        bounds.resolution_m,
+        radius_m,
+        points.ctypes.data_as(double_ptr),
+        len(points),
+        result.ctypes.data_as(double_ptr),
+    )
+    if code:
+        raise ValueError("Invalid native coverage query")
+    return result

@@ -6,6 +6,7 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 [dependencies]
+argusnet-mapping = { path = "../argusnet-mapping" }
 argusnet-world = { path = "../argusnet-world" }
 safety-engine = { path = "../safety-engine" }
 serde.workspace = true

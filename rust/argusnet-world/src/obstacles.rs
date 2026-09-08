@@ -57,44 +57,7 @@ const MAX_PUSH_ITERATIONS: usize = 6;
 // Bounds2d
 // ---------------------------------------------------------------------------
 
-/// Axis-aligned horizontal extent of a footprint, metres.
-///
-/// Distinct from [`crate::TerrainBounds`], which also carries elevation: an
-/// obstacle's vertical extent is its own `base_z_m`/`top_z_m` pair.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct Bounds2d {
-    pub x_min_m: f64,
-    pub x_max_m: f64,
-    pub y_min_m: f64,
-    pub y_max_m: f64,
-}
-
-impl Bounds2d {
-    pub fn new(x_min_m: f64, x_max_m: f64, y_min_m: f64, y_max_m: f64) -> Self {
-        Self {
-            x_min_m,
-            x_max_m,
-            y_min_m,
-            y_max_m,
-        }
-    }
-
-    #[inline]
-    pub fn contains_xy(&self, x_m: f64, y_m: f64) -> bool {
-        x_m >= self.x_min_m && x_m <= self.x_max_m && y_m >= self.y_min_m && y_m <= self.y_max_m
-    }
-
-    /// Widen by `margin_m` on every side. Used to pre-filter candidates before
-    /// running the exact test.
-    pub fn expanded(&self, margin_m: f64) -> Self {
-        Self {
-            x_min_m: self.x_min_m - margin_m,
-            x_max_m: self.x_max_m + margin_m,
-            y_min_m: self.y_min_m - margin_m,
-            y_max_m: self.y_max_m + margin_m,
-        }
-    }
-}
+pub use argusnet_types::Bounds2d;
 
 // ---------------------------------------------------------------------------
 // Blocker classification

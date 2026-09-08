@@ -260,6 +260,7 @@ dependencies = [
 name = "argusnet-core"
 version = "0.1.0"
 dependencies = [
+ "argusnet-types",
  "criterion",
  "nalgebra",
  "serde",
@@ -267,9 +268,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-mapping"
+version = "0.1.0"
+
+[[package]]
 name = "argusnet-native"
 version = "0.1.0"
 dependencies = [
+ "argusnet-mapping",
  "argusnet-world",
  "safety-engine",
  "serde",
@@ -281,6 +287,7 @@ name = "argusnet-proto"
 version = "0.1.0"
 dependencies = [
  "argusnet-core",
+ "argusnet-types",
  "criterion",
  "nalgebra",
  "prost",
@@ -311,6 +318,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-types"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "serde",
+]
+
+[[package]]
 name = "argusnet-viewer"
 version = "0.1.0"
 dependencies = [
@@ -334,6 +349,7 @@ dependencies = [
 name = "argusnet-world"
 version = "0.1.0"
 dependencies = [
+ "argusnet-types",
  "criterion",
  "serde",
  "serde_json",

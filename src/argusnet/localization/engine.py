@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from argusnet._native_world import score_footprints
 from argusnet.core.types import LocalizationEstimate, Vector3
 
 
@@ -99,9 +100,8 @@ class GridLocalizer:
 
         # Score each particle: how well does a footprint at that position match
         # the existing coverage map?  Higher coverage around the particle = better.
-        scores = np.array(
-            [self._score_position(pos, footprint_radius_m, coverage_map) for pos in positions],
-            dtype=float,
+        scores = score_footprints(
+            coverage_map.count_grid, coverage_map.bounds, footprint_radius_m, positions
         )
 
         # Weighted mean position.
@@ -196,17 +196,11 @@ class GridLocalizer:
         Uses the public ``count_grid()`` API and the canonical ``xy_to_ij``
         converter so axis ordering matches CoverageMap's (nx, ny) internal layout.
         """
-        bounds = coverage_map.bounds
-        gi, gj = bounds.xy_to_ij(float(xy[0]), float(xy[1]))
-        r_cells = max(1, int(radius_m / bounds.resolution_m))
-        nx, ny = bounds.nx, bounds.ny
-        i0, i1 = max(0, gi - r_cells), min(nx - 1, gi + r_cells)
-        j0, j1 = max(0, gj - r_cells), min(ny - 1, gj + r_cells)
-        if i0 >= i1 or j0 >= j1:
-            return -1.0
-        grid = coverage_map.count_grid  # property: returns a copy with shape (nx, ny)
-        patch = grid[i0:i1, j0:j1]
-        return float(np.log1p(patch.mean()))
+        return float(
+            score_footprints(
+                coverage_map.count_grid, coverage_map.bounds, radius_m, np.asarray(xy).reshape(1, 2)
+            )[0]
+        )
 
     def reset(self, drone_id: str | None = None) -> None:
         if drone_id is None:

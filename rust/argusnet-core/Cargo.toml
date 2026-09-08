@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+argusnet-types = { path = "../argusnet-types" }
 nalgebra.workspace = true
 serde.workspace = true
 smallvec = { version = "1", features = ["union"] }

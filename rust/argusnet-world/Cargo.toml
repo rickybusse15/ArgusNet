@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+argusnet-types = { path = "../argusnet-types" }
 serde.workspace = true
 
 [dev-dependencies]

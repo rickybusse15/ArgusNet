@@ -443,3 +443,53 @@ pub unsafe extern "C" fn argusnet_sample(
     }
     0
 }
+
+/// Score a batch of footprints without serializing the coverage raster.
+/// Returns 0 on success and 1 for invalid arguments.
+/// # Safety
+/// grid points to nx*ny i32 values; positions to count*2 f64 values;
+/// origin to two f64 values; output to count writable f64 values.
+/// All buffers must be valid, aligned, and output must not overlap inputs.
+#[no_mangle]
+pub unsafe extern "C" fn argusnet_score_footprints(
+    grid: *const i32,
+    nx: usize,
+    ny: usize,
+    origin: *const f64,
+    resolution: f64,
+    radius: f64,
+    positions: *const f64,
+    count: usize,
+    output: *mut f64,
+) -> i32 {
+    let Some(cells) = nx.checked_mul(ny) else {
+        return 1;
+    };
+    if grid.is_null()
+        || origin.is_null()
+        || positions.is_null()
+        || output.is_null()
+        || cells > isize::MAX as usize / 4
+        || count > isize::MAX as usize / 16
+    {
+        return 1;
+    }
+    // SAFETY: the caller provides valid buffers with the extents documented above.
+    let (grid, origin, positions) = unsafe {
+        (
+            std::slice::from_raw_parts(grid, cells),
+            [*origin, *origin.add(1)],
+            std::slice::from_raw_parts(positions.cast::<[f64; 2]>(), count),
+        )
+    };
+    let Ok(scores) =
+        argusnet_mapping::score_footprints(grid, [nx, ny], origin, resolution, radius, positions)
+    else {
+        return 1;
+    };
+    // SAFETY: writable output has count elements and does not overlap inputs.
+    unsafe {
+        std::ptr::copy_nonoverlapping(scores.as_ptr(), output, count);
+    }
+    0
+}

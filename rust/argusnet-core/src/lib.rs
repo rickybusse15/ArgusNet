@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, HashMap};
 
-pub type Matrix6 = SMatrix<f64, 6, 6>;
+pub use argusnet_types::{
+    BearingObservation, Matrix6, NodeState, ObservationRejection, PlatformFrame, PlatformMetrics,
+    TrackState, TruthState,
+};
 pub type Vector6 = SVector<f64, 6>;
 
 /// Upper bound on a track covariance trace before it is reset to an
@@ -328,95 +331,6 @@ impl TrackerConfig {
             min_quality_score: self.min_quality_score,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NodeState {
-    pub node_id: String,
-    pub position: Vector3<f64>,
-    pub velocity: Vector3<f64>,
-    pub is_mobile: bool,
-    pub timestamp_s: f64,
-    pub health: f64,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct BearingObservation {
-    pub node_id: String,
-    pub target_id: String,
-    pub origin: Vector3<f64>,
-    pub direction: Vector3<f64>,
-    pub bearing_std_rad: f64,
-    pub timestamp_s: f64,
-    pub confidence: f64,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ObservationRejection {
-    pub node_id: String,
-    pub target_id: String,
-    pub timestamp_s: f64,
-    pub reason: String,
-    pub detail: String,
-    pub origin: Option<Vector3<f64>>,
-    pub attempted_point: Option<Vector3<f64>>,
-    pub closest_point: Option<Vector3<f64>>,
-    pub blocker_type: String,
-    pub first_hit_range_m: Option<f64>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct TruthState {
-    pub target_id: String,
-    pub position: Vector3<f64>,
-    pub velocity: Vector3<f64>,
-    pub timestamp_s: f64,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct TrackState {
-    pub track_id: String,
-    pub timestamp_s: f64,
-    pub position: Vector3<f64>,
-    pub velocity: Vector3<f64>,
-    pub covariance: Matrix6,
-    pub measurement_std_m: f64,
-    pub update_count: u32,
-    pub stale_steps: u32,
-    pub lifecycle_state: Option<String>,
-    pub quality_score: Option<f64>,
-    /// IMM CV-model weight in [0, 1]. None when not using an IMM filter.
-    pub mode_probability_cv: Option<f64>,
-    /// Node IDs whose observations contributed to the most recent update.
-    /// Shared with the owning track so per-frame snapshots don't deep-clone.
-    pub contributing_node_ids: std::sync::Arc<Vec<String>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PlatformMetrics {
-    pub mean_error_m: Option<f64>,
-    pub max_error_m: Option<f64>,
-    pub active_track_count: u32,
-    pub observation_count: u32,
-    pub accepted_observation_count: u32,
-    pub rejected_observation_count: u32,
-    pub mean_measurement_std_m: Option<f64>,
-    pub track_errors_m: BTreeMap<String, f64>,
-    pub rejection_counts: BTreeMap<String, u32>,
-    pub accepted_observations_by_target: BTreeMap<String, u32>,
-    pub rejected_observations_by_target: BTreeMap<String, u32>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PlatformFrame {
-    pub timestamp_s: f64,
-    pub nodes: Vec<NodeState>,
-    pub observations: Vec<BearingObservation>,
-    pub rejected_observations: Vec<ObservationRejection>,
-    pub tracks: Vec<TrackState>,
-    pub truths: Vec<TruthState>,
-    pub metrics: PlatformMetrics,
-    pub generation_rejections: Vec<ObservationRejection>,
 }
 
 #[derive(Clone, Debug)]

@@ -1,6 +1,7 @@
-use argusnet_core::{
-    AssociationMode, BearingObservation, Matrix6, NodeHealthSnapshot, NodeState,
-    ObservationRejection, PlatformFrame, PlatformMetrics, TrackState, TrackerConfig, TruthState,
+use argusnet_core::{AssociationMode, NodeHealthSnapshot, TrackerConfig};
+use argusnet_types::{
+    BearingObservation, Matrix6, NodeState, ObservationRejection, PlatformFrame, PlatformMetrics,
+    TrackState, TruthState,
 };
 
 pub mod pb {
