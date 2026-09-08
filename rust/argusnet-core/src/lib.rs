@@ -2051,8 +2051,10 @@ mod tests {
 
     #[test]
     fn weak_geometry_cluster_is_rejected() {
-        let mut config = TrackerConfig::default();
-        config.min_intersection_angle_deg = 20.0;
+        let config = TrackerConfig {
+            min_intersection_angle_deg: 20.0,
+            ..Default::default()
+        };
         let mut engine = TrackingEngine::new(config).unwrap();
         let origin = vec3(0.0, 0.0, 0.0);
         let same_dir = vec3(1.0, 0.0, 0.0);
@@ -2114,9 +2116,11 @@ mod tests {
 
     #[test]
     fn stale_tracks_expire_after_limit() {
-        let mut config = TrackerConfig::default();
-        config.max_stale_steps = 1;
-        config.max_coast_frames = 2;
+        let config = TrackerConfig {
+            max_stale_steps: 1,
+            max_coast_frames: 2,
+            ..Default::default()
+        };
         let mut engine = TrackingEngine::new(config).unwrap();
         let nodes = vec![
             NodeState {
