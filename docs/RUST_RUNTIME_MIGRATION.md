@@ -1,10 +1,30 @@
 # Rust Runtime Migration and Game-Engine Viewer
 
+## Detailed migration plan
+
+The remaining migration is governed by these companion documents:
+
+- [Delivery plan](migration/DELIVERY_PLAN.md): work packages, dependencies,
+  consumer handoffs and exit criteria for partial Phases 2/4 and remaining 5/6.
+- [Architecture and communication protocols](migration/ARCHITECTURE_AND_PROTOCOLS.md):
+  crate ownership, truth/belief access, tick order, commands, snapshots,
+  checkpoints, streaming, native ABI and versioning.
+- [Verification and rollout](migration/VERIFICATION_AND_ROLLOUT.md): deterministic
+  seeds/math, statistical qualification, test matrices, performance/visual gates,
+  compatibility, release/rollback and open calibration decisions.
+- [ADR-007](adr/007-runtime-composition-and-snapshots.md) and
+  [ADR-008](adr/008-world-aware-streaming-and-compatibility.md) record the adopted
+  architecture. Accepted design does not mean the planned interfaces exist yet.
+
+These documents supersede the abbreviated ordering below where more specific.
+They do not change the separate product roadmap's phase numbering.
+
 ## Status after Phase 3
 
 Implementation snapshot: `8fbf7c2` on `codex/finish-phase3`, based on GitHub
 `main` at `5f86094` (the latest fetched main when Phase 3 was completed).
-Phase 3 is implemented and verified locally; it has not been pushed or merged.
+Phase 3 is implemented and verified on this branch; merge/release status must be
+checked in GitHub rather than inferred from this implementation snapshot.
 This plan uses **migration phases**, distinct from the product capability phases
 in [ROADMAP.md](ROADMAP.md).
 
@@ -13,7 +33,7 @@ queries, safety policy and fusion. Python still drives the simulation; the
 viewer still loads batch replay/scene artifacts. Completing Phase 3 does not
 complete the real-time runtime migration.
 
-## Next slices delivered locally
+## Subsequent implemented slices
 
 The branch now also incorporates GitHub main `a7817d9` (PR #43 observation-source
 contract). Phase 2 has persistent typed mesh markers, a holographic material and
@@ -62,7 +82,7 @@ The compatibility re-exports in `environment.py` remain available.
 | 0 — Measurement, contracts and guardrails | Foundation landed; verification gaps remain | Retain strict replay and deterministic work gates. Add a protobuf regeneration comparison and a steady-state viewer frame budget bench; neither was verified as present in this checkout. |
 | 1 — Bevy 0.19 and one renderer | Landed | Keep real headless Bevy smoke coverage. CPU rasterization is no longer the CI render path. |
 | 2 — Viewer engine, visuals and controls | Partial | Preserve interpolation, typed selection, ordered/gated systems, HDR/bloom/fog/gradient sky and screen-scaled camera-facing symbols. Persistent typed marker meshes and the holographic material now exist. Finish terrain/belief material, sensor/zone/trail geometry, picking, camera/time controls and authored UI. Exit with gizmos diagnostic-only, image regression coverage and a measured frame budget. |
-| 3 — One world authority | Implemented and verified locally | Review/push/merge `8fbf7c2`; no remaining Phase 3 implementation items identified. See the evidence below. |
+| 3 — One world authority | Implemented and verified locally | Review/merge the branch containing `8fbf7c2`; no remaining Phase 3 implementation items identified. See the evidence below. |
 | 4 — Rust simulation runtime | In progress: shared types and localization scoring | Finish shared DTO alignment and localization state, then decompose the loop into library crates. Rust CLI must reproduce scenarios within documented statistical envelopes. |
 | 5 — Real-time viewer | Depends on Phases 2 and 4 | Link simulation in-process, fixed timestep, pause/step/speed/rewind; remove Python subprocesses and runtime GLB baking, add live world metadata. Verify sustained render performance. |
 | 6 — Python reduction | After runtime consumers migrate | Delete migrated runtime modules/bridge paths as callers disappear; retain evaluation, reporting, GIS and export tooling. Update ownership and usage docs. |

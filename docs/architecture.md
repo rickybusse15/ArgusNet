@@ -308,6 +308,13 @@ All nontrivial architecture changes require an ADR in `docs/adr/`.
 | 004 | Performance Benchmarking Rollout | accepted (renumbered from a second ADR-001) |
 | 005 | Rust as the Runtime Authority | accepted; supersedes Decision 3 of `ARCHITECTURE_DECISIONS.md` |
 | 006 | Determinism Re-baseline for the Rust Runtime | accepted |
+| [007](adr/007-runtime-composition-and-snapshots.md) | Deterministic Runtime Composition and Snapshot Boundaries | accepted design; staged implementation |
+| [008](adr/008-world-aware-streaming-and-compatibility.md) | World-Aware Streaming and Versioned Compatibility | accepted design; RPCs not yet implemented |
+
+The [remaining migration delivery plan](migration/DELIVERY_PLAN.md),
+[protocol contract](migration/ARCHITECTURE_AND_PROTOCOLS.md) and
+[verification/rollout gates](migration/VERIFICATION_AND_ROLLOUT.md) govern the Rust
+migration. Planned APIs there are distinct from current implemented ownership.
 
 Recommended new ADRs:
 

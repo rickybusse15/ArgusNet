@@ -16,8 +16,10 @@ current implementation boundary.
 ## Runtime migration track
 
 The [Rust runtime migration plan](RUST_RUNTIME_MIGRATION.md) tracks the separate
-engineering migration. Its Phase 3 (world/safety authority) is implemented and
-verified locally at `8fbf7c2`, pending publication and merge. Python still owns the
+engineering migration, with detailed [work packages](migration/DELIVERY_PLAN.md),
+[protocols](migration/ARCHITECTURE_AND_PROTOCOLS.md) and
+[acceptance gates](migration/VERIFICATION_AND_ROLLOUT.md). Its Phase 3 (world/safety authority) is implemented and
+verified at `8fbf7c2` on the migration branch, pending merge. Python still owns the
 simulation loop. Migration phase numbers do not correspond to the product phases
 below.
 

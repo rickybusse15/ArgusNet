@@ -4,6 +4,11 @@ This document describes current ArgusNet state ownership. It intentionally uses 
 `src/argusnet` package, `argusnet-*` Rust crates, and split mapping/localization/planning modules.
 Roadmap contracts belong in the subsystem docs; this file should reflect implemented ownership.
 
+Planned ownership and communication boundaries are specified separately in
+[migration/ARCHITECTURE_AND_PROTOCOLS.md](migration/ARCHITECTURE_AND_PROTOCOLS.md).
+This file continues to describe implemented behavior; accepted design is not a
+claim that `argusnet-sim`, full Rust localization or world-aware live RPCs exist.
+
 ## Ownership Rules
 
 - Runtime mutable state is owned by the subsystem that mutates it.
