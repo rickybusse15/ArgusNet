@@ -20,7 +20,10 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "
 
 def _load_replay_schema() -> dict[str, Any]:
     """Load the JSON Schema for replay documents from the docs directory."""
-    with _SCHEMA_PATH.open("r", encoding="utf-8") as fh:
+    schema_path = (
+        _SCHEMA_PATH if _SCHEMA_PATH.is_file() else Path(__file__).with_name("replay-schema.json")
+    )
+    with schema_path.open("r", encoding="utf-8") as fh:
         return json.load(fh)
 
 

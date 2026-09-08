@@ -22,7 +22,7 @@ Status labels:
 | Weather affecting sensing | **Implemented** | `src/argusnet/world/visibility.py`, `src/argusnet/world/weather.py` |
 | Weather affecting vehicle dynamics | **Planned** | Wind/weather are not fully coupled to drone dynamics. |
 | CRS/geodetic transforms | **Partial** | `src/argusnet/core/frames.py` and `EnvironmentCRS`; most sim scenarios remain local-frame. |
-| Rust world/terrain runtime integration | **Partial** | `terrain-engine` exists, but Python sim terrain remains authoritative for current runtime. [ADR-005](adr/005-rust-runtime-authority.md) makes `argusnet-world` the single authority; not yet implemented. |
+| Rust world/terrain runtime integration | **Implemented (Phase 3)** | `argusnet-world` owns analytic/tiled sampling, obstacle geometry/indexing, land-cover queries and LOS. Python calls the native library; the viewer uses its replay-raster adapter. Python scenario authoring/export and the tick loop remain until later phases. |
 
 ## Sensing And Fusion
 

@@ -1,6 +1,7 @@
 [workspace]
 members = [
-  "rust/terrain-engine",
+  "rust/argusnet-native",
+  "rust/argusnet-world",
   "rust/safety-engine",
   "rust/argusnet-core",
   "rust/argusnet-proto",

@@ -6,8 +6,8 @@
 
 use std::path::PathBuf;
 
+use argusnet_world::obstacles::{Obstacle, ObstacleMetadata, ObstacleShape};
 use serde::Deserialize;
-use terrain_engine::obstacles::{Obstacle, ObstacleMetadata, ObstacleShape};
 
 #[derive(Deserialize)]
 struct EnvironmentMetadata {

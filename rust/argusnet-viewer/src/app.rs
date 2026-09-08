@@ -1516,13 +1516,13 @@ fn draw_sensor_overlays_system(
                     let z0 = mission_zones
                         .terrain_mesh
                         .as_ref()
-                        .and_then(|m| m.sample_height(c0[0], c0[1]))
+                        .and_then(|m| m.height_at(c0[0], c0[1]))
                         .unwrap_or(pos.z)
                         + 1.5;
                     let z1 = mission_zones
                         .terrain_mesh
                         .as_ref()
-                        .and_then(|m| m.sample_height(c1[0], c1[1]))
+                        .and_then(|m| m.height_at(c1[0], c1[1]))
                         .unwrap_or(pos.z)
                         + 1.5;
                     let p0 = Vec3::new(c0[0], c0[1], z0);
@@ -1673,7 +1673,7 @@ fn footprint_ground_z_m(
     xy_m: [f32; 2],
 ) -> f32 {
     terrain_mesh
-        .and_then(|mesh| mesh.sample_height(xy_m[0], xy_m[1]))
+        .and_then(|mesh| mesh.height_at(xy_m[0], xy_m[1]))
         .unwrap_or(fallback_ground_z)
 }
 

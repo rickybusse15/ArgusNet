@@ -20,11 +20,11 @@ Roadmap contracts belong in the subsystem docs; this file should reflect impleme
 
 | State | Defined In | Written By | Read By | Boundary Notes |
 |-------|------------|------------|---------|----------------|
-| Terrain model features | `src/argusnet/world/terrain.py` | Terrain preset/build code | `world/procedural.py`, environment creation, tests | Analytic source for procedural terrain. |
-| Terrain layer | `src/argusnet/world/environment.py` (`TerrainLayer`) | Scenario/environment builders, `build_terrain_layer()` | sim altitude clamping, LOS, replay/scene builders | Python runtime terrain authority; Rust terrain consumers use `terrain-engine` only where wired. |
+| Terrain model features | `src/argusnet/world/terrain.py` | Terrain preset/build code | `world/procedural.py`, environment creation, tests | Preset/configuration data; analytic evaluation is owned by `argusnet-world`. |
+| Terrain layer | `src/argusnet/world/environment.py` (`TerrainLayer`) | Scenario/environment builders, `build_terrain_layer()` | sim altitude clamping, LOS, replay/scene builders | Rust `argusnet-world` owns evaluation through `argusnet-native`; Python retains configuration/export metadata. |
 | Terrain viewer mesh | Replay `meta.terrain.viewer_mesh`, scene packages | replay/scene builders | `rust/argusnet-viewer/src/replay.rs` and viewer state | Display artifact, not planning authority. |
-| Obstacles | `src/argusnet/world/obstacles.py`, `EnvironmentModel.obstacles` | Scenario/environment builders | LOS, planner, collision/deconfliction, scene export | Python-owned geometry. |
-| Land cover | `src/argusnet/world/environment.py`, `world/procedural.py` | Environment builders | visibility/sensing, replay/scene export | Seasonal masks are current; production tuning is scenario-specific. |
+| Obstacles | `src/argusnet/world/obstacles.py`, `EnvironmentModel.obstacles` | Scenario/environment builders | LOS, planner, collision/deconfliction, scene export | Rust `argusnet-world` owns geometry and indexing; Python retains metadata wrappers. |
+| Land cover | `src/argusnet/world/environment.py`, `world/procedural.py` | Environment builders | visibility/sensing, replay/scene export | Rust owns categorical sampling and density queries; Python authors seasonal raster data. |
 | Weather | `src/argusnet/world/weather.py` | Scenario builders | visibility/sensing and scenario metadata | Weather affects sensor factors; full vehicle dynamics effects remain partial. |
 | Scenario config | `src/argusnet/simulation/sim.py`, `src/argusnet/core/config.py` | CLI/scenario builders | sim runtime, replay metadata, tests | `ScenarioOptions` and `SimulationConfig` are Python authorities. |
 | Node state | `argusnet.core.types.NodeState` | Python simulation loop and ingestion adapters | Rust service request conversion, replay, viewer | Includes sensor capability and battery fraction fields for replay/sim use. |
@@ -87,7 +87,7 @@ inspection documentation.
 | Python sim -> Rust fusion service | `proto/argusnet/v1/world_model.proto` via `argusnet.adapters.argusnet_grpc` | Rust owns returned fused object states and metrics. |
 | Python sim -> replay JSON | `src/argusnet/evaluation/replay.py` and `docs/replay-schema.json` | Python owns serialization; schema is additive. |
 | Replay JSON -> Rust viewer | `rust/argusnet-viewer/src/replay.rs` / schema types | Viewer reads and displays; it does not mutate mission truth. |
-| Python terrain -> Rust terrain helpers | No universal live boundary | `terrain-engine` is available for Rust-side consumers but not the Python sim authority. |
+| Python world -> Rust world | Versioned native C ABI, owned handles and batched f64 buffers | `argusnet-world` evaluates terrain/obstacles/LOS; `safety-engine` makes safety decisions. No Python fallback. |
 | Mapping/localization/inspection -> gRPC | Not currently in proto | These states are replay/runtime Python state today, not Rust gRPC state. |
 
 ## Current Gaps To Keep Visible

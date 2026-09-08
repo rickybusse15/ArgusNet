@@ -80,7 +80,8 @@ argusnet sim --duration-s 60        # Run simulation
 ## Crate / Module Map
 
 See `docs/architecture.md` for the current map. The planned evolution (docs/STATE_OWNERSHIP.md) adds:
-- `terrain-engine` — analytic terrain queries
+- `argusnet-world` — authoritative terrain, obstacle and visibility queries
+- `argusnet-native` — Python world/safety bindings (built by `pip install -e .`)
 - `argusnet-core` — current fused object-state authority
 - `argusnet-server` / `argusnet-proto` — current gRPC service boundary
 - `argusnet-viewer` — current replay/scene viewer

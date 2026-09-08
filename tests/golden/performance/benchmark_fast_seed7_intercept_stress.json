@@ -4,8 +4,8 @@
   "duration_s": 1.0,
   "work": {
     "frame_count": 5,
-    "total_accepted_observations": 16,
-    "total_rejected_observations": 5,
+    "total_accepted_observations": 8,
+    "total_rejected_observations": 7,
     "cache": {
       "obstacles.point_collides": {
         "hits": 0,
@@ -18,8 +18,8 @@
         "evictions": 0
       },
       "terrain.height_at": {
-        "hits": 1276,
-        "misses": 11766,
+        "hits": 94,
+        "misses": 338,
         "evictions": 0
       },
       "visibility.los": {
@@ -31,12 +31,12 @@
   },
   "timing_reference": {
     "note": "Recorded for reference. Only compared when ARGUSNET_RUN_PERF_TIMING=1 marks this machine as calibrated.",
-    "machine": "Linux x86_64",
-    "python": "3.11.15",
-    "wall_clock_s": 0.4482766870000887,
-    "frame_time_mean_ms": 89.40157500000001,
-    "frame_time_p95_ms": 95.1265,
-    "frame_time_p99_ms": 95.45664000000001,
-    "peak_rss_mb": 106.328125
+    "machine": "Darwin arm64",
+    "python": "3.12.13",
+    "wall_clock_s": 0.03442379197804257,
+    "frame_time_mean_ms": 6.823625,
+    "frame_time_p95_ms": 8.8987164,
+    "frame_time_p99_ms": 9.16850968,
+    "peak_rss_mb": 161.703125
   }
 }

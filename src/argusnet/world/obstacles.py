@@ -3,8 +3,11 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
+
+from argusnet._native_world import NativeHandle, call
 
 from .environment import Bounds2D
 
@@ -42,20 +45,7 @@ def _point_on_segment(
 
 
 def _point_in_polygon(point_xy: np.ndarray, polygon_xy: np.ndarray) -> bool:
-    inside = False
-    for index in range(len(polygon_xy)):
-        a = polygon_xy[index]
-        b = polygon_xy[(index + 1) % len(polygon_xy)]
-        if _point_on_segment(point_xy, a, b):
-            return True
-        intersects = (a[1] > point_xy[1]) != (b[1] > point_xy[1])
-        if intersects:
-            # The `intersects` test above guarantees b[1] != a[1], so the denominator
-            # is non-zero; it must keep its sign for downward edges to cross correctly.
-            x_cross = ((b[0] - a[0]) * (point_xy[1] - a[1]) / (b[1] - a[1])) + a[0]
-            if point_xy[0] < x_cross:
-                inside = not inside
-    return inside
+    return bool(call("point_in_polygon", point=point_xy, polygon=polygon_xy))
 
 
 def _segment_intersection_parameters(
@@ -64,17 +54,8 @@ def _segment_intersection_parameters(
     b0: np.ndarray,
     b1: np.ndarray,
 ) -> tuple[float, float] | None:
-    da = a1 - a0
-    db = b1 - b0
-    denominator = (da[0] * db[1]) - (da[1] * db[0])
-    if abs(denominator) <= 1.0e-9:
-        return None
-    delta = b0 - a0
-    ta = ((delta[0] * db[1]) - (delta[1] * db[0])) / denominator
-    tb = ((delta[0] * da[1]) - (delta[1] * da[0])) / denominator
-    if -1.0e-9 <= ta <= 1.0 + 1.0e-9 and -1.0e-9 <= tb <= 1.0 + 1.0e-9:
-        return (float(ta), float(tb))
-    return None
+    result = call("segment_hit", a0=a0, a1=a1, b0=b0, b1=b1)
+    return None if result is None else tuple(result)
 
 
 def _segment_polygon_intervals(
@@ -82,57 +63,36 @@ def _segment_polygon_intervals(
     target_xy: np.ndarray,
     polygon_xy: np.ndarray,
 ) -> list[tuple[float, float]]:
-    t_values: list[float] = [0.0, 1.0]
-    for index in range(len(polygon_xy)):
-        edge_start = polygon_xy[index]
-        edge_end = polygon_xy[(index + 1) % len(polygon_xy)]
-        parameters = _segment_intersection_parameters(origin_xy, target_xy, edge_start, edge_end)
-        if parameters is not None:
-            t_values.append(parameters[0])
-    t_values = _unique_sorted(value for value in t_values if -1.0e-9 <= value <= 1.0 + 1.0e-9)
-
-    intervals: list[tuple[float, float]] = []
-    for start, end in zip(t_values[:-1], t_values[1:], strict=False):
-        if end - start <= 1.0e-9:
-            continue
-        midpoint = (start + end) * 0.5
-        point_xy = origin_xy + (target_xy - origin_xy) * midpoint
-        if _point_in_polygon(point_xy, polygon_xy):
-            intervals.append((start, end))
-    return intervals
+    return [
+        tuple(v)
+        for v in call("polygon_intervals", origin=origin_xy, target=target_xy, polygon=polygon_xy)
+    ]
 
 
 def _nearest_point_on_segment(
     point_xy: np.ndarray, start_xy: np.ndarray, end_xy: np.ndarray
 ) -> np.ndarray:
-    segment = end_xy - start_xy
-    length_sq = float(np.dot(segment, segment))
-    if length_sq <= 1.0e-12:
-        return start_xy.copy()
-    t_value = float(np.clip(np.dot(point_xy - start_xy, segment) / length_sq, 0.0, 1.0))
-    return start_xy + segment * t_value
-
-
-def _signed_polygon_area(polygon_xy: np.ndarray) -> float:
-    x_values = polygon_xy[:, 0]
-    y_values = polygon_xy[:, 1]
-    return 0.5 * float(
-        np.dot(x_values, np.roll(y_values, -1)) - np.dot(y_values, np.roll(x_values, -1))
+    return np.asarray(
+        call("nearest_point", point=point_xy, start=start_xy, end=end_xy), dtype=float
     )
 
 
+def _signed_polygon_area(polygon_xy: np.ndarray) -> float:
+    return float(call("polygon_area", polygon=polygon_xy))
+
+
 def _edge_outward_normal(start_xy: np.ndarray, end_xy: np.ndarray, *, is_ccw: bool) -> np.ndarray:
-    edge = end_xy - start_xy
-    length = max(float(np.linalg.norm(edge)), 1.0e-9)
-    if is_ccw:
-        return np.array([edge[1], -edge[0]], dtype=float) / length
-    return np.array([-edge[1], edge[0]], dtype=float) / length
+    return np.asarray(call("outward_normal", start=start_xy, end=end_xy, ccw=is_ccw), dtype=float)
 
 
 @dataclass(frozen=True)
 class ObstaclePrimitive:
     primitive_id: str
     blocker_type: str
+
+    @cached_property
+    def _native(self):
+        return NativeHandle("obstacle_new", metadata=self.to_metadata())
 
     def bounds_xy_m(self) -> Bounds2D:
         raise NotImplementedError
@@ -167,63 +127,27 @@ class PolygonPrism(ObstaclePrimitive):
             raise ValueError("top_z_m must be greater than base_z_m.")
 
     def bounds_xy_m(self) -> Bounds2D:
-        return Bounds2D(
-            x_min_m=float(np.min(self.footprint_xy_m[:, 0])),
-            x_max_m=float(np.max(self.footprint_xy_m[:, 0])),
-            y_min_m=float(np.min(self.footprint_xy_m[:, 1])),
-            y_max_m=float(np.max(self.footprint_xy_m[:, 1])),
-        )
-
-    def _inside_intervals(
-        self, origin: np.ndarray, target: np.ndarray
-    ) -> list[tuple[float, float]]:
-        intervals = _segment_polygon_intervals(origin[:2], target[:2], self.footprint_xy_m)
-        filtered: list[tuple[float, float]] = []
-        for start, end in intervals:
-            z_start = float(origin[2] + ((target[2] - origin[2]) * start))
-            z_end = float(origin[2] + ((target[2] - origin[2]) * end))
-            if max(z_start, z_end) >= self.base_z_m and min(z_start, z_end) <= self.top_z_m:
-                filtered.append((start, end))
-        return filtered
+        return Bounds2D(**call("obstacle", handle=self._native.id, method="bounds"))
 
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
-        distance_m = float(np.linalg.norm(target - origin))
         return float(
-            sum((end - start) * distance_m for start, end in self._inside_intervals(origin, target))
+            call("obstacle", handle=self._native.id, method="length", origin=origin, target=target)
         )
 
     def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
-        intervals = self._inside_intervals(origin, target)
-        return intervals[0][0] if intervals else None
+        return call("obstacle", handle=self._native.id, method="hit", origin=origin, target=target)
 
     def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
-        if z_m < self.base_z_m - 1.0e-9 or z_m > self.top_z_m + 1.0e-9:
-            return False
-        return _point_in_polygon(np.array([x_m, y_m], dtype=float), self.footprint_xy_m)
+        return bool(
+            call("obstacle", handle=self._native.id, method="inside", point=[x_m, y_m, z_m])
+        )
 
     def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
-        point_xy = np.array([x_m, y_m], dtype=float)
-        if not _point_in_polygon(point_xy, self.footprint_xy_m):
-            return point_xy
-
-        is_ccw = _signed_polygon_area(self.footprint_xy_m) >= 0.0
-        best_candidate = point_xy.copy()
-        best_distance = float("inf")
-        for index in range(len(self.footprint_xy_m)):
-            edge_start = self.footprint_xy_m[index]
-            edge_end = self.footprint_xy_m[(index + 1) % len(self.footprint_xy_m)]
-            boundary_point = _nearest_point_on_segment(point_xy, edge_start, edge_end)
-            outward_normal = _edge_outward_normal(edge_start, edge_end, is_ccw=is_ccw)
-            candidate = boundary_point + outward_normal * max(margin_m, 1.0)
-            for _ in range(6):
-                if not _point_in_polygon(candidate, self.footprint_xy_m):
-                    break
-                candidate = candidate + outward_normal * max(margin_m, 1.0)
-            distance = float(np.linalg.norm(candidate - point_xy))
-            if distance < best_distance:
-                best_distance = distance
-                best_candidate = candidate
-        return best_candidate
+        return np.asarray(
+            call(
+                "obstacle", handle=self._native.id, method="push", point=[x_m, y_m], margin=margin_m
+            )
+        )
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -327,19 +251,27 @@ class OrientedBox(ObstaclePrimitive):
         )
 
     def bounds_xy_m(self) -> Bounds2D:
-        return self._as_prism().bounds_xy_m()
+        return Bounds2D(**call("obstacle", handle=self._native.id, method="bounds"))
 
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
-        return self._as_prism().path_length_inside(origin, target)
+        return float(
+            call("obstacle", handle=self._native.id, method="length", origin=origin, target=target)
+        )
 
     def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
-        return self._as_prism().first_hit_t(origin, target)
+        return call("obstacle", handle=self._native.id, method="hit", origin=origin, target=target)
 
     def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
-        return self._as_prism().point_inside(x_m, y_m, z_m)
+        return bool(
+            call("obstacle", handle=self._native.id, method="inside", point=[x_m, y_m, z_m])
+        )
 
     def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
-        return self._as_prism().push_outside_xy(x_m, y_m, margin_m=margin_m)
+        return np.asarray(
+            call(
+                "obstacle", handle=self._native.id, method="push", point=[x_m, y_m], margin=margin_m
+            )
+        )
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -395,19 +327,27 @@ class WallSegment(ObstaclePrimitive):
         )
 
     def bounds_xy_m(self) -> Bounds2D:
-        return self._as_prism().bounds_xy_m()
+        return Bounds2D(**call("obstacle", handle=self._native.id, method="bounds"))
 
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
-        return self._as_prism().path_length_inside(origin, target)
+        return float(
+            call("obstacle", handle=self._native.id, method="length", origin=origin, target=target)
+        )
 
     def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
-        return self._as_prism().first_hit_t(origin, target)
+        return call("obstacle", handle=self._native.id, method="hit", origin=origin, target=target)
 
     def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
-        return self._as_prism().point_inside(x_m, y_m, z_m)
+        return bool(
+            call("obstacle", handle=self._native.id, method="inside", point=[x_m, y_m, z_m])
+        )
 
     def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
-        return self._as_prism().push_outside_xy(x_m, y_m, margin_m=margin_m)
+        return np.asarray(
+            call(
+                "obstacle", handle=self._native.id, method="push", point=[x_m, y_m], margin=margin_m
+            )
+        )
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -436,74 +376,27 @@ class CylinderObstacle(ObstaclePrimitive):
             raise ValueError("Invalid CylinderObstacle dimensions.")
 
     def bounds_xy_m(self) -> Bounds2D:
-        return Bounds2D(
-            self.center_x_m - self.radius_m,
-            self.center_x_m + self.radius_m,
-            self.center_y_m - self.radius_m,
-            self.center_y_m + self.radius_m,
-        )
+        return Bounds2D(**call("obstacle", handle=self._native.id, method="bounds"))
 
     def path_length_inside(self, origin: np.ndarray, target: np.ndarray) -> float:
-        interval = self._t_interval(origin, target)
-        if interval is None:
-            return 0.0
-        return float((interval[1] - interval[0]) * np.linalg.norm(target - origin))
-
-    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
-        interval = self._t_interval(origin, target)
-        return None if interval is None else interval[0]
-
-    def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
-        if z_m < self.base_z_m - 1.0e-9 or z_m > self.top_z_m + 1.0e-9:
-            return False
-        dx = x_m - self.center_x_m
-        dy = y_m - self.center_y_m
-        return (dx * dx + dy * dy) <= (self.radius_m * self.radius_m + 1.0e-9)
-
-    def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
-        delta = np.array([x_m - self.center_x_m, y_m - self.center_y_m], dtype=float)
-        radius = float(np.linalg.norm(delta))
-        direction = np.array([1.0, 0.0], dtype=float) if radius <= 1e-09 else delta / radius
-        return np.array(
-            [
-                self.center_x_m + direction[0] * (self.radius_m + max(margin_m, 1.0)),
-                self.center_y_m + direction[1] * (self.radius_m + max(margin_m, 1.0)),
-            ],
-            dtype=float,
+        return float(
+            call("obstacle", handle=self._native.id, method="length", origin=origin, target=target)
         )
 
-    def _t_interval(self, origin: np.ndarray, target: np.ndarray) -> tuple[float, float] | None:
-        origin_xy = origin[:2]
-        target_xy = target[:2]
-        segment_xy = target_xy - origin_xy
-        relative_xy = origin_xy - np.array([self.center_x_m, self.center_y_m], dtype=float)
-        a = float(np.dot(segment_xy, segment_xy))
-        if a <= 1.0e-9:
-            if float(np.dot(relative_xy, relative_xy)) > self.radius_m * self.radius_m:
-                return None
-            if (
-                max(float(origin[2]), float(target[2])) < self.base_z_m
-                or min(float(origin[2]), float(target[2])) > self.top_z_m
-            ):
-                return None
-            return (0.0, 1.0)
-        b = 2.0 * float(np.dot(relative_xy, segment_xy))
-        c = float(np.dot(relative_xy, relative_xy) - (self.radius_m * self.radius_m))
-        discriminant = b * b - (4.0 * a * c)
-        if discriminant < 0.0:
-            return None
-        sqrt_disc = math.sqrt(discriminant)
-        t0 = (-b - sqrt_disc) / (2.0 * a)
-        t1 = (-b + sqrt_disc) / (2.0 * a)
-        start = max(0.0, min(t0, t1))
-        end = min(1.0, max(t0, t1))
-        if start > end:
-            return None
-        z_start = float(origin[2] + ((target[2] - origin[2]) * start))
-        z_end = float(origin[2] + ((target[2] - origin[2]) * end))
-        if max(z_start, z_end) < self.base_z_m or min(z_start, z_end) > self.top_z_m:
-            return None
-        return (start, end)
+    def first_hit_t(self, origin: np.ndarray, target: np.ndarray) -> float | None:
+        return call("obstacle", handle=self._native.id, method="hit", origin=origin, target=target)
+
+    def point_inside(self, x_m: float, y_m: float, z_m: float) -> bool:
+        return bool(
+            call("obstacle", handle=self._native.id, method="inside", point=[x_m, y_m, z_m])
+        )
+
+    def push_outside_xy(self, x_m: float, y_m: float, margin_m: float = 1.0) -> np.ndarray:
+        return np.asarray(
+            call(
+                "obstacle", handle=self._native.id, method="push", point=[x_m, y_m], margin=margin_m
+            )
+        )
 
     def to_metadata(self) -> dict[str, object]:
         return {

@@ -3,8 +3,11 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
+
+from argusnet._native_world import NativeHandle, call, sample
 
 from ._cache import BoundedLRU, quantized_key
 from .environment import (
@@ -68,23 +71,7 @@ class MountainRange(TerrainFeature):
         object.__setattr__(self, "end_xy", _as_xy(self.end_xy))
 
     def height_contribution(self, x_m: float, y_m: float) -> float:
-        point_xy = np.array([x_m, y_m], dtype=float)
-        segment = self.end_xy - self.start_xy
-        length = max(float(np.linalg.norm(segment)), self.width_m, 1.0)
-        _, clamped_along, cross = _segment_frame(point_xy, self.start_xy, self.end_xy)
-        spacing = length / max(self.peak_count + 1, 1)
-        ridge_envelope = math.exp(-0.5 * (cross / max(self.width_m, 1.0)) ** 2)
-        contribution = 0.0
-        for peak_index in range(max(self.peak_count, 1)):
-            peak_along = spacing * (peak_index + 1)
-            peak_span = max(spacing * 0.9, self.width_m * 0.75, 1.0)
-            roughness_phase = (peak_index + 1) * 1.618
-            amplitude = self.peak_elevation_m * (
-                0.8 + self.roughness * 0.2 * math.sin(roughness_phase)
-            )
-            along_delta = (clamped_along - peak_along) / peak_span
-            contribution += amplitude * math.exp(-0.5 * along_delta * along_delta)
-        return contribution * ridge_envelope
+        return float(call("feature", feature=self.to_metadata(), point=[x_m, y_m]))
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -110,10 +97,7 @@ class Valley(TerrainFeature):
         object.__setattr__(self, "end_xy", _as_xy(self.end_xy))
 
     def height_contribution(self, x_m: float, y_m: float) -> float:
-        point_xy = np.array([x_m, y_m], dtype=float)
-        _, _, cross = _segment_frame(point_xy, self.start_xy, self.end_xy)
-        normalized = cross / max(self.width_m, 1.0)
-        return -self.depth_m * math.exp(-0.5 * normalized * normalized)
+        return float(call("feature", feature=self.to_metadata(), point=[x_m, y_m]))
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -136,11 +120,7 @@ class Plateau(TerrainFeature):
         object.__setattr__(self, "center_xy", _as_xy(self.center_xy))
 
     def height_contribution(self, x_m: float, y_m: float) -> float:
-        radius = max(self.radius_m, 1.0)
-        distance = float(np.linalg.norm(np.array([x_m, y_m], dtype=float) - self.center_xy))
-        normalized = distance / radius
-        sharpness = max(self.edge_sharpness, 1.0)
-        return self.elevation_m / (1.0 + normalized**sharpness)
+        return float(call("feature", feature=self.to_metadata(), point=[x_m, y_m]))
 
     def scaled(self, scale: float) -> Plateau:
         return Plateau(
@@ -172,10 +152,7 @@ class RidgeLine(TerrainFeature):
         object.__setattr__(self, "end_xy", _as_xy(self.end_xy))
 
     def height_contribution(self, x_m: float, y_m: float) -> float:
-        point_xy = np.array([x_m, y_m], dtype=float)
-        _, _, cross = _segment_frame(point_xy, self.start_xy, self.end_xy)
-        normalized = cross / max(self.width_m, 1.0)
-        return self.peak_elevation_m * math.exp(-0.5 * normalized * normalized)
+        return float(call("feature", feature=self.to_metadata(), point=[x_m, y_m]))
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -188,12 +165,7 @@ class RidgeLine(TerrainFeature):
 
 
 def _noise_hash2d(ix: int, iy: int, seed: int) -> float:
-    """Deterministic hash of grid coordinates to a float in [-1, 1]."""
-    h = (ix * 73856093) ^ (iy * 19349663) ^ seed
-    h = ((h >> 13) ^ h) * 0x45D9F3B & 0xFFFFFFFF
-    h = ((h >> 13) ^ h) * 0x45D9F3B & 0xFFFFFFFF
-    h = (h >> 13) ^ h
-    return (h & 0xFFFF) / 32767.5 - 1.0
+    return float(call("noise_hash", ix=ix, iy=iy, seed=seed))
 
 
 def _smoothstep(t: float) -> float:
@@ -201,18 +173,7 @@ def _smoothstep(t: float) -> float:
 
 
 def _value_noise_2d(x: float, y: float, seed: int) -> float:
-    """Bilinearly interpolated value noise at (x, y)."""
-    ix = int(math.floor(x))
-    iy = int(math.floor(y))
-    fx = _smoothstep(x - ix)
-    fy = _smoothstep(y - iy)
-    n00 = _noise_hash2d(ix, iy, seed)
-    n10 = _noise_hash2d(ix + 1, iy, seed)
-    n01 = _noise_hash2d(ix, iy + 1, seed)
-    n11 = _noise_hash2d(ix + 1, iy + 1, seed)
-    nx0 = n00 + fx * (n10 - n00)
-    nx1 = n01 + fx * (n11 - n01)
-    return nx0 + fy * (nx1 - nx0)
+    return float(call("value_noise", x=x, y=y, seed=seed))
 
 
 @dataclass(frozen=True)
@@ -227,14 +188,7 @@ class NoiseLayer(TerrainFeature):
     lacunarity: float = 2.0
 
     def height_contribution(self, x_m: float, y_m: float) -> float:
-        total = 0.0
-        wavelength = max(self.base_wavelength_m, 1.0)
-        amp = 1.0
-        for octave in range(self.octaves):
-            total += amp * _value_noise_2d(x_m / wavelength, y_m / wavelength, self.seed + octave)
-            wavelength /= self.lacunarity
-            amp *= self.persistence
-        return total * self.amplitude_m
+        return float(call("feature", feature=self.to_metadata(), point=[x_m, y_m]))
 
     def to_metadata(self) -> dict[str, object]:
         return {
@@ -284,37 +238,16 @@ class TerrainModel:
         compare=False,
     )
 
+    @cached_property
+    def _native(self):
+        return NativeHandle("analytic_new", parameters=self.to_metadata()["parameters"])
+
     @classmethod
     def default(cls) -> TerrainModel:
         return cls()
 
     def analytic_height_at(self, x_m: float, y_m: float) -> float:
-        ridge_r2 = max(self.ridge_radius_m**2, 1.0)
-        basin_r2 = max(self.basin_radius_m**2, 1.0)
-
-        x_freq = (2.0 * np.pi) / max(self.wave_length_x_m, 1.0)
-        y_freq = (2.0 * np.pi) / max(self.wave_length_y_m, 1.0)
-        wave = (
-            self.wave_amplitude_m
-            * np.sin(x_m * x_freq + self.wave_phase_x_rad)
-            * np.cos(y_m * y_freq + self.wave_phase_y_rad)
-        )
-
-        ridge_dx = x_m - self.ridge_center_x_m
-        ridge_dy = y_m - self.ridge_center_y_m
-        ridge = self.ridge_amplitude_m * np.exp(
-            -(ridge_dx * ridge_dx + ridge_dy * ridge_dy) / (2.0 * ridge_r2)
-        )
-
-        basin_dx = x_m - self.basin_center_x_m
-        basin_dy = y_m - self.basin_center_y_m
-        basin = self.basin_depth_m * np.exp(
-            -(basin_dx * basin_dx + basin_dy * basin_dy) / (2.0 * basin_r2)
-        )
-
-        slope = x_m * self.slope_x_m_per_m + y_m * self.slope_y_m_per_m
-        feature_height = sum(feature.height_contribution(x_m, y_m) for feature in self.features)
-        return float(self.base_elevation_m + slope + wave + ridge - basin + feature_height)
+        return sample(self._native, [x_m, y_m], analytic=True)
 
     def height_at(self, x_m: float, y_m: float) -> float:
         cell_m = 1.0e-6
@@ -323,55 +256,14 @@ class TerrainModel:
         cached = self._height_cache.get(key)
         if cached is not None:
             return cached
-        height = max(self.analytic_height_at(x_m, y_m), self.ground_plane_m)
+        height = sample(self._native, [x_m, y_m])
         return self._height_cache.put(key, height)
 
     def analytic_height_at_many(self, xy_m: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
-        points = np.asarray(xy_m, dtype=float)
-        if points.shape == (2,):
-            points = points.reshape(1, 2)
-            scalar_input = True
-        else:
-            scalar_input = False
-        if points.ndim < 2 or points.shape[-1] != 2:
-            raise ValueError("xy_m must have shape (..., 2).")
-        original_shape = points.shape[:-1]
-        flat = points.reshape(-1, 2)
-        x_m = flat[:, 0]
-        y_m = flat[:, 1]
-
-        ridge_r2 = max(self.ridge_radius_m**2, 1.0)
-        basin_r2 = max(self.basin_radius_m**2, 1.0)
-        x_freq = (2.0 * np.pi) / max(self.wave_length_x_m, 1.0)
-        y_freq = (2.0 * np.pi) / max(self.wave_length_y_m, 1.0)
-        wave = (
-            self.wave_amplitude_m
-            * np.sin(x_m * x_freq + self.wave_phase_x_rad)
-            * np.cos(y_m * y_freq + self.wave_phase_y_rad)
-        )
-        ridge_dx = x_m - self.ridge_center_x_m
-        ridge_dy = y_m - self.ridge_center_y_m
-        ridge = self.ridge_amplitude_m * np.exp(
-            -(ridge_dx * ridge_dx + ridge_dy * ridge_dy) / (2.0 * ridge_r2)
-        )
-        basin_dx = x_m - self.basin_center_x_m
-        basin_dy = y_m - self.basin_center_y_m
-        basin = self.basin_depth_m * np.exp(
-            -(basin_dx * basin_dx + basin_dy * basin_dy) / (2.0 * basin_r2)
-        )
-        slope = x_m * self.slope_x_m_per_m + y_m * self.slope_y_m_per_m
-        heights = self.base_elevation_m + slope + wave + ridge - basin
-        for feature in self.features:
-            heights += np.fromiter(
-                (feature.height_contribution(float(x), float(y)) for x, y in flat),
-                dtype=float,
-                count=flat.shape[0],
-            )
-        return heights[0] if scalar_input else heights.reshape(original_shape)
+        return sample(self._native, xy_m, analytic=True)
 
     def height_at_many(self, xy_m: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
-        heights = self.analytic_height_at_many(xy_m)
-        return np.maximum(heights, self.ground_plane_m)
+        return sample(self._native, xy_m)
 
     def clamp_altitude(self, xy_m: Sequence[float], z_m: float, min_agl_m: float) -> float:
         ground_m = self.height_at(float(xy_m[0]), float(xy_m[1]))
@@ -385,13 +277,7 @@ class TerrainModel:
         cached = self._gradient_cache.get(key)
         if cached is not None:
             return cached.copy()
-        dz_dx = (self.height_at(x_m + delta, y_m) - self.height_at(x_m - delta, y_m)) / (
-            2.0 * delta
-        )
-        dz_dy = (self.height_at(x_m, y_m + delta) - self.height_at(x_m, y_m - delta)) / (
-            2.0 * delta
-        )
-        gradient = np.array([dz_dx, dz_dy], dtype=float)
+        gradient = sample(self._native, [x_m, y_m], method="gradients", delta=delta)
         self._gradient_cache.put(key, gradient.copy())
         return gradient
 
@@ -402,18 +288,7 @@ class TerrainModel:
         }
 
     def curvature_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
-        """Scalar surface curvature (Laplacian approximation).
-
-        Positive = convex (hilltop), negative = concave (valley).
-        """
-        d = max(delta_m, 0.1)
-        return (
-            self.height_at(x_m + d, y_m)
-            + self.height_at(x_m - d, y_m)
-            + self.height_at(x_m, y_m + d)
-            + self.height_at(x_m, y_m - d)
-            - 4.0 * self.height_at(x_m, y_m)
-        ) / (d * d)
+        return sample(self._native, [x_m, y_m], method="curvature", delta=max(delta_m, 0.1))
 
     def slope_rad_at(self, x_m: float, y_m: float, delta_m: float = 1.0) -> float:
         """Slope magnitude in radians at the given point."""

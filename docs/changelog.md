@@ -195,3 +195,14 @@
 - Added terrain presets, terrain-aware mission zones, rejection diagnostics, and export formats.
 - Added MQTT and file replay ingestion adapters.
 - Added Rust fusion service, replay export, and Python simulation workflow.
+
+## Rust world authority (Phase 3)
+
+- Grew `terrain-engine` into `argusnet-world`, including tiled/analytic terrain,
+  obstacle indexing, land cover, DDA visibility and detection models.
+- Wired Python world queries through packaged native bindings and removed the
+  Python safety checker. Simulation safety now uses `safety-engine` defaults
+  and policy, preserving opt-in blocking and clamp ordering.
+- Moved replay terrain sampling from the viewer into the shared world crate.
+- Added cross-language analytic fixtures and regression coverage for terrain
+  seams, LODs, negative ray directions, missing coverage and combined violations.

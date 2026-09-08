@@ -267,6 +267,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-native"
+version = "0.1.0"
+dependencies = [
+ "argusnet-world",
+ "safety-engine",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "argusnet-proto"
 version = "0.1.0"
 dependencies = [
@@ -306,6 +316,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argusnet-proto",
+ "argusnet-world",
  "bevy",
  "bevy_egui",
  "clap",
@@ -317,6 +328,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "tonic",
+]
+
+[[package]]
+name = "argusnet-world"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5703,11 +5723,11 @@ dependencies = [
 name = "safety-engine"
 version = "0.1.0"
 dependencies = [
+ "argusnet-world",
  "criterion",
  "nalgebra",
  "serde",
  "serde_json",
- "terrain-engine",
 ]
 
 [[package]]
@@ -6154,15 +6174,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "terrain-engine"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "serde",
- "serde_json",
 ]
 
 [[package]]

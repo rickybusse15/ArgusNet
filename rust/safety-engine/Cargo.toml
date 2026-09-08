@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 nalgebra.workspace = true
 serde.workspace = true
-terrain-engine = { path = "../terrain-engine" }
+argusnet-world = { path = "../argusnet-world" }
 
 [dev-dependencies]
 criterion.workspace = true

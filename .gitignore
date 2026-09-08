@@ -81,3 +81,9 @@ replays/
 .playwright-cli/
 .vscode/
 .idea/
+
+# Native world extension produced by editable Python installs.
+/src/argusnet/_native*.so
+/src/argusnet/_native*.pyd
+/src/argusnet/_native*.dll
+/src/argusnet/_native*.dylib

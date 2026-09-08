@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
+use argusnet_world::TerrainQuery;
 use serde::{Deserialize, Serialize};
-use terrain_engine::TerrainQuery;
 
 use crate::limits::DronePhysicalLimits;
 use crate::validator::{
@@ -436,7 +436,7 @@ fn clamp_command(
 mod tests {
     use super::*;
     use crate::limits::DronePhysicalLimits;
-    use terrain_engine::{FlatTerrain, TerrainBounds};
+    use argusnet_world::{FlatTerrain, TerrainBounds};
 
     fn make_monitor() -> SafetyMonitor {
         SafetyMonitor::new(SafetyConfig::default())
