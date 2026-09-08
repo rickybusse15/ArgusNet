@@ -13,6 +13,8 @@
 //! - [`GridTerrain`] – bilinearly-interpolated heightmap on a regular grid.
 //! - [`FlatTerrain`] – constant-height plane, useful for unit testing and flat-world simulations.
 
+pub mod obstacles;
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -658,7 +660,9 @@ mod tests {
         let cols = 3_usize;
         let rows = 3_usize;
         let mut heights = vec![0.0_f64; rows * cols];
-        heights[1 * cols + 1] = 4.0;
+        // Row-major, so cells are addressed the way the diagram above reads.
+        let cell = |row: usize, col: usize| (row * cols) + col;
+        heights[cell(1, 1)] = 4.0;
         let t = GridTerrain::new(heights, cols, rows, 10.0, 0.0, 0.0, 0.0);
 
         // Exact node values.
