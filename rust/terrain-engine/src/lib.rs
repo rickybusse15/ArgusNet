@@ -594,6 +594,13 @@ impl TerrainQuery for GridTerrain {
 mod tests {
     use super::*;
 
+    /// Row-major index into a grid `cols` nodes wide. Spelling the grid
+    /// coordinates out keeps the test data readable; writing `1 * cols + 1`
+    /// inline would also trip `clippy::identity_op`.
+    fn cell(row: usize, col: usize, cols: usize) -> usize {
+        row * cols + col
+    }
+
     /// Convenience builder: 100×100 m flat terrain at Z = 0.
     fn unit_flat() -> FlatTerrain {
         FlatTerrain::new(0.0, TerrainBounds::new(0.0, 100.0, 0.0, 100.0, 0.0, 0.0))
@@ -605,7 +612,7 @@ mod tests {
         let cols = 11_usize;
         let rows = 11_usize;
         let mut heights = vec![0.0_f64; rows * cols];
-        heights[5 * cols + 5] = 20.0;
+        heights[cell(5, 5, cols)] = 20.0;
         GridTerrain::new(heights, cols, rows, 1.0, 0.0, 0.0, 0.0)
     }
 
@@ -661,8 +668,7 @@ mod tests {
         let rows = 3_usize;
         let mut heights = vec![0.0_f64; rows * cols];
         // Row-major, so cells are addressed the way the diagram above reads.
-        let cell = |row: usize, col: usize| (row * cols) + col;
-        heights[cell(1, 1)] = 4.0;
+        heights[cell(1, 1, cols)] = 4.0;
         let t = GridTerrain::new(heights, cols, rows, 10.0, 0.0, 0.0, 0.0);
 
         // Exact node values.

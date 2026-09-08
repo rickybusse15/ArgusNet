@@ -96,8 +96,11 @@ jobs:
           PY
       - name: Benchmark compile check
         run: cargo bench --workspace --no-run
+      # --all-targets so tests, benches and examples are linted too. Without
+      # it clippy only sees lib and bin targets, and lint drift accumulates
+      # unnoticed in exactly the code nobody re-reads.
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Format check
         run: cargo fmt --all -- --check
 

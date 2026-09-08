@@ -55,9 +55,11 @@ fn truths(count: usize, timestamp_s: f64) -> Vec<TruthState> {
 }
 
 fn seeded_engine(mode: AssociationMode) -> TrackingEngine {
-    let mut config = TrackerConfig::default();
-    config.data_association_mode = mode;
-    config.min_observations = 2;
+    let config = TrackerConfig {
+        data_association_mode: mode,
+        min_observations: 2,
+        ..Default::default()
+    };
     TrackingEngine::new(config).unwrap()
 }
 

@@ -73,8 +73,10 @@ fn bench_ingest(c: &mut Criterion) {
         c.bench_function(&format!("ingest_frame_{nodes}n_{observations}o"), |b| {
             b.iter_batched(
                 || {
-                    let mut config = TrackerConfig::default();
-                    config.data_association_mode = AssociationMode::Labeled;
+                    let config = TrackerConfig {
+                        data_association_mode: AssociationMode::Labeled,
+                        ..Default::default()
+                    };
                     let engine = TrackingEngine::new(config).unwrap();
                     (engine, frame_inputs(nodes, observations, 1.0))
                 },
@@ -123,8 +125,10 @@ fn bench_ingest_steady_state(c: &mut Criterion) {
             let name = format!("ingest_steady_{mode:?}_{target_count}t");
             c.bench_function(&name, |b| {
                 b.iter_custom(|iters| {
-                    let mut config = TrackerConfig::default();
-                    config.data_association_mode = mode.clone();
+                    let config = TrackerConfig {
+                        data_association_mode: mode.clone(),
+                        ..Default::default()
+                    };
                     let mut engine = TrackingEngine::new(config).unwrap();
                     let mut timestamp = 0.0;
                     for _ in 0..20 {
