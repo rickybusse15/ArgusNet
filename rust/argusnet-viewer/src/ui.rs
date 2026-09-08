@@ -2449,6 +2449,10 @@ fn section_runtime_overlays(
     mission_overlay: &mut MissionOverlaySettings,
 ) {
     ui.collapsing("Runtime Overlays", |ui| {
+        ui.checkbox(
+            &mut runtime_visibility.diagnostic_glyphs,
+            "Diagnostic Wire Glyphs",
+        );
         ui.checkbox(&mut runtime_visibility.tracks, "Tracks");
         ui.checkbox(&mut runtime_visibility.truths, "Truths");
         ui.checkbox(&mut runtime_visibility.nodes, "Nodes");

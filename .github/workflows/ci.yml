@@ -79,8 +79,9 @@ jobs:
       - name: Headless render smoke test
         run: |
           python3 -m pip install --quiet pillow
+          python3 scripts/prepare_viewer_smoke_scene.py /tmp/argusnet-render-scene
           ./target/debug/argusnet-viewer \
-            --scene scene.smartscene \
+            --scene /tmp/argusnet-render-scene \
             --headless \
             --output /tmp/argusnet-headless.png \
             --width 640 --height 480 --camera isometric
@@ -94,6 +95,13 @@ jobs:
           # Real terrain produces thousands of distinct shades.
           top = sorted(colors, reverse=True)[:3]
           assert len(colors) > 50, f"headless render looks empty: {top}"
+          # The synthetic replay has a green track. Terrain and blue radar rings
+          # alone must not pass when the hologram pipeline fails to draw.
+          green_pixels = sum(
+              count for count, (r, g, b) in colors
+              if g > 100 and g > 1.4 * r and g > 1.4 * b
+          )
+          assert green_pixels > 30, f"holographic track missing: {green_pixels} green pixels"
           print(f"headless render OK: {len(colors)} distinct colours")
           PY
       - name: Benchmark compile check
