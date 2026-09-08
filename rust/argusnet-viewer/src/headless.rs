@@ -849,7 +849,7 @@ mod uniformity_tests {
 
         let cleared = readback(width, height, CLEAR);
         assert!(
-            cleared.iter().any(|byte| *byte == 0),
+            cleared.contains(&0),
             "the padding should be present and unwritten"
         );
         assert!(is_uniform(&cleared, width, height));
