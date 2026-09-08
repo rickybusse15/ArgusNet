@@ -291,5 +291,127 @@ class SceneCompilationTest(unittest.TestCase):
             self.assertEqual(1, environment_document["overlay_counts"]["landcover"])
 
 
+class SceneObstacleRoundTripTest(unittest.TestCase):
+    """A packaged scene's obstacle metadata must rebuild through its own loader."""
+
+    @staticmethod
+    def _height_at(x_m: float, y_m: float) -> float:
+        return 110.0 + 0.05 * x_m + 0.09 * y_m
+
+    @staticmethod
+    def _replay_with_obstacles() -> dict:
+        replay_document = _sample_replay_document()
+        replay_document["meta"]["occluding_objects"] = [
+            {
+                "object_id": "warehouse-north",
+                "kind": "polygon-prism-v1",
+                "blocker_type": "building",
+                "footprint_xy_m": [[-60.0, -40.0], [40.0, -40.0], [40.0, 30.0], [-60.0, 30.0]],
+                "base_elevation_m": 100.0,
+                "top_elevation_m": 128.0,
+            },
+            {
+                "object_id": "pine-stand-west",
+                "kind": "forest-stand-v1",
+                "blocker_type": "vegetation",
+                "footprint_xy_m": [[-90.0, 10.0], [-50.0, 4.0], [-44.0, 52.0], [-84.0, 60.0]],
+                "base_elevation_m": 104.0,
+                "top_elevation_m": 122.0,
+                "density": 0.58,
+            },
+        ]
+        return replay_document
+
+    def test_packaged_metadata_keeps_footprints_as_xy_pairs(self) -> None:
+        replay_document = self._replay_with_obstacles()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_scene_from_replay(replay_document, temp_dir)
+            environment_document = json.loads(
+                (Path(temp_dir) / "metadata" / "environment.json").read_text(encoding="utf-8")
+            )
+
+        packaged = environment_document["occluding_objects"]
+        self.assertEqual(2, len(packaged))
+        for source, written in zip(
+            replay_document["meta"]["occluding_objects"], packaged, strict=True
+        ):
+            self.assertEqual(source["footprint_xy_m"], written["footprint_xy_m"])
+
+        # The nested replay_meta copy must agree with the top-level one, and with
+        # the canonical replay document the package also carries.
+        for written in environment_document["replay_meta"]["occluding_objects"]:
+            self.assertTrue(all(len(pair) == 2 for pair in written["footprint_xy_m"]))
+
+    def test_obstacle_meshes_rebuild_from_packaged_metadata(self) -> None:
+        replay_document = self._replay_with_obstacles()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build_scene_from_replay(replay_document, temp_dir)
+            environment_document = json.loads(
+                (Path(temp_dir) / "metadata" / "environment.json").read_text(encoding="utf-8")
+            )
+
+        layers = _build_obstacle_meshes(
+            environment_document["occluding_objects"], height_at=self._height_at
+        )
+
+        self.assertEqual({"buildings", "vegetation"}, {layer.layer_id for layer in layers})
+        for layer in layers:
+            self.assertGreater(len(layer.mesh.positions), 0)
+            self.assertGreater(len(layer.mesh.indices), 0)
+
+    def test_flat_footprints_from_existing_packages_still_build(self) -> None:
+        """Scene packages written before the fix store footprints flattened."""
+        nested = [[-20.0, -15.0], [18.0, -10.0], [22.0, 14.0], [-16.0, 18.0]]
+        flat = [value for pair in nested for value in pair]
+
+        def build(footprint):
+            return _build_obstacle_meshes(
+                [
+                    {
+                        "object_id": "warehouse-a",
+                        "blocker_type": "building",
+                        "footprint_xy_m": footprint,
+                        "base_elevation_m": 123.5,
+                        "top_elevation_m": 151.5,
+                    }
+                ],
+                height_at=self._height_at,
+            )
+
+        nested_layers = build(nested)
+        flat_layers = build(flat)
+
+        self.assertEqual(1, len(flat_layers))
+        np.testing.assert_allclose(nested_layers[0].mesh.positions, flat_layers[0].mesh.positions)
+
+    def test_odd_length_flat_footprint_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            _build_obstacle_meshes(
+                [
+                    {
+                        "object_id": "warehouse-a",
+                        "blocker_type": "building",
+                        "footprint_xy_m": [0.0, 0.0, 10.0, 0.0, 10.0],
+                        "base_elevation_m": 100.0,
+                        "top_elevation_m": 110.0,
+                    }
+                ],
+                height_at=self._height_at,
+            )
+
+    @unittest.skipUnless(
+        Path("scene.smartscene/metadata/environment.json").exists(),
+        "checked-in scene package not present",
+    )
+    def test_checked_in_scene_package_rebuilds(self) -> None:
+        environment_document = json.loads(
+            Path("scene.smartscene/metadata/environment.json").read_text(encoding="utf-8")
+        )
+        layers = _build_obstacle_meshes(
+            environment_document["occluding_objects"], height_at=self._height_at
+        )
+        self.assertTrue(any(len(layer.mesh.positions) for layer in layers))
+
+
 if __name__ == "__main__":
     unittest.main()
