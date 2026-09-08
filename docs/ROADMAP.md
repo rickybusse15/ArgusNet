@@ -541,8 +541,9 @@ and hardware-in-the-loop checks appropriate to the capability's risk.
 The first implementation tranche should be deliberately architectural:
 
 1. Publish the state-authority and schema-compatibility rules.
-2. Extract observation generation from `simulation/sim.py` behind
-   `ObservationSource`.
+2. [Implemented] Route observation generation through the versioned, injectable
+   `ObservationSource` contract while retaining the deterministic simulator
+   generator and its compatibility API.
 3. Add typed task, route, trajectory, safety, and execution replay events.
 4. Wire `MissionExecutor` into one non-legacy mission execution path.
 5. Make `WorldBeliefQuery` the mandatory input for new planning work.
