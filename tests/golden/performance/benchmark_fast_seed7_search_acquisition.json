@@ -4,7 +4,7 @@
   "duration_s": 1.0,
   "work": {
     "frame_count": 5,
-    "total_accepted_observations": 15,
+    "total_accepted_observations": 16,
     "total_rejected_observations": 4,
     "cache": {
       "obstacles.point_collides": {

@@ -50,7 +50,9 @@ def _point_in_polygon(point_xy: np.ndarray, polygon_xy: np.ndarray) -> bool:
             return True
         intersects = (a[1] > point_xy[1]) != (b[1] > point_xy[1])
         if intersects:
-            x_cross = (b[0] - a[0]) * (point_xy[1] - a[1]) / max((b[1] - a[1]), 1.0e-12) + a[0]
+            # The `intersects` test above guarantees b[1] != a[1], so the denominator
+            # is non-zero; it must keep its sign for downward edges to cross correctly.
+            x_cross = ((b[0] - a[0]) * (point_xy[1] - a[1]) / (b[1] - a[1])) + a[0]
             if point_xy[0] < x_cross:
                 inside = not inside
     return inside
