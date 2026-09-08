@@ -8,7 +8,7 @@ Civilian 3D world-modeling platform. Python simulation + Rust sensor-fusion serv
 
 ```
 src/argusnet/        Python package (install with pip install -e .)
-rust/                Rust workspace (argusnet-core, argusnet-server, argusnet-viewer, argusnet-proto, argusnet-world, argusnet-native, safety-engine)
+rust/                Rust workspace (argusnet-core, argusnet-server, argusnet-viewer, argusnet-proto, argusnet-world, argusnet-native, argusnet-types, argusnet-mapping, safety-engine)
 proto/               Protobuf service definition (argusnet/v1/world_model.proto)
 tests/               Python tests
 docs/                Architecture, usage, changelog

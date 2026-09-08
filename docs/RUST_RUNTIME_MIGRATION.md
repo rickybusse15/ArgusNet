@@ -13,6 +13,16 @@ queries, safety policy and fusion. Python still drives the simulation; the
 viewer still loads batch replay/scene artifacts. Completing Phase 3 does not
 complete the real-time runtime migration.
 
+## Next slices delivered locally
+
+The branch now also incorporates GitHub main `a7817d9` (PR #43 observation-source
+contract). Phase 2 has persistent typed mesh markers, a holographic material and
+a marker-aware CI smoke fixture. Phase 4 has begun: shared core/world value types
+live in `argusnet-types`, and the hot GridLocalizer footprint-scoring batch runs
+in `argusnet-mapping` through the native bridge. See the
+[implementation and measurement report](performance/phase2-phase4-first-slices.md).
+Neither phase is complete; the simulation loop and estimator state remain Python.
+
 ## Current system state
 
 | Concern | Current authority | Remaining transition |
@@ -22,7 +32,7 @@ complete the real-time runtime migration.
 | Fused tracks and fusion health | `argusnet-core`, served by `argusnet-server` | Replace the simulation's per-tick gRPC call with a direct Rust library call. |
 | Scenario/preset configuration and procedural scene shaping | Python | Port runtime construction; retain analysis and exporter-facing configuration where useful. |
 | Sensing, mapping, GridLocalizer/VIO, planning, mission state and replay assembly | Python simulation | Phase 4. |
-| Shared runtime value types | Python types, Rust core/proto and viewer types | Extract `argusnet-types` in Phase 4. |
+| Shared runtime value types | `argusnet-types` for core/world/proto runtime values; Python and viewer DTOs remain | Finish replay DTO alignment and conversion consolidation. |
 | Interactive and headless rendering | Bevy 0.19 viewer | Finish Phase 2 materials, geometry and operator controls; integrate simulation in Phase 5. |
 | Viewer terrain height queries | `argusnet-world::TerrainRaster` | Mesh runtime terrain directly in Phase 5. |
 | Scene/GLB export, GIS and offline evaluation | Python | Keep as offline tooling; remove export from the interactive boot path. |
@@ -51,9 +61,9 @@ The compatibility re-exports in `environment.py` remain available.
 | --- | --- | --- |
 | 0 — Measurement, contracts and guardrails | Foundation landed; verification gaps remain | Retain strict replay and deterministic work gates. Add a protobuf regeneration comparison and a steady-state viewer frame budget bench; neither was verified as present in this checkout. |
 | 1 — Bevy 0.19 and one renderer | Landed | Keep real headless Bevy smoke coverage. CPU rasterization is no longer the CI render path. |
-| 2 — Viewer engine, visuals and controls | Partial | Preserve interpolation, typed selection, ordered/gated systems, HDR/bloom/fog/gradient sky and screen-scaled camera-facing symbols. Finish persistent mesh entities, terrain/holographic materials, sensor/zone/trail geometry, picking, camera/time controls and authored UI. Exit with gizmos diagnostic-only, image regression coverage and a measured frame budget. |
+| 2 — Viewer engine, visuals and controls | Partial | Preserve interpolation, typed selection, ordered/gated systems, HDR/bloom/fog/gradient sky and screen-scaled camera-facing symbols. Persistent typed marker meshes and the holographic material now exist. Finish terrain/belief material, sensor/zone/trail geometry, picking, camera/time controls and authored UI. Exit with gizmos diagnostic-only, image regression coverage and a measured frame budget. |
 | 3 — One world authority | Implemented and verified locally | Review/push/merge `8fbf7c2`; no remaining Phase 3 implementation items identified. See the evidence below. |
-| 4 — Rust simulation runtime | Next runtime phase | Extract shared types, port measured hot paths and decompose the loop into library crates. Rust CLI must reproduce scenarios within documented statistical envelopes. |
+| 4 — Rust simulation runtime | In progress: shared types and localization scoring | Finish shared DTO alignment and localization state, then decompose the loop into library crates. Rust CLI must reproduce scenarios within documented statistical envelopes. |
 | 5 — Real-time viewer | Depends on Phases 2 and 4 | Link simulation in-process, fixed timestep, pause/step/speed/rewind; remove Python subprocesses and runtime GLB baking, add live world metadata. Verify sustained render performance. |
 | 6 — Python reduction | After runtime consumers migrate | Delete migrated runtime modules/bridge paths as callers disappear; retain evaluation, reporting, GIS and export tooling. Update ownership and usage docs. |
 

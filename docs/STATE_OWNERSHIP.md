@@ -52,7 +52,7 @@ inspection documentation.
 | `WorldMap` | `src/argusnet/mapping/world_map.py` | scan loop | feature extraction, coverage region queries, mapping state | Current bridge toward a richer belief world. |
 | `LocalizationState` | `argusnet.core.types` | `src/argusnet/simulation/sim.py` from `GridLocalizer` estimates | replay schema, viewer, docs | Aggregate active localizations, mean position std, mean confidence. |
 | `LocalizationEstimate` | `argusnet.core.types` | `GridLocalizer.update()` results copied into `ScanMissionState` | replay/viewer/evaluation | Per-drone map-relative estimate for `scan_map_inspect`. |
-| `GridLocalizer` | `src/argusnet/localization/engine.py` | Python sim loop | mission phase gate, replay state | Uses `LocalizationConfig.localization_timeout_steps`; timeout can force confidence for mission progress. |
+| `GridLocalizer` | Python `localization/engine.py` state + Rust `argusnet-mapping` scoring | Python sim loop with native batched footprint queries | mission phase gate, replay state | Uses `LocalizationConfig.localization_timeout_steps`; timeout can force confidence for mission progress. |
 | `InspectionPOI` | `argusnet.core.types` | scenario defaults / mission setup | `POIManager`, replay scan mission state | Map-relative point of interest for the current inspection runtime. |
 | `POIStatus` | `argusnet.core.types` | `POIManager` | replay/viewer/evaluation | Status is `pending`, `active`, or `complete`. |
 | `InspectionEvent` | `argusnet.core.types` | `src/argusnet/simulation/sim.py` mission-zone coverage loop | replay schema, viewer/evaluation | Includes entered/coverage/exited style events and current violation events. |
@@ -82,6 +82,7 @@ inspection documentation.
 | Evaluation report | `src/argusnet/evaluation/metrics.py` | `evaluate_replay()` | benchmark/report helpers, tests | Includes coverage, localization, mission completion, safety, and fusion metrics. |
 | Benchmark suite state | `src/argusnet/evaluation/benchmarks.py` | benchmark runner callers | reports/tests | Aggregates `EvaluationReport` across seeds. |
 | Export artifacts | `src/argusnet/evaluation/export.py` | CLI/export helpers | external tools | GeoJSON/CZML/Foxglove and related exports. |
+| Persistent marker entities | `rust/argusnet-viewer/src/marker_meshes.rs` | Interpolated replay marker sync | Bevy mesh rendering | Typed identities survive motion/toggles; absent IDs despawn. |
 | Viewer runtime state | `rust/argusnet-viewer/src/state.rs` and related viewer modules | viewer replay loading/playback | UI/rendering | Viewer state is derived from replay/scene files. |
 
 ## Cross-Boundary Contracts
