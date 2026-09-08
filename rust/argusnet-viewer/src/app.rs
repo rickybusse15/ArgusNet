@@ -20,6 +20,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 /// terrain on an otherwise empty background (no real terrain, drones, or gizmos).
 const RECON_LAYER: usize = 1;
 
+use crate::glyphs::{GlyphProjection, NODE_GLYPH_PX, TRACK_GLYPH_PX, TRUTH_GLYPH_PX};
 use crate::headless::{HeadlessRequest, HeadlessTarget};
 use crate::mission_zones::{self, build_projected_badges_system, ProjectedZoneBadges};
 use crate::orbit_camera::{OrbitCamera, OrbitCameraPlugin};
@@ -27,6 +28,7 @@ use crate::replay::{
     MarkerKind, RejectedObservation, ReplayDocument, ReplayState, RuntimeMarker, TerrainViewerMesh,
 };
 use crate::schema::ScenePackage;
+use crate::sky::{spawn_sky, GradientSkyPlugin, SkyMaterial, HORIZON_COLOR};
 use crate::state::{
     CurrentFrameMetrics, CurrentRuntimeMarkers, LayerEntityIndex, LayerVisibilityState,
     LoadedMissionZones, MissionOverlaySettings, NodeDetails, ReconstructionCamera,
@@ -164,7 +166,10 @@ fn run_inner(
     }
 
     let mut app = App::new();
-    app.insert_resource(ClearColor(Color::srgb(0.18, 0.20, 0.22)))
+    // The sky dome covers every direction the main camera can look, so this is
+    // now only what shows for the one frame before the dome spawns, and behind
+    // any camera that opts out of layer 0.
+    app.insert_resource(ClearColor(HORIZON_COLOR))
         .insert_resource(scene_package)
         .insert_resource(working_scene_root)
         .insert_resource(replay_state)
@@ -232,6 +237,7 @@ fn run_inner(
 
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .add_plugins(OrbitCameraPlugin)
+        .add_plugins(GradientSkyPlugin)
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
         .add_systems(
             Update,
@@ -380,6 +386,9 @@ fn sensor_overlays_enabled(visibility: Res<RuntimeOverlayVisibility>) -> bool {
     visibility.radar_rings || visibility.fov_cones
 }
 
+// Eight system parameters: the scene resources it reads, plus the two asset
+// collections the sky dome is built from.
+#[allow(clippy::too_many_arguments)]
 fn setup_world(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -387,6 +396,8 @@ fn setup_world(
     scene_package: Res<ScenePackage>,
     layer_visibility: Res<LayerVisibilityState>,
     mut layer_entities: ResMut<LayerEntityIndex>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut sky_materials: ResMut<Assets<SkyMaterial>>,
 ) {
     let terrain_summary = scene_package.environment.terrain_summary.as_ref();
     let orbit = OrbitCamera::from_bounds(
@@ -396,6 +407,7 @@ fn setup_world(
     );
     let eye = orbit.eye_position();
     let focus = orbit.focus;
+    let orbit_radius = orbit.radius;
     commands.insert_resource(CameraHomePosition {
         yaw: orbit.yaw,
         pitch: orbit.pitch,
@@ -490,7 +502,9 @@ fn setup_world(
         // the scene span alone either swallows the whole terrain or never
         // reaches it.
         DistanceFog {
-            color: Color::srgb(0.18, 0.20, 0.22),
+            // The sky's own horizon colour, so distant terrain fades *into* the
+            // sky rather than into a band standing in front of it.
+            color: HORIZON_COLOR,
             falloff: FogFalloff::Linear {
                 start: 0.0,
                 end: f32::MAX,
@@ -539,6 +553,14 @@ fn setup_world(
         Transform::from_translation(recon_eye).looking_at(recon_focus, Vec3::Z),
         RenderLayers::layer(RECON_LAYER),
     ));
+
+    spawn_sky(
+        &mut commands,
+        &mut meshes,
+        &mut sky_materials,
+        asset_server.as_ref(),
+        orbit_radius + span,
+    );
 
     spawn_base_layers(
         &mut commands,
@@ -932,7 +954,21 @@ fn draw_runtime_overlays_system(
     markers: Res<CurrentRuntimeMarkers>,
     runtime_visibility: Res<RuntimeOverlayVisibility>,
     mission_zones: Res<LoadedMissionZones>,
+    camera_query: Query<(&GlobalTransform, &Projection, &Camera), With<MainCamera>>,
 ) {
+    // Glyphs are symbology, not scenery: they hold a constant size on screen and
+    // face the viewer. See `crate::glyphs` for what this replaces.
+    let glyphs = camera_query
+        .single()
+        .map(|(transform, projection, camera)| {
+            GlyphProjection::from_camera(
+                transform,
+                projection,
+                camera.logical_viewport_size().map(|size| size.y),
+            )
+        })
+        .unwrap_or_default();
+
     // Compute altitude range across all current markers for color normalization.
     let alt_min = markers
         .markers
@@ -984,7 +1020,7 @@ fn draw_runtime_overlays_system(
         } else {
             (base_color, 1.0)
         };
-        draw_marker_scaled(&mut gizmos, marker, draw_color, radius_scale);
+        draw_marker_scaled(&mut gizmos, &glyphs, marker, draw_color, radius_scale);
 
         // Item 15: trail with alpha fading and altitude-based hue coloring.
         let trail_points = replay_state.trail_points(marker, TRAIL_MAX_POINTS);
@@ -1026,11 +1062,16 @@ fn draw_runtime_overlays_system(
                 let Some(pos) = generation_rejection_position(rej) else {
                     continue;
                 };
-                draw_rejection_marker(&mut gizmos, pos, rejection_marker_style(rej, true));
+                draw_rejection_marker(&mut gizmos, &glyphs, pos, rejection_marker_style(rej, true));
             }
             for rej in &frame.rejected_observations {
                 let pos = tracker_rejection_position(frame, rej);
-                draw_rejection_marker(&mut gizmos, pos, rejection_marker_style(rej, false));
+                draw_rejection_marker(
+                    &mut gizmos,
+                    &glyphs,
+                    pos,
+                    rejection_marker_style(rej, false),
+                );
             }
         }
 
@@ -1141,7 +1182,8 @@ enum RejectionGlyph {
 struct RejectionMarkerStyle {
     color: Color,
     glyph: RejectionGlyph,
-    size: f32,
+    /// On-screen radius in logical pixels — see `crate::glyphs`.
+    size_px: f32,
 }
 
 fn generation_rejection_position(rej: &RejectedObservation) -> Option<Vec3> {
@@ -1166,98 +1208,98 @@ fn rejection_marker_style(rej: &RejectedObservation, is_generation: bool) -> Rej
         return RejectionMarkerStyle {
             color: Color::srgba(0.94, 0.2, 0.25, 0.9),
             glyph: RejectionGlyph::Cross,
-            size: 7.0,
+            size_px: 7.0,
         };
     }
     match rej.reason.as_str() {
         "terrain_occlusion" => RejectionMarkerStyle {
             color: Color::srgba(0.76, 0.42, 0.16, 0.92),
             glyph: RejectionGlyph::Diamond,
-            size: 7.5,
+            size_px: 7.5,
         },
         "building_occlusion" | "wall_occlusion" => RejectionMarkerStyle {
             color: Color::srgba(0.92, 0.62, 0.18, 0.92),
             glyph: RejectionGlyph::Square,
-            size: 7.0,
+            size_px: 7.0,
         },
         "vegetation_occlusion" => RejectionMarkerStyle {
             color: Color::srgba(0.2, 0.72, 0.32, 0.92),
             glyph: RejectionGlyph::Cross,
-            size: 7.0,
+            size_px: 7.0,
         },
         "outside_fov" | "low_elevation" => RejectionMarkerStyle {
             color: Color::srgba(0.95, 0.78, 0.2, 0.92),
             glyph: RejectionGlyph::Triangle,
-            size: 8.0,
+            size_px: 8.0,
         },
         "out_of_range" | "out_of_coverage" => RejectionMarkerStyle {
             color: Color::srgba(0.24, 0.66, 0.95, 0.92),
             glyph: RejectionGlyph::Ring,
-            size: 7.5,
+            size_px: 7.5,
         },
         "dropout" => RejectionMarkerStyle {
             color: Color::srgba(0.82, 0.84, 0.86, 0.88),
             glyph: RejectionGlyph::Ring,
-            size: 6.0,
+            size_px: 6.0,
         },
         _ => RejectionMarkerStyle {
             color: Color::srgba(0.96, 0.34, 0.34, 0.9),
             glyph: RejectionGlyph::Cross,
-            size: 7.0,
+            size_px: 7.0,
         },
     }
 }
 
-fn draw_rejection_marker(gizmos: &mut Gizmos, position: Vec3, style: RejectionMarkerStyle) {
+/// Draws one observation-rejection glyph, sized in pixels and camera-facing.
+///
+/// These are flat symbols with no altitude component, so unlike the marker
+/// glyphs they have no world-Z spine — the whole shape lives in the screen plane.
+fn draw_rejection_marker(
+    gizmos: &mut Gizmos,
+    glyphs: &GlyphProjection,
+    position: Vec3,
+    style: RejectionMarkerStyle,
+) {
+    let r = glyphs.radius(position, style.size_px);
+    let right = glyphs.right * r;
+    let up = glyphs.up * r;
+
     match style.glyph {
         RejectionGlyph::Cross => {
-            gizmos.line(
-                position - Vec3::X * style.size - Vec3::Y * style.size,
-                position + Vec3::X * style.size + Vec3::Y * style.size,
-                style.color,
-            );
-            gizmos.line(
-                position + Vec3::X * style.size - Vec3::Y * style.size,
-                position - Vec3::X * style.size + Vec3::Y * style.size,
-                style.color,
-            );
+            gizmos.line(position - right - up, position + right + up, style.color);
+            gizmos.line(position + right - up, position - right + up, style.color);
         }
         RejectionGlyph::Diamond => {
-            let top = position + Vec3::Y * style.size;
-            let right = position + Vec3::X * style.size;
-            let bottom = position - Vec3::Y * style.size;
-            let left = position - Vec3::X * style.size;
-            gizmos.line(top, right, style.color);
-            gizmos.line(right, bottom, style.color);
-            gizmos.line(bottom, left, style.color);
-            gizmos.line(left, top, style.color);
+            gizmos.line(position + up, position + right, style.color);
+            gizmos.line(position + right, position - up, style.color);
+            gizmos.line(position - up, position - right, style.color);
+            gizmos.line(position - right, position + up, style.color);
         }
         RejectionGlyph::Square => {
-            let half = style.size;
-            let a = position + Vec3::new(-half, -half, 0.0);
-            let b = position + Vec3::new(half, -half, 0.0);
-            let c = position + Vec3::new(half, half, 0.0);
-            let d = position + Vec3::new(-half, half, 0.0);
+            let a = position - right - up;
+            let b = position + right - up;
+            let c = position + right + up;
+            let d = position - right + up;
             gizmos.line(a, b, style.color);
             gizmos.line(b, c, style.color);
             gizmos.line(c, d, style.color);
             gizmos.line(d, a, style.color);
         }
         RejectionGlyph::Triangle => {
-            let top = position + Vec3::Y * style.size;
-            let right = position + Vec3::new(style.size * 0.86, -style.size * 0.6, 0.0);
-            let left = position + Vec3::new(-style.size * 0.86, -style.size * 0.6, 0.0);
-            gizmos.line(top, right, style.color);
-            gizmos.line(right, left, style.color);
-            gizmos.line(left, top, style.color);
+            let top = position + up;
+            let right_foot = position + right * 0.86 - up * 0.6;
+            let left_foot = position - right * 0.86 - up * 0.6;
+            gizmos.line(top, right_foot, style.color);
+            gizmos.line(right_foot, left_foot, style.color);
+            gizmos.line(left_foot, top, style.color);
         }
         RejectionGlyph::Ring => {
             let segments = 14;
             for index in 0..segments {
                 let a0 = std::f32::consts::TAU * index as f32 / segments as f32;
                 let a1 = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
-                let p0 = position + Vec3::new(a0.cos() * style.size, a0.sin() * style.size, 0.0);
-                let p1 = position + Vec3::new(a1.cos() * style.size, a1.sin() * style.size, 0.0);
+                let p0 = position + right * a0.cos() + up * a0.sin();
+                let p1 = position + right * a1.cos() + up * a1.sin();
                 gizmos.line(p0, p1, style.color);
             }
         }
@@ -1323,20 +1365,37 @@ fn pick_runtime_marker_system(
     }
 }
 
-fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color, scale: f32) {
-    let base_radius = match marker.kind {
-        MarkerKind::Track => 12.0,
-        MarkerKind::Truth => 10.0,
-        MarkerKind::Node => 8.0,
+/// Draws one marker glyph, sized in pixels and oriented to the camera.
+///
+/// `scale` is the track-confidence multiplier, applied on top of the target
+/// pixel size so an uncertain track still reads as a larger symbol.
+fn draw_marker_scaled(
+    gizmos: &mut Gizmos,
+    glyphs: &GlyphProjection,
+    marker: &RuntimeMarker,
+    color: Color,
+    scale: f32,
+) {
+    let pixels = match marker.kind {
+        MarkerKind::Track => TRACK_GLYPH_PX,
+        MarkerKind::Truth => TRUTH_GLYPH_PX,
+        MarkerKind::Node => NODE_GLYPH_PX,
     };
-    let r = base_radius * scale;
     let pos = marker.position;
+    let r = glyphs.radius(pos, pixels) * scale;
+
+    // The glyph plane faces the camera. The vertical spines below stay on world
+    // Z on purpose: they mean altitude, so they belong to the world rather than
+    // to the screen, and collapsing to a point from directly overhead is the
+    // correct reading of a vertical line.
+    let right = glyphs.right * r;
+    let up = glyphs.up * r;
 
     match marker.kind {
         MarkerKind::Track => {
             // Cross (+) glyph
-            gizmos.line(pos - Vec3::X * r, pos + Vec3::X * r, color);
-            gizmos.line(pos - Vec3::Y * r, pos + Vec3::Y * r, color);
+            gizmos.line(pos - right, pos + right, color);
+            gizmos.line(pos - up, pos + up, color);
             gizmos.line(pos - Vec3::Z * (r * 0.6), pos + Vec3::Z * (r * 0.6), color);
         }
         MarkerKind::Truth => {
@@ -1345,8 +1404,8 @@ fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color,
             for i in 0..segs {
                 let a0 = std::f32::consts::TAU * i as f32 / segs as f32;
                 let a1 = std::f32::consts::TAU * (i + 1) as f32 / segs as f32;
-                let p0 = pos + Vec3::new(a0.cos() * r, a0.sin() * r, 0.0);
-                let p1 = pos + Vec3::new(a1.cos() * r, a1.sin() * r, 0.0);
+                let p0 = pos + right * a0.cos() + up * a0.sin();
+                let p1 = pos + right * a1.cos() + up * a1.sin();
                 gizmos.line(p0, p1, color);
             }
             // Vertical tick
@@ -1355,22 +1414,18 @@ fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color,
         MarkerKind::Node => {
             if marker.is_mobile == Some(true) {
                 // Diamond glyph for mobile drones
-                let top = pos + Vec3::Y * r;
-                let right = pos + Vec3::X * r;
-                let bottom = pos - Vec3::Y * r;
-                let left = pos - Vec3::X * r;
-                gizmos.line(top, right, color);
-                gizmos.line(right, bottom, color);
-                gizmos.line(bottom, left, color);
-                gizmos.line(left, top, color);
+                gizmos.line(pos + up, pos + right, color);
+                gizmos.line(pos + right, pos - up, color);
+                gizmos.line(pos - up, pos - right, color);
+                gizmos.line(pos - right, pos + up, color);
                 // Vertical spine for altitude context
                 gizmos.line(pos - Vec3::Z * (r * 0.5), pos + Vec3::Z * r, color);
             } else {
                 // Square bracket glyph for static ground sensors
-                let a = pos + Vec3::new(-r, -r, 0.0);
-                let b = pos + Vec3::new(r, -r, 0.0);
-                let c = pos + Vec3::new(r, r, 0.0);
-                let d = pos + Vec3::new(-r, r, 0.0);
+                let a = pos - right - up;
+                let b = pos + right - up;
+                let c = pos + right + up;
+                let d = pos - right + up;
                 gizmos.line(a, b, color);
                 gizmos.line(b, c, color);
                 gizmos.line(c, d, color);
@@ -1379,15 +1434,27 @@ fn draw_marker_scaled(gizmos: &mut Gizmos, marker: &RuntimeMarker, color: Color,
         }
     }
 
-    // Velocity vector (all types)
+    // Velocity leader. The direction is the real world-space heading, but the
+    // length is expressed in glyph radii rather than metres: at default framing
+    // the old 15 m maximum was under three pixels, so speed was unreadable
+    // exactly where the overview needs it.
     if marker.velocity.length_squared() > 0.0 {
+        let speed_fraction =
+            marker.velocity.clamp_length_max(MAX_LEADER_SPEED_MPS) / MAX_LEADER_SPEED_MPS;
         gizmos.line(
             pos,
-            pos + marker.velocity.clamp_length_max(60.0) * 0.25,
+            pos + speed_fraction * r * LEADER_RADII_AT_MAX_SPEED,
             color,
         );
     }
 }
+
+/// Speed at which a velocity leader reaches its full length. Above this the
+/// leader stops growing, so one fast outlier cannot swamp the display.
+const MAX_LEADER_SPEED_MPS: f32 = 60.0;
+
+/// Length of a full-speed velocity leader, in glyph radii.
+const LEADER_RADII_AT_MAX_SPEED: f32 = 4.0;
 
 fn is_marker_visible(
     marker: &RuntimeMarker,
