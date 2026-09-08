@@ -36,7 +36,7 @@ Status labels:
 | Labeled/GNN/JPDA association | **Implemented** | `rust/argusnet-core` |
 | Python Kalman/triangulation utilities | **Partial** | `src/argusnet/mapping/fusion.py` and localization helpers are utility/reference paths, not runtime fusion authority. |
 | Clutter / false-alarm generation | **Partial** | Parameters exist; scenario-wide clutter generation remains limited. |
-| Formal observation-source interface | **Planned** | `build_observations()` remains a large runtime function. |
+| Formal observation-source interface | **Implemented** | `argusnet.sensing.observation_source.ObservationSource` is the versioned, injectable runtime boundary; the deterministic simulator generator remains available as `build_observations()`. |
 
 ## Mapping
 
@@ -107,7 +107,7 @@ Status labels:
 
 ## Interface Boundaries That Need Formalization
 
-1. Observation generation should move behind a versioned observation-source contract.
+1. Observation generation is behind the versioned `ObservationSource` contract; future dataset and physical adapters should implement that interface.
 2. Mapping should expose a runtime belief query interface before planners depend on
    belief-world semantics in physical-mode tests.
 3. Localization should expose a richer pose/covariance/status interface before precision
