@@ -16,20 +16,24 @@
 //! that is a polygon or a cylinder. The originating `kind` is retained so
 //! metadata can still be attributed to the primitive it came from.
 //!
-//! # One deliberate divergence from Python
+//! # A defect this port surfaced, since fixed on both sides
 //!
-//! `point_in_polygon` here divides by the true edge `dy`. The Python original
-//! divides by `max(b.y - a.y, 1e-12)`, which clamps the denominator to a tiny
-//! *positive* value on any downward-going edge and makes the crossing test
-//! degenerate into "toggle iff the edge moves left", independent of the query
-//! point. On the repo's own `scene.smartscene` that misclassifies 14–16% of
-//! probes around each rotated building; axis-aligned footprints are unaffected,
-//! which is why it has gone unnoticed — every footprint in `test_collision.py`
-//! is axis-aligned.
+//! `point_in_polygon` here divides by the true edge `dy`. When this was
+//! written the Python original divided by `max(b.y - a.y, 1e-12)`, which
+//! clamps the denominator to a tiny *positive* value on any downward-going
+//! edge and makes the crossing test degenerate into "toggle iff the edge moves
+//! left", independent of the query point. On the repo's own `scene.smartscene`
+//! that misclassified 14–16% of probes around each rotated building.
 //!
-//! The two implementations therefore disagree on rotated footprints, and this
-//! one is the correct one. `polygon_tests::rotated_footprints_are_where_python_disagrees`
-//! pins the cases that differ.
+//! Axis-aligned footprints were unaffected, which is why it went unnoticed for
+//! so long: every footprint in `tests/test_collision.py` was axis-aligned, and
+//! that is exactly the case the degenerate branch happens to get right. Worth
+//! remembering when adding fixtures — geometry tests that only use
+//! axis-aligned shapes cannot see a whole class of error.
+//!
+//! Python was corrected to divide by the signed `dy`, so the two sides now
+//! agree. `polygon_tests::rotated_footprints_classify_correctly` keeps the
+//! cases that used to differ, as a guard against reintroducing it here.
 
 use serde::{Deserialize, Serialize};
 
@@ -903,18 +907,15 @@ mod polygon_tests {
         assert!(!point_in_polygon([5.0, -1.0], &square()));
     }
 
-    /// The divergence from Python, stated as a test.
+    /// The cases a clamped crossing denominator gets wrong.
     ///
-    /// Python's `_point_in_polygon` clamps the crossing denominator with
-    /// `max(b.y - a.y, 1e-12)`, so on any downward-going edge the test
-    /// degenerates to "toggle iff the edge moves left", independent of the
-    /// query point. These are the cases where that gives the wrong answer and
-    /// this implementation gives the right one. Axis-aligned rectangles — the
-    /// only footprints `tests/test_collision.py` uses — are unaffected, which
-    /// is why the defect survived.
+    /// Both implementations answered these incorrectly until the denominator
+    /// was corrected to keep its sign on downward-going edges — see the module
+    /// docs. Kept as a regression guard: they are the smallest shapes that
+    /// distinguish a correct crossing test from that degenerate one, and no
+    /// axis-aligned fixture can stand in for them.
     #[test]
-    fn rotated_footprints_are_where_python_disagrees() {
-        // Python answers False for both of these.
+    fn rotated_footprints_classify_correctly() {
         assert!(
             point_in_polygon([5.0, 5.0], &triangle()),
             "the centroid of a triangle is inside it"
@@ -923,7 +924,6 @@ mod polygon_tests {
             point_in_polygon([5.0, 5.0], &diamond()),
             "the centre of a diamond is inside it"
         );
-        // ...and True for this one.
         assert!(
             !point_in_polygon([9.0, 9.0], &diamond()),
             "a corner of the diamond's bounding box is outside the diamond"
