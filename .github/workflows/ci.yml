@@ -80,11 +80,16 @@ jobs:
         run: |
           python3 -m pip install --quiet pillow
           python3 scripts/prepare_viewer_smoke_scene.py /tmp/argusnet-render-scene
+          # 650 wide, not 640: wgpu pads each readback row out to a 256-byte
+          # boundary, and a width divisible by 64 needs no padding at all. Every
+          # round width (640, 1280, 1920) falls in that aligned class, so
+          # rendering at one leaves the padded path untested -- the path where
+          # the readback buffer carries bytes the render never wrote.
           ./target/debug/argusnet-viewer \
             --scene /tmp/argusnet-render-scene \
             --headless \
             --output /tmp/argusnet-headless.png \
-            --width 640 --height 480 --camera isometric
+            --width 650 --height 480 --camera isometric
           python3 - <<'PY'
           from PIL import Image
 

@@ -586,14 +586,21 @@ fn apply_camera_preset(
 /// A cleared-but-undrawn target is uniform; a rendered scene is not. This is the
 /// same property CI asserts on the saved PNG, checked here so the capture waits
 /// for it rather than trusting a frame count to have covered it.
-fn is_uniform(frame: &[u8]) -> bool {
+///
+/// `frame` is the raw readback buffer, so it must be walked through [`pixel_rows`]
+/// rather than read straight through. The padding bytes wgpu adds to each row are
+/// never written by the render, so at any width whose row stride is not already
+/// 256-byte aligned they stay zero — and comparing them as if they were pixels
+/// makes *every* frame look non-uniform, including the cleared one this exists to
+/// reject.
+fn is_uniform(frame: &[u8], width: u32, height: u32) -> bool {
     // A trailing partial pixel cannot make a frame non-uniform, so the
-    // remainder is dropped rather than compared.
-    let (pixels, _partial) = frame.as_chunks::<4>();
-    let Some(first) = pixels.first() else {
+    // remainder of each row is dropped rather than compared.
+    let mut pixels = pixel_rows(frame, width, height).flat_map(|row| row.as_chunks::<4>().0.iter());
+    let Some(first) = pixels.next() else {
         return true;
     };
-    pixels.iter().all(|pixel| pixel == first)
+    pixels.all(|pixel| pixel == first)
 }
 
 /// Drives the capture state machine described on [`HeadlessCapture`].
@@ -656,7 +663,7 @@ fn headless_capture_system(
             // `drawn` proves rendering started (so pipelines have been queued
             // at all), `!pipelines_pending` proves none is still compiling, and
             // stability proves the contents have settled.
-            let drawn = !is_uniform(&frame.pixels);
+            let drawn = !is_uniform(&frame.pixels, target.width, target.height);
             let ready = drawn && !frame.pipelines_pending;
 
             if drawn && capture.timing.drawn_at_frame.is_none() {
@@ -753,18 +760,28 @@ fn frame_at_or_after(replay_state: &ReplayState, time_s: f32) -> Option<usize> {
         .position(|frame| frame.timestamp_s >= time_s)
 }
 
+/// The real pixel bytes of a readback buffer, one row at a time.
+///
+/// wgpu pads every copied row out to a 256-byte boundary, so a buffer is only
+/// `width * 4` bytes of image per `align_copy_bytes_per_row(width * 4)` bytes of
+/// buffer. Anything that reads the readback as pixels has to go through here;
+/// reading it flat silently mixes padding into the image.
+fn pixel_rows(padded: &[u8], width: u32, height: u32) -> impl Iterator<Item = &[u8]> {
+    let row_bytes = width as usize * TextureFormat::Rgba8UnormSrgb.pixel_size().unwrap_or(4);
+    // A zero-width target would give a zero stride, and `chunks(0)` panics.
+    // `into_request` clamps the extent, so this only guards the unreachable case.
+    let stride = RenderDevice::align_copy_bytes_per_row(row_bytes).max(1);
+    padded
+        .chunks(stride)
+        .take(height as usize)
+        .map(move |row| &row[..row_bytes.min(row.len())])
+}
+
 /// Trims the row padding wgpu's copy alignment adds, so the bytes match the
 /// image's real width.
 fn unpad_rows(padded: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let row_bytes = width as usize * TextureFormat::Rgba8UnormSrgb.pixel_size().unwrap_or(4);
-    let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
-    if row_bytes == aligned_row_bytes {
-        return padded.to_vec();
-    }
-    padded
-        .chunks(aligned_row_bytes)
-        .take(height as usize)
-        .flat_map(|row| &row[..row_bytes.min(row.len())])
+    pixel_rows(padded, width, height)
+        .flatten()
         .copied()
         .collect()
 }
@@ -785,44 +802,99 @@ fn save_frame(path: &Path, padded: &[u8], width: u32, height: u32) -> Result<()>
 
 #[cfg(test)]
 mod uniformity_tests {
-    use super::is_uniform;
+    use super::{is_uniform, RenderDevice};
+
+    const CLEAR: [u8; 4] = [12, 14, 20, 255];
+
+    /// 64 px * 4 bytes = 256, exactly the copy alignment, so the readback for
+    /// this width carries no padding.
+    const ALIGNED_W: u32 = 64;
+
+    /// Builds a readback buffer the way wgpu delivers one: `width * 4` bytes of
+    /// image per row, then zero padding out to the 256-byte copy alignment.
+    fn readback(width: u32, height: u32, pixel: [u8; 4]) -> Vec<u8> {
+        let row_bytes = width as usize * 4;
+        let stride = RenderDevice::align_copy_bytes_per_row(row_bytes);
+        let mut buffer = vec![0u8; stride * height as usize];
+        for row in 0..height as usize {
+            for x in 0..width as usize {
+                buffer[row * stride + x * 4..row * stride + x * 4 + 4].copy_from_slice(&pixel);
+            }
+        }
+        buffer
+    }
 
     /// A cleared-but-undrawn target: every pixel identical. This is the state
     /// the capture must not mistake for a finished render, and the reason a
     /// stability check alone is not enough.
     #[test]
     fn a_cleared_target_is_uniform() {
-        let cleared: Vec<u8> = [12u8, 14, 20, 255].repeat(64);
-        assert!(is_uniform(&cleared));
+        assert!(is_uniform(&readback(ALIGNED_W, 4, CLEAR), ALIGNED_W, 4));
     }
 
-    /// One pixel differing anywhere is enough to say something drew.
+    /// The defect this signature exists for. At a width whose row stride is not
+    /// already 256-byte aligned, wgpu pads each row with bytes the render never
+    /// writes. Read flat, those zeros differ from the clear colour, so a
+    /// perfectly empty target reports as drawn — and since a cleared target is
+    /// also stable, the capture releases on an empty frame.
+    #[test]
+    fn row_padding_does_not_make_a_cleared_target_look_drawn() {
+        let width = 650;
+        let height = 3;
+        let row_bytes = width as usize * 4;
+        assert!(
+            RenderDevice::align_copy_bytes_per_row(row_bytes) > row_bytes,
+            "this width must need padding for the test to mean anything"
+        );
+
+        let cleared = readback(width, height, CLEAR);
+        assert!(
+            cleared.iter().any(|byte| *byte == 0),
+            "the padding should be present and unwritten"
+        );
+        assert!(is_uniform(&cleared, width, height));
+    }
+
+    /// One pixel differing anywhere is enough to say something drew — including
+    /// the last pixel of a padded row, which is the one nearest the bytes that
+    /// have to be ignored.
     #[test]
     fn a_single_differing_pixel_is_not_uniform() {
-        let mut frame: Vec<u8> = [12u8, 14, 20, 255].repeat(64);
-        let last = frame.len() - 4;
-        frame[last] = 13;
-        assert!(!is_uniform(&frame));
+        for width in [ALIGNED_W, 650] {
+            let row_bytes = width as usize * 4;
+            let stride = RenderDevice::align_copy_bytes_per_row(row_bytes);
 
-        let mut first_pixel: Vec<u8> = [12u8, 14, 20, 255].repeat(64);
-        first_pixel[6] = 21;
-        assert!(!is_uniform(&first_pixel));
+            let mut first = readback(width, 3, CLEAR);
+            first[6] = 21;
+            assert!(!is_uniform(&first, width, 3), "width {width}, first pixel");
+
+            let mut last_in_row = readback(width, 3, CLEAR);
+            last_in_row[row_bytes - 4] = 13;
+            assert!(
+                !is_uniform(&last_in_row, width, 3),
+                "width {width}, row end"
+            );
+
+            let mut last_row = readback(width, 3, CLEAR);
+            last_row[2 * stride] = 13;
+            assert!(!is_uniform(&last_row, width, 3), "width {width}, last row");
+        }
     }
 
     /// An empty or truncated buffer must not be reported as drawn: treating a
     /// missing frame as ready would capture nothing at all.
     #[test]
     fn a_frame_too_short_to_hold_a_pixel_is_uniform() {
-        assert!(is_uniform(&[]));
-        assert!(is_uniform(&[1, 2, 3]));
+        assert!(is_uniform(&[], ALIGNED_W, 4));
+        assert!(is_uniform(&[1, 2, 3], 1, 1));
     }
 
     /// Alpha alone distinguishes two pixels, since the readback is RGBA.
     #[test]
     fn alpha_counts_as_a_difference() {
-        let mut frame: Vec<u8> = [12u8, 14, 20, 255].repeat(8);
+        let mut frame = readback(ALIGNED_W, 2, CLEAR);
         frame[7] = 254;
-        assert!(!is_uniform(&frame));
+        assert!(!is_uniform(&frame, ALIGNED_W, 2));
     }
 }
 
