@@ -23,6 +23,21 @@ version = "0.1.0"
 lto = "thin"
 codegen-units = 1
 
+# Full DWARF across 721 crates produced ~1.3 GB viewer test binaries. CI links
+# two of them (lib test and bin test) on a runner with ~14 GB of free disk, and
+# rust-lld died writing its memory-mapped output: "ld terminated with signal 7
+# [Bus error]" on #45 and twice on #46.
+#
+# line-tables-only keeps the file and line numbers that panics, backtraces and
+# test failures actually print; it drops the type and variable information a
+# step debugger would use. Dependencies are not stepped through at all, so
+# their debuginfo is pure cost.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [workspace.dependencies]
 anyhow = "1.0"
 # The viewer is the only consumer today, but these live here with every other
