@@ -9,6 +9,9 @@ Roadmap contracts belong in the subsystem docs; this file should reflect impleme
 - Runtime mutable state is owned by the subsystem that mutates it.
 - Replay data is an immutable snapshot of runtime state.
 - Rust `argusnet-core` owns fused object-state output and fusion health.
+- Rust `argusnet-world` owns terrain, obstacle and visibility queries; `safety-engine`
+  owns physical limits and simulation safety decisions. Python invokes them through
+  persistent `argusnet-native` handles.
 - Python simulation owns scenario construction, synthetic observations, mapping/localization mission
   state, and replay assembly.
 - Mapping, localization, inspection, deconfliction, and scan mission replay types live in
@@ -25,6 +28,7 @@ Roadmap contracts belong in the subsystem docs; this file should reflect impleme
 | Terrain viewer mesh | Replay `meta.terrain.viewer_mesh`, scene packages | replay/scene builders | `rust/argusnet-viewer/src/replay.rs` and viewer state | Display artifact, not planning authority. |
 | Obstacles | `src/argusnet/world/obstacles.py`, `EnvironmentModel.obstacles` | Scenario/environment builders | LOS, planner, collision/deconfliction, scene export | Rust `argusnet-world` owns geometry and indexing; Python retains metadata wrappers. |
 | Land cover | `src/argusnet/world/environment.py`, `world/procedural.py` | Environment builders | visibility/sensing, replay/scene export | Rust owns categorical sampling and density queries; Python authors seasonal raster data. |
+| Simulation safety state | `safety-engine::simulation`, Python `safety/native.py` wrappers | Native monitor retained per drone | Python simulation clamps, replay safety events | Rust policy/limits; Python retains opt-in orchestration and clamp ordering. |
 | Weather | `src/argusnet/world/weather.py` | Scenario builders | visibility/sensing and scenario metadata | Weather affects sensor factors; full vehicle dynamics effects remain partial. |
 | Scenario config | `src/argusnet/simulation/sim.py`, `src/argusnet/core/config.py` | CLI/scenario builders | sim runtime, replay metadata, tests | `ScenarioOptions` and `SimulationConfig` are Python authorities. |
 | Node state | `argusnet.core.types.NodeState` | Python simulation loop and ingestion adapters | Rust service request conversion, replay, viewer | Includes sensor capability and battery fraction fields for replay/sim use. |

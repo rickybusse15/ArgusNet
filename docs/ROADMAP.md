@@ -13,6 +13,14 @@ code, the code and its tests describe current behavior. See
 [architecture.md](architecture.md) and [KNOWN_GAPS.md](KNOWN_GAPS.md) for the
 current implementation boundary.
 
+## Runtime migration track
+
+The [Rust runtime migration plan](RUST_RUNTIME_MIGRATION.md) tracks the separate
+engineering migration. Its Phase 3 (world/safety authority) is implemented and
+verified locally at `8fbf7c2`, pending publication and merge. Python still owns the
+simulation loop. Migration phase numbers do not correspond to the product phases
+below.
+
 ## Product North Star
 
 An authorized operator should be able to define a bounded site and objective,

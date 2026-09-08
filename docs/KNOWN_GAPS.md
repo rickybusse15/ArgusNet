@@ -103,7 +103,7 @@ Status labels:
 | CI benchmark markers and golden performance files | **Implemented** | Deterministic work-counter gate runs on every PR; timing comparison is opt-in (`ARGUSNET_RUN_PERF_TIMING`). Baseline profile in `docs/performance/baseline-profile-2026-09.md`. |
 | Viewer replay playback | **Implemented** | `rust/argusnet-viewer` |
 | Viewer live streaming | **Implemented** | Legacy `WatchFrames` plus operator-focused `WatchFramesV2`, reconnect, bounded queues/history, truth filtering, sequence/drop telemetry |
-| Viewer headless CI/render path | **Partial** | Headless module exists; CI/render workflow is not fully documented or gated. |
+| Viewer headless CI/render path | **Implemented smoke coverage** | CI renders through Bevy and checks a non-empty image. Fixed-image regression and steady-state frame-budget gates remain open. |
 
 ## Interface Boundaries That Need Formalization
 
@@ -116,8 +116,9 @@ Status labels:
    repeat-inspection/change-detection claims are made.
 5. The mission executive should own task state and route all motion through planning, trajectory,
    and safety gates.
-6. Rust-side world/terrain interfaces should be explicit before Rust prediction or safety consumers
-   depend on terrain/obstacle data.
+6. Rust world queries and native safety are now load-bearing (migration Phase 3).
+   Remaining runtime consumers should use `argusnet-world` directly as they migrate;
+   Python still owns the simulation loop. See [migration plan](RUST_RUNTIME_MIGRATION.md).
 
 ## Proto And Schema State
 
