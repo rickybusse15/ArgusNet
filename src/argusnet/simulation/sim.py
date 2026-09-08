@@ -87,6 +87,12 @@ from argusnet.sensing.imu import IMUMeasurement
 from argusnet.sensing.models.noise import SensorErrorConfig, SensorModel
 from argusnet.sensing.models.noise import atmospheric_attenuation as sensor_atmospheric_attenuation
 from argusnet.sensing.models.noise import detection_probability as sensor_detection_probability
+from argusnet.sensing.observation_source import (
+    FunctionObservationSource,
+    ObservationBatch,
+    ObservationRequest,
+    ObservationSource,
+)
 from argusnet.world.environment import (
     Bounds2D,
     BuildingPrism,
@@ -230,17 +236,6 @@ class SimTarget:
             velocity=velocity,
             timestamp_s=timestamp_s,
         )
-
-
-@dataclass(frozen=True)
-class ObservationBatch:
-    observations: list[BearingObservation]
-    attempted_count: int
-    rejection_counts: dict[str, int]
-    accepted_by_target: dict[str, int]
-    rejected_by_target: dict[str, int]
-    accepted_by_node_target: dict[tuple[str, str], int]
-    generation_rejections: list[ObservationRejection] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -4839,11 +4834,13 @@ def run_simulation(
     max_frames_in_memory: int = 500,
     progress: Callable[[int, int], None] | None = None,
     realtime: bool = False,
+    observation_source: ObservationSource | None = None,
 ) -> SimulationResult:
     active_tracker_config = tracker_config or TrackerConfig()
     scenario.reset_runtime_state()
     rng = np.random.default_rng(simulation_config.seed)
     sensor_models = _build_sensor_models(scenario.nodes, seed=simulation_config.seed)
+    active_observation_source = observation_source or FunctionObservationSource(build_observations)
     service = TrackingService(config=active_tracker_config, retain_history=True)
     # Persistent bidi stream: same request/response semantics as unary
     # ingest_frame, without per-call RPC overhead across thousands of steps.
@@ -5517,18 +5514,20 @@ def run_simulation(
                 for ns in node_states
             ]
 
-        observation_batch = build_observations(
-            rng=rng,
-            nodes=scenario.nodes,
-            truths=truths,
-            timestamp_s=timestamp_s,
-            terrain=scenario.terrain,
-            occluding_objects=scenario.occluding_objects,
-            environment=scenario.environment,
-            weather=scenario.weather,
-            sensor_models=sensor_models,
-            constants=scenario.constants,
-            seed=simulation_config.seed,
+        observation_batch = active_observation_source.generate(
+            ObservationRequest(
+                rng=rng,
+                nodes=scenario.nodes,
+                truths=truths,
+                timestamp_s=timestamp_s,
+                terrain=scenario.terrain,
+                occluding_objects=scenario.occluding_objects,
+                environment=scenario.environment,
+                weather=scenario.weather,
+                sensor_models=sensor_models,
+                constants=scenario.constants,
+                seed=simulation_config.seed,
+            )
         )
         generation_attempted_count += observation_batch.attempted_count
         generation_rejection_counts.update(observation_batch.rejection_counts)
