@@ -5,12 +5,13 @@ import math
 import tempfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import numpy as np
 
-from argusnet.core.types import to_jsonable
 from argusnet.evaluation.replay import (
     ReplayDocument,
     load_replay_document,
@@ -280,6 +281,66 @@ def _build_landcover_meshes_from_environment(environment) -> Sequence[SceneLayer
     ]
 
 
+def _json_safe(value):
+    """JSON-encode ``value`` without collapsing its nesting.
+
+    ``to_jsonable`` flattens any 2-D value to a flat list. That rule exists for
+    covariance matrices, and is wrong for scene metadata: ``footprint_xy_m`` is
+    a list of ``(x, y)`` pairs whose meaning depends on that pairing.
+    """
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field_info.name: _json_safe(getattr(value, field_info.name))
+            for field_info in fields(value)
+        }
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(nested) for key, nested in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    return value
+
+
+def _footprint_pairs(value, *, dtype) -> np.ndarray:
+    """Normalize an obstacle footprint to an ``(n, 2)`` array.
+
+    Accepts the nested ``[[x, y], ...]`` form written by
+    ``ObstaclePrimitive.to_metadata()`` and the flat ``[x, y, x, y, ...]`` form
+    that scene packages built before this writer stopped flattening carry on
+    disk.
+    """
+    footprint = np.asarray(value, dtype=dtype)
+    if footprint.ndim == 1:
+        if footprint.size % 2:
+            raise ValueError(
+                "Flat obstacle footprint must hold an even number of coordinates, "
+                f"got {footprint.size}."
+            )
+        footprint = footprint.reshape(-1, 2)
+    return footprint
+
+
+def _obstacle_metadata_document(
+    occluding_objects: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Serialize obstacle metadata, keeping footprints as ``(x, y)`` pairs."""
+    encoded = []
+    for object_meta in occluding_objects:
+        entry = _json_safe(object_meta)
+        footprint = entry.get("footprint_xy_m")
+        if footprint is not None:
+            entry["footprint_xy_m"] = _footprint_pairs(footprint, dtype=float).tolist()
+        encoded.append(entry)
+    return encoded
+
+
 def _build_obstacle_meshes(
     occluding_objects: Sequence[Mapping[str, object]],
     *,
@@ -298,7 +359,7 @@ def _build_obstacle_meshes(
             else "buildings"
         )
         if isinstance(object_meta.get("footprint_xy_m"), list):
-            footprint = np.asarray(object_meta["footprint_xy_m"], dtype=np.float32)
+            footprint = _footprint_pairs(object_meta["footprint_xy_m"], dtype=np.float32)
             min_tz, max_tz = _terrain_height_span_under_footprint(footprint, height_at)
             base_z, top_z = _solid_mesh_elevations(object_meta, min_tz, max_tz)
             grouped[layer_id].append(
@@ -465,8 +526,8 @@ def build_scene_from_replay(
                 "min_height_m": terrain_meta.get("min_height_m"),
                 "max_height_m": terrain_meta.get("max_height_m"),
             },
-            "occluding_objects": to_jsonable(occluding_objects),
-            "replay_meta": to_jsonable(meta),
+            "occluding_objects": _obstacle_metadata_document(occluding_objects),
+            "replay_meta": _json_safe(meta),
         },
     )
 
