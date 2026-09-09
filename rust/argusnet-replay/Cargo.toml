@@ -1,0 +1,16 @@
+[package]
+name = "argusnet-replay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+live-stream = ["dep:argusnet-proto"]
+
+[dependencies]
+argusnet-proto = { path = "../argusnet-proto", optional = true }
+argusnet-world = { path = "../argusnet-world" }
+glam = "0.32"
+serde.workspace = true
+serde_json.workspace = true
