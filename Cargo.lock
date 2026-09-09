@@ -299,6 +299,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-replay"
+version = "0.1.0"
+dependencies = [
+ "argusnet-proto",
+ "argusnet-world",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "argusnet-server"
 version = "0.1.0"
 dependencies = [
@@ -331,6 +341,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argusnet-proto",
+ "argusnet-replay",
  "argusnet-world",
  "bevy",
  "bevy_egui",

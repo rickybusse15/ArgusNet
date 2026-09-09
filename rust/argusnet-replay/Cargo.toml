@@ -1,0 +1,23 @@
+[package]
+name = "argusnet-replay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "argusnet_replay"
+path = "src/lib.rs"
+
+[features]
+# Off by default. The viewer turns it on through its own `live-stream` feature,
+# so a replay-only build never pulls tonic/prost in.
+live-stream = ["dep:argusnet-proto"]
+
+[dependencies]
+argusnet-world = { path = "../argusnet-world" }
+serde.workspace = true
+serde_json.workspace = true
+argusnet-proto = { path = "../argusnet-proto", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

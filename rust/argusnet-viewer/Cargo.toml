@@ -18,9 +18,15 @@ path = "src/main.rs"
 # replay-only viewer without the tokio/tonic/proto dependencies.
 default = ["live-stream"]
 # Enables live gRPC frame ingestion from argusnet-server (--live <endpoint>).
-live-stream = ["dep:argusnet-proto", "dep:tokio", "dep:tonic"]
+live-stream = [
+  "dep:argusnet-proto",
+  "dep:tokio",
+  "dep:tonic",
+  "argusnet-replay/live-stream",
+]
 
 [dependencies]
+argusnet-replay = { path = "../argusnet-replay" }
 argusnet-world = { path = "../argusnet-world" }
 anyhow.workspace = true
 clap.workspace = true
