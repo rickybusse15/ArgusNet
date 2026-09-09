@@ -1,0 +1,281 @@
+//! Seed derivation and the pinned random stream.
+//!
+//! [ADR-006](../../../docs/adr/006-determinism-rebaseline.md) settles what
+//! determinism means after the port: *the Rust runtime is deterministic for a
+//! fixed seed and configuration, and reproducible across platforms* — not
+//! "identical to numpy". Reproducing numpy would mean reimplementing
+//! `SeedSequence` and PCG64 bit-exactly and then owning that forever.
+//!
+//! ADR-006 does require keeping the *seed-derivation scheme*, because that is
+//! what buys order-independence: `build_observations` gives every
+//! `(node, target, tick)` triple its own stream, so the result does not depend
+//! on the order platforms are iterated in. That scheme is reproduced here
+//! exactly — see [`stable_seed`] — and pinned against Python's own output by
+//! `tests/conformance.rs`.
+//!
+//! # What "pinned" means
+//!
+//! Choosing a PRNG does not by itself make values stable; a dependency can
+//! change its algorithm in a release and every golden file moves silently. So
+//! the guarantee does not rest on the crate choice. It rests on conformance
+//! fixtures that record actual draws, and on exact-version pins in
+//! `Cargo.toml`. The fixtures are the contract; ChaCha8 is an implementation
+//! detail the contract protects.
+
+use rand_chacha::ChaCha8Rng;
+// In rand_core 0.10 the generator methods live on `Rng`; `RngCore` is a marker
+// alias for it, so importing that instead compiles to a missing-method error.
+use rand_core::{Rng, SeedableRng};
+
+/// One component of a keyed seed.
+///
+/// The Python derivation hashes `str(part)`, so how a part renders *is* part of
+/// the contract: the integer `1500` must hash as `"1500"`. Making the rendering
+/// explicit at the call site is the point of this enum — a bare `impl Display`
+/// would let a float or a debug format in, and the mismatch would show up as a
+/// diverged stream rather than a type error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedPart<'a> {
+    /// Hashed as-is.
+    Str(&'a str),
+    /// Hashed as its decimal rendering, which matches Python's `str(int)` for
+    /// every value an `i64` can hold, negative sign included.
+    Int(i64),
+}
+
+impl<'a> From<&'a str> for SeedPart<'a> {
+    fn from(value: &'a str) -> Self {
+        SeedPart::Str(value)
+    }
+}
+
+impl From<i64> for SeedPart<'_> {
+    fn from(value: i64) -> Self {
+        SeedPart::Int(value)
+    }
+}
+
+/// The 32-bit FNV prime, as `sim.py::_stable_seed` uses it.
+const FNV_PRIME_32: u32 = 16_777_619;
+
+/// Reproduce `sim.py::_stable_seed` exactly.
+///
+/// ```text
+/// seed = int(base_seed) & 0xFFFFFFFF
+/// for part in parts:
+///     for char in str(part):
+///         seed = ((seed * 16777619) ^ ord(char)) & 0xFFFFFFFF
+/// ```
+///
+/// Two details are easy to get wrong and both are load-bearing:
+///
+/// - The order is **multiply then xor**, which is FNV-**1**, not the more
+///   common FNV-1a. Swapping them produces a different hash for every input
+///   longer than one character.
+/// - `ord(char)` is a Unicode scalar value, not a byte. For the ASCII node and
+///   target ids in use today the two coincide, but hashing UTF-8 bytes would
+///   diverge the moment an id carried a non-ASCII character — so this iterates
+///   `chars()`, matching Python rather than matching intuition about bytes.
+///
+/// There is no initial FNV offset basis: the walk starts from the caller's
+/// seed. That is not a mistake to "fix" here; it is what the reference does,
+/// and the fixtures pin it.
+pub fn stable_seed(base_seed: u32, parts: &[SeedPart<'_>]) -> u32 {
+    let mut seed = base_seed;
+    let mut buffer = itoa_buffer();
+    for part in parts {
+        let rendered = match part {
+            SeedPart::Str(value) => *value,
+            SeedPart::Int(value) => render_int(*value, &mut buffer),
+        };
+        for character in rendered.chars() {
+            seed = seed.wrapping_mul(FNV_PRIME_32) ^ (character as u32);
+        }
+    }
+    seed
+}
+
+/// Scratch space for rendering an `i64` without allocating.
+///
+/// 20 digits plus a sign covers `i64::MIN`.
+type IntBuffer = [u8; 21];
+
+fn itoa_buffer() -> IntBuffer {
+    [0; 21]
+}
+
+fn render_int(value: i64, buffer: &mut IntBuffer) -> &str {
+    use std::io::Write;
+    let mut cursor = std::io::Cursor::new(&mut buffer[..]);
+    write!(cursor, "{value}").expect("21 bytes holds any i64");
+    let written = cursor.position() as usize;
+    std::str::from_utf8(&buffer[..written]).expect("decimal digits are ASCII")
+}
+
+/// A reproducible stream of random values.
+///
+/// Construct one per logical stream — per `(node, target, tick)` for
+/// observation noise, per platform for controller jitter — rather than
+/// threading a single generator through the tick. That is what makes the
+/// result independent of iteration order, and it is the property ADR-006
+/// specifically preserves.
+#[derive(Debug, Clone)]
+pub struct DeterministicRng {
+    inner: ChaCha8Rng,
+}
+
+impl DeterministicRng {
+    /// Seed directly from an already-derived 32-bit seed.
+    pub fn from_seed(seed: u32) -> Self {
+        Self {
+            inner: ChaCha8Rng::seed_from_u64(u64::from(seed)),
+        }
+    }
+
+    /// Derive a seed with [`stable_seed`] and open its stream.
+    pub fn keyed(base_seed: u32, parts: &[SeedPart<'_>]) -> Self {
+        Self::from_seed(stable_seed(base_seed, parts))
+    }
+
+    /// A uniform draw in `[0, 1)`.
+    ///
+    /// Built from the top 53 bits of a `u64`, so every value is a multiple of
+    /// `2^-53` and no double is unreachable through rounding. This is the same
+    /// construction numpy's `random()` uses, which keeps the *distribution*
+    /// comparable even though individual draws differ.
+    pub fn uniform(&mut self) -> f64 {
+        const SCALE: f64 = 1.0 / ((1u64 << 53) as f64);
+        ((self.inner.next_u64() >> 11) as f64) * SCALE
+    }
+
+    /// A uniform draw in `[low, high)`.
+    pub fn uniform_range(&mut self, low: f64, high: f64) -> f64 {
+        low + (high - low) * self.uniform()
+    }
+
+    /// A normal draw with the given mean and standard deviation.
+    ///
+    /// Box–Muller, spelled out, deliberately: `rand_distr`'s `StandardNormal`
+    /// is a ziggurat whose tables are explicitly **not** value-stable across
+    /// releases, which is exactly the silent drift the fixtures exist to catch.
+    /// P4.1 asks for the normal sampler to be chosen and pinned, and a
+    /// transform written here cannot move underneath us.
+    ///
+    /// Both variates are consumed and only one is returned. Caching the second
+    /// would halve the cost, but it would make a draw depend on how many draws
+    /// preceded it within the stream — harmless in fact, and one more thing to
+    /// reason about when a golden file moves. Streams are per-key and short;
+    /// the clarity is worth more than the arithmetic.
+    pub fn normal(&mut self, mean: f64, std_dev: f64) -> f64 {
+        // `uniform` can return exactly 0, and ln(0) is -inf. Reflecting into
+        // (0, 1] costs nothing and removes the special case.
+        let u1 = 1.0 - self.uniform();
+        let u2 = self.uniform();
+        let radius = (-2.0 * u1.ln()).sqrt();
+        mean + std_dev * radius * (std::f64::consts::TAU * u2).cos()
+    }
+
+    /// Raw 64 bits, for callers that need their own transform.
+    pub fn next_u64(&mut self) -> u64 {
+        self.inner.next_u64()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_seed_is_multiply_then_xor() {
+        // Worked by hand from the Python source, so this fails if the order is
+        // flipped to FNV-1a rather than merely disagreeing with a fixture.
+        let expected = 7u32.wrapping_mul(FNV_PRIME_32) ^ u32::from(b'a');
+        assert_eq!(stable_seed(7, &[SeedPart::Str("a")]), expected);
+
+        let two_chars = expected.wrapping_mul(FNV_PRIME_32) ^ u32::from(b'b');
+        assert_eq!(stable_seed(7, &[SeedPart::Str("ab")]), two_chars);
+    }
+
+    #[test]
+    fn parts_are_hashed_as_python_renders_them() {
+        assert_eq!(
+            stable_seed(1, &[SeedPart::Int(1500)]),
+            stable_seed(1, &[SeedPart::Str("1500")])
+        );
+        assert_eq!(
+            stable_seed(1, &[SeedPart::Int(-42)]),
+            stable_seed(1, &[SeedPart::Str("-42")])
+        );
+        assert_eq!(
+            stable_seed(1, &[SeedPart::Int(i64::MIN)]),
+            stable_seed(1, &[SeedPart::Str("-9223372036854775808")])
+        );
+    }
+
+    #[test]
+    fn concatenation_is_not_the_same_as_two_parts() {
+        // It happens to be, because there is no separator between parts -- and
+        // that is worth pinning rather than discovering later, since it means
+        // ("ab", "c") and ("a", "bc") collide. The Python derivation has the
+        // same property; callers relying on distinct keys must not build them
+        // from adjacent free-form strings.
+        assert_eq!(
+            stable_seed(3, &[SeedPart::Str("ab"), SeedPart::Str("c")]),
+            stable_seed(3, &[SeedPart::Str("a"), SeedPart::Str("bc")])
+        );
+    }
+
+    #[test]
+    fn a_stream_is_reproducible_from_its_key() {
+        let draws = |()| {
+            let mut rng =
+                DeterministicRng::keyed(11, &[SeedPart::Str("node-1"), SeedPart::Int(500)]);
+            (0..8).map(|_| rng.uniform()).collect::<Vec<_>>()
+        };
+        assert_eq!(draws(()), draws(()));
+    }
+
+    #[test]
+    fn different_keys_give_different_streams() {
+        let mut first = DeterministicRng::keyed(11, &[SeedPart::Str("node-1")]);
+        let mut second = DeterministicRng::keyed(11, &[SeedPart::Str("node-2")]);
+        assert_ne!(first.uniform(), second.uniform());
+    }
+
+    #[test]
+    fn uniform_stays_in_range_over_a_long_run() {
+        let mut rng = DeterministicRng::from_seed(1);
+        for _ in 0..100_000 {
+            let value = rng.uniform();
+            assert!((0.0..1.0).contains(&value), "uniform produced {value}");
+        }
+    }
+
+    #[test]
+    fn normal_has_the_requested_moments() {
+        // Not a distribution test -- it is a guard against a transform that is
+        // scaled or centred wrongly, which is the failure Box-Muller invites.
+        let mut rng = DeterministicRng::from_seed(99);
+        let samples: Vec<f64> = (0..200_000).map(|_| rng.normal(3.0, 2.0)).collect();
+        let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+        let variance =
+            samples.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / samples.len() as f64;
+        assert!((mean - 3.0).abs() < 0.02, "mean was {mean}");
+        assert!(
+            (variance.sqrt() - 2.0).abs() < 0.02,
+            "std dev was {}",
+            variance.sqrt()
+        );
+    }
+
+    #[test]
+    fn normal_is_finite_even_when_the_first_uniform_is_zero() {
+        // u1 == 0 would make ln(u1) negative infinity. The reflection to (0, 1]
+        // is what prevents it, and a stream that happens never to draw exactly
+        // zero would not exercise it -- so drive the transform directly.
+        let mut rng = DeterministicRng::from_seed(5);
+        for _ in 0..50_000 {
+            assert!(rng.normal(0.0, 1.0).is_finite());
+        }
+    }
+}

@@ -9,6 +9,7 @@ members = [
   "rust/argusnet-proto",
   "rust/argusnet-server",
   "rust/argusnet-replay",
+  "rust/argusnet-sim",
   "rust/argusnet-viewer",
 ]
 resolver = "2"
