@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -39,6 +40,20 @@ def validate_replay_with_schema(document: Mapping[str, Any]) -> list[str]:
     try:
         import jsonschema  # type: ignore[import-untyped]
     except ImportError:
+        # jsonschema is a runtime dependency precisely so this path is not
+        # normally reachable. It stays as a fallback for stripped installs, but
+        # it must not be silent: the hand-written check misses unknown keys
+        # anywhere in the document, wrong-typed fields nested inside tracks and
+        # nodes, and out-of-range values. A caller that believes it validated a
+        # replay and did not is the failure this warning exists to prevent.
+        warnings.warn(
+            "jsonschema is not installed; replay validation is falling back to a "
+            "weaker hand-written check that misses unknown keys, wrong-typed "
+            "nested fields and out-of-range values. Install argusnet's declared "
+            "dependencies to validate against docs/replay-schema.json.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return _manual_schema_validation(document, schema)
 
     validator_cls = jsonschema.Draft7Validator
