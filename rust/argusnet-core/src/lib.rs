@@ -2088,16 +2088,28 @@ mod tests {
 
     /// Long-duration multi-track numerical stability stress test.
     ///
-    /// Runs hundreds of concurrent tracks for hundreds of frames with
-    /// periodic observation dropouts (forcing coast/re-acquire cycles) and
-    /// asserts every published state and covariance stays finite. Scale via
-    /// ARGUSNET_STRESS_TARGETS / ARGUSNET_STRESS_FRAMES for nightly runs.
+    /// Runs concurrent tracks for hundreds of frames with periodic
+    /// observation dropouts (forcing coast/re-acquire cycles) and asserts
+    /// every published state and covariance stays finite.
+    ///
+    /// The default target count is one full lane cycle. Frames stay high
+    /// because the property under test is divergence *over time*: covariance
+    /// drift needs a long run to show up, while extra simultaneous targets
+    /// only add association load. Cost is linear in targets x frames
+    /// (~0.48ms per target-frame in a debug build), so the old 150-target
+    /// default spent 28.5s of every `cargo test` run -- more than the other
+    /// 14 tests in this crate combined, and the whole reason a no-op
+    /// `cargo test -p argusnet-core --lib` took ~29s.
+    ///
+    /// nightly-bench.yml raises ARGUSNET_STRESS_TARGETS back to 150 so the
+    /// crowded-association case still runs daily. That override is what the
+    /// env vars were always for; nothing had actually been setting them.
     #[test]
     fn many_tracks_remain_finite_over_long_run() {
         let target_count: usize = std::env::var("ARGUSNET_STRESS_TARGETS")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(150);
+            .unwrap_or(25);
         let frame_count: usize = std::env::var("ARGUSNET_STRESS_FRAMES")
             .ok()
             .and_then(|value| value.parse().ok())
