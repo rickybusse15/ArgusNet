@@ -43,6 +43,7 @@ message NodeState {
   double health = 6;
   string sensor_type = 7;       // e.g. "optical", "thermal", "radar"
   double fov_half_angle_deg = 8; // 0 = unset (use platform default 180)
+  // 0.0 means "unset"; readers substitute their own default range.
   double max_range_m = 9;        // 0 = unset (use platform default unlimited)
 
   // Signed-envelope identity fields (comms security). Empty signature means
@@ -103,6 +104,10 @@ message TrackState {
   optional double quality_score = 10;
   repeated double acceleration_mps2 = 11;  // [ax, ay, az]
   double confidence = 12;
+  // Probability the IMM filter assigns to the constant-velocity mode.
+  // 0.0 means "unset" -- the runtime type models this as an optional and the
+  // wire type cannot, so zero is the in-band sentinel, as it is for
+  // NodeState.max_range_m. The producing filter never emits a genuine zero.
   double mode_probability_cv = 13;
   double last_seen_s = 14;
   repeated string contributing_nodes = 15;

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use argusnet_core::{
     AssociationMode, NodeHealthSnapshot, SafetyEvent, TargetMetadata, TrackerConfig,
 };
@@ -24,6 +26,12 @@ fn vec3_from_pb(
 ) -> Result<nalgebra::Vector3<f64>, String> {
     let value = value.ok_or_else(|| format!("{field_name} is required"))?;
     Ok(nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m))
+}
+
+/// For the optional geometry on `ObservationRejection`, where "absent" is a
+/// value rather than an error and the caller has already matched on `Some`.
+fn vec3_from_pb_infallible(value: pb::Vector3) -> nalgebra::Vector3<f64> {
+    nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m)
 }
 
 fn association_mode_to_string(mode: &AssociationMode) -> String {
@@ -156,7 +164,54 @@ pub fn tracker_config_from_pb(config: pb::TrackerConfig) -> Result<TrackerConfig
     Ok(config)
 }
 
+// ---------------------------------------------------------------------------
+// Runtime type -> wire message.
+//
+// Each type has exactly ONE conversion body, reached by two public entry
+// points: `x_to_pb` for a caller that owns the value and `x_to_pb_ref` for one
+// that only borrows it (the server keeps an `Arc<PlatformFrame>` for
+// latest-frame queries and cannot move out of it).
+//
+// The two used to be two hand-written bodies per type, and they drifted: when
+// `PlatformFrame` grew `target_metadata` and `safety_events`, and when the
+// covariance transpose was corrected, each fix had to be applied twice and
+// there was nothing to catch it if it were not. `Cow` collapses them.
+//
+// `Cow::into_owned` moves in the `Owned` case and clones the whole struct in
+// the `Borrowed` case -- which is what the old `_ref` bodies already did field
+// by field, since every non-`Copy` field was cloned individually. The one
+// difference is at collection level: cloning a `Vec<NodeState>` allocates the
+// vector's spine as well as cloning its elements, so the borrowed frame path
+// pays a handful of extra allocations against the hundreds of `String` clones
+// it was already making. That is the price of the field list existing once.
+// ---------------------------------------------------------------------------
+
+/// `TrackState::mode_probability_cv` is `Option<f64>` in the runtime type and a
+/// bare `double` on the wire, so "unset" needs an in-band representation.
+///
+/// Zero is that representation. This is not a new interpretation of the field:
+/// `track_from_pb` and the viewer's replay reader (`replay.rs`) both already
+/// decode `0.0` as absent, and `NodeState.max_range_m` uses the same convention
+/// in the same proto. Only the *encoder* disagreed -- it sent `1.0` for `None`,
+/// so a `None` came back as `Some(1.0)`, silently reporting maximum confidence
+/// in the constant-velocity mode where the truth was "no IMM estimate".
+///
+/// The cost is that a genuine `Some(0.0)` cannot be distinguished from absent.
+/// That is acceptable because the only producer, `argusnet-core`'s IMM filter,
+/// cannot emit it: the mixed mode probability is a normalized posterior whose
+/// numerator is floored at `1.0e-30`, so it is strictly positive.
+const UNSET_MODE_PROBABILITY_CV: f64 = 0.0;
+
 pub fn node_state_to_pb(node: NodeState) -> pb::NodeState {
+    node_state_pb(Cow::Owned(node))
+}
+
+pub fn node_state_to_pb_ref(node: &NodeState) -> pb::NodeState {
+    node_state_pb(Cow::Borrowed(node))
+}
+
+fn node_state_pb(node: Cow<'_, NodeState>) -> pb::NodeState {
+    let node = node.into_owned();
     pb::NodeState {
         node_id: node.node_id,
         position: Some(vec3_to_pb(node.position)),
@@ -194,6 +249,15 @@ pub fn node_state_from_pb(node: pb::NodeState) -> Result<NodeState, String> {
 }
 
 pub fn observation_to_pb(observation: BearingObservation) -> pb::BearingObservation {
+    observation_pb(Cow::Owned(observation))
+}
+
+pub fn observation_to_pb_ref(observation: &BearingObservation) -> pb::BearingObservation {
+    observation_pb(Cow::Borrowed(observation))
+}
+
+fn observation_pb(observation: Cow<'_, BearingObservation>) -> pb::BearingObservation {
+    let observation = observation.into_owned();
     pb::BearingObservation {
         node_id: observation.node_id,
         target_id: observation.target_id,
@@ -224,6 +288,15 @@ pub fn observation_from_pb(
 }
 
 pub fn rejection_to_pb(rejection: ObservationRejection) -> pb::ObservationRejection {
+    rejection_pb(Cow::Owned(rejection))
+}
+
+pub fn rejection_to_pb_ref(rejection: &ObservationRejection) -> pb::ObservationRejection {
+    rejection_pb(Cow::Borrowed(rejection))
+}
+
+fn rejection_pb(rejection: Cow<'_, ObservationRejection>) -> pb::ObservationRejection {
+    let rejection = rejection.into_owned();
     pb::ObservationRejection {
         node_id: rejection.node_id,
         target_id: rejection.target_id,
@@ -238,7 +311,38 @@ pub fn rejection_to_pb(rejection: ObservationRejection) -> pb::ObservationReject
     }
 }
 
+/// The inverse of [`rejection_to_pb`].
+///
+/// Infallible where the others are not: every geometry field on
+/// `ObservationRejection` is already optional, so a missing one is a legitimate
+/// value rather than a malformed message. `frame_from_pb` used to inline this
+/// body twice -- once for `rejected_observations` and once for
+/// `generation_rejections` -- which made a third copy of the field list.
+pub fn rejection_from_pb(rejection: pb::ObservationRejection) -> ObservationRejection {
+    ObservationRejection {
+        node_id: rejection.node_id,
+        target_id: rejection.target_id,
+        timestamp_s: rejection.timestamp_s,
+        reason: rejection.reason,
+        detail: rejection.detail,
+        origin: rejection.origin.map(vec3_from_pb_infallible),
+        attempted_point: rejection.attempted_point.map(vec3_from_pb_infallible),
+        closest_point: rejection.closest_point.map(vec3_from_pb_infallible),
+        blocker_type: rejection.blocker_type,
+        first_hit_range_m: rejection.first_hit_range_m,
+    }
+}
+
 pub fn truth_to_pb(truth: TruthState) -> pb::TruthState {
+    truth_pb(Cow::Owned(truth))
+}
+
+pub fn truth_to_pb_ref(truth: &TruthState) -> pb::TruthState {
+    truth_pb(Cow::Borrowed(truth))
+}
+
+fn truth_pb(truth: Cow<'_, TruthState>) -> pb::TruthState {
+    let truth = truth.into_owned();
     pb::TruthState {
         target_id: truth.target_id,
         position: Some(vec3_to_pb(truth.position)),
@@ -271,12 +375,24 @@ fn covariance_to_vec(matrix: Matrix6) -> Vec<f64> {
 
 fn covariance_from_vec(values: Vec<f64>) -> Result<Matrix6, String> {
     if values.len() != 36 {
-        return Err("track covariance must contain 36 row-major values".to_string());
+        return Err(format!(
+            "track covariance must contain 36 row-major values, got {}",
+            values.len()
+        ));
     }
     Ok(Matrix6::from_row_slice(&values))
 }
 
 pub fn track_to_pb(track: TrackState) -> pb::TrackState {
+    track_pb(Cow::Owned(track))
+}
+
+pub fn track_to_pb_ref(track: &TrackState) -> pb::TrackState {
+    track_pb(Cow::Borrowed(track))
+}
+
+fn track_pb(track: Cow<'_, TrackState>) -> pb::TrackState {
+    let track = track.into_owned();
     pb::TrackState {
         track_id: track.track_id,
         timestamp_s: track.timestamp_s,
@@ -288,10 +404,16 @@ pub fn track_to_pb(track: TrackState) -> pb::TrackState {
         stale_steps: track.stale_steps,
         lifecycle_state: track.lifecycle_state,
         quality_score: track.quality_score,
+        // Wire-only fields the runtime type does not carry. FIELD_PARITY.md
+        // records `acceleration_mps2` as `inert` and `confidence` /
+        // `last_seen_s` as `derived` for exactly this reason: they are written
+        // here and never read back, so they carry no information of their own.
         acceleration_mps2: vec![0.0, 0.0, 0.0],
         confidence: track.quality_score.unwrap_or(0.0),
-        mode_probability_cv: track.mode_probability_cv.unwrap_or(1.0),
         last_seen_s: track.timestamp_s,
+        mode_probability_cv: track
+            .mode_probability_cv
+            .unwrap_or(UNSET_MODE_PROBABILITY_CV),
         // Move out of the Arc when this TrackState holds the last reference;
         // otherwise fall back to cloning the shared list.
         contributing_nodes: std::sync::Arc::try_unwrap(track.contributing_node_ids)
@@ -311,7 +433,7 @@ pub fn track_from_pb(track: pb::TrackState) -> Result<TrackState, String> {
         stale_steps: track.stale_steps,
         lifecycle_state: track.lifecycle_state,
         quality_score: track.quality_score,
-        mode_probability_cv: if track.mode_probability_cv == 0.0 {
+        mode_probability_cv: if track.mode_probability_cv == UNSET_MODE_PROBABILITY_CV {
             None
         } else {
             Some(track.mode_probability_cv)
@@ -321,6 +443,15 @@ pub fn track_from_pb(track: pb::TrackState) -> Result<TrackState, String> {
 }
 
 pub fn metrics_to_pb(metrics: PlatformMetrics) -> pb::PlatformMetrics {
+    metrics_pb(Cow::Owned(metrics))
+}
+
+pub fn metrics_to_pb_ref(metrics: &PlatformMetrics) -> pb::PlatformMetrics {
+    metrics_pb(Cow::Borrowed(metrics))
+}
+
+fn metrics_pb(metrics: Cow<'_, PlatformMetrics>) -> pb::PlatformMetrics {
+    let metrics = metrics.into_owned();
     pb::PlatformMetrics {
         mean_error_m: metrics.mean_error_m,
         max_error_m: metrics.max_error_m,
@@ -364,136 +495,18 @@ pub fn metrics_from_pb(metrics: pb::PlatformMetrics) -> PlatformMetrics {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Reference-based conversions.
-//
-// Used when the caller shares the core frame (e.g. the server keeps an
-// Arc<PlatformFrame> for latest-frame queries) and cannot move out of it.
-// The by-value functions above stay move-based for callers that own the data.
-// ---------------------------------------------------------------------------
-
-pub fn node_state_to_pb_ref(node: &NodeState) -> pb::NodeState {
-    pb::NodeState {
-        node_id: node.node_id.clone(),
-        position: Some(vec3_to_pb(node.position)),
-        velocity: Some(vec3_to_pb(node.velocity)),
-        is_mobile: node.is_mobile,
-        timestamp_s: node.timestamp_s,
-        health: node.health,
-        sensor_type: "optical".to_string(),
-        fov_half_angle_deg: 180.0,
-        max_range_m: 0.0,
-        device_id: String::new(),
-        sequence: 0,
-        signature: Vec::new(),
-        signer_pubkey_id: String::new(),
-    }
-}
-
-pub fn observation_to_pb_ref(observation: &BearingObservation) -> pb::BearingObservation {
-    pb::BearingObservation {
-        node_id: observation.node_id.clone(),
-        target_id: observation.target_id.clone(),
-        origin: Some(vec3_to_pb(observation.origin)),
-        direction: Some(vec3_to_pb(observation.direction)),
-        bearing_std_rad: observation.bearing_std_rad,
-        timestamp_s: observation.timestamp_s,
-        confidence: observation.confidence,
-        device_id: String::new(),
-        sequence: 0,
-        signature: Vec::new(),
-        signer_pubkey_id: String::new(),
-    }
-}
-
-pub fn rejection_to_pb_ref(rejection: &ObservationRejection) -> pb::ObservationRejection {
-    pb::ObservationRejection {
-        node_id: rejection.node_id.clone(),
-        target_id: rejection.target_id.clone(),
-        timestamp_s: rejection.timestamp_s,
-        reason: rejection.reason.clone(),
-        detail: rejection.detail.clone(),
-        origin: rejection.origin.map(vec3_to_pb),
-        attempted_point: rejection.attempted_point.map(vec3_to_pb),
-        closest_point: rejection.closest_point.map(vec3_to_pb),
-        blocker_type: rejection.blocker_type.clone(),
-        first_hit_range_m: rejection.first_hit_range_m,
-    }
-}
-
-pub fn truth_to_pb_ref(truth: &TruthState) -> pb::TruthState {
-    pb::TruthState {
-        target_id: truth.target_id.clone(),
-        position: Some(vec3_to_pb(truth.position)),
-        velocity: Some(vec3_to_pb(truth.velocity)),
-        timestamp_s: truth.timestamp_s,
-    }
-}
-
-pub fn track_to_pb_ref(track: &TrackState) -> pb::TrackState {
-    pb::TrackState {
-        track_id: track.track_id.clone(),
-        timestamp_s: track.timestamp_s,
-        position: Some(vec3_to_pb(track.position)),
-        velocity: Some(vec3_to_pb(track.velocity)),
-        covariance_row_major: covariance_to_vec(track.covariance),
-        measurement_std_m: track.measurement_std_m,
-        update_count: track.update_count,
-        stale_steps: track.stale_steps,
-        lifecycle_state: track.lifecycle_state.clone(),
-        quality_score: track.quality_score,
-        acceleration_mps2: vec![0.0, 0.0, 0.0],
-        confidence: track.quality_score.unwrap_or(0.0),
-        mode_probability_cv: track.mode_probability_cv.unwrap_or(1.0),
-        last_seen_s: track.timestamp_s,
-        contributing_nodes: (*track.contributing_node_ids).clone(),
-    }
-}
-
-pub fn metrics_to_pb_ref(metrics: &PlatformMetrics) -> pb::PlatformMetrics {
-    pb::PlatformMetrics {
-        mean_error_m: metrics.mean_error_m,
-        max_error_m: metrics.max_error_m,
-        active_track_count: metrics.active_track_count,
-        observation_count: metrics.observation_count,
-        accepted_observation_count: metrics.accepted_observation_count,
-        rejected_observation_count: metrics.rejected_observation_count,
-        mean_measurement_std_m: metrics.mean_measurement_std_m,
-        track_errors_m: metrics
-            .track_errors_m
-            .iter()
-            .map(|(key, value)| (key.clone(), *value))
-            .collect(),
-        rejection_counts: metrics
-            .rejection_counts
-            .iter()
-            .map(|(key, value)| (key.clone(), *value))
-            .collect(),
-        accepted_observations_by_target: metrics
-            .accepted_observations_by_target
-            .iter()
-            .map(|(key, value)| (key.clone(), *value))
-            .collect(),
-        rejected_observations_by_target: metrics
-            .rejected_observations_by_target
-            .iter()
-            .map(|(key, value)| (key.clone(), *value))
-            .collect(),
-    }
-}
-
-fn target_metadata_to_pb(value: &TargetMetadata) -> pb::TargetMetadata {
+fn target_metadata_to_pb(value: TargetMetadata) -> pb::TargetMetadata {
     pb::TargetMetadata {
-        target_id: value.target_id.clone(),
-        operator_label: value.operator_label.clone(),
-        target_type: value.target_type.clone(),
+        target_id: value.target_id,
+        operator_label: value.operator_label,
+        target_type: value.target_type,
         priority: value.priority,
-        behavior: value.behavior.clone(),
-        status: value.status.clone(),
+        behavior: value.behavior,
+        status: value.status,
         first_seen_s: value.first_seen_s,
         last_seen_s: value.last_seen_s,
         confidence: value.confidence,
-        notes: value.notes.clone(),
+        notes: value.notes,
     }
 }
 
@@ -512,16 +525,16 @@ pub fn target_metadata_from_pb(value: pb::TargetMetadata) -> TargetMetadata {
     }
 }
 
-fn safety_event_to_pb(value: &SafetyEvent) -> pb::SafetyEvent {
+fn safety_event_to_pb(value: SafetyEvent) -> pb::SafetyEvent {
     pb::SafetyEvent {
-        event_id: value.event_id.clone(),
-        subject_id: value.subject_id.clone(),
+        event_id: value.event_id,
+        subject_id: value.subject_id,
         timestamp_s: value.timestamp_s,
-        state: value.state.clone(),
-        violations: value.violations.clone(),
+        state: value.state,
+        violations: value.violations,
         command_clamped: value.command_clamped,
         blocked: value.blocked,
-        reason: value.reason.clone(),
+        reason: value.reason,
     }
 }
 
@@ -538,38 +551,16 @@ pub fn safety_event_from_pb(value: pb::SafetyEvent) -> SafetyEvent {
     }
 }
 
-pub fn frame_to_pb_ref(frame: &PlatformFrame) -> pb::PlatformFrame {
-    pb::PlatformFrame {
-        timestamp_s: frame.timestamp_s,
-        nodes: frame.nodes.iter().map(node_state_to_pb_ref).collect(),
-        observations: frame
-            .observations
-            .iter()
-            .map(observation_to_pb_ref)
-            .collect(),
-        rejected_observations: frame
-            .rejected_observations
-            .iter()
-            .map(rejection_to_pb_ref)
-            .collect(),
-        tracks: frame.tracks.iter().map(track_to_pb_ref).collect(),
-        truths: frame.truths.iter().map(truth_to_pb_ref).collect(),
-        metrics: Some(metrics_to_pb_ref(&frame.metrics)),
-        generation_rejections: frame
-            .generation_rejections
-            .iter()
-            .map(rejection_to_pb_ref)
-            .collect(),
-        target_metadata: frame
-            .target_metadata
-            .iter()
-            .map(target_metadata_to_pb)
-            .collect(),
-        safety_events: frame.safety_events.iter().map(safety_event_to_pb).collect(),
-    }
+pub fn frame_to_pb(frame: PlatformFrame) -> pb::PlatformFrame {
+    frame_pb(Cow::Owned(frame))
 }
 
-pub fn frame_to_pb(frame: PlatformFrame) -> pb::PlatformFrame {
+pub fn frame_to_pb_ref(frame: &PlatformFrame) -> pb::PlatformFrame {
+    frame_pb(Cow::Borrowed(frame))
+}
+
+fn frame_pb(frame: Cow<'_, PlatformFrame>) -> pb::PlatformFrame {
+    let frame = frame.into_owned();
     pb::PlatformFrame {
         timestamp_s: frame.timestamp_s,
         nodes: frame.nodes.into_iter().map(node_state_to_pb).collect(),
@@ -593,10 +584,14 @@ pub fn frame_to_pb(frame: PlatformFrame) -> pb::PlatformFrame {
             .collect(),
         target_metadata: frame
             .target_metadata
-            .iter()
+            .into_iter()
             .map(target_metadata_to_pb)
             .collect(),
-        safety_events: frame.safety_events.iter().map(safety_event_to_pb).collect(),
+        safety_events: frame
+            .safety_events
+            .into_iter()
+            .map(safety_event_to_pb)
+            .collect(),
     }
 }
 
@@ -628,24 +623,7 @@ pub fn frame_from_pb(frame: pb::PlatformFrame) -> Result<PlatformFrame, String> 
         rejected_observations: frame
             .rejected_observations
             .into_iter()
-            .map(|rejection| ObservationRejection {
-                node_id: rejection.node_id,
-                target_id: rejection.target_id,
-                timestamp_s: rejection.timestamp_s,
-                reason: rejection.reason,
-                detail: rejection.detail,
-                origin: rejection
-                    .origin
-                    .map(|value| nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m)),
-                attempted_point: rejection
-                    .attempted_point
-                    .map(|value| nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m)),
-                closest_point: rejection
-                    .closest_point
-                    .map(|value| nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m)),
-                blocker_type: rejection.blocker_type,
-                first_hit_range_m: rejection.first_hit_range_m,
-            })
+            .map(rejection_from_pb)
             .collect(),
         tracks: frame
             .tracks
@@ -661,24 +639,7 @@ pub fn frame_from_pb(frame: pb::PlatformFrame) -> Result<PlatformFrame, String> 
         generation_rejections: frame
             .generation_rejections
             .into_iter()
-            .map(|rejection| ObservationRejection {
-                node_id: rejection.node_id,
-                target_id: rejection.target_id,
-                timestamp_s: rejection.timestamp_s,
-                reason: rejection.reason,
-                detail: rejection.detail,
-                origin: rejection
-                    .origin
-                    .map(|value| nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m)),
-                attempted_point: rejection
-                    .attempted_point
-                    .map(|value| nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m)),
-                closest_point: rejection
-                    .closest_point
-                    .map(|value| nalgebra::Vector3::new(value.x_m, value.y_m, value.z_m)),
-                blocker_type: rejection.blocker_type,
-                first_hit_range_m: rejection.first_hit_range_m,
-            })
+            .map(rejection_from_pb)
             .collect(),
         target_metadata: frame
             .target_metadata

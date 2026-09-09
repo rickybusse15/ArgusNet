@@ -372,9 +372,26 @@ def _track_from_proto(track: tracker_pb2.TrackState) -> TrackState:
         stale_steps=int(track.stale_steps),
         lifecycle_state=str(track.lifecycle_state) if track.HasField("lifecycle_state") else None,
         quality_score=_optional_double(track, "quality_score"),
-        mode_probability_cv=float(track.mode_probability_cv),
+        mode_probability_cv=_unset_sentinel_to_none(track.mode_probability_cv),
         contributing_node_ids=tuple(track.contributing_nodes),
     )
+
+
+def _unset_sentinel_to_none(value: float) -> float | None:
+    """Decode a bare ``double`` whose zero means "unset".
+
+    ``TrackState.mode_probability_cv`` is ``float | None`` here and in the Rust
+    runtime type, but a bare ``double`` on the wire, which cannot carry absence.
+    Zero is the agreed in-band sentinel, and both Rust decoders -- ``track_from_pb``
+    and the viewer's replay reader -- already read it that way. Python read it
+    literally, so an unset probability arrived as ``0.0``: a claim that the
+    constant-velocity mode is impossible, where the truth is that no IMM estimate
+    was reported at all.
+
+    The producing filter never emits a genuine zero, so nothing real is lost.
+    ``docs/migration/FIELD_PARITY.md`` records the convention and its cost.
+    """
+    return None if value == 0.0 else float(value)
 
 
 def _optional_double(message: object, field_name: str) -> float | None:
