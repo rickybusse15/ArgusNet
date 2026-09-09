@@ -178,6 +178,43 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # G0's installed-wheel and clean-checkout contract job.
+  #
+  # Every other job runs from the checkout, where the source tree satisfies
+  # imports and data-file lookups that an installed wheel has to provide for
+  # itself. That gap is how the replay schema came to ship without the
+  # validator that enforces it: `jsonschema` was in the dev extra, so CI
+  # validated strictly while an installed package fell back to a hand-written
+  # check that misses unknown keys, wrong-typed nested fields and out-of-range
+  # values.
+  #
+  # The runner's checkout is already clean, so building the wheel here is the
+  # clean-checkout half; installing it into a fresh venv and running the
+  # contract assertions from /tmp is the installed-wheel half.
+  packaging-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      # The wheel carries a compiled cdylib, so the pinned toolchain is needed
+      # to build it even though nothing here runs cargo directly.
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - name: Build the wheel
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build --wheel --outdir dist/ .
+      - name: Install it into a clean environment
+        run: |
+          python3 -m venv /tmp/contract-venv
+          /tmp/contract-venv/bin/pip install dist/*.whl
+      # Run from /tmp: the script refuses to run inside the source tree, since a
+      # checkout on the path would mask the failures it exists to catch.
+      - name: Installed package honours its contracts
+        run: cd /tmp && /tmp/contract-venv/bin/python "$GITHUB_WORKSPACE/scripts/check_installed_contract.py"
+
   security:
     runs-on: ubuntu-latest
     steps:
