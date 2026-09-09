@@ -81,6 +81,38 @@ pub struct PlatformMetrics {
     pub rejected_observations_by_target: BTreeMap<String, u32>,
 }
 
+/// Operator-supplied annotation for a target.
+///
+/// Carried through the runtime rather than around it: before P4.0 the server
+/// grafted the wire copies onto the ingest response, so `LatestFrame` -- which
+/// rebuilds from `PlatformFrame` -- returned an empty list for the same frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetMetadata {
+    pub target_id: String,
+    pub operator_label: String,
+    pub target_type: String,
+    pub priority: i32,
+    pub behavior: String,
+    pub status: String,
+    pub first_seen_s: f64,
+    pub last_seen_s: f64,
+    pub confidence: f64,
+    pub notes: String,
+}
+
+/// A safety-envelope event raised against one subject during a frame.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SafetyEvent {
+    pub event_id: String,
+    pub subject_id: String,
+    pub timestamp_s: f64,
+    pub state: String,
+    pub violations: Vec<String>,
+    pub command_clamped: bool,
+    pub blocked: bool,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformFrame {
     pub timestamp_s: f64,
@@ -91,6 +123,8 @@ pub struct PlatformFrame {
     pub truths: Vec<TruthState>,
     pub metrics: PlatformMetrics,
     pub generation_rejections: Vec<ObservationRejection>,
+    pub target_metadata: Vec<TargetMetadata>,
+    pub safety_events: Vec<SafetyEvent>,
 }
 
 /// Axis-aligned horizontal extent of a footprint, metres.

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 
 pub use argusnet_types::{
     BearingObservation, Matrix6, NodeState, ObservationRejection, PlatformFrame, PlatformMetrics,
-    TrackState, TruthState,
+    SafetyEvent, TargetMetadata, TrackState, TruthState,
 };
 pub type Vector6 = SVector<f64, 6>;
 
@@ -1157,12 +1157,19 @@ impl TrackingEngine {
             .count() as u32
     }
 
+    /// `target_metadata` and `safety_events` are operator annotations the engine
+    /// does not compute; it carries them onto the frame so every reader of that
+    /// frame sees them. Before P4.0 they had no home on `PlatformFrame`, so the
+    /// server patched them onto the ingest response instead and `LatestFrame`
+    /// answered the same frame without them.
     pub fn ingest_frame(
         &mut self,
         timestamp_s: f64,
         node_states: Vec<NodeState>,
         observations: Vec<BearingObservation>,
         truths: Vec<TruthState>,
+        target_metadata: Vec<TargetMetadata>,
+        safety_events: Vec<SafetyEvent>,
     ) -> std::sync::Arc<PlatformFrame> {
         for node in node_states {
             self.nodes.insert(node.node_id.clone(), node);
@@ -1245,6 +1252,8 @@ impl TrackingEngine {
             truths,
             metrics,
             generation_rejections: Vec::new(),
+            target_metadata,
+            safety_events,
         };
 
         // Share the frame instead of deep-cloning it: the engine keeps one Arc
@@ -1954,6 +1963,8 @@ mod tests {
                 velocity: Vector3::zeros(),
                 timestamp_s: 0.0,
             }],
+            Vec::new(),
+            Vec::new(),
         );
 
         assert_eq!(1, frame.tracks.len());
@@ -2019,6 +2030,8 @@ mod tests {
                 },
             ],
             Vec::new(),
+            Vec::new(),
+            Vec::new(),
         );
 
         assert_eq!(0, frame.tracks.len());
@@ -2077,12 +2090,33 @@ mod tests {
             ),
         ];
 
-        let first = engine.ingest_frame(0.0, nodes.clone(), observations, vec![truth.clone()]);
+        let first = engine.ingest_frame(
+            0.0,
+            nodes.clone(),
+            observations,
+            vec![truth.clone()],
+            Vec::new(),
+            Vec::new(),
+        );
         assert_eq!(1, first.tracks.len());
 
-        let second = engine.ingest_frame(1.0, Vec::new(), Vec::new(), vec![truth.clone()]);
+        let second = engine.ingest_frame(
+            1.0,
+            Vec::new(),
+            Vec::new(),
+            vec![truth.clone()],
+            Vec::new(),
+            Vec::new(),
+        );
         assert_eq!(1, second.tracks.len());
-        let third = engine.ingest_frame(2.0, Vec::new(), Vec::new(), vec![truth]);
+        let third = engine.ingest_frame(
+            2.0,
+            Vec::new(),
+            Vec::new(),
+            vec![truth],
+            Vec::new(),
+            Vec::new(),
+        );
         assert_eq!(0, third.tracks.len());
     }
 
@@ -2175,7 +2209,14 @@ mod tests {
                 ));
             }
 
-            let frame = engine.ingest_frame(time_s, observers.clone(), observations, truths);
+            let frame = engine.ingest_frame(
+                time_s,
+                observers.clone(),
+                observations,
+                truths,
+                Vec::new(),
+                Vec::new(),
+            );
             max_live_tracks = max_live_tracks.max(frame.tracks.len());
             for track in &frame.tracks {
                 assert!(
