@@ -826,3 +826,123 @@ async fn oversized_ingest_frame_is_rejected() {
     server_handle.abort();
     let _ = fs::remove_file(config_path);
 }
+
+/// G0 field-parity probe: `target_metadata` and `safety_events` exist on the
+/// wire but have no counterpart on the runtime `PlatformFrame`, so the server
+/// carries them by grafting the request's copies onto the ingest response
+/// (`lib.rs`, "pb_frame.target_metadata = target_metadata"). Anything that
+/// rebuilds a frame from the runtime type instead -- `LatestFrame`, which calls
+/// `frame_to_pb_ref` -- emits `Vec::new()` for both.
+///
+/// This pins that asymmetry so it cannot change unnoticed. It is a contract
+/// observation, not an endorsement: the same logical frame answers differently
+/// depending on which RPC asked, which is the "silent missing-field success"
+/// G0 exists to surface. Closing it means giving `PlatformFrame` real fields,
+/// which is P4.0's job.
+#[tokio::test]
+async fn target_metadata_and_safety_events_survive_ingest_but_not_latest_frame() {
+    let config_path = minimal_config_path("g0-parity");
+    let address = allocate_endpoint();
+    let server_handle = tokio::spawn(argusnet_server::serve(argusnet_server::ServeArgs {
+        listen: address.clone(),
+        config: Some(config_path.clone()),
+        min_observations: None,
+        max_stale_steps: None,
+        min_confidence: None,
+        max_bearing_std_rad: None,
+        max_timestamp_skew_s: None,
+        min_intersection_angle_deg: None,
+        data_association_mode: None,
+        cv_process_accel_std: None,
+        ct_process_accel_std: None,
+        ct_turn_rate_std: None,
+        innovation_window: None,
+        innovation_scale_factor: None,
+        innovation_max_scale: None,
+        adaptive_measurement_noise: None,
+        chi_squared_gate_threshold: None,
+        cluster_distance_threshold_m: None,
+        near_parallel_rejection_angle_deg: None,
+        confirmation_m: None,
+        confirmation_n: None,
+        max_coast_frames: None,
+        max_coast_seconds: None,
+        min_quality_score: None,
+        tls_cert: None,
+        tls_key: None,
+        tls_client_ca: None,
+    }));
+
+    let mut client = loop {
+        match WorldModelServiceClient::connect(format!("http://{address}")).await {
+            Ok(c) => break c,
+            Err(_) => sleep(Duration::from_millis(100)).await,
+        }
+    };
+
+    let metadata = argusnet_proto::pb::TargetMetadata {
+        target_id: "tgt-1".to_string(),
+        operator_label: "Alpha".to_string(),
+        target_type: "rotary".to_string(),
+        priority: 3,
+        behavior: "loiter".to_string(),
+        status: "tracked".to_string(),
+        first_seen_s: 1.0,
+        last_seen_s: 2.0,
+        confidence: 0.9,
+        notes: "operator annotation".to_string(),
+    };
+    let safety_event = argusnet_proto::pb::SafetyEvent {
+        event_id: "evt-1".to_string(),
+        subject_id: "tgt-1".to_string(),
+        timestamp_s: 1.0,
+        state: "warn".to_string(),
+        violations: vec!["floor".to_string()],
+        command_clamped: true,
+        blocked: false,
+        reason: "below floor".to_string(),
+    };
+
+    let response = client
+        .ingest_frame(IngestFrameRequest {
+            timestamp_s: 1.0,
+            node_states: vec![],
+            observations: vec![],
+            truths: vec![],
+            target_metadata: vec![metadata.clone()],
+            safety_events: vec![safety_event.clone()],
+        })
+        .await
+        .expect("ingest")
+        .into_inner();
+
+    let ingested = response.frame.expect("ingest frame");
+    // The graft in the ingest path preserves both, field for field.
+    assert_eq!(ingested.target_metadata, vec![metadata]);
+    assert_eq!(ingested.safety_events, vec![safety_event]);
+
+    let latest = client
+        .latest_frame(LatestFrameRequest {})
+        .await
+        .expect("latest")
+        .into_inner()
+        .frame
+        .expect("latest frame");
+
+    // Same frame, same timestamp -- and both payloads are gone, because this
+    // path rebuilds from the runtime type. If a future change gives
+    // PlatformFrame real fields, this assertion is what should start failing.
+    assert_eq!(latest.timestamp_s, ingested.timestamp_s);
+    assert!(
+        latest.target_metadata.is_empty(),
+        "LatestFrame unexpectedly carried target_metadata: {:?}",
+        latest.target_metadata
+    );
+    assert!(
+        latest.safety_events.is_empty(),
+        "LatestFrame unexpectedly carried safety_events: {:?}",
+        latest.safety_events
+    );
+
+    server_handle.abort();
+}

@@ -40,6 +40,11 @@ jobs:
       # format. This is the only thing that catches that.
       - name: Protobuf bindings are up to date
         run: python3 scripts/regenerate_proto.py --check
+      # G0: a new proto field must arrive with a stated disposition. This does
+      # not judge whether the handling is right -- only that someone said what
+      # it should be, which is what "no silent missing-field success" needs.
+      - name: Proto fields have a recorded disposition
+        run: python3 scripts/check_field_parity.py
       - name: Run tests
         run: python -m pytest tests/ -q --timeout=120
       - name: Fast benchmark smoke
