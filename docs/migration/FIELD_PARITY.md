@@ -21,14 +21,42 @@ whether the handling is correct — only that it was stated.
 | `inert` | On the wire and in the generated bindings, but nothing reads or writes a meaningful value on either side. |
 | `grafted` | Preserved only because one code path copies it around the runtime type, so a different RPC about the same frame may omit it. |
 | `consumer-gap` | Produced by one side, never consumed by the other. Nothing is lost on the wire; the far side ignores it. |
+| `derived` | Computed from another field when encoding and never read back, so it carries no information of its own. |
 
 ## What the inventory found
 
-Of 171 fields: **134 `carried`**, 17 `consumer-gap`, 15 `inert`,
-3 `dropped-intentional`, 2 `grafted`.
+Of 171 fields: **132 `carried`**, 16 `consumer-gap`, 16 `inert`,
+3 `dropped-intentional`, 2 `grafted`, 2 `derived`.
+
+### How much the `carried` rows are worth
+
+`carried` means both sides reference the field. That was established partly by
+searching for field names, which cannot tell `TrackState.confidence` from
+`BearingObservation.confidence`, and cannot see a field assigned a constant
+rather than passed through. The all-field round trips in
+`rust/argusnet-proto/tests/roundtrip.rs` are what turn the claim into evidence,
+and running them corrected three rows this file originally got wrong:
+`TrackState.acceleration_mps2` is a hardcoded zero vector rather than a
+`consumer-gap`, and `confidence` and `last_seen_s` are aliases of
+`quality_score` and `timestamp_s` rather than `carried`.
+
+The round trips cover `NodeState`, `BearingObservation`, `TruthState`,
+`TrackState` and `PlatformMetrics`. The rest of the `carried` rows still rest on
+inspection alone; extending the round trips is P4.0 work.
 
 Three findings are worth a reader's attention. All were verified by reading the
 conversion code, not inferred from a name search.
+
+**0. The covariance matrix was transposed on the wire — fixed here.**
+`covariance_to_vec` emitted `matrix.iter()`, which is nalgebra's column-major
+order, into a field the proto names `covariance_row_major`. Every reader honours
+that name: `covariance_from_vec` uses `from_row_slice`, and the Python adapter
+uses numpy's C-order `reshape(6, 6)`. So Rust wrote the transpose of what it
+meant. A covariance matrix is symmetric, which is why nothing ever noticed — but
+the Kalman update uses the Joseph form without an explicit symmetrization step,
+so rounding leaves small asymmetries, and any genuinely non-symmetric matrix
+would have been corrupted silently. The fix transposes before flattening and is
+a no-op for symmetric data; the cross-language parity fixtures pass unchanged.
 
 **1. `PlatformFrame.target_metadata` and `.safety_events` answer differently
 depending on which RPC you ask.** The Rust runtime `PlatformFrame` has no fields
@@ -188,11 +216,11 @@ clean-checkout contract jobs — is not in this change.
 | `TargetMetadata.status` | `carried` |  |
 | `TargetMetadata.target_id` | `carried` |  |
 | `TargetMetadata.target_type` | `consumer-gap` | Handled in Python; no Rust runtime representation. |
-| `TrackState.acceleration_mps2` | `consumer-gap` | Populated in Rust; the Python adapter does not read it. |
-| `TrackState.confidence` | `carried` |  |
+| `TrackState.acceleration_mps2` | `inert` | `track_to_pb` assigns a hardcoded `vec![0.0, 0.0, 0.0]`; no runtime field backs it. |
+| `TrackState.confidence` | `derived` | An alias of `quality_score` (`quality_score.unwrap_or(0.0)`), never read back. |
 | `TrackState.contributing_nodes` | `carried` |  |
 | `TrackState.covariance_row_major` | `carried` |  |
-| `TrackState.last_seen_s` | `carried` |  |
+| `TrackState.last_seen_s` | `derived` | An alias of `timestamp_s`, never read back. |
 | `TrackState.lifecycle_state` | `carried` |  |
 | `TrackState.measurement_std_m` | `carried` |  |
 | `TrackState.mode_probability_cv` | `carried` |  |

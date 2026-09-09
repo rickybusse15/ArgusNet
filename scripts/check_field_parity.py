@@ -44,6 +44,9 @@ DISPOSITIONS = {
     # Produced by one side, never consumed by the other. No data is lost on the
     # wire; the far side simply ignores it.
     "consumer-gap",
+    # Computed from another field when encoding, and never read back. Carries no
+    # information of its own, so it cannot round-trip.
+    "derived",
 }
 
 

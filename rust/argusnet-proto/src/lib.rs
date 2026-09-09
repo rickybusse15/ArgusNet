@@ -255,7 +255,16 @@ pub fn truth_from_pb(truth: pb::TruthState) -> Result<TruthState, String> {
 }
 
 fn covariance_to_vec(matrix: Matrix6) -> Vec<f64> {
-    matrix.iter().copied().collect()
+    // The wire field is `covariance_row_major`, and every reader honours that:
+    // `covariance_from_vec` uses `from_row_slice`, and the Python adapter uses
+    // numpy's C-order `reshape(6, 6)`. nalgebra stores column-major, so
+    // `matrix.iter()` would emit the transpose under a row-major name.
+    //
+    // A covariance matrix is symmetric, so this was invisible in practice --
+    // but the Kalman update never explicitly symmetrizes, so rounding leaves
+    // small asymmetries, and any genuinely non-symmetric matrix would have been
+    // corrupted silently. Transposing first yields true row-major order.
+    matrix.transpose().iter().copied().collect()
 }
 
 fn covariance_from_vec(values: Vec<f64>) -> Result<Matrix6, String> {
