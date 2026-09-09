@@ -47,30 +47,56 @@ jobs:
           name: bench-${{ matrix.python-version }}
           path: bench.json
 
-  rust-tests:
+  # The Rust work is split four ways so a logic error does not wait behind a
+  # Bevy build. Only argusnet-viewer depends on Bevy (66 of the 721 locked
+  # packages), so every other crate compiles and links without it.
+  #
+  # These jobs restore a shared cache but only WRITE it on main. PR runs would
+  # otherwise each store their own copy of a multi-gigabyte target directory and
+  # evict each other from the repository's 10 GB cache quota.
+  rust-fast:
+    name: rust-fast (no Bevy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # No apt step: the packages below exist for Bevy's alsa and libudev
+      # bindings, and nothing in this job depends on Bevy.
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: fast
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # --exclude rather than naming crates, so a new workspace member is
+      # covered here by default instead of silently going untested.
+      - name: Test everything except the viewer
+        run: cargo test --workspace --exclude argusnet-viewer
+
+  rust-viewer:
+    name: rust-viewer (Bevy + headless render)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # mesa-vulkan-drivers supplies lavapipe, a software Vulkan
-          # implementation. The runner has no GPU and wgpu has no software
-          # fallback of its own, so the headless render step below needs it.
+          # libudev/libasound are needed to LINK anything Bevy, rendering or
+          # not. mesa-vulkan-drivers supplies lavapipe, a software Vulkan
+          # implementation, and is needed only by the render step below: the
+          # runner has no GPU and wgpu has no software fallback of its own.
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers
-      # No toolchain action: `rust-toolchain.toml` pins the version, and rustup
-      # (preinstalled on the runner) installs it on first use. This keeps CI on
-      # the same compiler contributors run, so a new lint in a future stable
-      # cannot turn `main` red without a commit.
       - name: Install pinned Rust toolchain
-        run: |
-          rustup show
-          cargo --version
-          cargo clippy --version
-      - name: Build
-        run: cargo build --workspace
-      - name: Test
-        run: cargo test --workspace
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: viewer
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test the viewer
+        run: cargo test -p argusnet-viewer
+      # Only the viewer binary, not `--workspace`: the old single job built the
+      # whole workspace here and then built it again under `cargo test`.
+      - name: Build the viewer binary for the render smoke test
+        run: cargo build -p argusnet-viewer --bin argusnet-viewer
       # Renders a scene through the real Bevy pipeline with no window. This is
       # the only check that exercises rendering at all: every other test runs
       # logic that never reaches a shader, so a regression that leaves the world
@@ -109,15 +135,57 @@ jobs:
           assert green_pixels > 30, f"holographic track missing: {green_pixels} green pixels"
           print(f"headless render OK: {len(colors)} distinct colours")
           PY
-      - name: Benchmark compile check
-        run: cargo bench --workspace --no-run
+
+  rust-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          # Linting the viewer still runs the alsa and libudev build scripts, so
+          # the dev headers are required. lavapipe is not: nothing renders here.
+          sudo apt-get install -y pkg-config libasound2-dev libudev-dev
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup show
+          cargo clippy --version
+      # Formatting first: it compiles nothing, so a misformatted file fails in
+      # seconds instead of behind a full clippy pass.
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # --all-targets so tests, benches and examples are linted too. Without
       # it clippy only sees lib and bin targets, and lint drift accumulates
       # unnoticed in exactly the code nobody re-reads.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Format check
-        run: cargo fmt --all -- --check
+
+  # Its own job rather than a step in rust-lint: compiling the six criterion
+  # benches measured 9m06s locally, which would have made it the longest thing
+  # on the lint critical path while gating nothing. Kept on PRs rather than
+  # moved to the nightly workflow because clippy checks bench code but never
+  # codegens or links it, so a bench that fails to build would otherwise reach
+  # main and only surface overnight.
+  rust-bench-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libudev-dev
+      - name: Install pinned Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: bench
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Benchmark compile check
+        run: cargo bench --workspace --no-run
 
   security:
     runs-on: ubuntu-latest
