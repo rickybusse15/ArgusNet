@@ -33,6 +33,11 @@ jobs:
         run: ruff format --check src/ tests/
       - name: Type check with mypy
         run: mypy src/argusnet/ --ignore-missing-imports --follow-imports=skip
+      # G0: a new proto field must arrive with a stated disposition. This does
+      # not judge whether the handling is right -- only that someone said what
+      # it should be, which is what "no silent missing-field success" needs.
+      - name: Proto fields have a recorded disposition
+        run: python3 scripts/check_field_parity.py
       - name: Run tests
         run: python -m pytest tests/ -q --timeout=120
       - name: Fast benchmark smoke
