@@ -1,4 +1,6 @@
-use argusnet_core::{AssociationMode, NodeHealthSnapshot, TrackerConfig};
+use argusnet_core::{
+    AssociationMode, NodeHealthSnapshot, SafetyEvent, TargetMetadata, TrackerConfig,
+};
 use argusnet_types::{
     BearingObservation, Matrix6, NodeState, ObservationRejection, PlatformFrame, PlatformMetrics,
     TrackState, TruthState,
@@ -480,6 +482,62 @@ pub fn metrics_to_pb_ref(metrics: &PlatformMetrics) -> pb::PlatformMetrics {
     }
 }
 
+fn target_metadata_to_pb(value: &TargetMetadata) -> pb::TargetMetadata {
+    pb::TargetMetadata {
+        target_id: value.target_id.clone(),
+        operator_label: value.operator_label.clone(),
+        target_type: value.target_type.clone(),
+        priority: value.priority,
+        behavior: value.behavior.clone(),
+        status: value.status.clone(),
+        first_seen_s: value.first_seen_s,
+        last_seen_s: value.last_seen_s,
+        confidence: value.confidence,
+        notes: value.notes.clone(),
+    }
+}
+
+pub fn target_metadata_from_pb(value: pb::TargetMetadata) -> TargetMetadata {
+    TargetMetadata {
+        target_id: value.target_id,
+        operator_label: value.operator_label,
+        target_type: value.target_type,
+        priority: value.priority,
+        behavior: value.behavior,
+        status: value.status,
+        first_seen_s: value.first_seen_s,
+        last_seen_s: value.last_seen_s,
+        confidence: value.confidence,
+        notes: value.notes,
+    }
+}
+
+fn safety_event_to_pb(value: &SafetyEvent) -> pb::SafetyEvent {
+    pb::SafetyEvent {
+        event_id: value.event_id.clone(),
+        subject_id: value.subject_id.clone(),
+        timestamp_s: value.timestamp_s,
+        state: value.state.clone(),
+        violations: value.violations.clone(),
+        command_clamped: value.command_clamped,
+        blocked: value.blocked,
+        reason: value.reason.clone(),
+    }
+}
+
+pub fn safety_event_from_pb(value: pb::SafetyEvent) -> SafetyEvent {
+    SafetyEvent {
+        event_id: value.event_id,
+        subject_id: value.subject_id,
+        timestamp_s: value.timestamp_s,
+        state: value.state,
+        violations: value.violations,
+        command_clamped: value.command_clamped,
+        blocked: value.blocked,
+        reason: value.reason,
+    }
+}
+
 pub fn frame_to_pb_ref(frame: &PlatformFrame) -> pb::PlatformFrame {
     pb::PlatformFrame {
         timestamp_s: frame.timestamp_s,
@@ -502,8 +560,12 @@ pub fn frame_to_pb_ref(frame: &PlatformFrame) -> pb::PlatformFrame {
             .iter()
             .map(rejection_to_pb_ref)
             .collect(),
-        target_metadata: Vec::new(),
-        safety_events: Vec::new(),
+        target_metadata: frame
+            .target_metadata
+            .iter()
+            .map(target_metadata_to_pb)
+            .collect(),
+        safety_events: frame.safety_events.iter().map(safety_event_to_pb).collect(),
     }
 }
 
@@ -529,8 +591,12 @@ pub fn frame_to_pb(frame: PlatformFrame) -> pb::PlatformFrame {
             .into_iter()
             .map(rejection_to_pb)
             .collect(),
-        target_metadata: Vec::new(),
-        safety_events: Vec::new(),
+        target_metadata: frame
+            .target_metadata
+            .iter()
+            .map(target_metadata_to_pb)
+            .collect(),
+        safety_events: frame.safety_events.iter().map(safety_event_to_pb).collect(),
     }
 }
 
@@ -613,6 +679,16 @@ pub fn frame_from_pb(frame: pb::PlatformFrame) -> Result<PlatformFrame, String> 
                 blocker_type: rejection.blocker_type,
                 first_hit_range_m: rejection.first_hit_range_m,
             })
+            .collect(),
+        target_metadata: frame
+            .target_metadata
+            .into_iter()
+            .map(target_metadata_from_pb)
+            .collect(),
+        safety_events: frame
+            .safety_events
+            .into_iter()
+            .map(safety_event_from_pb)
             .collect(),
     })
 }

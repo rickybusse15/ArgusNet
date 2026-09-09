@@ -13,7 +13,8 @@
 //! coinciding with the value it was meant to carry.
 
 use argusnet_types::{
-    BearingObservation, Matrix6, NodeState, PlatformMetrics, TrackState, TruthState,
+    BearingObservation, Matrix6, NodeState, PlatformFrame, PlatformMetrics, SafetyEvent,
+    TargetMetadata, TrackState, TruthState,
 };
 use nalgebra::Vector3;
 use std::collections::BTreeMap;
@@ -195,4 +196,64 @@ fn metrics_round_trip_every_field() {
     };
     let restored = argusnet_proto::metrics_from_pb(argusnet_proto::metrics_to_pb(original.clone()));
     assert_eq!(restored, original);
+}
+
+/// The frame-level annotations P4.0 gave `PlatformFrame` real fields for.
+/// Before that they had no runtime home, so `frame_to_pb` emitted empty vectors
+/// and only the server's ingest path carried them, by grafting the request's
+/// copies onto the response.
+#[test]
+fn frame_annotations_round_trip_every_field() {
+    let original = PlatformFrame {
+        timestamp_s: 7.5,
+        nodes: Vec::new(),
+        observations: Vec::new(),
+        rejected_observations: Vec::new(),
+        tracks: Vec::new(),
+        truths: Vec::new(),
+        metrics: PlatformMetrics {
+            mean_error_m: None,
+            max_error_m: None,
+            active_track_count: 0,
+            observation_count: 0,
+            accepted_observation_count: 0,
+            rejected_observation_count: 0,
+            mean_measurement_std_m: None,
+            track_errors_m: BTreeMap::new(),
+            rejection_counts: BTreeMap::new(),
+            accepted_observations_by_target: BTreeMap::new(),
+            rejected_observations_by_target: BTreeMap::new(),
+        },
+        generation_rejections: Vec::new(),
+        target_metadata: vec![TargetMetadata {
+            target_id: "tgt-1".to_string(),
+            operator_label: "Alpha".to_string(),
+            target_type: "rotary".to_string(),
+            priority: 3,
+            behavior: "loiter".to_string(),
+            status: "tracked".to_string(),
+            first_seen_s: 1.25,
+            last_seen_s: 2.75,
+            confidence: 0.875,
+            notes: "operator annotation".to_string(),
+        }],
+        safety_events: vec![SafetyEvent {
+            event_id: "evt-1".to_string(),
+            subject_id: "tgt-1".to_string(),
+            timestamp_s: 1.5,
+            state: "warn".to_string(),
+            violations: vec!["floor".to_string(), "geofence".to_string()],
+            command_clamped: true,
+            blocked: false,
+            reason: "below floor".to_string(),
+        }],
+    };
+
+    let restored = argusnet_proto::frame_from_pb(argusnet_proto::frame_to_pb(original.clone()))
+        .expect("frame round trip");
+    assert_eq!(restored, original);
+
+    // frame_to_pb_ref must agree with the owning variant, not drift from it.
+    let by_ref = argusnet_proto::frame_to_pb_ref(&original);
+    assert_eq!(by_ref, argusnet_proto::frame_to_pb(original));
 }

@@ -827,20 +827,17 @@ async fn oversized_ingest_frame_is_rejected() {
     let _ = fs::remove_file(config_path);
 }
 
-/// G0 field-parity probe: `target_metadata` and `safety_events` exist on the
-/// wire but have no counterpart on the runtime `PlatformFrame`, so the server
-/// carries them by grafting the request's copies onto the ingest response
-/// (`lib.rs`, "pb_frame.target_metadata = target_metadata"). Anything that
-/// rebuilds a frame from the runtime type instead -- `LatestFrame`, which calls
-/// `frame_to_pb_ref` -- emits `Vec::new()` for both.
+/// `target_metadata` and `safety_events` reach every reader of a frame, not
+/// just the caller that ingested it.
 ///
-/// This pins that asymmetry so it cannot change unnoticed. It is a contract
-/// observation, not an endorsement: the same logical frame answers differently
-/// depending on which RPC asked, which is the "silent missing-field success"
-/// G0 exists to surface. Closing it means giving `PlatformFrame` real fields,
-/// which is P4.0's job.
+/// G0 found these answering differently depending on which RPC asked: the
+/// runtime `PlatformFrame` had no fields for them, so the server grafted the
+/// request's copies onto the ingest response and `LatestFrame` -- rebuilt from
+/// the runtime type -- returned both empty. P4.0 gave `PlatformFrame` real
+/// fields and deleted the graft, so this now asserts the symmetry instead of
+/// the asymmetry.
 #[tokio::test]
-async fn target_metadata_and_safety_events_survive_ingest_but_not_latest_frame() {
+async fn target_metadata_and_safety_events_reach_ingest_and_latest_frame_alike() {
     let config_path = minimal_config_path("g0-parity");
     let address = allocate_endpoint();
     let server_handle = tokio::spawn(argusnet_server::serve(argusnet_server::ServeArgs {
@@ -917,9 +914,8 @@ async fn target_metadata_and_safety_events_survive_ingest_but_not_latest_frame()
         .into_inner();
 
     let ingested = response.frame.expect("ingest frame");
-    // The graft in the ingest path preserves both, field for field.
-    assert_eq!(ingested.target_metadata, vec![metadata]);
-    assert_eq!(ingested.safety_events, vec![safety_event]);
+    assert_eq!(ingested.target_metadata, vec![metadata.clone()]);
+    assert_eq!(ingested.safety_events, vec![safety_event.clone()]);
 
     let latest = client
         .latest_frame(LatestFrameRequest {})
@@ -929,19 +925,18 @@ async fn target_metadata_and_safety_events_survive_ingest_but_not_latest_frame()
         .frame
         .expect("latest frame");
 
-    // Same frame, same timestamp -- and both payloads are gone, because this
-    // path rebuilds from the runtime type. If a future change gives
-    // PlatformFrame real fields, this assertion is what should start failing.
+    // Same frame, same payloads -- the point of the change. A regression here
+    // means something rebuilt the frame around the runtime type again.
     assert_eq!(latest.timestamp_s, ingested.timestamp_s);
-    assert!(
-        latest.target_metadata.is_empty(),
-        "LatestFrame unexpectedly carried target_metadata: {:?}",
-        latest.target_metadata
+    assert_eq!(
+        latest.target_metadata,
+        vec![metadata],
+        "LatestFrame dropped target_metadata that ingest returned"
     );
-    assert!(
-        latest.safety_events.is_empty(),
-        "LatestFrame unexpectedly carried safety_events: {:?}",
-        latest.safety_events
+    assert_eq!(
+        latest.safety_events,
+        vec![safety_event],
+        "LatestFrame dropped safety_events that ingest returned"
     );
 
     server_handle.abort();

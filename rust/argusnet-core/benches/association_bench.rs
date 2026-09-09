@@ -71,12 +71,14 @@ fn bench_mode(c: &mut Criterion, mode: AssociationMode, name: &str) {
                 let ns = nodes(32);
                 let ts0 = truths(4, 0.0);
                 let obs0 = observations(&ns, &ts0, 0.0);
-                engine.ingest_frame(0.0, ns.clone(), obs0, ts0);
+                engine.ingest_frame(0.0, ns.clone(), obs0, ts0, Vec::new(), Vec::new());
                 let ts1 = truths(4, 0.25);
                 let obs1 = observations(&ns, &ts1, 0.25);
                 (engine, ns, obs1, ts1)
             },
-            |(mut engine, ns, obs, ts)| engine.ingest_frame(black_box(0.25), ns, obs, ts),
+            |(mut engine, ns, obs, ts)| {
+                engine.ingest_frame(black_box(0.25), ns, obs, ts, Vec::new(), Vec::new())
+            },
             criterion::BatchSize::SmallInput,
         )
     });

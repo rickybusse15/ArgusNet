@@ -428,22 +428,38 @@ async fn spawn_engine(config: TrackerConfig) -> Result<EngineHandle> {
             match command {
                 EngineCommand::Ingest { request, response } => {
                     let t0 = Instant::now();
-                    let target_metadata = request.target_metadata.clone();
-                    let safety_events = request.safety_events.clone();
+                    // The annotations now travel on PlatformFrame itself, so
+                    // every reader of the frame sees them. This used to graft
+                    // the request's copies onto the response after conversion,
+                    // which left LatestFrame -- rebuilt from the runtime type --
+                    // answering the same frame with both lists empty.
+                    let target_metadata = request
+                        .target_metadata
+                        .iter()
+                        .cloned()
+                        .map(argusnet_proto::target_metadata_from_pb)
+                        .collect();
+                    let safety_events = request
+                        .safety_events
+                        .iter()
+                        .cloned()
+                        .map(argusnet_proto::safety_event_from_pb)
+                        .collect();
                     let reply = match convert_request(request) {
                         Ok((timestamp_s, node_states, observations, truths)) => {
-                            let frame =
-                                engine.ingest_frame(timestamp_s, node_states, observations, truths);
+                            let frame = engine.ingest_frame(
+                                timestamp_s,
+                                node_states,
+                                observations,
+                                truths,
+                                target_metadata,
+                                safety_events,
+                            );
                             processed_frame_count += 1;
                             let elapsed_us =
                                 t0.elapsed().as_micros().clamp(1, u64::MAX as u128) as u64;
                             let _ = ingest_latency_us.record(elapsed_us);
-                            let mut response = frame_response(&frame);
-                            if let Some(pb_frame) = response.frame.as_mut() {
-                                pb_frame.target_metadata = target_metadata;
-                                pb_frame.safety_events = safety_events;
-                            }
-                            Ok(response)
+                            Ok(frame_response(&frame))
                         }
                         Err(error) => Err(error),
                     };

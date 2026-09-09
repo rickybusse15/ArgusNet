@@ -25,8 +25,9 @@ whether the handling is correct — only that it was stated.
 
 ## What the inventory found
 
-Of 171 fields: **132 `carried`**, 16 `consumer-gap`, 16 `inert`,
-3 `dropped-intentional`, 2 `grafted`, 2 `derived`.
+Of 171 fields: **134 `carried`**, 16 `consumer-gap`, 16 `inert`,
+3 `dropped-intentional`, 2 `derived`. No `grafted` rows remain: P4.0 closed the
+only two by giving `PlatformFrame` real fields.
 
 ### How much the `carried` rows are worth
 
@@ -58,18 +59,17 @@ so rounding leaves small asymmetries, and any genuinely non-symmetric matrix
 would have been corrupted silently. The fix transposes before flattening and is
 a no-op for symmetric data; the cross-language parity fixtures pass unchanged.
 
-**1. `PlatformFrame.target_metadata` and `.safety_events` answer differently
-depending on which RPC you ask.** The Rust runtime `PlatformFrame` has no fields
-for either, so `frame_to_pb_ref` emits `Vec::new()`. The server compensates in
-the ingest path only, capturing the request's copies before conversion and
-grafting them onto the response afterwards
-(`argusnet-server/src/lib.rs`: `pb_frame.target_metadata = target_metadata`).
-Watchers receive that same patched response, so they are fine. `LatestFrame`
-is not: it rebuilds from the runtime type and returns both empty. The viewer
-models both in its replay path (`argusnet-viewer/src/replay.rs`), so it expects
-data that one of the two RPCs will never provide. Pinned by the test
-`target_metadata_and_safety_events_survive_ingest_but_not_latest_frame`.
-Closing this means giving `PlatformFrame` real fields, which is **P4.0**'s job.
+**1. `PlatformFrame.target_metadata` and `.safety_events` — fixed in P4.0.**
+These used to answer differently depending on which RPC asked. The runtime
+`PlatformFrame` had no fields for either, so `frame_to_pb_ref` emitted
+`Vec::new()`, and the server compensated in the ingest path only by grafting
+the request's copies onto the response. Watchers saw that patched response;
+`LatestFrame`, rebuilt from the runtime type, returned both empty, while the
+viewer's replay path modelled both and expected them.
+
+P4.0 gave `PlatformFrame` real fields, threaded them through `ingest_frame`,
+and deleted the graft. `target_metadata_and_safety_events_reach_ingest_and_latest_frame_alike`
+now asserts the symmetry it once pinned the asymmetry of.
 
 **2. The attestation fields are inert.** `device_id`, `signature` and
 `signer_pubkey_id` on both `NodeState` and `BearingObservation` are always
@@ -182,8 +182,8 @@ clean-checkout contract jobs — is not in this change.
 | `PlatformFrame.nodes` | `carried` |  |
 | `PlatformFrame.observations` | `carried` |  |
 | `PlatformFrame.rejected_observations` | `carried` |  |
-| `PlatformFrame.safety_events` | `grafted` | Copied onto the ingest response around the runtime type; `LatestFrame` rebuilds from `PlatformFrame` and returns it empty. Pinned by `target_metadata_and_safety_events_survive_ingest_but_not_latest_frame`. |
-| `PlatformFrame.target_metadata` | `grafted` | Copied onto the ingest response around the runtime type; `LatestFrame` rebuilds from `PlatformFrame` and returns it empty. Pinned by `target_metadata_and_safety_events_survive_ingest_but_not_latest_frame`. |
+| `PlatformFrame.safety_events` | `carried` | Real field on the runtime `PlatformFrame` since P4.0. Round-tripped by `frame_annotations_round_trip_every_field`. |
+| `PlatformFrame.target_metadata` | `carried` | Real field on the runtime `PlatformFrame` since P4.0. Round-tripped by `frame_annotations_round_trip_every_field`. |
 | `PlatformFrame.timestamp_s` | `carried` |  |
 | `PlatformFrame.tracks` | `carried` |  |
 | `PlatformFrame.truths` | `carried` |  |

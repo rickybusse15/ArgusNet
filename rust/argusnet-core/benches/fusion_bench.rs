@@ -81,7 +81,14 @@ fn bench_ingest(c: &mut Criterion) {
                     (engine, frame_inputs(nodes, observations, 1.0))
                 },
                 |(mut engine, (node_states, obs, truths))| {
-                    engine.ingest_frame(black_box(1.0), node_states, obs, truths)
+                    engine.ingest_frame(
+                        black_box(1.0),
+                        node_states,
+                        obs,
+                        truths,
+                        Vec::new(),
+                        Vec::new(),
+                    )
                 },
                 criterion::BatchSize::SmallInput,
             )
@@ -133,7 +140,14 @@ fn bench_ingest_steady_state(c: &mut Criterion) {
                     let mut timestamp = 0.0;
                     for _ in 0..20 {
                         let (obs, truths) = multi_target_frame(&nodes, target_count, timestamp);
-                        engine.ingest_frame(timestamp, nodes.clone(), obs, truths);
+                        engine.ingest_frame(
+                            timestamp,
+                            nodes.clone(),
+                            obs,
+                            truths,
+                            Vec::new(),
+                            Vec::new(),
+                        );
                         timestamp += 0.25;
                     }
                     // Pre-generate all measured frames so input construction
@@ -147,7 +161,14 @@ fn bench_ingest_steady_state(c: &mut Criterion) {
                         .collect();
                     let start = std::time::Instant::now();
                     for (t, frame_nodes, obs, truths) in frames {
-                        black_box(engine.ingest_frame(t, frame_nodes, obs, truths));
+                        black_box(engine.ingest_frame(
+                            t,
+                            frame_nodes,
+                            obs,
+                            truths,
+                            Vec::new(),
+                            Vec::new(),
+                        ));
                     }
                     start.elapsed()
                 })
