@@ -36,6 +36,7 @@ use crate::state::{
     SimPhase, SimulationRunner, TrackDetails, TruthDetails, ViewMode, ViewerUiState,
     WorkingSceneRoot, ZoneFocus,
 };
+use crate::terrain_material::{is_terrain_layer, TerrainLayerRoot, TerrainMaterialPlugin};
 use crate::ui::viewer_ui_system;
 
 /// Maximum number of historical positions kept in a trail.
@@ -237,7 +238,11 @@ fn run_inner(
 
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .add_plugins(OrbitCameraPlugin)
-        .add_plugins((GradientSkyPlugin, crate::marker_meshes::MarkerMeshPlugin))
+        .add_plugins((
+            GradientSkyPlugin,
+            crate::marker_meshes::MarkerMeshPlugin,
+            TerrainMaterialPlugin,
+        ))
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
         .add_systems(
             Update,
@@ -679,6 +684,11 @@ fn spawn_base_layers(
                 visibility,
             ))
             .id();
+        // Attaches by the style's semantic kind rather than by layer id, so a
+        // scene that names its ground something else still gets the material.
+        if is_terrain_layer(scene_package, &layer.style_id) {
+            commands.entity(entity).insert(TerrainLayerRoot);
+        }
         layer_entities
             .entities_by_layer
             .insert(layer.id.clone(), entity);
