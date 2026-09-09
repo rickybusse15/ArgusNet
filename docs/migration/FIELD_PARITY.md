@@ -41,9 +41,14 @@ and running them corrected three rows this file originally got wrong:
 `consumer-gap`, and `confidence` and `last_seen_s` are aliases of
 `quality_score` and `timestamp_s` rather than `carried`.
 
-The round trips cover `NodeState`, `BearingObservation`, `TruthState`,
-`TrackState` and `PlatformMetrics`. The rest of the `carried` rows still rest on
-inspection alone; extending the round trips is P4.0 work.
+The round trips now cover `NodeState`, `BearingObservation`, `TruthState`,
+`TrackState`, `PlatformMetrics`, `TrackerConfig`, `ObservationRejection`,
+`TargetMetadata`, `SafetyEvent` and `PlatformFrame`, in both the all-present and
+all-absent shapes, plus invalid covariance lengths and missing required
+submessages. What still rests on inspection alone is the service-level messages
+that have no runtime counterpart to round-trip through — `HealthResponse`,
+`MissionStatus*`, `WatchFramesV2*` — and the mission-zone messages, which finding
+3 below records as unused.
 
 Three findings are worth a reader's attention. All were verified by reading the
 conversion code, not inferred from a name search.
@@ -71,6 +76,25 @@ P4.0 gave `PlatformFrame` real fields, threaded them through `ingest_frame`,
 and deleted the graft. `target_metadata_and_safety_events_reach_ingest_and_latest_frame_alike`
 now asserts the symmetry it once pinned the asymmetry of.
 
+**1b. `TrackState.mode_probability_cv` did not survive being unset — fixed in
+P4.0.** The runtime type models it as `Option<f64>`; the wire field is a bare
+`double`, so "unset" needs an in-band value. Both decoders already read `0.0` as
+absent — `track_from_pb`, and the viewer's replay reader — and the same proto
+uses that convention for `NodeState.max_range_m`. Only the *encoder* disagreed:
+it sent `1.0` for `None`, so `None` came back as `Some(1.0)`, reporting total
+confidence in the constant-velocity mode where the truth was "no IMM estimate at
+all" — a fabricated value, not a lost one, which is the worse of the two.
+
+The fix is one constant, `UNSET_MODE_PROBABILITY_CV = 0.0`, used by both
+directions, so the encoder now agrees with the decoders that were already there.
+No proto field is renumbered or reinterpreted; the interpretation was already
+the readers'. The residual cost is that a genuine `Some(0.0)` cannot be told
+from absent, and that is acceptable because the only producer cannot emit one:
+`argusnet-core`'s IMM mode probability is a normalized posterior whose numerator
+is floored at `1.0e-30`, so it is strictly positive. That claim is asserted by
+running the filter (`the_imm_filter_never_emits_a_zero_mode_probability`) rather
+than by reading it.
+
 **2. The attestation fields are inert.** `device_id`, `signature` and
 `signer_pubkey_id` on both `NodeState` and `BearingObservation` are always
 written as an empty string by the Rust conversions and never read back; the
@@ -91,8 +115,8 @@ follow: dropped from the runtime type on purpose, with a comment in
 
 This covers the protobuf wire contract. The replay JSON schema
 (`docs/replay-schema.json`) is a separate contract, already enforced by
-`validate_replay_document`. G0's remaining half — the installed-wheel and
-clean-checkout contract jobs — is not in this change.
+`validate_replay_document`. G0's other half — the installed-wheel contract job —
+landed separately in #53, corrected by #55.
 
 ## Matrix
 
@@ -223,7 +247,7 @@ clean-checkout contract jobs — is not in this change.
 | `TrackState.last_seen_s` | `derived` | An alias of `timestamp_s`, never read back. |
 | `TrackState.lifecycle_state` | `carried` |  |
 | `TrackState.measurement_std_m` | `carried` |  |
-| `TrackState.mode_probability_cv` | `carried` |  |
+| `TrackState.mode_probability_cv` | `carried` | `Option<f64>` in the runtime type, a bare `double` on the wire. `0.0` means unset — the same convention `NodeState.max_range_m` uses. A genuine `Some(0.0)` is therefore indistinguishable from absent; the IMM filter cannot emit one. |
 | `TrackState.position` | `carried` |  |
 | `TrackState.quality_score` | `carried` |  |
 | `TrackState.stale_steps` | `carried` |  |
