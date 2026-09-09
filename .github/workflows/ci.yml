@@ -161,31 +161,15 @@ jobs:
       # --all-targets so tests, benches and examples are linted too. Without
       # it clippy only sees lib and bin targets, and lint drift accumulates
       # unnoticed in exactly the code nobody re-reads.
+      #
+      # This type-checks bench code but never codegens or links it. Compiling
+      # the benches for real measured 25m27s on the runner -- four times the
+      # next slowest job, and the only reason PR CI took 25 minutes rather than
+      # 7 -- so that lives in nightly-bench.yml, whose `cargo bench --workspace`
+      # builds them anyway. A bench that fails to link now surfaces overnight
+      # instead of pre-merge.
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-
-  # Its own job rather than a step in rust-lint: compiling the six criterion
-  # benches measured 9m06s locally, which would have made it the longest thing
-  # on the lint critical path while gating nothing. Kept on PRs rather than
-  # moved to the nightly workflow because clippy checks bench code but never
-  # codegens or links it, so a bench that fails to build would otherwise reach
-  # main and only surface overnight.
-  rust-bench-compile:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libudev-dev
-      - name: Install pinned Rust toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: bench
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Benchmark compile check
-        run: cargo bench --workspace --no-run
 
   security:
     runs-on: ubuntu-latest
