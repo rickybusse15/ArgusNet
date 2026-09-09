@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use bevy::app::AppExit;
@@ -27,6 +28,7 @@ use bevy::camera::RenderTarget;
 use bevy::image::TextureFormatPixelInfo;
 use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssets;
+use bevy::render::render_resource::PipelineCache;
 use bevy::render::render_resource::{
     Buffer, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Extent3d, MapMode, PollType,
     TexelCopyBufferInfo, TexelCopyBufferLayout, TextureFormat, TextureUsages,
@@ -110,11 +112,25 @@ pub fn render_headless(scene_path: impl AsRef<Path>, options: HeadlessRenderOpti
 
 /// Receives finished frames in the main world.
 #[derive(Resource, Deref)]
-struct MainWorldReceiver(Receiver<Vec<u8>>);
+struct MainWorldReceiver(Receiver<RenderedFrame>);
 
 /// Sends finished frames out of the render world.
 #[derive(Resource, Deref)]
-struct RenderWorldSender(Sender<Vec<u8>>);
+struct RenderWorldSender(Sender<RenderedFrame>);
+
+/// One frame's pixels, plus whether the renderer had finished compiling.
+///
+/// `pipelines_pending` is the piece the main world cannot see for itself:
+/// `PipelineCache` lives in the render world, and it is the only authority on
+/// whether a shader is still being specialized. Without it the capture has to
+/// guess from pixels, and guessing is not good enough — a frame showing only
+/// the sky is non-uniform and can hold still for a dozen frames while the
+/// terrain pipeline is mid-compile, which captures a near-empty image roughly
+/// one run in three.
+struct RenderedFrame {
+    pixels: Vec<u8>,
+    pipelines_pending: bool,
+}
 
 /// The offscreen image the cameras render into, plus its extent. Systems that
 /// need the render size prefer this over the (absent) window.
@@ -251,7 +267,9 @@ fn receive_image_from_buffer(
     image_copiers: Res<ImageCopiers>,
     render_device: Res<RenderDevice>,
     sender: Res<RenderWorldSender>,
+    pipeline_cache: Res<PipelineCache>,
 ) {
+    let pipelines_pending = pipeline_cache.waiting_pipelines().next().is_some();
     for image_copier in image_copiers.0.iter() {
         if !image_copier.enabled() {
             continue;
@@ -278,7 +296,10 @@ fn receive_image_from_buffer(
         }
 
         // Fails only if the main world has already torn down the receiver.
-        let _ = sender.send(buffer_slice.get_mapped_range().to_vec());
+        let _ = sender.send(RenderedFrame {
+            pixels: buffer_slice.get_mapped_range().to_vec(),
+            pipelines_pending,
+        });
         image_copier.buffer.unmap();
     }
 }
@@ -303,6 +324,79 @@ struct HeadlessCapture {
     phase: CapturePhase,
     next_index: usize,
     next_time_s: f32,
+    timing: CaptureTiming,
+}
+
+/// Where a headless run spent its time, and on which frame each milestone fell.
+///
+/// The render step is the slowest thing in CI and has grown with every visual
+/// change, but wall-clock alone cannot say whether the *drawing* got more
+/// expensive or the release condition simply waits too long. Splitting the two
+/// is what `docs/migration/DELIVERY_PLAN.md`'s G2 guardrail asks for before more
+/// expensive effects go in — and it is what turned the blind frame floor below
+/// into a measured condition.
+#[derive(Debug)]
+struct CaptureTiming {
+    started: Instant,
+    assets_ready: Option<Instant>,
+    frames_waiting_assets: u32,
+    /// First frame whose output was not a single flat colour — the first frame
+    /// on which something was actually drawn.
+    drawn_at_frame: Option<u32>,
+    /// First frame that had been stable for `STABLE_FRAMES_REQUIRED`, whether
+    /// or not anything had been drawn yet.
+    ///
+    /// Recorded because it is the trap: a cleared target is perfectly stable,
+    /// so this lands far earlier than the scene is ready. On the bundled scene
+    /// it is frame ~20, where the image still holds exactly one colour. Keeping
+    /// it in the log makes that concrete for anyone tempted to release on
+    /// stability alone.
+    stable_at_frame: Option<u32>,
+    /// Frames spent settling in total: the frame the capture fired on.
+    settle_frames: u32,
+}
+
+impl CaptureTiming {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            assets_ready: None,
+            frames_waiting_assets: 0,
+            drawn_at_frame: None,
+            stable_at_frame: None,
+            settle_frames: 0,
+        }
+    }
+
+    /// Emits the breakdown. Called once per run, on the first still.
+    fn report(&self) {
+        let assets_s = self
+            .assets_ready
+            .map(|ready| ready.duration_since(self.started).as_secs_f32())
+            .unwrap_or_default();
+        info!(
+            "headless timing: total {:.1}s (assets {:.1}s over {} frames); drawn at frame {}, \
+             stable at frame {}, captured at frame {}",
+            self.started.elapsed().as_secs_f32(),
+            assets_s,
+            self.frames_waiting_assets,
+            OptionalFrame(self.drawn_at_frame),
+            OptionalFrame(self.stable_at_frame),
+            self.settle_frames,
+        );
+    }
+}
+
+/// Renders a milestone a run may never have reached.
+struct OptionalFrame(Option<u32>);
+
+impl std::fmt::Display for OptionalFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(frame) => write!(f, "{frame}"),
+            None => write!(f, "never"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -333,16 +427,33 @@ impl CapturePhase {
 /// Consecutive identical frames that count as "the scene has finished drawing".
 const STABLE_FRAMES_REQUIRED: u32 = 10;
 
-/// Frames to render before stability is even considered, on the first capture.
+/// Frames rendered before the release condition is even consulted.
 ///
-/// Stability alone is not a sufficient signal. Bevy specializes render pipelines
-/// lazily on first use, and until that finishes the camera clears the target but
-/// draws nothing — so the output sits *unchanged* at the clear colour for a long
-/// stretch that looks exactly like a settled frame. On the software rasterizer
-/// CI uses this takes several seconds; capturing on stability alone reliably
-/// saves an empty image. This floor covers the compile, and the stability check
-/// then catches whatever is slower still.
-const WARMUP_FRAMES: u32 = 300;
+/// This was a blind 300, and replacing it took three attempts because the two
+/// obvious signals are both wrong. Recording them here so the next person does
+/// not repeat the sequence:
+///
+/// 1. **Stability alone.** Bevy specializes pipelines lazily; until that
+///    finishes the camera clears the target and draws nothing, so the output
+///    sits *unchanged* at the clear colour. On the bundled scene it is stable by
+///    frame 11 and the saved image holds exactly one colour.
+/// 2. **"Wait for the output to change."** The first change is the target going
+///    transparent, then black, then the clear colour. None of that is drawing.
+/// 3. **"Wait until the frame is more than one colour" ([`is_uniform`]).**
+///    Closer, and it captured correctly most of the time — but the sky draws
+///    before the terrain, and a sky-only frame is both non-uniform and perfectly
+///    still while the terrain pipeline compiles. Roughly one run in three saved
+///    an 8-colour image.
+///
+/// The signal that actually works is the one the render world already owns:
+/// `PipelineCache::waiting_pipelines`. The release condition is all three of
+/// drawn, no pipeline still compiling, and stable — see [`RenderedFrame`].
+/// Measured: capture moved from frame 300 to frame ~48, the render step from
+/// ~35s to ~4.6s, and eight consecutive captures are byte-identical to what the
+/// 300-frame floor produced.
+///
+/// What remains here is only a small lower bound before any of it is consulted.
+const WARMUP_FRAMES: u32 = MIN_SETTLE_FRAMES;
 
 /// Frames before stability counts on subsequent captures in a `--record-dir`
 /// run. Pipelines are warm by then, so only the frame's own contents need to
@@ -362,6 +473,7 @@ impl HeadlessCapture {
             phase: CapturePhase::WaitingForAssets,
             next_index: 0,
             next_time_s: 0.0,
+            timing: CaptureTiming::new(),
         }
     }
 }
@@ -469,6 +581,28 @@ fn apply_camera_preset(
     }
 }
 
+/// Whether every pixel of `frame` is the same colour.
+///
+/// A cleared-but-undrawn target is uniform; a rendered scene is not. This is the
+/// same property CI asserts on the saved PNG, checked here so the capture waits
+/// for it rather than trusting a frame count to have covered it.
+///
+/// `frame` is the raw readback buffer, so it must be walked through [`pixel_rows`]
+/// rather than read straight through. The padding bytes wgpu adds to each row are
+/// never written by the render, so at any width whose row stride is not already
+/// 256-byte aligned they stay zero — and comparing them as if they were pixels
+/// makes *every* frame look non-uniform, including the cleared one this exists to
+/// reject.
+fn is_uniform(frame: &[u8], width: u32, height: u32) -> bool {
+    // A trailing partial pixel cannot make a frame non-uniform, so the
+    // remainder of each row is dropped rather than compared.
+    let mut pixels = pixel_rows(frame, width, height).flat_map(|row| row.as_chunks::<4>().0.iter());
+    let Some(first) = pixels.next() else {
+        return true;
+    };
+    pixels.all(|pixel| pixel == first)
+}
+
 /// Drives the capture state machine described on [`HeadlessCapture`].
 fn headless_capture_system(
     mut capture: ResMut<HeadlessCapture>,
@@ -495,8 +629,10 @@ fn headless_capture_system(
                 .iter()
                 .any(|root| !asset_server.is_loaded_with_dependencies(&root.0));
             if pending {
+                capture.timing.frames_waiting_assets += 1;
                 return;
             }
+            capture.timing.assets_ready = Some(Instant::now());
             // A single still shows the completed mission, so jump to the final
             // frame rather than capturing an empty opening one.
             if capture.record_dir.is_none() {
@@ -516,18 +652,36 @@ fn headless_capture_system(
             let Some(frame) = latest.as_ref() else {
                 return;
             };
-            let hash = frame_hash(frame);
+            let hash = frame_hash(&frame.pixels);
             let stable = if last_hash == Some(hash) {
                 stable + 1
             } else {
                 0
             };
             let seen = seen + 1;
+            // Three conditions, and each rules out a failure the others miss:
+            // `drawn` proves rendering started (so pipelines have been queued
+            // at all), `!pipelines_pending` proves none is still compiling, and
+            // stability proves the contents have settled.
+            let drawn = !is_uniform(&frame.pixels, target.width, target.height);
+            let ready = drawn && !frame.pipelines_pending;
+
+            if drawn && capture.timing.drawn_at_frame.is_none() {
+                capture.timing.drawn_at_frame = Some(seen);
+            }
+            if stable >= STABLE_FRAMES_REQUIRED && capture.timing.stable_at_frame.is_none() {
+                capture.timing.stable_at_frame = Some(seen);
+            }
+            capture.timing.settle_frames = seen;
 
             capture.phase = if seen >= MAX_SETTLE_FRAMES {
-                warn!("headless render did not settle after {seen} frames; capturing anyway");
+                warn!(
+                    "headless render did not settle after {seen} frames \
+                     (drawn: {drawn}, pipelines pending: {}); capturing anyway",
+                    frame.pipelines_pending
+                );
                 CapturePhase::Capture
-            } else if seen >= min_frames && stable >= STABLE_FRAMES_REQUIRED {
+            } else if seen >= min_frames && ready && stable >= STABLE_FRAMES_REQUIRED {
                 CapturePhase::Capture
             } else {
                 CapturePhase::Settling {
@@ -544,8 +698,15 @@ fn headless_capture_system(
                 return;
             };
 
+            // Once per run: a --record-dir sequence re-enters Capture for every
+            // frame and only the first is the cold one.
+            if capture.next_index == 0 {
+                capture.timing.report();
+            }
+
             if let Some(output) = capture.output.take() {
-                if let Err(error) = save_frame(&output, &frame, target.width, target.height) {
+                if let Err(error) = save_frame(&output, &frame.pixels, target.width, target.height)
+                {
                     error!("failed to write {}: {error:#}", output.display());
                 }
                 if capture.record_dir.is_none() {
@@ -560,7 +721,7 @@ fn headless_capture_system(
             };
             let index = capture.next_index;
             let path = record_dir.join(format!("frame_{index:05}.png"));
-            if let Err(error) = save_frame(&path, &frame, target.width, target.height) {
+            if let Err(error) = save_frame(&path, &frame.pixels, target.width, target.height) {
                 error!("failed to write {}: {error:#}", path.display());
             }
             capture.next_index += 1;
@@ -599,18 +760,28 @@ fn frame_at_or_after(replay_state: &ReplayState, time_s: f32) -> Option<usize> {
         .position(|frame| frame.timestamp_s >= time_s)
 }
 
+/// The real pixel bytes of a readback buffer, one row at a time.
+///
+/// wgpu pads every copied row out to a 256-byte boundary, so a buffer is only
+/// `width * 4` bytes of image per `align_copy_bytes_per_row(width * 4)` bytes of
+/// buffer. Anything that reads the readback as pixels has to go through here;
+/// reading it flat silently mixes padding into the image.
+fn pixel_rows(padded: &[u8], width: u32, height: u32) -> impl Iterator<Item = &[u8]> {
+    let row_bytes = width as usize * TextureFormat::Rgba8UnormSrgb.pixel_size().unwrap_or(4);
+    // A zero-width target would give a zero stride, and `chunks(0)` panics.
+    // `into_request` clamps the extent, so this only guards the unreachable case.
+    let stride = RenderDevice::align_copy_bytes_per_row(row_bytes).max(1);
+    padded
+        .chunks(stride)
+        .take(height as usize)
+        .map(move |row| &row[..row_bytes.min(row.len())])
+}
+
 /// Trims the row padding wgpu's copy alignment adds, so the bytes match the
 /// image's real width.
 fn unpad_rows(padded: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let row_bytes = width as usize * TextureFormat::Rgba8UnormSrgb.pixel_size().unwrap_or(4);
-    let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
-    if row_bytes == aligned_row_bytes {
-        return padded.to_vec();
-    }
-    padded
-        .chunks(aligned_row_bytes)
-        .take(height as usize)
-        .flat_map(|row| &row[..row_bytes.min(row.len())])
+    pixel_rows(padded, width, height)
+        .flatten()
         .copied()
         .collect()
 }
@@ -627,6 +798,104 @@ fn save_frame(path: &Path, padded: &[u8], width: u32, height: u32) -> Result<()>
         .save(path)
         .with_context(|| format!("failed to save {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod uniformity_tests {
+    use super::{is_uniform, RenderDevice};
+
+    const CLEAR: [u8; 4] = [12, 14, 20, 255];
+
+    /// 64 px * 4 bytes = 256, exactly the copy alignment, so the readback for
+    /// this width carries no padding.
+    const ALIGNED_W: u32 = 64;
+
+    /// Builds a readback buffer the way wgpu delivers one: `width * 4` bytes of
+    /// image per row, then zero padding out to the 256-byte copy alignment.
+    fn readback(width: u32, height: u32, pixel: [u8; 4]) -> Vec<u8> {
+        let row_bytes = width as usize * 4;
+        let stride = RenderDevice::align_copy_bytes_per_row(row_bytes);
+        let mut buffer = vec![0u8; stride * height as usize];
+        for row in 0..height as usize {
+            for x in 0..width as usize {
+                buffer[row * stride + x * 4..row * stride + x * 4 + 4].copy_from_slice(&pixel);
+            }
+        }
+        buffer
+    }
+
+    /// A cleared-but-undrawn target: every pixel identical. This is the state
+    /// the capture must not mistake for a finished render, and the reason a
+    /// stability check alone is not enough.
+    #[test]
+    fn a_cleared_target_is_uniform() {
+        assert!(is_uniform(&readback(ALIGNED_W, 4, CLEAR), ALIGNED_W, 4));
+    }
+
+    /// The defect this signature exists for. At a width whose row stride is not
+    /// already 256-byte aligned, wgpu pads each row with bytes the render never
+    /// writes. Read flat, those zeros differ from the clear colour, so a
+    /// perfectly empty target reports as drawn — and since a cleared target is
+    /// also stable, the capture releases on an empty frame.
+    #[test]
+    fn row_padding_does_not_make_a_cleared_target_look_drawn() {
+        let width = 650;
+        let height = 3;
+        let row_bytes = width as usize * 4;
+        assert!(
+            RenderDevice::align_copy_bytes_per_row(row_bytes) > row_bytes,
+            "this width must need padding for the test to mean anything"
+        );
+
+        let cleared = readback(width, height, CLEAR);
+        assert!(
+            cleared.contains(&0),
+            "the padding should be present and unwritten"
+        );
+        assert!(is_uniform(&cleared, width, height));
+    }
+
+    /// One pixel differing anywhere is enough to say something drew — including
+    /// the last pixel of a padded row, which is the one nearest the bytes that
+    /// have to be ignored.
+    #[test]
+    fn a_single_differing_pixel_is_not_uniform() {
+        for width in [ALIGNED_W, 650] {
+            let row_bytes = width as usize * 4;
+            let stride = RenderDevice::align_copy_bytes_per_row(row_bytes);
+
+            let mut first = readback(width, 3, CLEAR);
+            first[6] = 21;
+            assert!(!is_uniform(&first, width, 3), "width {width}, first pixel");
+
+            let mut last_in_row = readback(width, 3, CLEAR);
+            last_in_row[row_bytes - 4] = 13;
+            assert!(
+                !is_uniform(&last_in_row, width, 3),
+                "width {width}, row end"
+            );
+
+            let mut last_row = readback(width, 3, CLEAR);
+            last_row[2 * stride] = 13;
+            assert!(!is_uniform(&last_row, width, 3), "width {width}, last row");
+        }
+    }
+
+    /// An empty or truncated buffer must not be reported as drawn: treating a
+    /// missing frame as ready would capture nothing at all.
+    #[test]
+    fn a_frame_too_short_to_hold_a_pixel_is_uniform() {
+        assert!(is_uniform(&[], ALIGNED_W, 4));
+        assert!(is_uniform(&[1, 2, 3], 1, 1));
+    }
+
+    /// Alpha alone distinguishes two pixels, since the readback is RGBA.
+    #[test]
+    fn alpha_counts_as_a_difference() {
+        let mut frame = readback(ALIGNED_W, 2, CLEAR);
+        frame[7] = 254;
+        assert!(!is_uniform(&frame, ALIGNED_W, 2));
+    }
 }
 
 #[cfg(test)]

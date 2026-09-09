@@ -10,6 +10,7 @@ pub mod replay;
 pub mod schema;
 pub mod sky;
 pub mod state;
+pub mod terrain_material;
 pub mod ui;
 
 pub use app::run;
