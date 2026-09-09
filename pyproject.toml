@@ -41,6 +41,15 @@ dev = [
     "py-spy>=0.3",
     "scalene>=1.5",
     "pre-commit>=3.6",
+    # Pinned exactly, not to a range. protoc stamps its own version into the
+    # files it emits, so a different generator rewrites the committed bindings
+    # with no schema change behind it -- 1.73.1 emits "Protobuf Python Version:
+    # 6.31.0" where 1.78.0 emits 6.31.1. scripts/regenerate_proto.py --check
+    # compares bytes, so an unpinned generator would fail CI on version stamps.
+    # 1.78.0 is what produced the committed files and keeps protobuf below the
+    # 7.0 cap in [project.dependencies]; `grpcio-tools>=1.78,<2.0` resolves to a
+    # newer release that pulls protobuf 7.x and breaks that cap.
+    "grpcio-tools==1.78.0",
 ]
 
 [project.scripts]
