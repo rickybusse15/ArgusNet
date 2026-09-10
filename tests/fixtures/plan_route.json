@@ -1,0 +1,3168 @@
+{
+  "source": "src/argusnet/planning/planner_base.py",
+  "note": "PathPlanner2D's public routing surface, read back from the reference. Cases are tagged agreement/divergence: the route cache key is a deliberate change, so the reference is recorded as evidence of what was changed, not as the target.",
+  "config": {
+    "drone_clearance_m": "8.0",
+    "target_clearance_m": "4.0",
+    "snap_m": "10.0",
+    "cylinder_vertex_count": 12,
+    "turn_penalty_m": "3.0",
+    "max_cache_entries": 512
+  },
+  "default_clearance_m": "8.0",
+  "scenes": [
+    {
+      "name": "empty",
+      "clearance_m": "8.0",
+      "obstacles": [],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": []
+    },
+    {
+      "name": "edge_blocker",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -190.0,
+              -40.0
+            ],
+            [
+              -110.0,
+              -40.0
+            ],
+            [
+              -110.0,
+              40.0
+            ],
+            [
+              -190.0,
+              40.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-198.0",
+              "-48.0"
+            ],
+            [
+              "-102.0",
+              "-48.0"
+            ],
+            [
+              "-102.0",
+              "48.0"
+            ],
+            [
+              "-198.0",
+              "48.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "one_building",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -40.0,
+              -40.0
+            ],
+            [
+              40.0,
+              -40.0
+            ],
+            [
+              40.0,
+              40.0
+            ],
+            [
+              -40.0,
+              40.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-48.0",
+              "-48.0"
+            ],
+            [
+              "48.0",
+              "-48.0"
+            ],
+            [
+              "48.0",
+              "48.0"
+            ],
+            [
+              "-48.0",
+              "48.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "box_and_wall",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "x1",
+          "kind": "box-v1",
+          "blocker_type": "building",
+          "center_x_m": -60.0,
+          "center_y_m": 40.0,
+          "length_m": 90.0,
+          "width_m": 30.0,
+          "yaw_rad": 0.6,
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 25.0,
+          "footprint_xy_m": [
+            [
+              -88.67046557001,
+              2.211054473578237
+            ],
+            [
+              -14.390260228138942,
+              53.02887707913142
+            ],
+            [
+              -31.329534429990005,
+              77.78894552642177
+            ],
+            [
+              -105.60973977186106,
+              26.971122920868584
+            ]
+          ]
+        },
+        {
+          "object_id": "w1",
+          "kind": "wall-v1",
+          "blocker_type": "wall",
+          "start_xy_m": [
+            40.0,
+            -150.0
+          ],
+          "end_xy_m": [
+            40.0,
+            150.0
+          ],
+          "thickness_m": 4.0,
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 20.0,
+          "footprint_xy_m": [
+            [
+              42.0,
+              -150.0
+            ],
+            [
+              42.0,
+              150.0
+            ],
+            [
+              38.0,
+              150.0
+            ],
+            [
+              38.0,
+              -150.0
+            ]
+          ]
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "x1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-90.75601070212714",
+              "-8.908770232859473"
+            ],
+            [
+              "-3.2704355217012324",
+              "50.94333194701427"
+            ],
+            [
+              "-29.24398929787286",
+              "88.90877023285948"
+            ],
+            [
+              "-116.72956447829877",
+              "29.056668052985728"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "w1",
+          "blocker_type": "wall",
+          "vertices": [
+            [
+              "50.0",
+              "-158.0"
+            ],
+            [
+              "50.0",
+              "158.0"
+            ],
+            [
+              "30.0",
+              "158.0"
+            ],
+            [
+              "30.0",
+              "-158.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cylinder",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "c1",
+          "kind": "cylinder-v1",
+          "blocker_type": "building",
+          "center_x_m": 0.0,
+          "center_y_m": 0.0,
+          "radius_m": 45.0,
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 30.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "c1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "53.0",
+              "0.0"
+            ],
+            [
+              "45.899346400575254",
+              "26.499999999999996"
+            ],
+            [
+              "26.500000000000007",
+              "45.89934640057525"
+            ],
+            [
+              "3.245314017740486e-15",
+              "53.0"
+            ],
+            [
+              "-26.49999999999999",
+              "45.899346400575254"
+            ],
+            [
+              "-45.89934640057524",
+              "26.500000000000018"
+            ],
+            [
+              "-53.0",
+              "6.490628035480972e-15"
+            ],
+            [
+              "-45.899346400575254",
+              "-26.499999999999986"
+            ],
+            [
+              "-26.500000000000025",
+              "-45.89934640057523"
+            ],
+            [
+              "-9.735942053221457e-15",
+              "-53.0"
+            ],
+            [
+              "26.499999999999964",
+              "-45.89934640057527"
+            ],
+            [
+              "45.89934640057523",
+              "-26.500000000000025"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cluster",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -100.0,
+              -30.0
+            ],
+            [
+              -40.0,
+              -30.0
+            ],
+            [
+              -40.0,
+              30.0
+            ],
+            [
+              -100.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b2",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              30.0
+            ],
+            [
+              -30.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b3",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              40.0,
+              -30.0
+            ],
+            [
+              100.0,
+              -30.0
+            ],
+            [
+              100.0,
+              30.0
+            ],
+            [
+              40.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-108.0",
+              "-38.0"
+            ],
+            [
+              "-32.0",
+              "-38.0"
+            ],
+            [
+              "-32.0",
+              "38.0"
+            ],
+            [
+              "-108.0",
+              "38.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b2",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-38.0",
+              "-38.0"
+            ],
+            [
+              "38.0",
+              "-38.0"
+            ],
+            [
+              "38.0",
+              "38.0"
+            ],
+            [
+              "-38.0",
+              "38.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b3",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "32.0",
+              "-38.0"
+            ],
+            [
+              "108.0",
+              "-38.0"
+            ],
+            [
+              "108.0",
+              "38.0"
+            ],
+            [
+              "32.0",
+              "38.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "forest",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "f1",
+          "kind": "forest-stand-v1",
+          "blocker_type": "vegetation",
+          "footprint_xy_m": [
+            [
+              -60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              60.0
+            ],
+            [
+              -60.0,
+              60.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 25.0,
+          "density": 0.35
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "f1",
+          "blocker_type": "vegetation",
+          "vertices": [
+            [
+              "-68.0",
+              "-68.0"
+            ],
+            [
+              "68.0",
+              "-68.0"
+            ],
+            [
+              "68.0",
+              "68.0"
+            ],
+            [
+              "-68.0",
+              "68.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "corner_block",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -510.0,
+              -40.0
+            ],
+            [
+              -430.0,
+              -40.0
+            ],
+            [
+              -430.0,
+              40.0
+            ],
+            [
+              -510.0,
+              40.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-518.0",
+              "-48.0"
+            ],
+            [
+              "-422.0",
+              "-48.0"
+            ],
+            [
+              "-422.0",
+              "48.0"
+            ],
+            [
+              "-518.0",
+              "48.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "boundary_slab",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -680.0,
+              -200.0
+            ],
+            [
+              -280.0,
+              -200.0
+            ],
+            [
+              -280.0,
+              200.0
+            ],
+            [
+              -680.0,
+              200.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-688.0",
+              "-208.0"
+            ],
+            [
+              "-272.0",
+              "-208.0"
+            ],
+            [
+              "-272.0",
+              "208.0"
+            ],
+            [
+              "-688.0",
+              "208.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "nested",
+      "clearance_m": "8.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              30.0
+            ],
+            [
+              -30.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b2",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              60.0
+            ],
+            [
+              -60.0,
+              60.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b3",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -90.0,
+              -90.0
+            ],
+            [
+              90.0,
+              -90.0
+            ],
+            [
+              90.0,
+              90.0
+            ],
+            [
+              -90.0,
+              90.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b4",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -120.0,
+              -120.0
+            ],
+            [
+              120.0,
+              -120.0
+            ],
+            [
+              120.0,
+              120.0
+            ],
+            [
+              -120.0,
+              120.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-38.0",
+              "-38.0"
+            ],
+            [
+              "38.0",
+              "-38.0"
+            ],
+            [
+              "38.0",
+              "38.0"
+            ],
+            [
+              "-38.0",
+              "38.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b2",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-68.0",
+              "-68.0"
+            ],
+            [
+              "68.0",
+              "-68.0"
+            ],
+            [
+              "68.0",
+              "68.0"
+            ],
+            [
+              "-68.0",
+              "68.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b3",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-98.0",
+              "-98.0"
+            ],
+            [
+              "98.0",
+              "-98.0"
+            ],
+            [
+              "98.0",
+              "98.0"
+            ],
+            [
+              "-98.0",
+              "98.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b4",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-128.0",
+              "-128.0"
+            ],
+            [
+              "128.0",
+              "-128.0"
+            ],
+            [
+              "128.0",
+              "128.0"
+            ],
+            [
+              "-128.0",
+              "128.0"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "scenes_wide": [
+    {
+      "name": "empty",
+      "clearance_m": "25.0",
+      "obstacles": [],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": []
+    },
+    {
+      "name": "edge_blocker",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -190.0,
+              -40.0
+            ],
+            [
+              -110.0,
+              -40.0
+            ],
+            [
+              -110.0,
+              40.0
+            ],
+            [
+              -190.0,
+              40.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-215.0",
+              "-65.0"
+            ],
+            [
+              "-85.0",
+              "-65.0"
+            ],
+            [
+              "-85.0",
+              "65.0"
+            ],
+            [
+              "-215.0",
+              "65.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "one_building",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -40.0,
+              -40.0
+            ],
+            [
+              40.0,
+              -40.0
+            ],
+            [
+              40.0,
+              40.0
+            ],
+            [
+              -40.0,
+              40.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-65.0",
+              "-65.0"
+            ],
+            [
+              "65.0",
+              "-65.0"
+            ],
+            [
+              "65.0",
+              "65.0"
+            ],
+            [
+              "-65.0",
+              "65.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "box_and_wall",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "x1",
+          "kind": "box-v1",
+          "blocker_type": "building",
+          "center_x_m": -60.0,
+          "center_y_m": 40.0,
+          "length_m": 90.0,
+          "width_m": 30.0,
+          "yaw_rad": 0.6,
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 25.0,
+          "footprint_xy_m": [
+            [
+              -88.67046557001,
+              2.211054473578237
+            ],
+            [
+              -14.390260228138942,
+              53.02887707913142
+            ],
+            [
+              -31.329534429990005,
+              77.78894552642177
+            ],
+            [
+              -105.60973977186106,
+              26.971122920868584
+            ]
+          ]
+        },
+        {
+          "object_id": "w1",
+          "kind": "wall-v1",
+          "blocker_type": "wall",
+          "start_xy_m": [
+            40.0,
+            -150.0
+          ],
+          "end_xy_m": [
+            40.0,
+            150.0
+          ],
+          "thickness_m": 4.0,
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 20.0,
+          "footprint_xy_m": [
+            [
+              42.0,
+              -150.0
+            ],
+            [
+              42.0,
+              150.0
+            ],
+            [
+              38.0,
+              150.0
+            ],
+            [
+              38.0,
+              -150.0
+            ]
+          ]
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "x1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-95.18779410787606",
+              "-32.538397734039606"
+            ],
+            [
+              "20.3591919794789",
+              "46.51154854126534"
+            ],
+            [
+              "-24.812205892123934",
+              "112.53839773403962"
+            ],
+            [
+              "-140.3591919794789",
+              "33.48845145873465"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "w1",
+          "blocker_type": "wall",
+          "vertices": [
+            [
+              "67.0",
+              "-175.0"
+            ],
+            [
+              "67.0",
+              "175.0"
+            ],
+            [
+              "13.0",
+              "175.0"
+            ],
+            [
+              "13.0",
+              "-175.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cylinder",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "c1",
+          "kind": "cylinder-v1",
+          "blocker_type": "building",
+          "center_x_m": 0.0,
+          "center_y_m": 0.0,
+          "radius_m": 45.0,
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 30.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "c1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "70.0",
+              "0.0"
+            ],
+            [
+              "60.62177826491071",
+              "34.99999999999999"
+            ],
+            [
+              "35.00000000000001",
+              "60.6217782649107"
+            ],
+            [
+              "4.2862637970157365e-15",
+              "70.0"
+            ],
+            [
+              "-34.999999999999986",
+              "60.62177826491071"
+            ],
+            [
+              "-60.621778264910695",
+              "35.00000000000002"
+            ],
+            [
+              "-70.0",
+              "8.572527594031473e-15"
+            ],
+            [
+              "-60.621778264910716",
+              "-34.99999999999998"
+            ],
+            [
+              "-35.00000000000003",
+              "-60.62177826491069"
+            ],
+            [
+              "-1.2858791391047208e-14",
+              "-70.0"
+            ],
+            [
+              "34.99999999999995",
+              "-60.62177826491073"
+            ],
+            [
+              "60.62177826491069",
+              "-35.00000000000003"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cluster",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -100.0,
+              -30.0
+            ],
+            [
+              -40.0,
+              -30.0
+            ],
+            [
+              -40.0,
+              30.0
+            ],
+            [
+              -100.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b2",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              30.0
+            ],
+            [
+              -30.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b3",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              40.0,
+              -30.0
+            ],
+            [
+              100.0,
+              -30.0
+            ],
+            [
+              100.0,
+              30.0
+            ],
+            [
+              40.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-125.0",
+              "-55.0"
+            ],
+            [
+              "-15.0",
+              "-55.0"
+            ],
+            [
+              "-15.0",
+              "55.0"
+            ],
+            [
+              "-125.0",
+              "55.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b2",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-55.0",
+              "-55.0"
+            ],
+            [
+              "55.0",
+              "-55.0"
+            ],
+            [
+              "55.0",
+              "55.0"
+            ],
+            [
+              "-55.0",
+              "55.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b3",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "15.0",
+              "-55.0"
+            ],
+            [
+              "125.0",
+              "-55.0"
+            ],
+            [
+              "125.0",
+              "55.0"
+            ],
+            [
+              "15.0",
+              "55.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "forest",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "f1",
+          "kind": "forest-stand-v1",
+          "blocker_type": "vegetation",
+          "footprint_xy_m": [
+            [
+              -60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              60.0
+            ],
+            [
+              -60.0,
+              60.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 25.0,
+          "density": 0.35
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "f1",
+          "blocker_type": "vegetation",
+          "vertices": [
+            [
+              "-85.0",
+              "-85.0"
+            ],
+            [
+              "85.0",
+              "-85.0"
+            ],
+            [
+              "85.0",
+              "85.0"
+            ],
+            [
+              "-85.0",
+              "85.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "corner_block",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -510.0,
+              -40.0
+            ],
+            [
+              -430.0,
+              -40.0
+            ],
+            [
+              -430.0,
+              40.0
+            ],
+            [
+              -510.0,
+              40.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-535.0",
+              "-65.0"
+            ],
+            [
+              "-405.0",
+              "-65.0"
+            ],
+            [
+              "-405.0",
+              "65.0"
+            ],
+            [
+              "-535.0",
+              "65.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "boundary_slab",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -680.0,
+              -200.0
+            ],
+            [
+              -280.0,
+              -200.0
+            ],
+            [
+              -280.0,
+              200.0
+            ],
+            [
+              -680.0,
+              200.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-705.0",
+              "-225.0"
+            ],
+            [
+              "-255.0",
+              "-225.0"
+            ],
+            [
+              "-255.0",
+              "225.0"
+            ],
+            [
+              "-705.0",
+              "225.0"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "name": "nested",
+      "clearance_m": "25.0",
+      "obstacles": [
+        {
+          "object_id": "b1",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              -30.0
+            ],
+            [
+              30.0,
+              30.0
+            ],
+            [
+              -30.0,
+              30.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b2",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              -60.0
+            ],
+            [
+              60.0,
+              60.0
+            ],
+            [
+              -60.0,
+              60.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b3",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -90.0,
+              -90.0
+            ],
+            [
+              90.0,
+              -90.0
+            ],
+            [
+              90.0,
+              90.0
+            ],
+            [
+              -90.0,
+              90.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        },
+        {
+          "object_id": "b4",
+          "kind": "polygon-prism-v1",
+          "blocker_type": "building",
+          "footprint_xy_m": [
+            [
+              -120.0,
+              -120.0
+            ],
+            [
+              120.0,
+              -120.0
+            ],
+            [
+              120.0,
+              120.0
+            ],
+            [
+              -120.0,
+              120.0
+            ]
+          ],
+          "base_elevation_m": 0.0,
+          "top_elevation_m": 40.0
+        }
+      ],
+      "tile_size_m": "100.0",
+      "bounds": {
+        "x_min_m": "-500.0",
+        "x_max_m": "500.0",
+        "y_min_m": "-500.0",
+        "y_max_m": "500.0"
+      },
+      "polygons": [
+        {
+          "primitive_id": "b1",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-55.0",
+              "-55.0"
+            ],
+            [
+              "55.0",
+              "-55.0"
+            ],
+            [
+              "55.0",
+              "55.0"
+            ],
+            [
+              "-55.0",
+              "55.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b2",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-85.0",
+              "-85.0"
+            ],
+            [
+              "85.0",
+              "-85.0"
+            ],
+            [
+              "85.0",
+              "85.0"
+            ],
+            [
+              "-85.0",
+              "85.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b3",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-115.0",
+              "-115.0"
+            ],
+            [
+              "115.0",
+              "-115.0"
+            ],
+            [
+              "115.0",
+              "115.0"
+            ],
+            [
+              "-115.0",
+              "115.0"
+            ]
+          ]
+        },
+        {
+          "primitive_id": "b4",
+          "blocker_type": "building",
+          "vertices": [
+            [
+              "-145.0",
+              "-145.0"
+            ],
+            [
+              "145.0",
+              "-145.0"
+            ],
+            [
+              "145.0",
+              "145.0"
+            ],
+            [
+              "-145.0",
+              "145.0"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "tag": "agreement",
+  "nearest_free_point": [
+    {
+      "scene": "empty",
+      "note": "already free",
+      "point": [
+        "100.0",
+        "100.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "100.0",
+        "100.0"
+      ],
+      "moved": false
+    },
+    {
+      "scene": "empty",
+      "note": "clamped to bounds, margin applied",
+      "point": [
+        "10000.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "492.0",
+        "0.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "empty",
+      "note": "exactly on the corner, margin applied",
+      "point": [
+        "-500.0",
+        "-500.0"
+      ],
+      "clearance_m": "25.0",
+      "expected": [
+        "-475.0",
+        "-475.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "one_building",
+      "note": "dead centre of a building",
+      "point": [
+        "0.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "0.0",
+        "-56.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "one_building",
+      "note": "just inside a corner",
+      "point": [
+        "-45.0",
+        "-45.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "-45.0",
+        "-56.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "one_building",
+      "note": "just outside, already free",
+      "point": [
+        "60.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "60.0",
+        "0.0"
+      ],
+      "moved": false
+    },
+    {
+      "scene": "cluster",
+      "note": "inside overlapping expanded footprints",
+      "point": [
+        "0.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "0.0",
+        "-46.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "cylinder",
+      "note": "inside a sampled circle",
+      "point": [
+        "5.0",
+        "5.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "41.85652744978002",
+        "41.85652744978"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "corner_block",
+      "note": "pushed out against the boundary",
+      "point": [
+        "-470.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "-470.0",
+        "-56.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "corner_block",
+      "note": "pushed out, wider margin",
+      "point": [
+        "-470.0",
+        "0.0"
+      ],
+      "clearance_m": "25.0",
+      "expected": [
+        "-470.0",
+        "-90.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "nested",
+      "note": "nested rings, several push iterations",
+      "point": [
+        "0.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "0.0",
+        "-136.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "forest",
+      "note": "vegetation does not block, so unchanged",
+      "point": [
+        "0.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "0.0",
+        "0.0"
+      ],
+      "moved": false
+    },
+    {
+      "scene": "boundary_slab",
+      "note": "escape lies outside bounds; clamp fights push",
+      "point": [
+        "-500.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "-492.0",
+        "0.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "boundary_slab",
+      "note": "same slab, off-centre",
+      "point": [
+        "-450.0",
+        "30.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": [
+        "-264.0",
+        "30.0"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "one_building",
+      "note": "clearance below the 0.5 m push floor",
+      "point": [
+        "0.0",
+        "0.0"
+      ],
+      "clearance_m": "0.2",
+      "expected": [
+        "0.0",
+        "-40.7"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "one_building",
+      "note": "same, from a corner",
+      "point": [
+        "-39.0",
+        "-39.0"
+      ],
+      "clearance_m": "0.2",
+      "expected": [
+        "-39.0",
+        "-40.7"
+      ],
+      "moved": true
+    },
+    {
+      "scene": "nested",
+      "note": "nested rings at a sub-floor clearance",
+      "point": [
+        "0.0",
+        "0.0"
+      ],
+      "clearance_m": "0.2",
+      "expected": [
+        "0.0",
+        "-120.7"
+      ],
+      "moved": true
+    }
+  ],
+  "plan_route": [
+    {
+      "scene": "empty",
+      "note": "free straight line",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": {
+        "points": [
+          [
+            "-200.0",
+            "0.0"
+          ],
+          [
+            "200.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "400.0",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "one_building",
+      "note": "detour",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": {
+        "points": [
+          [
+            "-200.0",
+            "0.0"
+          ],
+          [
+            "-48.0",
+            "-48.0"
+          ],
+          [
+            "48.0",
+            "-48.0"
+          ],
+          [
+            "200.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "414.7977415227404",
+        "vertex_count": 4,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "one_building",
+      "note": "start inside an obstacle",
+      "start": [
+        "0.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "one_building",
+      "note": "goal inside an obstacle",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "0.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "empty",
+      "note": "start inside the clearance margin",
+      "start": [
+        "-499.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "empty",
+      "note": "goal inside the clearance margin",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "499.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "cluster",
+      "note": "unroutable cluster",
+      "start": [
+        "-250.0",
+        "0.0"
+      ],
+      "goal": [
+        "250.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "box_and_wall",
+      "note": "box and wall",
+      "start": [
+        "-250.0",
+        "-150.0"
+      ],
+      "goal": [
+        "250.0",
+        "150.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": {
+        "points": [
+          [
+            "-250.0",
+            "-150.0"
+          ],
+          [
+            "-116.72956447829877",
+            "29.056668052985728"
+          ],
+          [
+            "30.0",
+            "158.0"
+          ],
+          [
+            "50.0",
+            "158.0"
+          ],
+          [
+            "250.0",
+            "150.0"
+          ]
+        ],
+        "length_m": "638.7045048000384",
+        "vertex_count": 5,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "cylinder",
+      "note": "around a cylinder",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": {
+        "points": [
+          [
+            "-200.0",
+            "0.0"
+          ],
+          [
+            "3.245314017740486e-15",
+            "53.0"
+          ],
+          [
+            "200.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "413.80671816682724",
+        "vertex_count": 3,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "one_building",
+      "note": "wider clearance",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "25.0",
+      "expected": {
+        "points": [
+          [
+            "-200.0",
+            "0.0"
+          ],
+          [
+            "-65.0",
+            "-65.0"
+          ],
+          [
+            "65.0",
+            "-65.0"
+          ],
+          [
+            "200.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "429.66648127543397",
+        "vertex_count": 4,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "one_building",
+      "note": "start on the expanded boundary",
+      "start": [
+        "-48.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "one_building",
+      "note": "goal on the expanded boundary",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "-48.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "forest",
+      "note": "straight through vegetation",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": {
+        "points": [
+          [
+            "-200.0",
+            "0.0"
+          ],
+          [
+            "200.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "400.0",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "one_building",
+      "note": "start on the boundary with a free way out",
+      "start": [
+        "-48.0",
+        "-20.0"
+      ],
+      "goal": [
+        "-200.0",
+        "-200.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": null
+    },
+    {
+      "scene": "empty",
+      "note": "start exactly on the bounds margin",
+      "start": [
+        "-492.0",
+        "0.0"
+      ],
+      "goal": [
+        "200.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": {
+        "points": [
+          [
+            "-492.0",
+            "0.0"
+          ],
+          [
+            "200.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "692.0",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "empty",
+      "note": "goal exactly on the bounds margin",
+      "start": [
+        "-200.0",
+        "0.0"
+      ],
+      "goal": [
+        "492.0",
+        "0.0"
+      ],
+      "clearance_m": "8.0",
+      "expected": {
+        "points": [
+          [
+            "-200.0",
+            "0.0"
+          ],
+          [
+            "492.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "692.0",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    }
+  ],
+  "route_waypoints": [
+    {
+      "scene": "empty",
+      "note": "closed loop, nothing in the way",
+      "anchors": [
+        [
+          "-150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "150.0"
+        ],
+        [
+          "-150.0",
+          "150.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": true,
+      "expected": {
+        "points": [
+          [
+            "-150.0",
+            "-150.0"
+          ],
+          [
+            "-150.0",
+            "150.0"
+          ]
+        ],
+        "length_m": "300.0",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "empty",
+      "note": "open path",
+      "anchors": [
+        [
+          "-150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "150.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": false,
+      "expected": {
+        "points": [
+          [
+            "-150.0",
+            "-150.0"
+          ],
+          [
+            "150.0",
+            "150.0"
+          ]
+        ],
+        "length_m": "424.26406871192853",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "one_building",
+      "note": "closed loop around a building",
+      "anchors": [
+        [
+          "-150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "150.0"
+        ],
+        [
+          "-150.0",
+          "150.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": true,
+      "expected": {
+        "points": [
+          [
+            "-150.0",
+            "-150.0"
+          ],
+          [
+            "-150.0",
+            "150.0"
+          ]
+        ],
+        "length_m": "300.0",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "one_building",
+      "note": "an anchor starts inside an obstacle",
+      "anchors": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "200.0",
+          "0.0"
+        ],
+        [
+          "200.0",
+          "200.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": false,
+      "expected": {
+        "points": [
+          [
+            "0.0",
+            "-56.0"
+          ],
+          [
+            "48.0",
+            "-48.0"
+          ],
+          [
+            "200.0",
+            "200.0"
+          ]
+        ],
+        "length_m": "339.53664364555124",
+        "vertex_count": 3,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "cluster",
+      "note": "segments that cannot be routed are skipped",
+      "anchors": [
+        [
+          "-250.0",
+          "0.0"
+        ],
+        [
+          "250.0",
+          "0.0"
+        ],
+        [
+          "250.0",
+          "200.0"
+        ],
+        [
+          "-250.0",
+          "200.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": true,
+      "expected": {
+        "points": [
+          [
+            "250.0",
+            "0.0"
+          ],
+          [
+            "-250.0",
+            "200.0"
+          ],
+          [
+            "-250.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "738.5164807134504",
+        "vertex_count": 3,
+        "cache_hit": false,
+        "skipped_segments": 1
+      }
+    },
+    {
+      "scene": "edge_blocker",
+      "note": "closed: the closing segment must detour",
+      "anchors": [
+        [
+          "-150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "150.0"
+        ],
+        [
+          "-150.0",
+          "150.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": true,
+      "expected": {
+        "points": [
+          [
+            "-150.0",
+            "-150.0"
+          ],
+          [
+            "-198.0",
+            "-48.0"
+          ]
+        ],
+        "length_m": "112.72976536833562",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "edge_blocker",
+      "note": "open: the same anchors never traverse the closing edge",
+      "anchors": [
+        [
+          "-150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "-150.0"
+        ],
+        [
+          "150.0",
+          "150.0"
+        ],
+        [
+          "-150.0",
+          "150.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": false,
+      "expected": {
+        "points": [
+          [
+            "-150.0",
+            "-150.0"
+          ],
+          [
+            "150.0",
+            "150.0"
+          ],
+          [
+            "-150.0",
+            "150.0"
+          ]
+        ],
+        "length_m": "724.2640687119285",
+        "vertex_count": 3,
+        "cache_hit": false,
+        "skipped_segments": 0
+      }
+    },
+    {
+      "scene": "empty",
+      "note": "coincident anchors",
+      "anchors": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "0.0",
+          "0.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": true,
+      "expected": null
+    },
+    {
+      "scene": "cluster",
+      "note": "skips exactly at the threshold",
+      "anchors": [
+        [
+          "-250.0",
+          "0.0"
+        ],
+        [
+          "250.0",
+          "0.0"
+        ],
+        [
+          "-250.0",
+          "10.0"
+        ],
+        [
+          "-250.0",
+          "200.0"
+        ]
+      ],
+      "clearance_m": "8.0",
+      "closed": true,
+      "expected": {
+        "points": [
+          [
+            "-250.0",
+            "10.0"
+          ],
+          [
+            "-250.0",
+            "0.0"
+          ]
+        ],
+        "length_m": "10.0",
+        "vertex_count": 2,
+        "cache_hit": false,
+        "skipped_segments": 2
+      }
+    }
+  ],
+  "cache_sequence": {
+    "tag": "agreement",
+    "note": "The reference's cache behaviour, which the port reproduces for a FIXED scene. What the port adds is a revision in the key, so a scene change misses instead of serving a route planned around obstacles that have moved -- the reference cannot express that, so there is nothing to record for it.",
+    "calls": [
+      {
+        "start": [
+          "-200.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "cold",
+        "expected": {
+          "points": [
+            [
+              "-200.0",
+              "0.0"
+            ],
+            [
+              "-48.0",
+              "-48.0"
+            ],
+            [
+              "48.0",
+              "-48.0"
+            ],
+            [
+              "200.0",
+              "0.0"
+            ]
+          ],
+          "length_m": "414.7977415227404",
+          "vertex_count": 4,
+          "cache_hit": false,
+          "skipped_segments": 0
+        }
+      },
+      {
+        "start": [
+          "-200.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "same request, hit",
+        "expected": {
+          "points": [
+            [
+              "-200.0",
+              "0.0"
+            ],
+            [
+              "-48.0",
+              "-48.0"
+            ],
+            [
+              "48.0",
+              "-48.0"
+            ],
+            [
+              "200.0",
+              "0.0"
+            ]
+          ],
+          "length_m": "414.7977415227404",
+          "vertex_count": 4,
+          "cache_hit": true,
+          "skipped_segments": 0
+        }
+      },
+      {
+        "start": [
+          "-197.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "3 m away: snaps to the same key, hit",
+        "expected": {
+          "points": [
+            [
+              "-200.0",
+              "0.0"
+            ],
+            [
+              "-48.0",
+              "-48.0"
+            ],
+            [
+              "48.0",
+              "-48.0"
+            ],
+            [
+              "200.0",
+              "0.0"
+            ]
+          ],
+          "length_m": "414.7977415227404",
+          "vertex_count": 4,
+          "cache_hit": true,
+          "skipped_segments": 0
+        }
+      },
+      {
+        "start": [
+          "-160.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "40 m away: a different key, miss",
+        "expected": {
+          "points": [
+            [
+              "-160.0",
+              "0.0"
+            ],
+            [
+              "-48.0",
+              "-48.0"
+            ],
+            [
+              "48.0",
+              "-48.0"
+            ],
+            [
+              "200.0",
+              "0.0"
+            ]
+          ],
+          "length_m": "377.2512404551927",
+          "vertex_count": 4,
+          "cache_hit": false,
+          "skipped_segments": 0
+        }
+      },
+      {
+        "start": [
+          "-200.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "clearance_m": "25.0",
+        "note": "different clearance, miss",
+        "expected": {
+          "points": [
+            [
+              "-200.0",
+              "0.0"
+            ],
+            [
+              "-65.0",
+              "-65.0"
+            ],
+            [
+              "65.0",
+              "-65.0"
+            ],
+            [
+              "200.0",
+              "0.0"
+            ]
+          ],
+          "length_m": "429.66648127543397",
+          "vertex_count": 4,
+          "cache_hit": false,
+          "skipped_segments": 0
+        }
+      },
+      {
+        "start": [
+          "-200.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "back to the first key, still hit",
+        "expected": {
+          "points": [
+            [
+              "-200.0",
+              "0.0"
+            ],
+            [
+              "-48.0",
+              "-48.0"
+            ],
+            [
+              "48.0",
+              "-48.0"
+            ],
+            [
+              "200.0",
+              "0.0"
+            ]
+          ],
+          "length_m": "414.7977415227404",
+          "vertex_count": 4,
+          "cache_hit": true,
+          "skipped_segments": 0
+        }
+      }
+    ]
+  },
+  "cache_eviction": {
+    "max_cache_entries": 2,
+    "clearance_m": "8.0",
+    "scene": "one_building",
+    "calls": [
+      {
+        "start": [
+          "-200.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "note": "A: cold",
+        "cache_hit": false
+      },
+      {
+        "start": [
+          "-200.0",
+          "100.0"
+        ],
+        "goal": [
+          "200.0",
+          "100.0"
+        ],
+        "note": "B: cold, cache now [A, B]",
+        "cache_hit": false
+      },
+      {
+        "start": [
+          "-200.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "note": "A again: hit, moves A to the end -> [B, A]",
+        "cache_hit": true
+      },
+      {
+        "start": [
+          "-200.0",
+          "200.0"
+        ],
+        "goal": [
+          "200.0",
+          "200.0"
+        ],
+        "note": "C: cold, evicts B -> [A, C]",
+        "cache_hit": false
+      },
+      {
+        "start": [
+          "-200.0",
+          "0.0"
+        ],
+        "goal": [
+          "200.0",
+          "0.0"
+        ],
+        "note": "A: still cached because the hit saved it",
+        "cache_hit": true
+      },
+      {
+        "start": [
+          "-200.0",
+          "100.0"
+        ],
+        "goal": [
+          "200.0",
+          "100.0"
+        ],
+        "note": "B: evicted, so a miss",
+        "cache_hit": false
+      }
+    ]
+  },
+  "cache_quantization": {
+    "scene": "empty",
+    "calls": [
+      {
+        "start": [
+          "5.0",
+          "0.0"
+        ],
+        "goal": [
+          "300.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "+5 cold",
+        "cache_hit": false
+      },
+      {
+        "start": [
+          "-5.0",
+          "0.0"
+        ],
+        "goal": [
+          "300.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "-5: banker's rounding shares +5's key",
+        "cache_hit": true
+      },
+      {
+        "start": [
+          "6.0",
+          "0.0"
+        ],
+        "goal": [
+          "300.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0",
+        "note": "+6: a different key under rounding, +5's under floor",
+        "cache_hit": false
+      },
+      {
+        "start": [
+          "5.0",
+          "0.0"
+        ],
+        "goal": [
+          "300.0",
+          "0.0"
+        ],
+        "clearance_m": "8.0000001",
+        "note": "clearance differs below 1e-3: same key",
+        "cache_hit": true
+      }
+    ]
+  },
+  "snap_floor": {
+    "scene": "empty",
+    "snap_m": "0.1",
+    "calls": [
+      {
+        "start": [
+          "0.0",
+          "0.0"
+        ],
+        "goal": [
+          "300.0",
+          "0.0"
+        ],
+        "note": "cold",
+        "cache_hit": false
+      },
+      {
+        "start": [
+          "0.4",
+          "0.0"
+        ],
+        "goal": [
+          "300.0",
+          "0.0"
+        ],
+        "note": "0.4 m away: the 1.0 floor makes this the same key",
+        "cache_hit": true
+      }
+    ]
+  },
+  "cylinder_vertex_floor": {
+    "scene": "cylinder",
+    "cylinder_vertex_count": 3,
+    "clearance_m": "8.0",
+    "expected": [
+      [
+        "53.0",
+        "0.0"
+      ],
+      [
+        "26.500000000000007",
+        "45.89934640057525"
+      ],
+      [
+        "-26.49999999999999",
+        "45.899346400575254"
+      ],
+      [
+        "-53.0",
+        "6.490628035480972e-15"
+      ],
+      [
+        "-26.500000000000025",
+        "-45.89934640057523"
+      ],
+      [
+        "26.499999999999964",
+        "-45.89934640057527"
+      ]
+    ]
+  }
+}

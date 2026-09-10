@@ -9,6 +9,7 @@ name = "argusnet_planning"
 path = "src/lib.rs"
 
 [dependencies]
+argusnet-types = { path = "../argusnet-types" }
 argusnet-world = { path = "../argusnet-world" }
 
 [dev-dependencies]
