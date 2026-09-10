@@ -1,0 +1,16 @@
+[package]
+name = "argusnet-localization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "argusnet_localization"
+path = "src/lib.rs"
+
+[dependencies]
+argusnet-mapping = { path = "../argusnet-mapping" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
