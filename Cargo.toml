@@ -2,6 +2,7 @@
 members = [
   "rust/argusnet-types",
   "rust/argusnet-mapping",
+  "rust/argusnet-sensing",
   "rust/argusnet-native",
   "rust/argusnet-world",
   "rust/safety-engine",

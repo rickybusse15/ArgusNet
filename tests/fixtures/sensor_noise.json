@@ -1,0 +1,1078 @@
+{
+  "source": "src/argusnet/sensing/models/noise.py",
+  "note": "Recorded values from the Python sensor error model. The closed-form cases are pure functions of their inputs. The drift cases record the increment numpy drew at each step, so the Rust state machine replays against the same numbers rather than being compared statistically.",
+  "closed_form": [
+    {
+      "name": "default",
+      "config": {
+        "base_bearing_std_rad": "0.015",
+        "range_noise_exponent": "1.5",
+        "range_noise_reference_m": "1000.0",
+        "max_bearing_std_rad": "0.15",
+        "atmospheric_attenuation_coeff": "0.0001",
+        "min_detection_probability": "0.1",
+        "detection_range_knee_m": "800.0",
+        "detection_range_falloff_m": "400.0",
+        "bias_drift_rate_rad_per_s": "0.0",
+        "bias_drift_max_rad": "0.01",
+        "snr_reference_db": "30.0",
+        "snr_range_exponent": "2.0"
+      },
+      "rows": [
+        {
+          "range_m": "-100.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "0.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "1.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9999000049998333",
+          "snr_db": "90.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "10.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.999000499833375",
+          "snr_db": "70.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "250.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9753099120283326",
+          "snr_db": "42.04119982655925",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "799.9",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231255775962556",
+          "snr_db": "31.939286064230053",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231163463866358",
+          "snr_db": "31.93820026016113",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.1",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231071152693275",
+          "snr_db": "31.937114591809227",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.24995668205453736",
+            "1.0": "0.9998267282181494"
+          }
+        },
+        {
+          "range_m": "1000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9048374180359595",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1767766952966369",
+            "1.0": "0.7071067811865476"
+          }
+        },
+        {
+          "range_m": "1200.0",
+          "bearing_std_rad": "0.019718012070185975",
+          "transmittance": "0.8869204367171575",
+          "snr_db": "28.416375079047505",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.125",
+            "1.0": "0.5"
+          }
+        },
+        {
+          "range_m": "2000.0",
+          "bearing_std_rad": "0.042426406871192854",
+          "transmittance": "0.8187307530779818",
+          "snr_db": "23.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.12500000000000003"
+          }
+        },
+        {
+          "range_m": "5000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "0.6065306597126334",
+          "snr_db": "16.020599913279625",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "50000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "0.006737946999085467",
+          "snr_db": "-3.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "1000000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "3.720075976020836e-44",
+          "snr_db": "-30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "no_attenuation",
+      "config": {
+        "base_bearing_std_rad": "0.015",
+        "range_noise_exponent": "1.5",
+        "range_noise_reference_m": "1000.0",
+        "max_bearing_std_rad": "0.15",
+        "atmospheric_attenuation_coeff": "0.0",
+        "min_detection_probability": "0.1",
+        "detection_range_knee_m": "800.0",
+        "detection_range_falloff_m": "400.0",
+        "bias_drift_rate_rad_per_s": "0.0",
+        "bias_drift_max_rad": "0.01",
+        "snr_reference_db": "30.0",
+        "snr_range_exponent": "2.0"
+      },
+      "rows": [
+        {
+          "range_m": "-100.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "0.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "1.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "90.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "10.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "70.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "250.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "42.04119982655925",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "799.9",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "31.939286064230053",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "31.93820026016113",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.1",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "31.937114591809227",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.24995668205453736",
+            "1.0": "0.9998267282181494"
+          }
+        },
+        {
+          "range_m": "1000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1767766952966369",
+            "1.0": "0.7071067811865476"
+          }
+        },
+        {
+          "range_m": "1200.0",
+          "bearing_std_rad": "0.019718012070185975",
+          "transmittance": "1.0",
+          "snr_db": "28.416375079047505",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.125",
+            "1.0": "0.5"
+          }
+        },
+        {
+          "range_m": "2000.0",
+          "bearing_std_rad": "0.042426406871192854",
+          "transmittance": "1.0",
+          "snr_db": "23.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.12500000000000003"
+          }
+        },
+        {
+          "range_m": "5000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "1.0",
+          "snr_db": "16.020599913279625",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "50000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "1.0",
+          "snr_db": "-3.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "1000000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "1.0",
+          "snr_db": "-30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "sharp_cutoff",
+      "config": {
+        "base_bearing_std_rad": "0.015",
+        "range_noise_exponent": "1.5",
+        "range_noise_reference_m": "1000.0",
+        "max_bearing_std_rad": "0.15",
+        "atmospheric_attenuation_coeff": "0.0001",
+        "min_detection_probability": "0.1",
+        "detection_range_knee_m": "800.0",
+        "detection_range_falloff_m": "0.0",
+        "bias_drift_rate_rad_per_s": "0.0",
+        "bias_drift_max_rad": "0.01",
+        "snr_reference_db": "30.0",
+        "snr_range_exponent": "2.0"
+      },
+      "rows": [
+        {
+          "range_m": "-100.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "0.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "1.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9999000049998333",
+          "snr_db": "90.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "10.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.999000499833375",
+          "snr_db": "70.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "250.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9753099120283326",
+          "snr_db": "42.04119982655925",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "799.9",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231255775962556",
+          "snr_db": "31.939286064230053",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231163463866358",
+          "snr_db": "31.93820026016113",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.1",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231071152693275",
+          "snr_db": "31.937114591809227",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "1000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9048374180359595",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "1200.0",
+          "bearing_std_rad": "0.019718012070185975",
+          "transmittance": "0.8869204367171575",
+          "snr_db": "28.416375079047505",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "2000.0",
+          "bearing_std_rad": "0.042426406871192854",
+          "transmittance": "0.8187307530779818",
+          "snr_db": "23.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "5000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "0.6065306597126334",
+          "snr_db": "16.020599913279625",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "50000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "0.006737946999085467",
+          "snr_db": "-3.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "1000000.0",
+          "bearing_std_rad": "0.15",
+          "transmittance": "3.720075976020836e-44",
+          "snr_db": "-30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "zero_reference",
+      "config": {
+        "base_bearing_std_rad": "0.015",
+        "range_noise_exponent": "1.5",
+        "range_noise_reference_m": "0.0",
+        "max_bearing_std_rad": "0.15",
+        "atmospheric_attenuation_coeff": "0.0001",
+        "min_detection_probability": "0.1",
+        "detection_range_knee_m": "800.0",
+        "detection_range_falloff_m": "400.0",
+        "bias_drift_rate_rad_per_s": "0.0",
+        "bias_drift_max_rad": "0.01",
+        "snr_reference_db": "30.0",
+        "snr_range_exponent": "2.0"
+      },
+      "rows": [
+        {
+          "range_m": "-100.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "0.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "1.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9999000049998333",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "10.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.999000499833375",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "250.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9753099120283326",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "799.9",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231255775962556",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231163463866358",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.1",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231071152693275",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.24995668205453736",
+            "1.0": "0.9998267282181494"
+          }
+        },
+        {
+          "range_m": "1000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9048374180359595",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1767766952966369",
+            "1.0": "0.7071067811865476"
+          }
+        },
+        {
+          "range_m": "1200.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.8869204367171575",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.125",
+            "1.0": "0.5"
+          }
+        },
+        {
+          "range_m": "2000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.8187307530779818",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.12500000000000003"
+          }
+        },
+        {
+          "range_m": "5000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.6065306597126334",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "50000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.006737946999085467",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "1000000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "3.720075976020836e-44",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "steep_noise",
+      "config": {
+        "base_bearing_std_rad": "0.015",
+        "range_noise_exponent": "3.0",
+        "range_noise_reference_m": "1000.0",
+        "max_bearing_std_rad": "1.0",
+        "atmospheric_attenuation_coeff": "0.0001",
+        "min_detection_probability": "0.1",
+        "detection_range_knee_m": "800.0",
+        "detection_range_falloff_m": "400.0",
+        "bias_drift_rate_rad_per_s": "0.0",
+        "bias_drift_max_rad": "0.01",
+        "snr_reference_db": "30.0",
+        "snr_range_exponent": "2.0"
+      },
+      "rows": [
+        {
+          "range_m": "-100.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "0.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "1.0",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "1.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9999000049998333",
+          "snr_db": "90.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "10.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.999000499833375",
+          "snr_db": "70.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "250.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9753099120283326",
+          "snr_db": "42.04119982655925",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "799.9",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231255775962556",
+          "snr_db": "31.939286064230053",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231163463866358",
+          "snr_db": "31.93820026016113",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.25",
+            "1.0": "1.0"
+          }
+        },
+        {
+          "range_m": "800.1",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9231071152693275",
+          "snr_db": "31.937114591809227",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.24995668205453736",
+            "1.0": "0.9998267282181494"
+          }
+        },
+        {
+          "range_m": "1000.0",
+          "bearing_std_rad": "0.015",
+          "transmittance": "0.9048374180359595",
+          "snr_db": "30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1767766952966369",
+            "1.0": "0.7071067811865476"
+          }
+        },
+        {
+          "range_m": "1200.0",
+          "bearing_std_rad": "0.025919999999999995",
+          "transmittance": "0.8869204367171575",
+          "snr_db": "28.416375079047505",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.125",
+            "1.0": "0.5"
+          }
+        },
+        {
+          "range_m": "2000.0",
+          "bearing_std_rad": "0.12",
+          "transmittance": "0.8187307530779818",
+          "snr_db": "23.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.12500000000000003"
+          }
+        },
+        {
+          "range_m": "5000.0",
+          "bearing_std_rad": "1.0",
+          "transmittance": "0.6065306597126334",
+          "snr_db": "16.020599913279625",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "50000.0",
+          "bearing_std_rad": "1.0",
+          "transmittance": "0.006737946999085467",
+          "snr_db": "-3.979400086720375",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        },
+        {
+          "range_m": "1000000.0",
+          "bearing_std_rad": "1.0",
+          "transmittance": "3.720075976020836e-44",
+          "snr_db": "-30.0",
+          "detection_probability": {
+            "0.0": "0.1",
+            "0.25": "0.1",
+            "1.0": "0.1"
+          }
+        }
+      ]
+    }
+  ],
+  "drift": [
+    {
+      "name": "even_ticks",
+      "drift_rate_rad_per_s": "0.0001",
+      "max_bias_rad": "0.01",
+      "steps": [
+        {
+          "timestamp_s": "0.0",
+          "increment": null,
+          "expected_bias_rad": "0.0"
+        },
+        {
+          "timestamp_s": "0.1",
+          "increment": "3.890086480948271e-08",
+          "expected_bias_rad": "3.890086480948271e-08"
+        },
+        {
+          "timestamp_s": "0.2",
+          "increment": "9.44716339338029e-06",
+          "expected_bias_rad": "9.486064258189773e-06"
+        },
+        {
+          "timestamp_s": "0.3",
+          "increment": "-8.669000158184109e-06",
+          "expected_bias_rad": "8.170641000056641e-07"
+        },
+        {
+          "timestamp_s": "0.4",
+          "increment": "-2.8162986760304085e-05",
+          "expected_bias_rad": "-2.734592266029842e-05"
+        },
+        {
+          "timestamp_s": "0.5",
+          "increment": "-1.4377952666797544e-05",
+          "expected_bias_rad": "-4.172387532709596e-05"
+        },
+        {
+          "timestamp_s": "1.0",
+          "increment": "-7.012000035782773e-05",
+          "expected_bias_rad": "-0.0001118438756849237"
+        },
+        {
+          "timestamp_s": "2.0",
+          "increment": "6.0143602597438486e-06",
+          "expected_bias_rad": "-0.00010582951542517985"
+        }
+      ]
+    },
+    {
+      "name": "uneven_ticks",
+      "drift_rate_rad_per_s": "0.0001",
+      "max_bias_rad": "0.01",
+      "steps": [
+        {
+          "timestamp_s": "0.0",
+          "increment": null,
+          "expected_bias_rad": "0.0"
+        },
+        {
+          "timestamp_s": "0.05",
+          "increment": "2.7507065300806358e-08",
+          "expected_bias_rad": "2.7507065300806358e-08"
+        },
+        {
+          "timestamp_s": "0.5",
+          "increment": "2.0040459895309556e-05",
+          "expected_bias_rad": "2.0067966960610364e-05"
+        },
+        {
+          "timestamp_s": "5.0",
+          "increment": "-5.8153420951968294e-05",
+          "expected_bias_rad": "-3.8085453991357934e-05"
+        },
+        {
+          "timestamp_s": "5.0",
+          "increment": null,
+          "expected_bias_rad": "-3.8085453991357934e-05"
+        },
+        {
+          "timestamp_s": "50.0",
+          "increment": "-0.0005974271675003392",
+          "expected_bias_rad": "-0.0006355126214916972"
+        }
+      ]
+    },
+    {
+      "name": "tight_clamp",
+      "drift_rate_rad_per_s": "0.005",
+      "max_bias_rad": "0.0001",
+      "steps": [
+        {
+          "timestamp_s": "0.0",
+          "increment": null,
+          "expected_bias_rad": "0.0"
+        },
+        {
+          "timestamp_s": "1.0",
+          "increment": "6.150766787412871e-06",
+          "expected_bias_rad": "6.150766787412871e-06"
+        },
+        {
+          "timestamp_s": "2.0",
+          "increment": "0.0014937276875423495",
+          "expected_bias_rad": "0.0001"
+        },
+        {
+          "timestamp_s": "3.0",
+          "increment": "-0.001370689276811088",
+          "expected_bias_rad": "-0.0001"
+        },
+        {
+          "timestamp_s": "4.0",
+          "increment": "-0.004452959193786371",
+          "expected_bias_rad": "-0.0001"
+        },
+        {
+          "timestamp_s": "5.0",
+          "increment": "-0.002273353925858613",
+          "expected_bias_rad": "-0.0001"
+        },
+        {
+          "timestamp_s": "6.0",
+          "increment": "-0.004958232774982312",
+          "expected_bias_rad": "-0.0001"
+        },
+        {
+          "timestamp_s": "7.0",
+          "increment": "0.00030071801298719243",
+          "expected_bias_rad": "0.0001"
+        },
+        {
+          "timestamp_s": "8.0",
+          "increment": "0.006701076227772668",
+          "expected_bias_rad": "0.0001"
+        },
+        {
+          "timestamp_s": "9.0",
+          "increment": "-0.002461032592756648",
+          "expected_bias_rad": "-0.0001"
+        },
+        {
+          "timestamp_s": "10.0",
+          "increment": "-0.0031023744990997023",
+          "expected_bias_rad": "-0.0001"
+        },
+        {
+          "timestamp_s": "11.0",
+          "increment": "0.002449210250925991",
+          "expected_bias_rad": "0.0001"
+        }
+      ]
+    },
+    {
+      "name": "non_monotonic",
+      "drift_rate_rad_per_s": "0.0001",
+      "max_bias_rad": "0.01",
+      "steps": [
+        {
+          "timestamp_s": "0.0",
+          "increment": null,
+          "expected_bias_rad": "0.0"
+        },
+        {
+          "timestamp_s": "1.0",
+          "increment": "1.2301533574825744e-07",
+          "expected_bias_rad": "1.2301533574825744e-07"
+        },
+        {
+          "timestamp_s": "1.0",
+          "increment": null,
+          "expected_bias_rad": "1.2301533574825744e-07"
+        },
+        {
+          "timestamp_s": "0.5",
+          "increment": null,
+          "expected_bias_rad": "1.2301533574825744e-07"
+        },
+        {
+          "timestamp_s": "2.0",
+          "increment": "3.6588706491462205e-05",
+          "expected_bias_rad": "3.671172182721046e-05"
+        }
+      ]
+    },
+    {
+      "name": "disabled",
+      "drift_rate_rad_per_s": "0.0",
+      "max_bias_rad": "0.01",
+      "steps": [
+        {
+          "timestamp_s": "0.0",
+          "increment": null,
+          "expected_bias_rad": "0.0"
+        },
+        {
+          "timestamp_s": "1.0",
+          "increment": null,
+          "expected_bias_rad": "0.0"
+        },
+        {
+          "timestamp_s": "2.0",
+          "increment": null,
+          "expected_bias_rad": "0.0"
+        }
+      ]
+    }
+  ]
+}
