@@ -65,8 +65,10 @@ pub fn score_footprints(
         .collect())
 }
 
+pub mod coverage;
 pub mod footprint;
 
+pub use coverage::{CoverageGrid, CoverageStats};
 pub use footprint::{rasterize_circle, GridBounds, Sampling};
 
 #[cfg(test)]
