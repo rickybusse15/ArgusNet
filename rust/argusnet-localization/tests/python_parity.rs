@@ -13,7 +13,72 @@
 //! arithmetic is the same one.
 
 use argusnet_localization::{GridLocalizer, LocalizationConfig, LocalizationStatus, StepInput};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// A float the fixture wrote as a string, parsed exactly.
+///
+/// `serde_json`'s float parser is off by one ULP on many values -- measured at
+/// **15.25% of the 11,061 literals** in an earlier, number-encoded version of
+/// this fixture. Rust's own `str::parse::<f64>` is exact, so every value
+/// travels as a string and is parsed here.
+///
+/// This matters for what the tolerance below *means*: before the change, its
+/// residual mixed the parser's error with any real numerical difference, so
+/// neither could be attributed.
+fn exact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    String::deserialize(deserializer)?
+        .parse()
+        .map_err(serde::de::Error::custom)
+}
+
+fn exact_vec<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<f64>, D::Error> {
+    Vec::<String>::deserialize(deserializer)?
+        .into_iter()
+        .map(|text| text.parse().map_err(serde::de::Error::custom))
+        .collect()
+}
+
+fn exact_triple<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[f64; 3], D::Error> {
+    let values = exact_vec(deserializer)?;
+    values.try_into().map_err(|v: Vec<f64>| {
+        serde::de::Error::custom(format!("expected 3 values, got {}", v.len()))
+    })
+}
+
+fn exact_pairs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<[f64; 2]>>, D::Error> {
+    let raw = Option::<Vec<Vec<String>>>::deserialize(deserializer)?;
+    let Some(raw) = raw else { return Ok(None) };
+    raw.into_iter()
+        .map(|pair| {
+            let parsed: Result<Vec<f64>, _> = pair
+                .into_iter()
+                .map(|text| text.parse().map_err(serde::de::Error::custom))
+                .collect();
+            parsed.and_then(|values| {
+                values.try_into().map_err(|v: Vec<f64>| {
+                    serde::de::Error::custom(format!("expected 2 values, got {}", v.len()))
+                })
+            })
+        })
+        .collect::<Result<Vec<[f64; 2]>, _>>()
+        .map(Some)
+}
+
+fn exact_optional_vec<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<f64>>, D::Error> {
+    let raw = Option::<Vec<String>>::deserialize(deserializer)?;
+    match raw {
+        None => Ok(None),
+        Some(values) => values
+            .into_iter()
+            .map(|text| text.parse().map_err(serde::de::Error::custom))
+            .collect::<Result<Vec<f64>, _>>()
+            .map(Some),
+    }
+}
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -31,11 +96,16 @@ struct Case {
 
 #[derive(Deserialize)]
 struct ConfigFields {
+    #[serde(deserialize_with = "exact")]
     search_radius_m: f64,
     particle_count: usize,
+    #[serde(deserialize_with = "exact")]
     convergence_threshold_m: f64,
+    #[serde(deserialize_with = "exact")]
     min_coverage_to_localize: f64,
+    #[serde(deserialize_with = "exact")]
     confidence_decay: f64,
+    #[serde(deserialize_with = "exact")]
     annealing_rate: f64,
     localization_timeout_steps: u32,
 }
@@ -43,40 +113,58 @@ struct ConfigFields {
 #[derive(Deserialize)]
 struct Step {
     platform_id: String,
+    #[serde(deserialize_with = "exact_triple")]
     nominal_position: [f64; 3],
+    #[serde(deserialize_with = "exact")]
     heading_rad: f64,
+    #[serde(deserialize_with = "exact")]
     timestamp_s: f64,
+    #[serde(deserialize_with = "exact")]
     coverage_fraction: f64,
     /// `None` on the no-map path, where neither is reached.
+    #[serde(deserialize_with = "exact_pairs")]
     offsets: Option<Vec<[f64; 2]>>,
+    #[serde(deserialize_with = "exact_optional_vec")]
     scores: Option<Vec<f64>>,
     expected: Expected,
 }
 
 #[derive(Deserialize)]
 struct Expected {
+    #[serde(deserialize_with = "exact_triple")]
     position_estimate: [f64; 3],
+    #[serde(deserialize_with = "exact")]
     position_std_m: f64,
+    #[serde(deserialize_with = "exact")]
     confidence: f64,
 }
 
 /// Relative tolerance for a value that went through a 200-element sum.
 ///
-/// Not bit-equality, and the reason is specific rather than defensive: numpy
-/// switches to pairwise summation for arrays of this size, so its rounding
-/// differs from a sequential accumulation even when every input is identical.
+/// Not bit-equality, and the reason is specific: numpy switches to pairwise
+/// summation for arrays of this size, so its rounding differs from a sequential
+/// accumulation even when every input is identical.
 ///
-/// Both ends of that were measured rather than assumed:
+/// **That attribution took two measurements to earn.** The first read 7.86e-16
+/// with the fixture encoding floats as JSON numbers — and `serde_json`'s parser
+/// is off by one ULP on 15.25% of them, so the inputs were not provably the same
+/// on both sides and the residual could not be attributed to anything. Encoding
+/// them as strings and parsing with `str::parse` (see `exact`) makes the inputs
+/// bit-identical, and the gap becomes:
 ///
 /// | particles | agreement |
 /// |---|---|
 /// | 4 | bit-identical (pinned by a unit test in `lib.rs`) |
-/// | 200 | **7.86e-16 relative**, about 3.5 ULP |
+/// | 200 | **8.98e-16 relative**, about 4 ULP |
 ///
-/// So `1e-12` sits roughly 1,200x above the largest real disagreement and many
-/// orders of magnitude below anything a formula error would produce. Setting it
-/// to `0.0` reproduces the 7.86e-16 failure, which is how the number above was
-/// obtained.
+/// Slightly *larger* than the confounded figure, which is worth noting: the
+/// parser error was partly cancelling the real difference rather than inflating
+/// it. With identical inputs the residual can only come from the arithmetic, so
+/// summation order is now the supported explanation rather than a plausible one.
+///
+/// `1e-12` sits about 1,100x above that and orders of magnitude below anything a
+/// formula error would produce. Setting it to `0.0` reproduces the 8.98e-16
+/// failure, which is how the number was obtained.
 const RELATIVE_TOLERANCE: f64 = 1e-12;
 
 #[track_caller]

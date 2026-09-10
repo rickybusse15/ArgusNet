@@ -37,6 +37,23 @@ from argusnet.mapping.coverage import CoverageMap  # noqa: E402
 from argusnet.mapping.occupancy import GridBounds  # noqa: E402
 
 
+def exact(value: float) -> str:
+    """Render a float as a string so it survives the trip into Rust.
+
+    `serde_json`'s float parser is off by one ULP on values like
+    `0.9999000049998333`, which it reads back as `...332` -- measured at 15.25%
+    of the literals in an earlier version of this fixture. Rust's own
+    `str::parse::<f64>` is exact, so every value here is written as a string and
+    parsed with that on the Rust side. `repr` is shortest-round-trip, so the
+    rendering itself loses nothing.
+
+    Without this the parity comparison could only be approximate, and its
+    residual would be a mixture of the parser and any real numerical difference
+    -- which is exactly the confusion this replaced.
+    """
+    return repr(float(value))
+
+
 class Recorder:
     """Captures the offsets drawn and the scores returned, per step."""
 
@@ -53,12 +70,12 @@ def instrument(localizer: GridLocalizer, recorder: Recorder):
     class RecordingRng:
         def normal(self, loc, scale, size):
             drawn = real_rng.normal(loc, scale, size)
-            recorder.offsets = [[float(x), float(y)] for x, y in drawn]
+            recorder.offsets = [[exact(x), exact(y)] for x, y in drawn]
             return drawn
 
     def recording_score(*args, **kwargs):
         result = real_score(*args, **kwargs)
-        recorder.scores = [float(value) for value in np.asarray(result).ravel()]
+        recorder.scores = [exact(value) for value in np.asarray(result).ravel()]
         return result
 
     localizer._rng = RecordingRng()  # noqa: SLF001
@@ -118,17 +135,17 @@ def capture() -> dict:
                 steps.append(
                     {
                         "platform_id": platform_id,
-                        "nominal_position": nominal,
-                        "heading_rad": heading,
-                        "timestamp_s": timestamp,
-                        "coverage_fraction": actual_fraction,
+                        "nominal_position": [exact(v) for v in nominal],
+                        "heading_rad": exact(heading),
+                        "timestamp_s": exact(timestamp),
+                        "coverage_fraction": exact(actual_fraction),
                         # None on the no-map path, where neither is reached.
                         "offsets": recorder.offsets,
                         "scores": recorder.scores,
                         "expected": {
-                            "position_estimate": [float(v) for v in estimate.position_estimate],
-                            "position_std_m": float(estimate.position_std_m),
-                            "confidence": float(estimate.confidence),
+                            "position_estimate": [exact(v) for v in estimate.position_estimate],
+                            "position_std_m": exact(estimate.position_std_m),
+                            "confidence": exact(estimate.confidence),
                         },
                     }
                 )
@@ -140,21 +157,21 @@ def capture() -> dict:
             {
                 "name": name,
                 "config": {
-                    "search_radius_m": config.search_radius_m,
+                    "search_radius_m": exact(config.search_radius_m),
                     "particle_count": config.particle_count,
-                    "convergence_threshold_m": config.convergence_threshold_m,
-                    "min_coverage_to_localize": config.min_coverage_to_localize,
-                    "confidence_decay": config.confidence_decay,
-                    "annealing_rate": config.annealing_rate,
+                    "convergence_threshold_m": exact(config.convergence_threshold_m),
+                    "min_coverage_to_localize": exact(config.min_coverage_to_localize),
+                    "confidence_decay": exact(config.confidence_decay),
+                    "annealing_rate": exact(config.annealing_rate),
                     "localization_timeout_steps": config.localization_timeout_steps,
                 },
                 "steps": steps,
                 "expected_fused": None
                 if fused is None
                 else {
-                    "position_estimate": [float(v) for v in fused.position_estimate],
-                    "position_std_m": float(fused.position_std_m),
-                    "confidence": float(fused.confidence),
+                    "position_estimate": [exact(v) for v in fused.position_estimate],
+                    "position_std_m": exact(fused.position_std_m),
+                    "confidence": exact(fused.confidence),
                 },
                 "expected_any_timed_out": bool(localizer.any_timed_out),
             }
