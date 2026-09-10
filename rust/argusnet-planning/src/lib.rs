@@ -4,6 +4,7 @@
 pub mod battery;
 pub mod frontier;
 pub mod planner;
+pub mod poi;
 pub mod route;
 
 pub use battery::{BatteryModel, BatteryState};
