@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 argusnet-mapping = { path = "../argusnet-mapping" }
+nalgebra.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
