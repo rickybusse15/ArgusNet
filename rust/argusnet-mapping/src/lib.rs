@@ -65,6 +65,10 @@ pub fn score_footprints(
         .collect())
 }
 
+pub mod footprint;
+
+pub use footprint::{rasterize_circle, GridBounds, Sampling};
+
 #[cfg(test)]
 mod tests {
     use super::*;
