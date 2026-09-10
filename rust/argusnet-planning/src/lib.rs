@@ -2,6 +2,7 @@
 //! deconfliction work P4.7 names.
 
 pub mod battery;
+pub mod frontier;
 pub mod planner;
 pub mod route;
 
