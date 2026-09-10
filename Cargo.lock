@@ -268,6 +268,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-localization"
+version = "0.1.0"
+dependencies = [
+ "argusnet-mapping",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "argusnet-mapping"
 version = "0.1.0"
 
@@ -333,6 +342,17 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+]
+
+[[package]]
+name = "argusnet-sim"
+version = "0.1.0"
+dependencies = [
+ "argusnet-types",
+ "rand_chacha",
+ "rand_core 0.10.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5216,6 +5236,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppv-lite86"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
 name = "presser"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5456,6 +5485,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "getrandom 0.4.2",
+ "rand_core 0.10.1",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+dependencies = [
+ "ppv-lite86",
  "rand_core 0.10.1",
 ]
 

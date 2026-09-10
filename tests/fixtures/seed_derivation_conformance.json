@@ -1,0 +1,545 @@
+{
+  "source": "src/argusnet/simulation/sim.py::_stable_seed",
+  "note": "Generated from the Python reference. ADR-006 re-baselines the random stream but preserves the seed-derivation scheme, so these values must match bit-for-bit across the port.",
+  "cases": [
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 0
+        }
+      ],
+      "seed": 1264778991
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 0
+        }
+      ],
+      "seed": 66851830
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 0
+        }
+      ],
+      "seed": 2922504102
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 0
+        }
+      ],
+      "seed": 723548229
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 0
+        }
+      ],
+      "seed": 1050409277
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 0
+        }
+      ],
+      "seed": 629911644
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 250
+        }
+      ],
+      "seed": 1341231798
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 250
+        }
+      ],
+      "seed": 818842555
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 250
+        }
+      ],
+      "seed": 995148907
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 250
+        }
+      ],
+      "seed": 3476123360
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 250
+        }
+      ],
+      "seed": 977215480
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 250
+        }
+      ],
+      "seed": 571727597
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 1500
+        }
+      ],
+      "seed": 2314871543
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 1500
+        }
+      ],
+      "seed": 3235166080
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 1500
+        }
+      ],
+      "seed": 4224972016
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 1500
+        }
+      ],
+      "seed": 1512177889
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 1500
+        }
+      ],
+      "seed": 1482731241
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 1500
+        }
+      ],
+      "seed": 2543304930
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 60000
+        }
+      ],
+      "seed": 2574550969
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-0"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 60000
+        }
+      ],
+      "seed": 405317040
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 60000
+        }
+      ],
+      "seed": 1744198880
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 60000
+        }
+      ],
+      "seed": 2061205587
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "asset-a"
+        },
+        {
+          "kind": "int",
+          "value": 60000
+        }
+      ],
+      "seed": 853613643
+    },
+    {
+      "base_seed": 1234,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "drone-alpha"
+        },
+        {
+          "kind": "str",
+          "value": "target-7"
+        },
+        {
+          "kind": "int",
+          "value": 60000
+        }
+      ],
+      "seed": 256010298
+    },
+    {
+      "base_seed": 0,
+      "parts": [],
+      "seed": 0
+    },
+    {
+      "base_seed": 0,
+      "parts": [
+        {
+          "kind": "str",
+          "value": ""
+        }
+      ],
+      "seed": 0
+    },
+    {
+      "base_seed": 4294967295,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "overflow-probe"
+        }
+      ],
+      "seed": 3920501692
+    },
+    {
+      "base_seed": 7,
+      "parts": [
+        {
+          "kind": "int",
+          "value": -42
+        }
+      ],
+      "seed": 3198508566
+    },
+    {
+      "base_seed": 7,
+      "parts": [
+        {
+          "kind": "int",
+          "value": -9223372036854775808
+        }
+      ],
+      "seed": 2536411363
+    },
+    {
+      "base_seed": 7,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "café"
+        }
+      ],
+      "seed": 3549473748
+    },
+    {
+      "base_seed": 7,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "日本語"
+        }
+      ],
+      "seed": 509573626
+    },
+    {
+      "base_seed": 7,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "ab"
+        },
+        {
+          "kind": "str",
+          "value": "c"
+        }
+      ],
+      "seed": 1966719081
+    },
+    {
+      "base_seed": 7,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "a"
+        },
+        {
+          "kind": "str",
+          "value": "bc"
+        }
+      ],
+      "seed": 1966719081
+    },
+    {
+      "base_seed": 99,
+      "parts": [
+        {
+          "kind": "str",
+          "value": "node-1"
+        },
+        {
+          "kind": "int",
+          "value": 500
+        }
+      ],
+      "seed": 1932338666
+    }
+  ]
+}

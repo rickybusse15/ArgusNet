@@ -2,6 +2,7 @@
 members = [
   "rust/argusnet-types",
   "rust/argusnet-mapping",
+  "rust/argusnet-localization",
   "rust/argusnet-sensing",
   "rust/argusnet-native",
   "rust/argusnet-world",
@@ -10,6 +11,7 @@ members = [
   "rust/argusnet-proto",
   "rust/argusnet-server",
   "rust/argusnet-replay",
+  "rust/argusnet-sim",
   "rust/argusnet-viewer",
 ]
 resolver = "2"

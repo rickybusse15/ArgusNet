@@ -1,0 +1,22 @@
+[package]
+name = "argusnet-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "argusnet_sim"
+path = "src/lib.rs"
+
+[dependencies]
+argusnet-types = { path = "../argusnet-types" }
+# Pinned deliberately: this crate's output values are a contract. See
+# `deterministic.rs` and the conformance fixtures that pin actual draws, which
+# are what make a silent change to this dependency fail a test.
+rand_chacha = "=0.10.0"
+rand_core = "=0.10.1"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
