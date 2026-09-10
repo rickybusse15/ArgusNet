@@ -2,5 +2,7 @@
 //! deconfliction work P4.7 names.
 
 pub mod battery;
+pub mod route;
 
 pub use battery::{BatteryModel, BatteryState};
+pub use route::{astar_path, build_visibility_graph, smooth_path, RouteConfig};
