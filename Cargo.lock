@@ -268,6 +268,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-localization"
+version = "0.1.0"
+dependencies = [
+ "argusnet-mapping",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "argusnet-mapping"
 version = "0.1.0"
 
