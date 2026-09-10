@@ -256,6 +256,13 @@ impl BearingBiasDrift {
     }
 }
 
+pub mod cascade;
+
+pub use cascade::{
+    evaluate_pair, Blocker, DominantLoss, FovInput, GenerationTally, Outcome, PairInput,
+    RejectReason, Visibility,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
