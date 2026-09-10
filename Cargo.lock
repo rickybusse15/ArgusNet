@@ -296,6 +296,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-planning"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "argusnet-proto"
 version = "0.1.0"
 dependencies = [

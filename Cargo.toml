@@ -2,6 +2,7 @@
 members = [
   "rust/argusnet-types",
   "rust/argusnet-mapping",
+  "rust/argusnet-planning",
   "rust/argusnet-localization",
   "rust/argusnet-native",
   "rust/argusnet-world",
