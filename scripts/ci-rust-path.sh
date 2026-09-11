@@ -63,8 +63,23 @@ if ! command -v rustup >/dev/null 2>&1; then
   find "$HOME" -maxdepth 6 \( -name rustup -o -name cargo -o -name rustc \) \
     -type f -perm -u+x 2>/dev/null | head -20
   echo
-  echo "If the two listings above are empty, the toolchain is not installed on"
-  echo "this machine and no workflow change can help. Reinstall it on the"
-  echo "runner:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  # Name the case rather than leaving it to be read off two listings. The
+  # commonest one is invisible to `find -type f`: rustup fills ~/.cargo/bin
+  # with symlinks that all point at the `rustup` binary beside them, and if
+  # that one binary goes missing the whole farm dangles. A `-type f` search
+  # skips symlinks, so the directory reads as empty and the machine looks like
+  # it never had Rust -- which is exactly the wrong conclusion.
+  if [ -L "$HOME/.cargo/bin/cargo" ] && [ ! -e "$HOME/.cargo/bin/rustup" ]; then
+    echo "DIAGNOSIS: rustup's proxy symlinks in ~/.cargo/bin are intact but the"
+    echo "rustup binary they all point to is GONE, so every one of them dangles."
+    echo "The toolchains under ~/.rustup are untouched; only rustup is missing."
+  elif [ -d "$HOME/.rustup/toolchains" ] && [ -n "$(ls -A "$HOME/.rustup/toolchains" 2>/dev/null)" ]; then
+    echo "DIAGNOSIS: toolchains exist under ~/.rustup but rustup is not runnable."
+  else
+    echo "DIAGNOSIS: no Rust toolchain on this machine."
+  fi
+  echo "Reinstalling rustup repairs all three, and keeps rust-toolchain.toml"
+  echo "authoritative -- which pointing PATH at a toolchain directory would not:"
+  echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
   return 1 2>/dev/null || exit 1
 fi

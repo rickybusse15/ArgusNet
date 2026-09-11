@@ -160,13 +160,25 @@ workflow needs editing either way.
 
   **But `rustup: command not found` is not always a PATH problem, and
   assuming it is wastes CI rounds.** On 2026-09-11 this runner hit it with
-  `~/.cargo/bin` already on `PATH` and both `~/.cargo` and `~/.rustup`
-  present — the rustup and cargo binaries had simply gone missing from the
-  machine. No workflow change can fix that. When the search fails the step
-  now lists `~/.cargo/bin` and `~/.rustup/toolchains` and searches six levels
-  deep for any `rustup`, `cargo` or `rustc`, so the log distinguishes
-  "installed somewhere unusual" from "not installed", and reinstalling is
-  `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+  `~/.cargo/bin` already on `PATH`, both `~/.cargo` and `~/.rustup` present,
+  and both toolchains — including the pinned 1.98.0 — intact. What had gone
+  missing was the **`rustup` binary itself**, leaving every proxy symlink in
+  `~/.cargo/bin` (`cargo`, `rustc`, `rustfmt`, …, all of which point at
+  `rustup`) dangling.
+
+  That case is easy to misread, and it was misread twice here: `find -type f`
+  skips symlinks, so `~/.cargo/bin` reads as empty and the machine looks like
+  it never had Rust. The step now names the diagnosis outright — dangling
+  proxies, toolchains present but rustup unrunnable, or nothing installed —
+  rather than leaving it to be inferred from two directory listings.
+
+  The repair for all three is the same, and it keeps `rust-toolchain.toml`
+  authoritative in a way that pointing `PATH` at a toolchain directory would
+  not:
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
 
   Adding `PATH=<your rust bin>:/usr/bin:/bin:/usr/sbin:/sbin` to
   `actions-runner/.env` is an equivalent fix if you prefer it on the machine.
