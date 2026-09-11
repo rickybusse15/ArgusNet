@@ -1,0 +1,15 @@
+[package]
+name = "argusnet-sensing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "argusnet_sensing"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

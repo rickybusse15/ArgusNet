@@ -323,6 +323,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-sensing"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "argusnet-server"
 version = "0.1.0"
 dependencies = [
