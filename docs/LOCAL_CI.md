@@ -153,13 +153,20 @@ workflow needs editing either way.
   rustup works perfectly in your terminal. Running the runner from a terminal
   instead hides the problem entirely, because it inherits your shell's `PATH`.
 
-  The workflow handles this itself: every toolchain step sources
+  The workflow handles that itself: every toolchain step sources
   `scripts/ci-rust-path.sh`, which searches the usual install locations —
   rustup's own `~/.cargo/bin`, `$CARGO_HOME/bin`, Homebrew's
-  `/opt/homebrew/bin` and `/usr/local/bin`, and the conda prefixes. Nothing is
-  needed on your side. If it ever fails to find your toolchain it prints
-  `PATH`, `HOME`, `CARGO_HOME`, and a search of your home directory, so the
-  answer is in the log rather than in a second guess.
+  `/opt/homebrew/bin` and `/usr/local/bin`, and the conda prefixes.
+
+  **But `rustup: command not found` is not always a PATH problem, and
+  assuming it is wastes CI rounds.** On 2026-09-11 this runner hit it with
+  `~/.cargo/bin` already on `PATH` and both `~/.cargo` and `~/.rustup`
+  present — the rustup and cargo binaries had simply gone missing from the
+  machine. No workflow change can fix that. When the search fails the step
+  now lists `~/.cargo/bin` and `~/.rustup/toolchains` and searches six levels
+  deep for any `rustup`, `cargo` or `rustc`, so the log distinguishes
+  "installed somewhere unusual" from "not installed", and reinstalling is
+  `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
 
   Adding `PATH=<your rust bin>:/usr/bin:/bin:/usr/sbin:/sbin` to
   `actions-runner/.env` is an equivalent fix if you prefer it on the machine.
