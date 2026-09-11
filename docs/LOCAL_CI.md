@@ -147,12 +147,21 @@ workflow needs editing either way.
 
   If you run the runner as a **service** (`./svc.sh install && ./svc.sh start`
   on macOS — no sudo, it is a launchd *user* agent), note that launchd gives it
-  a minimal `PATH` and never sources `~/.zprofile`, where rustup puts
-  `~/.cargo/bin`. Every cargo step would then fail with
-  `rustup: command not found` while rustup works perfectly in your terminal.
-  The workflow handles this itself — each toolchain step adds `~/.cargo/bin`
-  when it exists — so nothing is needed on your side. Adding
-  `PATH=/Users/<you>/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin` to
+  a minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) and never sources
+  `~/.zprofile`. Nothing installed by rustup, Homebrew or conda is on that
+  path, so every cargo step fails with `rustup: command not found` while
+  rustup works perfectly in your terminal. Running the runner from a terminal
+  instead hides the problem entirely, because it inherits your shell's `PATH`.
+
+  The workflow handles this itself: every toolchain step sources
+  `scripts/ci-rust-path.sh`, which searches the usual install locations —
+  rustup's own `~/.cargo/bin`, `$CARGO_HOME/bin`, Homebrew's
+  `/opt/homebrew/bin` and `/usr/local/bin`, and the conda prefixes. Nothing is
+  needed on your side. If it ever fails to find your toolchain it prints
+  `PATH`, `HOME`, `CARGO_HOME`, and a search of your home directory, so the
+  answer is in the log rather than in a second guess.
+
+  Adding `PATH=<your rust bin>:/usr/bin:/bin:/usr/sbin:/sbin` to
   `actions-runner/.env` is an equivalent fix if you prefer it on the machine.
 - **A Python 3.10 or newer.** Whichever one `python3` resolves to is the one
   CI will use; nothing else is needed.

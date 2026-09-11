@@ -62,19 +62,9 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Install pinned Rust toolchain for native world bindings
         run: |
-          # A self-hosted runner started as a launchd USER AGENT -- which is
-          # what macOS `svc.sh install` sets up, and what this repository's
-          # LOCAL_CI.md tells you to run -- inherits launchd's minimal PATH and
-          # never sources the login shell's profile. rustup installs itself
-          # into ~/.cargo/bin and puts it on PATH from ~/.zprofile, so under
-          # the agent every cargo step dies with "rustup: command not found"
-          # even though rustup is installed and works fine in a terminal.
-          #
-          # Hosted runners already have it on PATH, where this is a no-op.
-          if [ -d "$HOME/.cargo/bin" ]; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
           rustup show
       - name: Install dependencies
         run: |
@@ -128,19 +118,9 @@ jobs:
       # bindings, and nothing in this job depends on Bevy.
       - name: Install pinned Rust toolchain
         run: |
-          # A self-hosted runner started as a launchd USER AGENT -- which is
-          # what macOS `svc.sh install` sets up, and what this repository's
-          # LOCAL_CI.md tells you to run -- inherits launchd's minimal PATH and
-          # never sources the login shell's profile. rustup installs itself
-          # into ~/.cargo/bin and puts it on PATH from ~/.zprofile, so under
-          # the agent every cargo step dies with "rustup: command not found"
-          # even though rustup is installed and works fine in a terminal.
-          #
-          # Hosted runners already have it on PATH, where this is a no-op.
-          if [ -d "$HOME/.cargo/bin" ]; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
           rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -169,19 +149,9 @@ jobs:
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers
       - name: Install pinned Rust toolchain
         run: |
-          # A self-hosted runner started as a launchd USER AGENT -- which is
-          # what macOS `svc.sh install` sets up, and what this repository's
-          # LOCAL_CI.md tells you to run -- inherits launchd's minimal PATH and
-          # never sources the login shell's profile. rustup installs itself
-          # into ~/.cargo/bin and puts it on PATH from ~/.zprofile, so under
-          # the agent every cargo step dies with "rustup: command not found"
-          # even though rustup is installed and works fine in a terminal.
-          #
-          # Hosted runners already have it on PATH, where this is a no-op.
-          if [ -d "$HOME/.cargo/bin" ]; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
           rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -246,19 +216,9 @@ jobs:
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev
       - name: Install pinned Rust toolchain
         run: |
-          # A self-hosted runner started as a launchd USER AGENT -- which is
-          # what macOS `svc.sh install` sets up, and what this repository's
-          # LOCAL_CI.md tells you to run -- inherits launchd's minimal PATH and
-          # never sources the login shell's profile. rustup installs itself
-          # into ~/.cargo/bin and puts it on PATH from ~/.zprofile, so under
-          # the agent every cargo step dies with "rustup: command not found"
-          # even though rustup is installed and works fine in a terminal.
-          #
-          # Hosted runners already have it on PATH, where this is a no-op.
-          if [ -d "$HOME/.cargo/bin" ]; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
           rustup show
           cargo clippy --version
       # Formatting first: it compiles nothing, so a misformatted file fails in
@@ -307,19 +267,9 @@ jobs:
       # to build it even though nothing here runs cargo directly.
       - name: Install pinned Rust toolchain
         run: |
-          # A self-hosted runner started as a launchd USER AGENT -- which is
-          # what macOS `svc.sh install` sets up, and what this repository's
-          # LOCAL_CI.md tells you to run -- inherits launchd's minimal PATH and
-          # never sources the login shell's profile. rustup installs itself
-          # into ~/.cargo/bin and puts it on PATH from ~/.zprofile, so under
-          # the agent every cargo step dies with "rustup: command not found"
-          # even though rustup is installed and works fine in a terminal.
-          #
-          # Hosted runners already have it on PATH, where this is a no-op.
-          if [ -d "$HOME/.cargo/bin" ]; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
           rustup show
       - name: Work from a virtualenv
         run: |
@@ -356,19 +306,9 @@ jobs:
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Install pinned Rust toolchain
         run: |
-          # A self-hosted runner started as a launchd USER AGENT -- which is
-          # what macOS `svc.sh install` sets up, and what this repository's
-          # LOCAL_CI.md tells you to run -- inherits launchd's minimal PATH and
-          # never sources the login shell's profile. rustup installs itself
-          # into ~/.cargo/bin and puts it on PATH from ~/.zprofile, so under
-          # the agent every cargo step dies with "rustup: command not found"
-          # even though rustup is installed and works fine in a terminal.
-          #
-          # Hosted runners already have it on PATH, where this is a no-op.
-          if [ -d "$HOME/.cargo/bin" ]; then
-            export PATH="$HOME/.cargo/bin:$PATH"
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          fi
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
           rustup show
       - name: Install dependencies
         run: pip install -e ".[dev]" pip-audit bandit
