@@ -13,6 +13,13 @@ argusnet-types = { path = "../argusnet-types" }
 # Pinned deliberately: this crate's output values are a contract. See
 # `deterministic.rs` and the conformance fixtures that pin actual draws, which
 # are what make a silent change to this dependency fail a test.
+# Pinned EXACTLY, like the PRNG above and for the same reason. `normal()`
+# routes ln and cos through this rather than through the platform libm,
+# because neither is required by IEEE-754 to be correctly rounded and glibc
+# on x86_64 disagrees with Apple's libm on arm64 by 1 ULP -- which broke the
+# conformance fixture the moment CI moved to a Mac. A version bump here can
+# move the draws, so it is pinned and the fixture guards it.
+libm = "=0.2.16"
 rand_chacha = "=0.10.0"
 rand_core = "=0.10.1"
 serde.workspace = true
