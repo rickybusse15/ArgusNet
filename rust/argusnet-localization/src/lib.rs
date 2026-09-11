@@ -438,6 +438,10 @@ impl GridLocalizer {
     }
 }
 
+pub mod vio;
+
+pub use vio::{rotvec_to_matrix, ImuMeasurement, VioNoise, VioPredictor};
+
 #[cfg(test)]
 mod tests {
     use super::*;
