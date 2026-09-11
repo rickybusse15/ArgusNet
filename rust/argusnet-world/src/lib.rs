@@ -804,6 +804,7 @@ pub mod visibility;
 
 pub mod grid_ops;
 pub mod land_cover;
+pub mod land_cover_build;
 pub mod noise;
 pub mod raster;
 pub mod semantic;
