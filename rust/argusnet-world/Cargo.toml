@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 argusnet-types = { path = "../argusnet-types" }
+blake2.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

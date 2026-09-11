@@ -1,0 +1,118 @@
+# The observation rejection cascade: what the port had to preserve
+
+**Status:** ported 2026-09-10 (P4.5b).
+
+`build_observations` runs six gates per (node, target) pair. Porting them is
+mostly mechanical; three properties are not, and each would be easy to "clean
+up" into a behaviour change.
+
+## 1. A random draw sits in the middle of the deterministic gates
+
+The order is: range, FOV, **dropout**, elevation, line-of-sight, detection.
+
+Dropout is a random draw at position three, ahead of two deterministic gates
+that cost nothing to evaluate. Any reasonable instinct says to move it after
+them. Doing so changes behaviour: a pair that would fail elevation *still
+consumes its dropout draw today*.
+
+The reference proves this about itself. Two fixture cases use identical
+geometry:
+
+| case | dropout probability | reported reason |
+|---|---|---|
+| `dropout_precedes_elevation` | 1.0 | `dropout` |
+| `elevation_gate_alone` | 0.0 | `low_elevation` |
+
+Same target, same node, same terrain. The only difference is which gate got
+there first.
+
+`sim.py` notes that deferring RNG construction past the draw-free rejects is
+"draw-order safe". That holds because each pair gets a stream keyed on
+`(node, target, tick)` — **but only when a seed is supplied.** Without one the
+reference falls back to a single shared generator, and then the number of pairs
+reaching the dropout gate shifts every later pair's draws.
+`SimulationConfig.seed` is `int` with default 7 and is never `None`, so the
+production path is always keyed. The shared-stream path is reachable only from
+direct callers of `build_observations`. Latent, not live.
+
+## 2. Ten rejection constants, nine wire strings
+
+```python
+REJECT_OBJECT_OCCLUSION = REJECT_BUILDING_OCCLUSION
+```
+
+An unrecognised blocker is counted as a **building** occlusion. A Rust enum
+with a separate `ObjectOcclusion` variant is the more natural design and would
+silently change every rejection count that includes an unknown blocker. The
+port keeps `Blocker::Other` as an honest *input* variant and maps it onto
+`BuildingOcclusion` on the way out.
+
+## 3. Reasons do not identify gates
+
+Two gates report `dropout`: gate 3, and gate 6 when the detection draw fails
+with a non-transmittance dominant loss. Two gates report
+`vegetation_occlusion`: gate 5, and gate 6 when transmittance dominates.
+
+The first version of the fixture recorded only the reason. That was not enough
+to test anything about ordering — a port running gates 3 and 6 in the wrong
+order would have matched on reasons alone. It records the **gate** as well,
+derived from the reference's own detail text, and the parity test asserts gate
+attribution rather than just the tally.
+
+The gap showed up in the fixture itself: `mobile_elevation_floor` reports a
+`dropout` on a node whose `dropout_probability` is `0.0`. That rejection came
+from gate 6.
+
+## Boundaries
+
+Every gate is exclusive on the rejecting side, and each is pinned separately
+because one stray `<=` changes which pairs survive:
+
+| gate | test | equality |
+|---|---|---|
+| range | `range_m < 1e-6 \|\| > max_range_m` | the `1e-6` floor rejects a coincident target |
+| FOV | `angle > half_angle` | exactly on the boundary is **inside** |
+| dropout | `draw < p` | |
+| elevation | `elevation < required` | exactly at the floor **passes** |
+| detection | `draw > p_d` | see below |
+
+The detection gate is asymmetric, and the port is right where intuition is
+wrong. `p_d = 1` accepts every draw, since `random()` returns `[0, 1)` and can
+never exceed one. But `p_d = 0` does **not** reject every draw: a draw of
+exactly `0.0` gives `0.0 > 0.0`, which is false, so an impossible detection is
+accepted. numpy can return exactly zero, so this is reachable — about once in
+2⁵³ draws.
+
+My first test asserted the tidy symmetric behaviour and failed against the
+port. The port was right. A `>=` there would have been a silent change at the
+boundary, and the test would have enshrined it.
+
+## What was ported, and what was not
+
+`argusnet_sensing::cascade` carries the gate sequence, the reason taxonomy with
+its aliasing, and `GenerationTally` (attempted, accepted, and counts by node,
+target and reason — P4.5's requirement, kept distinct from fusion rejection).
+
+The cascade is a pure decision over already-computed inputs: range, FOV angle,
+elevation, the line-of-sight result and the combined detection probability
+arrive as arguments. That is the same split P4.2a and P4.5a used, and it keeps
+the cascade checkable without pulling the whole world crate in. The two random
+draws go through a `Draws` trait so a test can feed exact values and pin which
+gate consumed which draw.
+
+Not included: false-alarm generation, bias application, and the accepted-path
+noise model. Those consume the accepted branch's own draws and belong with the
+observation-construction half.
+
+## Verification
+
+Nine fixture cases, 25 pairs, generated by driving the reference and reading
+decisions back out of its `ObservationBatch` — not by reimplementing the gate
+sequence, which would let the fixture and the port share a misreading and agree
+with each other while both disagreed with Python. All six gates are exercised;
+that was checked rather than assumed, and two gates (FOV and line-of-sight)
+were missing until cases were added for them.
+
+Nine mutations, each caught by a named test. Three survived a first pass — the
+coincident-range floor, the FOV boundary, and the elevation boundary — and are
+why those three tests exist.

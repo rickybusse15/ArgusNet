@@ -802,5 +802,8 @@ pub mod index;
 pub mod tiled;
 pub mod visibility;
 
+pub mod grid_ops;
 pub mod land_cover;
+pub mod noise;
 pub mod raster;
+pub mod semantic;

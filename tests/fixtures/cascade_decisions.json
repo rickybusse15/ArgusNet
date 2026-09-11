@@ -1,0 +1,651 @@
+{
+  "source": "src/argusnet/simulation/sim.py::build_observations",
+  "note": "Rejection-cascade decisions read back from the ObservationBatch the reference itself produced, so the fixture cannot agree with the port by sharing its author's misreading. Reason strings are the wire strings; note that object and building occlusion are the same string.",
+  "reason_aliasing": {
+    "object_occlusion_is_building_occlusion": true,
+    "distinct_reason_strings": [
+      "building_occlusion",
+      "dropout",
+      "low_elevation",
+      "out_of_coverage",
+      "out_of_range",
+      "outside_fov",
+      "terrain_occlusion",
+      "vegetation_occlusion",
+      "wall_occlusion"
+    ]
+  },
+  "cases": [
+    {
+      "name": "range_gate_both_bounds",
+      "note": "one target far beyond max range, one coincident with the node origin",
+      "seed": 11,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "n1",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "500.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "0.0",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "far",
+          "position": [
+            "5000.0",
+            "0.0",
+            "100.0"
+          ]
+        },
+        {
+          "target_id": "coincident",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 2,
+        "accepted": 0,
+        "rejection_counts": {
+          "out_of_range": 2
+        },
+        "rejected_by_target": {
+          "coincident": 1,
+          "far": 1
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "n1",
+            "target_id": "far",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          },
+          {
+            "node_id": "n1",
+            "target_id": "coincident",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          }
+        ]
+      }
+    },
+    {
+      "name": "directional_sensor_without_look_direction",
+      "note": "fov_half_angle < 179 but a static node resolves no look direction, so the gate is skipped",
+      "seed": 12,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "n1",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "30.0",
+          "dropout_probability": "0.0",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "t1",
+          "position": [
+            "100.0",
+            "0.0",
+            "90.0"
+          ]
+        },
+        {
+          "target_id": "t2",
+          "position": [
+            "0.0",
+            "400.0",
+            "50.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 2,
+        "accepted": 0,
+        "rejection_counts": {
+          "low_elevation": 2
+        },
+        "rejected_by_target": {
+          "t1": 1,
+          "t2": 1
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "n1",
+            "target_id": "t1",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          },
+          {
+            "node_id": "n1",
+            "target_id": "t2",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dropout_certain",
+      "note": "dropout_probability 1.0 rejects every pair at gate 3",
+      "seed": 13,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "n1",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "1.0",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "t1",
+          "position": [
+            "300.0",
+            "0.0",
+            "90.0"
+          ]
+        },
+        {
+          "target_id": "t2",
+          "position": [
+            "0.0",
+            "300.0",
+            "95.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 2,
+        "accepted": 0,
+        "rejection_counts": {
+          "dropout": 2
+        },
+        "rejected_by_target": {
+          "t1": 1,
+          "t2": 1
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "n1",
+            "target_id": "t1",
+            "reason": "dropout",
+            "gate": "3_dropout"
+          },
+          {
+            "node_id": "n1",
+            "target_id": "t2",
+            "reason": "dropout",
+            "gate": "3_dropout"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dropout_precedes_elevation",
+      "note": "a target that would also fail elevation is reported as dropout, proving gate order",
+      "seed": 14,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "n1",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "1.0",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "below",
+          "position": [
+            "3000.0",
+            "0.0",
+            "99.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 1,
+        "accepted": 0,
+        "rejection_counts": {
+          "dropout": 1
+        },
+        "rejected_by_target": {
+          "below": 1
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "n1",
+            "target_id": "below",
+            "reason": "dropout",
+            "gate": "3_dropout"
+          }
+        ]
+      }
+    },
+    {
+      "name": "elevation_gate_alone",
+      "note": "the same geometry with dropout disabled, rejected at gate 4 instead",
+      "seed": 14,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "n1",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "0.0",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "below",
+          "position": [
+            "3000.0",
+            "0.0",
+            "99.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 1,
+        "accepted": 0,
+        "rejection_counts": {
+          "low_elevation": 1
+        },
+        "rejected_by_target": {
+          "below": 1
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "n1",
+            "target_id": "below",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mobile_elevation_floor",
+      "note": "a mobile node uses sensor_cfg.mobile_min_elevation_deg, not min_elevation_deg",
+      "seed": 15,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "drone",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "0.0",
+          "is_mobile": true
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "below",
+          "position": [
+            "3000.0",
+            "0.0",
+            "99.0"
+          ]
+        },
+        {
+          "target_id": "above",
+          "position": [
+            "100.0",
+            "0.0",
+            "10.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 2,
+        "accepted": 1,
+        "rejection_counts": {
+          "dropout": 1
+        },
+        "rejected_by_target": {
+          "below": 1
+        },
+        "accepted_by_target": {
+          "above": 1
+        },
+        "rejections": [
+          {
+            "node_id": "drone",
+            "target_id": "below",
+            "reason": "dropout",
+            "gate": "6_detection"
+          }
+        ]
+      }
+    },
+    {
+      "name": "multi_node_multi_target",
+      "note": "three nodes and four targets, mixing accepted and rejected pairs",
+      "seed": 16,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "n1",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "800.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "0.0",
+          "is_mobile": false
+        },
+        {
+          "node_id": "n2",
+          "position": [
+            "1000.0",
+            "0.0",
+            "120.0"
+          ],
+          "max_range_m": "400.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "0.0",
+          "is_mobile": false
+        },
+        {
+          "node_id": "n3",
+          "position": [
+            "0.0",
+            "1000.0",
+            "80.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "0.5",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "a",
+          "position": [
+            "200.0",
+            "0.0",
+            "10.0"
+          ]
+        },
+        {
+          "target_id": "b",
+          "position": [
+            "1100.0",
+            "0.0",
+            "20.0"
+          ]
+        },
+        {
+          "target_id": "c",
+          "position": [
+            "0.0",
+            "900.0",
+            "5.0"
+          ]
+        },
+        {
+          "target_id": "d",
+          "position": [
+            "4000.0",
+            "4000.0",
+            "0.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 12,
+        "accepted": 0,
+        "rejection_counts": {
+          "dropout": 1,
+          "low_elevation": 4,
+          "out_of_range": 7
+        },
+        "rejected_by_target": {
+          "a": 3,
+          "b": 3,
+          "c": 3,
+          "d": 3
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "n1",
+            "target_id": "a",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          },
+          {
+            "node_id": "n1",
+            "target_id": "b",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          },
+          {
+            "node_id": "n1",
+            "target_id": "c",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          },
+          {
+            "node_id": "n1",
+            "target_id": "d",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          },
+          {
+            "node_id": "n2",
+            "target_id": "a",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          },
+          {
+            "node_id": "n2",
+            "target_id": "b",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          },
+          {
+            "node_id": "n2",
+            "target_id": "c",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          },
+          {
+            "node_id": "n2",
+            "target_id": "d",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          },
+          {
+            "node_id": "n3",
+            "target_id": "a",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          },
+          {
+            "node_id": "n3",
+            "target_id": "b",
+            "reason": "dropout",
+            "gate": "3_dropout"
+          },
+          {
+            "node_id": "n3",
+            "target_id": "c",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          },
+          {
+            "node_id": "n3",
+            "target_id": "d",
+            "reason": "out_of_range",
+            "gate": "1_range"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fov_gate_with_look_direction",
+      "note": "an aimed 30-degree sensor: one target on axis, one at 90 degrees off it",
+      "seed": 17,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "aimed",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "30.0",
+          "dropout_probability": "0.0",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "on_axis",
+          "position": [
+            "500.0",
+            "0.0",
+            "100.0"
+          ]
+        },
+        {
+          "target_id": "off_axis",
+          "position": [
+            "0.0",
+            "500.0",
+            "100.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 2,
+        "accepted": 0,
+        "rejection_counts": {
+          "low_elevation": 1,
+          "outside_fov": 1
+        },
+        "rejected_by_target": {
+          "off_axis": 1,
+          "on_axis": 1
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "aimed",
+            "target_id": "on_axis",
+            "reason": "low_elevation",
+            "gate": "4_elevation"
+          },
+          {
+            "node_id": "aimed",
+            "target_id": "off_axis",
+            "reason": "outside_fov",
+            "gate": "2_fov"
+          }
+        ]
+      }
+    },
+    {
+      "name": "terrain_occlusion",
+      "note": "a ridge blocks the line of sight; the target sits high enough to clear the elevation gate first, so this reaches gate 5 rather than gate 4",
+      "seed": 18,
+      "min_elevation_deg": "0.5",
+      "nodes": [
+        {
+          "node_id": "ground",
+          "position": [
+            "-400.0",
+            "0.0",
+            "5.0"
+          ],
+          "max_range_m": "5000.0",
+          "fov_half_angle_deg": "180.0",
+          "dropout_probability": "0.0",
+          "is_mobile": false
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "behind_ridge",
+          "position": [
+            "400.0",
+            "0.0",
+            "60.0"
+          ]
+        }
+      ],
+      "expected": {
+        "attempted": 1,
+        "accepted": 0,
+        "rejection_counts": {
+          "terrain_occlusion": 1
+        },
+        "rejected_by_target": {
+          "behind_ridge": 1
+        },
+        "accepted_by_target": {},
+        "rejections": [
+          {
+            "node_id": "ground",
+            "target_id": "behind_ridge",
+            "reason": "terrain_occlusion",
+            "gate": "5_line_of_sight"
+          }
+        ]
+      }
+    }
+  ]
+}
