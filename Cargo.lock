@@ -364,6 +364,7 @@ name = "argusnet-sim"
 version = "0.1.0"
 dependencies = [
  "argusnet-types",
+ "libm",
  "rand_chacha",
  "rand_core 0.10.1",
  "serde",

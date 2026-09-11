@@ -166,13 +166,29 @@ impl DeterministicRng {
     /// preceded it within the stream — harmless in fact, and one more thing to
     /// reason about when a golden file moves. Streams are per-key and short;
     /// the clarity is worth more than the arithmetic.
+    ///
+    /// # `ln` and `cos` come from `libm`, not from the platform
+    ///
+    /// IEEE-754 requires `sqrt` and the arithmetic operators to be correctly
+    /// rounded. It requires **nothing** of `ln` and `cos`, and implementations
+    /// differ: glibc on x86_64 and Apple's libm on arm64 disagree by 1 ULP on
+    /// some inputs. Box–Muller propagates that straight into the draw, so
+    /// `f64::ln`/`f64::cos` make the stream platform-dependent — which is
+    /// exactly what ADR-006 promises it is not, and what broke the conformance
+    /// fixture the first time CI ran on a Mac.
+    ///
+    /// `libm` is a pure-Rust port of MUSL's libm with no platform calls, so it
+    /// answers identically everywhere. Writing the transform out by hand
+    /// stopped `rand_distr`'s ziggurat moving underneath us; this stops the
+    /// system C library doing the same.
     pub fn normal(&mut self, mean: f64, std_dev: f64) -> f64 {
         // `uniform` can return exactly 0, and ln(0) is -inf. Reflecting into
         // (0, 1] costs nothing and removes the special case.
         let u1 = 1.0 - self.uniform();
         let u2 = self.uniform();
-        let radius = (-2.0 * u1.ln()).sqrt();
-        mean + std_dev * radius * (std::f64::consts::TAU * u2).cos()
+        // `sqrt` stays on f64: IEEE-754 pins it, so it is already portable.
+        let radius = (-2.0 * libm::log(u1)).sqrt();
+        mean + std_dev * radius * libm::cos(std::f64::consts::TAU * u2)
     }
 
     /// Raw 64 bits, for callers that need their own transform.
@@ -276,6 +292,69 @@ mod tests {
         let mut rng = DeterministicRng::from_seed(5);
         for _ in 0..50_000 {
             assert!(rng.normal(0.0, 1.0).is_finite());
+        }
+    }
+
+    #[test]
+    fn no_draw_routes_through_the_platform_libm() {
+        // This is a source-text assertion, deliberately, because no behavioural
+        // test on any single machine can make this one. `f64::ln` and
+        // `libm::log` agree bit-for-bit on x86_64 glibc -- verified over the
+        // whole conformance corpus, 0 of 8 draws changed on all five seeds --
+        // so on the platform CI used to run, the wrong spelling is
+        // indistinguishable from the right one. It is only wrong on arm64, and
+        // by then it is a red fixture on someone else's machine.
+        //
+        // So the rule being enforced here is a source rule: this module calls
+        // no f64 transcendental method. The correctly-rounded operations
+        // (`sqrt`, the arithmetic operators) are unaffected and stay on f64.
+        //
+        // Only the production half of the file is scanned: the list below
+        // contains every banned spelling by construction.
+        let source = include_str!("deterministic.rs");
+        let production = source
+            .split_once("mod tests {")
+            .expect("this test lives in `mod tests`, so the marker is present")
+            .0;
+        let banned = [
+            ".ln()",
+            ".log(",
+            ".log2()",
+            ".log10()",
+            ".ln_1p()",
+            ".exp()",
+            ".exp2()",
+            ".exp_m1()",
+            ".sin()",
+            ".cos()",
+            ".tan()",
+            ".sin_cos()",
+            ".asin()",
+            ".acos()",
+            ".atan()",
+            ".atan2(",
+            ".powf(",
+            ".hypot(",
+            ".cbrt()",
+            ".sinh()",
+            ".cosh()",
+            ".tanh()",
+        ];
+        for method in banned {
+            // The comments above name several of these, so only lines that are
+            // not comments count.
+            let offender = production
+                .lines()
+                .enumerate()
+                .find(|(_, line)| !line.trim_start().starts_with("//") && line.contains(method));
+            assert!(
+                offender.is_none(),
+                "`{method}` reached deterministic.rs at line {}: {}\n\
+                 The platform libm is not required by IEEE-754 to round these correctly, \
+                 and glibc and Apple's libm disagree. Call the `libm` crate instead.",
+                offender.unwrap().0 + 1,
+                offender.unwrap().1.trim(),
+            );
         }
     }
 }
