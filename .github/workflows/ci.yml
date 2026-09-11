@@ -11,9 +11,19 @@ on:
 permissions:
   contents: read
 
+# Every job's `runs-on` reads the repository variable `CI_RUNNER`, defaulting
+# to GitHub's hosted Linux runners. Set it (Settings -> Secrets and variables
+# -> Actions -> Variables) to `self-hosted` to move CI onto your own machine --
+# see docs/LOCAL_CI.md. It has to be spelled out per job rather than hoisted
+# into a workflow-level `env`, because `runs-on` is evaluated before `env` is
+# available to it.
+#
+# Steps specific to a hosted Ubuntu image are guarded on `runner.os` rather
+# than assumed, so the same workflow runs unchanged on a macOS runner.
+
 jobs:
   python-tests:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
@@ -68,7 +78,7 @@ jobs:
   # evict each other from the repository's 10 GB cache quota.
   rust-fast:
     name: rust-fast (no Bevy)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # No apt step: the packages below exist for Bevy's alsa and libudev
@@ -86,16 +96,19 @@ jobs:
 
   rust-viewer:
     name: rust-viewer (Bevy + headless render)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # Debian-only. A macOS runner links CoreAudio and IOKit instead, and its
+      # wgpu backend is Metal, so it needs neither the dev headers nor lavapipe.
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           # libudev/libasound are needed to LINK anything Bevy, rendering or
           # not. mesa-vulkan-drivers supplies lavapipe, a software Vulkan
-          # implementation, and is needed only by the render step below: the
-          # runner has no GPU and wgpu has no software fallback of its own.
+          # implementation, and is needed only by the render step below: a
+          # hosted runner has no GPU and wgpu has no software fallback.
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers
       - name: Install pinned Rust toolchain
         run: rustup show
@@ -149,10 +162,12 @@ jobs:
           PY
 
   rust-lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # Debian-only; see the note in rust-viewer.
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           # Linting the viewer still runs the alsa and libudev build scripts, so
@@ -197,7 +212,7 @@ jobs:
   # clean-checkout half; installing it into a fresh venv and running the
   # contract assertions from /tmp is the installed-wheel half.
   packaging-contract:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -221,7 +236,7 @@ jobs:
         run: cd /tmp && /tmp/contract-venv/bin/python "$GITHUB_WORKSPACE/scripts/check_installed_contract.py"
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -244,7 +259,10 @@ jobs:
         run: |
           cargo install cargo-audit --locked
           cargo audit
+      # A container action, so it cannot run on a macOS runner at all. Guarded
+      # rather than removed: on Linux it still runs exactly as before.
       - name: gitleaks (secret scanning)
+        if: runner.os == 'Linux'
         continue-on-error: true
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
