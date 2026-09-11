@@ -20,22 +20,51 @@ permissions:
 #
 # Steps specific to a hosted Ubuntu image are guarded on `runner.os` rather
 # than assumed, so the same workflow runs unchanged on a macOS runner.
+#
+# `actions/setup-python` is guarded too, because it CANNOT work on a
+# self-hosted macOS runner -- for two independent reasons, and neither is fixed
+# by setting AGENT_TOOLSDIRECTORY:
+#
+#   1. Its macOS builds are .pkg installers. The setup.sh inside the tarball
+#      runs `sudo installer -pkg ... -target /` to write into
+#      /Library/Frameworks. A personal Mac has no passwordless sudo and should
+#      not be given any to run CI.
+#   2. The runner's default tool cache on macOS is /Users/runner/hostedtoolcache
+#      -- owned by a user that exists only on GitHub's images -- so the script
+#      fails at its first `mkdir` with "Permission denied" before it gets that
+#      far.
+#
+# A self-hosted runner therefore uses the Python already installed on it. Every
+# job that needs Python then works from a virtualenv under RUNNER_TEMP, so the
+# hosted and self-hosted paths are identical from that point on and CI never
+# installs anything into the machine's own interpreter.
 
 jobs:
   python-tests:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # Three interpreters on GitHub's images, where actions/setup-python can
+        # supply them. A self-hosted runner has exactly the Python its owner
+        # installed and no way to get more (see the step below), so it tests
+        # that one rather than running the same interpreter three times -- which
+        # on a single runner would also serialise into three identical jobs.
+        python-version: ${{ vars.CI_RUNNER && fromJSON('["system"]') || fromJSON('["3.10", "3.11", "3.12"]') }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: matrix.python-version != 'system'
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Work from a virtualenv
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Install pinned Rust toolchain for native world bindings
         run: rustup show
       - name: Install dependencies
         run: |
+          python -VV
           pip install -e ".[dev]"
       - name: Lint with ruff
         run: ruff check src/ tests/
@@ -216,32 +245,46 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: runner.environment == 'github-hosted'
         with:
           python-version: "3.12"
       # The wheel carries a compiled cdylib, so the pinned toolchain is needed
       # to build it even though nothing here runs cargo directly.
       - name: Install pinned Rust toolchain
         run: rustup show
+      - name: Work from a virtualenv
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Build the wheel
         run: |
-          python3 -m pip install --upgrade build
-          python3 -m build --wheel --outdir dist/ .
+          python -m pip install --upgrade build
+          python -m build --wheel --outdir dist/ .
+      # Under RUNNER_TEMP rather than a fixed /tmp path: on a self-hosted
+      # runner that path is shared with every other job and every other repo on
+      # the machine, and two runs would install into each other's venv.
       - name: Install it into a clean environment
         run: |
-          python3 -m venv /tmp/contract-venv
-          /tmp/contract-venv/bin/pip install dist/*.whl
-      # Run from /tmp: the script refuses to run inside the source tree, since a
-      # checkout on the path would mask the failures it exists to catch.
+          python3 -m venv "$RUNNER_TEMP/contract-venv"
+          "$RUNNER_TEMP/contract-venv/bin/pip" install dist/*.whl
+      # Run from outside the checkout: the script refuses to run inside the
+      # source tree, since a checkout on the path would mask the failures it
+      # exists to catch.
       - name: Installed package honours its contracts
-        run: cd /tmp && /tmp/contract-venv/bin/python "$GITHUB_WORKSPACE/scripts/check_installed_contract.py"
+        run: cd "$RUNNER_TEMP" && "$RUNNER_TEMP/contract-venv/bin/python" "$GITHUB_WORKSPACE/scripts/check_installed_contract.py"
 
   security:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: runner.environment == 'github-hosted'
         with:
           python-version: "3.12"
+      - name: Work from a virtualenv
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Install pinned Rust toolchain
         run: rustup show
       - name: Install dependencies

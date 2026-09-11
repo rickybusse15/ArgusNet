@@ -46,6 +46,49 @@ port rather than discovered during it: preserve bit-parity, or re-baseline.
    rejection-reason distributions, track position error, coverage fraction —
    rather than on equality. A port that shifts a distribution is a bug; a port
    that shifts individual draws is expected.
+6. "Reproducible across platforms" means **no draw may call the platform's C
+   maths library.** See below; this is not free and it is not automatic.
+
+## "Across platforms" costs one dependency, and the cost is real
+
+Added 2026-09-11, after the clause in Decision 1 was violated the first time CI
+ran on something other than x86_64 Linux.
+
+IEEE-754 requires `sqrt`, `fma` and the arithmetic operators to be **correctly
+rounded** — one answer, everywhere, for every input. It requires nothing at all
+of `ln`, `cos`, `exp` or any other transcendental, and implementations use that
+freedom: glibc on x86_64 and Apple's libm on arm64 disagree by 1 ULP on some
+inputs.
+
+`DeterministicRng::normal` is a Box–Muller transform, so it multiplies `ln` and
+`cos` results straight into the draw. Spelled `u1.ln()` it is a call into
+whichever libm the binary happens to link, and the recorded stream becomes a
+property of the build machine. The conformance fixture caught it the first time
+CI ran on a Mac — element 0 of the very first normal draw, off by exactly one
+ULP, and nothing else in the fixture moved.
+
+The rule that follows is narrow and mechanical:
+
+- Correctly-rounded operations (`+ - * /`, `sqrt`, `fma`, comparisons, integer
+  work) stay on `f64`. They are already portable and the hardware is faster.
+- Every transcendental in a stream whose values are a contract goes through the
+  **`libm` crate** — a pure-Rust port of MUSL's libm with no platform calls,
+  version-pinned exactly like the PRNG, because a version bump there can move
+  the draws just as a platform change can. `libm`'s architecture-specific
+  routines cover only `fma`, `rint` and `sqrt`, all correctly rounded, so its
+  `log` and `cos` run identical generic code everywhere.
+
+**No behavioural test on a single machine can enforce this.** `f64::ln` and
+`libm::log` agree bit-for-bit on x86_64 glibc across the whole conformance
+corpus — the mistake is invisible on the platform that would have to catch it,
+and only becomes a red fixture on someone else's machine. So the rule is
+enforced as a **source rule**:
+`deterministic::tests::no_draw_routes_through_the_platform_libm` scans the
+module and fails on any `f64` transcendental method. It is a source-text
+assertion on purpose, and the alternative is no guard at all.
+
+The "Tests Required" item below — *reproduces a run exactly, on more than one
+platform* — was written at this ADR and first actually exercised here.
 
 ## Rationale
 

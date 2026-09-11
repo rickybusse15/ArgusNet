@@ -144,10 +144,33 @@ workflow needs editing either way.
 - **Xcode command line tools:** `xcode-select --install`
 - **Rust:** `rustup` — `rust-toolchain.toml` pins the version and installs it
   on first use.
-- **Python 3.10, 3.11 and 3.12.** The `python-tests` job matrixes over all
-  three, and `actions/setup-python` on a self-hosted macOS runner will download
-  a build if it isn't already there. If you would rather run one version, drop
-  the matrix down — but say so in the PR, since it narrows the gate.
+- **A Python 3.10 or newer.** Whichever one `python3` resolves to is the one
+  CI will use; nothing else is needed.
+
+  **Correction (2026-09-11).** This section previously said
+  `actions/setup-python` would download an interpreter if one was missing. It
+  will not, on a self-hosted Mac, for two independent reasons — and the first
+  attempt at a fix (`AGENT_TOOLSDIRECTORY` in the runner's `.env`) addresses
+  neither:
+
+  1. The macOS interpreters it fetches are **`.pkg` installers**. The `setup.sh`
+     inside the tarball runs `sudo installer -pkg … -target /` to write into
+     `/Library/Frameworks`. A personal Mac has no passwordless sudo, and giving
+     CI any would be a worse idea than the problem it solves.
+  2. The runner's default tool cache on macOS is
+     **`/Users/runner/hostedtoolcache`** — a path under a user that exists only
+     on GitHub's images — so the script dies at its first `mkdir` with
+     `Permission denied` well before it reaches the `sudo`.
+
+  So `actions/setup-python` is now **skipped on a self-hosted runner**, and the
+  `python-tests` matrix collapses to a single `system` entry there rather than
+  running the same interpreter three times (on one runner that would serialise
+  into three identical jobs). The three-version matrix still runs on GitHub's
+  images, so the gate is unchanged where it can be met.
+
+  **CI never installs into your interpreter.** Every job that needs Python
+  builds a virtualenv under `RUNNER_TEMP` first and works from that, so
+  `pip install -e ".[dev]"` cannot disturb a conda base or a system Python.
 - Nothing else: the apt steps are guarded on `runner.os == 'Linux'` and are
   skipped.
 
@@ -165,10 +188,11 @@ workflow needs editing either way.
   builds much faster and means a stale artifact can mask a broken cold build.
   Worth an occasional `cargo clean` — and note `target/` reached 24 GB in this
   repository before the debuginfo change, so keep an eye on disk.
-- **The render smoke test will use Metal**, not lavapipe. It should pass, and
-  it will be far faster. **This has not been verified on macOS from here** —
-  this container is Linux — so treat the first `rust-viewer` run as the check
-  of that claim rather than an assumption.
+- **The render smoke test uses Metal**, not lavapipe. This was written as an
+  unverified prediction and is now **confirmed**: the first `rust-viewer` run on
+  the macOS runner passed every step, the headless render included, in 1m21s.
+  It is the one claim in this document that could not be checked from the Linux
+  container, and it held.
 - **Timing baselines do not transfer.** The perf gate's blocking half compares
   deterministic work counters, which are machine-independent and fine. The
   wall-clock half stays opt-in behind `ARGUSNET_RUN_PERF_TIMING` precisely
