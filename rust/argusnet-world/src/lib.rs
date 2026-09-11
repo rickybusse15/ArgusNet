@@ -803,4 +803,5 @@ pub mod tiled;
 pub mod visibility;
 
 pub mod land_cover;
+pub mod noise;
 pub mod raster;
