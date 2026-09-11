@@ -144,6 +144,16 @@ workflow needs editing either way.
 - **Xcode command line tools:** `xcode-select --install`
 - **Rust:** `rustup` — `rust-toolchain.toml` pins the version and installs it
   on first use.
+
+  If you run the runner as a **service** (`./svc.sh install && ./svc.sh start`
+  on macOS — no sudo, it is a launchd *user* agent), note that launchd gives it
+  a minimal `PATH` and never sources `~/.zprofile`, where rustup puts
+  `~/.cargo/bin`. Every cargo step would then fail with
+  `rustup: command not found` while rustup works perfectly in your terminal.
+  The workflow handles this itself — each toolchain step adds `~/.cargo/bin`
+  when it exists — so nothing is needed on your side. Adding
+  `PATH=/Users/<you>/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin` to
+  `actions-runner/.env` is an equivalent fix if you prefer it on the machine.
 - **A Python 3.10 or newer.** Whichever one `python3` resolves to is the one
   CI will use; nothing else is needed.
 
