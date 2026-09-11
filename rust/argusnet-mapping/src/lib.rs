@@ -65,9 +65,11 @@ pub fn score_footprints(
         .collect())
 }
 
+pub mod belief;
 pub mod coverage;
 pub mod footprint;
 
+pub use belief::{BeliefCell, BeliefCellStatus, BeliefGrids, WorldBeliefQuery};
 pub use coverage::{CoverageGrid, CoverageStats};
 pub use footprint::{rasterize_circle, GridBounds, Sampling};
 
