@@ -1,0 +1,2053 @@
+{
+  "elections": [
+    {
+      "name": "empty_list",
+      "drone_ids": [],
+      "battery_states": [],
+      "battery_capacity_wh": "500.0",
+      "elected": null
+    },
+    {
+      "name": "single_drone",
+      "drone_ids": [
+        "a"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "a",
+          "remaining_wh": "120.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "a"
+    },
+    {
+      "name": "highest_fraction_wins",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "a",
+          "remaining_wh": "100.0"
+        },
+        {
+          "drone_id": "b",
+          "remaining_wh": "400.0"
+        },
+        {
+          "drone_id": "c",
+          "remaining_wh": "250.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "b"
+    },
+    {
+      "name": "tie_keeps_the_earlier_id",
+      "drone_ids": [
+        "b",
+        "a"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "a",
+          "remaining_wh": "300.0"
+        },
+        {
+          "drone_id": "b",
+          "remaining_wh": "300.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "b"
+    },
+    {
+      "name": "tie_reversed_order",
+      "drone_ids": [
+        "a",
+        "b"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "a",
+          "remaining_wh": "300.0"
+        },
+        {
+          "drone_id": "b",
+          "remaining_wh": "300.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "a"
+    },
+    {
+      "name": "missing_state_scores_full",
+      "drone_ids": [
+        "known",
+        "unknown"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "known",
+          "remaining_wh": "499.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "unknown"
+    },
+    {
+      "name": "missing_state_listed_first",
+      "drone_ids": [
+        "unknown",
+        "known"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "known",
+          "remaining_wh": "499.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "unknown"
+    },
+    {
+      "name": "capacity_below_one_wh",
+      "drone_ids": [
+        "small",
+        "large"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "small",
+          "remaining_wh": "0.25"
+        },
+        {
+          "drone_id": "large",
+          "remaining_wh": "0.5"
+        }
+      ],
+      "battery_capacity_wh": "0.5",
+      "elected": "large"
+    },
+    {
+      "name": "zero_capacity",
+      "drone_ids": [
+        "small",
+        "large"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "small",
+          "remaining_wh": "0.25"
+        },
+        {
+          "drone_id": "large",
+          "remaining_wh": "0.5"
+        }
+      ],
+      "battery_capacity_wh": "0.0",
+      "elected": "large"
+    },
+    {
+      "name": "all_below_the_bar",
+      "drone_ids": [
+        "a",
+        "b"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "a",
+          "remaining_wh": "-5000.0"
+        },
+        {
+          "drone_id": "b",
+          "remaining_wh": "-1000.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "a"
+    },
+    {
+      "name": "all_below_the_bar_reversed",
+      "drone_ids": [
+        "b",
+        "a"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "a",
+          "remaining_wh": "-5000.0"
+        },
+        {
+          "drone_id": "b",
+          "remaining_wh": "-1000.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "b"
+    },
+    {
+      "name": "exactly_at_the_bar",
+      "drone_ids": [
+        "x",
+        "y"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "x",
+          "remaining_wh": "-500.0"
+        },
+        {
+          "drone_id": "y",
+          "remaining_wh": "-500.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "x"
+    },
+    {
+      "name": "just_above_the_bar",
+      "drone_ids": [
+        "x",
+        "y"
+      ],
+      "battery_states": [
+        {
+          "drone_id": "x",
+          "remaining_wh": "-600.0"
+        },
+        {
+          "drone_id": "y",
+          "remaining_wh": "-499.0"
+        }
+      ],
+      "battery_capacity_wh": "500.0",
+      "elected": "y"
+    },
+    {
+      "name": "empty_battery_map",
+      "drone_ids": [
+        "a",
+        "b"
+      ],
+      "battery_states": [],
+      "battery_capacity_wh": "500.0",
+      "elected": "a"
+    }
+  ],
+  "message_sequences": [
+    {
+      "name": "zero_latency_applies_immediately",
+      "message_latency_steps": 0,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            3,
+            4
+          ],
+          "current_step": 10,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  3,
+                  4
+                ]
+              }
+            ],
+            "pending": []
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "b",
+          "cell": [
+            5,
+            6
+          ],
+          "current_step": 10,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  3,
+                  4
+                ]
+              },
+              {
+                "drone_id": "b",
+                "cell": [
+                  5,
+                  6
+                ]
+              }
+            ],
+            "pending": []
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 10,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  3,
+                  4
+                ]
+              },
+              {
+                "drone_id": "b",
+                "cell": [
+                  5,
+                  6
+                ]
+              }
+            ],
+            "pending": []
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            7,
+            8
+          ],
+          "current_step": 11,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  7,
+                  8
+                ]
+              },
+              {
+                "drone_id": "b",
+                "cell": [
+                  5,
+                  6
+                ]
+              }
+            ],
+            "pending": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "none_cell_is_a_no_op",
+      "message_latency_steps": 0,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": null,
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": []
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "none_cell_is_a_no_op_under_latency",
+      "message_latency_steps": 3,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": null,
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": []
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 9,
+          "state": {
+            "claimed_cells": [],
+            "pending": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "queued_message_waits_for_its_step",
+      "message_latency_steps": 2,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            1,
+            1
+          ],
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 6,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 7,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  1,
+                  1
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "last_message_due_on_a_step_wins",
+      "message_latency_steps": 2,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            1,
+            1
+          ],
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            2,
+            2
+          ],
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  },
+                  {
+                    "cell": [
+                      2,
+                      2
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            3,
+            3
+          ],
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  },
+                  {
+                    "cell": [
+                      2,
+                      2
+                    ],
+                    "deliver_at_step": 7
+                  },
+                  {
+                    "cell": [
+                      3,
+                      3
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 7,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  3,
+                  3
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "a_later_message_is_held_back",
+      "message_latency_steps": 2,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            1,
+            1
+          ],
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            2,
+            2
+          ],
+          "current_step": 6,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 7
+                  },
+                  {
+                    "cell": [
+                      2,
+                      2
+                    ],
+                    "deliver_at_step": 8
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 7,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  1,
+                  1
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      2,
+                      2
+                    ],
+                    "deliver_at_step": 8
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 8,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  2,
+                  2
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "queue_order_is_first_queued_first",
+      "message_latency_steps": 4,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "c",
+          "cell": [
+            0,
+            0
+          ],
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "c",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      0
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            0,
+            1
+          ],
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "c",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      0
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              },
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      1
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "c",
+          "cell": [
+            1,
+            0
+          ],
+          "current_step": 1,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "c",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      0
+                    ],
+                    "deliver_at_step": 4
+                  },
+                  {
+                    "cell": [
+                      1,
+                      0
+                    ],
+                    "deliver_at_step": 5
+                  }
+                ]
+              },
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      1
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "b",
+          "cell": [
+            0,
+            2
+          ],
+          "current_step": 2,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "c",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      0
+                    ],
+                    "deliver_at_step": 4
+                  },
+                  {
+                    "cell": [
+                      1,
+                      0
+                    ],
+                    "deliver_at_step": 5
+                  }
+                ]
+              },
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      1
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              },
+              {
+                "drone_id": "b",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      2
+                    ],
+                    "deliver_at_step": 6
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 4,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  0,
+                  1
+                ]
+              },
+              {
+                "drone_id": "c",
+                "cell": [
+                  0,
+                  0
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "c",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      0
+                    ],
+                    "deliver_at_step": 5
+                  }
+                ]
+              },
+              {
+                "drone_id": "a",
+                "messages": []
+              },
+              {
+                "drone_id": "b",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      2
+                    ],
+                    "deliver_at_step": 6
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  0,
+                  1
+                ]
+              },
+              {
+                "drone_id": "c",
+                "cell": [
+                  1,
+                  0
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "c",
+                "messages": []
+              },
+              {
+                "drone_id": "a",
+                "messages": []
+              },
+              {
+                "drone_id": "b",
+                "messages": [
+                  {
+                    "cell": [
+                      0,
+                      2
+                    ],
+                    "deliver_at_step": 6
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 6,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  0,
+                  1
+                ]
+              },
+              {
+                "drone_id": "b",
+                "cell": [
+                  0,
+                  2
+                ]
+              },
+              {
+                "drone_id": "c",
+                "cell": [
+                  1,
+                  0
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "c",
+                "messages": []
+              },
+              {
+                "drone_id": "a",
+                "messages": []
+              },
+              {
+                "drone_id": "b",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "a_drained_queue_survives_as_an_empty_queue",
+      "message_latency_steps": 1,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            1,
+            1
+          ],
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 5,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  1,
+                  1
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 6,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  1,
+                  1
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "negative_latency_delivers_at_the_next_flush",
+      "message_latency_steps": -3,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            7,
+            7
+          ],
+          "current_step": 10,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      7,
+                      7
+                    ],
+                    "deliver_at_step": 7
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 10,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  7,
+                  7
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "latency_one_delivers_on_the_following_step",
+      "message_latency_steps": 1,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            1,
+            2
+          ],
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      2
+                    ],
+                    "deliver_at_step": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      2
+                    ],
+                    "deliver_at_step": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 1,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  1,
+                  2
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "interleaved_drones_under_latency",
+      "message_latency_steps": 2,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            1,
+            1
+          ],
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "b",
+          "cell": [
+            2,
+            2
+          ],
+          "current_step": 1,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 2
+                  }
+                ]
+              },
+              {
+                "drone_id": "b",
+                "messages": [
+                  {
+                    "cell": [
+                      2,
+                      2
+                    ],
+                    "deliver_at_step": 3
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            3,
+            3
+          ],
+          "current_step": 2,
+          "state": {
+            "claimed_cells": [],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      1,
+                      1
+                    ],
+                    "deliver_at_step": 2
+                  },
+                  {
+                    "cell": [
+                      3,
+                      3
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              },
+              {
+                "drone_id": "b",
+                "messages": [
+                  {
+                    "cell": [
+                      2,
+                      2
+                    ],
+                    "deliver_at_step": 3
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 2,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  1,
+                  1
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      3,
+                      3
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              },
+              {
+                "drone_id": "b",
+                "messages": [
+                  {
+                    "cell": [
+                      2,
+                      2
+                    ],
+                    "deliver_at_step": 3
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 3,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  1,
+                  1
+                ]
+              },
+              {
+                "drone_id": "b",
+                "cell": [
+                  2,
+                  2
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": [
+                  {
+                    "cell": [
+                      3,
+                      3
+                    ],
+                    "deliver_at_step": 4
+                  }
+                ]
+              },
+              {
+                "drone_id": "b",
+                "messages": []
+              }
+            ]
+          }
+        },
+        {
+          "call": "flush_messages",
+          "drone_id": null,
+          "cell": null,
+          "current_step": 4,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  3,
+                  3
+                ]
+              },
+              {
+                "drone_id": "b",
+                "cell": [
+                  2,
+                  2
+                ]
+              }
+            ],
+            "pending": [
+              {
+                "drone_id": "a",
+                "messages": []
+              },
+              {
+                "drone_id": "b",
+                "messages": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "negative_cells_round_trip",
+      "message_latency_steps": 0,
+      "steps": [
+        {
+          "call": "update_claimed",
+          "drone_id": "a",
+          "cell": [
+            -4,
+            -9
+          ],
+          "current_step": 0,
+          "state": {
+            "claimed_cells": [
+              {
+                "drone_id": "a",
+                "cell": [
+                  -4,
+                  -9
+                ]
+              }
+            ],
+            "pending": []
+          }
+        }
+      ]
+    }
+  ],
+  "formations": [
+    {
+      "name": "none_returns_nothing",
+      "formation_mode": "none",
+      "formation_spacing_m": "80.0",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "0.7",
+      "offsets": []
+    },
+    {
+      "name": "single_drone_returns_nothing",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "80.0",
+      "drone_ids": [
+        "a"
+      ],
+      "lead_heading_rad": "0.7",
+      "offsets": []
+    },
+    {
+      "name": "empty_returns_nothing",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "80.0",
+      "drone_ids": [],
+      "lead_heading_rad": "0.7",
+      "offsets": []
+    },
+    {
+      "name": "unrecognized_mode_returns_zeros",
+      "formation_mode": "echelon",
+      "formation_spacing_m": "80.0",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "0.7",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "line_abreast_pair",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "137.3",
+      "drone_ids": [
+        "a",
+        "b"
+      ],
+      "lead_heading_rad": "0.9128",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-108.63438664379072",
+            "83.9634446561561"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "line_abreast_axis_aligned",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "100.0",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "0.0",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-0.0",
+            "100.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "0.0",
+            "-100.0"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "line_abreast_negative_heading",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "137.3",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "-2.4011",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "92.62967003091754",
+            "-101.3461110746897"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "-92.62967003091754",
+            "101.3461110746897"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "line_abreast_nine",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "137.3",
+      "drone_ids": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i"
+      ],
+      "lead_heading_rad": "0.9128",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-108.63438664379072",
+            "83.9634446561561"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "108.63438664379072",
+            "-83.9634446561561"
+          ]
+        },
+        {
+          "drone_id": "d",
+          "offset": [
+            "-217.26877328758144",
+            "167.9268893123122"
+          ]
+        },
+        {
+          "drone_id": "e",
+          "offset": [
+            "217.26877328758144",
+            "-167.9268893123122"
+          ]
+        },
+        {
+          "drone_id": "f",
+          "offset": [
+            "-325.90315993137216",
+            "251.8903339684683"
+          ]
+        },
+        {
+          "drone_id": "g",
+          "offset": [
+            "325.90315993137216",
+            "-251.8903339684683"
+          ]
+        },
+        {
+          "drone_id": "h",
+          "offset": [
+            "-434.5375465751629",
+            "335.8537786246244"
+          ]
+        },
+        {
+          "drone_id": "i",
+          "offset": [
+            "434.5375465751629",
+            "-335.8537786246244"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "v_formation_pair",
+      "formation_mode": "v_formation",
+      "formation_spacing_m": "137.3",
+      "drone_ids": [
+        "a",
+        "b"
+      ],
+      "lead_heading_rad": "0.9128",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-96.29891564997341",
+            "-12.33547099381731"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "v_formation_axis_aligned",
+      "formation_mode": "v_formation",
+      "formation_spacing_m": "100.0",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "0.0",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-50.0",
+            "50.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "-50.0",
+            "-50.0"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "v_formation_heading_past_pi",
+      "formation_mode": "v_formation",
+      "formation_spacing_m": "137.3",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "4.7123",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "68.65610823163243",
+            "68.64389122483061"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "-68.64389122483061",
+            "68.65610823163243"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "v_formation_nine",
+      "formation_mode": "v_formation",
+      "formation_spacing_m": "137.3",
+      "drone_ids": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i"
+      ],
+      "lead_heading_rad": "0.9128",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-96.29891564997341",
+            "-12.33547099381731"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "12.33547099381731",
+            "-96.29891564997341"
+          ]
+        },
+        {
+          "drone_id": "d",
+          "offset": [
+            "-192.59783129994682",
+            "-24.67094198763462"
+          ]
+        },
+        {
+          "drone_id": "e",
+          "offset": [
+            "24.67094198763462",
+            "-192.59783129994682"
+          ]
+        },
+        {
+          "drone_id": "f",
+          "offset": [
+            "-288.8967469499202",
+            "-37.00641298145193"
+          ]
+        },
+        {
+          "drone_id": "g",
+          "offset": [
+            "37.00641298145193",
+            "-288.8967469499202"
+          ]
+        },
+        {
+          "drone_id": "h",
+          "offset": [
+            "-385.19566259989364",
+            "-49.34188397526924"
+          ]
+        },
+        {
+          "drone_id": "i",
+          "offset": [
+            "49.34188397526924",
+            "-385.19566259989364"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "zero_spacing_is_all_zeros",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "0.0",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "0.9128",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "0.0",
+            "-0.0"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "negative_spacing_mirrors",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "-137.3",
+      "drone_ids": [
+        "a",
+        "b",
+        "c"
+      ],
+      "lead_heading_rad": "0.9128",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "108.63438664379072",
+            "-83.9634446561561"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "offset": [
+            "-108.63438664379072",
+            "83.9634446561561"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repeated_id_overwrites_in_place",
+      "formation_mode": "line_abreast",
+      "formation_spacing_m": "137.3",
+      "drone_ids": [
+        "a",
+        "b",
+        "a"
+      ],
+      "lead_heading_rad": "0.9128",
+      "offsets": [
+        {
+          "drone_id": "a",
+          "offset": [
+            "108.63438664379072",
+            "-83.9634446561561"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "offset": [
+            "-108.63438664379072",
+            "83.9634446561561"
+          ]
+        }
+      ]
+    }
+  ]
+}
