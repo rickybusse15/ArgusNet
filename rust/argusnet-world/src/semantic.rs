@@ -37,7 +37,7 @@
 //! line from the *reference* would be a behaviour change if the mask were ever
 //! aliased upstream, so it is recorded rather than silently dropped.
 
-use crate::grid_ops::{dilate_mask, ellipse_mask, slope_grid, smooth_heights, Grid, Mask};
+use crate::grid_ops::{dilate_mask, ellipse_mask_grid, slope_grid, smooth_heights, Grid, Mask};
 use crate::noise::stable_seed;
 
 /// Scene bounds in metres.
@@ -315,28 +315,29 @@ pub fn semantic_masks(inputs: SemanticInputs<'_>) -> Result<(Grid, SemanticMasks
     }
 
     if preset_name == "lake_district" {
-        let xs: Vec<f64> = (0..nx).map(|i| xx.at(i, 0)).collect();
-        let ys: Vec<f64> = (0..ny).map(|j| yy.at(0, j)).collect();
-        let first = ellipse_mask(
-            &xs,
-            &ys,
+        // Elementwise over the coordinate GRIDS. Rebuilding 1-D axes from
+        // them would assume axis 0 is x, which the real caller's meshgrid
+        // convention does not guarantee.
+        let first = ellipse_mask_grid(
+            xx,
+            yy,
             (
                 center_x - scene_scale_m * 0.22,
                 center_y + scene_scale_m * 0.16,
             ),
             scene_scale_m * 0.09,
             scene_scale_m * 0.06,
-        );
-        let second = ellipse_mask(
-            &xs,
-            &ys,
+        )?;
+        let second = ellipse_mask_grid(
+            xx,
+            yy,
             (
                 center_x + scene_scale_m * 0.24,
                 center_y - scene_scale_m * 0.17,
             ),
             scene_scale_m * 0.08,
             scene_scale_m * 0.055,
-        );
+        )?;
         let mut lakes = first;
         or_into(&mut lakes, &second);
 
@@ -390,20 +391,18 @@ pub fn semantic_masks(inputs: SemanticInputs<'_>) -> Result<(Grid, SemanticMasks
     }
 
     if preset_name == "urban_flat" || preset_name == "military_compound" {
-        let xs: Vec<f64> = (0..nx).map(|i| xx.at(i, 0)).collect();
-        let ys: Vec<f64> = (0..ny).map(|j| yy.at(0, j)).collect();
         let (rx, ry) = if preset_name == "urban_flat" {
             (0.18, 0.15)
         } else {
             (0.20, 0.18)
         };
-        let pad = ellipse_mask(
-            &xs,
-            &ys,
+        let pad = ellipse_mask_grid(
+            xx,
+            yy,
             (center_x, center_y),
             scene_scale_m * rx,
             scene_scale_m * ry,
-        );
+        )?;
         let inside = masked_values(&heights, &pad);
         // `np.median(heights[pad]) if np.any(pad) else np.median(heights)` --
         // an empty pad falls back to the median of the WHOLE field, not to

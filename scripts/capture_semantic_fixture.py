@@ -167,20 +167,35 @@ SCENES: dict[str, dict] = {
 }
 
 
-def make_field(scene: dict, seed: int) -> tuple:
-    """A height field plus its coordinate grids, for one scene configuration."""
+def make_field(scene: dict, seed: int, layout: str = "ij") -> tuple:
+    """A height field plus its coordinate grids, for one scene configuration.
+
+    `layout` selects which meshgrid convention the grids use:
+
+    * `"ij"` -- `meshgrid(..., indexing="ij")`, so axis 0 is x.
+    * `"xy"` -- numpy's DEFAULT, so axis 0 is y. This is what
+      `procedural_terrain_grid` actually passes, and it is not equivalent:
+      `_smooth_heights` sums its four neighbours in a fixed POSITIONAL order,
+      which transposition permutes, and floating-point addition is not
+      associative. The two layouts agree on every mask and differ on the
+      height field by up to ~7e-15 -- small, but not zero, and this fixture
+      compares bit patterns.
+    """
     nx, ny = scene["nx"], scene["ny"]
     resolution = scene["resolution"]
     rng = np.random.default_rng(seed)
     xs = np.arange(nx, dtype=float) * resolution
     ys = np.arange(ny, dtype=float) * resolution
-    xx, yy = np.meshgrid(xs, ys, indexing="ij")
+    if layout == "ij":
+        xx, yy = np.meshgrid(xs, ys, indexing="ij")
+    else:
+        xx, yy = np.meshgrid(xs, ys)
     base = (
         scene["lift"]
         + (xx / max(xs[-1], 1.0)) * scene["tilt"]
         - (yy / max(ys[-1], 1.0)) * (scene["tilt"] * 0.375)
     )
-    heights = base + rng.normal(0.0, scene["rough"], size=(nx, ny))
+    heights = base + rng.normal(0.0, scene["rough"], size=xx.shape)
     bounds = Bounds(0.0, float(xs[-1]), 0.0, float(ys[-1]))
     return heights, xx, yy, bounds
 
@@ -267,13 +282,15 @@ def build() -> dict:
     default_profile = _PRESET_PROFILES["default"]
     runs = []
 
-    def add_run(label: str, scene_name: str, preset_name: str, profile, field=None) -> None:
+    def add_run(
+        label: str, scene_name: str, preset_name: str, profile, field=None, layout: str = "ij"
+    ) -> None:
         if field is None:
             scene = SCENES[scene_name]
-            heights, xx, yy, bounds = make_field(scene, seed=20260911)
+            heights, xx, yy, bounds = make_field(scene, seed=20260911, layout=layout)
         else:
             heights, xx, yy, bounds, scene = field
-        assert_coordinates_are_reconstructible(scene, xx, yy, scene["resolution"])
+        assert_coordinates_are_reconstructible(xx, yy, scene["resolution"], layout)
         result_heights, masks = _semantic_masks(
             preset_name=preset_name,
             profile=profile,
@@ -291,7 +308,8 @@ def build() -> dict:
                 "scene": scene_name,
                 "preset_name": preset_name,
                 "profile": profile_record(profile),
-                "shape": [scene["nx"], scene["ny"]],
+                "layout": layout,
+                "shape": [int(heights.shape[0]), int(heights.shape[1])],
                 "resolution_m": exact(scene["resolution"]),
                 "seed": 4242,
                 "ground_plane_m": exact(scene["ground"]),
@@ -392,6 +410,24 @@ def build() -> dict:
         "override/zero_bias_urban", "low", "urban_flat", terrain_profile_for_preset("urban_flat")
     )
 
+    # THE LAYOUT THE REAL CALLER USES. `procedural_terrain_grid` builds its
+    # coordinate grids with numpy's DEFAULT meshgrid, so axis 0 is y -- the
+    # transpose of every run above. `_semantic_masks` is layout-agnostic for
+    # the masks, but NOT for the heights: `_smooth_heights` sums its four
+    # neighbours in a fixed positional order, transposition permutes that
+    # order, and floating-point addition is not associative. The two layouts
+    # differ by up to ~7e-15, which is nothing physically and everything to a
+    # fixture that compares bit patterns. Without these runs the port is only
+    # pinned against a layout production never uses.
+    for preset_name in ("default", "coastal", "river_valley", "lake_district", "urban_flat"):
+        add_run(
+            f"xy/{preset_name}",
+            "base",
+            preset_name,
+            terrain_profile_for_preset(preset_name),
+            layout="xy",
+        )
+
     # Slopes landing EXACTLY on each steep-slope threshold. Smoothing is turned
     # off and the ground plane put well below the ramp so the height field
     # reaches the second slope computation untouched; roughness selects which
@@ -417,15 +453,19 @@ def build() -> dict:
     }
 
 
-def assert_coordinates_are_reconstructible(scene: dict, xx, yy, resolution: float) -> None:
-    """The fixture omits xx/yy; prove they are `i * res` and `j * res` first."""
-    nx, ny = scene["nx"], scene["ny"]
-    for i in range(nx):
-        for j in range(ny):
-            if xx[i, j] != i * resolution or yy[i, j] != j * resolution:
+def assert_coordinates_are_reconstructible(xx, yy, resolution: float, layout: str) -> None:
+    """The fixture omits xx/yy; prove they follow from the shape and layout."""
+    rows, cols = xx.shape
+    for a in range(rows):
+        for b in range(cols):
+            # "ij": axis 0 is x. "xy": axis 0 is y -- numpy's default, and what
+            # the real caller uses.
+            want_x = a * resolution if layout == "ij" else b * resolution
+            want_y = b * resolution if layout == "ij" else a * resolution
+            if xx[a, b] != want_x or yy[a, b] != want_y:
                 raise SystemExit(
-                    f"coordinate grids are not reconstructible at ({i}, {j}); "
-                    "the fixture cannot omit them"
+                    f"coordinate grids are not reconstructible at ({a}, {b}) "
+                    f"under layout {layout!r}; the fixture cannot omit them"
                 )
 
 
@@ -523,10 +563,34 @@ def check_discriminating(document: dict) -> None:
             f"they are untested: {sorted(missing)}"
         )
 
+    # (e) the xy-layout runs must DIFFER from their ij twins, or they are
+    #     redundant and the layout sensitivity is untested.
+    by_label = {run["label"]: run for run in document["runs"]}
+    layout_hits = 0
+    for label, run in by_label.items():
+        if not label.startswith("xy/"):
+            continue
+        twin = by_label.get("base/" + label[len("xy/") :])
+        if twin is None:
+            continue
+        rows, cols = run["shape"]
+        mine = np.array([float(v) for v in run["heights_out_m"]]).reshape(rows, cols)
+        theirs = np.array([float(v) for v in twin["heights_out_m"]]).reshape(
+            twin["shape"][0], twin["shape"][1]
+        )
+        if not np.array_equal(mine, theirs.T):
+            layout_hits += 1
+    if not layout_hits:
+        raise SystemExit(
+            "every xy-layout run is a bit-exact transpose of its ij twin, so "
+            "the layout sensitivity of _smooth_heights is untested"
+        )
+
     print(
         f"discriminating: {ridge_hits} runs pin elev_norm staleness, "
         f"{slope_hits} pin the two slope fields, {snapshot_hits} pin the "
-        f"valley snapshot, {len(branching)} preset branches fire"
+        f"valley snapshot, {len(branching)} preset branches fire, "
+        f"{layout_hits} xy-layout runs differ from their ij twins"
     )
 
 

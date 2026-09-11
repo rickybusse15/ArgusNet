@@ -267,10 +267,51 @@ pub fn smooth_heights(
     Ok(smoothed)
 }
 
-/// Cells inside an axis-aligned ellipse, boundary **included**.
+/// Cells inside an axis-aligned ellipse, boundary **included**, evaluated
+/// **elementwise over the coordinate grids**.
+///
+/// This is the shape the reference has: `_ellipse_mask(xx, yy, ...)` takes two
+/// full 2-D grids and never reconstructs an axis from them. That matters,
+/// because the caller's meshgrid convention is not fixed —
+/// `procedural_terrain_grid` uses numpy's default (axis 0 is y) while other
+/// callers use `indexing="ij"` (axis 0 is x). Rebuilding `xs` from `xx[:, 0]`
+/// silently assumes the latter and produces a constant axis under the former.
 ///
 /// Both radii are floored at one metre, so a degenerate axis still produces a
 /// one-metre-wide band rather than an empty mask.
+pub fn ellipse_mask_grid(
+    xx: &Grid,
+    yy: &Grid,
+    center_xy: (f64, f64),
+    radius_x_m: f64,
+    radius_y_m: f64,
+) -> Result<Mask, &'static str> {
+    if xx.nx != yy.nx || xx.ny != yy.ny {
+        return Err("coordinate grids must have the same shape");
+    }
+    let rx = radius_x_m.max(1.0);
+    let ry = radius_y_m.max(1.0);
+    let values = xx
+        .values
+        .iter()
+        .zip(&yy.values)
+        .map(|(x, y)| {
+            let dx = (x - center_xy.0) / rx;
+            let dy = (y - center_xy.1) / ry;
+            (dx * dx) + (dy * dy) <= 1.0
+        })
+        .collect();
+    Ok(Mask {
+        nx: xx.nx,
+        ny: xx.ny,
+        values,
+    })
+}
+
+/// The same test over the outer product of two axes, with axis 0 taken as x.
+///
+/// A convenience for callers that genuinely hold separate axes. Anything
+/// working from 2-D coordinate grids should use [`ellipse_mask_grid`].
 pub fn ellipse_mask(
     xs: &[f64],
     ys: &[f64],
@@ -278,21 +319,16 @@ pub fn ellipse_mask(
     radius_x_m: f64,
     radius_y_m: f64,
 ) -> Mask {
-    let rx = radius_x_m.max(1.0);
-    let ry = radius_y_m.max(1.0);
-    let mut values = Vec::with_capacity(xs.len() * ys.len());
-    for x in xs {
-        for y in ys {
-            let dx = (x - center_xy.0) / rx;
-            let dy = (y - center_xy.1) / ry;
-            values.push((dx * dx) + (dy * dy) <= 1.0);
+    let mut xx = Grid::filled(xs.len(), ys.len(), 0.0);
+    let mut yy = Grid::filled(xs.len(), ys.len(), 0.0);
+    for (i, x) in xs.iter().enumerate() {
+        for (j, y) in ys.iter().enumerate() {
+            xx.set(i, j, *x);
+            yy.set(i, j, *y);
         }
     }
-    Mask {
-        nx: xs.len(),
-        ny: ys.len(),
-        values,
-    }
+    ellipse_mask_grid(&xx, &yy, center_xy, radius_x_m, radius_y_m)
+        .expect("grids built to the same shape")
 }
 
 #[cfg(test)]
@@ -418,6 +454,42 @@ mod tests {
         // Radius 10 about x = 10: x = 0 and x = 20 sit exactly on the boundary.
         let mask = ellipse_mask(&xs, &ys, (10.0, 0.0), 10.0, 10.0);
         assert_eq!(mask.count(), 3, "<= 1.0 keeps the boundary");
+    }
+
+    #[test]
+    fn the_grid_ellipse_rejects_mismatched_coordinate_grids() {
+        let xx = Grid::filled(3, 4, 0.0);
+        let yy = Grid::filled(4, 3, 0.0);
+        assert!(ellipse_mask_grid(&xx, &yy, (0.0, 0.0), 1.0, 1.0).is_err());
+    }
+
+    #[test]
+    fn the_grid_ellipse_does_not_assume_which_axis_is_x() {
+        // The same points in both meshgrid conventions must give transposed
+        // masks. Rebuilding an axis from `xx[:, 0]` breaks this, and that was
+        // a real bug in the semantics port until the production layout was
+        // tested.
+        let (nx, ny) = (5usize, 3usize);
+        let mut ij_xx = Grid::filled(nx, ny, 0.0);
+        let mut ij_yy = Grid::filled(nx, ny, 0.0);
+        let mut xy_xx = Grid::filled(ny, nx, 0.0);
+        let mut xy_yy = Grid::filled(ny, nx, 0.0);
+        for i in 0..nx {
+            for j in 0..ny {
+                ij_xx.set(i, j, i as f64 * 10.0);
+                ij_yy.set(i, j, j as f64 * 10.0);
+                xy_xx.set(j, i, i as f64 * 10.0);
+                xy_yy.set(j, i, j as f64 * 10.0);
+            }
+        }
+        let a = ellipse_mask_grid(&ij_xx, &ij_yy, (20.0, 10.0), 15.0, 8.0).unwrap();
+        let b = ellipse_mask_grid(&xy_xx, &xy_yy, (20.0, 10.0), 15.0, 8.0).unwrap();
+        for i in 0..nx {
+            for j in 0..ny {
+                assert_eq!(a.at(i, j), b.at(j, i), "cell ({i}, {j})");
+            }
+        }
+        assert!(a.count() > 0, "the ellipse must select something");
     }
 
     #[test]

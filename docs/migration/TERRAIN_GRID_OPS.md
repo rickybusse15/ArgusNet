@@ -86,9 +86,22 @@ observable and both are pinned.
 - `_ellipse_mask` includes its boundary (`<= 1.0`); the fixture places 8
   samples exactly on it, without which `<=` and `<` are indistinguishable.
 
+## Added later: `ellipse_mask_grid`
+
+The original `ellipse_mask` took two 1-D axes and formed their outer product,
+with axis 0 as x. That is not the shape the reference has: `_ellipse_mask(xx,
+yy, ...)` is **elementwise over two full 2-D grids** and never reconstructs an
+axis. The difference is invisible while every caller uses `indexing="ij"`, and
+becomes a wrong answer the moment one uses numpy's default meshgrid — which
+`procedural_terrain_grid` does. See `TERRAIN_SEMANTICS.md`; the bug was real
+and cost 0.013 m on the lake preset.
+
+`ellipse_mask_grid` is now the primary form and the axis-product version is a
+convenience built on it.
+
 ## Not in this slice
 
-`_semantic_masks` (130 lines) and the builders above it —
+The builders above it —
 `procedural_terrain_grid`, `procedural_height_grid`, `build_terrain_layer`,
 `build_land_cover_layer`, `build_landscape`. That is the rest of P4.3, and all
 of it composes the primitives from P4.3a with the four operations here.

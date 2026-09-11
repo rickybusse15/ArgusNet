@@ -68,6 +68,9 @@ struct FallbackCase {
 struct RunCase {
     label: String,
     scene: String,
+    /// `"ij"` (axis 0 is x) or `"xy"` (axis 0 is y — numpy's default, and what
+    /// `procedural_terrain_grid` actually passes).
+    layout: String,
     preset_name: String,
     profile: PresetCase,
     shape: [usize; 2],
@@ -312,10 +315,16 @@ fn run_case(case: &RunCase) -> (Grid, argusnet_world::semantic::SemanticMasks) {
     let resolution = f(&case.resolution_m);
     let mut xx = Grid::filled(nx, ny, 0.0);
     let mut yy = Grid::filled(nx, ny, 0.0);
+    let along_x_is_axis0 = case.layout == "ij";
     for i in 0..nx {
         for j in 0..ny {
-            xx.set(i, j, i as f64 * resolution);
-            yy.set(i, j, j as f64 * resolution);
+            let (x, y) = if along_x_is_axis0 {
+                (i as f64, j as f64)
+            } else {
+                (j as f64, i as f64)
+            };
+            xx.set(i, j, x * resolution);
+            yy.set(i, j, y * resolution);
         }
     }
     semantic_masks(SemanticInputs {
@@ -441,6 +450,55 @@ fn the_fixture_still_pins_the_valley_snapshot() {
         differing > 0,
         "valley_mask equals lowland_mask in every run; the pre-branch snapshot \
          is indistinguishable from an alias"
+    );
+}
+
+/// `procedural_terrain_grid` builds its coordinate grids with numpy's DEFAULT
+/// meshgrid, so axis 0 is **y** — the transpose of the `ij` runs.
+///
+/// The masks are layout-agnostic, but the heights are not: `smooth_heights`
+/// sums its four neighbours in a fixed positional order, transposition
+/// permutes that order, and floating-point addition is not associative. The
+/// two layouts differ by ~7e-15 — nothing physically, everything to a fixture
+/// that compares bit patterns. Without `xy` runs the port is only pinned
+/// against a layout production never uses.
+#[test]
+fn the_fixture_covers_the_layout_the_real_caller_uses() {
+    let fixture = load();
+    let by_label: std::collections::HashMap<&str, &RunCase> = fixture
+        .runs
+        .iter()
+        .map(|run| (run.label.as_str(), run))
+        .collect();
+
+    let xy_runs: Vec<&&RunCase> = by_label.values().filter(|run| run.layout == "xy").collect();
+    assert!(
+        !xy_runs.is_empty(),
+        "no run uses the default (axis 0 = y) meshgrid layout that \
+         procedural_terrain_grid actually passes"
+    );
+
+    // Each must genuinely differ from its ij twin, or it is redundant.
+    let mut differing = 0usize;
+    for run in &xy_runs {
+        let twin_label = format!("base/{}", &run.label["xy/".len()..]);
+        let Some(twin) = by_label.get(twin_label.as_str()) else {
+            continue;
+        };
+        let (rows, cols) = (run.shape[0], run.shape[1]);
+        let mine = fv(&run.heights_out_m);
+        let theirs = fv(&twin.heights_out_m);
+        let transposed_differs = (0..rows).any(|a| {
+            (0..cols).any(|b| mine[a * cols + b].to_bits() != theirs[b * rows + a].to_bits())
+        });
+        if transposed_differs {
+            differing += 1;
+        }
+    }
+    assert!(
+        differing > 0,
+        "every xy-layout run is a bit-exact transpose of its ij twin, so the \
+         layout sensitivity of smooth_heights is untested"
     );
 }
 
