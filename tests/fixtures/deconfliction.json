@@ -1,0 +1,3406 @@
+{
+  "source": "src/argusnet/planning/deconfliction.py",
+  "note": "DeconflictionLayer.resolve_step recorded per case. Order decides the outcome three times over: the lexicographic tie-break yields the LARGER id, the pairwise pass writes back in place so later pairs see earlier adjustments, and corridor membership follows the proposed mapping's order rather than sorted order.",
+  "role_priority": {
+    "primary_observer": 5,
+    "secondary_baseline": 4,
+    "corridor_watcher": 3,
+    "relay": 2,
+    "reserve": 1
+  },
+  "default_role_priority": 0,
+  "cases": [
+    {
+      "name": "far_apart",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "500.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "500.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "one_drone_only",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "relay"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "disabled",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": false
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "5.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "5.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "role_priority_decides",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "alpha": "primary_observer",
+        "bravo": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "-17.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "bravo",
+          "conflicting_drone_id": "alpha",
+          "predicted_separation_m": "0.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "role_priority_reversed",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "alpha": "reserve",
+        "bravo": "primary_observer"
+      },
+      "proposed": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "17.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "alpha",
+          "conflicting_drone_id": "bravo",
+          "predicted_separation_m": "0.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "equal_roles_larger_id_yields",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "alpha": "relay",
+        "bravo": "relay"
+      },
+      "proposed": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "-17.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "bravo",
+          "conflicting_drone_id": "alpha",
+          "predicted_separation_m": "0.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "unknown_roles_tie_at_zero",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "alpha": "nonsense",
+        "bravo": "also_nonsense"
+      },
+      "proposed": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "alpha",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "bravo",
+          "position": [
+            "12.0",
+            "-17.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "bravo",
+          "conflicting_drone_id": "alpha",
+          "predicted_separation_m": "0.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "three_in_a_row_sequential",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "relay",
+        "c": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "10.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "20.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "10.0",
+            "7.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "20.0",
+            "-4.793444384266298",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        },
+        {
+          "yielding_drone_id": "c",
+          "conflicting_drone_id": "b",
+          "predicted_separation_m": "12.206555615733702",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "lateral_offset",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "17.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "lateral_blocked_flips_side",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [
+        {
+          "zone_id": "z1",
+          "zone_type": "exclusion",
+          "center": [
+            "10.0",
+            "40.0",
+            "0.0"
+          ],
+          "radius_m": "5.0"
+        }
+      ],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "40.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "-7.0",
+            "40.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "lateral_first_side_when_clear",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "40.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "7.0",
+            "40.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "vertical_offset_up",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [
+        {
+          "zone_id": "z1",
+          "zone_type": "exclusion",
+          "center": [
+            "0.0",
+            "37.0",
+            "0.0"
+          ],
+          "radius_m": "20.0"
+        },
+        {
+          "zone_id": "z2",
+          "zone_type": "exclusion",
+          "center": [
+            "0.0",
+            "-17.0",
+            "0.0"
+          ],
+          "radius_m": "20.0"
+        }
+      ],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "10.0",
+            "120.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "vertical_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "vertical_offset_down",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [
+        {
+          "zone_id": "z1",
+          "zone_type": "exclusion",
+          "center": [
+            "0.0",
+            "37.0",
+            "0.0"
+          ],
+          "radius_m": "20.0"
+        },
+        {
+          "zone_id": "z2",
+          "zone_type": "exclusion",
+          "center": [
+            "0.0",
+            "-17.0",
+            "0.0"
+          ],
+          "radius_m": "20.0"
+        }
+      ],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "200.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "200.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "10.0",
+            "80.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "vertical_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "vertical_offset_clamped_by_terrain",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": "95.0",
+      "zones": [
+        {
+          "zone_id": "z1",
+          "zone_type": "exclusion",
+          "center": [
+            "0.0",
+            "37.0",
+            "0.0"
+          ],
+          "radius_m": "20.0"
+        },
+        {
+          "zone_id": "z2",
+          "zone_type": "exclusion",
+          "center": [
+            "0.0",
+            "-17.0",
+            "0.0"
+          ],
+          "radius_m": "20.0"
+        }
+      ],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "200.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "200.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "10.0",
+            "113.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "vertical_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "stationary_yielder_pushes_away",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "8.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "17.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "8.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "coincident_and_stationary",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "17.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "0.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_head_on_hold",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "200.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_window_flips",
+      "timestamp_s": "45.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "a",
+          "conflicting_drone_id": "b",
+          "predicted_separation_m": "200.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "45.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_same_direction_ignored",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "corridor_one_way_ignored",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "inbound",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "corridor_outside_active_window",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "1000.0",
+            "2000.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "corridor_assignment_filters_members",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [
+            "a",
+            "b"
+          ],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve",
+        "c": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "200.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "200.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "200.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_too_far_off_centreline",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "20.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "400.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "400.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "bent_corridor",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "400.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "400.0",
+            "90.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-10.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "400.0",
+            "90.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "310.4834939252005",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_held_set_short_circuits",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve",
+        "c": "corridor_watcher"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "200.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "200.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "100.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        },
+        {
+          "yielding_drone_id": "c",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "200.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "proposed_order_is_not_sorted_order",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "zulu": "relay",
+        "alpha": "relay",
+        "mike": "relay"
+      },
+      "proposed": [
+        {
+          "drone_id": "zulu",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "alpha",
+          "position": [
+            "10.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "mike",
+          "position": [
+            "20.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "zulu",
+          "position": [
+            "0.0",
+            "0.0",
+            "120.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "alpha",
+          "position": [
+            "10.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "mike",
+          "position": [
+            "20.0",
+            "7.0",
+            "100.0"
+          ],
+          "velocity": [
+            "5.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "mike",
+          "conflicting_drone_id": "alpha",
+          "predicted_separation_m": "10.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        },
+        {
+          "yielding_drone_id": "zulu",
+          "conflicting_drone_id": "alpha",
+          "predicted_separation_m": "10.0",
+          "resolution": "vertical_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "separation_exactly_at_the_minimum",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "16.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "16.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "flip_away_when_both_sides_are_viable",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "5.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "40.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "5.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "-5.819660112501051",
+            "40.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "11.180339887498949",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "peer_on_the_left_forces_the_flip_away",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "10.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "-7.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "lateral_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "opposite_side_blocked_by_a_zone",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [
+        {
+          "zone_id": "z1",
+          "zone_type": "exclusion",
+          "center": [
+            "10.0",
+            "40.0",
+            "0.0"
+          ],
+          "radius_m": "5.0"
+        },
+        {
+          "zone_id": "z2",
+          "zone_type": "exclusion",
+          "center": [
+            "-10.0",
+            "40.0",
+            "0.0"
+          ],
+          "radius_m": "5.0"
+        }
+      ],
+      "corridors": [],
+      "roles": {
+        "a": "primary_observer",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "40.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "0.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "15.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "0.0",
+            "40.0",
+            "120.0"
+          ],
+          "velocity": [
+            "0.0",
+            "-15.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "10.0",
+          "resolution": "vertical_offset",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_with_a_short_window_is_active",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "200.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "held_set_prevents_a_second_hold",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve",
+        "c": "relay"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "200.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "200.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "c",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "100.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_member_exactly_at_the_width",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "50.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "50.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "b",
+          "conflicting_drone_id": "a",
+          "predicted_separation_m": "206.15528128088303",
+          "resolution": "corridor_hold",
+          "timestamp_s": "0.0"
+        }
+      ]
+    },
+    {
+      "name": "corridor_crossing_traffic_is_not_a_member",
+      "timestamp_s": "0.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "10.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "10.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "corridor_window_from_length_not_the_default",
+      "timestamp_s": "50.0",
+      "config": {
+        "min_separation_m": "16.0",
+        "look_ahead_s": "1.0",
+        "vertical_separation_m": "20.0",
+        "min_agl_m": "18.0",
+        "corridor_window_default_s": "5.0",
+        "enabled": true
+      },
+      "terrain_height_m": null,
+      "zones": [],
+      "corridors": [
+        {
+          "corridor_id": "c1",
+          "waypoints_xy_m": [
+            [
+              "0.0",
+              "0.0"
+            ],
+            [
+              "400.0",
+              "0.0"
+            ]
+          ],
+          "width_m": "50.0",
+          "direction": "bidirectional",
+          "assigned_drone_ids": [],
+          "active_window": [
+            "0.0",
+            "600.0"
+          ]
+        }
+      ],
+      "roles": {
+        "a": "relay",
+        "b": "reserve"
+      },
+      "proposed": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "adjusted": [
+        {
+          "drone_id": "a",
+          "position": [
+            "100.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ]
+        },
+        {
+          "drone_id": "b",
+          "position": [
+            "300.0",
+            "0.0",
+            "100.0"
+          ],
+          "velocity": [
+            "-10.0",
+            "0.0",
+            "0.0"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "yielding_drone_id": "a",
+          "conflicting_drone_id": "b",
+          "predicted_separation_m": "200.0",
+          "resolution": "corridor_hold",
+          "timestamp_s": "50.0"
+        }
+      ]
+    }
+  ]
+}

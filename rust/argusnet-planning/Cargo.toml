@@ -1,0 +1,17 @@
+[package]
+name = "argusnet-planning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "argusnet_planning"
+path = "src/lib.rs"
+
+[dependencies]
+argusnet-types = { path = "../argusnet-types" }
+argusnet-world = { path = "../argusnet-world" }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

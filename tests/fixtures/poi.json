@@ -1,0 +1,3254 @@
+{
+  "source": "src/argusnet/planning/poi.py",
+  "note": "POIManager driven through call sequences and recorded step by step. Construction order decides ties in both assignment paths and the order check_completions returns ids in, so the fixture contains cases that can only be passed by preserving it.",
+  "travel_power_w": "350.0",
+  "sequences": [
+    {
+      "name": "assign_nearest_ordering",
+      "pois": [
+        {
+          "poi_id": "a",
+          "name": "A",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "b",
+          "name": "B",
+          "position": [
+            "10.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "c",
+          "name": "C",
+          "position": [
+            "500.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 5,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "d",
+          "name": "D",
+          "position": [
+            "0.0",
+            "50.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "e",
+          "name": "E",
+          "position": [
+            "50.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "drone-1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "c",
+          "statuses": [
+            {
+              "poi_id": "a",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "b",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "c",
+              "status": "active",
+              "assigned_drone_id": "drone-1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "d",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "e",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "drone-1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "c",
+          "statuses": [
+            {
+              "poi_id": "a",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "b",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "c",
+              "status": "active",
+              "assigned_drone_id": "drone-1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "d",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "e",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "drone-2",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "d",
+          "statuses": [
+            {
+              "poi_id": "a",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "b",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "c",
+              "status": "active",
+              "assigned_drone_id": "drone-1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "d",
+              "status": "active",
+              "assigned_drone_id": "drone-2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "e",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "drone-3",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "0.2"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "a",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "b",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "c",
+              "status": "active",
+              "assigned_drone_id": "drone-1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "d",
+              "status": "active",
+              "assigned_drone_id": "drone-2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "e",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "drone-3",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "0.25"
+          },
+          "result": "e",
+          "statuses": [
+            {
+              "poi_id": "a",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "b",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "c",
+              "status": "active",
+              "assigned_drone_id": "drone-1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "d",
+              "status": "active",
+              "assigned_drone_id": "drone-2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "e",
+              "status": "active",
+              "assigned_drone_id": "drone-3",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "drone-4",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "b",
+          "statuses": [
+            {
+              "poi_id": "a",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "b",
+              "status": "active",
+              "assigned_drone_id": "drone-4",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "c",
+              "status": "active",
+              "assigned_drone_id": "drone-1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "d",
+              "status": "active",
+              "assigned_drone_id": "drone-2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "e",
+              "status": "active",
+              "assigned_drone_id": "drone-3",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "drone-5",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "a",
+          "statuses": [
+            {
+              "poi_id": "a",
+              "status": "active",
+              "assigned_drone_id": "drone-5",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "b",
+              "status": "active",
+              "assigned_drone_id": "drone-4",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "c",
+              "status": "active",
+              "assigned_drone_id": "drone-1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "d",
+              "status": "active",
+              "assigned_drone_id": "drone-2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "e",
+              "status": "active",
+              "assigned_drone_id": "drone-3",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "dwell_and_completion",
+      "pois": [
+        {
+          "poi_id": "first",
+          "name": "FIRST",
+          "position": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "10.0"
+        },
+        {
+          "poi_id": "second",
+          "name": "SECOND",
+          "position": [
+            "20.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "5.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "first",
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d2",
+            "drone_pos": [
+              "20.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "second",
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d2",
+            "drone_pos": [
+              "20.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "6.0"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "10.0"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "check_completions",
+          "args": {
+            "timestamp_s": "100.0"
+          },
+          "result": [
+            "first",
+            "second"
+          ],
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "complete",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "10.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "complete",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "6.0"
+            }
+          ],
+          "completed_count": 2,
+          "all_complete": true
+        },
+        {
+          "call": "assignment_for",
+          "args": {
+            "drone_id": "d1"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "complete",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "10.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "complete",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "6.0"
+            }
+          ],
+          "completed_count": 2,
+          "all_complete": true
+        },
+        {
+          "call": "assignment_for",
+          "args": {
+            "drone_id": "d2"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "complete",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "10.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "complete",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "6.0"
+            }
+          ],
+          "completed_count": 2,
+          "all_complete": true
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d3",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "first",
+              "status": "complete",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "10.0"
+            },
+            {
+              "poi_id": "second",
+              "status": "complete",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": "100.0",
+              "completion_time_s": "100.0",
+              "dwell_accumulated_s": "6.0"
+            }
+          ],
+          "completed_count": 2,
+          "all_complete": true
+        }
+      ]
+    },
+    {
+      "name": "dwell_radius",
+      "pois": [
+        {
+          "poi_id": "p",
+          "name": "P",
+          "position": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "1.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "p",
+          "statuses": [
+            {
+              "poi_id": "p",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "30.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "0.4"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "p",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "30.001",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "0.4"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "p",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "check_completions",
+          "args": {
+            "timestamp_s": "10.0"
+          },
+          "result": [],
+          "statuses": [
+            {
+              "poi_id": "p",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "0.6"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "p",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "check_completions",
+          "args": {
+            "timestamp_s": "20.0"
+          },
+          "result": [
+            "p"
+          ],
+          "statuses": [
+            {
+              "poi_id": "p",
+              "status": "complete",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": "20.0",
+              "completion_time_s": "20.0",
+              "dwell_accumulated_s": "1.0"
+            }
+          ],
+          "completed_count": 1,
+          "all_complete": true
+        }
+      ]
+    },
+    {
+      "name": "energy_aware",
+      "pois": [
+        {
+          "poi_id": "near_low",
+          "name": "NEAR_LOW",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "far_high",
+          "name": "FAR_HIGH",
+          "position": [
+            "5000.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "near_high",
+          "name": "NEAR_HIGH",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "100.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "near_high",
+          "statuses": [
+            {
+              "poi_id": "near_low",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "far_high",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_high",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d2",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "20.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "near_low",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "far_high",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_high",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d3",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "40.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "near_low",
+          "statuses": [
+            {
+              "poi_id": "near_low",
+              "status": "active",
+              "assigned_drone_id": "d3",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "far_high",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_high",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d3",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "40.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "near_low",
+          "statuses": [
+            {
+              "poi_id": "near_low",
+              "status": "active",
+              "assigned_drone_id": "d3",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "far_high",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_high",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "rescore_banker_rounding",
+      "pois": [
+        {
+          "poi_id": "far_half_boost",
+          "name": "FAR_HALF_BOOST",
+          "position": [
+            "3000.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "near_high_priority",
+          "name": "NEAR_HIGH_PRIORITY",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "rescore_from_map",
+          "args": {
+            "densities": {
+              "far_half_boost": "0.1666666666666666",
+              "near_high_priority": "1.0"
+            }
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "far_half_boost",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_high_priority",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "100.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "near_high_priority",
+          "statuses": [
+            {
+              "poi_id": "far_half_boost",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_high_priority",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "rescore_ignored_by_assign_nearest",
+      "pois": [
+        {
+          "poi_id": "high_raw",
+          "name": "HIGH_RAW",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "boosted",
+          "name": "BOOSTED",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "rescore_from_map",
+          "args": {
+            "densities": {
+              "high_raw": "1.0",
+              "boosted": "0.0"
+            }
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "high_raw",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "boosted",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "high_raw",
+          "statuses": [
+            {
+              "poi_id": "high_raw",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "boosted",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "handoff_and_team",
+      "pois": [
+        {
+          "poi_id": "shared",
+          "name": "SHARED",
+          "position": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "10.0"
+        },
+        {
+          "poi_id": "other",
+          "name": "OTHER",
+          "position": [
+            "400.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "trigger_handoff",
+          "args": {
+            "from_drone_id": "d1",
+            "to_drone_id": "d2"
+          },
+          "result": false,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "shared",
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "trigger_handoff",
+          "args": {
+            "from_drone_id": "d1",
+            "to_drone_id": "d2"
+          },
+          "result": true,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assignment_for",
+          "args": {
+            "drone_id": "d1"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assignment_for",
+          "args": {
+            "drone_id": "d2"
+          },
+          "result": "shared",
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "request_team_assign",
+          "args": {
+            "poi_id": "shared",
+            "second_drone_id": "d3"
+          },
+          "result": true,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "request_team_assign",
+          "args": {
+            "poi_id": "shared",
+            "second_drone_id": "d3"
+          },
+          "result": false,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "request_team_assign",
+          "args": {
+            "poi_id": "other",
+            "second_drone_id": "d4"
+          },
+          "result": false,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d2",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "3.0"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d3",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "3.0"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "check_completions",
+          "args": {
+            "timestamp_s": "50.0"
+          },
+          "result": [],
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d2",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "2.0"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "accumulate_dwell",
+          "args": {
+            "drone_id": "d3",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "dt_s": "2.0"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "check_completions",
+          "args": {
+            "timestamp_s": "60.0"
+          },
+          "result": [
+            "shared"
+          ],
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "complete",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": "60.0",
+              "completion_time_s": "60.0",
+              "dwell_accumulated_s": "10.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 1,
+          "all_complete": false
+        },
+        {
+          "call": "assignment_for",
+          "args": {
+            "drone_id": "d2"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "complete",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": "60.0",
+              "completion_time_s": "60.0",
+              "dwell_accumulated_s": "10.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 1,
+          "all_complete": false
+        },
+        {
+          "call": "assignment_for",
+          "args": {
+            "drone_id": "d3"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "shared",
+              "status": "complete",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": "60.0",
+              "completion_time_s": "60.0",
+              "dwell_accumulated_s": "10.0"
+            },
+            {
+              "poi_id": "other",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 1,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "energy_edges",
+      "pois": [
+        {
+          "poi_id": "underfoot",
+          "name": "UNDERFOOT",
+          "position": [
+            "0.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "20.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "underfoot",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "100.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "0.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "underfoot",
+          "statuses": [
+            {
+              "poi_id": "underfoot",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "energy_exact_tie",
+      "pois": [
+        {
+          "poi_id": "first_of_two",
+          "name": "FIRST_OF_TWO",
+          "position": [
+            "0.0",
+            "100.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "second_of_two",
+          "name": "SECOND_OF_TWO",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "100.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "first_of_two",
+          "statuses": [
+            {
+              "poi_id": "first_of_two",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "second_of_two",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "rescore_changes_the_winner",
+      "pois": [
+        {
+          "poi_id": "far_boosted",
+          "name": "FAR_BOOSTED",
+          "position": [
+            "3000.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "near_raw",
+          "name": "NEAR_RAW",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "rescore_from_map",
+          "args": {
+            "densities": {
+              "far_boosted": "0.0",
+              "near_raw": "1.0"
+            }
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "far_boosted",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_raw",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "100.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "far_boosted",
+          "statuses": [
+            {
+              "poi_id": "far_boosted",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "near_raw",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "rescore_edges",
+      "pois": [
+        {
+          "poi_id": "active_already",
+          "name": "ACTIVE_ALREADY",
+          "position": [
+            "50.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "unknown_to_the_map",
+          "name": "UNKNOWN_TO_THE_MAP",
+          "position": [
+            "400.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "known",
+          "name": "KNOWN",
+          "position": [
+            "500.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "active_already",
+          "statuses": [
+            {
+              "poi_id": "active_already",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "unknown_to_the_map",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "known",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "rescore_from_map",
+          "args": {
+            "densities": {
+              "active_already": "0.0",
+              "known": "0.0"
+            }
+          },
+          "result": null,
+          "statuses": [
+            {
+              "poi_id": "active_already",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "unknown_to_the_map",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "known",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        },
+        {
+          "call": "assign_energy_aware",
+          "args": {
+            "drone_id": "d2",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_remaining_wh": "100.0",
+            "battery_capacity_wh": "100.0",
+            "cruise_speed_mps": "28.0",
+            "battery_reserve_fraction": "0.2"
+          },
+          "result": "known",
+          "statuses": [
+            {
+              "poi_id": "active_already",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "unknown_to_the_map",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "known",
+              "status": "active",
+              "assigned_drone_id": "d2",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    },
+    {
+      "name": "stable_sort_at_scale",
+      "pois": [
+        {
+          "poi_id": "ring00",
+          "name": "RING00",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring01",
+          "name": "RING01",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring02",
+          "name": "RING02",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring03",
+          "name": "RING03",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring04",
+          "name": "RING04",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring05",
+          "name": "RING05",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring06",
+          "name": "RING06",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring07",
+          "name": "RING07",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring08",
+          "name": "RING08",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring09",
+          "name": "RING09",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring10",
+          "name": "RING10",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring11",
+          "name": "RING11",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring12",
+          "name": "RING12",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring13",
+          "name": "RING13",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring14",
+          "name": "RING14",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring15",
+          "name": "RING15",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring16",
+          "name": "RING16",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring17",
+          "name": "RING17",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring18",
+          "name": "RING18",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring19",
+          "name": "RING19",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring20",
+          "name": "RING20",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring21",
+          "name": "RING21",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring22",
+          "name": "RING22",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring23",
+          "name": "RING23",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring24",
+          "name": "RING24",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring25",
+          "name": "RING25",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring26",
+          "name": "RING26",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring27",
+          "name": "RING27",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring28",
+          "name": "RING28",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring29",
+          "name": "RING29",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring30",
+          "name": "RING30",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring31",
+          "name": "RING31",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring32",
+          "name": "RING32",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring33",
+          "name": "RING33",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring34",
+          "name": "RING34",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring35",
+          "name": "RING35",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring36",
+          "name": "RING36",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring37",
+          "name": "RING37",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring38",
+          "name": "RING38",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring39",
+          "name": "RING39",
+          "position": [
+            "100.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring40",
+          "name": "RING40",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring41",
+          "name": "RING41",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring42",
+          "name": "RING42",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring43",
+          "name": "RING43",
+          "position": [
+            "200.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring44",
+          "name": "RING44",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 1,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring45",
+          "name": "RING45",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 2,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring46",
+          "name": "RING46",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 3,
+          "required_dwell_s": "15.0"
+        },
+        {
+          "poi_id": "ring47",
+          "name": "RING47",
+          "position": [
+            "300.0",
+            "0.0",
+            "0.0"
+          ],
+          "priority": 4,
+          "required_dwell_s": "15.0"
+        }
+      ],
+      "steps": [
+        {
+          "call": "assign_nearest",
+          "args": {
+            "drone_id": "d1",
+            "drone_pos": [
+              "0.0",
+              "0.0",
+              "0.0"
+            ],
+            "battery_fraction": "1.0"
+          },
+          "result": "ring03",
+          "statuses": [
+            {
+              "poi_id": "ring00",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring01",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring02",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring03",
+              "status": "active",
+              "assigned_drone_id": "d1",
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring04",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring05",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring06",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring07",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring08",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring09",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring10",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring11",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring12",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring13",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring14",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring15",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring16",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring17",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring18",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring19",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring20",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring21",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring22",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring23",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring24",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring25",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring26",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring27",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring28",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring29",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring30",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring31",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring32",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring33",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring34",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring35",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring36",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring37",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring38",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring39",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring40",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring41",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring42",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring43",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring44",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring45",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring46",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            },
+            {
+              "poi_id": "ring47",
+              "status": "pending",
+              "assigned_drone_id": null,
+              "arrival_time_s": null,
+              "completion_time_s": null,
+              "dwell_accumulated_s": "0.0"
+            }
+          ],
+          "completed_count": 0,
+          "all_complete": false
+        }
+      ]
+    }
+  ],
+  "call_summary": [
+    {
+      "name": "assign_nearest_ordering",
+      "calls": [
+        "assign_nearest",
+        "assign_nearest",
+        "assign_nearest",
+        "assign_nearest",
+        "assign_nearest",
+        "assign_nearest",
+        "assign_nearest"
+      ]
+    },
+    {
+      "name": "dwell_and_completion",
+      "calls": [
+        "assign_nearest",
+        "assign_nearest",
+        "accumulate_dwell",
+        "accumulate_dwell",
+        "check_completions",
+        "assignment_for",
+        "assignment_for",
+        "assign_nearest"
+      ]
+    },
+    {
+      "name": "dwell_radius",
+      "calls": [
+        "assign_nearest",
+        "accumulate_dwell",
+        "accumulate_dwell",
+        "check_completions",
+        "accumulate_dwell",
+        "check_completions"
+      ]
+    },
+    {
+      "name": "energy_aware",
+      "calls": [
+        "assign_energy_aware",
+        "assign_energy_aware",
+        "assign_energy_aware",
+        "assign_energy_aware"
+      ]
+    },
+    {
+      "name": "rescore_banker_rounding",
+      "calls": [
+        "rescore_from_map",
+        "assign_energy_aware"
+      ]
+    },
+    {
+      "name": "rescore_ignored_by_assign_nearest",
+      "calls": [
+        "rescore_from_map",
+        "assign_nearest"
+      ]
+    },
+    {
+      "name": "handoff_and_team",
+      "calls": [
+        "trigger_handoff",
+        "assign_nearest",
+        "trigger_handoff",
+        "assignment_for",
+        "assignment_for",
+        "request_team_assign",
+        "request_team_assign",
+        "request_team_assign",
+        "accumulate_dwell",
+        "accumulate_dwell",
+        "check_completions",
+        "accumulate_dwell",
+        "accumulate_dwell",
+        "check_completions",
+        "assignment_for",
+        "assignment_for"
+      ]
+    },
+    {
+      "name": "energy_edges",
+      "calls": [
+        "assign_energy_aware",
+        "assign_energy_aware"
+      ]
+    },
+    {
+      "name": "energy_exact_tie",
+      "calls": [
+        "assign_energy_aware"
+      ]
+    },
+    {
+      "name": "rescore_changes_the_winner",
+      "calls": [
+        "rescore_from_map",
+        "assign_energy_aware"
+      ]
+    },
+    {
+      "name": "rescore_edges",
+      "calls": [
+        "assign_nearest",
+        "rescore_from_map",
+        "assign_energy_aware"
+      ]
+    },
+    {
+      "name": "stable_sort_at_scale",
+      "calls": [
+        "assign_nearest"
+      ]
+    }
+  ]
+}
