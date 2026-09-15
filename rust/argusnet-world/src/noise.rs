@@ -67,13 +67,30 @@ pub fn stable_seed(parts: &[&str]) -> i64 {
     (u64::from_le_bytes(digest) & 0x7FFF_FFFF) as i64
 }
 
-/// Half-open axis bounds in metres.
+/// Scene bounds in metres.
+///
+/// The one definition in this crate. `semantic` re-exports it: it previously
+/// carried a second, field-identical copy, which made `noise::Bounds2D` and
+/// `semantic::Bounds2D` distinct types that no caller could pass between —
+/// invisible until P4.3e composed `grid_values` with `semantic_masks` in one
+/// function and the compiler refused. CLAUDE.md's "one authority per concern"
+/// applies to value types too.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds2D {
     pub x_min_m: f64,
     pub x_max_m: f64,
     pub y_min_m: f64,
     pub y_max_m: f64,
+}
+
+impl Bounds2D {
+    pub fn width_m(&self) -> f64 {
+        self.x_max_m - self.x_min_m
+    }
+
+    pub fn height_m(&self) -> f64 {
+        self.y_max_m - self.y_min_m
+    }
 }
 
 /// Reproduce `np.arange(start, stop, step)` for `f64`.
