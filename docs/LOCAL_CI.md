@@ -144,6 +144,44 @@ workflow needs editing either way.
 - **Xcode command line tools:** `xcode-select --install`
 - **Rust:** `rustup` — `rust-toolchain.toml` pins the version and installs it
   on first use.
+
+  If you run the runner as a **service** (`./svc.sh install && ./svc.sh start`
+  on macOS — no sudo, it is a launchd *user* agent), note that launchd gives it
+  a minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) and never sources
+  `~/.zprofile`. Nothing installed by rustup, Homebrew or conda is on that
+  path, so every cargo step fails with `rustup: command not found` while
+  rustup works perfectly in your terminal. Running the runner from a terminal
+  instead hides the problem entirely, because it inherits your shell's `PATH`.
+
+  The workflow handles that itself: every toolchain step sources
+  `scripts/ci-rust-path.sh`, which searches the usual install locations —
+  rustup's own `~/.cargo/bin`, `$CARGO_HOME/bin`, Homebrew's
+  `/opt/homebrew/bin` and `/usr/local/bin`, and the conda prefixes.
+
+  **But `rustup: command not found` is not always a PATH problem, and
+  assuming it is wastes CI rounds.** On 2026-09-11 this runner hit it with
+  `~/.cargo/bin` already on `PATH`, both `~/.cargo` and `~/.rustup` present,
+  and both toolchains — including the pinned 1.98.0 — intact. What had gone
+  missing was the **`rustup` binary itself**, leaving every proxy symlink in
+  `~/.cargo/bin` (`cargo`, `rustc`, `rustfmt`, …, all of which point at
+  `rustup`) dangling.
+
+  That case is easy to misread, and it was misread twice here: `find -type f`
+  skips symlinks, so `~/.cargo/bin` reads as empty and the machine looks like
+  it never had Rust. The step now names the diagnosis outright — dangling
+  proxies, toolchains present but rustup unrunnable, or nothing installed —
+  rather than leaving it to be inferred from two directory listings.
+
+  The repair for all three is the same, and it keeps `rust-toolchain.toml`
+  authoritative in a way that pointing `PATH` at a toolchain directory would
+  not:
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+
+  Adding `PATH=<your rust bin>:/usr/bin:/bin:/usr/sbin:/sbin` to
+  `actions-runner/.env` is an equivalent fix if you prefer it on the machine.
 - **A Python 3.10 or newer.** Whichever one `python3` resolves to is the one
   CI will use; nothing else is needed.
 

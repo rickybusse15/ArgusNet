@@ -61,7 +61,11 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Install pinned Rust toolchain for native world bindings
-        run: rustup show
+        run: |
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
+          rustup show
       - name: Install dependencies
         run: |
           python -VV
@@ -113,7 +117,11 @@ jobs:
       # No apt step: the packages below exist for Bevy's alsa and libudev
       # bindings, and nothing in this job depends on Bevy.
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: |
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
+          rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: fast
@@ -140,7 +148,11 @@ jobs:
           # hosted runner has no GPU and wgpu has no software fallback.
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: |
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
+          rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: viewer
@@ -204,6 +216,9 @@ jobs:
           sudo apt-get install -y pkg-config libasound2-dev libudev-dev
       - name: Install pinned Rust toolchain
         run: |
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
           rustup show
           cargo clippy --version
       # Formatting first: it compiles nothing, so a misformatted file fails in
@@ -251,7 +266,11 @@ jobs:
       # The wheel carries a compiled cdylib, so the pinned toolchain is needed
       # to build it even though nothing here runs cargo directly.
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: |
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
+          rustup show
       - name: Work from a virtualenv
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
@@ -286,7 +305,11 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/venv"
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Install pinned Rust toolchain
-        run: rustup show
+        run: |
+          # Sourced, not run: a child process cannot change this step's PATH.
+          # See the script for why a self-hosted runner needs it at all.
+          source scripts/ci-rust-path.sh
+          rustup show
       - name: Install dependencies
         run: pip install -e ".[dev]" pip-audit bandit
       # New scanners are non-blocking until an initial pass has triaged any
