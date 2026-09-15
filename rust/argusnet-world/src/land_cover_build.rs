@@ -30,6 +30,7 @@
 //! on the same profile field, forty lines apart in the reference.
 
 use crate::grid_ops::Mask;
+use crate::obstacles::{point_in_polygon, Obstacle, ObstacleShape};
 use crate::semantic::{quantile, TerrainProfile};
 
 /// The land-cover classes, with the reference's integer values. These reach
@@ -341,6 +342,197 @@ pub fn classify_land_cover(inputs: LandCoverInputs<'_>) -> Result<CoverGrid, &'s
     })
 }
 
+// ---------------------------------------------------------------------------
+// The polygon overlay
+//
+// The tail of `build_land_cover_layer`: obstacle footprints and caller-supplied
+// patches repaint cells the classification above already decided. It runs after
+// every mask rule, so it has the last word -- including over `road`, which is
+// the only rule that lowers a density.
+// ---------------------------------------------------------------------------
+
+/// One polygon's contribution to the overlay, already reduced to the three
+/// things the loop needs.
+///
+/// The reference derives these inline from two very different sources -- an
+/// obstacle, duck-typed, and a `LandCoverPatch` -- and then runs the *same*
+/// three lines on both. Naming that shared shape keeps the derivation rules
+/// (which differ) apart from the application rule (which does not).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverPolygon {
+    pub polygon_xy_m: Vec<[f64; 2]>,
+    pub cover_class: LandCoverClass,
+    pub cover_density: u8,
+}
+
+/// A caller-supplied land-cover override. Mirrors `LandCoverPatch`.
+///
+/// `density` is `i64` because the reference annotates the field `int` and then
+/// runs `int(np.clip(patch.density, 0, 255))` on it: a negative clamps to zero
+/// and anything above 255 clamps down, so the field is wider than the `u8` it
+/// ends up as. A float would truncate toward zero on the Python side; the
+/// annotation says it cannot be one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LandCoverPatch {
+    pub polygon_xy_m: Vec<[f64; 2]>,
+    pub land_cover_class: LandCoverClass,
+    pub density: i64,
+}
+
+impl LandCoverClass {
+    /// The reference's integer value back to the class.
+    pub fn from_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => Self::Open,
+            1 => Self::Urban,
+            2 => Self::Forest,
+            3 => Self::Water,
+            4 => Self::Scrub,
+            5 => Self::Wetland,
+            6 => Self::Rocky,
+            7 => Self::Snow,
+            8 => Self::Road,
+            _ => return None,
+        })
+    }
+}
+
+/// What an obstacle contributes to the land cover, or `None` if it contributes
+/// nothing.
+///
+/// Three branches, and the two that drop an obstacle are the interesting ones:
+///
+/// * A **forest stand** paints `FOREST` at `int(clip(density, 0, 1) * 255)`,
+///   and is skipped entirely when vegetation is suppressed. The truncation is
+///   `int()`, not a round: a density of 0.5 gives 127, not 128.
+/// * Anything else **with a footprint** paints `URBAN` at a flat 180 -- and is
+///   *not* suppressed. Suppressing vegetation removes the trees and leaves the
+///   buildings, which is the whole point of the flag.
+/// * Anything **without** a footprint is silently dropped by the reference's
+///   `else: continue`. Today that is exactly the cylinders: a cylindrical
+///   obstacle occludes sight and blocks movement but contributes nothing at
+///   all to land cover. That is a real asymmetry in the reference, not an
+///   oversight of this port.
+///
+/// The forest test is on `kind`, not on [`BlockerType::Vegetation`]. The
+/// reference asks `isinstance(obstacle, ForestStand)`, and a `PolygonPrism`
+/// constructed with `blocker_type="vegetation"` is not a `ForestStand` -- it
+/// takes the urban branch. `kind` is the field that survives that distinction;
+/// `blocker_type` is not.
+pub fn obstacle_cover_polygon(
+    obstacle: &Obstacle,
+    suppress_vegetation: bool,
+) -> Option<CoverPolygon> {
+    let footprint = match &obstacle.shape {
+        ObstacleShape::Polygon { footprint_xy_m } => footprint_xy_m,
+        // No `footprint_xy_m` attribute in the reference -> `else: continue`.
+        ObstacleShape::Cylinder { .. } => return None,
+    };
+    if obstacle.kind == FOREST_STAND_KIND {
+        if suppress_vegetation {
+            return None;
+        }
+        // The upper clamp is kept although Rust cannot observe it: `as u8`
+        // saturates, so `2.0 * 255.0` and `1.0 * 255.0` both land on 255 and
+        // a mutation that drops the `1.0` survives every test. It is NOT
+        // redundant in the reference, where `int(2.0 * 255)` is 510 and
+        // assigning that into a `uint8` raster raises. Two different
+        // mechanisms, one behaviour -- and the clamp is the one that says so.
+        let density = obstacle.density.unwrap_or(0.0).clamp(0.0, 1.0);
+        return Some(CoverPolygon {
+            polygon_xy_m: footprint.clone(),
+            cover_class: LandCoverClass::Forest,
+            // `int(...)`: truncation toward zero, not rounding.
+            cover_density: (density * 255.0) as u8,
+        });
+    }
+    Some(CoverPolygon {
+        polygon_xy_m: footprint.clone(),
+        cover_class: LandCoverClass::Urban,
+        cover_density: URBAN_COVER_DENSITY,
+    })
+}
+
+/// The `kind` tag [`Obstacle::forest_stand`] writes, and the only thing that
+/// distinguishes a stand of trees from any other polygonal prism.
+const FOREST_STAND_KIND: &str = "forest-stand-v1";
+
+/// The flat density every non-vegetation footprint paints.
+const URBAN_COVER_DENSITY: u8 = 180;
+
+/// What a patch contributes. Unlike an obstacle, a patch always contributes:
+/// there is no suppression gate and no shape that can fail to have a polygon.
+///
+/// A `FOREST` patch therefore lands even when `suppress_vegetation` is set.
+/// The flag suppresses *generated* vegetation, not vegetation the caller asked
+/// for by name.
+pub fn patch_cover_polygon(patch: &LandCoverPatch) -> CoverPolygon {
+    CoverPolygon {
+        polygon_xy_m: patch.polygon_xy_m.clone(),
+        cover_class: patch.land_cover_class,
+        cover_density: patch.density.clamp(0, 255) as u8,
+    }
+}
+
+/// Repaint every cell whose centre falls inside each polygon, in order.
+///
+/// Class **assigns** and density takes **`max`**. That pairing is what makes
+/// the overlay differ from the road rule immediately above it: a road clears
+/// the foliage density to zero, but a `ROAD` *patch* over forest keeps the
+/// forest's density while changing the class. Two ways to paint a road, two
+/// different densities.
+///
+/// `xx` and `yy` are the flattened cell-centre coordinates, row-major `(y, x)`
+/// -- the same layout and the same arrays [`sample_mask_to_grid`] takes.
+/// Boundary cells count as inside: [`point_in_polygon`] returns true on the
+/// edge, so two abutting patches both claim the cells on their shared border
+/// and the later one wins.
+pub fn overlay_cover_polygons(
+    grid: &mut CoverGrid,
+    xx: &[f64],
+    yy: &[f64],
+    polygons: &[CoverPolygon],
+) -> Result<(), &'static str> {
+    let cells = grid.rows.checked_mul(grid.cols).ok_or("grid too large")?;
+    if grid.classes.len() != cells || grid.density.len() != cells {
+        return Err("grid rasters do not match its shape");
+    }
+    if xx.len() != cells || yy.len() != cells {
+        return Err("coordinate grids must match the cover grid");
+    }
+    for polygon in polygons {
+        for k in 0..cells {
+            if point_in_polygon([xx[k], yy[k]], &polygon.polygon_xy_m) {
+                grid.classes[k] = polygon.cover_class as u8;
+                grid.density[k] = grid.density[k].max(polygon.cover_density);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The overlay as the reference runs it: **every obstacle, then every patch**.
+///
+/// The order is load-bearing and is not a detail of iteration. A patch exists
+/// to let a caller override what the terrain generated, and it can only do that
+/// if it runs last -- so a patch placed over a building repaints it, while a
+/// building placed over a patch would not.
+pub fn apply_land_cover_overlay(
+    grid: &mut CoverGrid,
+    xx: &[f64],
+    yy: &[f64],
+    obstacles: &[Obstacle],
+    patches: &[LandCoverPatch],
+    suppress_vegetation: bool,
+) -> Result<(), &'static str> {
+    let polygons: Vec<CoverPolygon> = obstacles
+        .iter()
+        .filter_map(|obstacle| obstacle_cover_polygon(obstacle, suppress_vegetation))
+        .chain(patches.iter().map(patch_cover_polygon))
+        .collect();
+    overlay_cover_polygons(grid, xx, yy, &polygons)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +565,155 @@ mod tests {
             moisture_noise: noise,
             masks,
         }
+    }
+
+    // --- the polygon overlay --------------------------------------------
+    //
+    // The fixture in `polygon_overlay_parity` covers what the reference can
+    // produce. These cover what it cannot: the rejection paths, and a state
+    // no Python constructor can build.
+
+    fn unit_square() -> Vec<[f64; 2]> {
+        vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    }
+
+    fn one_cell_grid(class: LandCoverClass, density: u8) -> CoverGrid {
+        CoverGrid {
+            rows: 1,
+            cols: 1,
+            classes: vec![class as u8],
+            density: vec![density],
+        }
+    }
+
+    #[test]
+    fn a_grid_whose_rasters_disagree_with_its_shape_is_rejected() {
+        let mut grid = CoverGrid {
+            rows: 2,
+            cols: 2,
+            classes: vec![0, 0, 0, 0],
+            density: vec![0, 0, 0],
+        };
+        assert!(overlay_cover_polygons(&mut grid, &[0.0; 4], &[0.0; 4], &[]).is_err());
+    }
+
+    #[test]
+    fn coordinate_grids_of_the_wrong_length_are_rejected() {
+        // Silently iterating the shorter of the two would leave part of the
+        // map unpainted and look like a subtle geometry bug.
+        let mut grid = one_cell_grid(LandCoverClass::Open, 0);
+        assert!(overlay_cover_polygons(&mut grid, &[0.5, 1.5], &[0.5], &[]).is_err());
+        assert!(overlay_cover_polygons(&mut grid, &[0.5], &[0.5, 1.5], &[]).is_err());
+        assert!(overlay_cover_polygons(&mut grid, &[0.5], &[0.5], &[]).is_ok());
+    }
+
+    #[test]
+    fn density_takes_the_larger_value_and_the_class_takes_the_later_one() {
+        // The pairing, in one assertion. A ROAD patch at density 0 over a
+        // forested cell changes the class and keeps the foliage -- which is
+        // the opposite of what the road MASK does twenty lines above.
+        let mut grid = one_cell_grid(LandCoverClass::Forest, 190);
+        overlay_cover_polygons(
+            &mut grid,
+            &[0.5],
+            &[0.5],
+            &[CoverPolygon {
+                polygon_xy_m: unit_square(),
+                cover_class: LandCoverClass::Road,
+                cover_density: 0,
+            }],
+        )
+        .unwrap();
+        assert_eq!(grid.classes[0], LandCoverClass::Road as u8);
+        assert_eq!(grid.density[0], 190);
+    }
+
+    #[test]
+    fn a_stand_with_no_recorded_density_paints_zero_rather_than_panicking() {
+        // `Obstacle::forest_stand` always sets a density, so this state cannot
+        // arrive through a constructor -- but `Obstacle` is deserialized from
+        // scene metadata, where the field is optional. The reference has no
+        // equivalent: `ForestStand.density` has a default and cannot be unset.
+        let mut obstacle = Obstacle::forest_stand("stand", unit_square(), 0.0, 10.0, 0.75).unwrap();
+        assert_eq!(
+            obstacle_cover_polygon(&obstacle, false)
+                .unwrap()
+                .cover_density,
+            191 // 0.75 * 255 = 191.25, truncated
+        );
+        obstacle.density = None;
+        let polygon = obstacle_cover_polygon(&obstacle, false).unwrap();
+        assert_eq!(polygon.cover_class, LandCoverClass::Forest);
+        assert_eq!(polygon.cover_density, 0);
+    }
+
+    #[test]
+    fn a_stand_density_above_one_saturates_rather_than_wrapping() {
+        // The mutation that drops the upper clamp survives the whole suite,
+        // because `as u8` saturates -- see the comment at the clamp. What can
+        // still be pinned is the BEHAVIOUR, so that a future change to the
+        // cast or to the rounding cannot quietly turn a dense canopy into a
+        // sparse one.
+        let mut obstacle = Obstacle::forest_stand("stand", unit_square(), 0.0, 10.0, 4.0).unwrap();
+        for value in [1.0, 4.0, 1.0e40, f64::INFINITY] {
+            obstacle.density = Some(value);
+            assert_eq!(
+                obstacle_cover_polygon(&obstacle, false)
+                    .unwrap()
+                    .cover_density,
+                255,
+                "density {value}"
+            );
+        }
+        obstacle.density = Some(f64::NAN);
+        assert_eq!(
+            obstacle_cover_polygon(&obstacle, false)
+                .unwrap()
+                .cover_density,
+            0
+        );
+    }
+
+    #[test]
+    fn from_u8_covers_the_class_table_and_nothing_beyond_it() {
+        for value in 0..=8u8 {
+            let class = LandCoverClass::from_u8(value).expect("a real class");
+            assert_eq!(class as u8, value);
+        }
+        assert_eq!(LandCoverClass::from_u8(9), None);
+        assert_eq!(LandCoverClass::from_u8(255), None);
+    }
+
+    #[test]
+    fn a_two_vertex_polygon_paints_the_cells_on_its_line_and_no_others() {
+        // The reference builds patch polygons with `np.asarray` and never
+        // checks the vertex count, so a degenerate patch does reach the loop.
+        // It encloses no area -- but `point_in_polygon` counts the boundary as
+        // inside, and for two vertices the boundary IS the whole shape. So a
+        // degenerate patch paints a line of cells rather than nothing, which
+        // is worth pinning precisely because "nothing" is the intuitive guess.
+        let mut grid = CoverGrid {
+            rows: 1,
+            cols: 2,
+            classes: vec![LandCoverClass::Open as u8; 2],
+            density: vec![7, 7],
+        };
+        overlay_cover_polygons(
+            &mut grid,
+            &[0.5, 0.5],
+            &[0.5, 0.9],
+            &[CoverPolygon {
+                polygon_xy_m: vec![[0.0, 0.0], [1.0, 1.0]],
+                cover_class: LandCoverClass::Urban,
+                cover_density: 180,
+            }],
+        )
+        .unwrap();
+        // (0.5, 0.5) is on the segment; (0.5, 0.9) is not.
+        assert_eq!(grid.classes[0], LandCoverClass::Urban as u8);
+        assert_eq!(grid.density[0], 180);
+        assert_eq!(grid.classes[1], LandCoverClass::Open as u8);
+        assert_eq!(grid.density[1], 7);
     }
 
     #[test]
