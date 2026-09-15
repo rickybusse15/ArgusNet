@@ -48,6 +48,75 @@ port rather than discovered during it: preserve bit-parity, or re-baseline.
    that shifts individual draws is expected.
 6. "Reproducible across platforms" means **no draw may call the platform's C
    maths library.** See below; this is not free and it is not automatic.
+7. The recommendation in 1 is about **cost**, not principle. Where reproducing
+   numpy's stream is cheap and the benefit is concrete, reproduce it. See the
+   amendment below.
+
+## Amendment: bit-parity where it is cheap (2026-09-15, P4.3e)
+
+Decision 1 says not to reproduce numpy's PRNG, and the Rationale gives the
+reason plainly: bit-parity *"costs a hand-verified reimplementation of two
+algorithms"* and *"would then have to be kept correct forever"*. That reasoning
+was written about `build_observations`, which constructs a **fresh generator per
+(node, target) pair per tick** and uses `SeedSequence.spawn`.
+
+`procedural_terrain_grid` is not that shape. It creates **one** generator and
+draws **12 to 46 scalars** from it — `uniform(low, high)` and nothing else. No
+`spawn`, no arrays, no other distribution. A `SeedSequence` + `PCG64` port for
+that path is about 130 lines, and it was verified against numpy on **24,000 of
+24,000** draws across 2,000 seeds and ten ranges, then mutation-tested at
+**38 of 38**.
+
+So the amendment is narrow:
+
+> Where a call site uses **one** generator, **no `spawn`**, and a **scalar-only**
+> distribution surface, reproduce numpy's stream exactly and keep the goldens.
+> Everywhere else, Decision 1 stands and the re-baseline applies.
+
+**Why it is worth the 130 lines.** Python still bakes scene packages during the
+transition. If Rust generated statistically-similar-but-different terrain for
+the same seed, the `.smartscene` GLBs and the Rust runtime would describe
+*different worlds*, and a replay recorded against one would be quietly wrong
+against the other. An envelope cannot detect that; bit-parity makes it
+impossible.
+
+### The limit of parity is numpy's `exp`, not the PRNG
+
+Worth recording, because it bounds what "bit-exact" can mean anywhere in this
+migration, not only here.
+
+`np.exp` is **not** the platform's `exp`. Measured over 300,000 inputs in the
+ranges `_line_gaussian` uses, it differs from glibc's scalar `exp` by 1 ULP on
+**4.4%–5.0%** of them, and `NPY_DISABLE_CPU_FEATURES` does not change that — it
+is numpy's own implementation, not SIMD dispatch.
+
+The consequence for terrain: **5.25% of cells differ, by at most 32 ULP and
+5.7e-14 m**, while all six semantic masks are bit-identical on every cell of
+every scene. The 5.25% matching the measured `exp` rate is what identifies the
+cause rather than merely being consistent with it.
+
+So the rule is: **the PRNG stream is bit-exact; floating-point results that pass
+through a numpy transcendental are compared on a tolerance with a named cause
+and a measured bound.** That is not the statistical envelope of Decision 5 —
+it is a deterministic bound, and a guard requires a wrong port to miss it by a
+factor of a million.
+
+### Interaction with Decision 6
+
+Decisions 6 and this amendment pull in opposite directions wherever a
+transcendental appears, and it is better to say so than to leave it implicit:
+
+* Matching **numpy** wants the platform's libm, since that is what numpy is
+  mostly calling.
+* Cross-platform reproducibility wants the `libm` crate, which calls nothing.
+
+They cannot both hold. `argusnet-sim`'s draw stream takes Decision 6, because
+nothing compares it to Python. `argusnet-world`'s terrain takes Python parity,
+because the scene baker is Python and the two must agree. Neither is a mistake;
+they are different contracts, and the parity fixtures for `argusnet-world` are
+therefore **valid for one platform at a time**. If those fixtures are ever run
+on a second platform, expect ULP-level differences and widen the comparison
+rather than treating it as a regression.
 
 ## "Across platforms" costs one dependency, and the cost is real
 

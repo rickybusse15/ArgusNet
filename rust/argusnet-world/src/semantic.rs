@@ -40,24 +40,11 @@
 use crate::grid_ops::{dilate_mask, ellipse_mask_grid, slope_grid, smooth_heights, Grid, Mask};
 use crate::noise::stable_seed;
 
-/// Scene bounds in metres.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Bounds2D {
-    pub x_min_m: f64,
-    pub x_max_m: f64,
-    pub y_min_m: f64,
-    pub y_max_m: f64,
-}
-
-impl Bounds2D {
-    pub fn width_m(&self) -> f64 {
-        self.x_max_m - self.x_min_m
-    }
-
-    pub fn height_m(&self) -> f64 {
-        self.y_max_m - self.y_min_m
-    }
-}
+// `Bounds2D` lives in `noise` and is re-exported here, so callers that reach
+// for `semantic::Bounds2D` keep working. It used to be defined twice, which
+// made the two spellings incompatible types; see the definition for why that
+// went unnoticed.
+pub use crate::noise::Bounds2D;
 
 /// A named terrain preset.
 #[derive(Debug, Clone, Copy, PartialEq)]
