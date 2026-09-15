@@ -249,3 +249,61 @@ the queueing, and it is the only one available when nothing has been pushed
 yet. Register the self-hosted runner when you want the results attached to a
 pull request, or when several branches are in flight and you would rather not
 run each one by hand.
+
+## When `rustup` goes missing from the runner
+
+This has now happened twice on the same machine, and on 2026-09-15 it took
+**every one of the six checks** down rather than only the three Rust jobs —
+`packaging-contract` and `python-tests` build the `argusnet-native` cdylib
+during `pip install`, and `security` runs `cargo-audit`, so all of them need a
+working `cargo`.
+
+The signature is distinctive and worth recognising:
+
+```
+##[error]rustup is not on PATH and was not found in any known location.
+DIAGNOSIS: rustup's proxy symlinks in ~/.cargo/bin are intact but the
+rustup binary they all point to is GONE, so every one of them dangles.
+```
+
+`~/.cargo/bin` is full of symlinks that all point at the `rustup` binary
+beside them. If that one binary disappears, every proxy — `cargo`, `rustc`,
+`cargo-clippy`, `rustfmt` — dangles at once, while the toolchains under
+`~/.rustup/toolchains` remain untouched. Note that `find -type f` skips
+symlinks, so the directory reads as *empty* and the machine looks like it
+never had Rust installed. That is the wrong conclusion and it cost two CI
+rounds the first time.
+
+**The repair is one command**, and it is still the right one:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### The degraded fallback, and what it does not give up
+
+`scripts/ci-rust-path.sh` no longer stops there. When `rustup` is absent but
+the pinned toolchain is installed, it puts that toolchain's `bin` directory on
+PATH directly and CI continues in a **degraded mode**, announced with a
+`::warning::` on every run.
+
+Pointing PATH at a toolchain directory is normally the wrong answer, because it
+bypasses `rust-toolchain.toml` and lets the pinned version drift silently —
+which is the exact failure the pin exists to prevent (`main` went red twice on
+toolchain drift before it was added). The fallback answers that objection
+rather than ignoring it:
+
+- The directory is **chosen by** the pin. The channel is read out of
+  `rust-toolchain.toml`; it is never hardcoded and never guessed.
+- The result is **verified against** the pin. `rustc --version` must report the
+  pinned channel, so a mismatch fails *louder* than before, not quieter.
+- A channel the machine does not have **fails outright**. The fallback cannot
+  silently substitute a different toolchain, which is the whole risk.
+
+What is genuinely lost is rustup's component management. `cargo clippy` and
+`cargo fmt` need `cargo-clippy`, `clippy-driver` and `rustfmt` to be present in
+that same directory; the script checks for each and names any that are missing,
+so a `rust-lint` failure reads as a missing component rather than as a lint
+error.
+
+Treat a run with that warning as a run to fix, not a new normal.
