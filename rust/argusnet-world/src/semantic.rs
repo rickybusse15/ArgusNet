@@ -186,6 +186,35 @@ fn or_into(target: &mut Mask, other: &Mask) {
 ///
 /// Returns the **rewritten** heights and the six masks. See the module docs
 /// for the four stale-by-design reads this reproduces.
+/// Which steep-slope threshold a profile selects.
+///
+/// `roughness < 0.7` picks the gentler one. The comparison is strict on the
+/// roughness too, so a profile at exactly 0.7 takes the 0.62 threshold.
+pub fn steep_slope_threshold(profile: &TerrainProfile) -> f64 {
+    if profile.roughness < 0.7 {
+        0.52
+    } else {
+        0.62
+    }
+}
+
+/// Strict `>`: a slope landing **exactly** on the threshold is not steep.
+///
+/// Extracted from `semantic_masks` so the operator can be tested without going
+/// through `atan`. The fixture's `exact_slope` scenes were built by scanning
+/// ULPs for a ramp step whose `atan` lands bit-exactly on the threshold -- which
+/// makes them the one part of the terrain port that is genuinely
+/// platform-dependent, since a 1 ULP difference in `atan` moves the value off
+/// the boundary and flips the bit. Measured under a third libm: **5 of 30 cells
+/// in `exact_slope/0.52` flip, and no other cell of any other mask, preset or
+/// scene does.** So the operator is pinned here, exactly, where no libm is
+/// involved, and the fixture is left to test everything else.
+///
+/// See `docs/adr/006-determinism-rebaseline.md`.
+pub fn is_steep_slope(slope_rad: f64, threshold: f64) -> bool {
+    slope_rad > threshold
+}
+
 pub fn semantic_masks(inputs: SemanticInputs<'_>) -> Result<(Grid, SemanticMasks), &'static str> {
     let SemanticInputs {
         preset_name,
@@ -423,12 +452,12 @@ pub fn semantic_masks(inputs: SemanticInputs<'_>) -> Result<(Grid, SemanticMasks
 
     // The SECOND slope field, from the finished heights.
     let slopes = slope_grid(&heights, resolution_m)?;
-    let steep_threshold = if profile.roughness < 0.7 { 0.52 } else { 0.62 };
+    let steep_threshold = steep_slope_threshold(&profile);
 
     let mut steep_slope_mask = Mask::filled(nx, ny, false);
     let mut ridge_mask = Mask::filled(nx, ny, false);
     for (k, norm) in elev_norm.iter().enumerate() {
-        let steep = slopes.values[k] > steep_threshold;
+        let steep = is_steep_slope(slopes.values[k], steep_threshold);
         steep_slope_mask.values[k] = steep;
         // `norm` here is the ORIGINAL-height normalisation. See module docs.
         ridge_mask.values[k] = *norm > 0.72 || (steep && *norm > 0.55);

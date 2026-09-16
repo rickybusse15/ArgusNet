@@ -249,3 +249,67 @@ else.
 - `src/argusnet/simulation/sim.py:4258` — the per-pair generator construction
 - `docs/PERFORMANCE_AND_BENCHMARKING.md` §4 — `repeated_seed_diff_count` gate
 - ADR-005 (Rust as the runtime authority)
+
+### The second platform arrived, and the amendment was already written (2026-09-16, P4.3/P4.8)
+
+The paragraph above ends: *"If those fixtures are ever run on a second platform,
+expect ULP-level differences and widen the comparison rather than treating it as
+a regression."* CI moved onto a self-hosted arm64 Mac, `rust-fast` went red, and
+this is the record of applying that rule rather than re-deciding it.
+
+**What failed.** `grid_ops_parity::slope_matches_the_reference`,
+`ramp_along_axis0` cell (0, 0): `0.46364760900080615` against the fixture's
+`0.4636476090008061`. One ULP. `slope_grid` ends in `atan`, which IEEE-754 does
+not require to be correctly rounded, so its last bit is a property of Apple's
+libm rather than of the port.
+
+**How the rest of the surface was measured without a Mac.** Swapping every
+`f64::atan/exp/sin/cos/ln/sqrt/hypot` in `argusnet-world` for the `libm` crate
+gives a **third** implementation, differing from glibc on 4.3% of `atan` samples
+and 9.8% of `exp`. Anything that then fails is platform-dependent; anything that
+still passes is not. That reproduces the Mac's class of failure on Linux and
+answers the question `rust-fast` cannot, because it stops at the first failing
+test binary.
+
+Across all eleven `argusnet-world` test binaries, exactly three tests failed:
+
+| test | divergence |
+|---|---|
+| `slope_matches_the_reference` | 5 cells, every one **1 ULP / 2.3e-16 rad** |
+| `line_gaussian_matches_the_reference` | 1 case, **1 ULP / 1.1e-16** |
+| `semantic_masks_match_the_reference_for_every_preset` | `exact_slope/0.52`, **5 of 30 cells** of the `steep_slope` mask |
+
+Everything else — `terrain_grid`, `land_cover`, `polygon_overlay`, `numpy_rng`,
+the other four semantic masks on every preset and every scene — is **bit-
+identical under a completely different libm**. That is a much stronger result
+than the original `exp` measurement and it says where the real exposure is: two
+float comparisons and one deliberately-constructed scene.
+
+**The two value comparisons were widened**, with the bound named as a constant
+carrying the measurement, at 1e-12 — roughly 4,000x the observed divergence and
+eleven orders of magnitude below the ~0.2 rad a port that clamped the edge index
+instead of taking numpy's one-sided difference would produce.
+`the_slope_fixture_still_pins_the_edge_difference` now *asserts* that margin
+(`worst > tolerance * 1e6`) instead of leaving it to a comment, so the tolerance
+cannot later be widened over the bug it exists to catch.
+
+**The mask was not widened, because a mask is discrete.** The `exact_slope`
+scenes were built by scanning ULPs for a ramp step whose `atan` lands
+bit-exactly on the threshold, precisely so `slope > t` and `slope >= t` are
+distinguishable. Being on the boundary is what they are for, and it is also
+exactly what no two libm implementations can agree on. So the operator moved to
+where no libm can reach it: `semantic::is_steep_slope` and
+`semantic::steep_slope_threshold` are extracted from `semantic_masks`, and
+`the_steep_slope_comparison_is_strict` asserts the boundary and one ULP either
+side of it directly.
+
+The fixture then excludes only cells whose slope sits within **one ULP** of the
+threshold — one ULP is the whole budget, since a wider window would start
+excusing real disagreement — and the loop asserts that **no scene other than
+`exact_slope/` contains such a cell**. That is a sharper guard than a count:
+it says the exclusion cannot reach anywhere it was not intended to.
+
+**Verified the right way round.** The full `argusnet-world` suite was re-run
+under the third-libm probe after the change and all eleven binaries pass. The
+fix is confirmed against the failure mode, not merely against the platform the
+fixtures were captured on.
