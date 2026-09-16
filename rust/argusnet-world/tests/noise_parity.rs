@@ -92,6 +92,31 @@ fn i(text: &str) -> i64 {
     text.parse().expect("fixture integer")
 }
 
+/// How far `line_gaussian` may sit from the reference's.
+///
+/// It is the one function in this fixture that routes through `sin`, `cos` and
+/// `exp`, whose last bit is a property of the platform's libm rather than of
+/// the port -- see `SLOPE_TOLERANCE_RAD` in `grid_ops_parity.rs` and ADR-006.
+/// Measured against the `libm` crate, a third implementation: **one case of the
+/// fixture moves, by exactly 1 ULP (1.1e-16)**. This bound is ~9,000x that,
+/// while the result is a normalised envelope in [0, 1], so a port that squared
+/// the along-track term instead of raising it to the fourth power -- the
+/// mistake this fixture exists to catch -- misses by order 0.1.
+///
+/// Every other case here stays bit-exact, and was confirmed bit-identical
+/// under the same probe.
+const LINE_GAUSSIAN_TOLERANCE: f64 = 1.0e-12;
+
+fn near(actual: f64, expected: &str, what: &str) {
+    let want = f(expected);
+    assert!(
+        (actual - want).abs() <= LINE_GAUSSIAN_TOLERANCE,
+        "{what}: got {actual}, expected {expected} (off by {:e}, tolerance {:e})",
+        (actual - want).abs(),
+        LINE_GAUSSIAN_TOLERANCE
+    );
+}
+
 fn same(actual: f64, expected: &str, what: &str) {
     assert_eq!(
         actual.to_bits(),
@@ -248,7 +273,7 @@ fn line_gaussian_matches_the_reference() {
             length_m: f(&case.length_m),
             center_xy: (f(&case.center_xy[0]), f(&case.center_xy[1])),
         };
-        same(
+        near(
             line_gaussian(f(&case.xx), f(&case.yy), envelope),
             &case.result,
             &format!("line_gaussian({}, {})", case.xx, case.yy),

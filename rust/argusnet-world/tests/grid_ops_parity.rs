@@ -56,6 +56,26 @@ struct EllipseCase {
     mask: Vec<bool>,
 }
 
+/// How far a slope may sit from the reference's.
+///
+/// `slope_grid` ends in `atan`, which IEEE-754 does not require to be
+/// correctly rounded, so its last bit is a property of the platform's libm
+/// rather than of the port. ADR-006 anticipated exactly this: *"the parity
+/// fixtures for `argusnet-world` are valid for one platform at a time. If those
+/// fixtures are ever run on a second platform, expect ULP-level differences and
+/// widen the comparison rather than treating it as a regression."* CI moved to
+/// an arm64 Mac on 2026-09-16 and `ramp_along_axis0` cell (0, 0) came back
+/// 1 ULP high.
+///
+/// **Measured, not guessed.** Running the whole fixture against the `libm`
+/// crate -- a third implementation, differing from glibc on 4.3% of `atan`
+/// samples -- moves 5 cells, every one by exactly **1 ULP, 2.3e-16 rad**. This
+/// bound is ~4,000x that, and eleven orders of magnitude below the ~0.2 rad a
+/// port that clamped the edge index instead of taking numpy's one-sided
+/// difference would produce. `the_slope_fixture_still_pins_the_edge_difference`
+/// asserts that margin rather than leaving it to this comment.
+const SLOPE_TOLERANCE_RAD: f64 = 1.0e-12;
+
 fn f(text: &str) -> f64 {
     text.parse().expect("fixture float")
 }
@@ -71,6 +91,26 @@ fn load() -> Fixture {
     );
     let text = std::fs::read_to_string(path).expect("grid_ops fixture");
     serde_json::from_str(&text).expect("grid_ops fixture parses")
+}
+
+/// Compare a whole grid within `tolerance`, naming the first cell that misses.
+///
+/// Used only where the value passed through a transcendental. Everything else
+/// -- smoothing, dilation, the ellipse masks -- stays bit-exact, and was
+/// confirmed bit-identical under the third-libm probe described on
+/// [`SLOPE_TOLERANCE_RAD`].
+fn near_grid(actual: &Grid, expected: &[String], tolerance: f64, label: &str) {
+    assert_eq!(actual.values.len(), expected.len(), "{label}: cell count");
+    for (index, (value, text)) in actual.values.iter().zip(expected).enumerate() {
+        let (i, j) = (index / actual.ny, index % actual.ny);
+        let want = f(text);
+        assert!(
+            (value - want).abs() <= tolerance,
+            "{label}: cell ({i}, {j}) got {value}, expected {text} \
+             (off by {:e}, tolerance {tolerance:e})",
+            (value - want).abs()
+        );
+    }
 }
 
 /// Compare a whole grid bit-for-bit, naming the first cell that diverges.
@@ -94,7 +134,7 @@ fn slope_matches_the_reference() {
         let heights = Grid::new(case.shape[0], case.shape[1], fv(&case.heights_m)).unwrap();
         let slope = slope_grid(&heights, f(&case.resolution_m))
             .unwrap_or_else(|e| panic!("{}: {e}", case.name));
-        same_grid(&slope, &case.slope_rad, &case.name);
+        near_grid(&slope, &case.slope_rad, SLOPE_TOLERANCE_RAD, &case.name);
     }
 }
 
@@ -123,7 +163,10 @@ fn the_slope_fixture_still_pins_the_edge_difference() {
                     let d0 = (hi0 - lo0) / (2.0 * spacing);
                     let d1 = (hi1 - lo1) / (2.0 * spacing);
                     let wrong = ((d0 * d0) + (d1 * d1)).sqrt().atan();
-                    wrong.to_bits() != expected[i * ny + j].to_bits()
+                    // Must miss by more than the tolerance, or widening the
+                    // comparison would have swallowed the boundary bug it
+                    // exists to catch.
+                    (wrong - expected[i * ny + j]).abs() > SLOPE_TOLERANCE_RAD
                 })
             })
         })
@@ -131,7 +174,38 @@ fn the_slope_fixture_still_pins_the_edge_difference() {
     assert!(
         discriminating > 0,
         "no slope case distinguishes numpy's one-sided edge difference from \
-         an index-clamping port; the boundary handling is untested"
+         an index-clamping port by more than SLOPE_TOLERANCE_RAD; the boundary \
+         handling is untested, or the tolerance has been widened over it"
+    );
+
+    // And by how much: ADR-006 asks a guard to require a wrong port to miss by
+    // a wide margin, not merely to miss.
+    let worst = fixture
+        .slope
+        .iter()
+        .flat_map(|case| {
+            let (nx, ny) = (case.shape[0], case.shape[1]);
+            let heights = fv(&case.heights_m);
+            let spacing = f(&case.resolution_m).max(1.0);
+            let expected = fv(&case.slope_rad);
+            (0..nx)
+                .flat_map(move |i| (0..ny).map(move |j| (i, j)))
+                .map(move |(i, j)| {
+                    let at = |a: usize, b: usize| heights[a * ny + b];
+                    let d0 =
+                        (at((i + 1).min(nx - 1), j) - at(i.saturating_sub(1), j)) / (2.0 * spacing);
+                    let d1 =
+                        (at(i, (j + 1).min(ny - 1)) - at(i, j.saturating_sub(1))) / (2.0 * spacing);
+                    let wrong = ((d0 * d0) + (d1 * d1)).sqrt().atan();
+                    (wrong - expected[i * ny + j]).abs()
+                })
+        })
+        .fold(0.0f64, f64::max);
+    assert!(
+        worst > SLOPE_TOLERANCE_RAD * 1.0e6,
+        "an index-clamping port misses by at most {worst:e} rad, only \
+         {:.0}x the tolerance -- too close for the tolerance to be safe",
+        worst / SLOPE_TOLERANCE_RAD
     );
 }
 
