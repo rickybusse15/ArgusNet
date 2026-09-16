@@ -118,6 +118,32 @@ therefore **valid for one platform at a time**. If those fixtures are ever run
 on a second platform, expect ULP-level differences and widen the comparison
 rather than treating it as a regression.
 
+### The other limit is BLAS, and it is not worth chasing (2026-09-15, P4.3f)
+
+A second instance of the same shape, recorded because the conclusion goes the
+other way from the PRNG amendment above and the difference is the point.
+
+`OrientedBox.footprint_xy_m()` rotates four corners with `corners @ rot.T`.
+numpy hands that to BLAS, which accumulates the two-term dot product with a
+**fused multiply-add** — one rounding where a plain `x * cos - y * sin` has two.
+The derived vertices differ from the Rust constructor's by up to 2.8e-14 m.
+
+One `mul_add` reproduces it exactly; it is deliberately not used. Whether
+numpy's matmul fuses is a property of the BLAS **vendor**, the matrix size and
+the CPU's feature set — not of a published algorithm — so matching it would pin
+this crate to one build of one library. That is the fragile bit-parity Decision 1
+declines, and it is what distinguishes this case from PCG64, where the stream is
+specified.
+
+The divergence is accepted with a **stated mechanism for why it cannot matter**,
+which is the standard this ADR asks for and not merely a tolerance: obstacle
+footprints are consumed by `point_in_polygon`, which answers anything within
+1e-6 m of an edge from its boundary short-circuit, identically under both
+spellings. A 2.8e-14 m vertex shift is eight orders of magnitude inside that
+band. `polygon_overlay_parity` carries a compile-time check that the tolerance
+stays three orders of magnitude inside it, so the argument cannot be widened out
+of existence by a later edit.
+
 ## "Across platforms" costs one dependency, and the cost is real
 
 Added 2026-09-11, after the clause in Decision 1 was violated the first time CI
