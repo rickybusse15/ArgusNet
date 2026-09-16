@@ -96,10 +96,20 @@ jobs:
       # because absolute wall-clock baselines do not transfer between runners.
       - name: Performance regression (deterministic work counters)
         run: python -m pytest tests/test_performance_regression.py -q
+      # The benchmark JSON is a diagnostic, not a gate -- the assertions above
+      # already ran and passed by the time this step is reached. Losing the
+      # upload must therefore not turn a green test run red, and on
+      # 2026-09-16 it did: every PR reported `python-tests` red with
+      # "Failed to CreateArtifact: Artifact storage quota has been hit",
+      # after pytest, ruff, mypy, the proto checks and the perf gate had all
+      # succeeded. A retention window keeps the quota from refilling; quota is
+      # recalculated every 6-12 hours, so a green run may lag the fix.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        continue-on-error: true
         with:
           name: bench-${{ matrix.python-version }}
           path: bench.json
+          retention-days: 7
 
   # The Rust work is split four ways so a logic error does not wait behind a
   # Bevy build. Only argusnet-viewer depends on Bevy (66 of the 721 locked
