@@ -68,10 +68,15 @@ pub fn score_footprints(
 pub mod belief;
 pub mod coverage;
 pub mod footprint;
+pub mod revision;
 
 pub use belief::{BeliefCell, BeliefCellStatus, BeliefGrids, WorldBeliefQuery};
 pub use coverage::{CoverageGrid, CoverageStats};
 pub use footprint::{rasterize_circle, GridBounds, Sampling};
+pub use revision::{
+    BeliefRevision, BeliefStore, BeliefTilePatch, CellObservation, Observation, OccupancyEvidence,
+    Revision, TileIndex,
+};
 
 #[cfg(test)]
 mod tests {
