@@ -46,6 +46,102 @@ if ! command -v rustup >/dev/null 2>&1; then
   unset _argusnet_candidate
 fi
 
+# A LAST RESORT, when rustup itself is gone but its toolchains are not.
+#
+# Added 2026-09-15, after the 2026-09-11 failure above recurred and took the
+# ENTIRE CI graph down -- not only the three Rust jobs. `packaging-contract`
+# and `python-tests` build the `argusnet-native` cdylib during `pip install`,
+# and `security` runs `cargo-audit`, so all six checks die at this step. Four
+# pull requests merged or opened with no check ever running on them.
+#
+# This was deliberately NOT done twice before, on the grounds that pointing
+# PATH at a toolchain directory bypasses rust-toolchain.toml and lets the
+# pinned version drift silently -- which is the exact failure the pin was
+# added to prevent. That objection is answered here rather than overruled:
+#
+#   * The directory is CHOSEN BY the pin. The channel is read out of
+#     rust-toolchain.toml, never hardcoded and never guessed.
+#   * The result is VERIFIED AGAINST the pin. `rustc --version` must report
+#     the pinned channel or this fails, so a mismatch is louder than before,
+#     not quieter.
+#   * A channel the machine does not have fails outright. The fallback cannot
+#     silently substitute a different toolchain, which is the whole risk.
+#
+# So the pin stays authoritative. What is lost is rustup's component
+# management, which is why the missing components are named below: without
+# them `cargo clippy` and `cargo fmt` fail, and a reader should not have to
+# work out why.
+#
+# This is a degraded mode and says so on every run. The real repair is still
+# to reinstall rustup on the machine.
+if ! command -v rustup >/dev/null 2>&1 && [ -f rust-toolchain.toml ]; then
+  _argusnet_channel="$(
+    sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+      rust-toolchain.toml | head -1
+  )"
+  if [ -n "$_argusnet_channel" ]; then
+    for _argusnet_bin in "$HOME/.rustup/toolchains/$_argusnet_channel"-*/bin; do
+      [ -x "$_argusnet_bin/cargo" ] && [ -x "$_argusnet_bin/rustc" ] || continue
+      # Confirm the binary really is the pinned channel before trusting it.
+      # A directory name is a claim; `rustc --version` is the evidence.
+      _argusnet_reported="$("$_argusnet_bin/rustc" --version 2>/dev/null)"
+      case "$_argusnet_reported" in
+        *"$_argusnet_channel"*) ;;
+        *)
+          echo "::error::$_argusnet_bin/rustc reports '$_argusnet_reported'," \
+               "which is not the pinned channel $_argusnet_channel."
+          continue
+          ;;
+      esac
+
+      export PATH="$_argusnet_bin:$PATH"
+      [ -n "$GITHUB_PATH" ] && echo "$_argusnet_bin" >> "$GITHUB_PATH"
+      echo "::warning::rustup is missing; falling back to the pinned toolchain" \
+           "at $_argusnet_bin. CI is running in a DEGRADED mode -- reinstall" \
+           "rustup on this runner: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+      echo "pinned channel from rust-toolchain.toml: $_argusnet_channel"
+      echo "rustc reports: $_argusnet_reported"
+
+      # Name what rustup would have provided and this cannot. `cargo clippy`
+      # and `cargo fmt` need these on PATH; without the note, a rust-lint
+      # failure here looks like a lint error rather than a missing component.
+      for _argusnet_component in cargo-clippy clippy-driver rustfmt cargo-fmt; do
+        [ -x "$_argusnet_bin/$_argusnet_component" ] ||
+          echo "::warning::component $_argusnet_component is not in" \
+               "$_argusnet_bin; any step needing it will fail"
+      done
+      unset _argusnet_component
+      break
+    done
+    unset _argusnet_bin _argusnet_reported
+  fi
+  unset _argusnet_channel
+fi
+
+# Report what will actually be used, in whichever mode we ended up in.
+#
+# This replaces the `rustup show` that each of the six call sites used to run
+# after sourcing. That line cannot work in the fallback above, and deciding
+# what to print is this script's job anyway -- it is the only thing that knows
+# which mode is live.
+_argusnet_report() {
+  echo "cargo: $(command -v cargo 2>/dev/null) -- $(cargo --version 2>/dev/null)"
+  echo "rustc: $(command -v rustc 2>/dev/null) -- $(rustc --version 2>/dev/null)"
+  if command -v rustup >/dev/null 2>&1; then
+    rustup show
+  else
+    echo "(no rustup: running on the pinned toolchain directly, see the warning above)"
+  fi
+}
+
+# With the fallback engaged there is no rustup, and there does not need to be:
+# every step downstream calls cargo, not rustup. A usable cargo is success, so
+# the hard failure below stays reserved for a machine with no toolchain at all.
+if ! command -v rustup >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
+  _argusnet_report
+  return 0 2>/dev/null || exit 0
+fi
+
 # Fail LOUDLY and with evidence. The point of the detail below is to
 # distinguish "installed somewhere this script does not look" -- a workflow
 # fix -- from "not installed on this machine at all", which is not.
@@ -83,3 +179,5 @@ if ! command -v rustup >/dev/null 2>&1; then
   echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
   return 1 2>/dev/null || exit 1
 fi
+
+_argusnet_report
