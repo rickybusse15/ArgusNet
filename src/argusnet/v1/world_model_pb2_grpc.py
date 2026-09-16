@@ -5,7 +5,7 @@ import warnings
 
 from argusnet.v1 import world_model_pb2 as argusnet_dot_v1_dot_world__model__pb2
 
-GRPC_GENERATED_VERSION = '1.78.0'
+GRPC_GENERATED_VERSION = '1.83.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class WorldModelServiceStub(object):
+class WorldModelServiceStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -81,7 +81,7 @@ class WorldModelServiceStub(object):
                 _registered_method=True)
 
 
-class WorldModelServiceServicer(object):
+class WorldModelServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def IngestFrame(self, request, context):
@@ -196,7 +196,7 @@ def add_WorldModelServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class WorldModelService(object):
+class WorldModelService:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
