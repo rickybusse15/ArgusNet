@@ -8,10 +8,10 @@
 //! guards at the bottom implement each one the "clean" way and require it to
 //! disagree, so the staleness cannot quietly stop being tested.
 
-use argusnet_world::grid_ops::Grid;
+use argusnet_world::grid_ops::{slope_grid, Grid};
 use argusnet_world::semantic::{
-    median, quantile, semantic_masks, terrain_profile_for_preset, Bounds2D, SemanticInputs,
-    TerrainProfile,
+    is_steep_slope, median, quantile, semantic_masks, steep_slope_threshold,
+    terrain_profile_for_preset, Bounds2D, SemanticInputs, TerrainProfile,
 };
 use serde::Deserialize;
 
@@ -354,6 +354,7 @@ fn semantic_masks_match_the_reference_for_every_preset() {
         "every preset across several scenes, plus overrides"
     );
 
+    let mut total_unresolvable = 0usize;
     for case in &fixture.runs {
         let (heights, masks) = run_case(case);
         let ny = case.shape[1];
@@ -374,6 +375,24 @@ fn semantic_masks_match_the_reference_for_every_preset() {
             );
         }
 
+        // Cells whose slope sits within one ULP of the steep-slope threshold
+        // cannot be classified the same way by two different `atan`
+        // implementations, because the value is *on* the boundary. They are
+        // excluded here and pinned exactly, without any libm, by
+        // `the_steep_slope_comparison_is_strict` below.
+        let unresolvable = unresolvable_slope_cells(case, &heights);
+        // The only scenes allowed to contain a boundary cell are the ones
+        // built to contain nothing else. Anywhere else, a cell on the
+        // threshold would be a silent hole in an otherwise exact comparison.
+        assert!(
+            unresolvable.is_empty() || case.label.starts_with("exact_slope/"),
+            "{at}: {} cell(s) sit on the steep-slope threshold outside the \
+             scenes constructed for it, so the mask comparison there is no \
+             longer exact",
+            unresolvable.len()
+        );
+        total_unresolvable += unresolvable.len();
+
         for (name, actual, expected) in [
             ("water", &masks.water.values, &case.masks.water),
             ("ridge", &masks.ridge.values, &case.masks.ridge),
@@ -386,11 +405,16 @@ fn semantic_masks_match_the_reference_for_every_preset() {
             ("lowland", &masks.lowland.values, &case.masks.lowland),
             ("road", &masks.road.values, &case.masks.road),
         ] {
+            // Only the two masks derived from the slope threshold can be moved
+            // by a boundary cell; the other four are exact everywhere.
+            let slope_derived = name == "steep_slope" || name == "ridge";
             let first_bad = actual
                 .iter()
                 .zip(expected)
-                .position(|(a, b)| a != b)
-                .map(|index| (index / ny, index % ny));
+                .enumerate()
+                .filter(|(index, _)| !(slope_derived && unresolvable.contains(index)))
+                .find(|(_, (a, b))| a != b)
+                .map(|(index, _)| (index / ny, index % ny));
             assert!(
                 first_bad.is_none(),
                 "{at}: {name} mask differs first at {:?}",
@@ -398,6 +422,19 @@ fn semantic_masks_match_the_reference_for_every_preset() {
             );
         }
     }
+
+    // Both `exact_slope` scenes are pure ramps, so every one of their 6x5 = 30
+    // cells has the same derivative and therefore sits on the threshold. That
+    // is the whole content of those scenes; the assertion inside the loop is
+    // what keeps the exclusion from reaching any other.
+    //
+    // Measured against the `libm` crate -- a third implementation, differing
+    // from glibc on 4.3% of `atan` samples -- 5 of those 60 flip, and no cell
+    // of any other mask, preset or scene does.
+    assert_eq!(
+        total_unresolvable, 60,
+        "the two exact_slope ramps should contribute 30 boundary cells each"
+    );
 }
 
 /// `elev_norm` is normalised from the **original** heights and used at the end
@@ -530,4 +567,68 @@ fn every_preset_branch_changes_the_terrain() {
             "{preset}'s branch changed nothing versus the fallback, so it is untested"
         );
     }
+}
+
+/// Flat indices whose finished slope is within one ULP of the profile's
+/// steep-slope threshold.
+///
+/// One ULP is the whole budget: `atan` is not required by IEEE-754 to be
+/// correctly rounded, and the measured divergence between three separate libm
+/// implementations is exactly one ULP. A wider window would start excusing real
+/// disagreement.
+fn unresolvable_slope_cells(case: &RunCase, heights: &Grid) -> std::collections::HashSet<usize> {
+    let profile = profile_of(&case.profile);
+    let threshold = steep_slope_threshold(&profile);
+    let resolution = f(&case.resolution_m);
+    let Ok(slopes) = slope_grid(heights, resolution) else {
+        return std::collections::HashSet::new();
+    };
+    let above = f64::from_bits(threshold.to_bits() + 1);
+    let below = f64::from_bits(threshold.to_bits() - 1);
+    slopes
+        .values
+        .iter()
+        .enumerate()
+        .filter(|(_, slope)| **slope >= below && **slope <= above)
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// The property the `exact_slope` scenes were constructed to prove, asserted
+/// where no libm can reach it.
+///
+/// `semantic_masks` classifies with a strict `>`, so a slope landing exactly on
+/// the threshold is **not** steep. The fixture proves this by building a ramp
+/// whose `atan` lands bit-exactly on 0.52 -- which works only on the platform
+/// the fixture was captured on. Here the boundary value is supplied directly.
+#[test]
+fn the_steep_slope_comparison_is_strict() {
+    for threshold in [0.52_f64, 0.62_f64] {
+        assert!(
+            !is_steep_slope(threshold, threshold),
+            "a slope exactly on {threshold} must not be steep"
+        );
+        assert!(
+            is_steep_slope(f64::from_bits(threshold.to_bits() + 1), threshold),
+            "one ULP above {threshold} must be steep"
+        );
+        assert!(!is_steep_slope(
+            f64::from_bits(threshold.to_bits() - 1),
+            threshold
+        ));
+    }
+}
+
+/// And that the roughness split picking the threshold is strict the same way.
+#[test]
+fn the_roughness_split_is_strict() {
+    let mut profile = terrain_profile_for_preset("default");
+    profile.roughness = 0.699_999_999;
+    assert_eq!(steep_slope_threshold(&profile), 0.52);
+    profile.roughness = 0.7;
+    assert_eq!(
+        steep_slope_threshold(&profile),
+        0.62,
+        "`< 0.7`, not `<= 0.7`"
+    );
 }
