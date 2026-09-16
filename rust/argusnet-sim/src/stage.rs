@@ -69,6 +69,33 @@ impl Stage {
         Stage::CommitSnapshot,
     ];
 
+    /// Whether this stage may be handed the true world state.
+    ///
+    /// §3 makes truth a capability rather than a convention, and this is the
+    /// whole list. Two stages exist to sense the true world:
+    /// [`Stage::UpdateVioAndPose`] builds synthetic IMU features from it, and
+    /// [`Stage::GenerateObservations`] is the sensor model. Every other handler
+    /// is handed `None`, whatever it does, because `TickContext` offers no
+    /// other path to truth.
+    ///
+    /// Adding a stage to this list is a deliberate widening of what can see
+    /// ground truth, which is why it is a `match` over every variant rather
+    /// than a default — a new stage cannot join by omission.
+    pub fn may_read_truth(self) -> bool {
+        match self {
+            Stage::UpdateVioAndPose | Stage::GenerateObservations => true,
+            Stage::ApplyCommands
+            | Stage::SampleControllersAndBattery
+            | Stage::ApplyMissionOverrides
+            | Stage::Deconflict
+            | Stage::SafetyMonitor
+            | Stage::UpdateFusion
+            | Stage::UpdateMappingAndLocalization
+            | Stage::EvaluateMissionTransitions
+            | Stage::CommitSnapshot => false,
+        }
+    }
+
     /// The stage's number in §4's table.
     pub fn order(self) -> u8 {
         Self::PIPELINE

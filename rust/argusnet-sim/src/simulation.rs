@@ -38,6 +38,9 @@ use crate::snapshot::{
     CheckpointHeader, RestoreError, RuntimeSnapshot, SimulationCheckpoint, SnapshotHeader,
 };
 use crate::stage::{Stage, StageError, StageOutcome, StageRecord, StageTrace};
+use crate::world::TickWorld;
+
+use argusnet_types::{NodeState, TrackState, TruthState};
 
 /// What a stage handler is given, and what it may record.
 ///
@@ -53,6 +56,19 @@ pub struct TickContext<'a> {
     pub seed: u32,
     /// The millisecond key `build_observations` uses.
     pub seed_time_key: i64,
+    /// The tick's mutable platform and track state.
+    ///
+    /// One list, edited in place. P4.8 asks to "eliminate repeated
+    /// dataclass-style list rebuilds; freeze once at the snapshot boundary",
+    /// and this is the list that is not rebuilt -- see [`crate::world`].
+    pub world: &'a mut TickWorld,
+    /// The true world, for the stages allowed to see it.
+    ///
+    /// `None` for every stage [`Stage::may_read_truth`] does not admit, which
+    /// is most of them. §3 makes truth a capability; this field is that
+    /// capability, and a handler handed `None` has no other way to reach
+    /// truth, so the restriction is structural rather than advisory.
+    pub truth: Option<&'a [TruthState]>,
     notes: &'a mut Vec<String>,
 }
 
@@ -153,6 +169,11 @@ pub struct Simulation {
     /// pacing, never physics dt."* Nothing in `step` reads it.
     speed: f64,
     world_revision: u64,
+    /// The tick's mutable state. Stages edit it; stage 10 freezes it once.
+    world: TickWorld,
+    /// The true world. Reaches a stage only through
+    /// [`Stage::may_read_truth`]; never reaches a snapshot at all.
+    truth: Vec<TruthState>,
     belief_revision: u64,
     journal_cursor: u64,
 }
@@ -191,6 +212,8 @@ impl Simulation {
             world_revision: 0,
             belief_revision: 0,
             journal_cursor: 0,
+            world: TickWorld::default(),
+            truth: Vec::new(),
         })
     }
 
@@ -249,6 +272,28 @@ impl Simulation {
     }
 
     /// The last committed snapshot, if any tick has committed.
+    /// Load the fleet and any existing tracks.
+    ///
+    /// The run driver's entry point: `TickWorld` is what the stages mutate, and
+    /// nothing inside the pipeline creates platforms.
+    pub fn load_world(&mut self, platforms: Vec<NodeState>, tracks: Vec<TrackState>) {
+        self.world = TickWorld::new(platforms, tracks);
+    }
+
+    /// Supply the true world for the ticks that follow.
+    ///
+    /// Written from outside the pipeline because truth is prescribed by the
+    /// scenario rather than integrated by a stage. It reaches a stage only
+    /// through [`Stage::may_read_truth`] and never reaches a snapshot.
+    pub fn set_truth(&mut self, truth: Vec<TruthState>) {
+        self.truth = truth;
+    }
+
+    /// Read-only view of the tick's mutable state.
+    pub fn world(&self) -> &TickWorld {
+        &self.world
+    }
+
     pub fn latest_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
         self.last_snapshot.clone()
     }
@@ -384,6 +429,7 @@ impl Simulation {
         }
 
         let tick = self.clock.tick();
+        self.world.begin_tick();
 
         // Stage 0 runs before the pause check, and that ordering is load-bearing.
         // §5 says pause is "checked between ticks", and commands are admitted at
@@ -446,6 +492,9 @@ impl Simulation {
                         timestamp_s: self.clock.timestamp_s(),
                         seed: self.config.seed(),
                         seed_time_key: self.clock.seed_time_key(),
+                        world: &mut self.world,
+                        // The capability, handed out by stage and nowhere else.
+                        truth: stage.may_read_truth().then_some(self.truth.as_slice()),
                         notes: &mut notes,
                     };
                     match self.handlers.get_mut(&stage) {
@@ -492,16 +541,25 @@ impl Simulation {
     /// Freeze a snapshot at the current clock position and publish it.
     fn commit_current(&mut self) -> Arc<RuntimeSnapshot> {
         self.revision += 1;
-        let snapshot = RuntimeSnapshot::empty(SnapshotHeader {
-            run_id: self.config.run_id().to_string(),
-            epoch: self.epoch,
-            tick: self.clock.tick(),
-            revision: self.revision,
-            timestamp_s: self.clock.timestamp_s(),
-            world_revision: self.world_revision,
-            belief_revision: self.belief_revision,
-            event_cursor: self.journal_cursor,
-            truth_filtered: true,
+        self.world_revision = self.world.revision();
+        // The one clone of the tick. Everything before this mutated in place.
+        let (platforms, tracks) = self.world.freeze();
+        let snapshot = Arc::new(RuntimeSnapshot {
+            header: SnapshotHeader {
+                run_id: self.config.run_id().to_string(),
+                epoch: self.epoch,
+                tick: self.clock.tick(),
+                revision: self.revision,
+                timestamp_s: self.clock.timestamp_s(),
+                world_revision: self.world_revision,
+                belief_revision: self.belief_revision,
+                event_cursor: self.journal_cursor,
+                // Not a filtering step someone has to remember: `TickWorld`
+                // never held truth, so this is a statement about the type.
+                truth_filtered: true,
+            },
+            platforms,
+            tracks,
         });
         self.last_snapshot = Some(Arc::clone(&snapshot));
         snapshot
@@ -563,6 +621,12 @@ impl Simulation {
         self.speed = 1.0;
         self.belief_revision = 0;
         self.journal_cursor = 0;
+        // A reset is a new epoch, so the previous epoch's platforms are not
+        // this run's. Truth goes with them: the caller reloads both, and
+        // leaving stale truth behind would let a fresh run sense the old
+        // world for one tick.
+        self.world.clear();
+        self.truth.clear();
     }
 
     /// Freeze everything needed to resume.
