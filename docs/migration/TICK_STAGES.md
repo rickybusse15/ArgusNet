@@ -537,3 +537,154 @@ accident:
 | `redirect` ignores its `speed_mps` and uses the constant | every test passed `REDIRECT_SPEED_MPS` |
 | the zero-length-interval epsilon guard is dropped | reachable only by sampling a zero-length trajectory *before* it starts, which nothing did — the velocity becomes an infinity |
 | `clear_frontier` reaches into the POI table | six near-identical accessors over three maps, and only the bulk clearer was tested |
+
+# Stage 5: synthetic IMU, the VIO update, and the pose select
+
+§4 names stage 5 *"truth/synthetic IMU features, VIO update, observation pose
+select"*. The estimator itself landed in P4.4; this is the wiring around it —
+and the wiring turned out to be where the interesting behaviour lives.
+
+## The VIO integrates the nominal path, not the flown one
+
+`node.trajectory(timestamp_s)` is the scenario's undisturbed path. Stages 2, 3,
+4 and 10 have all run by the time stage 5 does, so the platform in the world may
+have been redirected to a frontier cell, nudged by deconfliction and clamped by
+the safety monitor — and the VIO sees **none of it**.
+
+That is load-bearing. It is what makes the estimate drift away from the world
+position in a way the fusion stage can see; reading the world here instead would
+make the estimate track the truth it is supposed to be independent of.
+
+So the nominal path arrives through an injected `NominalTrajectory` rather than
+from `TickContext::world`. §3's truth capability covers *target* truth, which is
+a different thing — a platform's own prescribed path is not in
+`TickContext::truth` at all. With no source installed the stage reports
+`Skipped` rather than quietly falling back to the world, because the fallback
+would be a different estimator.
+
+The test compares two runs, identical but for a world position thrown a
+kilometre off course every tick, and requires bit-identical estimates. Comparing
+runs rather than asserting a range means it does not have to know where the
+estimate ought to land — only that the world cannot reach it.
+
+## Parity: value-for-value against the reference, within 1 ULP
+
+Six ticks are pinned against values taken from running `EKFVIO` itself, driven
+with the inputs `sim.py` gives it. The worst disagreement across those ticks is
+**1.42e-14 m**, which at a state magnitude of 80 m is exactly one ULP, and comes
+from numpy and nalgebra ordering the covariance products differently.
+
+`PARITY_TOLERANCE_M = 1e-9` is ~70,000x that, and the fixture asserts the
+measured worst stays four orders of magnitude *below* the tolerance — so if a
+future change starts eating the headroom, the fixture says so rather than
+absorbing it. The covariance trace agrees exactly and is pinned exactly; a
+tolerance there would hide a real divergence.
+
+A correction worth recording: the first reading of this was "bit-for-bit
+identical", taken from output rounded to six decimals. It is not. Full-precision
+comparison is what turned a claim into a measurement.
+
+## ⚠ A defect in the reference, reproduced deliberately
+
+**The synthetic IMU feeds kinematic acceleration where the filter expects
+specific force, so a level cruise makes the VIO estimate free-fall.**
+
+The reference synthesises `accel = (v - v_prev) / dt` — the derivative of
+velocity. A real accelerometer measures *specific force*, which at rest reads
+`+g` along up, not zero. `_predict` then computes `R @ accel_body -
+_GRAVITY_WORLD`, so on a straight, level, constant-velocity path `accel_body` is
+zero and the estimate accelerates downward at 9.80665 m/s².
+
+Measured, on a drone cruising east at 10 m/s from 80 m:
+
+| tick | estimated z (m) | estimated vz (m/s) |
+|---|---|---|
+| 0 | 80.000 | 0.000 |
+| 1 | 75.097 | −9.807 |
+| 2 | 60.387 | −19.613 |
+| 3 | 35.870 | −29.420 |
+| 4 | 1.547 | −39.227 |
+| 5 | **−42.583** | −49.033 |
+
+The estimate is through the terrain datum inside five ticks and still
+accelerating. Verified by running `EKFVIO` directly with the same inputs — this
+is the reference's behaviour, not a port artefact — and carried across because
+§4 forbids silently "improving" the port.
+
+It matters because `use_vio_position` substitutes this position into the state
+the tracker sees. **This needs a decision** and is flagged rather than fixed: the
+candidate fix is to synthesise specific force (`a_kinematic + g` in the body
+frame), which would change every `use_vio_position` run and is not this slice's
+call to make.
+
+## Three dead stores, and one that took measuring to find
+
+- `_vio_prev_positions` is written every tick and never read.
+- `_vio_prev_velocities.get(node_id, np.zeros(3))` names a zeros default that
+  cannot fire — the setup loop that creates a backend fills both maps.
+- The setup loop's seeding of `_vio_prev_velocities` from `vel0` has **no
+  observable effect either**. The only tick that would consume it is the one at
+  `t = 0`, where the filter was also initialised: its prediction interval is
+  empty and its IMU sample is skipped as not newer than the clock. By tick 2 the
+  value has been overwritten with tick 1's nominal velocity either way.
+
+The third was not read off the source. A first attempt asserted that the seed
+*avoided a startup spike*; it failed, and running the reference with the seed and
+with zeros produced identical output at every tick. The test now records the
+finding instead of asserting a false property. The seeding is still reproduced —
+`VioLink::track` mirrors the reference's signature, and initialising the filter
+at a non-zero timestamp would make it observable again.
+
+## Two orderings that are easy to get wrong
+
+**`classify` and `dt_total` are taken before `predict_to`**, because
+`predict_to` advances the filter's clock. Taking `dt_total` afterwards makes it
+identically zero, which zeroes the measurement Jacobian and silences the update
+every tick — leaving prediction's estimate standing while still reporting
+`Applied`.
+
+**The feature store is refreshed after the update, not before.** Refreshing
+first makes every frame match against itself, so the measured flow is zero by
+construction rather than by the features happening not to move.
+
+## The out-of-order path, and how a reset reaches it
+
+`Simulation::reset` rewinds the clock and clears the world, but the stage's
+filters live behind the link and keep the clock they reached. So a reset run
+drops **every** VIO frame until the sim clock catches back up — and per finding 3
+in `VIO_CONTRACT.md` the feature store is deliberately left stale while it does.
+
+Whoever wires reset has to re-`track` on the new epoch.
+`a_reset_leaves_the_filters_ahead_of_the_clock_and_every_frame_is_dropped` is
+where that requirement is written down, and it is also what makes the
+otherwise-unreachable drop branch testable.
+
+## Verification
+
+- 22 unit tests, all through the real tick transaction.
+- **23 mutants, 22 caught, 1 proven equivalent.**
+
+The first round scored 19/23. Of the four survivors, one was a badly written
+mutant of mine — it computed a per-frame offset and then discarded it, so it
+varied nothing. The other three were real gaps:
+
+| survivor | why nothing caught it |
+|---|---|
+| the synthetic acceleration is not divided by `dt` | every test ran at `dt_s = 1.0`, where dividing by the interval is the identity |
+| platforms are visited in insertion order | only one platform was ever in the `dropped` list, so its order could not differ |
+| `classify` taken after `predict_to` | equivalent — see below |
+
+The `dt` gap is closed on the **vertical** axis, because the optical-flow update
+touches only `vx` and `vy` — its Jacobian has entries at state indices 3 and 4
+and nowhere else — so `vz` carries the IMU's integral unopposed and a wrong
+scaling shows there.
+
+The last survivor is **proven equivalent, not assumed**. Moving `classify` after
+`predict_to` looks like it should break the out-of-order drop, and does not,
+because calling `predict_to` twice with the same target timestamp is a no-op the
+second time: every IMU sample is skipped as not newer than the clock, and the
+tail interval is empty. That property is not obvious from the signature, so
+rather than rest on the reading, a test drives 5,000 randomised states through
+both orderings and requires bit-identical state, covariance and clock. If a
+future change breaks the idempotence, that test fails and the mutant stops being
+equivalent.

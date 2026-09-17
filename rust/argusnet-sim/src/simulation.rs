@@ -51,6 +51,10 @@ use argusnet_types::{NodeState, TrackState, TruthState};
 pub struct TickContext<'a> {
     pub tick: u64,
     pub timestamp_s: f64,
+    /// The tick interval. Derived from the config, never accumulated, and
+    /// carried here because a stage that reached for its own copy would be one
+    /// more place the two could disagree.
+    pub dt_s: f64,
     /// Base seed. Stages derive their own per-key streams from it; see
     /// [`crate::deterministic`].
     pub seed: u32,
@@ -501,6 +505,7 @@ impl Simulation {
                     let mut context = TickContext {
                         tick,
                         timestamp_s: self.clock.timestamp_s(),
+                        dt_s: self.config.timestep().seconds(),
                         seed: self.config.seed(),
                         seed_time_key: self.clock.seed_time_key(),
                         world: &mut self.world,
