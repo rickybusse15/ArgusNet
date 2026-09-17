@@ -367,6 +367,7 @@ dependencies = [
  "argusnet-localization",
  "argusnet-mapping",
  "argusnet-planning",
+ "argusnet-sensing",
  "argusnet-types",
  "libm",
  "rand_chacha",

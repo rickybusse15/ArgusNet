@@ -9,6 +9,7 @@ pub mod deterministic;
 pub mod fusion;
 pub mod mapping;
 pub mod mission;
+pub mod observe;
 pub mod overrides;
 pub mod particles;
 pub mod safety;

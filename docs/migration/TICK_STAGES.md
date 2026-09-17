@@ -768,3 +768,110 @@ the list. The emptiness is enforced by the capability model rather than by this
 stage remembering to pass `Vec::new()` — the stronger guarantee, and the one
 `stage_seven_cannot_reach_truth_at_all` pins, along with the two stages that
 *are* admitted, so a future widening of the list has to come past an assertion.
+
+# Stage 6a: generating the observation batch
+
+§4 names stage 6 *"generate the observation batch, preserving rejection
+stages"*. The cascade landed in P4.5b and the error model in P4.5a; this is the
+loop around them.
+
+## Stage 6 was not blocked on the proto change, and a first reading that said so
+## is corrected here
+
+The reference reads `max_range_m`, `fov_half_angle_deg`, `dropout_probability`
+and `sensor_type` off its scenario node. `argusnet_types::NodeState` carries
+none of those, and I initially read that as blocking stage 6 behind a proto
+change that has to move together with the Python bindings, `argusnet-proto`,
+`argusnet-core` and `argusnet-server`.
+
+That widening is still wanted — the viewer cannot draw a sensor cone it cannot
+see — but it is a **replay and transport** concern. `PairInput` already takes
+`max_range_m` and the FOV as plain values, so this stage takes a `SensorSpec`
+table the same way stage 5 takes its nominal trajectory. Nothing about
+generating observations needs the field on the wire.
+
+Line of sight is injected the same way, as a `VisibilityOracle`. The two-level
+DDA lives in `argusnet-world`, and wiring it in would pull terrain, obstacles
+and land cover into this crate's graph for one call; the cascade already models
+visibility as an *input* rather than something it computes, so honouring that
+boundary costs nothing.
+
+**The default oracle sees through terrain**, and that is dangerous to leave
+implicit — acceptance rates from such a run mean something quite different.
+`ObserveLink::visibility_is_modelled` reports whether a real oracle was
+installed, so a caller cannot mistake one for the other.
+
+## The per-pair stream is opened after the draw-free gates
+
+```python
+# Per-pair RNG streams are seeded independently, so deferring
+# construction past the draw-free rejects above is draw-order safe.
+```
+
+Range and FOV consume no draws, so where the stream is opened cannot change any
+value — the reference says so itself. It is reproduced anyway, because "this is
+safe *because* the streams are independent" is exactly the kind of reasoning
+that stops being true when someone later threads one generator through the loop.
+
+The key is `(node_id, target_id, round(t * 1000))`, which is what makes the batch
+independent of the order pairs are visited in — ADR-006's central property.
+
+## What 6a defers, named rather than absent
+
+Three quality modifiers are **explicitly 1.0**: FOV-edge degradation, altitude
+falloff above 200 m AGL (which needs a terrain sampler), and the bearing bias
+random walk from P4.5a. The thermal duplicate observation a `thermal`/`lwir`/
+`mwir`/`ir` node emits is also not here.
+
+All four are neutral for an omnidirectional, low-altitude, drift-free sensor, so
+a run configured that way is already exact — and
+`the_deferred_quality_modifiers_are_all_neutral` pins the arithmetic so 6b has a
+test to change rather than a gap to discover.
+
+## Verification
+
+- 28 unit tests, all through the real tick transaction.
+- **27 mutants, 26 caught, 1 proven equivalent.**
+
+The 19 tests written first caught only **16 of 26** on the first pass — the
+worst first-round score of any stage in this PR, and the round that most earned
+its keep. What the survivors had in common is that the test rig's *convenient*
+settings made distinct formulas agree:
+
+| survivor | why nothing caught it |
+|---|---|
+| elevation is the raw height difference | at a 30° gate, `45°` and `100 m` both pass and `63°` and `20 m` both… did not disagree either |
+| elevation uses horizontal range, not slant | `45°` vs `90°` are on the same side of every gate the tests used |
+| every sensor is treated as directional | every omnidirectional test used a *stationary* sensor, where the gate is skipped for a different reason |
+| the stream key drops the target id | the only "same place" test used two **nodes**, so the node id still separated them |
+| confidence drops the detection probability | the permissive spec put the knee past every range, so `pd` was exactly 1.0 |
+| the confidence floor is dropped | the range slope alone bottoms out at 0.3, so the 0.15 floor never bound |
+| the tally is not reset between ticks | nothing stepped twice and re-read it |
+| only two noise draws are taken | nothing looked at the z component or the draw count |
+| the degenerate branch returns zero | unreachable from a random stream |
+
+The elevation pair needed a threshold at which **all three** candidate formulas
+disagree, which took a table to find:
+
+| target | true angle | raw `dz` | `dz`/horizontal |
+|---|---|---|---|
+| `(100, 0, 100)` | 45° | 100 | 90° |
+| `(10, 0, 20)` | 63.4° | 20 | `asin(2)` = NaN |
+
+At a 60° gate the true answer rejects the first and accepts the second, and each
+wrong answer gets at least one backwards — the NaN case because `NaN < 60.0` is
+false, so it accepts by default.
+
+The last two survivors drove a design change rather than another test.
+`noisy_unit_vector` is now split into a pure `perturb_unit_vector` plus a
+`bearing_perturbation` that takes the draws — the same shape
+`argusnet_sensing::BearingBiasDrift` already uses for its increment, and for the
+same stated reason: it makes the function checkable value-for-value. It also
+makes the degenerate branch reachable at all. A random stream will not produce a
+perturbation that cancels the unit direction on demand, so with the draw inside
+the function that branch was untestable and would have sat there unverified.
+
+The one equivalent mutant turns the missing-truth-capability `Invariant` into
+`NoWork`. Stage 6 is one of the two stages §3 admits to truth, so that branch is
+unreachable through the pipeline — which is the point. `stage_six_is_admitted_to_truth`
+is what would notice if the list changed.
