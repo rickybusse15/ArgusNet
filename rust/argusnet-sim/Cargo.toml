@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 argusnet-planning = { path = "../argusnet-planning" }
 argusnet-types = { path = "../argusnet-types" }
+safety-engine = { path = "../safety-engine" }
 # Pinned deliberately: this crate's output values are a contract. See
 # `deterministic.rs` and the conformance fixtures that pin actual draws, which
 # are what make a silent change to this dependency fail a test.

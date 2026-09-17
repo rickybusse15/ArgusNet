@@ -195,3 +195,88 @@ untouched — tested with a tower parked *between* two converging drones.
   `DEFAULT_ROLE_PRIORITY` and the tie-break — *the larger id yields* — still
   produces a plausible answer. The test now pins both the tie-break and the
   priority override, so a resolver that never sees the roles gets caught.
+
+---
+
+# Stage 4: the hard safety monitor
+
+Third stage body of P4.8c. §4 places it **after** deconfliction, and the
+reference is explicit about why it is opt-in:
+
+> *"Hard safety floor runs after cooperative deconfliction. It is opt-in so
+> legacy seeded simulations remain bit-identical."*
+
+So a run without `safety_blocking` must not merely produce the same numbers —
+the monitor must not run at all. `Skipped` says that; `NoWork` would claim it
+ran and found nothing.
+
+The policy is `safety_engine::simulation::SimulationSafetyMonitor`. This is the
+loop around it.
+
+## The role match is a substring, not an equality
+
+```python
+DronePhysicalLimits.interceptor_default()
+if "interceptor" in role
+else DronePhysicalLimits.tracker_default()
+```
+
+`"interceptor-lead"` and `"backup_interceptor"` both get the interceptor
+envelope. The two envelopes differ — 42 m/s against 35 m/s top speed, and a
+higher minimum AGL — so reading it as an equality silently gives part of the
+fleet the wrong limits, with nothing to show for it. `limits_for_role` is a free
+function so the rule has a name, and the test drives the same speed through both
+roles to prove the choice reaches the monitor rather than only the table.
+
+## The monitor is created once and kept
+
+It carries the consecutive-violation count that escalates `warning` to `abort`.
+Rebuilding it each tick would mean a platform could never escalate — and the
+run would look calmer than it is.
+
+## `previous_velocity` is the clamped velocity, not the proposal
+
+```python
+_safety_previous_velocities[ns.node_id] = decision.velocity.copy()
+```
+
+What is stored is what the monitor **allowed**. A platform commanded far past
+its limit therefore shows a plausible acceleration next tick rather than an
+enormous one, because the clamp already absorbed the difference. Storing the
+proposal instead would manufacture an acceleration violation out of the clamp's
+own work.
+
+## The energy sentinel reaches the monitor
+
+The reference passes `ns.battery_fraction` straight through, and that field is
+**-1.0** for a platform with no battery in the ledger. `check` flags
+`min_energy_reserve` for any fraction below the limit, so a **mobile** platform
+with no battery would violate its energy reserve on every tick, for ever.
+
+It does not bite today only because the reference registers a battery for every
+mobile node at start-up. Preserved rather than papered over with a `None`, and
+`a_mobile_platform_with_no_battery_violates_its_energy_reserve` records what it
+costs. This is also the first place two stage bodies compose: stage 4 reads
+stage 1's ledger through `SafetyLink::use_battery`.
+
+## Verification
+
+- 20 unit tests through the real tick transaction.
+- **14 mutants, 13 caught. The 14th is equivalent, and that was established
+  rather than assumed.**
+
+  The mutant made the write-back conditional on the decision having violated
+  something. Reading `check` against the clamp, every quantity the clamp
+  touches — `min_agl`, `max_agl`, `max_speed`, `max_climb_rate`,
+  `max_descent_rate` — is a constraint tested on the same condition, so a clamp
+  that changes anything always coincides with a violation. A 200,000-state
+  randomised probe over altitude, all three velocity components and terrain
+  height found **zero** clamp-without-violation cases, which is the evidence
+  for calling it equivalent rather than a test gap.
+
+  Of the 13 caught, two needed tests that did not exist:
+
+  | survivor | what was missing |
+  |---|---|
+  | validations not cleared between ticks | they are **pushed** and nothing reassigns the list, so only two consecutive violating ticks with nothing taken in between can see it |
+  | (the equivalent one) | — |
