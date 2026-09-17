@@ -688,3 +688,83 @@ rather than rest on the reading, a test drives 5,000 randomised states through
 both orderings and requires bit-identical state, covariance and clock. If a
 future change breaks the idempotence, that test fails and the mutant stops being
 equivalent.
+
+# Stage 7: the fusion update, in process
+
+§4 names stage 7 *"fusion update, in-process rather than over gRPC"*, and that
+is the whole change in shape. The reference's `_ingest_stream.ingest_frame` puts
+a request on a queue and blocks on `next(self._responses)` — a synchronous gRPC
+round-trip on the sim thread, every tick. The stage calls
+`TrackingEngine::ingest_frame` directly instead.
+
+Worth restating from the Phase 0 profile, because it corrects the obvious
+assumption: that round-trip measured **1.73 ms/frame, 5.9% of a representative
+run**. Removing it is a minor throughput win. The reason to remove it is that it
+is what stands between the world and an in-process viewer, not the microseconds.
+
+## ⚠ Truth: fusion does not use it, but the tracker's metrics do
+
+`ingest_frame` takes a `truths` argument, and `Stage::UpdateFusion` is not one
+of the two stages `Stage::may_read_truth` admits. That is not an oversight —
+inside `ingest_frame`, `truths` reaches exactly two places:
+
+- `build_metrics`, which matches each track against the truth of the same id and
+  computes a position error, and
+- the returned `PlatformFrame`, as a passthrough for the replay.
+
+**Nothing in the estimator sees it.** Fusion is *measured* against truth, not
+*informed* by it — and `the_fused_tracks_are_identical_with_and_without_truth`
+proves that rather than taking it on trust: two engines, one given the truth of
+every target and one given none, fused bit-identically over eight ticks.
+
+So the stage passes an empty truth vector, and the truth-referenced metrics are
+not computed here. **That leaves a real gap:** under the capability list as it
+stands, *no* stage can compute them — stage 11 (`CommitSnapshot`), where the
+replay is assembled, is not admitted either.
+
+The gap is left open rather than closed by widening the list. Handing fusion a
+truth handle so it can compute an error metric would also let it fuse with
+truth, and nothing structural would stop that — which is the one thing §3's
+capability model exists to prevent. Separating measurement from estimation is a
+design decision and it is **flagged, not taken**.
+
+## The tracker runs on every tick, including barren ones
+
+The reference calls `ingest_frame` unconditionally. That is load-bearing: the
+track lifecycle ages toward `Coasting` and `Lost` on the strength of *ticks
+passing*, so a stage that skipped a tick with no observations would keep a stale
+track alive forever. `an_unobserved_track_ages_out_over_barren_ticks` watches
+a real track disappear over 40 empty ticks rather than asserting it from the
+tracker's documentation.
+
+## The inbox is taken, not copied
+
+A pending batch left in place would be re-fused next tick, and the tracker would
+treat the same bearing as independent evidence twice — which is how a
+triangulation gets falsely confident. Each `submit_*` also *replaces* rather
+than appends, for the same reason.
+
+## Verification
+
+- 12 unit tests, all through the real tick transaction.
+- **18 mutants, 16 caught, 2 proven equivalent.**
+
+Both survivors are equivalent for reasons worth writing down, and both are now
+pinned by a test that fails if the equivalence stops holding:
+
+**"the node states are written back from the frame."** An earlier version of the
+module comment said writing them back "can only lose". That is an overclaim, and
+the mutation run is what exposed it. The tracker stores what it is handed and
+never modifies it, and this stage hands it the world's own platforms, so the
+round trip is an **identity** — the write-back would change nothing. It is
+skipped because it is redundant, not because it is destructive.
+`the_frame_round_trips_the_worlds_platforms` pins that identity field by field;
+if the tracker ever starts editing node states, that test fails and the decision
+has to be made again on new evidence.
+
+**"truth is forwarded after all."** A mutant that reaches for `context.truth`
+gets `None`, because §3 hands the capability out by stage and stage 7 is not on
+the list. The emptiness is enforced by the capability model rather than by this
+stage remembering to pass `Vec::new()` — the stronger guarantee, and the one
+`stage_seven_cannot_reach_truth_at_all` pins, along with the two stages that
+*are* admitted, so a future widening of the list has to come past an assertion.

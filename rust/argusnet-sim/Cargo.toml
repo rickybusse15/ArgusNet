@@ -9,6 +9,7 @@ name = "argusnet_sim"
 path = "src/lib.rs"
 
 [dependencies]
+argusnet-core = { path = "../argusnet-core" }
 argusnet-localization = { path = "../argusnet-localization" }
 argusnet-mapping = { path = "../argusnet-mapping" }
 argusnet-planning = { path = "../argusnet-planning" }
