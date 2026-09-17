@@ -8,6 +8,7 @@ pub mod deconflict;
 pub mod deterministic;
 pub mod mapping;
 pub mod mission;
+pub mod overrides;
 pub mod particles;
 pub mod safety;
 pub mod simulation;

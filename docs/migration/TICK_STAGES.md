@@ -438,3 +438,102 @@ offsets and candidates. That is the test that took the localization half from
 - Coverage: **13 mutants, 13 caught** — one at compile time. The single
   first-pass survivor was the multiplicity contract above.
 - Localization: **14 mutants, 14 caught**, from 7/14 on the first pass.
+
+# Stage 2: mission overrides
+
+§4 names stage 2 *"frontier, then POI, then egress overrides, in that
+precedence"*. The reference is three near-identical blocks in a row, each
+rebuilding the list the next one reads:
+
+```python
+if _frontier_trajectories and _scan_phase in ("scanning", "localizing"):
+    for ns in node_states: ...          # rebuilds node_states
+if _poi_trajectories:
+    for ns in node_states: ...          # rebuilds it again
+if _egress_trajectories:
+    for ns in node_states: ...          # and again
+```
+
+So a platform named by two tables is flown by the **last** one to touch it.
+Egress beats POI beats frontier, and that is a real decision rather than an
+artefact: a drone recalled to base does not keep inspecting.
+
+## This stage applies; it does not select
+
+The reference sets `_frontier_trajectories` about 350 lines *later* in the same
+tick, beside the mission transitions. A trajectory chosen on tick `n` therefore
+first moves a platform on tick `n + 1` — exactly §4's *"decisions that take
+effect on the next tick"*. Selection is stage 9's work and is deliberately not
+in this slice.
+
+Splitting them the way the reference already splits them buys something
+concrete: the precedence is testable without a planner, a coverage grid or a
+terrain sampler. A test installs three trajectories by hand and asks which one
+flew the drone.
+
+## The frontier gate reads the previous tick's phase
+
+Only the frontier block is gated, on `scanning` or `localizing`. The reference's
+own comment says why: *"Kept active through the localizing phase so drones hold
+position rather than jumping back to their lawnmower trajectories."*
+
+Stage 2 runs long before stage 9, so the phase it reads is the one committed at
+the end of the previous tick — the same causal shape as stage 8's localization
+gate, and `the_frontier_override_is_dropped_once_the_mission_leaves_localizing`
+walks all three ticks of it: the tick the machine transitions on still flies the
+override, because stage 2 ran first.
+
+POI and egress are ungated in the reference and are ungated here.
+
+**One case the reference does not have:** a link with no mission machine
+watching it. The gate is left **open** there, because a run with no phases has
+nothing to gate on. That is a decision, not a default, so it is pinned by
+`an_unwatched_link_leaves_the_frontier_gate_open` — a future run that acquires
+phases without acquiring a link fails there rather than silently flying its
+drones through egress.
+
+The gate suppresses the pass; it does not empty the table. The same trajectory
+flies again when the phase comes back into range.
+
+## Three things about `_make_goto_hover` that are easy to tidy away
+
+- **Velocity is constant while in flight**, not scaled by progress: the whole
+  displacement over the whole interval, so it reads as an average velocity.
+- **On arrival, velocity is exactly zero and the position is exactly the
+  target**, from a separate branch. Evaluating the lerp at `frac == 1` would
+  land on the target too — and would keep reporting the flight velocity.
+- **Before `t_start` the position clamps but the velocity does not.** The
+  reference clamps `frac` into `[0, 1]` and then computes velocity from the
+  interval alone, so an early sample reports the start position at full speed.
+  Nothing samples early today. It is reproduced because it is what is written,
+  and `sampling_before_the_start_holds_position_but_not_velocity` says so out
+  loud rather than leaving a future reader to wonder whether it was a port bug.
+
+`_make_redirect_goto` measures its distance in the **XY plane only**, so a
+redirect that also climbs 500 m takes exactly as long as one that does not
+climb at all, and floors the flight time at a millisecond so a drone standing on
+its own target still gets a finite interval to divide by.
+
+## What is not here
+
+`_make_routed_goto` — the branch `_make_redirect_goto` takes when a route
+planner is installed — is not ported in this slice. `PathPlanner2D` landed in
+P4.7c and wiring it in is stage 9's business, next to the selection that decides
+where the platform is going in the first place.
+
+## Verification
+
+- 21 unit tests, all through the real tick transaction.
+- **29 mutants, 29 caught**, across two rounds.
+
+The first round scored 19/19, which is a warning rather than a result: a suite
+that catches everything first time is usually a suite whose mutants were chosen
+to match it. The second round was written to be harder and found three
+survivors — all three in places the first round's tests happened to agree on by
+accident:
+
+| survivor | why nothing caught it |
+|---|---|
+| `redirect` ignores its `speed_mps` and uses the constant | every test passed `REDIRECT_SPEED_MPS` |
+| the zero-length-interval epsilon guard is dropped | reachable only by sampling a zero-length trajectory *before* it starts, which nothing did — the velocity becomes an infinity |
+| `clear_frontier` reaches into the POI table | six near-identical accessors over three maps, and only the bulk clearer was tested |
