@@ -6,6 +6,7 @@ pub mod command;
 pub mod config;
 pub mod deconflict;
 pub mod deterministic;
+pub mod mapping;
 pub mod particles;
 pub mod safety;
 pub mod simulation;
