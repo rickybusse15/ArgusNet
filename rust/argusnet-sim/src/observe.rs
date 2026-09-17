@@ -115,6 +115,23 @@ pub const ALTITUDE_CONFIDENCE_SLOPE: f64 = 0.5;
 /// `altitude_confidence_floor`.
 pub const ALTITUDE_CONFIDENCE_FLOOR: f64 = 0.3;
 
+/// Clutter observations carry `target_id = "clutter"`.
+pub const CLUTTER_TARGET_ID: &str = "clutter";
+
+/// The caller caps a clutter return's confidence at `confidence_floor * 0.9`,
+/// so no false alarm is ever more trusted than the least-trusted real one.
+pub const CLUTTER_CONFIDENCE_CAP: f64 = CONFIDENCE_FLOOR * 0.9;
+
+/// The cap really is below the floor a real observation can reach. A compile-
+/// time assertion rather than a test, because it is a property of the two
+/// constants and nothing at runtime can change it.
+const _: () = assert!(CLUTTER_CONFIDENCE_CAP < CONFIDENCE_FLOOR);
+
+/// A clutter return's confidence is drawn uniformly from this band, then
+/// capped.
+pub const CLUTTER_CONFIDENCE_LOW: f64 = 0.05;
+pub const CLUTTER_CONFIDENCE_HIGH: f64 = 0.4;
+
 /// A thermal sensor also emits a second, noisier observation of the same
 /// target: `1.3x` the bearing noise.
 pub const THERMAL_NOISE_FACTOR: f64 = 1.3;
@@ -209,6 +226,17 @@ pub struct SensorSpec {
     /// A thermal sensor emits a second, noisier observation of every target it
     /// accepts.
     pub band: SensorBand,
+    /// `false_alarm_rate_per_scan`. Zero disables clutter, which is the
+    /// reference's default.
+    ///
+    /// On the spec rather than on `SensorErrorConfig`: P4.5a scoped that struct
+    /// to the *error* model, and clutter is a second observation source rather
+    /// than an error on an existing one. The reference keeps them together, so
+    /// this is a deliberate divergence in where the field lives, not in what it
+    /// does.
+    pub false_alarm_rate_per_scan: f64,
+    /// `clutter_bearing_std_rad`.
+    pub clutter_bearing_std_rad: f64,
     pub error: SensorErrorConfig,
 }
 
@@ -221,6 +249,8 @@ impl Default for SensorSpec {
             dropout_probability: 0.0,
             base_bearing_std_rad: 0.015,
             band: SensorBand::Optical,
+            false_alarm_rate_per_scan: 0.0,
+            clutter_bearing_std_rad: 0.3,
             error: SensorErrorConfig::default(),
         }
     }
@@ -523,7 +553,11 @@ impl StageHandler for ObserveStage {
                 "stage 6 was not handed the truth capability".to_string(),
             ));
         };
-        if shared.sensors.is_empty() || truths.is_empty() {
+        // Not `|| truths.is_empty()`: the reference's clutter loop sits inside
+        // the per-node loop *after* the per-target one, so a sensor with a
+        // false-alarm rate still reports clutter in an empty world. Returning
+        // early on no targets would silently drop it.
+        if shared.sensors.is_empty() {
             return Ok(StageOutcome::NoWork);
         }
 
@@ -720,6 +754,61 @@ impl StageHandler for ObserveStage {
                     });
                 }
             }
+
+            // Clutter: false alarms this sensor reports, independent of any
+            // real target. Once per sensor per tick, not once per pair.
+            // Its own stream, keyed `(node_id, "clutter", tick)`, so the number
+            // of real targets in view cannot shift the false-alarm draws.
+            if spec.false_alarm_rate_per_scan > 0.0 {
+                let mut clutter_rng = DeterministicRng::keyed(
+                    seed,
+                    &[
+                        SeedPart::Str(&node_id),
+                        SeedPart::Str(CLUTTER_TARGET_ID),
+                        SeedPart::Int(seed_time_key),
+                    ],
+                );
+                let count = clutter_rng.poisson(spec.false_alarm_rate_per_scan);
+                for _ in 0..count {
+                    // A uniform direction on the sphere, then noise on top of
+                    // it -- which is what the reference does, even though
+                    // perturbing an already-uniform direction changes nothing
+                    // about the distribution. The draws are reproduced because
+                    // the stream position is the contract.
+                    let raw = bearing_perturbation(1.0, &mut clutter_rng);
+                    let norm = raw.norm();
+                    if norm < 1e-12 {
+                        // The reference `continue`s, so the confidence draw for
+                        // this alarm is never taken -- the skip shifts the
+                        // stream for every later alarm in the same scan.
+                        continue;
+                    }
+                    let direction = raw / norm;
+                    let noise =
+                        bearing_perturbation(spec.clutter_bearing_std_rad, &mut clutter_rng);
+                    let noisy = direction + noise;
+                    let noisy_norm = noisy.norm();
+                    if noisy_norm < 1e-12 {
+                        continue;
+                    }
+                    let confidence = clutter_rng
+                        .uniform_range(CLUTTER_CONFIDENCE_LOW, CLUTTER_CONFIDENCE_HIGH)
+                        .min(CLUTTER_CONFIDENCE_CAP);
+                    shared.observations.push(BearingObservation {
+                        node_id: node_id.clone(),
+                        target_id: CLUTTER_TARGET_ID.to_string(),
+                        origin,
+                        direction: noisy / noisy_norm,
+                        bearing_std_rad: spec.clutter_bearing_std_rad,
+                        timestamp_s,
+                        confidence,
+                    });
+                }
+            }
+        }
+
+        if shared.records.is_empty() && shared.observations.is_empty() {
+            return Ok(StageOutcome::NoWork);
         }
 
         let accepted = shared.observations.len();
@@ -2136,5 +2225,220 @@ mod tests {
     fn a_negative_agl_is_already_neutral_without_the_floor() {
         assert_eq!(altitude_quality(-500.0), (1.0, 1.0));
         assert_eq!(altitude_quality(-500.0), altitude_quality(0.0));
+    }
+
+    // -----------------------------------------------------------------
+    // Clutter (6c)
+    // -----------------------------------------------------------------
+
+    fn cluttered(rate: f64) -> SensorSpec {
+        SensorSpec {
+            false_alarm_rate_per_scan: rate,
+            ..permissive()
+        }
+    }
+
+    /// Clutter is off by default — `false_alarm_rate_per_scan = 0.0` — so a
+    /// scenario that never asks for it never pays for it, and every other test
+    /// in this file is unaffected.
+    #[test]
+    fn clutter_is_off_by_default() {
+        assert_eq!(SensorSpec::default().false_alarm_rate_per_scan, 0.0);
+
+        let (mut sim, link) = rig(
+            vec![sensor_node("s0", 0.0, 0.0, false)],
+            vec![target("t0", 100.0, 0.0, 0.0)],
+        );
+        link.install_sensor("s0", permissive());
+        for _ in 0..20 {
+            sim.step().expect("tick runs");
+            assert!(link
+                .observations()
+                .iter()
+                .all(|o| o.target_id != CLUTTER_TARGET_ID));
+        }
+    }
+
+    /// A high false-alarm rate produces clutter returns, tagged `"clutter"`,
+    /// originating at the sensor and carrying the clutter noise figure.
+    #[test]
+    fn a_high_false_alarm_rate_produces_tagged_clutter_returns() {
+        let (mut sim, link) = rig(
+            vec![sensor_node("s0", 7.0, 8.0, false)],
+            vec![target("t0", 100.0, 0.0, 0.0)],
+        );
+        link.install_sensor("s0", cluttered(5.0));
+
+        let mut seen = 0;
+        for _ in 0..10 {
+            sim.step().expect("tick runs");
+            for alarm in link
+                .observations()
+                .iter()
+                .filter(|o| o.target_id == CLUTTER_TARGET_ID)
+            {
+                seen += 1;
+                assert_eq!(alarm.node_id, "s0");
+                assert_eq!(alarm.origin, Vector3::new(7.0, 8.0, 0.0));
+                assert_eq!(alarm.bearing_std_rad, 0.3);
+                assert!((alarm.direction.norm() - 1.0).abs() < 1.0e-12);
+            }
+        }
+        assert!(seen > 0, "a rate of 5.0 produced no clutter in 10 ticks");
+    }
+
+    /// Clutter never outranks the least-trusted real observation: the caller
+    /// caps it at `confidence_floor * 0.9`. The draw itself runs up to 0.4, so
+    /// without the cap most clutter would be *more* confident than a
+    /// long-range real return.
+    #[test]
+    fn clutter_confidence_is_capped_below_the_real_floor() {
+        let (mut sim, link) = rig(
+            vec![sensor_node("s0", 0.0, 0.0, false)],
+            vec![target("t0", 100.0, 0.0, 0.0)],
+        );
+        link.install_sensor("s0", cluttered(5.0));
+
+        let mut seen = 0;
+        for _ in 0..10 {
+            sim.step().expect("tick runs");
+            for alarm in link
+                .observations()
+                .iter()
+                .filter(|o| o.target_id == CLUTTER_TARGET_ID)
+            {
+                seen += 1;
+                assert!(
+                    alarm.confidence <= CLUTTER_CONFIDENCE_CAP,
+                    "clutter confidence {} exceeded the cap {CLUTTER_CONFIDENCE_CAP}",
+                    alarm.confidence
+                );
+                assert!(alarm.confidence >= CLUTTER_CONFIDENCE_LOW);
+            }
+        }
+        assert!(seen > 0);
+    }
+
+    /// Clutter is emitted even with **no targets at all**. The reference's
+    /// clutter loop sits inside the per-node loop after the per-target one, so
+    /// an empty world still produces false alarms — and an early return on "no
+    /// targets" would silently drop them, which is what an earlier draft did.
+    #[test]
+    fn clutter_is_emitted_in_a_world_with_no_targets() {
+        let (mut sim, link) = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
+        link.install_sensor("s0", cluttered(5.0));
+
+        let mut seen = 0;
+        for _ in 0..10 {
+            sim.step().expect("tick runs");
+            seen += link.observations().len();
+        }
+
+        assert!(seen > 0, "no clutter without targets");
+        assert_eq!(link.tally().attempted, 0, "there were no pairs to attempt");
+    }
+
+    /// Clutter has its **own** stream, keyed `(node_id, "clutter", tick)`, so
+    /// the number of real targets in view cannot shift the false-alarm draws.
+    /// Two runs differing only in target count must produce identical clutter.
+    #[test]
+    fn the_clutter_stream_is_independent_of_the_targets_in_view() {
+        let clutter_from = |targets: Vec<TruthState>| {
+            let (mut sim, link) = rig(vec![sensor_node("s0", 0.0, 0.0, false)], targets);
+            link.install_sensor("s0", cluttered(3.0));
+            let mut all = Vec::new();
+            for _ in 0..6 {
+                sim.step().expect("tick runs");
+                all.extend(
+                    link.observations()
+                        .into_iter()
+                        .filter(|o| o.target_id == CLUTTER_TARGET_ID)
+                        .map(|o| o.direction.iter().map(|v| v.to_bits()).collect::<Vec<_>>()),
+                );
+            }
+            all
+        };
+
+        let alone = clutter_from(Vec::new());
+        let crowded = clutter_from(vec![
+            target("t0", 100.0, 0.0, 0.0),
+            target("t1", 120.0, 30.0, 10.0),
+            target("t2", 90.0, -40.0, 5.0),
+        ]);
+
+        assert!(!alone.is_empty(), "no clutter was produced");
+        assert_eq!(alone, crowded);
+    }
+
+    /// Two sensors draw their clutter independently.
+    #[test]
+    fn two_sensors_draw_clutter_independently() {
+        let (mut sim, link) = rig(
+            vec![
+                sensor_node("a", 0.0, 0.0, false),
+                sensor_node("b", 0.0, 0.0, false),
+            ],
+            Vec::new(),
+        );
+        link.install_sensor("a", cluttered(4.0));
+        link.install_sensor("b", cluttered(4.0));
+
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for _ in 0..8 {
+            sim.step().expect("tick runs");
+            for alarm in link.observations() {
+                if alarm.node_id == "a" {
+                    a.push(alarm.direction);
+                } else {
+                    b.push(alarm.direction);
+                }
+            }
+        }
+
+        assert!(!a.is_empty() && !b.is_empty());
+        assert_ne!(a, b);
+    }
+
+    // -----------------------------------------------------------------
+    // The Poisson draw
+    // -----------------------------------------------------------------
+
+    /// A non-positive or non-finite rate yields nothing, rather than looping or
+    /// producing a NaN count.
+    #[test]
+    fn the_poisson_draw_rejects_a_non_positive_rate() {
+        let mut rng = DeterministicRng::from_seed(3);
+        assert_eq!(rng.poisson(0.0), 0);
+        assert_eq!(rng.poisson(-1.0), 0);
+        assert_eq!(rng.poisson(f64::NAN), 0);
+    }
+
+    /// `exp(-lambda)` underflows to zero past about 745, at which point Knuth's
+    /// loop can never terminate. The guard returns zero instead of hanging.
+    #[test]
+    fn the_poisson_draw_does_not_hang_on_an_absurd_rate() {
+        let mut rng = DeterministicRng::from_seed(3);
+        assert_eq!(rng.poisson(1.0e6), 0);
+        assert_eq!(rng.poisson(f64::INFINITY), 0);
+    }
+
+    /// The draw's mean tracks its parameter. Not a distribution test — it is a
+    /// check that the loop counts what it claims to, which a `k` vs `k - 1`
+    /// slip would break.
+    #[test]
+    fn the_poisson_draw_has_roughly_the_right_mean() {
+        for lambda in [0.5_f64, 2.0, 8.0] {
+            let mut rng = DeterministicRng::from_seed(17);
+            let samples = 20_000;
+            let total: u64 = (0..samples).map(|_| rng.poisson(lambda)).sum();
+            let mean = total as f64 / samples as f64;
+            // Three standard errors for a Poisson mean is 3*sqrt(lambda/n),
+            // which is well under 0.1 at these rates; 0.15 leaves room.
+            assert!(
+                (mean - lambda).abs() < 0.15,
+                "lambda {lambda} gave mean {mean}"
+            );
+        }
     }
 }

@@ -960,3 +960,70 @@ equivalence is checked rather than assumed:
 | the altitude threshold is `<` not `<=` | at exactly the threshold the excess is zero, so the ramp returns `(1.0, 1.0)` — the early return's own answer | `the_altitude_threshold_boundary_is_neutral_either_way` |
 | the altitude confidence floor is dropped | the ramp saturates at `0.5`, well above the `0.3` floor, so the floor never binds **with the current slope** | `the_altitude_confidence_floor_is_currently_unreachable` fails the moment it does |
 | AGL is not floored at zero | a negative AGL is below the threshold, and the ramp is neutral there | `a_negative_agl_is_already_neutral_without_the_floor` |
+
+# Stage 6c: clutter
+
+`SensorModel.generate_clutter` emits Poisson-distributed false alarms tagged
+`target_id = "clutter"`. It is a second observation *source* rather than a
+modifier on an existing one, which is why it is its own slice.
+
+Off by default — `false_alarm_rate_per_scan = 0.0` — so a scenario that never
+asks for clutter never pays for it.
+
+## Three things that are not obvious from the shape
+
+**Clutter is emitted even with no targets at all.** The reference's clutter loop
+sits inside the per-node loop *after* the per-target one, so an empty world still
+produces false alarms. An earlier draft of this stage returned `NoWork` as soon
+as the truth list was empty, which silently dropped them; the early return is now
+on sensors alone.
+
+**Its stream is its own**, keyed `(node_id, "clutter", tick)`, so the number of
+real targets in view cannot shift the false-alarm draws.
+`the_clutter_stream_is_independent_of_the_targets_in_view` runs two worlds —
+empty and crowded — and requires bit-identical clutter.
+
+**The confidence is capped at `confidence_floor * 0.9`** by the caller, so no
+false alarm is ever more trusted than the least-trusted real observation. The
+draw itself runs to 0.4, well above the 0.15 floor, so without the cap most
+clutter would outrank a long-range real return.
+
+`clutter_min_range_m` and `clutter_max_range_m` are declared on the reference's
+config and never read by `generate_false_alarms`. They are not carried across.
+
+## The Poisson draw is not numpy's, deliberately
+
+numpy switches between PTRS transformed-rejection and an inversion loop at
+`lambda = 10`, and reproducing either bit-for-bit would mean porting its branch
+structure. ADR-006 already re-baselined every stream in this crate — the
+contract is *"deterministic for a fixed seed and config"*, not *"identical to
+numpy"* — so `DeterministicRng::poisson` uses Knuth's multiplication method and
+the fixtures pin it.
+
+`exp(-lambda)` goes through **`libm::exp`, not `f64::exp`**. Neither is required
+by IEEE-754 to be correctly rounded and glibc disagrees with Apple's libm by
+1 ULP, which is what broke the conformance fixture when CI moved to a Mac.
+
+## Two failures worth recording
+
+**The crate's own guard caught the libm slip.**
+`no_draw_routes_through_the_platform_libm` scans this module's source for bare
+`.exp()`/`.log()`/`.cos()` calls and fails on them. It named the exact line. I
+had run the stage's own tests, which passed, and would have shipped the slip if
+I had not run the whole crate — a reminder that a filtered test run is not a
+verification.
+
+**The mutation harness left a mutant in the tree.** The "poisson compares the
+wrong way" mutant turns Knuth's loop into one that almost never terminates
+early, so a test that draws 20,000 samples ran until the harness's 900-second
+subprocess timeout, which killed the script before its restore step. The source
+was left mutated and the buffered output was lost.
+
+Nothing was committed, because the working tree is diffed against the
+pre-mutation backup before any commit — that check is what caught it. Two
+lessons for the harness itself: restore in a `finally`, and run Python
+unbuffered so a killed run still yields its partial results.
+
+## Verification
+
+- 58 unit tests in the stage; 316 in the crate.
