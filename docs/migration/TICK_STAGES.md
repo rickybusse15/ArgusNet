@@ -280,3 +280,98 @@ stage 1's ledger through `SafetyLink::use_battery`.
   |---|---|
   | validations not cleared between ticks | they are **pushed** and nothing reassigns the list, so only two consecutive violating ticks with nothing taken in between can see it |
   | (the equivalent one) | — |
+
+---
+
+# Stage 8: coverage, and the loop closing
+
+Fourth stage body of P4.8c, and the first place two ported subsystems drive
+each other.
+
+## The reference keeps two identical coverage maps
+
+`run_simulation` builds a top-level `CoverageMap` **and** a `WorldMap`, which
+builds a second `CoverageMap` of its own. Both are marked from the same drone
+positions, with the same radius, the same visibility predicate and the same
+sample cap:
+
+```python
+_coverage_map.mark_circular(center_xy=(cx, cy), radius_m=_FOOTPRINT_RADIUS_M,
+                            visibility_predicate=..., los_max_samples=...)
+# ... and, inside WorldMap.add_scan_observation:
+self._coverage.mark_circular(center_xy=(cx, cy), radius_m=footprint_radius_m,
+                             visibility_predicate=..., los_max_samples=...)
+```
+
+Identical arguments to the same method on two instances. So
+`MappingState.coverage_fraction` (read from the first) and the mission
+machine's `scan_frac` (read from the second) are **the same number computed
+twice**, every tick, for every drone — which is the duplicate rasterization the
+delivery plan names.
+
+The asymmetry worth keeping: the second map is only fed under
+`mission_mode == "scan_map_inspect"`. In any other mode `WorldMap` stays empty
+while the top-level map fills, so the two agree only in scan mode.
+
+Here there is one grid, and `coverage_fraction` is read from it — so it cannot
+drift from `stats()` the way the reference's two could.
+
+## The footprint radius is derived, and the floor is the interesting part
+
+```python
+_target_cells = max(5, int(0.05 * nx * ny / _n_mobile))
+_r_cells = max(1, int(ceil(sqrt(_target_cells / pi))))
+_FOOTPRINT_RADIUS_M = max(50.0, float(_r_cells) * resolution_m)
+```
+
+Each drone is scaled to cover about 5% of the map per pass, then floored at
+50 m. `footprint_radius_m` reproduces all three floors, and every one of them
+is mutation-tested — including `or 1` on the fleet size, which is what stops a
+fleet of zero dividing by zero.
+
+The 50 m floor matters downstream: it breaks the integral `radius / resolution`
+the rest of the configuration maintains, and that is exactly when P4.6a's two
+rasterizations stop agreeing.
+`the_two_samplings_disagree_at_a_non_integral_radius` pins that the choice is a
+visible decision rather than a detail.
+
+## A correction the mutation run forced
+
+The multiplicity contract — a cell the lattice folds onto twice must be
+incremented twice — had no test. Writing one, my first attempt parked a drone
+near the corner on the assumption that out-of-range samples clamp onto the last
+cell. **They do not: a sample past the bounds is skipped entirely.** The fold is
+much narrower — only a sample landing *exactly* on the inclusive far edge
+truncates to index `nx` and clamps back onto `nx - 1`, the cell that
+`x_max - res` already hit.
+
+The test now places the centre so the lattice lands on both `950` and exactly
+`1000` on a grid whose `x_max` is 1000, and requires that cell to count **2**
+from a single footprint while its neighbour counts 1.
+
+## The loop
+
+`tests/mapping_drives_mission.rs` flies a lawnmower pattern and requires the
+mission machine's own coverage gate to trip — no test reaching in to fake the
+fraction. Its negative is what makes it mean anything: a **stationary** drone
+covers its own footprint and never reaches the threshold, so the positive test
+cannot be passing because coverage climbs for some unrelated reason.
+
+This is the first evidence that P4.6's coverage and P4.8a's mission machine
+compose through the real tick transaction.
+
+## What is not here
+
+`BeliefStore` (P4.6d) is the second consumer those same rasterized hits are
+meant to feed, and it is deliberately not wired: it lands with its own PR, and
+stacking to reach one accessor would make a three-deep chain across two crates
+for no reviewer's benefit. Nothing consumes belief yet — P2.1b is still
+deferred — whereas the coverage fraction has a consumer today.
+
+Localization is the other half of stage 8 and is a separate slice.
+
+## Verification
+
+- 15 unit tests plus 2 integration tests through the real tick transaction.
+- **13 mutants, 13 caught** — one at compile time. The single first-pass
+  survivor was the multiplicity contract above.

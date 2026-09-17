@@ -60,9 +60,7 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use argusnet_mapping::{
-    rasterize_circle, CoverageGrid, CoverageStats, GridBounds, Sampling,
-};
+use argusnet_mapping::{rasterize_circle, CoverageGrid, CoverageStats, GridBounds, Sampling};
 
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{StageError, StageOutcome};
@@ -196,9 +194,12 @@ impl MappingStage {
     ) -> Result<Self, &'static str> {
         let stage = Self::new(bounds)?;
         let (nx, ny) = bounds.dimensions()?;
-        stage
-            .link
-            .set_footprint_radius_m(footprint_radius_m(nx, ny, mobile_count, bounds.resolution_m));
+        stage.link.set_footprint_radius_m(footprint_radius_m(
+            nx,
+            ny,
+            mobile_count,
+            bounds.resolution_m,
+        ));
         Ok(stage)
     }
 
@@ -251,7 +252,6 @@ impl StageHandler for MappingStage {
             for (i, j) in &hits {
                 shared.coverage.mark_cell(*i, *j);
             }
-
         }
 
         let stats = shared.coverage.stats();
@@ -551,6 +551,42 @@ mod tests {
             covered_with(Sampling::WorldAnchored),
             covered_with(Sampling::CellDisc),
             "the choice of rasterization is a visible decision, not a detail"
+        );
+    }
+
+    /// P4.6a's multiplicity contract, reaching the grid.
+    ///
+    /// The metre-anchored lattice steps by the cell size, so distinct samples
+    /// normally land in distinct cells. The exception is narrow and worth
+    /// stating exactly, because the obvious guess is wrong: a sample *past*
+    /// the bounds is **skipped**, not clamped. Only a sample landing exactly
+    /// on the inclusive far edge folds — `x == x_max` truncates to index
+    /// `nx`, which clamps back onto `nx - 1`, the same cell `x_max - res`
+    /// already hit.
+    ///
+    /// That fold is a genuine double-increment under the reference's
+    /// `np.add.at`, so hits must be applied with multiplicity rather than
+    /// deduplicated. A single tick is the whole test: revisits across ticks
+    /// would raise the count either way.
+    #[test]
+    fn a_sample_on_the_far_edge_folds_onto_the_last_cell_and_counts_twice() {
+        // x_max is 1000 and the resolution 50, so a centre at 950 puts lattice
+        // samples on both 950 (index 19) and exactly 1000 (index 20 -> 19).
+        let (mut sim, link) = rig(vec![node("drone-1", true, 950.0, 500.0)]);
+        link.set_footprint_radius_m(150.0);
+
+        sim.step().unwrap();
+
+        assert_eq!(
+            link.coverage_count_at(19, 10),
+            2,
+            "the edge sample and its neighbour both land on the last cell"
+        );
+        // One column in, nothing folds, so the same footprint hits once.
+        assert_eq!(
+            link.coverage_count_at(18, 10),
+            1,
+            "an unfolded cell is hit once by one footprint"
         );
     }
 }
