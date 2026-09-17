@@ -363,6 +363,7 @@ dependencies = [
 name = "argusnet-sim"
 version = "0.1.0"
 dependencies = [
+ "argusnet-planning",
  "argusnet-types",
  "libm",
  "rand_chacha",

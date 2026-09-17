@@ -294,6 +294,17 @@ impl Simulation {
         &self.world
     }
 
+    /// Mutable access for the run driver, **between** ticks.
+    ///
+    /// Platform positions are prescribed by the scenario rather than
+    /// integrated by a stage -- the reference evaluates
+    /// `scenario.node_states(timestamp_s)` at the top of each loop iteration --
+    /// so something outside the pipeline has to write them. Stages reach the
+    /// same state through `TickContext::world`.
+    pub fn world_mut(&mut self) -> &mut TickWorld {
+        &mut self.world
+    }
+
     pub fn latest_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
         self.last_snapshot.clone()
     }

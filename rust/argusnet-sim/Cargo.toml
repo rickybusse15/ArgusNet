@@ -9,6 +9,7 @@ name = "argusnet_sim"
 path = "src/lib.rs"
 
 [dependencies]
+argusnet-planning = { path = "../argusnet-planning" }
 argusnet-types = { path = "../argusnet-types" }
 # Pinned deliberately: this crate's output values are a contract. See
 # `deterministic.rs` and the conformance fixtures that pin actual draws, which
