@@ -1,6 +1,6 @@
-# P4.8c: stage 1's battery accounting
+# P4.8c: the first tick stage bodies
 
-**Status:** delivered 2026-09-17. First stage body wired into the tick, after
+**Status:** delivered 2026-09-17. The first stage bodies wired into the tick, after
 P4.8a (the mission machine, stage 9) and P4.8b (`TickWorld` and the truth
 capability).
 
@@ -130,3 +130,68 @@ wearing a stage handler's clothes.
   | events not cleared between ticks | the test took events every tick, so nothing could go stale |
 
 - `cargo test`/`clippy --all-targets -D warnings`/`fmt` clean.
+
+---
+
+# Stage 3: cooperative deconfliction
+
+Second stage body of P4.8c. §4 places stage 3 **after** the mission overrides
+of stage 2 and **before** the safety monitor of stage 4, and the reference says
+why at the call site: the resolution *"runs after all controller and trajectory
+overrides but before observation generation, so the tracker and replay see the
+resolved positions."*
+
+The resolution itself is `argusnet_planning::deconfliction::resolve_step`,
+ported in P4.7g. This is the loop around it, which carries three behaviours the
+reference states by construction rather than by comment.
+
+## The write-back is guarded on the event list, not on the proposals changing
+
+```python
+if _step_deconfliction_events:
+    node_states = [ ... _resolved[ns.node_id] ... ]
+```
+
+Today the two agree — `resolve_step` only moves a platform when it also emits
+an event — so the guard is invisible. It stops being invisible the moment a
+resolution is added that adjusts without reporting, and at that point the
+reference **silently discards the adjustment**.
+
+Preserved rather than simplified to "write back whatever came out": a port that
+dropped the guard would apply an adjustment the reference does not, and no
+existing test would notice. Reaching the case needs a stub resolver, so the
+stage takes a `ConflictResolver` and `an_adjustment_without_an_event_is_discarded`
+installs one that moves both platforms a kilometre while reporting nothing.
+
+## Fewer than two mobile platforms is not a call at all
+
+`resolve_step` also returns early below two proposals, which makes the
+reference's `if len(_mobile_proposed) >= 2` look redundant. It is not redundant
+to the **trace**: with one drone the reference never enters the block, so there
+is no call to record. `the_resolver_is_not_called_with_fewer_than_two_proposals`
+counts calls, which is the only way to see the difference.
+
+## Only mobile platforms are proposed
+
+A fixed node is never in the proposal map, so it can neither yield nor be
+yielded to, and the write-back leaves anything absent from the resolved map
+untouched — tested with a tower parked *between* two converging drones.
+
+## Verification
+
+- 14 unit tests driving the stage through the real tick transaction.
+- **12 mutants, 12 caught** — but **five survived the first pass**, and the
+  suite passing first time was the warning rather than the reassurance:
+
+  | survivor | what was missing |
+  |---|---|
+  | write-back dropped the velocity | no test asserted a velocity change landed |
+  | write-back dropped `z` | same, for altitude |
+  | roles never reached the resolver | no test let role priority decide who yields |
+  | the resolver was called with one proposal | no test counted calls |
+  | events not cleared between ticks | `shared.events = events` masks it on the success path; only an **early return** can leave a stale list, and no test had one follow a tick that produced events |
+
+  The roles gap is the sharpest: without roles the two platforms tie on
+  `DEFAULT_ROLE_PRIORITY` and the tie-break — *the larger id yields* — still
+  produces a plausible answer. The test now pins both the tie-break and the
+  priority override, so a resolver that never sees the roles gets caught.

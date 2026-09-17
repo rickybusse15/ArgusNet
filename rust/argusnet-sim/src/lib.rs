@@ -4,6 +4,7 @@ pub mod battery;
 pub mod clock;
 pub mod command;
 pub mod config;
+pub mod deconflict;
 pub mod deterministic;
 pub mod particles;
 pub mod simulation;
