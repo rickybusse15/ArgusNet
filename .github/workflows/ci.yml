@@ -324,10 +324,24 @@ jobs:
       - name: bandit (Python static analysis)
         continue-on-error: true
         run: bandit -r src/ -x src/argusnet/v1
+      # `cargo install` COMPILES cargo-audit from source, and unconditionally:
+      # on a self-hosted runner that rebuilt the same binary on every run, for
+      # several minutes of CPU each time, making this by far the longest step
+      # in CI and the last job to finish. A self-hosted runner keeps
+      # ~/.cargo/bin between runs, so the install only ever needs to happen
+      # once; on a hosted runner the cache is cold and it behaves as before.
+      #
+      # This is also a mitigation for a failure whose root cause is not
+      # readable: on 2026-09-16 the `security` job failed after exactly 600s
+      # with NO steps recorded and NO logs retained (HTTP 404), which is a
+      # runner-level abandonment rather than a scanner finding -- every scanner
+      # here is `continue-on-error`, so a finding cannot fail this job. The
+      # cargo-audit build is the only thing long enough to have been running
+      # when it died. Recorded as unproven rather than presented as the fix.
       - name: cargo audit (Rust dependency vulnerabilities)
         continue-on-error: true
         run: |
-          cargo install cargo-audit --locked
+          command -v cargo-audit >/dev/null 2>&1 || cargo install cargo-audit --locked
           cargo audit
       # A container action, so it cannot run on a macOS runner at all. Guarded
       # rather than removed: on Linux it still runs exactly as before.
