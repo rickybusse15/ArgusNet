@@ -368,10 +368,73 @@ stacking to reach one accessor would make a three-deep chain across two crates
 for no reviewer's benefit. Nothing consumes belief yet — P2.1b is still
 deferred — whereas the coverage fraction has a consumer today.
 
-Localization is the other half of stage 8 and is a separate slice.
+# Stage 8, second half: localization
+
+The `GridLocalizer` ported in P4.2 is now driven by the same stage, after the
+footprints are marked. It is opt-in — `MappingLink::enable_localization`
+installs it — so a scenario that only wants coverage pays nothing.
+
+Four things about the wiring are decisions rather than details, and each is
+pinned by a test that fails if it is reversed.
+
+## The phase gate reads the *previous* tick's phase
+
+Localization runs only in `Scanning` or `Localizing`. Stage 8 runs **before**
+stage 9, where the mission machine advances, so the phase it reads is the one
+committed at the end of the last tick, never one this tick produced. That is
+the correct reading — the phase is an input to this tick's work, not an output
+of it — but it means a transition into `Egress` stops localization on the tick
+*after* the transition, not the same one.
+`localization_stops_outside_the_scanning_and_localizing_phases` and
+`the_localizing_phase_still_localizes` pin both sides of the gate; dropping it
+entirely is caught too.
+
+## Below the speed floor the heading is zero, not the last heading
+
+`atan2(vy, vx)` is only meaningful when the platform is actually moving, so
+below `MIN_SPEED_FOR_HEADING_MPS` (0.1 m/s) the stage feeds the estimator
+exactly `0.0`. The tempting alternative — hold the last heading — would make
+the estimator's input depend on history the stage does not own.
+`heading_is_zero_below_the_speed_floor_not_the_last_heading` requires the
+zero, and `the_heading_speed_floor_is_strict` pins that the comparison is `>`
+rather than `>=`.
+
+## The estimator sees this tick's own footprint
+
+Stage 8 marks coverage and *then* localizes, so the count grid the scorer reads
+already includes the footprint this tick just stamped. This turned up while
+writing the contract test below — an earlier draft captured
+`coverage_fraction` before `step()` and disagreed. It is pinned deliberately
+now rather than left to be rediscovered.
+
+## The timeout budget counts localization steps, not ticks
+
+`localizer_timed_out` latches once, and it latches from the localizer's own
+step counter. A platform that never localizes — because it sits below the
+coverage floor, so the stage returns `MapUnavailable` before a step is
+recorded — therefore **never** times out, however many ticks pass.
+`the_localizer_timeout_latches` and
+`a_platform_below_the_coverage_floor_never_times_out` are two tests because
+they are two different behaviours, and an earlier single test conflated them
+and failed.
+
+## The contract test
+
+Two mutants survived the first pass — keying the particle stream on the
+previous step, and passing the raw offsets as candidates instead of
+`nominal + offset`. Both leave the estimate plausibly near the platform, so no
+assertion about *where* the estimate lands can separate them.
+
+`the_estimator_receives_the_step_scale_and_candidates_the_contract_specifies`
+separates them by reconstructing the stage's inputs independently — a second
+`GridLocalizer` driven by hand — and requiring an exact match on step, scale,
+offsets and candidates. That is the test that took the localization half from
+12/14 to 14/14, and it is also what pins the three properties above.
 
 ## Verification
 
-- 15 unit tests plus 2 integration tests through the real tick transaction.
-- **13 mutants, 13 caught** — one at compile time. The single first-pass
-  survivor was the multiplicity contract above.
+- 15 unit tests plus 2 integration tests for coverage; 18 more for
+  localization, through the real tick transaction.
+- Coverage: **13 mutants, 13 caught** — one at compile time. The single
+  first-pass survivor was the multiplicity contract above.
+- Localization: **14 mutants, 14 caught**, from 7/14 on the first pass.
