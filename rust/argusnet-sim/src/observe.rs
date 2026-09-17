@@ -72,7 +72,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use argusnet_sensing::cascade::{
     evaluate_pair, DominantLoss, FovInput, GenerationTally, Outcome, PairInput, Visibility,
 };
-use argusnet_sensing::{atmospheric_attenuation, detection_probability, SensorErrorConfig};
+use argusnet_sensing::{
+    atmospheric_attenuation, detection_probability, BearingBiasDrift, SensorErrorConfig,
+};
 use argusnet_types::{BearingObservation, Vector3};
 
 use crate::deterministic::{DeterministicRng, SeedPart};
@@ -91,6 +93,105 @@ pub const CONFIDENCE_RANGE_SLOPE: f64 = 0.7;
 /// FOV gate is skipped rather than applied against a degenerate heading.
 pub const MIN_SPEED_FOR_LOOK_DIRECTION_MPS: f64 = 1.0e-6;
 
+/// `fov_noise_multiplier_slope` — how fast noise grows toward the FOV edge.
+pub const FOV_NOISE_MULTIPLIER_SLOPE: f64 = 1.5;
+
+/// `fov_confidence_slope` — how fast confidence falls toward the FOV edge.
+pub const FOV_CONFIDENCE_SLOPE: f64 = 0.4;
+
+/// `altitude_quality_threshold_m` — AGL above which quality starts to degrade.
+pub const ALTITUDE_QUALITY_THRESHOLD_M: f64 = 200.0;
+
+/// `altitude_quality_range_m` — the AGL band over which the degradation ramps
+/// to full.
+pub const ALTITUDE_QUALITY_RANGE_M: f64 = 400.0;
+
+/// `altitude_noise_multiplier_max` — the extra noise at the top of the ramp.
+pub const ALTITUDE_NOISE_MULTIPLIER_MAX: f64 = 1.2;
+
+/// `altitude_confidence_slope`.
+pub const ALTITUDE_CONFIDENCE_SLOPE: f64 = 0.5;
+
+/// `altitude_confidence_floor`.
+pub const ALTITUDE_CONFIDENCE_FLOOR: f64 = 0.3;
+
+/// A thermal sensor also emits a second, noisier observation of the same
+/// target: `1.3x` the bearing noise.
+pub const THERMAL_NOISE_FACTOR: f64 = 1.3;
+
+/// …and `0.9x` the confidence.
+pub const THERMAL_CONFIDENCE_FACTOR: f64 = 0.9;
+
+/// Which band a sensor observes in.
+///
+/// The reference tests `sensor_type in ("thermal", "lwir", "mwir", "ir")`, so
+/// the four names are one case rather than four.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SensorBand {
+    #[default]
+    Optical,
+    /// `thermal`, `lwir`, `mwir` or `ir`.
+    Thermal,
+}
+
+impl SensorBand {
+    /// Classify a reference `sensor_type` string.
+    pub fn from_sensor_type(sensor_type: &str) -> Self {
+        match sensor_type {
+            "thermal" | "lwir" | "mwir" | "ir" => SensorBand::Thermal,
+            _ => SensorBand::Optical,
+        }
+    }
+}
+
+/// Terrain height under a point, for the AGL the altitude ramp needs.
+///
+/// Injected for the same reason the visibility oracle is: the sampler lives in
+/// `argusnet-world`, and the reference only consults it for one number.
+pub trait TerrainHeight: fmt::Debug + Send {
+    fn height_at(&self, x_m: f64, y_m: f64) -> f64;
+}
+
+/// Terrain at the datum. The AGL ramp then reads altitude above zero, which is
+/// what a run with no terrain model gets in the reference too.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FlatDatum;
+
+impl TerrainHeight for FlatDatum {
+    fn height_at(&self, _x_m: f64, _y_m: f64) -> f64 {
+        0.0
+    }
+}
+
+/// The FOV-edge quality pair: `(noise_multiplier, confidence_factor)`.
+///
+/// Noise grows and confidence falls linearly with how far toward the boundary
+/// the target sat. Both are exactly neutral at the centre.
+pub fn fov_quality(fov_fraction: f64) -> (f64, f64) {
+    (
+        1.0 + fov_fraction * FOV_NOISE_MULTIPLIER_SLOPE,
+        1.0 - fov_fraction * FOV_CONFIDENCE_SLOPE,
+    )
+}
+
+/// The altitude quality pair for a sensor `agl_m` above the ground.
+///
+/// Flat below the threshold, then ramping over `ALTITUDE_QUALITY_RANGE_M` and
+/// saturating: `normalized_excess` is clamped at 1, so a sensor at 10 km is
+/// treated the same as one at 600 m. The confidence has its own floor beneath
+/// the ramp.
+pub fn altitude_quality(agl_m: f64) -> (f64, f64) {
+    if agl_m <= ALTITUDE_QUALITY_THRESHOLD_M {
+        return (1.0, 1.0);
+    }
+    let excess = (agl_m - ALTITUDE_QUALITY_THRESHOLD_M) / ALTITUDE_QUALITY_RANGE_M.max(1.0);
+    let normalized_excess = excess.min(1.0);
+    (
+        1.0 + normalized_excess * ALTITUDE_NOISE_MULTIPLIER_MAX,
+        ALTITUDE_CONFIDENCE_FLOOR.max(1.0 - normalized_excess * ALTITUDE_CONFIDENCE_SLOPE),
+    )
+}
+
 /// What this stage needs to know about one sensor.
 ///
 /// The reference reads these off its scenario node; see the module docs for why
@@ -105,6 +206,9 @@ pub struct SensorSpec {
     /// The sensor's bearing noise at the reference range, before the
     /// range-dependent scaling.
     pub base_bearing_std_rad: f64,
+    /// A thermal sensor emits a second, noisier observation of every target it
+    /// accepts.
+    pub band: SensorBand,
     pub error: SensorErrorConfig,
 }
 
@@ -116,14 +220,39 @@ impl Default for SensorSpec {
             required_elevation_deg: -90.0,
             dropout_probability: 0.0,
             base_bearing_std_rad: 0.015,
+            band: SensorBand::Optical,
             error: SensorErrorConfig::default(),
+        }
+    }
+}
+
+/// What a sight-line query answers.
+///
+/// The reference's visibility result carries an `effective_noise_multiplier`
+/// beside the verdict — partial vegetation widens the bearing noise without
+/// blocking the observation. Stage 6a omitted that factor and did not name it
+/// among its deferrals; this is where that is put right, and the multiplier
+/// lives on the oracle's result because that is where the reference computes
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SightLine {
+    pub visibility: Visibility,
+    /// `>= 1.0`. Exactly 1.0 for a clear path.
+    pub noise_multiplier: f64,
+}
+
+impl SightLine {
+    pub fn clear() -> Self {
+        Self {
+            visibility: Visibility::Visible,
+            noise_multiplier: 1.0,
         }
     }
 }
 
 /// Whether the path from a sensor to a target is clear.
 pub trait VisibilityOracle: fmt::Debug + Send {
-    fn visibility(&self, from: [f64; 3], to: [f64; 3]) -> Visibility;
+    fn sight_line(&self, from: [f64; 3], to: [f64; 3]) -> SightLine;
 }
 
 /// The default oracle: everything is visible.
@@ -135,8 +264,8 @@ pub trait VisibilityOracle: fmt::Debug + Send {
 pub struct AlwaysVisible;
 
 impl VisibilityOracle for AlwaysVisible {
-    fn visibility(&self, _from: [f64; 3], _to: [f64; 3]) -> Visibility {
-        Visibility::Visible
+    fn sight_line(&self, _from: [f64; 3], _to: [f64; 3]) -> SightLine {
+        SightLine::clear()
     }
 }
 
@@ -149,9 +278,24 @@ pub struct PairRecord {
     pub outcome: Outcome,
 }
 
+/// One sensor's bias drift and its own random stream.
+///
+/// The drift is **not** driven from the pair stream. The reference gives
+/// `BearingBiasDrift` its own generator, so the bias walk is per sensor and
+/// continuous across ticks while the pair streams are opened fresh for every
+/// `(node, target, tick)`. Mixing the two would make the bias depend on how
+/// many targets happened to be in view.
+#[derive(Debug)]
+struct SensorState {
+    drift: BearingBiasDrift,
+    rng: DeterministicRng,
+}
+
 #[derive(Debug)]
 struct Shared {
     sensors: BTreeMap<String, SensorSpec>,
+    drifts: BTreeMap<String, SensorState>,
+    terrain: Box<dyn TerrainHeight>,
     oracle: Box<dyn VisibilityOracle>,
     oracle_installed: bool,
     observations: Vec<BearingObservation>,
@@ -172,12 +316,42 @@ impl ObserveLink {
     }
 
     /// Give `node_id` a sensor. A platform with no spec generates nothing.
+    ///
+    /// Installing also opens the sensor's own bias stream, keyed on the node id
+    /// so two sensors never share a walk. Re-installing resets the walk, which
+    /// matches `SensorModel::reset`.
     pub fn install_sensor(&self, node_id: &str, spec: SensorSpec) {
-        self.lock().sensors.insert(node_id.to_string(), spec);
+        let mut shared = self.lock();
+        shared.sensors.insert(node_id.to_string(), spec);
+        shared.drifts.insert(
+            node_id.to_string(),
+            SensorState {
+                drift: BearingBiasDrift::from_config(&spec.error),
+                // Seeded from the node id alone: the walk is continuous across
+                // ticks, so it must not be re-keyed per tick.
+                rng: DeterministicRng::keyed(0, &[SeedPart::Str(node_id), SeedPart::Str("bias")]),
+            },
+        );
     }
 
     pub fn remove_sensor(&self, node_id: &str) {
-        self.lock().sensors.remove(node_id);
+        let mut shared = self.lock();
+        shared.sensors.remove(node_id);
+        shared.drifts.remove(node_id);
+    }
+
+    /// Install the terrain sampler the altitude ramp needs. Without one, AGL is
+    /// measured from the datum.
+    pub fn set_terrain(&self, terrain: Box<dyn TerrainHeight>) {
+        self.lock().terrain = terrain;
+    }
+
+    /// The accumulated bearing bias for `node_id`, radians.
+    pub fn bias_rad(&self, node_id: &str) -> Option<f64> {
+        self.lock()
+            .drifts
+            .get(node_id)
+            .map(|state| state.drift.current_bias_rad())
     }
 
     pub fn sensor(&self, node_id: &str) -> Option<SensorSpec> {
@@ -236,6 +410,8 @@ impl ObserveStage {
             link: ObserveLink {
                 inner: Arc::new(Mutex::new(Shared {
                     sensors: BTreeMap::new(),
+                    drifts: BTreeMap::new(),
+                    terrain: Box::new(FlatDatum),
                     oracle: Box::new(AlwaysVisible),
                     oracle_installed: false,
                     observations: Vec::new(),
@@ -273,6 +449,54 @@ fn perturb_unit_vector(direction: Vector3<f64>, perturbation: Vector3<f64>) -> V
         return unit;
     }
     candidate / norm
+}
+
+/// Rotate a direction by a bearing bias, about an axis perpendicular to it.
+///
+/// **The axis is not random**, although `apply_bias_to_direction`'s docstring
+/// says it is *"a rotation about a random axis perpendicular to the direction
+/// vector"* and the function takes an `rng` it never uses. The axis is the
+/// cross product with world X, falling back to world Y when the direction is
+/// within about 25 degrees of X. So the bias always tilts a given direction the
+/// same way. The code is the contract; the docstring is wrong, and the unused
+/// generator is not reproduced.
+fn apply_bias_to_direction(direction: Vector3<f64>, bias_rad: f64) -> Vector3<f64> {
+    if bias_rad.abs() < 1e-12 {
+        return direction;
+    }
+    let length = direction.norm();
+    if length < 1e-12 {
+        return direction;
+    }
+    let unit = direction / length;
+
+    let arbitrary = if unit.dot(&Vector3::new(1.0, 0.0, 0.0)).abs() > 0.9 {
+        Vector3::new(0.0, 1.0, 0.0)
+    } else {
+        Vector3::new(1.0, 0.0, 0.0)
+    };
+    let perpendicular = unit.cross(&arbitrary);
+    let perpendicular_norm = perpendicular.norm();
+    if perpendicular_norm < 1e-12 {
+        return direction;
+    }
+    let perpendicular = perpendicular / perpendicular_norm;
+
+    // Rodrigues. Note the third term uses `dot(perp, unit)`, which is zero by
+    // construction here -- the reference writes the general form and it
+    // contributes nothing. Reproduced as written rather than simplified away,
+    // because "this term is always zero" is only true while the axis stays
+    // perpendicular.
+    let cos_b = bias_rad.cos();
+    let sin_b = bias_rad.sin();
+    let rotated = unit * cos_b
+        + perpendicular.cross(&unit) * sin_b
+        + perpendicular * perpendicular.dot(&unit) * (1.0 - cos_b);
+    let rotated_norm = rotated.norm();
+    if rotated_norm < 1e-12 {
+        return direction;
+    }
+    rotated / rotated_norm * length
 }
 
 /// Three independent normal draws, in x, y, z order — the order numpy fills
@@ -333,6 +557,7 @@ impl StageHandler for ObserveStage {
             };
             let origin = platform.position;
             let velocity = platform.velocity;
+            let is_mobile = platform.is_mobile;
 
             for (target_id, target_position) in &targets {
                 let line_of_sight = target_position - origin;
@@ -374,10 +599,11 @@ impl StageHandler for ObserveStage {
                     DominantLoss::Other
                 };
 
-                let visibility = shared.oracle.visibility(
+                let sight_line = shared.oracle.sight_line(
                     [origin.x, origin.y, origin.z],
                     [target_position.x, target_position.y, target_position.z],
                 );
+                let visibility = sight_line.visibility;
 
                 let input = PairInput {
                     range_m,
@@ -413,27 +639,48 @@ impl StageHandler for ObserveStage {
                     outcome,
                 });
 
-                let Outcome::Accepted { fov_fraction: _ } = outcome else {
+                let Outcome::Accepted { fov_fraction } = outcome else {
                     continue;
                 };
 
-                // Deferred to stage 6b, and neutral here. Named as constants
-                // rather than left out so 6b has a landing spot and a reader
-                // can see what is missing.
-                let fov_noise_multiplier = 1.0;
-                let altitude_noise_multiplier = 1.0;
-                let fov_confidence_factor = 1.0;
-                let altitude_confidence_factor = 1.0;
+                let (fov_noise_multiplier, fov_confidence_factor) = fov_quality(fov_fraction);
+                // The reference ramps on altitude only for a mobile sensor: a
+                // mast-mounted camera at the same height is not treated as
+                // airborne.
+                let (altitude_noise_multiplier, altitude_confidence_factor) = if is_mobile {
+                    let agl_m = (origin.z - shared.terrain.height_at(origin.x, origin.y)).max(0.0);
+                    altitude_quality(agl_m)
+                } else {
+                    (1.0, 1.0)
+                };
 
                 let effective_bearing_std = argusnet_sensing::range_dependent_bearing_noise(
                     spec.base_bearing_std_rad,
                     range_m,
                     &spec.error,
-                ) * fov_noise_multiplier
+                ) * sight_line.noise_multiplier
+                    * fov_noise_multiplier
                     * altitude_noise_multiplier;
 
                 let perturbation = bearing_perturbation(effective_bearing_std, &mut pair_rng);
                 let direction = perturb_unit_vector(line_of_sight, perturbation);
+
+                // The bias walk steps once per observation, from the sensor's
+                // own stream -- see `SensorState`. It is applied after the
+                // noise, so the two compose as rotate-then-tilt.
+                let direction = match shared.drifts.get_mut(&node_id) {
+                    Some(state) => {
+                        let bias_rad = match state.drift.increment_std(timestamp_s) {
+                            Some(increment_std) => {
+                                let increment = state.rng.normal(0.0, increment_std);
+                                state.drift.step(timestamp_s, increment)
+                            }
+                            None => state.drift.step(timestamp_s, 0.0),
+                        };
+                        apply_bias_to_direction(direction, bias_rad)
+                    }
+                    None => direction,
+                };
 
                 let confidence = CONFIDENCE_FLOOR.max(
                     (1.0 - (range_m / spec.max_range_m) * CONFIDENCE_RANGE_SLOPE)
@@ -451,6 +698,27 @@ impl StageHandler for ObserveStage {
                     timestamp_s,
                     confidence,
                 });
+
+                // A thermal sensor publishes a second observation of the same
+                // target: noisier, less confident, and drawn from the SAME pair
+                // stream immediately after the first -- so its three draws
+                // follow the primary's three, and adding or removing the
+                // thermal path shifts nothing else.
+                if spec.band == SensorBand::Thermal {
+                    let thermal_std = effective_bearing_std * THERMAL_NOISE_FACTOR;
+                    let thermal_perturbation = bearing_perturbation(thermal_std, &mut pair_rng);
+                    let thermal_direction =
+                        perturb_unit_vector(line_of_sight, thermal_perturbation);
+                    shared.observations.push(BearingObservation {
+                        node_id: node_id.clone(),
+                        target_id: target_id.clone(),
+                        origin,
+                        direction: thermal_direction,
+                        bearing_std_rad: thermal_std,
+                        timestamp_s,
+                        confidence: confidence * THERMAL_CONFIDENCE_FACTOR,
+                    });
+                }
             }
         }
 
@@ -804,8 +1072,11 @@ mod tests {
     struct NeverVisible;
 
     impl VisibilityOracle for NeverVisible {
-        fn visibility(&self, _from: [f64; 3], _to: [f64; 3]) -> Visibility {
-            Visibility::Blocked(Blocker::Terrain)
+        fn sight_line(&self, _from: [f64; 3], _to: [f64; 3]) -> SightLine {
+            SightLine {
+                visibility: Visibility::Blocked(Blocker::Terrain),
+                noise_multiplier: 1.0,
+            }
         }
     }
 
@@ -1014,13 +1285,17 @@ mod tests {
         assert!(by_target("edge") >= CONFIDENCE_FLOOR);
     }
 
-    /// **The deferral, pinned.** Three quality modifiers are stage 6b's, and
-    /// they are 1.0 here rather than absent. This test states the arithmetic
-    /// that makes a 6a run exact for an omnidirectional, low-altitude,
-    /// drift-free sensor — and gives 6b a test to change rather than a gap to
-    /// discover.
+    /// Every quality modifier is neutral for an omnidirectional, ground-fixed,
+    /// clear-path, drift-free sensor — so for that configuration the published
+    /// noise is exactly the range-dependent value and the confidence carries
+    /// only the range slope and `pd`.
+    ///
+    /// This started life as `the_deferred_quality_modifiers_are_all_neutral`,
+    /// pinning that 6a had hardcoded them to 1.0. They are computed now, and
+    /// the test still holds — which is the point: it says the *baseline* case
+    /// is unchanged by adding the ramps.
     #[test]
-    fn the_deferred_quality_modifiers_are_all_neutral() {
+    fn every_quality_modifier_is_neutral_for_a_plain_ground_sensor() {
         let (mut sim, link) = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 500.0, 0.0, 0.0)],
@@ -1035,8 +1310,6 @@ mod tests {
 
         let observation = &link.observations()[0];
         let range_m = 500.0;
-        // No FOV multiplier, no altitude multiplier: the published noise is
-        // exactly the range-dependent value.
         assert_eq!(
             observation.bearing_std_rad,
             argusnet_sensing::range_dependent_bearing_noise(
@@ -1045,8 +1318,6 @@ mod tests {
                 &spec.error
             )
         );
-        // And the confidence carries no FOV or altitude factor either. `pd` is
-        // 1.0 because this spec's detection knee is past every test range.
         let expected = CONFIDENCE_FLOOR
             .max((1.0 - (range_m / spec.max_range_m) * CONFIDENCE_RANGE_SLOPE) * 1.0);
         assert_eq!(observation.confidence, expected);
@@ -1319,5 +1590,551 @@ mod tests {
     #[test]
     fn stage_six_is_admitted_to_truth() {
         assert!(Stage::GenerateObservations.may_read_truth());
+    }
+
+    // -----------------------------------------------------------------
+    // Quality modifiers (6b)
+    // -----------------------------------------------------------------
+
+    /// Noise grows and confidence falls linearly toward the FOV boundary, and
+    /// both are exactly neutral at the centre.
+    #[test]
+    fn the_fov_quality_ramp_is_neutral_at_the_centre_and_linear_to_the_edge() {
+        assert_eq!(fov_quality(0.0), (1.0, 1.0));
+        assert_eq!(
+            fov_quality(1.0),
+            (1.0 + FOV_NOISE_MULTIPLIER_SLOPE, 1.0 - FOV_CONFIDENCE_SLOPE)
+        );
+        let (noise, confidence) = fov_quality(0.5);
+        assert_eq!(noise, 1.75);
+        assert_eq!(confidence, 0.8);
+    }
+
+    /// A target near the FOV edge is noisier and less trusted than the same
+    /// target dead ahead, through the real stage rather than by calling the
+    /// ramp.
+    #[test]
+    fn a_target_near_the_fov_edge_is_noisier_and_less_confident() {
+        let mut platform = sensor_node("s0", 0.0, 0.0, true);
+        platform.velocity = Vector3::new(10.0, 0.0, 0.0);
+        let (mut sim, link) = rig(
+            vec![platform],
+            // Dead ahead, and 40 degrees off-axis inside a 45 degree cone --
+            // at the SAME range, so range cannot explain the difference.
+            // An earlier version put the edge target further away, and the
+            // range slope alone accounted for the confidence drop.
+            vec![
+                target("centre", 100.0, 0.0, 0.0),
+                target(
+                    "edge",
+                    100.0 * 0.766_044_443_118_978,
+                    100.0 * 0.642_787_609_686_539,
+                    0.0,
+                ),
+            ],
+        );
+        link.install_sensor(
+            "s0",
+            SensorSpec {
+                fov_half_angle_deg: Some(45.0),
+                ..permissive()
+            },
+        );
+
+        sim.step().expect("tick runs");
+
+        let by_target = |id: &str| {
+            link.observations()
+                .into_iter()
+                .find(|o| o.target_id == id)
+                .unwrap_or_else(|| panic!("{id} was rejected"))
+        };
+        let centre = by_target("centre");
+        let edge = by_target("edge");
+        // Identical ranges to within rounding, so the difference is the ramp
+        // and nothing else.
+        let centre_range = (centre.origin - Vector3::new(100.0, 0.0, 0.0)).norm();
+        let edge_range = 100.0;
+        assert!((centre_range - edge_range).abs() < 1.0e-9);
+        assert!(
+            edge.bearing_std_rad > centre.bearing_std_rad,
+            "edge {} vs centre {}",
+            edge.bearing_std_rad,
+            centre.bearing_std_rad
+        );
+        assert!(edge.confidence < centre.confidence);
+    }
+
+    /// The altitude ramp is flat below 200 m AGL, linear over the next 400 m,
+    /// and then **saturates** — a sensor at 10 km is treated exactly like one
+    /// at 600 m. The confidence has its own floor beneath the ramp.
+    #[test]
+    fn the_altitude_ramp_is_flat_then_linear_then_saturates() {
+        assert_eq!(altitude_quality(0.0), (1.0, 1.0));
+        assert_eq!(altitude_quality(ALTITUDE_QUALITY_THRESHOLD_M), (1.0, 1.0));
+
+        // Halfway up the ramp: 400 m AGL is 200 m of excess over a 400 m band.
+        let (noise, confidence) = altitude_quality(400.0);
+        assert_eq!(noise, 1.0 + 0.5 * ALTITUDE_NOISE_MULTIPLIER_MAX);
+        assert_eq!(confidence, 1.0 - 0.5 * ALTITUDE_CONFIDENCE_SLOPE);
+
+        // Saturated, and the same at any greater height.
+        let top = altitude_quality(600.0);
+        assert_eq!(top, (1.0 + ALTITUDE_NOISE_MULTIPLIER_MAX, 0.5));
+        assert_eq!(altitude_quality(10_000.0), top);
+        // The confidence floor is below the ramp's own minimum, so it never
+        // binds for these constants -- worth stating, since a future slope
+        // change would make it live.
+        assert!(top.1 > ALTITUDE_CONFIDENCE_FLOOR);
+    }
+
+    /// AGL is measured against terrain, not against the datum. A drone at 300 m
+    /// over a 250 m hill is 50 m up and below the ramp; the same drone over
+    /// flat ground is 300 m up and inside it.
+    #[test]
+    fn altitude_is_measured_above_ground_not_above_the_datum() {
+        #[derive(Debug)]
+        struct Plateau(f64);
+        impl TerrainHeight for Plateau {
+            fn height_at(&self, _x_m: f64, _y_m: f64) -> f64 {
+                self.0
+            }
+        }
+
+        let noise_at = |ground_m: f64| {
+            let mut platform = sensor_node("s0", 0.0, 0.0, true);
+            platform.position = Vector3::new(0.0, 0.0, 300.0);
+            let (mut sim, link) = rig(vec![platform], vec![target("t0", 500.0, 0.0, 300.0)]);
+            link.install_sensor("s0", permissive());
+            link.set_terrain(Box::new(Plateau(ground_m)));
+            sim.step().expect("tick runs");
+            link.observations()[0].bearing_std_rad
+        };
+
+        let over_flat = noise_at(0.0);
+        let over_hill = noise_at(250.0);
+        assert!(
+            over_flat > over_hill,
+            "flat {over_flat} should be noisier than hill {over_hill}"
+        );
+    }
+
+    /// The reference ramps on altitude only for a **mobile** sensor. A
+    /// mast-mounted camera at the same height is not treated as airborne.
+    #[test]
+    fn a_fixed_sensor_is_never_subject_to_the_altitude_ramp() {
+        let high = |mobile: bool| {
+            let mut platform = sensor_node("s0", 0.0, 0.0, mobile);
+            platform.position = Vector3::new(0.0, 0.0, 600.0);
+            let (mut sim, link) = rig(vec![platform], vec![target("t0", 500.0, 0.0, 600.0)]);
+            link.install_sensor("s0", permissive());
+            sim.step().expect("tick runs");
+            link.observations()[0].bearing_std_rad
+        };
+
+        assert!(high(true) > high(false));
+        // The fixed one carries no ramp at all.
+        assert_eq!(
+            high(false),
+            argusnet_sensing::range_dependent_bearing_noise(0.015, 500.0, &permissive().error)
+        );
+    }
+
+    /// Partial occlusion widens the noise without blocking the observation —
+    /// the factor stage 6a omitted *and failed to name* among its deferrals.
+    #[test]
+    fn a_partly_occluded_sight_line_widens_the_noise_without_blocking() {
+        #[derive(Debug)]
+        struct Hazy(f64);
+        impl VisibilityOracle for Hazy {
+            fn sight_line(&self, _from: [f64; 3], _to: [f64; 3]) -> SightLine {
+                SightLine {
+                    visibility: Visibility::Visible,
+                    noise_multiplier: self.0,
+                }
+            }
+        }
+
+        let (mut sim, link) = rig(
+            vec![sensor_node("s0", 0.0, 0.0, false)],
+            vec![target("t0", 500.0, 0.0, 0.0)],
+        );
+        link.install_sensor("s0", permissive());
+        link.set_visibility_oracle(Box::new(Hazy(2.5)));
+
+        sim.step().expect("tick runs");
+
+        let observation = &link.observations()[0];
+        assert_eq!(
+            link.observations().len(),
+            1,
+            "the pair was blocked, not hazed"
+        );
+        assert_eq!(
+            observation.bearing_std_rad,
+            argusnet_sensing::range_dependent_bearing_noise(0.015, 500.0, &permissive().error)
+                * 2.5
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Bias drift
+    // -----------------------------------------------------------------
+
+    /// The bias walk runs on the **sensor's own** stream, not the pair's, so it
+    /// is continuous across ticks and does not depend on how many targets
+    /// happened to be in view. Mixing the two would make a drone's bias a
+    /// function of the scenario's target count.
+    #[test]
+    fn the_bias_walk_accumulates_across_ticks() {
+        let drifting = SensorSpec {
+            error: SensorErrorConfig {
+                bias_drift_rate_rad_per_s: 0.01,
+                bias_drift_max_rad: 1.0,
+                ..permissive().error
+            },
+            ..permissive()
+        };
+        let (mut sim, link) = rig(
+            vec![sensor_node("s0", 0.0, 0.0, false)],
+            vec![target("t0", 100.0, 0.0, 0.0)],
+        );
+        link.install_sensor("s0", drifting);
+
+        // The first step records the clock without drifting -- there is no
+        // previous time to measure an interval against.
+        sim.step().expect("tick runs");
+        assert_eq!(link.bias_rad("s0"), Some(0.0));
+
+        sim.step().expect("tick runs");
+        let after_two = link.bias_rad("s0").expect("tracked");
+        assert_ne!(after_two, 0.0);
+
+        sim.step().expect("tick runs");
+        let after_three = link.bias_rad("s0").expect("tracked");
+        assert_ne!(after_three, after_two);
+    }
+
+    /// A sensor with drift disabled never accumulates one, and its direction is
+    /// whatever the noise produced.
+    #[test]
+    fn a_drift_free_sensor_stays_at_zero_bias() {
+        let (mut sim, link) = rig(
+            vec![sensor_node("s0", 0.0, 0.0, false)],
+            vec![target("t0", 100.0, 0.0, 0.0)],
+        );
+        link.install_sensor("s0", permissive());
+
+        for _ in 0..5 {
+            sim.step().expect("tick runs");
+        }
+
+        assert_eq!(link.bias_rad("s0"), Some(0.0));
+    }
+
+    /// Two sensors drift independently: the walk is keyed on the node id, so a
+    /// fleet does not share one bias.
+    #[test]
+    fn two_sensors_drift_independently() {
+        let drifting = SensorSpec {
+            error: SensorErrorConfig {
+                bias_drift_rate_rad_per_s: 0.01,
+                bias_drift_max_rad: 1.0,
+                ..permissive().error
+            },
+            ..permissive()
+        };
+        let (mut sim, link) = rig(
+            vec![
+                sensor_node("a", 0.0, 0.0, false),
+                sensor_node("b", 10.0, 0.0, false),
+            ],
+            vec![target("t0", 100.0, 0.0, 0.0)],
+        );
+        link.install_sensor("a", drifting);
+        link.install_sensor("b", drifting);
+
+        for _ in 0..4 {
+            sim.step().expect("tick runs");
+        }
+
+        assert_ne!(link.bias_rad("a"), link.bias_rad("b"));
+    }
+
+    /// The bias rotation's axis is **deterministic**, not random — despite the
+    /// reference's docstring calling it "a rotation about a random axis" and
+    /// the function taking an `rng` it never reads. The same direction and bias
+    /// always produce the same result.
+    #[test]
+    fn the_bias_rotation_axis_is_deterministic_despite_the_docstring() {
+        let direction = Vector3::new(0.0, 1.0, 0.0);
+
+        let once = apply_bias_to_direction(direction, 0.2);
+        let twice = apply_bias_to_direction(direction, 0.2);
+
+        assert_eq!(once, twice);
+        // It rotated, and kept its length.
+        assert_ne!(once, direction);
+        assert!((once.norm() - direction.norm()).abs() < 1.0e-12);
+    }
+
+    /// A zero bias is the identity, and the axis fallback triggers for a
+    /// direction close to world X — where the cross product with X would
+    /// otherwise be degenerate.
+    #[test]
+    fn the_bias_rotation_handles_zero_and_the_degenerate_axis() {
+        let along_x = Vector3::new(1.0, 0.0, 0.0);
+        assert_eq!(apply_bias_to_direction(along_x, 0.0), along_x);
+
+        // Falls back to world Y for the axis, so this still rotates rather than
+        // returning the input or a NaN.
+        let rotated = apply_bias_to_direction(along_x, 0.3);
+        assert_ne!(rotated, along_x);
+        assert!(rotated.iter().all(|v| v.is_finite()));
+        assert!((rotated.norm() - 1.0).abs() < 1.0e-12);
+    }
+
+    // -----------------------------------------------------------------
+    // The thermal duplicate
+    // -----------------------------------------------------------------
+
+    /// A thermal sensor publishes a **second** observation of every target it
+    /// accepts: 1.3x the noise, 0.9x the confidence, and a separately drawn
+    /// direction.
+    #[test]
+    fn a_thermal_sensor_publishes_a_second_noisier_observation() {
+        let (mut sim, link) = rig(
+            vec![sensor_node("s0", 0.0, 0.0, false)],
+            vec![target("t0", 500.0, 0.0, 0.0)],
+        );
+        link.install_sensor(
+            "s0",
+            SensorSpec {
+                band: SensorBand::Thermal,
+                ..permissive()
+            },
+        );
+
+        sim.step().expect("tick runs");
+
+        let observations = link.observations();
+        assert_eq!(observations.len(), 2);
+        let primary = &observations[0];
+        let thermal = &observations[1];
+        assert_eq!(thermal.target_id, primary.target_id);
+        // Literals, not the constants. Asserting against `THERMAL_NOISE_FACTOR`
+        // would move with the constant, so a mutant that set it to 1.0 moved
+        // the expectation too and survived -- which is exactly what the
+        // mutation run caught.
+        assert_eq!(thermal.bearing_std_rad, primary.bearing_std_rad * 1.3);
+        assert_eq!(thermal.confidence, primary.confidence * 0.9);
+        assert_eq!(THERMAL_NOISE_FACTOR, 1.3);
+        assert_eq!(THERMAL_CONFIDENCE_FACTOR, 0.9);
+        // Separately drawn, not a copy.
+        assert_ne!(thermal.direction, primary.direction);
+        // One accepted *pair*, two observations -- the tally counts pairs.
+        assert_eq!(link.tally().attempted, 1);
+    }
+
+    /// The four names the reference treats as thermal, and the fact that
+    /// anything else is not.
+    #[test]
+    fn the_thermal_band_covers_four_sensor_type_names() {
+        for name in ["thermal", "lwir", "mwir", "ir"] {
+            assert_eq!(
+                SensorBand::from_sensor_type(name),
+                SensorBand::Thermal,
+                "{name}"
+            );
+        }
+        for name in ["eo", "optical", "radar", "", "THERMAL"] {
+            assert_eq!(
+                SensorBand::from_sensor_type(name),
+                SensorBand::Optical,
+                "{name}"
+            );
+        }
+    }
+
+    /// An optical sensor publishes exactly one observation per accepted pair,
+    /// and the thermal path consumes no draws when it does not run — so adding
+    /// or removing a thermal sensor cannot shift another sensor's stream.
+    #[test]
+    fn an_optical_sensor_publishes_one_observation_and_consumes_the_same_draws() {
+        let direction_for = |band: SensorBand| {
+            let (mut sim, link) = rig(
+                vec![sensor_node("s0", 0.0, 0.0, false)],
+                vec![target("t0", 500.0, 0.0, 0.0)],
+            );
+            link.install_sensor(
+                "s0",
+                SensorSpec {
+                    band,
+                    ..permissive()
+                },
+            );
+            sim.step().expect("tick runs");
+            (link.observations().len(), link.observations()[0].direction)
+        };
+
+        let (optical_count, optical_direction) = direction_for(SensorBand::Optical);
+        let (thermal_count, thermal_primary) = direction_for(SensorBand::Thermal);
+
+        assert_eq!(optical_count, 1);
+        assert_eq!(thermal_count, 2);
+        // The primary observation is identical either way: the thermal draws
+        // come after it.
+        assert_eq!(optical_direction, thermal_primary);
+    }
+
+    /// Altitude costs **confidence** as well as noise. The noise half was
+    /// tested; the confidence half was not, and a mutant that dropped the
+    /// factor survived because of it.
+    #[test]
+    fn altitude_costs_confidence_as_well_as_noise() {
+        let confidence_at = |altitude_m: f64| {
+            let mut platform = sensor_node("s0", 0.0, 0.0, true);
+            platform.position = Vector3::new(0.0, 0.0, altitude_m);
+            let (mut sim, link) = rig(vec![platform], vec![target("t0", 500.0, 0.0, altitude_m)]);
+            link.install_sensor("s0", permissive());
+            sim.step().expect("tick runs");
+            link.observations()[0].confidence
+        };
+
+        // Same slant range at both altitudes, so only the ramp differs.
+        let low = confidence_at(100.0);
+        let high = confidence_at(600.0);
+        assert!(
+            high < low,
+            "high {high} should be less confident than low {low}"
+        );
+        assert_eq!(high, low * 0.5);
+    }
+
+    /// The bias actually reaches the published direction. Every other bias test
+    /// here reads `bias_rad()`, which a stage that computed the walk and then
+    /// threw it away would still satisfy.
+    ///
+    /// Both runs draw from the same pair stream, so the perturbation is
+    /// identical and the only possible difference is the rotation.
+    #[test]
+    fn the_accumulated_bias_reaches_the_published_direction() {
+        let direction_after = |drift_rate: f64| {
+            let (mut sim, link) = rig(
+                vec![sensor_node("s0", 0.0, 0.0, false)],
+                vec![target("t0", 100.0, 0.0, 0.0)],
+            );
+            link.install_sensor(
+                "s0",
+                SensorSpec {
+                    error: SensorErrorConfig {
+                        bias_drift_rate_rad_per_s: drift_rate,
+                        bias_drift_max_rad: 1.0,
+                        ..permissive().error
+                    },
+                    ..permissive()
+                },
+            );
+            for _ in 0..3 {
+                sim.step().expect("tick runs");
+            }
+            (
+                link.observations()[0].direction,
+                link.bias_rad("s0").unwrap(),
+            )
+        };
+
+        let (undrifted, zero_bias) = direction_after(0.0);
+        let (drifted, bias) = direction_after(0.05);
+
+        assert_eq!(zero_bias, 0.0);
+        assert_ne!(bias, 0.0, "the drifting run did not accumulate a bias");
+        assert_ne!(
+            drifted, undrifted,
+            "the bias was computed but never applied to the direction"
+        );
+        // And it is exactly the rotation, not some other perturbation.
+        assert_eq!(drifted, apply_bias_to_direction(undrifted, bias));
+    }
+
+    /// `apply_bias_to_direction` preserves the input's length, which only shows
+    /// on a non-unit input — and inside the stage the direction is always unit,
+    /// so nothing there would ever notice. The function is general; this pins
+    /// that it stays so.
+    #[test]
+    fn the_bias_rotation_preserves_a_non_unit_length() {
+        let direction = Vector3::new(0.0, 3.0, 4.0);
+        assert_eq!(direction.norm(), 5.0);
+
+        let rotated = apply_bias_to_direction(direction, 0.25);
+
+        assert!(
+            (rotated.norm() - 5.0).abs() < 1.0e-12,
+            "norm {}",
+            rotated.norm()
+        );
+        assert_ne!(rotated, direction);
+    }
+
+    /// A zero bias returns the input **exactly**, from the early return rather
+    /// than by rotating through an identity. Rodrigues with `cos = 1, sin = 0`
+    /// lands on the same place mathematically, but going through the
+    /// renormalisation is not bit-exact for every input.
+    #[test]
+    fn a_zero_bias_returns_the_input_bit_for_bit() {
+        for direction in [
+            Vector3::new(3.0, 0.0, 4.0),
+            Vector3::new(0.1, -0.7, 0.3),
+            Vector3::new(1.0, 0.0, 0.0),
+        ] {
+            let result = apply_bias_to_direction(direction, 0.0);
+            assert_eq!(
+                result.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                direction.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "{direction:?} did not round-trip"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Three mutants that are equivalent, and why
+    // -----------------------------------------------------------------
+
+    /// The altitude ramp's threshold comparison can be `<=` or `<` with no
+    /// observable difference: at exactly the threshold the excess is zero, so
+    /// the ramp evaluates to `(1.0, 1.0)` — the same pair the early return
+    /// gives. The early return is kept because it says the intent.
+    #[test]
+    fn the_altitude_threshold_boundary_is_neutral_either_way() {
+        let excess = 0.0_f64;
+        let through_the_ramp = (
+            1.0 + excess * ALTITUDE_NOISE_MULTIPLIER_MAX,
+            ALTITUDE_CONFIDENCE_FLOOR.max(1.0 - excess * ALTITUDE_CONFIDENCE_SLOPE),
+        );
+        assert_eq!(through_the_ramp, (1.0, 1.0));
+        assert_eq!(altitude_quality(ALTITUDE_QUALITY_THRESHOLD_M), (1.0, 1.0));
+    }
+
+    /// `ALTITUDE_CONFIDENCE_FLOOR` is unreachable with the current slope: the
+    /// ramp saturates at `1 - 0.5 = 0.5`, well above `0.3`. A mutant that drops
+    /// the floor is therefore equivalent **today**, and this is what would
+    /// notice if the slope ever grew past the point where the floor bites.
+    #[test]
+    fn the_altitude_confidence_floor_is_currently_unreachable() {
+        let saturated = 1.0 - ALTITUDE_CONFIDENCE_SLOPE;
+        assert!(
+            saturated > ALTITUDE_CONFIDENCE_FLOOR,
+            "the floor now binds ({saturated} <= {ALTITUDE_CONFIDENCE_FLOOR});              a mutant dropping it is no longer equivalent and needs its own test"
+        );
+    }
+
+    /// Flooring AGL at zero is likewise unobservable: a sensor below terrain
+    /// yields a negative AGL, and the ramp treats anything at or below the
+    /// threshold as neutral — negatives included. The floor is kept because a
+    /// negative "height above ground" is a nonsense to propagate.
+    #[test]
+    fn a_negative_agl_is_already_neutral_without_the_floor() {
+        assert_eq!(altitude_quality(-500.0), (1.0, 1.0));
+        assert_eq!(altitude_quality(-500.0), altitude_quality(0.0));
     }
 }

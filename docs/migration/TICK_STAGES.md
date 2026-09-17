@@ -816,17 +816,23 @@ that stops being true when someone later threads one generator through the loop.
 The key is `(node_id, target_id, round(t * 1000))`, which is what makes the batch
 independent of the order pairs are visited in — ADR-006's central property.
 
-## What 6a defers, named rather than absent
+## What 6a deferred — and one it deferred without saying so
 
-Three quality modifiers are **explicitly 1.0**: FOV-edge degradation, altitude
-falloff above 200 m AGL (which needs a terrain sampler), and the bearing bias
-random walk from P4.5a. The thermal duplicate observation a `thermal`/`lwir`/
-`mwir`/`ir` node emits is also not here.
+Three quality modifiers were **explicitly 1.0**: FOV-edge degradation, altitude
+falloff above 200 m AGL, and the bearing bias random walk. The thermal duplicate
+was also absent. All four are now in 6b.
 
-All four are neutral for an omnidirectional, low-altitude, drift-free sensor, so
-a run configured that way is already exact — and
-`the_deferred_quality_modifiers_are_all_neutral` pins the arithmetic so 6b has a
-test to change rather than a gap to discover.
+**6a's list was incomplete**, which is worth recording rather than quietly
+fixing. The reference also multiplies in `detection.effective_noise_multiplier`
+— partial vegetation widens the bearing noise without blocking the observation —
+and 6a neither implemented it nor named it among its deferrals. It is in 6b, on
+the visibility oracle's result, which is where the reference computes it.
+
+Still outstanding after 6b, and named here so the next slice does not have to
+rediscover it: **clutter**. `SensorModel.generate_clutter` emits false-alarm
+observations from a separate `(node_id, "clutter", tick)` stream, capped at
+`confidence_floor * 0.9`. That is a second observation source rather than a
+modifier, and it is stage 6c.
 
 ## Verification
 
@@ -875,3 +881,82 @@ The one equivalent mutant turns the missing-truth-capability `Invariant` into
 `NoWork`. Stage 6 is one of the two stages §3 admits to truth, so that branch is
 unreachable through the pipeline — which is the point. `stage_six_is_admitted_to_truth`
 is what would notice if the list changed.
+
+# Stage 6b: the quality modifiers
+
+Four things 6a left at `1.0`, plus the thermal duplicate.
+
+## FOV edge and altitude
+
+Noise grows and confidence falls toward the FOV boundary
+(`1 + f·1.5`, `1 − f·0.4`), and again above 200 m AGL, ramping over the next
+400 m and then **saturating** — a sensor at 10 km is treated exactly like one at
+600 m.
+
+Two details that only show with the right test:
+
+- **AGL is above *ground*, not above the datum.** A drone at 300 m over a 250 m
+  hill is 50 m up and outside the ramp; the same drone over flat ground is
+  inside it. The terrain sampler is injected, like everything else this stage
+  needs from `argusnet-world`.
+- **The ramp applies only to a *mobile* sensor.** A mast-mounted camera at 600 m
+  is not treated as airborne, which is the reference's `if node.is_mobile`.
+
+## The bias walk runs on the sensor's own stream
+
+`BearingBiasDrift` gets its own generator in the reference, so the walk is **per
+sensor and continuous across ticks**, while the pair streams are opened fresh
+for every `(node, target, tick)`. Driving the bias from the pair stream would
+make a drone's accumulated bias a function of how many targets happened to be in
+view — which is why the two are kept apart here and why a mutant that re-keys
+the bias stream per tick is caught.
+
+**The rotation axis is not random**, although `apply_bias_to_direction`'s
+docstring says it is *"a rotation about a random axis perpendicular to the
+direction vector"* — and the function takes an `rng` it never reads. The axis is
+the cross product with world X, falling back to world Y within about 25° of X.
+The code is the contract; the docstring is wrong, and the unused generator is
+not reproduced.
+
+## The thermal duplicate
+
+A `thermal`/`lwir`/`mwir`/`ir` sensor publishes a **second** observation of
+every target it accepts: 1.3× the noise, 0.9× the confidence, and a separately
+drawn direction taken from the *same* pair stream immediately after the primary.
+That ordering matters — the thermal draws come last, so adding or removing a
+thermal sensor cannot shift any other observation's noise.
+
+## Verification
+
+- 49 unit tests in the stage, all through the real tick transaction.
+- **32 mutants, 29 caught, 3 proven equivalent.**
+
+The first round scored 22/32, and one survivor was a genuine self-inflicted
+wound worth naming:
+
+**The thermal assertions referenced the constants they were testing.**
+`assert_eq!(thermal.bearing_std_rad, primary.bearing_std_rad * THERMAL_NOISE_FACTOR)`
+passes for *any* value of `THERMAL_NOISE_FACTOR`, so mutating the constant moved
+the expectation with it. Both thermal factors are now asserted against literals,
+with a separate assertion pinning the constants themselves.
+
+Two more survivors were confounded comparisons:
+
+- the FOV-edge test put its edge target **further away**, so the range slope
+  alone explained the confidence drop. It now sits at the same range, 40° off
+  axis.
+- nothing tested altitude's effect on **confidence** at all — only on noise.
+
+And one was a test that measured the wrong thing: every bias test read
+`bias_rad()`, which a stage that computed the walk and then discarded it would
+still satisfy. The new test requires the published direction to equal
+`apply_bias_to_direction(undrifted, bias)` exactly.
+
+The three equivalent mutants are each pinned by a test that says *why*, so the
+equivalence is checked rather than assumed:
+
+| mutant | why it is equivalent | what would notice |
+|---|---|---|
+| the altitude threshold is `<` not `<=` | at exactly the threshold the excess is zero, so the ramp returns `(1.0, 1.0)` — the early return's own answer | `the_altitude_threshold_boundary_is_neutral_either_way` |
+| the altitude confidence floor is dropped | the ramp saturates at `0.5`, well above the `0.3` floor, so the floor never binds **with the current slope** | `the_altitude_confidence_floor_is_currently_unreachable` fails the moment it does |
+| AGL is not floored at zero | a negative AGL is below the threshold, and the ramp is neutral there | `a_negative_agl_is_already_neutral_without_the_floor` |
