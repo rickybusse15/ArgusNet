@@ -2441,4 +2441,85 @@ mod tests {
             );
         }
     }
+
+    /// **The contract test for clutter.** Two mutants outlast every other
+    /// assertion here: dropping the noise perturbation entirely, and drawing it
+    /// at the sensor's own bearing std instead of the clutter figure. Neither
+    /// changes the *published* `bearing_std_rad` (which is copied from the spec,
+    /// not derived from the draw) and neither stops the direction being a
+    /// plausible unit vector — so nothing about the observation's shape
+    /// separates them.
+    ///
+    /// What separates them is the stream. This reconstructs the clutter stream
+    /// independently — same key, same draw order — and requires exact
+    /// agreement on the count, every direction and every confidence. It
+    /// therefore pins the draw order, which std each step uses, and the
+    /// normalise-perturb-normalise composition all at once.
+    #[test]
+    fn the_clutter_stream_draws_exactly_what_the_contract_specifies() {
+        const SEED: u32 = 11;
+        let spec = cluttered(3.0);
+        let (mut sim, link) = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
+        link.install_sensor("s0", spec);
+
+        sim.step().expect("tick runs");
+
+        // Tick 0 runs at t = 0.0, so the millisecond key is 0.
+        let mut expected_rng = DeterministicRng::keyed(
+            SEED,
+            &[
+                SeedPart::Str("s0"),
+                SeedPart::Str(CLUTTER_TARGET_ID),
+                SeedPart::Int(0),
+            ],
+        );
+        let count = expected_rng.poisson(spec.false_alarm_rate_per_scan);
+
+        let mut expected = Vec::new();
+        for _ in 0..count {
+            let raw = bearing_perturbation(1.0, &mut expected_rng);
+            let norm = raw.norm();
+            if norm < 1e-12 {
+                continue;
+            }
+            let direction = raw / norm;
+            let noise = bearing_perturbation(spec.clutter_bearing_std_rad, &mut expected_rng);
+            let noisy = direction + noise;
+            let noisy_norm = noisy.norm();
+            if noisy_norm < 1e-12 {
+                continue;
+            }
+            let confidence = expected_rng
+                .uniform_range(CLUTTER_CONFIDENCE_LOW, CLUTTER_CONFIDENCE_HIGH)
+                .min(CLUTTER_CONFIDENCE_CAP);
+            expected.push((noisy / noisy_norm, confidence));
+        }
+
+        let published: Vec<_> = link
+            .observations()
+            .into_iter()
+            .filter(|o| o.target_id == CLUTTER_TARGET_ID)
+            .map(|o| (o.direction, o.confidence))
+            .collect();
+
+        assert!(
+            !expected.is_empty(),
+            "the fixture drew no clutter, so it proves nothing"
+        );
+        assert_eq!(published.len(), expected.len());
+        for (index, ((got_dir, got_conf), (want_dir, want_conf))) in
+            published.iter().zip(expected.iter()).enumerate()
+        {
+            assert_eq!(
+                got_dir.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                want_dir.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "alarm {index}: direction"
+            );
+            assert_eq!(
+                got_conf.to_bits(),
+                want_conf.to_bits(),
+                "alarm {index}: confidence"
+            );
+        }
+    }
 }

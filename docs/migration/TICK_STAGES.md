@@ -1026,4 +1026,47 @@ unbuffered so a killed run still yields its partial results.
 
 ## Verification
 
-- 58 unit tests in the stage; 316 in the crate.
+- 59 unit tests in the stage; 317 in the crate.
+- **23 mutants, 22 caught, 1 proven equivalent.**
+
+The one equivalent mutant drops the `false_alarm_rate_per_scan > 0.0` guard.
+`poisson(0.0)` returns zero, so the guard is a short-circuit rather than a
+behaviour gate, and `the_poisson_draw_rejects_a_non_positive_rate` already pins
+the property that makes it so.
+
+**Three mutants were initially reported as SKIPs, which is not the same as a
+pass.** Their search patterns had gone stale — one because `cargo fmt` wrapped
+the line, two because of my own later edits (`libm::exp` and the clippy rewrite
+of the NaN guard). A skip is an *untested* mutant, and reporting the round as
+15/19 would have overstated the coverage. Re-run against the current source,
+all three were caught, including one that verifies the `libm` routing itself.
+
+Two genuine survivors then remained, both on the clutter noise step: dropping
+the perturbation entirely, and drawing it at the sensor's own bearing std
+instead of the clutter figure. Neither changes the *published*
+`bearing_std_rad` — that field is copied from the spec, not derived from the
+draw — and neither stops the direction being a plausible unit vector, so nothing
+about the observation's shape separates them.
+
+`the_clutter_stream_draws_exactly_what_the_contract_specifies` separates them by
+reconstructing the clutter stream independently — same key, same draw order —
+and requiring exact agreement on the count, every direction and every
+confidence. It pins the draw order, which std each step uses, and the
+normalise-perturb-normalise composition at once, and it also catches two further
+mutants that were never tried against the older tests.
+
+## A note on the harness, not the code
+
+This slice's mutation runs went wrong three times, each in a way worth fixing
+rather than working around:
+
+1. A hanging mutant hit the subprocess timeout and killed the script **before
+   its restore step**, leaving a mutant in the working tree.
+2. `atexit` does not run on `SIGTERM`, so a later kill left one there again.
+3. Both were only caught because the tree is diffed against the pre-mutation
+   backup before any commit.
+
+The harness now restores from signal handlers as well as `atexit`, treats a
+subprocess timeout as *caught* rather than as a crash, runs unbuffered so a
+killed run still yields partial results, and — the structural fix — operates on
+a separate `git worktree` so it cannot touch the real checkout at all.
