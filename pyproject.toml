@@ -58,7 +58,7 @@ dev = [
     # 1.78.0 is what produced the committed files and keeps protobuf below the
     # 7.0 cap in [project.dependencies]; `grpcio-tools>=1.78,<2.0` resolves to a
     # newer release that pulls protobuf 7.x and breaks that cap.
-    "grpcio-tools==1.83.1",
+    "grpcio-tools==1.84.0",
 ]
 
 [project.scripts]
