@@ -1,8 +1,18 @@
 //! Shared runtime values. No simulation, transport or renderer dependencies.
-use nalgebra::{SMatrix, Vector3};
+use nalgebra::SMatrix;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub type Matrix6 = SMatrix<f64, 6, 6>;
+
+/// Re-exported because it is in this crate's public API.
+///
+/// `NodeState`, `TruthState`, `TrackState` and `BearingObservation` all carry
+/// `Vector3<f64>`, so a consumer cannot construct one without it. Without this
+/// re-export every such crate takes its own `nalgebra` dependency and has to
+/// keep the version in step by hand -- two copies of the type would not unify,
+/// and the error would be about a version mismatch rather than about the code.
+/// `Matrix6` was already exposed for the same reason.
+pub use nalgebra::Vector3;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeState {
