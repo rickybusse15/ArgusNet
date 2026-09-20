@@ -350,6 +350,64 @@ pub enum FrameTime {
     OutOfOrder,
 }
 
+/// The estimator's answer, as the caller sees it.
+///
+/// Mirrors `VIOState`, and the field names carry a trap worth stating. The
+/// state vector is laid out
+/// `rotation(0:3) velocity(3:6) position(6:9) accel_bias(9:12) gyro_bias(12:15)`
+/// — **accel before gyro** — while `VIOState` lists `bias_gyro` before
+/// `bias_accel` in its constructor. The two orderings are opposite, and a port
+/// that reads them positionally swaps the biases silently: both are small
+/// 3-vectors near zero, so nothing crashes and the drift is subtly wrong.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VioState {
+    /// World-to-body rotation, from the rotation vector at `x[0:3]`.
+    pub rotation: Matrix3<f64>,
+    /// `x[6:9]`.
+    pub position_m: [f64; 3],
+    /// `x[3:6]`.
+    pub velocity_mps: [f64; 3],
+    /// `x[12:15]`. Note the index: gyro bias is the LAST block.
+    pub bias_gyro: [f64; 3],
+    /// `x[9:12]`. Accel bias comes first in the vector.
+    pub bias_accel: [f64; 3],
+    pub covariance: Covariance,
+    pub timestamp_s: f64,
+    /// How many features were matched into this update.
+    ///
+    /// The reference reports two different values for the same field depending
+    /// on which path produced the state: `process_image` sets the real matched
+    /// count, while `get_state` hardcodes **zero** even though the filter is
+    /// tracking features. Preserved rather than unified — a caller comparing
+    /// the two paths would otherwise see a difference this port invented.
+    pub tracked_feature_count: usize,
+}
+
+/// What one image frame produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageOutcome {
+    pub state: VioState,
+    /// `None` when the frame was out of order, so nothing was applied and the
+    /// state is the filter's previous one rather than a new estimate. That is
+    /// a different thing from `Some(NoInformation)`, which means the frame was
+    /// processed and carried nothing usable.
+    pub update: Option<UpdateOutcome>,
+}
+
+/// Why the estimator has no pose to give.
+///
+/// P4.4 requires that invalid and stale pose behaviour be defined explicitly
+/// rather than left to a `None` a caller has to guess at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoPose {
+    /// `initialize` has not been called. The reference returns `None`, and the
+    /// whole point of P4.4's "no manufactured confidence on a failed
+    /// estimator" rule is that this must not be answered with a zero pose at
+    /// some default covariance — which would read as a confident estimate at
+    /// the origin.
+    Uninitialized,
+}
+
 /// The gate threshold: chi-squared at 2 degrees of freedom, 0.997.
 pub const MAHALANOBIS_GATE: f64 = 11.8;
 
@@ -403,6 +461,106 @@ impl FeatureStore {
 }
 
 impl VioPredictor {
+    /// The current estimate, or why there is none.
+    ///
+    /// `Err(NoPose::Uninitialized)` where the reference returns `None`. A
+    /// `Result` rather than an `Option` so the reason is carried rather than
+    /// reconstructed at the call site.
+    ///
+    /// `tracked_feature_count` is **zero** here, matching `get_state`. The
+    /// count from an update is reported by [`Self::observe_image`] instead.
+    pub fn state_snapshot(&self) -> Result<VioState, NoPose> {
+        if !self.is_initialized() {
+            return Err(NoPose::Uninitialized);
+        }
+        Ok(self.snapshot_with_matches(0))
+    }
+
+    fn snapshot_with_matches(&self, tracked_feature_count: usize) -> VioState {
+        let x = self.state();
+        let block = |i: usize| [x[i], x[i + 1], x[i + 2]];
+        VioState {
+            rotation: rotvec_to_matrix(&Matrix3x1::new(x[0], x[1], x[2])),
+            position_m: block(6),
+            velocity_mps: block(3),
+            bias_gyro: block(12),
+            bias_accel: block(9),
+            covariance: *self.covariance(),
+            timestamp_s: self.timestamp_s(),
+            tracked_feature_count,
+        }
+    }
+
+    /// Return to the uninitialized state, as `reset` does.
+    ///
+    /// The reference zeroes the state and sets `P = I * 0.01` — a *small*
+    /// covariance on a state that means nothing. That combination is only safe
+    /// because `_initialized` is false and every accessor checks it first, so
+    /// the confident-looking covariance is unreachable. This keeps the same
+    /// values so a restarted filter behaves identically, and keeps the flag as
+    /// the thing that gates them.
+    pub fn reset(&mut self) {
+        *self = Self::new(self.noise);
+    }
+
+    /// One image frame: predict over the buffered IMU, then apply optical
+    /// flow. The composition `process_image` performs.
+    ///
+    /// # The three ways this answers
+    ///
+    /// * **Uninitialized** → `Err(NoPose::Uninitialized)`. The reference's
+    ///   `return None`.
+    /// * **Out of order** (`timestamp_s` older than the filter's clock) → the
+    ///   *current* state, unchanged: no prediction, no update, the clock does
+    ///   not move. The reference does this by returning `get_state()` before
+    ///   touching anything, and the consequence is easy to miss — a late frame
+    ///   is not merely ignored, it yields a state whose `timestamp_s` is the
+    ///   filter's, not the frame's. A caller stamping that pose with the
+    ///   frame's own time would date it wrongly.
+    /// * **Otherwise** → predict, update, and report the outcome alongside the
+    ///   new state, so "moved a lot because it saw a lot" and "moved a lot
+    ///   because it saw nothing" stay distinguishable. That distinction is the
+    ///   whole of P4.4's no-manufactured-confidence rule.
+    ///
+    /// `Repeated` frames (`dt == 0`) are *not* out of order and do run: the
+    /// reference gates on `dt_total < 0`, not `<= 0`.
+    pub fn observe_image(
+        &mut self,
+        features: &[VisualFeature],
+        store: &mut FeatureStore,
+        measurements: &[ImuMeasurement],
+        timestamp_s: f64,
+        config: &FlowConfig,
+    ) -> Result<ImageOutcome, NoPose> {
+        if !self.is_initialized() {
+            return Err(NoPose::Uninitialized);
+        }
+        if self.classify(timestamp_s) == FrameTime::OutOfOrder {
+            return Ok(ImageOutcome {
+                state: self.snapshot_with_matches(0),
+                update: None,
+            });
+        }
+
+        let dt_total = timestamp_s - self.timestamp_s();
+        self.predict_to(measurements, timestamp_s);
+        let outcome = self.update_optical_flow(features, store, dt_total, config);
+        store.replace(features);
+
+        let matched = match outcome {
+            UpdateOutcome::Applied {
+                features_matched, ..
+            } => features_matched,
+            UpdateOutcome::NoInformation {
+                features_matched, ..
+            } => features_matched,
+        };
+        Ok(ImageOutcome {
+            state: self.snapshot_with_matches(matched),
+            update: Some(outcome),
+        })
+    }
+
     /// Classify a frame timestamp against the filter's clock.
     pub fn classify(&self, timestamp_s: f64) -> FrameTime {
         let dt = timestamp_s - self.timestamp_s();

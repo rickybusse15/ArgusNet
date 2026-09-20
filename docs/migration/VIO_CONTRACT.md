@@ -136,3 +136,87 @@ have a test that fails if the old behaviour returns.
 One more to test rather than assume: `np.linalg.inv(S_batch)` has no
 singularity guard, and the Mahalanobis gate's `np.linalg.solve` throws on a
 singular per-feature innovation. P4.4 names singular covariance explicitly.
+
+---
+
+# P4.4 delivery: the estimator's surface (2026-09-16)
+
+The internals were already ported and fixture-tested (`vio_prediction.json`,
+`vio_update.json`). This slice delivers the part a caller touches, which is what
+P4.4 actually names: *"no manufactured confidence on a failed estimator"* and
+*"define invalid or stale pose behavior explicitly"*.
+
+Fixture: `tests/fixtures/vio_surface.json` — 7 scenes, 40 KB.
+
+## The port surface is smaller than the package, again
+
+`VIO_INVENTORY.md` established that the surface is `vio.py` + `transforms.py`
+rather than the 2,292 lines in the package. Re-running reachability for this
+slice narrowed it further, and the numbers are worth recording:
+
+| symbol | references outside its own file |
+|---|---|
+| `EKFVIO` | **5** — the live backend, constructed at `sim.py:5188` |
+| `SimpleVIO` | **0** |
+| `TransformTree` | **0** |
+| `identity_se3`, `compose`, `invert`, `from_xyz_yaw` | **0** |
+| `SE3` | 2 — `vio.py` (live) and `relocalization.py` (itself unreachable) |
+
+So `transforms.py` needed no port at all. `EKFVIO` uses `SE3` purely as a
+container for `R` and `t`, and `rotvec_to_matrix` — the only thing that builds
+that `R` — was already ported in P4.2b. Porting `TransformTree` and the four
+free functions would have been ~120 lines producing nothing any caller reaches,
+which is precisely what the inventory exists to prevent.
+
+## Four surface behaviours with nothing to do with the mathematics
+
+Each has a test that fails if it regresses.
+
+1. **The bias blocks are reversed between the vector and the state.** The state
+   is `rotation(0:3) velocity(3:6) position(6:9) accel(9:12) gyro(12:15)` —
+   accel first — while `VIOState(...)` lists `bias_gyro` before `bias_accel`. A
+   port reading them positionally swaps two small 3-vectors near zero: nothing
+   crashes, and the drift is quietly wrong.
+
+2. **`tracked_feature_count` has two values for one field.** `process_image`
+   sets the real matched count; `get_state` hardcodes **zero** even while the
+   filter is tracking. Preserved rather than unified — a caller comparing the
+   two paths would otherwise see a difference this port invented.
+
+3. **An out-of-order frame returns a state stamped with the filter's clock, not
+   the frame's.** The reference returns `get_state()` before touching anything,
+   so the clock does not move. A caller stamping that pose with the frame's own
+   time would date it wrongly. `ImageOutcome.update` is `None` on that path —
+   distinct from `Some(NoInformation)`, which means the frame *was* processed
+   and carried nothing.
+
+4. **A repeated timestamp is not out of order.** The gate is `dt_total < 0`, not
+   `<= 0`, so `dt == 0` runs the full predict-and-update. Off-by-one here
+   silently drops frames.
+
+## A finding the fixture surfaced: gyro bias is unobservable
+
+The bias-swap guard passes for a **narrower reason than it first reads**, and
+the capture script now asserts that reason rather than relying on it silently.
+
+Gyro bias is **exactly zero in every scene**, including `both_biases`, whose
+input gyro rate is 0.2 rad/s. The optical-flow measurement model observes
+horizontal velocity only, so nothing in it makes gyro bias observable and that
+block never leaves its initial zero. A swap is caught because accel bias reaches
+~1e-3 while gyro stays at 0 — the **asymmetry** does the work, not two
+independently driven biases.
+
+That matters beyond the test: `VIOState.bias_gyro` is a constant zero on this
+backend, so a consumer treating it as an estimate is reading a placeholder.
+Driving it would need a measurement that sees rotation, which `EKFVIO` does not
+have. The capture script fails if gyro bias ever moves, so the guard is
+revisited rather than continuing to pass for a reason that no longer holds.
+
+## Still open
+
+`NoPose` has one variant today (`Uninitialized`). P4.4 also names GNSS
+loss/recovery and singular covariance; `update_optical_flow` already reports
+`NoInformation::SingularInnovation`, but there is no GNSS fusion on this
+backend to lose — `gnss_fusion.py` is one of the unreachable modules. Adding a
+variant for a path nothing reaches would be the stub-porting the inventory warns
+against.
