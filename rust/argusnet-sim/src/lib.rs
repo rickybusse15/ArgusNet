@@ -1,12 +1,20 @@
 //! The Rust simulation runtime shell.
 
+pub mod battery;
 pub mod clock;
 pub mod command;
 pub mod config;
+pub mod deconflict;
 pub mod deterministic;
+pub mod fusion;
+pub mod mapping;
 pub mod mission;
+pub mod observe;
+pub mod overrides;
 pub mod particles;
+pub mod safety;
 pub mod simulation;
 pub mod snapshot;
 pub mod stage;
+pub mod vio;
 pub mod world;

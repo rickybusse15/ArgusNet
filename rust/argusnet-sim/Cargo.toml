@@ -9,7 +9,13 @@ name = "argusnet_sim"
 path = "src/lib.rs"
 
 [dependencies]
+argusnet-core = { path = "../argusnet-core" }
+argusnet-localization = { path = "../argusnet-localization" }
+argusnet-mapping = { path = "../argusnet-mapping" }
+argusnet-planning = { path = "../argusnet-planning" }
+argusnet-sensing = { path = "../argusnet-sensing" }
 argusnet-types = { path = "../argusnet-types" }
+safety-engine = { path = "../safety-engine" }
 # Pinned deliberately: this crate's output values are a contract. See
 # `deterministic.rs` and the conformance fixtures that pin actual draws, which
 # are what make a silent change to this dependency fail a test.

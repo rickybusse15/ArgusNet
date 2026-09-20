@@ -192,6 +192,57 @@ impl DeterministicRng {
     }
 
     /// Raw 64 bits, for callers that need their own transform.
+    /// A Poisson draw with mean `lambda`, by Knuth's multiplication method.
+    ///
+    /// # This is not numpy's algorithm, deliberately
+    ///
+    /// numpy switches between the PTRS transformed-rejection method and an
+    /// inversion loop at `lambda = 10`, and reproducing either bit-for-bit
+    /// would mean porting its exact branch structure. ADR-006 already
+    /// re-baselined every stream in this crate — the contract is *"deterministic
+    /// for a fixed seed and config"*, not *"identical to numpy"* — so this uses
+    /// the documented textbook method instead and the fixtures pin it.
+    ///
+    /// Knuth's method costs one uniform per unit of `lambda` on average, which
+    /// is fine for the clutter rates in use (0.01–0.5) and would not be for a
+    /// large mean. The guard below keeps a mistaken large `lambda` from
+    /// spinning: `exp(-lambda)` underflows to zero past about 745, and the loop
+    /// would never terminate.
+    pub fn poisson(&mut self, lambda: f64) -> u64 {
+        // Spelled out rather than `!(lambda > 0.0)`: NaN has to be rejected
+        // explicitly, and clippy is right that the negated comparison hides
+        // that it is the case being handled.
+        if lambda.is_nan() || lambda <= 0.0 {
+            return 0;
+        }
+        // `libm::exp`, not `f64::exp`: neither is required by IEEE-754 to be
+        // correctly rounded, and glibc disagrees with Apple's libm by 1 ULP --
+        // which is what broke the conformance fixture when CI moved to a Mac.
+        // `no_draw_routes_through_the_platform_libm` enforces this, and caught
+        // exactly this line.
+        //
+        // The value is denormal below about -745 and zero past it.
+        let limit = libm::exp(-lambda);
+        if limit <= 0.0 {
+            return 0;
+        }
+        let mut count = 0u64;
+        let mut product = 1.0;
+        loop {
+            product *= self.uniform();
+            if product <= limit {
+                return count;
+            }
+            count += 1;
+            // `uniform()` can return exactly 0.0, which ends the loop on the
+            // next comparison, so this is a belt-and-braces bound rather than
+            // the termination condition.
+            if count > 1_000_000 {
+                return count;
+            }
+        }
+    }
+
     pub fn next_u64(&mut self) -> u64 {
         self.inner.next_u64()
     }

@@ -51,6 +51,10 @@ use argusnet_types::{NodeState, TrackState, TruthState};
 pub struct TickContext<'a> {
     pub tick: u64,
     pub timestamp_s: f64,
+    /// The tick interval. Derived from the config, never accumulated, and
+    /// carried here because a stage that reached for its own copy would be one
+    /// more place the two could disagree.
+    pub dt_s: f64,
     /// Base seed. Stages derive their own per-key streams from it; see
     /// [`crate::deterministic`].
     pub seed: u32,
@@ -294,6 +298,17 @@ impl Simulation {
         &self.world
     }
 
+    /// Mutable access for the run driver, **between** ticks.
+    ///
+    /// Platform positions are prescribed by the scenario rather than
+    /// integrated by a stage -- the reference evaluates
+    /// `scenario.node_states(timestamp_s)` at the top of each loop iteration --
+    /// so something outside the pipeline has to write them. Stages reach the
+    /// same state through `TickContext::world`.
+    pub fn world_mut(&mut self) -> &mut TickWorld {
+        &mut self.world
+    }
+
     pub fn latest_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
         self.last_snapshot.clone()
     }
@@ -490,6 +505,7 @@ impl Simulation {
                     let mut context = TickContext {
                         tick,
                         timestamp_s: self.clock.timestamp_s(),
+                        dt_s: self.config.timestep().seconds(),
                         seed: self.config.seed(),
                         seed_time_key: self.clock.seed_time_key(),
                         world: &mut self.world,
