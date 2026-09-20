@@ -439,5 +439,50 @@ class TestFallbackValidation(unittest.TestCase):
         self.assertTrue(len(errors) > 0)
 
 
+class BatteryFractionSchemaTest(unittest.TestCase):
+    """The sentinel and a flat battery must stay distinguishable.
+
+    ``-1.0`` means "this platform has no battery" and ``0.0`` means "this
+    battery is empty". Both are legal; the range between them is not, and the
+    schema excludes it rather than merely describing it as meaningless -- a
+    truncated or sign-flipped value should fail validation instead of arriving
+    as a plausible reading that a viewer will happily render as a nearly-dead
+    drone.
+    """
+
+    def _document_with_battery(self, value):
+        document = _minimal_valid_document()
+        node = document["frames"][0]["nodes"][0]
+        if value is None:
+            node.pop("battery_fraction", None)
+        else:
+            node["battery_fraction"] = value
+        return document
+
+    def test_real_readings_and_the_sentinel_are_accepted(self) -> None:
+        from argusnet.evaluation.replay import validate_replay_with_schema
+
+        for value in (-1.0, 0.0, 0.25, 1.0, None):
+            with self.subTest(battery_fraction=value):
+                errors = validate_replay_with_schema(self._document_with_battery(value))
+                self.assertEqual(errors, [], f"{value!r} should validate")
+
+    def test_the_gap_between_the_sentinel_and_empty_is_rejected(self) -> None:
+        from argusnet.evaluation.replay import validate_replay_with_schema
+
+        for value in (-0.5, -0.999, -1.5, 1.5):
+            with self.subTest(battery_fraction=value):
+                errors = validate_replay_with_schema(self._document_with_battery(value))
+                self.assertTrue(errors, f"{value!r} is not a battery reading and must be rejected")
+
+    def test_the_adapter_sentinel_matches_the_schema_sentinel(self) -> None:
+        """One constant, not two that happen to agree today."""
+        from argusnet.adapters.argusnet_grpc import BATTERY_NOT_APPLICABLE
+        from argusnet.evaluation.replay import validate_replay_with_schema
+
+        errors = validate_replay_with_schema(self._document_with_battery(BATTERY_NOT_APPLICABLE))
+        self.assertEqual(errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
