@@ -13,6 +13,7 @@ fn node(node_id: usize, x: f64, y: f64) -> NodeState {
         is_mobile: true,
         timestamp_s: 0.0,
         health: 1.0,
+        ..Default::default()
     }
 }
 

@@ -1928,6 +1928,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
         );
         engine.nodes.insert(
@@ -1939,6 +1940,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
         );
 
@@ -1992,6 +1994,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
         );
         engine.nodes.insert(
@@ -2003,6 +2006,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
         );
 
@@ -2057,6 +2061,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
             NodeState {
                 node_id: "ground-b".to_string(),
@@ -2065,6 +2070,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
         ];
         let truth = TruthState {
@@ -2161,6 +2167,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
             NodeState {
                 node_id: "ground-b".to_string(),
@@ -2169,6 +2176,7 @@ mod tests {
                 is_mobile: false,
                 timestamp_s: 0.0,
                 health: 1.0,
+                ..Default::default()
             },
         ];
 

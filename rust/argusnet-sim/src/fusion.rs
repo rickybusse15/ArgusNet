@@ -239,6 +239,7 @@ mod tests {
             is_mobile: false,
             timestamp_s: 0.0,
             health: 1.0,
+            ..Default::default()
         }
     }
 
