@@ -102,19 +102,39 @@ scenario rather than integrated by a stage (the reference evaluates
 `scenario.node_states(timestamp_s)` at the top of each loop iteration), so
 something outside the pipeline has to write them.
 
-## `battery_fraction` does not reach the snapshot yet, deliberately
+## `battery_fraction` reaches the fleet — closed by P4.8d-i
 
-The ledger is the authority for energy, and nothing joins it onto
-`NodeState` — which has no `battery_fraction` field, nor `sensor_type`,
-`fov_half_angle_deg` or `max_range_m`. The replay DTO in `argusnet-replay`
-*does* carry `battery_fraction` (Phase 0b closed that half), so the join is
-real work that is simply not in this slice.
+**Superseded.** This section used to record the join as deliberately deferred,
+on the grounds that widening `argusnet-types::NodeState` touches ~31
+construction sites across nine files *and* the proto, which CLAUDE.md says must
+move together with the Python bindings and three Rust crates. That reasoning
+still holds for why it was not done *here*; it was done in its own slice
+instead, and this section is kept so the deferral does not read as a live
+caveat.
 
-Widening `argusnet-types::NodeState` touches 31 construction sites across nine
-files **and** the proto — and CLAUDE.md is explicit that a proto change means
-updating the Python bindings and three Rust crates together. That is its own
-slice, and pretending otherwise would have made this one a contract change
-wearing a stage handler's clothes.
+The stage now publishes the fraction onto every platform at the end of its
+run, mirroring the reference's `replace(ns, battery_fraction=…)` pass at
+`sim.py:5312`. Two details are load-bearing:
+
+- It runs over **every** platform, not only the ones it sampled for
+  consumption. A platform with no ledger entry has to be marked as having no
+  battery, not left holding whatever it had last tick.
+- `None` is this crate's spelling of the reference's `-1.0`. A ground station
+  has no battery; a drone at zero percent has an empty one. The wire keeps the
+  distinction by making `battery_fraction` an `optional double` rather than
+  following the `0.0`-means-unset convention its two sensor neighbours use —
+  see `docs/migration/FIELD_PARITY.md`.
+
+### The outcome changed with it
+
+The stage reports `Ran` on a first tick where it previously reported `NoWork`.
+Publishing is a world mutation that happens on every tick with a non-empty
+ledger, including the first — where nothing is *drawn*, because there is no
+previous position to measure a segment against. A stage that moved the world
+reporting `NoWork` is precisely the conflation `StageOutcome`'s own
+documentation warns against. "Nothing was drawn" is still observable through
+the ledger, which is where it belongs, and the empty-ledger early return still
+reports the genuinely idle case.
 
 ## Verification
 
