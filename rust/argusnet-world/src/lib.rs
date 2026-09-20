@@ -805,6 +805,7 @@ pub mod visibility;
 pub mod grid_ops;
 pub mod land_cover;
 pub mod land_cover_build;
+pub mod landscape;
 pub mod noise;
 pub mod numpy_rng;
 pub mod raster;
