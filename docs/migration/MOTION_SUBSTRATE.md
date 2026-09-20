@@ -305,3 +305,107 @@ controller is stateful (`FollowPathController` carries a `_state` dict with a
 cached timestamp and rotation phase). The controller stage must implement it,
 or a resumed mission flies a different path than an uninterrupted one. See
 [CHECKPOINT_COMPLETENESS.md](CHECKPOINT_COMPLETENESS.md).
+
+---
+
+# P4.8d.2a: the trajectory wrappers
+
+**Status:** delivered 2026-09-20. First slice of P4.8d.2, on the substrate
+and adapter above.
+
+The two outermost layers of a controller, and the last two items on
+`sim.py` line 136's list of helpers that block controller extraction:
+`_apply_weather_adjustments` (with its `WeatherAdjustedTrajectory` wrapper)
+and `LaunchableTrajectoryController`. Neither depends on a controller body,
+so both move ahead of `FollowPathController` rather than inside it.
+
+## Weather is a capability, not a port
+
+`argusnet-world` has no weather, and the full model — atmosphere,
+precipitation, clouds, visibility — is a sensing concern whose port is not
+this slice's. Motion reads exactly two numbers out of it, so `WeatherSampler`
+is exactly two methods, and the fixture records the reads as an oracle. Same
+decision as the terrain in P4.8d.1, for the same reason. When the weather
+model does move, it implements the trait and nothing here changes.
+
+The trait's shape encodes one asymmetry worth naming: `flight_speed_penalty`
+takes **no time argument**, because the reference's implementation evaluates
+the wind at time *zero* internally. The gust phase therefore affects the drift
+and not the penalty. Giving the penalty a timestamp would invite a port to
+pass the current one and quietly couple them.
+
+## The call pattern is the assertion
+
+More so than in the motion substrate, because behaviour lives in *when* the
+reads happen. `apply_weather_adjustments` reads the terrain **twice** — once
+before the speed penalty, so the penalty sees a true AGL rather than an
+underground one, and once after the wind has moved the platform over
+different ground. The reference says why in its own comment. A port that
+clamped once produces an entirely plausible altitude and can leave the
+platform below terrain, which CLAUDE.md lists as a hard invariant.
+
+So the fixture records the terrain reads *in order*, and the test compares
+the sequence, not just the outputs. It also panics on `clamp_altitude` and on
+`gradient_at`: this path takes a plain `max` against `height_at` and asks for
+no gradient at all, and a port reaching for either is caught at the call
+rather than in a number.
+
+## Three things preserved rather than corrected
+
+**"Altitude" means two different things.** With terrain it is height above
+ground; without, it is the raw `z`. Both weather reads get whichever applies.
+A port that always computed AGL would be *more* consistent and would disagree
+with every recorded value in the no-terrain case.
+
+**The launch path always integrates drift over one second.** The reference
+calls `_apply_weather_adjustments` without a `dt_s`, so it gets the default of
+`1.0` regardless of the simulation timestep — while `WeatherAdjustedTrajectory`
+carries its own `dt_s` field and can pass the real one. Two defaults, one
+unreachable from the other route. Changing it would move every existing run,
+so it belongs in a decision of its own rather than arriving inside a port; the
+caller supplies the context, which is where that decision will land.
+
+**The climb boundaries are strict.** `elapsed < 0` parks, and
+`elapsed < climb_duration_s` climbs — so a sample at exactly the climb
+duration is the *first operational one*. A port using `<=` delegates one tick
+late, which is invisible except at that instant.
+
+## The wrapped trajectory is not consulted during the climb
+
+Not an optimisation, and it has its own test because no output value records
+it. The inner trajectory may be stateful, so sampling a path the platform is
+not flying is a side effect rather than waste. The fixture records which
+timestamps the inner trajectory was asked for, and the empty list is the
+assertion.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `cargo test --workspace --exclude argusnet-viewer` | **854 passing**, exit 0 |
+| `cargo test -p argusnet-viewer` | **99 passing**, exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+| `python3 -m pytest tests/ -q` | **981 passed**, 9 skipped, 65 subtests, exit 0 |
+
+6 parity tests over 23 recorded cases. **16 mutants, 16 caught.**
+
+One survived a first pass: replacing the hardcoded `1.0` bounds margin with
+zero. The "drift past the edge" case sat at the *upper* x bound — and this
+wind blows west and south, so the drift carried the platform away from the
+boundary and the clamp never ran. The case now sits at the lower corner with
+a longer `dt`, and the assertion pins both axes to the bound inset by exactly
+the margin rather than merely inside it.
+
+## Next
+
+**`P4.8d.2b` — `FollowPathController`.** The large one: 433 lines, ~30
+configuration fields, a mutable `_state` dict (cached timestamp, rotation
+phase), a `PathPlanner2D` dependency, mission zones and cooperative orbit
+slots. Likely several slices of its own.
+`ObservationTriggeredFollowController` (45 lines) wraps it and follows after.
+
+Its prerequisites are now all in place: the substrate, the world adapter,
+these wrappers, and the P4.1d handler-state contract — which the controller
+stage must implement, since `_state` survives a tick and a resumed mission
+would otherwise fly a different path.

@@ -19,5 +19,6 @@ pub mod safety;
 pub mod simulation;
 pub mod snapshot;
 pub mod stage;
+pub mod trajectory;
 pub mod vio;
 pub mod world;
