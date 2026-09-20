@@ -412,6 +412,44 @@ mod tests {
         );
     }
 
+    /// A registered platform publishes whether or not it is mobile.
+    ///
+    /// Consumption is gated on `is_mobile` -- a tower does not fly, so it is
+    /// never charged for a segment -- and it is tempting to gate publishing on
+    /// the same flag. That is wrong, and this is the test that says so: a
+    /// registered fixed platform has a battery in the ledger, so its fraction
+    /// is a real reading and has to reach the fleet. A mutant that published
+    /// only to mobile platforms survived the first round because every other
+    /// test's fixed platform was unregistered, and `None` is what both the
+    /// correct and the broken version leave behind.
+    #[test]
+    fn a_registered_fixed_platform_publishes_even_though_it_is_never_charged() {
+        let (mut sim, link) = rig(vec![
+            node("drone-1", true, 0.0),
+            node("tower", false, 500.0),
+        ]);
+        link.register("drone-1", None);
+        link.register("tower", None);
+        sim.step().unwrap();
+
+        assert_eq!(
+            sim.world().platform("tower").unwrap().battery_fraction,
+            Some(1.0),
+            "a registered platform publishes; being fixed only means it is never charged"
+        );
+
+        // And it stays published, at full, however far the drone flies.
+        fly(&mut sim, "drone-1", 400.0);
+        assert_eq!(
+            sim.world().platform("tower").unwrap().battery_fraction,
+            Some(1.0)
+        );
+        assert!(
+            sim.world().platform("drone-1").unwrap().battery_fraction < Some(1.0),
+            "the drone did fly, so it must have been charged"
+        );
+    }
+
     /// Pins the published value to the ledger exactly. An implementation that
     /// published a stale fraction, or recomputed it from the wrong capacity,
     /// would still leave the field "plausibly populated" -- a monotonic
