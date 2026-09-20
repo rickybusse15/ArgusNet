@@ -4,6 +4,47 @@ Guide for engineers and AI agents. This document maps the current ArgusNet codeb
 documentation set, identifies authoritative state owners, and separates implemented behavior from
 roadmap architecture.
 
+## Current migration boundary and next architecture
+
+At integrated checkout `ba163ac`, Rust includes landscape construction, belief
+publication, localization/sensing/planning libraries, mission state, TickWorld
+and stage bodies with populated snapshots. Full scenario/CLI/checkpoint
+qualification remains open; Python still composes the existing production mission. See
+[STATE_OWNERSHIP.md](STATE_OWNERSHIP.md) for library versus active-consumer status.
+
+The next architecture completes one Rust simulation owner, one revisioned belief
+owner, typed task → route → trajectory → safety → execution decisions, capability-
+limited truth access, and independent evaluation. Replaceable display snapshots
+are separate from durable events and causal checkpoints. Spatial interchange
+keeps f64 precision; only the render adapter converts to local f32 coordinates.
+
+[VIEWER_UI.md](VIEWER_UI.md) specifies the native Operate / Plan / Review
+application. It consumes immutable coherent revisions and submits acknowledged
+intent; camera, selection and layout are its only independent authority. Replay,
+in-process simulation and read-only live adapters share presentation semantics.
+[CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) maps scorecards, failures,
+explanations, comparisons, energy contingencies, spatial memory and adaptive
+inspection to their owning domains and viewer surfaces.
+
+The [source review](NEXT_REFACTOR_REVIEW.md) records concrete control/checkpoint,
+localization, stream and precision gaps. The
+[protocol plan](migration/ARCHITECTURE_AND_PROTOCOLS.md) is normative for target
+interfaces; accepted plans do not imply implementation.
+
+## Autonomous system and 3D viewer target
+
+[AUTONOMOUS_SYSTEM_PLAN.md](AUTONOMOUS_SYSTEM_PLAN.md) defines future onboard
+flight-controller, autonomy-executive, independent safety, health and recorder
+boundaries. Ground mission authoring/review must not become a dependency of
+immediate aircraft safety. SIL/HIL and later aircraft promotion remain separate
+qualification gates; current runtime libraries do not constitute an aircraft stack.
+
+The target spatial revision extends surfaces with structures, free/occupied/unknown
+volumes, clearance, time-indexed trajectories and evidence anchors.
+[VIEWER_FEATURE_INTEGRATION.md](VIEWER_FEATURE_INTEGRATION.md) defines how the
+viewer presents these through common projections and inspectors without taking
+ownership of estimates, validation, contingencies or client report conclusions.
+
 ## Current Requirement Set
 
 ArgusNet is a closed-loop, belief-world mission system. It should not be treated as only a
@@ -54,12 +95,12 @@ be labeled as planned until the referenced code exists.
 |-----------|----------------|-------------|------|
 | World Model | `src/argusnet/world/*` | `argusnet-world`, `argusnet-native` | `TERRAIN.md` |
 | Sensing/Fusion | `src/argusnet/sensing/*`, `src/argusnet/adapters/argusnet_grpc.py` | `argusnet-core`, `argusnet-server`, `argusnet-proto` | `FUSION.md` |
-| Localization | `src/argusnet/localization/*`, replay state in `argusnet.core.types` | planned `localization-engine` | `LOCALIZATION.md` |
-| Mapping | `src/argusnet/mapping/*`, replay state in `argusnet.core.types` | planned `mapping-engine` | `MAPPING.md` |
+| Localization | `src/argusnet/localization/*`, replay state in `argusnet.core.types` | `argusnet-localization` (library; mission composition pending) | `LOCALIZATION.md` |
+| Mapping | `src/argusnet/mapping/*`, replay state in `argusnet.core.types` | `argusnet-mapping` (kernels/query facade; belief owner pending) | `MAPPING.md` |
 | Indexing | `src/argusnet/indexing/*` | planned `indexing-engine` | `INDEXING.md` |
 | Inspection | `src/argusnet/planning/poi.py`, `src/argusnet/planning/inspection.py`, inspection state in `argusnet.core.types` | planned `inspection-engine` | `INSPECTION.md` |
-| Planning / Trajectory / Safety | `src/argusnet/planning/*`, `src/argusnet/simulation/behaviors.py`, `src/argusnet/safety/*` | `safety-engine`, planned `planner-engine` / `trajectory-engine` | `PLANNING.md`, `SAFETY.md` |
-| Mission Execution / Evaluation | `src/argusnet/simulation/sim.py`, `src/argusnet/mission/*`, `src/argusnet/evaluation/*` | `argusnet-viewer`, planned runtime services | `MISSION_EXECUTION.md`, `SCENARIOS.md`, `PERFORMANCE_AND_BENCHMARKING.md` |
+| Planning / Trajectory / Safety | `src/argusnet/planning/*`, `src/argusnet/simulation/behaviors.py`, `src/argusnet/safety/*` | `safety-engine`, `argusnet-planning`; full trajectory execution integration pending | `PLANNING.md`, `SAFETY.md` |
+| Mission Execution / Evaluation | `src/argusnet/simulation/sim.py`, `src/argusnet/mission/*`, `src/argusnet/evaluation/*` | `argusnet-sim` (shell), `argusnet-replay`, `argusnet-viewer`; complete Rust mission pending | `MISSION_EXECUTION.md`, `SCENARIOS.md`, `PERFORMANCE_AND_BENCHMARKING.md` |
 
 ## Core Architectural Rule
 

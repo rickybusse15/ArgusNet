@@ -47,7 +47,7 @@ Status labels:
 | Occlusion-aware scan coverage | **Implemented (opt-in)** | `--occlusion-aware-mapping` gates coverage/reconstruction through `EnvironmentQuery.los()` |
 | Replay `MappingState` | **Implemented** | `argusnet.core.types.MappingState`, populated in `src/argusnet/simulation/sim.py` |
 | Elevation/occupancy/semantic/uncertainty modules | **Partial** | Modules exist under `src/argusnet/mapping/*`; closed-loop runtime integration is incomplete. |
-| Belief-world planning authority | **Planned** | `BeliefWorldModel` / `WorldBeliefQuery` are roadmap contracts, not the current sim authority. |
+| Belief-world planning authority | **Partial** | Rust `WorldBeliefQuery` facade exists; unified revisioned mutable ownership and mandatory planning integration remain planned. |
 | Truth-isolation tests for physical-mode mapping | **Implemented (opt-in)** | `tests/test_occlusion_aware_mapping.py` covers LOS-gated reconstruction and obstacle-routed redirects. |
 
 ## Localization
@@ -130,3 +130,39 @@ Status labels:
 | Replay schema | `docs/replay-schema.json`; additive changes preferred |
 | Mapping/localization/inspection over gRPC | Not currently part of the proto runtime contract |
 | Operational target metadata and safety events | Additive fields on live/replay frames; supported by V2 live clients |
+
+## Expanded viewer requirements (planned)
+
+The [latest feature UI plan](VIEWER_FEATURE_INTEGRATION.md) adds Perspective,
+Top-down and Section over coherent 3D spatial revisions, localization integrity,
+onboard contingencies, SIL/HIL qualification and client-product review/export.
+The [autonomous system plan](AUTONOMOUS_SYSTEM_PLAN.md) defines their S0–S8 gates.
+These are requirements, not claims that volumetric mapping, aircraft autonomy,
+section rendering or all export formats are implemented.
+
+## Latest merged phase status
+
+At `ba163ac`, P4.3g landscapes, P4.6d belief publication and P4.8a–c mission/world/
+stage integration are present. Rust snapshots can contain platforms and tracks.
+References below to missing builders/publication or an empty shell describe the
+older review baseline. Complete scenario/controller, checkpoint/replay/CLI and
+viewer integration remain open; see [the phase plan](migration/DELIVERY_PLAN.md).
+
+## Next delivery boundary
+
+The [ownership inventory](STATE_OWNERSHIP.md) distinguishes Rust libraries from
+active runtime consumers. Localization/VIO, sensing, coverage/belief queries and
+planning ports exist, but the Rust simulation still needs complete domain-stage
+composition, runtime world assembly and revisioned belief ownership. Its command
+and checkpoint foundations require the corrections in the
+[source review](NEXT_REFACTOR_REVIEW.md) before viewer control integration.
+
+[VIEWER_UI.md](VIEWER_UI.md) is the new target specification, not the current UI.
+Operate/Plan/Review, acknowledged runtime controls and complete world-aware live
+state remain staged work. Existing V2 live rendering is not evidence of P5.3.
+
+F1 scorecards, F2 failure schedules, F3 explanations, F4 comparisons, F5 continuous
+reserve replanning, F6 persistent memory and F7 evidence-based adaptive inspection
+are planned extensions of existing modules. See [their acceptance matrix](CAPABILITY_DELIVERY.md).
+Energy-aware assignment, benchmark aggregation and POI dwell already exist; they
+must not be counted as completion of these richer features.

@@ -558,3 +558,16 @@ directly to `Abort` without waiting for repeated violation.
 This invariant must hold even when the safety monitor is operating in
 simulation mode. Test coverage must include terrain-intersection edge cases
 (steep ridgelines, river valleys, mountain-pass saddles).
+
+## Next delivery integration (planned)
+
+New physical-profile actions must pass the typed execution gate; belief and
+localization uncertainty inform safety decisions while truth access for simulated
+collision remains a separate capability. Preserve the terrain floor after all
+clamps/deconfliction. F2 verifies degraded fallback, F5 reserve feasibility and
+F7 safe bounded revisits. Safety decisions expose constraints, modifications and
+fallback as durable events for F3 and the viewer safety inspector.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

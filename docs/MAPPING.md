@@ -359,3 +359,15 @@ This mapping step is successful when ArgusNet can:
 - evaluate reconstruction quality in simulation without allowing the planner to use ground truth.
 
 At that point, ArgusNet becomes a true world-modeling system rather than only a replay simulator.
+
+## Next delivery integration (planned)
+
+One mutable belief owner publishes immutable revisions and dirty tiles to
+planning, localization and presentation. Unknown, stale and known-safe are distinct.
+F6 persists immutable site revisions with CRS, alignment uncertainty, provenance
+and aging; loading a prior does not make it a fresh observation. Share coverage
+scoring work per revision and retain existing incremental statistics.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

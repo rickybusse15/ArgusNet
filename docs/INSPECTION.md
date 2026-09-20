@@ -257,3 +257,16 @@ Evaluation should measure:
 5. Route drones to POIs only after localization and safety checks pass.
 6. Add repeat-inspection and change-detection history.
 7. Render POIs, capture plans, evidence, and reconstructions in the viewer.
+
+## Next delivery integration (planned)
+
+F7 replaces route/dwell completion as the final success criterion with requested
+versus achieved evidence quality: viewpoint, occlusion, resolution, localization
+and calibration checks. Insufficient evidence produces a bounded safe revisit or
+an explicit unmet requirement under time/energy limits. F6 enables later-mission
+comparison with alignment uncertainty; Review displays evidence provenance and
+acceptance, not a UI-generated quality verdict.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

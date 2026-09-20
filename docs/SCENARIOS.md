@@ -232,3 +232,16 @@ Scenario results should be accepted only when:
 - benchmark reports include command, seed, environment, and commit SHA;
 - scenario objectives stay within mapping, localization, inspection, revisit, coordination, and
   safety.
+
+## Next delivery integration (planned)
+
+F2 adds deterministic outage, delay/reordering, calibration drift and degraded
+positioning schedules with explicit hold/return/abort/recovery expectations.
+F4 compares variants using paired seeds and immutable scenario/world/algorithm
+manifests; include failed runs and dispersion. F5–F7 add rising return cost,
+known cross-mission change and insufficient-viewpoint cases. Scenario Studio
+configures these fixtures; it never appears as live actuation control.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

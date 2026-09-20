@@ -255,3 +255,43 @@ interchange compatibility, tested failure recovery, named-hardware performance
 and updated user-facing docs. Remaining product capabilities such as richer
 inspection intelligence or persistent spatial memory stay in the product
 roadmap; this runtime migration must not falsely mark them complete.
+
+## 9. Next-refactor and feature acceptance additions
+
+These extend existing gates; they are required evidence for the relevant new
+slice, not claims that the tests already exist.
+
+| Scope | Required regression / acceptance |
+| --- | --- |
+| Commands | Faulted/completed queued reset; paused SingleStep stays paused after one tick; duplicate rejection reason; payload/ID collision; reset barrier in a due batch; invalid speed; scheduled precondition changes |
+| Checkpoints | Stateful handler reset; fresh-process resume equivalence; pending/dedup state; corrupt world identity and oversized queue rejected before mutation; seek invalidates interpolation |
+| Physical semantics | Fixed observations with perturbed hidden truth; timeout separate from convergence; duplicate/correlated localization inputs; delayed and missing measurements |
+| Fusion evaluation | Unlabeled matching, unmatched fraction, false/missed tracks and identity changes; missing scores never become zero error; covariance calibration |
+| DTO / streaming | Large-coordinate small-separation precision; malformed covariance; session restart with stale resume; missing patch base; truth-derived metric filtering |
+| F1–F4 | Outcome reason attribution, repeatable fault schedules, decision chain completeness despite display drops, paired seed/config comparisons including failed runs |
+| F5–F7 | Reserve-triggered return/handoff without thrashing; two-mission persistent site reload/change alignment; insufficient evidence triggers bounded safe revisit or explicit unmet result |
+| Viewer | Operate/Plan/Review source semantics; no fabricated backend fields; acknowledged command lifecycle; accessibility and fixed visual/lifecycle fixtures from VIEWER_UI |
+
+Use [feature-specific criteria](../CAPABILITY_DELIVERY.md) and
+[viewer acceptance](../VIEWER_UI.md). Viewer p95 ≤16.7 ms and p99 ≤25 ms are target
+budgets on named hardware/workloads, not measured results. Record cold startup,
+warm CPU/GPU frames, tick latency, recording backlog and memory independently.
+Historical localization/gRPC percentages do not establish current optimization
+priority. Benchmark shared coverage tables and tile updates before adding
+parallel execution or complex caches.
+
+## 10. Expanded viewer/system fixtures
+
+Adopt [the feature UI acceptance matrix](../VIEWER_FEATURE_INTEGRATION.md):
+overhang/underpass occupancy, vertically/time-separated paths, lost/recovered
+localization, disconnected platform with unobserved landing, stale prior map,
+rejected/expired command, insufficient evidence, misaligned change comparison,
+recording gaps, model out-of-distribution result and unavailable export.
+
+Verify identical typed selection and revision/time in Perspective, Top-down and
+Section; clipping must not imply absence. Only the timeline changes source time.
+Plan edits require vertical/time validation; Review differences retain alignment
+uncertainty. SIL/HIL results show frozen versions and predeclared deadlines,
+containment, fallback and measured terminal outcomes. These complement rather
+than replace the system plan's staged qualification ladder; UI tests alone do
+not qualify aircraft behavior.

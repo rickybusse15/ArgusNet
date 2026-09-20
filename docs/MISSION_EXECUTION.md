@@ -388,3 +388,16 @@ Mission execution is successful when ArgusNet can:
 - run the same high-level loop in simulation and physical adapters.
 
 At that point, ArgusNet becomes a closed-loop world-modeling mission system rather than a collection of isolated simulation tools.
+
+## Next delivery integration (planned)
+
+F3 decisions must record task → route → trajectory → safety → execution IDs,
+input revisions, reasons, fallback and actual applied outcome. F5 reserve-driven
+return and handoff and F7 evidence-driven revisit are mission transitions through
+that same gate. F1 reports distinguish completion, abort, degradation and unmet
+objectives. Operate and Review consume these records; the viewer never infers
+execution success from motion.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

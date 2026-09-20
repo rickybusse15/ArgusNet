@@ -55,3 +55,15 @@ observations, or holding/returning according to mission safety policy.
 2. Clarify replay and proto field names when a schema migration is explicitly approved.
 3. Add mapping/localization/inspection metrics that do not depend on old scenario framing.
 4. Keep sensor-fusion benchmarks under `PERFORMANCE_AND_BENCHMARKING.md`.
+
+## Next delivery integration (planned)
+
+Keep Rust fusion as the sole operational fused-state producer and call it
+directly in the composed simulation. Independent evaluation matches unlabeled
+tracks to truth and reports unmatched objects, false tracks, identity changes
+and covariance calibration. F1/F4 consume these scores; operational viewers do
+not receive truth-derived metrics without the evaluation capability.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.
