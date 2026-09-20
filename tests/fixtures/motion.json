@@ -1,0 +1,1494 @@
+{
+  "_reference": "src/argusnet/simulation/sim.py",
+  "_source": "scripts/capture_motion_fixture.py",
+  "advance_along_polyline": [
+    {
+      "direction": [
+        "1.0",
+        "0.0"
+      ],
+      "name": "zero_distance_stays_put",
+      "new_xy": [
+        "0.0",
+        "0.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "travel_distance_m": "0.0"
+    },
+    {
+      "direction": [
+        "1.0",
+        "0.0"
+      ],
+      "name": "negative_distance_is_floored",
+      "new_xy": [
+        "0.0",
+        "0.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "travel_distance_m": "-50.0"
+    },
+    {
+      "direction": [
+        "1.0",
+        "0.0"
+      ],
+      "name": "partway_along_first_segment",
+      "new_xy": [
+        "40.0",
+        "0.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "40.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "travel_distance_m": "40.0"
+    },
+    {
+      "direction": [
+        "1.0",
+        "0.0"
+      ],
+      "name": "exactly_on_vertex",
+      "new_xy": [
+        "100.0",
+        "0.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "travel_distance_m": "100.0"
+    },
+    {
+      "direction": [
+        "0.0",
+        "1.0"
+      ],
+      "name": "into_second_segment",
+      "new_xy": [
+        "100.0",
+        "50.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "100.0",
+          "50.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "travel_distance_m": "150.0"
+    },
+    {
+      "direction": [
+        "0.0",
+        "1.0"
+      ],
+      "name": "exactly_at_end",
+      "new_xy": [
+        "100.0",
+        "100.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "100.0",
+          "100.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "travel_distance_m": "200.0"
+    },
+    {
+      "direction": [
+        "0.0",
+        "1.0"
+      ],
+      "name": "past_the_end",
+      "new_xy": [
+        "100.0",
+        "100.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "0.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "100.0",
+          "100.0"
+        ],
+        [
+          "100.0",
+          "100.0"
+        ]
+      ],
+      "travel_distance_m": "500.0"
+    },
+    {
+      "direction": [
+        "1.0",
+        "0.0"
+      ],
+      "name": "degenerate_segment_skipped",
+      "new_xy": [
+        "30.0",
+        "0.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "60.0",
+          "0.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "30.0",
+          "0.0"
+        ],
+        [
+          "60.0",
+          "0.0"
+        ]
+      ],
+      "travel_distance_m": "30.0"
+    },
+    {
+      "direction": [
+        "0.0",
+        "0.0"
+      ],
+      "name": "all_degenerate_zero_direction",
+      "new_xy": [
+        "5.0",
+        "5.0"
+      ],
+      "points_xy": [
+        [
+          "5.0",
+          "5.0"
+        ],
+        [
+          "5.0",
+          "5.0"
+        ],
+        [
+          "5.0",
+          "5.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "5.0",
+          "5.0"
+        ],
+        [
+          "5.0",
+          "5.0"
+        ]
+      ],
+      "travel_distance_m": "10.0"
+    },
+    {
+      "direction": [
+        "0.6",
+        "0.8"
+      ],
+      "name": "two_point_polyline",
+      "new_xy": [
+        "15.0",
+        "20.0"
+      ],
+      "points_xy": [
+        [
+          "0.0",
+          "0.0"
+        ],
+        [
+          "30.0",
+          "40.0"
+        ]
+      ],
+      "remaining_xy": [
+        [
+          "15.0",
+          "20.0"
+        ],
+        [
+          "30.0",
+          "40.0"
+        ]
+      ],
+      "travel_distance_m": "25.0"
+    }
+  ],
+  "bounds": {
+    "bounds": {
+      "x_max_m": "500.0",
+      "x_min_m": "-100.0",
+      "y_max_m": "200.0",
+      "y_min_m": "0.0"
+    },
+    "clamp": [
+      {
+        "clamped_xy_m": [
+          "50.0",
+          "100.0"
+        ],
+        "margin_m": "0.0",
+        "name": "inside_unchanged",
+        "xy_m": [
+          "50.0",
+          "100.0"
+        ]
+      },
+      {
+        "clamped_xy_m": [
+          "-100.0",
+          "100.0"
+        ],
+        "margin_m": "0.0",
+        "name": "clamps_x_low",
+        "xy_m": [
+          "-500.0",
+          "100.0"
+        ]
+      },
+      {
+        "clamped_xy_m": [
+          "500.0",
+          "200.0"
+        ],
+        "margin_m": "0.0",
+        "name": "clamps_both_high",
+        "xy_m": [
+          "900.0",
+          "900.0"
+        ]
+      },
+      {
+        "clamped_xy_m": [
+          "-70.0",
+          "170.0"
+        ],
+        "margin_m": "30.0",
+        "name": "clamps_with_margin",
+        "xy_m": [
+          "-500.0",
+          "900.0"
+        ]
+      },
+      {
+        "clamped_xy_m": [
+          "350.0",
+          "100.0"
+        ],
+        "margin_m": "150.0",
+        "name": "y_collapses_x_clamps",
+        "xy_m": [
+          "900.0",
+          "900.0"
+        ]
+      },
+      {
+        "clamped_xy_m": [
+          "200.0",
+          "100.0"
+        ],
+        "margin_m": "500.0",
+        "name": "both_collapse",
+        "xy_m": [
+          "900.0",
+          "900.0"
+        ]
+      }
+    ],
+    "within": [
+      {
+        "margin_m": "0.0",
+        "name": "inside",
+        "within": true,
+        "xy_m": [
+          "50.0",
+          "100.0"
+        ]
+      },
+      {
+        "margin_m": "0.0",
+        "name": "on_min_edge_inclusive",
+        "within": true,
+        "xy_m": [
+          "-100.0",
+          "0.0"
+        ]
+      },
+      {
+        "margin_m": "0.0",
+        "name": "on_max_edge_inclusive",
+        "within": true,
+        "xy_m": [
+          "500.0",
+          "200.0"
+        ]
+      },
+      {
+        "margin_m": "0.0",
+        "name": "outside_x_low",
+        "within": false,
+        "xy_m": [
+          "-101.0",
+          "100.0"
+        ]
+      },
+      {
+        "margin_m": "0.0",
+        "name": "outside_y_high",
+        "within": false,
+        "xy_m": [
+          "50.0",
+          "201.0"
+        ]
+      },
+      {
+        "margin_m": "25.0",
+        "name": "inside_but_within_margin",
+        "within": false,
+        "xy_m": [
+          "-90.0",
+          "100.0"
+        ]
+      },
+      {
+        "margin_m": "25.0",
+        "name": "on_margin_edge_inclusive",
+        "within": true,
+        "xy_m": [
+          "-75.0",
+          "25.0"
+        ]
+      },
+      {
+        "margin_m": "25.0",
+        "name": "outside_x_max_margin_only",
+        "within": false,
+        "xy_m": [
+          "490.0",
+          "100.0"
+        ]
+      },
+      {
+        "margin_m": "25.0",
+        "name": "outside_y_min_margin_only",
+        "within": false,
+        "xy_m": [
+          "50.0",
+          "10.0"
+        ]
+      },
+      {
+        "margin_m": "25.0",
+        "name": "outside_y_max_margin_only",
+        "within": false,
+        "xy_m": [
+          "50.0",
+          "190.0"
+        ]
+      },
+      {
+        "margin_m": "500.0",
+        "name": "margin_wider_than_span_rejects_all",
+        "within": false,
+        "xy_m": [
+          "100.0",
+          "100.0"
+        ]
+      }
+    ]
+  },
+  "collision_aware_position": [
+    {
+      "has_obstacle_layer": false,
+      "min_agl_m": "20.0",
+      "name": "no_layer_returns_inputs",
+      "position": [
+        "10.0",
+        "10.0",
+        "150.0"
+      ],
+      "probes": [],
+      "result_position": [
+        "10.0",
+        "10.0",
+        "150.0"
+      ],
+      "result_velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ],
+      "velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ]
+    },
+    {
+      "has_obstacle_layer": true,
+      "min_agl_m": "20.0",
+      "name": "empty_layer_probes_once",
+      "position": [
+        "10.0",
+        "10.0",
+        "150.0"
+      ],
+      "probes": [
+        {
+          "collides": false,
+          "point": [
+            "10.0",
+            "10.0",
+            "150.0"
+          ]
+        }
+      ],
+      "result_position": [
+        "10.0",
+        "10.0",
+        "150.0"
+      ],
+      "result_velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ],
+      "velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ]
+    },
+    {
+      "has_obstacle_layer": true,
+      "min_agl_m": "20.0",
+      "name": "clear_of_obstacle",
+      "position": [
+        "200.0",
+        "200.0",
+        "150.0"
+      ],
+      "probes": [
+        {
+          "collides": false,
+          "point": [
+            "200.0",
+            "200.0",
+            "150.0"
+          ]
+        }
+      ],
+      "result_position": [
+        "200.0",
+        "200.0",
+        "150.0"
+      ],
+      "result_velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ],
+      "velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ]
+    },
+    {
+      "has_obstacle_layer": true,
+      "min_agl_m": "20.0",
+      "name": "inside_obstacle_pushed_out",
+      "position": [
+        "10.0",
+        "10.0",
+        "150.0"
+      ],
+      "probes": [
+        {
+          "collides": true,
+          "margin_m": "1.0",
+          "point": [
+            "10.0",
+            "10.0",
+            "150.0"
+          ],
+          "pushed_xy": [
+            "43.13351365237939",
+            "43.13351365237939"
+          ]
+        },
+        {
+          "collides": false,
+          "point": [
+            "43.13351365237939",
+            "43.13351365237939",
+            "150.0"
+          ]
+        }
+      ],
+      "result_position": [
+        "43.13351365237939",
+        "43.13351365237939",
+        "150.0"
+      ],
+      "result_velocity": [
+        "5.0",
+        "1.0",
+        "0.0"
+      ],
+      "velocity": [
+        "5.0",
+        "1.0",
+        "0.0"
+      ]
+    },
+    {
+      "has_obstacle_layer": true,
+      "min_agl_m": "20.0",
+      "name": "dead_centre_push",
+      "position": [
+        "0.0",
+        "0.0",
+        "150.0"
+      ],
+      "probes": [
+        {
+          "collides": true,
+          "margin_m": "1.0",
+          "point": [
+            "0.0",
+            "0.0",
+            "150.0"
+          ],
+          "pushed_xy": [
+            "61.0",
+            "0.0"
+          ]
+        },
+        {
+          "collides": false,
+          "point": [
+            "61.0",
+            "0.0",
+            "150.0"
+          ]
+        }
+      ],
+      "result_position": [
+        "61.0",
+        "0.0",
+        "150.0"
+      ],
+      "result_velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ]
+    },
+    {
+      "has_obstacle_layer": true,
+      "min_agl_m": "20.0",
+      "name": "push_over_higher_ground_reclamps",
+      "position": [
+        "10.0",
+        "10.0",
+        "30.0"
+      ],
+      "probes": [
+        {
+          "collides": true,
+          "margin_m": "1.0",
+          "point": [
+            "10.0",
+            "10.0",
+            "30.0"
+          ],
+          "pushed_xy": [
+            "43.13351365237939",
+            "43.13351365237939"
+          ]
+        },
+        {
+          "collides": false,
+          "point": [
+            "43.13351365237939",
+            "43.13351365237939",
+            "105.08527249434195"
+          ]
+        }
+      ],
+      "result_position": [
+        "43.13351365237939",
+        "43.13351365237939",
+        "105.08527249434195"
+      ],
+      "result_velocity": [
+        "5.0",
+        "1.0",
+        "0.0"
+      ],
+      "velocity": [
+        "5.0",
+        "1.0",
+        "0.0"
+      ]
+    },
+    {
+      "has_obstacle_layer": true,
+      "min_agl_m": "20.0",
+      "name": "above_obstacle_top",
+      "position": [
+        "0.0",
+        "0.0",
+        "400.0"
+      ],
+      "probes": [
+        {
+          "collides": false,
+          "point": [
+            "0.0",
+            "0.0",
+            "400.0"
+          ]
+        }
+      ],
+      "result_position": [
+        "0.0",
+        "0.0",
+        "400.0"
+      ],
+      "result_velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ],
+      "velocity": [
+        "5.0",
+        "0.0",
+        "0.0"
+      ]
+    },
+    {
+      "has_obstacle_layer": true,
+      "min_agl_m": "20.0",
+      "name": "vegetation_is_not_a_collision",
+      "position": [
+        "10.0",
+        "10.0",
+        "150.0"
+      ],
+      "probes": [
+        {
+          "collides": false,
+          "point": [
+            "10.0",
+            "10.0",
+            "150.0"
+          ]
+        }
+      ],
+      "result_position": [
+        "10.0",
+        "10.0",
+        "150.0"
+      ],
+      "result_velocity": [
+        "5.0",
+        "1.0",
+        "0.0"
+      ],
+      "velocity": [
+        "5.0",
+        "1.0",
+        "0.0"
+      ]
+    }
+  ],
+  "compose_air_state": [
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "no_target_delegates",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "0.0",
+        "0.0",
+        "148.87365549035974"
+      ],
+      "target_altitude_offset_m": null,
+      "target_altitude_rate_offset_mps": null,
+      "target_position": null,
+      "target_velocity": null,
+      "velocity": [
+        "10.0",
+        "4.0",
+        "3.6259113514224532"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "10.0",
+        "4.0"
+      ]
+    },
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "target_without_offset_delegates",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "0.0",
+        "0.0",
+        "148.87365549035974"
+      ],
+      "target_altitude_offset_m": null,
+      "target_altitude_rate_offset_mps": null,
+      "target_position": [
+        "50.0",
+        "50.0",
+        "200.0"
+      ],
+      "target_velocity": null,
+      "velocity": [
+        "10.0",
+        "4.0",
+        "3.6259113514224532"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "10.0",
+        "4.0"
+      ]
+    },
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "offset_without_target_delegates",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "0.0",
+        "0.0",
+        "148.87365549035974"
+      ],
+      "target_altitude_offset_m": "30.0",
+      "target_altitude_rate_offset_mps": null,
+      "target_position": null,
+      "target_velocity": null,
+      "velocity": [
+        "10.0",
+        "4.0",
+        "3.6259113514224532"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "10.0",
+        "4.0"
+      ]
+    },
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "target_term_wins_max",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "0.0",
+        "0.0",
+        "440.0"
+      ],
+      "target_altitude_offset_m": "40.0",
+      "target_altitude_rate_offset_mps": "0.25",
+      "target_position": [
+        "50.0",
+        "50.0",
+        "400.0"
+      ],
+      "target_velocity": [
+        "1.0",
+        "2.0",
+        "3.0"
+      ],
+      "velocity": [
+        "10.0",
+        "4.0",
+        "3.25"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "10.0",
+        "4.0"
+      ]
+    },
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "terrain_floor_wins_max",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "0.0",
+        "0.0",
+        "98.87365549035972"
+      ],
+      "target_altitude_offset_m": "5.0",
+      "target_altitude_rate_offset_mps": "0.0",
+      "target_position": [
+        "50.0",
+        "50.0",
+        "-100.0"
+      ],
+      "target_velocity": [
+        "1.0",
+        "2.0",
+        "-3.0"
+      ],
+      "velocity": [
+        "10.0",
+        "4.0",
+        "-3.0"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "10.0",
+        "4.0"
+      ]
+    },
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "target_velocity_defaults_to_zero",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "0.0",
+        "0.0",
+        "440.0"
+      ],
+      "target_altitude_offset_m": "40.0",
+      "target_altitude_rate_offset_mps": "1.5",
+      "target_position": [
+        "50.0",
+        "50.0",
+        "400.0"
+      ],
+      "target_velocity": null,
+      "velocity": [
+        "10.0",
+        "4.0",
+        "1.5"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "10.0",
+        "4.0"
+      ]
+    },
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "rate_offset_none_is_zero",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "0.0",
+        "0.0",
+        "440.0"
+      ],
+      "target_altitude_offset_m": "40.0",
+      "target_altitude_rate_offset_mps": null,
+      "target_position": [
+        "50.0",
+        "50.0",
+        "400.0"
+      ],
+      "target_velocity": [
+        "1.0",
+        "2.0",
+        "3.0"
+      ],
+      "velocity": [
+        "10.0",
+        "4.0",
+        "3.0"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "10.0",
+        "4.0"
+      ]
+    },
+    {
+      "agl_rate_mps": "0.5",
+      "min_agl_m": "20.0",
+      "name": "target_branch_uses_max_not_clamp",
+      "nominal_agl_m": "70.0",
+      "position": [
+        "-300.0",
+        "300.0",
+        "51.00329719485627"
+      ],
+      "target_altitude_offset_m": "0.0",
+      "target_altitude_rate_offset_mps": null,
+      "target_position": [
+        "0.0",
+        "0.0",
+        "10.0"
+      ],
+      "target_velocity": null,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "xy_m": [
+        "-300.0",
+        "300.0"
+      ],
+      "xy_velocity_mps": [
+        "0.0",
+        "0.0"
+      ]
+    }
+  ],
+  "compose_terrain_state": [
+    {
+      "agl_m": "60.0",
+      "agl_rate_mps": "1.5",
+      "min_agl_m": "20.0",
+      "name": "uphill_climb",
+      "position": [
+        "0.0",
+        "0.0",
+        "138.87365549035974"
+      ],
+      "terrain_speed_adaptation": false,
+      "velocity": [
+        "12.0",
+        "0.0",
+        "5.645875641750536"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "12.0",
+        "0.0"
+      ]
+    },
+    {
+      "agl_m": "60.0",
+      "agl_rate_mps": "-2.0",
+      "min_agl_m": "20.0",
+      "name": "downhill_descent_unclamped",
+      "position": [
+        "0.0",
+        "0.0",
+        "138.87365549035974"
+      ],
+      "terrain_speed_adaptation": false,
+      "velocity": [
+        "-12.0",
+        "0.0",
+        "-6.145875641750536"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "-12.0",
+        "0.0"
+      ]
+    },
+    {
+      "agl_m": "1.0",
+      "agl_rate_mps": "-2.0",
+      "min_agl_m": "20.0",
+      "name": "clamped_and_descending",
+      "position": [
+        "0.0",
+        "0.0",
+        "98.87365549035972"
+      ],
+      "terrain_speed_adaptation": false,
+      "velocity": [
+        "-12.0",
+        "0.0",
+        "0.0"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "-12.0",
+        "0.0"
+      ]
+    },
+    {
+      "agl_m": "1.0",
+      "agl_rate_mps": "2.0",
+      "min_agl_m": "20.0",
+      "name": "clamped_and_ascending",
+      "position": [
+        "0.0",
+        "0.0",
+        "98.87365549035972"
+      ],
+      "terrain_speed_adaptation": false,
+      "velocity": [
+        "12.0",
+        "0.0",
+        "6.145875641750536"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "12.0",
+        "0.0"
+      ]
+    },
+    {
+      "agl_m": "80.0",
+      "agl_rate_mps": "0.0",
+      "min_agl_m": "20.0",
+      "name": "adaptation_off_on_slope",
+      "position": [
+        "100.0",
+        "-50.0",
+        "185.5"
+      ],
+      "terrain_speed_adaptation": false,
+      "velocity": [
+        "15.0",
+        "15.0",
+        "1.95"
+      ],
+      "xy_m": [
+        "100.0",
+        "-50.0"
+      ],
+      "xy_velocity_mps": [
+        "15.0",
+        "15.0"
+      ]
+    },
+    {
+      "agl_m": "80.0",
+      "agl_rate_mps": "0.0",
+      "min_agl_m": "20.0",
+      "name": "adaptation_on_slope",
+      "position": [
+        "100.0",
+        "-50.0",
+        "185.5"
+      ],
+      "terrain_speed_adaptation": true,
+      "velocity": [
+        "14.575470849057453",
+        "14.575470849057453",
+        "1.894811210377469"
+      ],
+      "xy_m": [
+        "100.0",
+        "-50.0"
+      ],
+      "xy_velocity_mps": [
+        "15.0",
+        "15.0"
+      ]
+    },
+    {
+      "agl_m": "80.0",
+      "agl_rate_mps": "0.0",
+      "min_agl_m": "20.0",
+      "name": "adaptation_on_steep_flank",
+      "position": [
+        "220.0",
+        "-50.0",
+        "171.48088419221648"
+      ],
+      "terrain_speed_adaptation": true,
+      "velocity": [
+        "18.6492226465651",
+        "0.0",
+        "-4.093634713451093"
+      ],
+      "xy_m": [
+        "220.0",
+        "-50.0"
+      ],
+      "xy_velocity_mps": [
+        "20.0",
+        "0.0"
+      ]
+    },
+    {
+      "agl_m": "60.0",
+      "agl_rate_mps": "3.0",
+      "min_agl_m": "20.0",
+      "name": "stationary_pure_agl_rate",
+      "position": [
+        "0.0",
+        "0.0",
+        "138.87365549035974"
+      ],
+      "terrain_speed_adaptation": false,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "3.0"
+      ],
+      "xy_m": [
+        "0.0",
+        "0.0"
+      ],
+      "xy_velocity_mps": [
+        "0.0",
+        "0.0"
+      ]
+    },
+    {
+      "agl_m": "30.0",
+      "agl_rate_mps": "0.0",
+      "min_agl_m": "0.0",
+      "name": "zero_min_agl",
+      "position": [
+        "-200.0",
+        "200.0",
+        "64.30095506031262"
+      ],
+      "terrain_speed_adaptation": false,
+      "velocity": [
+        "5.0",
+        "-5.0",
+        "0.20845629156089274"
+      ],
+      "xy_m": [
+        "-200.0",
+        "200.0"
+      ],
+      "xy_velocity_mps": [
+        "5.0",
+        "-5.0"
+      ]
+    }
+  ],
+  "terrain_oracle": {
+    "clamps": [
+      {
+        "clamped_z_m": "64.30095506031262",
+        "min_agl_m": "0.0",
+        "x_m": "-200.0",
+        "y_m": "200.0",
+        "z_m": "64.30095506031262"
+      },
+      {
+        "clamped_z_m": "138.87365549035974",
+        "min_agl_m": "20.0",
+        "x_m": "0.0",
+        "y_m": "0.0",
+        "z_m": "138.87365549035974"
+      },
+      {
+        "clamped_z_m": "148.87365549035974",
+        "min_agl_m": "20.0",
+        "x_m": "0.0",
+        "y_m": "0.0",
+        "z_m": "148.87365549035974"
+      },
+      {
+        "clamped_z_m": "98.87365549035972",
+        "min_agl_m": "20.0",
+        "x_m": "0.0",
+        "y_m": "0.0",
+        "z_m": "79.87365549035972"
+      },
+      {
+        "clamped_z_m": "185.5",
+        "min_agl_m": "20.0",
+        "x_m": "100.0",
+        "y_m": "-50.0",
+        "z_m": "185.5"
+      },
+      {
+        "clamped_z_m": "171.48088419221648",
+        "min_agl_m": "20.0",
+        "x_m": "220.0",
+        "y_m": "-50.0",
+        "z_m": "171.48088419221648"
+      },
+      {
+        "clamped_z_m": "150.0",
+        "min_agl_m": "20.0",
+        "x_m": "43.13351365237939",
+        "y_m": "43.13351365237939",
+        "z_m": "150.0"
+      },
+      {
+        "clamped_z_m": "105.08527249434195",
+        "min_agl_m": "20.0",
+        "x_m": "43.13351365237939",
+        "y_m": "43.13351365237939",
+        "z_m": "30.0"
+      },
+      {
+        "clamped_z_m": "150.0",
+        "min_agl_m": "20.0",
+        "x_m": "61.0",
+        "y_m": "0.0",
+        "z_m": "150.0"
+      }
+    ],
+    "gradients": [
+      {
+        "delta_m": "default",
+        "gradient": [
+          "0.08641646837677286",
+          "0.04472521006459431"
+        ],
+        "x_m": "-200.0",
+        "y_m": "200.0"
+      },
+      {
+        "delta_m": "default",
+        "gradient": [
+          "0.34548963681254463",
+          "-0.08224625417574828"
+        ],
+        "x_m": "0.0",
+        "y_m": "0.0"
+      },
+      {
+        "delta_m": "default",
+        "gradient": [
+          "0.08",
+          "0.05"
+        ],
+        "x_m": "100.0",
+        "y_m": "-50.0"
+      },
+      {
+        "delta_m": "default",
+        "gradient": [
+          "-0.2195069891669226",
+          "0.05"
+        ],
+        "x_m": "220.0",
+        "y_m": "-50.0"
+      }
+    ],
+    "heights": [
+      {
+        "height_m": "34.30095506031262",
+        "x_m": "-200.0",
+        "y_m": "200.0"
+      },
+      {
+        "height_m": "31.003297194856273",
+        "x_m": "-300.0",
+        "y_m": "300.0"
+      },
+      {
+        "height_m": "78.87365549035972",
+        "x_m": "0.0",
+        "y_m": "0.0"
+      },
+      {
+        "height_m": "105.5",
+        "x_m": "100.0",
+        "y_m": "-50.0"
+      },
+      {
+        "height_m": "91.4808841922165",
+        "x_m": "220.0",
+        "y_m": "-50.0"
+      }
+    ]
+  }
+}
