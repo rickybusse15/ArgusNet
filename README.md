@@ -455,6 +455,12 @@ For implementation details already present in this repository, see:
 
 - [Architecture & module map](docs/architecture.md)
 - [Product and capability roadmap](docs/ROADMAP.md)
+- [Next refactor review](docs/NEXT_REFACTOR_REVIEW.md)
+- [Feature delivery and viewer integration](docs/CAPABILITY_DELIVERY.md)
+- [Autonomous system plan](docs/AUTONOMOUS_SYSTEM_PLAN.md)
+- [Viewer feature workflows and data contracts](docs/VIEWER_FEATURE_INTEGRATION.md)
+- [Next-generation viewer specification](docs/VIEWER_UI.md)
+- [Rust migration delivery plan](docs/migration/DELIVERY_PLAN.md)
 - [Usage guide & CLI reference](docs/usage.md)
 - [Terrain notes](docs/TERRAIN.md)
 - [Mapping contract](docs/MAPPING.md)

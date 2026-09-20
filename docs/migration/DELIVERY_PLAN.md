@@ -1,8 +1,9 @@
 # Remaining Migration: Delivery Plan
 
 This plan covers every open migration phase. Product roadmap numbering in
-[ROADMAP.md](../ROADMAP.md) is independent. Status is grounded in `84af500` plus
-GitHub main `a7817d9`; a planned crate or API below is not yet shipping.
+[ROADMAP.md](../ROADMAP.md) is independent. The baseline table is updated from
+integrated checkout `ba163ac`; package descriptions remain target acceptance
+contracts. An implemented library does not imply a shipping runtime consumer.
 
 [Architecture and protocols](ARCHITECTURE_AND_PROTOCOLS.md) is the cross-cutting
 contract. [Verification and rollout](VERIFICATION_AND_ROLLOUT.md) specifies gates.
@@ -14,18 +15,20 @@ sub-slice, with its prerequisites and remaining work stated.
 
 | Phase | Delivered | Still open |
 | --- | --- | --- |
-| 0 | Profile, meaningful work counters, replay parity/schema foundations, TLS guards and toolchain pins | Reproducible proto regeneration, frame-time budget, complete scanner triage and contract inventory |
+| 0 | Profile, work counters, replay/schema foundations, TLS guards, pins, proto regeneration and field-parity CI | Semantic contract inventory, frame-time budget and scanner triage |
 | 1 | Bevy 0.19, shared dependencies/features, real headless renderer and CI smoke | Ongoing compatibility maintenance; no migration redo |
 | 2 | Interpolation, typed selection, stage gating, HDR/bloom/fog/sky, persistent typed mesh markers and holographic shader | Full ECS snapshot path, terrain/belief material, sensor/zone/trail geometry, picking, camera/time/UI, visual regression and frame budget |
-| 3 | Rust world and safety query/policy authority; native Python bridge; shared viewer sampling | Operational hardening carried below; procedural shaping remains Python and moves in P4.3 |
-| 4 | Shared core/world types and native particle-footprint scoring | DTO completeness, estimator state/VIO, sensing/mapping/planning/mission, direct fusion composition, replay and Rust CLI |
+| 3 | Rust world/safety authority, native bridge, shared viewer sampling; P4.3g procedural landscape builders now merged | Integrate world boot/LOD and preprocessed imported-world consumers |
+| 4 | Shared types/replay, domain ports, P4.3g landscapes, P4.6d belief revisions, P4.8a mission state, P4.8b TickWorld and P4.8c stage bodies/direct fusion | Correct commands and complete checkpoints; finish controller/scenario composition, replay writer and Rust CLI qualification |
 | 5 | No in-process viewer simulation yet | Worker/snapshots/commands, world boot/LOD, live world protocol, rewind and removal of Python boot dependencies |
 | 6 | No broad Python reduction yet | Caller-driven deletions, analysis packaging, entry-point ownership and documentation |
 
-The accepted native kernel speedup is not evidence of a complete localizer port.
+Domain-port fixtures and the integration record are not evidence of a complete
+Rust mission. See [current ownership](../STATE_OWNERSHIP.md) and
+[the source review](../NEXT_REFACTOR_REVIEW.md).
 The current marker mesh shader is not a terrain shader. The current CI colored
-pixel assertion is not image regression coverage. Phase 3 completion does not
-mean procedural generation, the Python tick or GLB boot dependencies are gone.
+pixel assertion is not image regression coverage. Merged procedural builders do not mean the Python tick or viewer GLB boot
+dependencies are gone.
 
 ## 2. Dependency graph and workstream coordination
 
@@ -65,6 +68,23 @@ STATE_OWNERSHIP when a slice lands; do not mark an entire phase complete because
 one new crate exists. Resolve semantic questions through an ADR instead of
 inconsistent Slack/comment-only agreements. Reports must distinguish locally
 verified, pushed, PR checks passing and merged.
+
+## 2a. Viewer and feature handoff
+
+[VIEWER_UI.md](../VIEWER_UI.md) governs the target shell, visual language,
+source modes and operator acceptance. P2.0–P2.6 implement presentation against
+replay/explicit fixtures; P4.6 supplies belief revisions; P5.0/P5.2 supply worker,
+controls and history; P5.3 supplies coherent live state. Plan authoring and
+inspection Review depend on mission/evidence contracts, not renderer completion.
+The primary workspaces are Operate / Plan / Review; Diagnostics, Scenario Studio,
+Reporting and Site catalog are secondary. Preserve the spec's flat typography-led
+instrument layout, accessibility and semantic quality tiers.
+
+[CAPABILITY_DELIVERY.md](../CAPABILITY_DELIVERY.md) maps F1 scorecards, F2 fault
+scenarios, F3 explanations, F4 comparisons, F5 energy contingencies, F6 memory
+and F7 adaptive inspection to backend owners and viewer surfaces. Early F1–F4
+replay/evaluation slices can precede full Rust composition; runtime actuation
+and adaptive tasks still require the validated execution pipeline.
 
 ## 3. Guardrails before larger ports
 
@@ -162,7 +182,7 @@ replay mode implements the same UI affordances locally. Display unavailable seek
 ranges and live/read-only history separately from simulation rewind. Save camera
 bookmarks as presentation preferences, not deterministic runtime state.
 
-### P2.5 — authored C2 UI and quality tiers
+### P2.5 — mission-control shell and quality tiers
 
 Specify palette tokens, typography/license, spacing, semantic colors and readable
 contrast. Status must not rely on color alone. Provide a keybinding reference and
@@ -224,6 +244,18 @@ remain a deterministic test input, not a permanent second RNG authority. Exit:
 trace harness, reset semantics, fault behavior and snapshot headers are testable
 without viewer/network/file output.
 
+#### P4.1 corrective gate before composition and viewer controls
+
+Fix queued reset while faulted/completed, exactly-one-tick SingleStep, duplicate
+result preservation, reset epoch barriers and speed/effective-tick validation.
+Use explicit subsystem-owned state with reset/checkpoint/restore coverage.
+Validate checkpoint world identity and bounds before mutation; preserve causal
+command/dedup state; restore clock in O(1); invalidate presentation across seeks.
+Tests must drive the command API through recovery and compare real stateful
+uninterrupted versus fresh-process resumed missions. The shell's passing trace
+fixtures alone do not satisfy this gate. See protocol sections 5–6 and the
+[source findings](../NEXT_REFACTOR_REVIEW.md).
+
 ### P4.2 — full GridLocalizer state
 
 Move estimates, per-platform step counts, timeout state, particle generation,
@@ -240,6 +272,17 @@ contract so timeout, unavailable map and actual convergence are distinguishable.
 Keep legacy forced confidence only under the compatibility profile until a
 separate mission-gating change is reviewed. Re-profile full localization and
 record ABI/state-transfer cost rather than repeating the scoring-only benchmark.
+
+#### Current port evidence
+
+P4.3g landscape construction and P4.6d belief publication are merged. P4.8a–c
+adds mission transitions, mutable TickWorld, stage-scoped truth access, populated
+snapshots and stage bodies including direct fusion. See
+[LANDSCAPE_BUILDERS.md](LANDSCAPE_BUILDERS.md),
+[BELIEF_REVISIONS.md](BELIEF_REVISIONS.md), [MISSION_STATE.md](MISSION_STATE.md),
+[TICK_WORLD.md](TICK_WORLD.md) and [TICK_STAGES.md](TICK_STAGES.md).
+Package descriptions below remain acceptance contracts. Integration into an
+installed representative mission and viewer is a separate completion gate.
 
 ### P4.3 — runtime world construction
 
@@ -472,11 +515,32 @@ installed release by itself.
 
 ## 9. Immediate execution queue
 
-1. Land/review the current Phase 3 plus Phase 2/4 slices and this plan; require
-   branch CI before merge. Do not overwrite main to publish a plan.
-2. G0/G1 contract inventory/regeneration and G2 renderer measurement fixtures.
-3. P4.0 DTO completeness plus P2.0 snapshot adapter (shared ID/revision agreement).
-4. P4.1 stage trace/seed contract, then P4.2 estimator state; independently P2.1
-   terrain/belief material using declared unavailable states until P4.6 exists.
-5. Continue the dependency graph; use measured profiles to prioritize within
-   available packages, never to skip a compatibility or truth-isolation gate.
+1. Repair P4.1 command and checkpoint behavior; update causal-state inventories.
+2. Retain implemented G1 regeneration/field checks; finish G0 semantic conversion
+   and G2 visual/frame-time baselines. Follow the viewer specification for P2.
+3. Consume merged P4.3g landscapes and P4.6d belief publication; finish P4.8
+   controller/scenario composition, checkpoints/replay and P4.9 qualification.
+   Preserve P4.8a–c mission/TickWorld/stage work rather than restarting it.
+4. Start F1/F2/F3 replay/evaluation slices and F4 paired comparisons. Qualify
+   physical truth isolation, localization and validated execution separately
+   from legacy parity.
+5. Connect P5 worker/history/world-aware live state after correctness gates;
+   complete F5–F7 through the capability dependency matrix.
+6. Re-profile after integration, share coverage tables/tiles where measured, and
+   retire Python consumers under P6 packaging and compatibility gates.
+
+## 10. Latest autonomous/viewer system handoff
+
+Use [the feature UI plan](../VIEWER_FEATURE_INTEGRATION.md) with
+[the autonomous system releases](../AUTONOMOUS_SYSTEM_PLAN.md). P2 supplies typed
+3D selection, projections and the replay-first shell; extend P2.1 beyond surface
+rendering only when S2 spatial chunks exist. P4.6 initially publishes surface
+revisions and later adds versioned volumetric chunks. P4.8 supplies authoritative
+trajectory, integrity, health and decision outputs. P5 connects the worker and
+read-stream adapters without granting aircraft control.
+
+Prioritize one observable workflow per slice: objective failure → event/evidence;
+platform → task/constraint/contingency; 3D proposal → vertical/time validation;
+prior/current → aligned change claim. All share source context and one timeline.
+SIL/HIL case review follows S3/S4 contracts; aircraft command capability is a
+separate later design and qualification gate. Preserve existing P/F IDs.

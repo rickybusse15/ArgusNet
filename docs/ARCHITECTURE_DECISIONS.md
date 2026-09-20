@@ -42,6 +42,16 @@ designated as:
 
 ## Decision 2: Waypoints-as-Advisory vs. Direct Execution in `FollowPathController`
 
+> Current implementation amendment: the Python checker described in the historical
+> decision below was removed during Phase 3. Rust `safety-engine` through native
+> wrappers is the safety authority. New physical-profile motion must use the
+> typed task/route/trajectory/safety/execution pipeline; legacy nonblocking
+> behavior remains explicitly profiled for parity. Do not recreate the checker
+> or interpret the historical phase numbering as permission to bypass Rust safety.
+> See [the protocol plan](migration/ARCHITECTURE_AND_PROTOCOLS.md) and
+> [next delivery](CAPABILITY_DELIVERY.md).
+
+
 **Date:** 2026-03-22
 **Status:** Accepted
 

@@ -191,3 +191,15 @@ Indexing is successful when ArgusNet can:
 - support planning decisions based on memory
 
 At that point, ArgusNet becomes a persistent spatial memory system rather than a stateless mission runner.
+
+## Next delivery integration (planned)
+
+F6 delivers a two-mission site workflow: immutable map/evidence revisions,
+stable spatial identities, alignment confidence, aging and attributable change
+candidates survive restart. The index references the authoritative belief owner's
+outputs rather than maintaining a competing mutable map. Site catalog and Review
+resolve those same identities; stale prior data remains visibly distinct.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

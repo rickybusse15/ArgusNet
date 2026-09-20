@@ -780,3 +780,18 @@ Read these with this standard:
 - `docs/SAFETY.md` for physical/safety constraints
 - `CONTRIBUTING.md` for code completion standards and definition of done
 - `docs/adr/000-template.md` for architecture decision records
+
+## Next delivery integration (planned)
+
+F1 scorecards report objective outcomes, evidence, energy, violations and
+attributable failure/degradation reasons. F4 comparisons use paired seed sets,
+recorded versions, dispersion and failed-run counts. Score unlabeled tracking
+with explicit truth matching/unmatched penalties outside operational fusion;
+missing accuracy is unavailable, never zero error. Re-profile after composition:
+measure startup, tick percentiles, CPU/GPU frames, map/serialization bytes,
+recording backlog and long-run memory separately. Benchmark shared coverage
+summed-area tables and dirty tiles before speculative parallelism.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

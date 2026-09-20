@@ -129,3 +129,15 @@ through a blocking safety gate before execution.
 4. Add route/viewpoint event logs that feed `PERFORMANCE_AND_BENCHMARKING.md` metrics.
 5. Move toward a full closed-loop mission executive where planning proposes and safety validates
    every action.
+
+## Next delivery integration (planned)
+
+F5 extends existing energy-aware POI assignment with continuous return-route
+reserve feasibility, hysteresis and safe task handoff. F7 proposes bounded revisits
+for unmet evidence criteria. Both use current belief/localization revisions and
+the task → route → trajectory → safety → execution pipeline. F3 emits selected
+candidate, constraints, reason and replanning trigger for the platform inspector.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

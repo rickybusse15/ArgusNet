@@ -488,3 +488,15 @@ Localization is successful when ArgusNet can:
 - evaluate localization accuracy in simulation without allowing the planner to use ground truth.
 
 At that point, ArgusNet can reuse world models across missions and support future inspection routing to known locations.
+
+## Next delivery integration (planned)
+
+Keep legacy timeout/duplicate semantics in the compatibility profile only.
+The physical profile separates timeout from convergence, checks freshness/status,
+deduplicates platform inputs and qualifies shared-map correlation before combining
+confidence. Evaluate uncertainty calibration and hidden-truth invariance. Operate
+shows degraded/unavailable status; F1 reports timeout separately from success.
+
+See [CAPABILITY_DELIVERY.md](CAPABILITY_DELIVERY.md) for F1–F7 dependencies and
+acceptance, [ROADMAP.md](ROADMAP.md) for sequencing, and
+[VIEWER_UI.md](VIEWER_UI.md) for the consuming operator workflows.

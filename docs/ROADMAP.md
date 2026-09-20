@@ -18,10 +18,61 @@ current implementation boundary.
 The [Rust runtime migration plan](RUST_RUNTIME_MIGRATION.md) tracks the separate
 engineering migration, with detailed [work packages](migration/DELIVERY_PLAN.md),
 [protocols](migration/ARCHITECTURE_AND_PROTOCOLS.md) and
-[acceptance gates](migration/VERIFICATION_AND_ROLLOUT.md). Its Phase 3 (world/safety authority) is implemented and
-verified at `8fbf7c2` on the migration branch, pending merge. Python still owns the
-simulation loop. Migration phase numbers do not correspond to the product phases
-below.
+[acceptance gates](migration/VERIFICATION_AND_ROLLOUT.md). Rust world/safety/fusion
+authority is active, and localization, sensing, mapping and planning libraries
+exist. Rust now includes mission state, TickWorld, populated snapshots and several
+composed stage bodies; complete mission/CLI qualification remains open. Python
+still owns the existing production simulation entry path. See the checkout-grounded
+[ownership inventory](STATE_OWNERSHIP.md). Migration phase numbers do not
+correspond to the product phases below.
+
+The integrated [autonomous system plan](AUTONOMOUS_SYSTEM_PLAN.md) adds the
+system-level path from the current migration through client outputs, a true 3D
+belief world, flight-software SIL/HIL, GNSS-denied localization, contained
+autonomous aircraft and coordinated operations. Its S0–S8 release gates do not
+renumber the migration or feature packages in this document.
+
+## Next delivery priorities
+
+The [refactor review](NEXT_REFACTOR_REVIEW.md) supplies source findings;
+[capability delivery](CAPABILITY_DELIVERY.md) supplies F1–F7 owners, dependencies,
+viewer surfaces and acceptance criteria. Both are planned work, not shipped claims.
+
+| Order | Deliverable | Product phases / migration dependencies |
+| --- | --- | --- |
+| 1 | Correct command lifecycle and complete checkpoints; explicit subsystem ownership; precision/validation contracts | Product 0; repair P4.1 before P5 controls |
+| 2 | Compose and qualify a complete mission using merged landscape builders, belief publication and stage bodies | Product 0–2; P4.3/P4.6/P4.8/P4.9 |
+| 3 | Truth/belief separation, validated task-to-execution pipeline, physical localization semantics and independent accuracy evaluation | Product 2–3; P4 integration plus separately versioned physical profile |
+| Alongside 1–3 | F1 scorecards, F2 failure scenarios, F3 explanations; F4 paired scenario comparisons | Product 0–1 and early operator slices; reuse current replay/evaluation first |
+| 4 | Viewer Operate/Plan/Review, world-aware live protocol, responsive worker, acknowledged controls and durable events | P2 and P5; product 5 is final operator acceptance, not the start of UI work |
+| 5 | F5 continuous battery contingencies and task handoff | Product 3; validated execution and current belief/localization |
+| 6 | F6 cross-mission spatial memory and F7 evidence-driven adaptive inspection | Product 4; single-mission F7 may precede F6 |
+| Throughout / after migration | Measure startup/tick/render/storage costs, share coverage work, bound snapshots/recordings, then retire unused Python paths | Migration P6 only after consumer and installed-package gates |
+
+The [viewer specification](VIEWER_UI.md) is the presentation contract. Backend
+features and their operator views ship as vertical slices; a plausible display
+must never stand in for missing belief, evidence or mission state.
+
+## Latest system and viewer integration
+
+The [autonomous system plan](AUTONOMOUS_SYSTEM_PLAN.md) extends delivery to
+onboard-independent contingencies, true 3D belief/trajectory semantics, qualified
+SIL/HIL, localization integrity and client outcome packages. The
+[viewer feature plan](VIEWER_FEATURE_INTEGRATION.md) maps those requirements and
+F1–F7 to concrete workflows, data owners and acceptance fixtures.
+
+Operate / Plan / Review remain the global workspaces. Perspective / Top-down /
+Section are projections; Operational / Reconstruction / Safety are layer presets.
+The timeline alone controls source time. Plan validates altitude and time as well
+as horizontal geometry. Review connects evidence, reconstruction and change to
+mission assurance and audit products. HIL/live supervision begins read-only;
+telemetry access cannot grant autonomous command capability.
+
+S0 supplies runtime coherence, S1 canonical client-output contracts, S2 volumetric
+belief/reconstruction presentation, S3/S4 flight-software and hardware qualification,
+and S5–S8 progressively qualified aircraft/fleet/intelligence capabilities. These
+are dependency gates, not renumbered product or migration phases, and do not
+prevent replay-first UI work with explicit unavailable fields.
 
 ## Product North Star
 
@@ -57,9 +108,10 @@ mission and site constraints
   -> replay, evidence, metrics, and persistent mission record
 ```
 
-Ground truth is permitted in simulation only to generate synthetic observations
-and score results. It must never become a hidden input to production planning,
-safety, localization, or operator-mode visualizations.
+Ground truth is permitted through explicit simulation capabilities for synthetic
+observations, physical collision and evaluation. It must never become a hidden
+input to planning, safety decisions, localization or operator-mode visualizations.
+The physical collision floor is separate from the belief-based safety decision.
 
 ## Architectural Principles
 
@@ -361,16 +413,19 @@ Inspection should graduate from POI dwell to evidence-quality completion.
 The Rust/Bevy viewer should become the native mission-control application. It
 should support focused operator workflows, not just render replay data.
 
+The [viewer system specification](VIEWER_UI.md) defines the shell, visual
+language, source modes, controls and acceptance gates. Its workspace hierarchy is:
+
 | Workspace | Operator objective |
 |---|---|
-| Mission Control | Monitor mission status, platforms, task execution, safety, and live map |
-| Site and Map Editor | Define priors, geofences, zones, POIs, constraints, and asset metadata |
-| Live 3D World | Understand belief terrain, uncertainty, paths, sensor footprints, and hazards |
-| Inspection Review | Review evidence, reconstruction, coverage, quality, and changes |
-| Replay Timeline | Reconstruct decisions, state transitions, captures, and safety events |
-| Diagnostics | Diagnose sensor health, localization, fusion, streaming, and performance |
-| Scenario Studio | Build deterministic scenes, profiles, and benchmark runs |
-| Reporting | Produce map, mission, evidence, and audit exports |
+| Operate | Supervise belief world, platforms, task execution, safety and contingencies |
+| Plan | Author bounded mission intent, priors, zones, tasks and validated proposals |
+| Review | Reconstruct events, evaluate outcomes, inspect evidence and compare missions |
+
+Diagnostics, Scenario Studio, Reporting and Site catalog are secondary
+destinations. Live 3D World and Replay Timeline are shared surfaces, not separate
+mission authorities. F1–F7 surface assignments are in
+[capability delivery](CAPABILITY_DELIVERY.md).
 
 Essential interactions:
 
@@ -427,6 +482,23 @@ hardware-in-the-loop, and other approved adapters. Required platform controls:
 ## Delivery Phases
 
 The phases below describe dependency order, not fixed calendar estimates.
+
+### Phase crosswalk for the integrated plan
+
+These are scope mappings, not claims that any complete phase has passed.
+
+| Product phase | Features and viewer delivery | Migration / system gate |
+| --- | --- | --- |
+| 0 — Contracts | Command/checkpoint corrections, typed decisions, client-output skeleton, replay-first shell | P4.1/P4.8, P2.0/P2.5; S0/S1 |
+| 1 — Simulation | F1 assurance, F2 fault campaigns, F3 explanations, F4 paired comparisons; Scenario Studio and Review | P4.9 qualification; S3 SIL, S4 hardware timing |
+| 2 — Belief/localization | Reuse P4.3g/P4.6d; add 3D chunks and integrity; Perspective/Top-down/Section | P4.6/P5.1; S2 spatial revision, later S6 GNSS-denied envelope |
+| 3 — Planning/safety | F5 reserve/handoff; validated 3D/time proposals and onboard contingencies | P4.7/P4.8, acknowledged P5 controls; S3–S6 promotion |
+| 4 — Inspection/memory | F6 site history, F7 evidence/revisit, reconstruction/change/client outputs | S1/S2 contracts; Plan/Review; later S8 scale |
+| 5 — Operator/integrations | Complete Operate/Plan/Review, read-only HIL/live, reporting/audit; separately qualified command capability | P2/P5 acceptance; S4–S6; no control authority from telemetry |
+| 6 — Expansion | Fleet reservations/partitions, qualified ML, edge sync and multi-site review | S7/S8; preserve earlier safety/provenance gates |
+
+Migration P6 remains consumer-driven Python retirement, independent of product
+Phase 6. Early replay UI and scorecard work need not wait for aircraft milestones.
 
 ### Phase 0 — Architecture, contracts, and hardening
 
@@ -540,24 +612,24 @@ and hardware-in-the-loop checks appropriate to the capability's risk.
 
 ## Immediate Implementation Backlog
 
-The first implementation tranche should be deliberately architectural:
+Use this queue with the stable migration packages, not as a second phase system:
 
-1. Publish the state-authority and schema-compatibility rules.
-2. [Implemented] Route observation generation through the versioned, injectable
-   `ObservationSource` contract while retaining the deterministic simulator
-   generator and its compatibility API.
-3. Add typed task, route, trajectory, safety, and execution replay events.
-4. Wire `MissionExecutor` into one non-legacy mission execution path.
-5. Make `WorldBeliefQuery` the mandatory input for new planning work.
-6. Prototype persistent tiled belief-world storage.
-7. Add a localization covariance/status contract and corresponding viewer panel.
-8. Couple wind, battery, link degradation, and sensor timing into simulation.
-9. Add deterministic headless viewer snapshots to CI.
-10. Build a mission-control UI slice showing map, platform, task, and safety
-    explanations together.
-11. Establish the scenario matrix and physical-mode truth-isolation gate.
-12. Integrate the in-progress transport/security work as a protected foundation,
-    not an isolated feature branch.
+1. Repair command/reset/single-step/dedup semantics and stateful checkpoints.
+2. Maintain existing proto-regeneration and field-parity CI; finish semantic
+   conversion validation, f64 interchange and representative renderer baselines.
+3. Integrate the merged world builders and belief revisions; qualify one Rust-owned mission
+   with direct fusion, traced safety ordering and nonempty snapshots.
+4. Require belief inputs and typed task → route → trajectory → safety → execution
+   decisions for new mission paths; qualify the physical localization profile.
+5. Deliver F1/F2/F3 using current replay contracts where possible, then F4 paired
+   comparisons. Carry explicit unavailable states until richer contracts land.
+6. Implement the viewer spec against replay fixtures, then bind the repaired
+   worker/commands and coherent live/world protocol. Separate lossy display from
+   durable events and recording.
+7. Add F5 reserve-aware replanning, F6 spatial memory and F7 adaptive inspection
+   using the feature dependency/acceptance matrix.
+8. Re-profile, optimize demonstrated hot paths, and delete migrated Python paths
+   only after callers, packaging and exports pass compatibility checks.
 
 ## Governance
 

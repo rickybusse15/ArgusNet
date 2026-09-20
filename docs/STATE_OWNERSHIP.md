@@ -7,7 +7,45 @@ Roadmap contracts belong in the subsystem docs; this file should reflect impleme
 Planned ownership and communication boundaries are specified separately in
 [migration/ARCHITECTURE_AND_PROTOCOLS.md](migration/ARCHITECTURE_AND_PROTOCOLS.md).
 This file continues to describe implemented behavior; accepted design is not a
-claim that `argusnet-sim`, full Rust localization or world-aware live RPCs exist.
+claim that the existing `argusnet-sim` shell and domain ports compose a complete
+mission, or that world-aware live RPCs exist.
+
+## Integration status at `ba163ac`
+
+This plan now includes the merged P4.3g landscape builders, P4.6d belief
+publication and P4.8a–c mission/world/stage work. Evidence is recorded in
+[landscape builders](migration/LANDSCAPE_BUILDERS.md),
+[belief revisions](migration/BELIEF_REVISIONS.md),
+[mission state](migration/MISSION_STATE.md),
+[tick world](migration/TICK_WORLD.md) and [stage bodies](migration/TICK_STAGES.md).
+Rust can publish populated platform/track snapshots from `TickWorld`; it is no
+longer accurate to describe all snapshots as necessarily empty. The default
+constructor still registers no domain handlers. Complete production scenario
+composition, remaining controllers, full causal checkpoints, replay/CLI
+qualification and viewer integration remain acceptance work. Existing slice
+test reports are not a fresh full-system test result.
+
+The inventory below is retained as the original review baseline, not current
+completion status. P4.3 procedural landscape construction and P4.6 immutable
+belief publication now exist; the active Python consumer boundary and complete
+Rust mission acceptance must still be checked separately.
+
+## Migration inventory at reviewed checkout `388f74b`
+
+| Concern | Implemented library | Active consumer / integration boundary | Legacy retirement |
+| --- | --- | --- | --- |
+| World / safety | `argusnet-world`, `safety-engine` | Native Python runtime and viewer sampling | Python authoring/orchestration remain |
+| Fusion | `argusnet-core` | `argusnet-server`, Python gRPC client | Direct Rust simulation call pending |
+| Localization / sensing | `argusnet-localization`, `argusnet-sensing`; deterministic streams in `argusnet-sim` | Port fixtures exist; Python still runs mission orchestration | No broad runtime deletion |
+| Mapping / planning | `argusnet-mapping`, `argusnet-planning` | Native scoring active; other ports await composed tick; belief query facade is not a revisioned mutable owner | Python mission consumers remain |
+| Simulation | `argusnet-sim` transaction/command/clock shell | Default domain handlers do no work; empty snapshots | Python tick remains authoritative |
+| Replay / viewer | `argusnet-replay`, `argusnet-viewer` | Replay and V2 live presentation; Run launches Python simulation/scene builder | In-process boot pending |
+
+Evidence: [integration record](migration/P4_INTEGRATION.md),
+[source review](NEXT_REFACTOR_REVIEW.md), and the referenced crates. Historical
+integration test totals are not a fresh verification of this checkout.
+The [viewer specification](VIEWER_UI.md) describes the target, while
+[feature delivery](CAPABILITY_DELIVERY.md) assigns future feature ownership.
 
 ## Ownership Rules
 
@@ -21,7 +59,7 @@ claim that `argusnet-sim`, full Rust localization or world-aware live RPCs exist
   state, and replay assembly.
 - Mapping, localization, inspection, deconfliction, and scan mission replay types live in
   `argusnet.core.types` and are populated in `argusnet.simulation.sim`.
-- The Rust viewer reads replay/scene data from disk; it is not a live authority for planning,
+- The Rust viewer reads replay/scene data and live frame streams; it is not an authority for planning,
   safety, terrain, or fusion state.
 
 ## Current Runtime State
@@ -102,8 +140,9 @@ inspection documentation.
 
 ## Current Gaps To Keep Visible
 
-- `BeliefWorldModel` and `WorldBeliefQuery` are roadmap contracts; the current bridge is
-  `CoverageMap`, `WorldMap`, and `MappingState`.
+- `WorldBeliefQuery` exists as a Rust read-only facade. A unified revisioned mutable
+  belief owner remains planned; the active Python bridge is `CoverageMap`,
+  `WorldMap`, and `MappingState`.
 - Persistent inspection site records, evidence sets, reconstructions, and change records are roadmap
   inspection contracts; the current runtime uses `InspectionPOI`, `POIStatus`, and
   `InspectionEvent`.

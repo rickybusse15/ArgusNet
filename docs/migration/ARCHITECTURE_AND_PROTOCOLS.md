@@ -184,6 +184,22 @@ snapshots, source timestamps and a clamped blend. Never interpolate across epoch
 teleports, missing IDs, discrete mission transitions or incompatible world
 revisions. Selection follows typed IDs; removed IDs clear selection deliberately.
 
+### Command lifecycle clarification for the next implementation
+
+Distinguish admission (`Accepted`) from execution (`Applied`) and terminal
+`Rejected`/`Cancelled` outcomes. A retry flag accompanies the original result;
+it must not erase the original refusal reason. Scope identity by run/client/ID,
+bind it to a payload fingerprint and define the bounded retry horizon. Preserve
+existing wire fields; introduce compatible extensions with regeneration/tests.
+
+Validate payloads, finite positive speed and requested tick policy at admission.
+Revalidate applicable epoch/revision preconditions when scheduled work executes.
+A reset is an epoch barrier: cancel remaining old-epoch work, including commands
+already drained into a local batch. Drain eligible recovery controls even while
+faulted/completed without running domain stages. SingleStep advances exactly one
+tick and returns to paused. Report actual effective tick/revision, not merely
+the originally requested value. UI submission or queue acceptance is not motion.
+
 ## 6. Snapshot, checkpoint and replay are different contracts
 
 | Artifact | Intended contents | Persistence/compatibility |
@@ -220,6 +236,17 @@ selected policy. Render remains responsive. Large terrain blobs are referenced
 by immutable content hash, not embedded into every frame. Write temporary files
 and finalize manifests atomically; partial output is labelled and never reported
 as a complete replay.
+
+### Checkpoint completeness and presentation epoch
+
+Concrete subsystem state belongs to the Simulation owner; stateful handlers
+cannot sit outside reset/checkpoint/restore. Persist idempotency history needed
+for resumed command decisions and declare whether pause/pacing are restored or
+reset. Verify content hashes (not revision numbers), header/tick consistency,
+versions, payload dimensions and queue bounds before any mutation. Set the clock
+in O(1). A restore into an active session gets a fresh publication epoch to
+invalidate interpolation; retained checkpoint provenance and a new branch's
+identity are separate concepts.
 
 ## 7. External protobuf transport
 
@@ -324,3 +351,44 @@ transport boundaries. Keep wall-clock profiling outside deterministic state.
 Operational diagnostics distinguish time-to-first-world, steady render CPU/GPU,
 simulation tick latency, native transfer cost and recording backlog. Logs are
 rate-limited; they are not an unbounded per-frame buffer.
+
+## 10. Domain and product integration refinements
+
+The [capability plan](../CAPABILITY_DELIVERY.md) extends the runtime with typed
+scorecards, scenario failures, explanations, comparisons, energy contingencies,
+spatial memory and adaptive inspection. Feature state stays with its domain owner.
+A single revisioned belief owner supplies consistent read views and dirty tiles;
+persistent site history stores immutable revisions rather than mutating a second
+copy. Task/route/trajectory/safety/execution records carry causality IDs and the
+input revisions necessary to explain them in the viewer.
+
+Physical-profile localization preserves timeout as a degraded outcome, validates
+freshness/status, deduplicates platforms and accounts for shared evidence before
+claiming fusion confidence. Legacy parity remains a separate named profile.
+Evaluation-only truth matching and calibration are separate from operational
+fusion. Truth capability filtering covers derived metrics as well as entity lists.
+Canonical spatial interchange remains f64; covariance compatibility readers
+normalize supported shapes and reject invalid numeric data explicitly.
+
+[VIEWER_UI.md](../VIEWER_UI.md) is the consumer specification: Operate, Plan and
+Review share source adapters, coherent snapshot application and durable events.
+Plan submits validated intent; Review reads history/evidence; neither becomes
+an alternate simulation or safety authority. Remote actuation remains outside
+the read-stream upgrade.
+
+## 11. Additive 3D presentation and qualification contracts
+
+The [autonomous system plan](../AUTONOMOUS_SYSTEM_PLAN.md) extends world manifests
+from surface tiles to structure, sparse occupancy, clearance and evidence chunks.
+Each declares 3D bounds, frame, resolution/LOD, time, revision, hash and provenance.
+A surface-only client/source explicitly lacks volume data; unrepresented volume
+is never assumed free. Add capability negotiation and reader-first compatibility
+before defaulting writers to those payloads. No new RPC or field number is
+established by this prose.
+
+Trajectory records retain orientation, time, envelope, clearance, energy,
+localization requirement and validity. Localization integrity, health/fault/
+contingency and SIL/HIL qualification records are producer-owned versioned inputs,
+not UI-derived status. Evaluation/review and command capabilities remain distinct.
+[The feature UI contract](../VIEWER_FEATURE_INTEGRATION.md) maps these inputs to
+inspectors, three projections, client outputs and explicit unavailable states.

@@ -1,5 +1,20 @@
 # Rust Runtime Migration and Game-Engine Viewer
 
+## Integration status at `ba163ac`
+
+This plan now includes the merged P4.3g landscape builders, P4.6d belief
+publication and P4.8a–c mission/world/stage work. Evidence is recorded in
+[landscape builders](migration/LANDSCAPE_BUILDERS.md),
+[belief revisions](migration/BELIEF_REVISIONS.md),
+[mission state](migration/MISSION_STATE.md),
+[tick world](migration/TICK_WORLD.md) and [stage bodies](migration/TICK_STAGES.md).
+Rust can publish populated platform/track snapshots from `TickWorld`; it is no
+longer accurate to describe all snapshots as necessarily empty. The default
+constructor still registers no domain handlers. Complete production scenario
+composition, remaining controllers, full causal checkpoints, replay/CLI
+qualification and viewer integration remain acceptance work. Existing slice
+test reports are not a fresh full-system test result.
+
 ## Detailed migration plan
 
 The remaining migration is governed by these companion documents:
@@ -18,6 +33,24 @@ The remaining migration is governed by these companion documents:
 
 These documents supersede the abbreviated ordering below where more specific.
 They do not change the separate product roadmap's phase numbering.
+
+## Current reading guide
+
+The historical milestone narrative below records earlier implementation states;
+use [STATE_OWNERSHIP.md](STATE_OWNERSHIP.md) for the reviewed checkout inventory.
+Localization, sensing, mapping and planning libraries now exist, but P4.8 complete
+mission composition, world assembly and revisioned belief ownership remain open.
+Proto regeneration and field-parity checks are present in CI. Do not restart
+completed library ports or infer full runtime readiness from their existence.
+
+The [next refactor review](NEXT_REFACTOR_REVIEW.md) adds command/checkpoint
+correctness and physical-confidence gates to existing packages. The
+[viewer specification](VIEWER_UI.md) governs P2 presentation and P5 integration;
+[capability delivery](CAPABILITY_DELIVERY.md) adds F1–F7 product slices without
+renumbering migration phases. The viewer is a consumer of state, never a second
+simulation, map or mission owner.
+
+## Historical milestone record
 
 ## Status after Phase 3
 
