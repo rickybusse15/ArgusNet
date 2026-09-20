@@ -233,6 +233,13 @@ impl ObstacleSampler for ReplayObstacles {
         self.next.set(index + 1);
         probe.3
     }
+
+    fn collides(&self, point_m: [f64; 3]) -> bool {
+        // Not used by `collision_aware_position`, which always pushes. A
+        // panic rather than a guess, so a port that started asking this
+        // question here is caught instead of silently answered.
+        panic!("collision_aware_position asked whether {point_m:?} collides; it pushes instead")
+    }
 }
 
 #[test]

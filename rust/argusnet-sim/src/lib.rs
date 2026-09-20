@@ -6,6 +6,7 @@ pub mod command;
 pub mod config;
 pub mod deconflict;
 pub mod deterministic;
+pub mod follow_path;
 pub mod fusion;
 pub mod mapping;
 pub mod mission;

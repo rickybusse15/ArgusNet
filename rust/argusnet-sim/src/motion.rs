@@ -78,6 +78,17 @@ pub trait ObstacleSampler {
     /// so a point squarely inside a forest stand does not collide. See
     /// [`collision_aware_position`].
     fn push_clear(&self, point_m: [f64; 3], margin_m: f64) -> Option<[f64; 2]>;
+
+    /// Whether the point is inside something, without pushing it out.
+    ///
+    /// Separate from [`ObstacleSampler::push_clear`] because callers differ
+    /// in what they need and the difference is observable. A controller
+    /// *rejecting* a candidate only asks the question; the reference calls
+    /// `point_collides` and never `push_outside_xy` on that path, so a
+    /// default implemented in terms of `push_clear` would compute a push
+    /// nobody asked for — and against a recorded oracle, would fail on a
+    /// read the reference never made.
+    fn collides(&self, point_m: [f64; 3]) -> bool;
 }
 
 /// The margin `collision_aware_position` pushes with. Hardcoded at the call
@@ -143,7 +154,12 @@ pub fn compose_terrain_state(
 
     let mut xy_velocity = xy_velocity_mps;
     if terrain_speed_adaptation {
-        let gradient_magnitude = ground_gradient[0].hypot(ground_gradient[1]);
+        // `sqrt` of the sum of squares, not `hypot`: the reference uses
+        // `np.linalg.norm`, and the two differ by an ULP often enough to
+        // compound over a sequence of ticks. See `follow_path::norm`.
+        let gradient_magnitude = (ground_gradient[0] * ground_gradient[0]
+            + ground_gradient[1] * ground_gradient[1])
+            .sqrt();
         let steepness_factor = (1.0 - gradient_magnitude.min(1.0) * 0.3).max(0.7);
         xy_velocity = [
             xy_velocity[0] * steepness_factor,
@@ -411,7 +427,8 @@ pub fn advance_along_polyline(
     for index in 0..points_xy.len() - 1 {
         let endpoint = points_xy[index + 1];
         let segment = [endpoint[0] - cursor[0], endpoint[1] - cursor[1]];
-        let segment_length = segment[0].hypot(segment[1]);
+        // `np.linalg.norm`, not `hypot`. See `follow_path::norm`.
+        let segment_length = (segment[0] * segment[0] + segment[1] * segment[1]).sqrt();
         if segment_length <= DEGENERATE_SEGMENT_M {
             // Skipped without consuming distance and without setting the
             // direction — a coincident vertex is not a heading.
@@ -609,6 +626,9 @@ mod tests {
         fn push_clear(&self, point_m: [f64; 3], _margin_m: f64) -> Option<[f64; 2]> {
             // Pushes somewhere, and it is never enough.
             Some([point_m[0] + 1.0, point_m[1]])
+        }
+        fn collides(&self, _point_m: [f64; 3]) -> bool {
+            true
         }
     }
 

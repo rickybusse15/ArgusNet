@@ -112,6 +112,10 @@ impl ObstacleSampler for WorldObstacles<'_> {
             .point_collides(point_m)
             .map(|obstacle| obstacle.push_outside_xy(point_m[0], point_m[1], margin_m))
     }
+
+    fn collides(&self, point_m: [f64; 3]) -> bool {
+        self.index.point_collides(point_m).is_some()
+    }
 }
 
 #[cfg(test)]

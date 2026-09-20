@@ -409,3 +409,136 @@ Its prerequisites are now all in place: the substrate, the world adapter,
 these wrappers, and the P4.1d handler-state contract — which the controller
 stage must implement, since `_state` survives a tick and a resumed mission
 would otherwise fly a different path.
+
+---
+
+# P4.8d.2b: `FollowPathController`
+
+**Status:** delivered 2026-09-20. The largest slice of P4.8d.2, on the
+substrate, the adapter and the wrappers above.
+
+The third and last of the controllers `sim.py` line 136 names, and the one
+the other two are built around. `__call__` is ~370 lines in a single method
+and is **not divisible**: the candidate scan, the replan decision, the walk
+along the route, two exclusion-zone passes and the altitude computation all
+read and write one `_state` dict in an order that matters. Porting a piece
+would have shipped dead code, so it moved whole.
+
+## Five capabilities, and the call pattern is the assertion
+
+Terrain, obstacle containment, line of sight, and the planner's two entry
+points — each a narrow trait, each replayed from a recording that panics on
+a read the reference never made. `argusnet-sim` gains no crate dependency.
+
+That technique does more work here than anywhere before it. Earlier slices
+used oracles so the tests would not accidentally re-test P4.3; here the
+controller *chooses* between candidates using those reads, so **which points
+it asked about is the decision**. A port that tested visibility before the
+obstacle, or skipped the per-tick planner check on the stored goal, asks
+about positions the reference never evaluated and fails on a lookup rather
+than on a number that happens to agree.
+
+Cases are sequences, not samples: 30 cases, 140 samples, ~8000 recorded
+reads. Most of the behaviour is unreachable in one call — acceleration
+limiting needs a previous velocity, the orbit blend a previous position.
+
+## Two ULP-level parity fixes
+
+The port matched exactly for five samples and diverged in the twelfth digit
+on the sixth. Two causes, both worth naming because they will recur:
+
+**`hypot` is not `np.linalg.norm`.** They agree to within an ULP and
+disagree often enough to compound over a sequence. numpy takes the plain
+`sqrt` of the sum of squares; `hypot` is a different algorithm that avoids
+intermediate overflow and is often correctly rounded. Being more accurate
+than the reference is a change, not an improvement. Fixed here and in
+`motion.rs`, which had the same two calls.
+
+**`v / speed * max` is not `v * (max / speed)`.** One rounding, differently
+placed. The reference divides then multiplies; so does the port now.
+
+## Three findings, preserved rather than corrected
+
+**An unseeded controller never flies.** Tick 0 has `delta_t == 0` and no
+`last_xy`, so it takes the branch that jumps straight to `route[1]` — the
+platform *teleports* to its first goal — and collapses the route to
+`[chosen, chosen]`. Every later tick walks a zero-length route. The replan
+that would rebuild it never comes, and the reason is self-stabilising: the
+candidate score's second key is distance from where the platform *is*, so a
+frozen platform keeps choosing the candidate nearest itself, which never
+drifts past the `max(30, standoff / 2)` threshold. Verified over thirteen
+seconds: one position, thirteen times, while the reported velocity kept
+changing — so it does not look stuck from the outside.
+
+`seed` is what avoids this, and it is how a launched drone hands over
+mid-flight. Every comparison case in the fixture is seeded for that reason.
+
+**`terrain_following_smoothing_s` does nothing.** The reference computes an
+exponential moving average of the ground height, stores it, and never reads
+it again except to compute the next average; the altitude on that branch is
+the flat `terrain_following_agl_m`. Two fixture cases four orders of
+magnitude apart are recorded as byte-identical, and a property test sweeps
+the constant and requires the output not to move — the same treatment the
+dead steepness floor got in P4.8d.1.
+
+**The acceleration limit runs before the orbit blend, and the blend ignores
+it.** The limited velocity is stored as `last_velocity_xy`, then the tangent
+blend rewrites the velocity without updating that store — so the blend can
+move the speed past the limit, and the next tick limits against a value the
+platform never flew. Measured: a 5.75 m/s change under a 1.5 m/s² limit. An
+early version of the fixture asserted the limit held every tick; it failed
+against the reference, which is how this was found.
+
+Also worth knowing: the limit bounds *deceleration* too, so a limited
+platform is sometimes **faster** than an unlimited one.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `cargo test --workspace --exclude argusnet-viewer` | **859 passing**, exit 0 |
+| `cargo test -p argusnet-viewer` | **99 passing**, exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+| `python3 -m pytest tests/ -q` | **981 passed**, 9 skipped, 65 subtests, exit 0 |
+
+**30 distinct mutants, 29 caught, 1 proven equivalent.** Six survived a
+first pass, and every one named a case the fixture was missing:
+
+| survivor | what was missing |
+|---|---|
+| the bounds margin ignores `map_scale` | a scale of 8 left the margin at 120 m against 2 km bounds and rejected nothing; it takes 120 |
+| the orbit blend threshold is 0 | no case sat in the band but under 0.05 |
+| the standoff gate is 0 rather than 1 m | the sub-metre case sat far from its own radius, so the blend was below threshold anyway |
+| the final zone margin is `+0` | the waypoint pass pushes to `1.1×` and nothing moved the platform back in — it takes an obstacle placed to push it there |
+| the follow floor is `1.0` not `0.3` | unreachable with a level target, because the floor uses the *current* sample and the composition uses the *lead* one; it takes a descending target |
+| the `(None, Some(_))` replan arm | equivalent — see below |
+
+The equivalent one is kept rather than deleted. The goal and the route are
+written together every tick and cleared together by `seed` and
+`reset_state`, so "no goal" always implies "no route", which the length test
+has already turned into a replan. `the_goal_and_the_route_are_written_together`
+pins that invariant, so if a future slice clears one without the other,
+something says so rather than the arm quietly becoming load-bearing.
+
+The fixture is 1.6 MB — the largest in the repo, against 728 KB for the next
+one. The candidate scan is what costs it: twelve candidates per tick, each
+with an obstacle probe and a visibility query. Trimming it would mean
+recording fewer candidates, which is the subject.
+
+## Next
+
+**`ObservationTriggeredFollowController`** (45 lines) wraps this one with a
+search trajectory and an engagement trigger; it is small and immediate now
+that this exists.
+
+Then the **stage wiring**, which is the point of the whole sub-package:
+`Stage::SampleControllersAndBattery` still runs only `BatteryStage`. The
+controller stage must implement the P4.1d handler-state contract —
+[`FollowPathState`] is public and `PartialEq` for exactly that — or a
+resumed mission flies a different path from an uninterrupted one. See
+[CHECKPOINT_COMPLETENESS.md](CHECKPOINT_COMPLETENESS.md).
+
+Still open and unchanged: the planner capability has no `argusnet-planning`
+adapter, and no fixture case drives one (`has_planner` is asserted false in
+the parity test, so a future case cannot be added silently).
