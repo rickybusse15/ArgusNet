@@ -369,6 +369,7 @@ dependencies = [
  "argusnet-planning",
  "argusnet-sensing",
  "argusnet-types",
+ "argusnet-world",
  "libm",
  "rand_chacha",
  "rand_core 0.10.1",

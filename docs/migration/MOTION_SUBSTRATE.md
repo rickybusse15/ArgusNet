@@ -206,9 +206,9 @@ terrain/obstacle contract to test them against.
 
 Deliberately left here for it:
 
-* **No adapter from `argusnet-world` to `TerrainSampler`/`ObstacleSampler`.**
-  Nothing calls the substrate yet, so the adapter would be an untested seam.
-  The controller slice is its first caller and should bring it.
+* ~~**No adapter from `argusnet-world` to
+  `TerrainSampler`/`ObstacleSampler`.**~~ **Delivered** as `P4.8d.1b`,
+  `rust/argusnet-sim/src/motion_world.rs` — see the section below.
 * **The stage handler is not wired.** `Stage::SampleControllersAndBattery`
   still runs only `BatteryStage`. Wiring a second handler into one stage is the
   controller slice's problem, not the substrate's.
@@ -221,3 +221,87 @@ Then `P4.8e` (widening `NodeState` with `battery_fraction`, `sensor_type`,
 sites, which CLAUDE.md requires be coordinated across the Python bindings and
 three Rust crates, and which should land on a quiet tree), and `P4.8f`
 (`CommitSnapshot`, checkpoints and the Rust replay writer).
+
+---
+
+# P4.8d.1b: the world adapter
+
+**Status:** delivered 2026-09-19. Completes P4.8d.1 by supplying the
+prerequisite it deferred.
+
+`WorldTerrain` and `WorldObstacles` implement the substrate's two contracts
+over `argusnet-world`. Deferred from the first slice because nothing called
+the substrate yet and an adapter nobody exercises is an untested seam
+pretending to be progress; delivered now, ahead of the controllers, so
+P4.8d.2 starts against something that has been run.
+
+## `motion.rs` still does not know the world exists
+
+The adapter is a separate module, and the separation is load-bearing rather
+than tidy. The substrate's tests drive it with a recorded oracle that panics
+on an unrecorded read, and they can only do that because the contract is a
+trait. Merging the two files would make the fixture tests quietly depend on
+a real terrain and stop them testing what they claim to.
+
+`argusnet-world` becomes a direct dependency of `argusnet-sim` for the first
+time here, used by this module alone. It was already in the tree transitively
+through `argusnet-planning`.
+
+## The default gradient step is resolved here, on purpose
+
+`TerrainSampler::gradient_at` takes `Option<f64>` precisely so the substrate
+does not have to pick one of this codebase's three gradient steps.
+`TerrainQuery::gradient_at` requires one, so the adapter resolves it:
+`max(base_resolution * 0.5, 0.25)`, matching the reference's
+`TerrainLayer.gradient_at`.
+
+The resolution is a constructor argument rather than something read off the
+terrain, because `TerrainQuery` does not expose one — a tiled field, an
+analytic surface and an imported raster do not agree on what "the resolution"
+is, and guessing on their behalf is how the wrong step gets picked.
+
+The floor applies to the **default only**. A caller passing an explicit step
+below it gets exactly what it asked for: `slope_rad_at` legitimately uses
+`1.0`, and a caller may legitimately want something finer.
+
+## The blocker-type filter is not re-implemented
+
+`ObstacleLayer::point_collides` already tests
+`matches!(blocker_type.as_str(), "building" | "wall")` before containment —
+the same rule the Python `ObstacleLayer` applies, and the finding P4.8d.1
+recorded. The adapter forwards to it and adds nothing. A test pushes the same
+cylinder at the same point as `Building` and as `Vegetation` to pin that,
+because a future reader "fixing" the adapter by adding its own containment
+test would silently start colliding with forest.
+
+## Verification
+
+6 unit tests. **6 mutants, 6 caught.** One survived a first pass: replacing
+the forwarded margin with `0.0` passed, because clearing to exactly the
+radius lands a hair outside it in floating point and the test only asserted
+"outside the radius". It now measures two different margins against each
+other.
+
+`the_substrate_runs_against_a_real_world` composes both halves through the
+call a controller will actually make — the one thing neither file's own tests
+can check alone.
+
+| Gate | Result |
+|---|---|
+| `cargo test --workspace --exclude argusnet-viewer` | **848 passing**, exit 0 |
+| `cargo test -p argusnet-viewer` | **99 passing**, exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+
+## Next
+
+Unchanged: **`P4.8d.2`, the controller bodies**. Its two remaining
+prerequisites from the list above still stand — `Stage::SampleControllersAndBattery`
+runs only `BatteryStage`, and `_apply_weather_adjustments` is unported.
+
+One requirement has been **added** since P4.8d.1 was written: P4.1d gave
+`StageHandler` a `reset`/`checkpoint_state`/`restore_state` contract, and a
+controller is stateful (`FollowPathController` carries a `_state` dict with a
+cached timestamp and rotation phase). The controller stage must implement it,
+or a resumed mission flies a different path than an uninterrupted one. See
+[CHECKPOINT_COMPLETENESS.md](CHECKPOINT_COMPLETENESS.md).
