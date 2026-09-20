@@ -1,0 +1,360 @@
+{
+  "meta": {
+    "schema_version": "2.0",
+    "scenario_name": "rust-replay-contract",
+    "frame_count": 2,
+    "dt_s": 0.5,
+    "seed": 42,
+    "node_ids": [
+      "node-a",
+      "tower"
+    ],
+    "track_ids": [
+      "track-1"
+    ],
+    "producer": "argusnet-sim",
+    "generated_at_utc": "2026-01-01T00:00:00+00:00"
+  },
+  "summary": {
+    "mean_error_m": 3.0,
+    "peak_error_m": 3.0,
+    "mean_observations_per_frame": 4.0,
+    "mean_active_tracks": 1.0,
+    "mean_accepted_observations_per_frame": 3.0,
+    "mean_rejected_observations_per_frame": 1.0,
+    "total_accepted_observations": 6,
+    "total_rejected_observations": 2,
+    "observation_rejection_rate": 0.25,
+    "rejection_counts": {
+      "out_of_range": 2
+    }
+  },
+  "frames": [
+    {
+      "timestamp_s": 0.5,
+      "nodes": [
+        {
+          "node_id": "node-a",
+          "position": [
+            0.0,
+            10.0,
+            50.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            -0.25
+          ],
+          "is_mobile": true,
+          "timestamp_s": 0.5,
+          "health": 0.875,
+          "sensor_type": "radar",
+          "fov_half_angle_deg": 37.5,
+          "max_range_m": 1200.0,
+          "battery_fraction": 1.0
+        },
+        {
+          "node_id": "tower",
+          "position": [
+            500.0,
+            10.0,
+            50.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            -0.25
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.5,
+          "health": 0.875,
+          "sensor_type": "radar",
+          "fov_half_angle_deg": 37.5,
+          "max_range_m": 1200.0,
+          "battery_fraction": -1.0
+        }
+      ],
+      "observations": [
+        {
+          "node_id": "node-a",
+          "target_id": "target-1",
+          "origin": [
+            0.0,
+            10.0,
+            50.0
+          ],
+          "direction": [
+            0.6,
+            0.8,
+            0.0
+          ],
+          "bearing_std_rad": 0.015,
+          "timestamp_s": 0.5,
+          "confidence": 0.9
+        }
+      ],
+      "rejected_observations": [],
+      "tracks": [
+        {
+          "track_id": "track-1",
+          "timestamp_s": 0.5,
+          "position": [
+            100.0,
+            200.0,
+            30.0
+          ],
+          "velocity": [
+            -2.0,
+            1.0,
+            0.0
+          ],
+          "covariance": [
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0,
+            11.0,
+            12.0,
+            13.0,
+            14.0,
+            15.0,
+            16.0,
+            17.0,
+            18.0,
+            19.0,
+            20.0,
+            21.0,
+            22.0,
+            23.0,
+            24.0,
+            25.0,
+            26.0,
+            27.0,
+            28.0,
+            29.0,
+            30.0,
+            31.0,
+            32.0,
+            33.0,
+            34.0,
+            35.0
+          ],
+          "measurement_std_m": 2.25,
+          "update_count": 7,
+          "stale_steps": 1,
+          "mode_probability_cv": 0.6,
+          "contributing_node_ids": [
+            "node-a"
+          ]
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "target-1",
+          "position": [
+            105.0,
+            198.0,
+            29.0
+          ],
+          "velocity": [
+            -2.0,
+            1.0,
+            0.0
+          ],
+          "timestamp_s": 0.5
+        }
+      ],
+      "metrics": {
+        "mean_error_m": 3.0,
+        "max_error_m": 4.5,
+        "active_track_count": 1,
+        "observation_count": 4,
+        "accepted_observation_count": 3,
+        "rejected_observation_count": 1,
+        "mean_measurement_std_m": 2.25,
+        "track_errors_m": {
+          "track-1": 3.0
+        },
+        "rejection_counts": {
+          "out_of_range": 1
+        },
+        "accepted_observations_by_target": {
+          "target-1": 3
+        },
+        "rejected_observations_by_target": {
+          "target-1": 1
+        }
+      }
+    },
+    {
+      "timestamp_s": 1.0,
+      "nodes": [
+        {
+          "node_id": "node-a",
+          "position": [
+            10.0,
+            10.0,
+            50.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            -0.25
+          ],
+          "is_mobile": true,
+          "timestamp_s": 0.5,
+          "health": 0.875,
+          "sensor_type": "radar",
+          "fov_half_angle_deg": 37.5,
+          "max_range_m": 1200.0,
+          "battery_fraction": 0.75
+        },
+        {
+          "node_id": "tower",
+          "position": [
+            500.0,
+            10.0,
+            50.0
+          ],
+          "velocity": [
+            1.5,
+            0.0,
+            -0.25
+          ],
+          "is_mobile": false,
+          "timestamp_s": 0.5,
+          "health": 0.875,
+          "sensor_type": "radar",
+          "fov_half_angle_deg": 37.5,
+          "max_range_m": 1200.0,
+          "battery_fraction": -1.0
+        }
+      ],
+      "observations": [
+        {
+          "node_id": "node-a",
+          "target_id": "target-1",
+          "origin": [
+            0.0,
+            10.0,
+            50.0
+          ],
+          "direction": [
+            0.6,
+            0.8,
+            0.0
+          ],
+          "bearing_std_rad": 0.015,
+          "timestamp_s": 0.5,
+          "confidence": 0.9
+        }
+      ],
+      "rejected_observations": [],
+      "tracks": [
+        {
+          "track_id": "track-1",
+          "timestamp_s": 0.5,
+          "position": [
+            100.0,
+            200.0,
+            30.0
+          ],
+          "velocity": [
+            -2.0,
+            1.0,
+            0.0
+          ],
+          "covariance": [
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            10.0,
+            11.0,
+            12.0,
+            13.0,
+            14.0,
+            15.0,
+            16.0,
+            17.0,
+            18.0,
+            19.0,
+            20.0,
+            21.0,
+            22.0,
+            23.0,
+            24.0,
+            25.0,
+            26.0,
+            27.0,
+            28.0,
+            29.0,
+            30.0,
+            31.0,
+            32.0,
+            33.0,
+            34.0,
+            35.0
+          ],
+          "measurement_std_m": 2.25,
+          "update_count": 7,
+          "stale_steps": 1,
+          "mode_probability_cv": 0.6,
+          "contributing_node_ids": [
+            "node-a"
+          ]
+        }
+      ],
+      "truths": [
+        {
+          "target_id": "target-1",
+          "position": [
+            105.0,
+            198.0,
+            29.0
+          ],
+          "velocity": [
+            -2.0,
+            1.0,
+            0.0
+          ],
+          "timestamp_s": 0.5
+        }
+      ],
+      "metrics": {
+        "mean_error_m": 3.0,
+        "max_error_m": 4.5,
+        "active_track_count": 1,
+        "observation_count": 4,
+        "accepted_observation_count": 3,
+        "rejected_observation_count": 1,
+        "mean_measurement_std_m": 2.25,
+        "track_errors_m": {
+          "track-1": 3.0
+        },
+        "rejection_counts": {
+          "out_of_range": 1
+        },
+        "accepted_observations_by_target": {
+          "target-1": 3
+        },
+        "rejected_observations_by_target": {
+          "target-1": 1
+        }
+      }
+    }
+  ]
+}
