@@ -662,6 +662,11 @@ mod tests {
                 0.5 + f64::from(tick) * 0.5,
                 &[
                     node("node-a", offset, Some(1.0 - f64::from(tick) * 0.25)),
+                    // A second drone, so the fixture's node count (3) differs
+                    // from its frame count (2). With two of each, a mutant
+                    // that reported `node_ids.len()` as `frame_count`
+                    // survived: both numbers were 2 and every assertion held.
+                    node("node-b", offset + 25.0, Some(0.5)),
                     // A fixed platform: no battery, which must serialize as the
                     // -1.0 sentinel and not as 0.0.
                     node("tower", 500.0, None),
@@ -818,14 +823,56 @@ mod tests {
         assert_eq!(document.meta.producer, PRODUCER);
         assert_eq!(document.meta.frame_count, document.frames.len());
         assert_eq!(document.meta.frame_count, 2);
+        // Pinned against the id count too. These were both 2 in the original
+        // fixture, so `frame_count: node_ids.len()` was indistinguishable from
+        // the correct expression -- a mutant survived on that coincidence.
+        assert_eq!(document.meta.node_ids.len(), 3);
+        assert_ne!(
+            document.meta.frame_count,
+            document.meta.node_ids.len(),
+            "the fixture must not let a frame count and an id count coincide"
+        );
     }
 
     /// Sorted and deduplicated across the whole run, not per frame.
     #[test]
     fn node_and_track_ids_are_sorted_and_deduplicated_across_frames() {
         let document = fixture_document();
-        assert_eq!(document.meta.node_ids, vec!["node-a", "tower"]);
+        assert_eq!(document.meta.node_ids, vec!["node-a", "node-b", "tower"]);
         assert_eq!(document.meta.track_ids, vec!["track-1"]);
+    }
+
+    /// `frame_count` counts frames, and nothing else that happens to be the
+    /// same length.
+    ///
+    /// Stated over several shapes so no single coincidence can satisfy it:
+    /// one frame with four platforms, four frames with one, and so on.
+    #[test]
+    fn frame_count_counts_frames_not_platforms() {
+        for (frames, platforms) in [(1usize, 4usize), (4, 1), (3, 7), (5, 2)] {
+            let mut writer = ReplayWriter::new("counts", 0.1, 1);
+            let fleet: Vec<NodeState> = (0..platforms)
+                .map(|i| node(&format!("node-{i}"), i as f64, Some(1.0)))
+                .collect();
+            for tick in 0..frames {
+                writer.push_frame(ReplayWriter::frame(
+                    tick as f64 * 0.1,
+                    &fleet,
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    &metrics(),
+                    &[],
+                ));
+            }
+            let document = writer.finish();
+            assert_eq!(
+                document.meta.frame_count, frames,
+                "{frames} frames of {platforms} platforms"
+            );
+            assert_eq!(document.meta.node_ids.len(), platforms);
+        }
     }
 
     #[test]
