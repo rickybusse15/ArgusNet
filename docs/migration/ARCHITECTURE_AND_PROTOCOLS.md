@@ -186,6 +186,17 @@ revisions. Selection follows typed IDs; removed IDs clear selection deliberately
 
 ### Command lifecycle clarification for the next implementation
 
+The local P4.1 implementation now uses command protocol version 2. This is not a
+protobuf wire change. `Accepted` means queued; `Applied` means the control took
+effect at a boundary, not that a subsequent domain tick succeeded. An ack's
+revision identifies the boundary's last committed revision. Callers query
+`Simulation::command_ack` for the latest bounded result. `duplicate=true` preserves
+that result; legacy `Duplicate` is decode-only. One local command producer uses
+monotonic IDs per run; multi-client identity and durable result delivery remain
+future work. Busy is a stable refusal for that ID; a later submission uses a new
+ID. Reset cancellation is observable through the same bounded result API.
+
+
 Distinguish admission (`Accepted`) from execution (`Applied`) and terminal
 `Rejected`/`Cancelled` outcomes. A retry flag accompanies the original result;
 it must not erase the original refusal reason. Scope identity by run/client/ID,
@@ -238,6 +249,15 @@ and finalize manifests atomically; partial output is labelled and never reported
 as a complete replay.
 
 ### Checkpoint completeness and presentation epoch
+
+Implemented control slice: checkpoint format 2 restores pause, playback speed,
+committed revision, pending commands and bounded receipt/request/retirement
+history. Stored request speeds use explicit IEEE-754 bits so rejected NaN or
+infinite requests keep exact retry identity after JSON transport. Validate
+history bounds, identity and pending/receipt consistency before replacing state.
+This is control-state resume, not complete domain restore: subsystem handlers,
+world identity verification and fresh interactive publication epochs remain open.
+
 
 Concrete subsystem state belongs to the Simulation owner; stateful handlers
 cannot sit outside reset/checkpoint/restore. Persist idempotency history needed

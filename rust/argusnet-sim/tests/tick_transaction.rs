@@ -520,7 +520,8 @@ fn a_retry_gets_the_original_answer_and_is_not_applied_twice() {
     assert!(first.is_accepted());
 
     let retry = sim.apply_command(CommandEnvelope::new(7, "scan", 0, speed));
-    assert_eq!(retry.status, AckStatus::Duplicate);
+    assert_eq!(retry.status, first.status);
+    assert!(retry.duplicate);
     assert_eq!(retry.effective_tick, first.effective_tick);
 
     sim.step().expect("tick");
@@ -632,4 +633,468 @@ fn stage_zero_and_ten_cannot_be_delegated() {
             Box::new(FailingStage { fail_on_tick: 0 })
         )
         .is_err());
+}
+
+#[test]
+fn queued_reset_recovers_a_fault_at_tick_zero_without_running_stages() {
+    let mut sim = simulation();
+    sim.set_stage_handler(
+        Stage::Deconflict,
+        Box::new(FailingStage { fail_on_tick: 0 }),
+    )
+    .unwrap();
+    sim.step().unwrap_err();
+    assert!(sim
+        .apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Reset))
+        .is_accepted());
+    let reset = sim
+        .step()
+        .expect("recovery commands run even while faulted");
+    assert_eq!((reset.header.tick, reset.header.epoch), (0, 1));
+    assert!(!sim.is_faulted());
+    assert_eq!(sim.command_ack(1).unwrap().status, AckStatus::Applied);
+    // Recovery is a boundary, not a retry of a failed domain stage.
+    assert!(matches!(sim.step(), Err(TickError::Stage { tick: 0, .. })));
+}
+
+#[test]
+fn completed_runs_accept_immediate_reset_and_reject_unreachable_recovery() {
+    let mut sim = Simulation::new(SimulationConfig {
+        steps: Some(1),
+        ..config()
+    })
+    .unwrap();
+    sim.step().unwrap();
+    assert_eq!(
+        sim.apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Resume))
+            .status,
+        AckStatus::Rejected(RejectReason::Completed)
+    );
+    let mut delayed = CommandEnvelope::new(2, "scan", 0, CommandKind::Reset);
+    delayed.requested_effective_tick = Some(2);
+    assert_eq!(
+        sim.apply_command(delayed).status,
+        AckStatus::Rejected(RejectReason::RecoveryMustBeImmediate)
+    );
+    sim.apply_command(CommandEnvelope::new(3, "scan", 0, CommandKind::Reset));
+    assert_eq!(sim.step().unwrap().header.tick, 0);
+    assert_eq!(sim.step().unwrap().header.tick, 1);
+}
+
+#[test]
+fn single_step_runs_exactly_once_then_stays_paused() {
+    let mut sim = simulation();
+    sim.apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Pause));
+    assert_eq!(sim.step(), Err(TickError::Paused));
+    sim.apply_command(CommandEnvelope::new(2, "scan", 0, CommandKind::SingleStep));
+    assert_eq!(sim.step().unwrap().header.tick, 1);
+    assert!(sim.is_paused());
+    assert_eq!(sim.step(), Err(TickError::Paused));
+    sim.apply_command(CommandEnvelope::new(3, "scan", 0, CommandKind::SingleStep));
+    assert_eq!(sim.step().unwrap().header.tick, 2);
+    assert_eq!(sim.step(), Err(TickError::Paused));
+    sim.apply_command(CommandEnvelope::new(4, "scan", 0, CommandKind::Resume));
+    sim.step().unwrap();
+    sim.step().unwrap();
+    assert_eq!(sim.tick(), 4);
+}
+
+#[test]
+fn pause_or_resume_after_single_step_has_last_command_precedence() {
+    for (last, should_pause) in [(CommandKind::Pause, true), (CommandKind::Resume, false)] {
+        let mut sim = simulation();
+        sim.apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::SingleStep));
+        sim.apply_command(CommandEnvelope::new(2, "scan", 0, last));
+        assert_eq!(sim.step().is_err(), should_pause);
+        assert_eq!(sim.is_paused(), should_pause);
+    }
+}
+
+#[test]
+fn reset_cancels_both_due_and_future_old_epoch_commands() {
+    let mut sim = simulation();
+    sim.apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Reset));
+    sim.apply_command(CommandEnvelope::new(
+        2,
+        "scan",
+        0,
+        CommandKind::SetSpeed { multiplier: 9.0 },
+    ));
+    let mut future = CommandEnvelope::new(3, "scan", 0, CommandKind::Pause);
+    future.requested_effective_tick = Some(5);
+    sim.apply_command(future.clone());
+    sim.step().unwrap();
+    assert_eq!(sim.speed(), 1.0);
+    assert_eq!(sim.tick(), 0);
+    for id in [2, 3] {
+        assert_eq!(
+            sim.command_ack(id).unwrap().status,
+            AckStatus::Cancelled(RejectReason::StaleEpoch {
+                found: 0,
+                expected: 1
+            })
+        );
+    }
+    let retry = sim.apply_command(future);
+    assert!(retry.duplicate);
+    assert!(matches!(retry.status, AckStatus::Cancelled(_)));
+    for _ in 0..6 {
+        sim.step().unwrap();
+    }
+    assert!(!sim.is_paused());
+}
+
+#[test]
+fn execution_rechecks_a_scheduled_revision() {
+    let mut sim = simulation();
+    let mut command = CommandEnvelope::new(1, "scan", 0, CommandKind::Pause);
+    command.expected_revision = Some(0);
+    command.requested_effective_tick = Some(1);
+    sim.apply_command(command);
+    sim.step().unwrap();
+    sim.step().expect("stale pause does not take effect");
+    assert_eq!(
+        sim.command_ack(1).unwrap().status,
+        AckStatus::Cancelled(RejectReason::StaleRevision {
+            found: 0,
+            expected: 1
+        })
+    );
+}
+
+#[test]
+fn invalid_speed_and_past_ticks_never_mutate_pacing() {
+    let mut sim = simulation();
+    for (id, multiplier) in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0]
+        .into_iter()
+        .enumerate()
+    {
+        let command =
+            CommandEnvelope::new(id as u64, "scan", 0, CommandKind::SetSpeed { multiplier });
+        let first = sim.apply_command(command.clone());
+        assert_eq!(
+            first.status,
+            AckStatus::Rejected(RejectReason::InvalidSpeed)
+        );
+        let retry = sim.apply_command(command);
+        assert!(retry.duplicate);
+        assert_eq!(retry.status, first.status);
+    }
+    sim.step().unwrap();
+    let mut past = CommandEnvelope::new(10, "scan", 0, CommandKind::Pause);
+    past.requested_effective_tick = Some(0);
+    assert_eq!(
+        sim.apply_command(past).status,
+        AckStatus::Rejected(RejectReason::PastEffectiveTick {
+            requested: 0,
+            current: 1
+        })
+    );
+    assert_eq!(sim.speed(), 1.0);
+}
+
+#[test]
+fn a_conflicting_payload_cannot_replace_the_original_command() {
+    let mut sim = simulation();
+    let command = CommandEnvelope::new(1, "scan", 0, CommandKind::SetSpeed { multiplier: 2.0 });
+    sim.apply_command(command.clone());
+    assert_eq!(
+        sim.apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Pause))
+            .status,
+        AckStatus::Rejected(RejectReason::CommandIdConflict)
+    );
+    assert_eq!(sim.command_ack(1).unwrap().status, AckStatus::Accepted);
+    sim.step().unwrap();
+    assert_eq!(sim.speed(), 2.0);
+    let retry = sim.apply_command(command);
+    assert!(retry.duplicate);
+    assert_eq!(retry.status, AckStatus::Applied);
+}
+
+#[test]
+fn a_foreign_run_cannot_read_or_poison_acknowledgements() {
+    let mut sim = simulation();
+    sim.apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Pause));
+    let foreign = sim.apply_command(CommandEnvelope::new(1, "other", 0, CommandKind::Pause));
+    assert!(matches!(
+        foreign.status,
+        AckStatus::Rejected(RejectReason::StaleRun { .. })
+    ));
+    assert!(!foreign.duplicate);
+    sim.apply_command(CommandEnvelope::new(2, "other", 0, CommandKind::Resume));
+    assert!(sim
+        .apply_command(CommandEnvelope::new(2, "scan", 0, CommandKind::Resume))
+        .is_accepted());
+    sim.step().unwrap();
+}
+
+#[test]
+fn busy_retries_keep_the_refusal_instead_of_becoming_success() {
+    let mut sim = simulation();
+    for id in 0..CommandQueue::DEFAULT_CAPACITY as u64 {
+        let mut command = CommandEnvelope::new(id, "scan", 0, CommandKind::Pause);
+        command.requested_effective_tick = Some(10);
+        assert!(sim.apply_command(command).is_accepted());
+    }
+    let command = CommandEnvelope::new(1000, "scan", 0, CommandKind::Resume);
+    let first = sim.apply_command(command.clone());
+    let retry = sim.apply_command(command);
+    assert!(matches!(
+        first.status,
+        AckStatus::Rejected(RejectReason::Busy { .. })
+    ));
+    assert_eq!(retry.status, first.status);
+    assert!(retry.duplicate);
+}
+
+#[test]
+fn retry_history_eviction_cannot_make_a_retired_command_new_again() {
+    let mut queue = CommandQueue::new(1, 2);
+    for id in [100, 1, 2] {
+        queue.remember(argusnet_sim::command::CommandAck {
+            command_id: id,
+            status: AckStatus::Accepted,
+            effective_tick: None,
+            epoch: 0,
+            revision: 0,
+            duplicate: false,
+        });
+    }
+    assert!(queue.is_expired(100), "arrival order is not numeric order");
+    assert!(!queue.is_expired(101));
+    assert!(
+        queue.previous_ack(1).is_some(),
+        "known retries are checked before expiry"
+    );
+}
+
+#[test]
+fn malformed_checkpoints_leave_existing_state_untouched() {
+    let mut sim = simulation();
+    sim.step().unwrap();
+    let original = sim.checkpoint().unwrap();
+    let mut cases = Vec::new();
+    let mut bad = original.clone();
+    bad.tick += 1;
+    cases.push(bad);
+    let mut bad = original.clone();
+    bad.seed ^= 1;
+    cases.push(bad);
+    let mut bad = original.clone();
+    bad.tick = 101;
+    bad.header.tick = 101;
+    cases.push(bad);
+    let mut bad = original.clone();
+    bad.pending_commands = vec![CommandEnvelope::new(1, "scan", 0, CommandKind::Pause); 257];
+    cases.push(bad);
+    for command in [
+        CommandEnvelope::new(1, "foreign", 0, CommandKind::Pause),
+        CommandEnvelope::new(1, "scan", 9, CommandKind::Pause),
+        CommandEnvelope::new(
+            1,
+            "scan",
+            0,
+            CommandKind::SetSpeed {
+                multiplier: f64::NAN,
+            },
+        ),
+        CommandEnvelope::new(1, "scan", 0, CommandKind::Seek { tick: 1 }),
+    ] {
+        let mut bad = original.clone();
+        bad.pending_commands.push(command);
+        cases.push(bad);
+    }
+    let mut bad = original.clone();
+    let command = CommandEnvelope::new(1, "scan", 0, CommandKind::Pause);
+    bad.pending_commands = vec![command.clone(), command];
+    cases.push(bad);
+    for bad in cases {
+        assert!(matches!(
+            sim.restore(&bad),
+            Err(RestoreError::InvalidState { .. })
+        ));
+        assert_eq!(sim.tick(), 1);
+        assert_eq!(sim.revision(), 1);
+        assert_eq!(sim.latest_snapshot().unwrap().header.tick, 1);
+    }
+}
+
+#[test]
+fn restore_sets_a_large_valid_clock_directly() {
+    let mut sim = Simulation::new(SimulationConfig {
+        steps: None,
+        ..config()
+    })
+    .unwrap();
+    let mut checkpoint = sim.checkpoint().unwrap();
+    checkpoint.tick = 1_000_000_000_000;
+    checkpoint.header.tick = checkpoint.tick;
+    sim.restore(&checkpoint).unwrap();
+    assert_eq!(sim.tick(), checkpoint.tick);
+    assert_eq!(sim.step().unwrap().header.tick, checkpoint.tick + 1);
+}
+
+fn json_checkpoint(sim: &Simulation) -> argusnet_sim::snapshot::SimulationCheckpoint {
+    serde_json::from_str(&serde_json::to_string(&sim.checkpoint().unwrap()).unwrap()).unwrap()
+}
+
+#[test]
+fn checkpoint_roundtrip_preserves_pause_pacing_revision_and_retry_results() {
+    let mut source = simulation();
+    let speed = CommandEnvelope::new(1, "scan", 0, CommandKind::SetSpeed { multiplier: 2.5 });
+    source.apply_command(speed.clone());
+    source.step().unwrap();
+    source.apply_command(CommandEnvelope::new(2, "scan", 0, CommandKind::Pause));
+    assert_eq!(source.step(), Err(TickError::Paused));
+    let checkpoint = json_checkpoint(&source);
+    let mut resumed = simulation();
+    // Unrelated receiver history must be replaced rather than merged.
+    resumed.apply_command(CommandEnvelope::new(90, "scan", 0, CommandKind::Pause));
+    resumed.restore(&checkpoint).unwrap();
+    assert!(resumed.command_ack(90).is_none());
+    assert!(resumed.is_paused());
+    assert_eq!(resumed.speed(), 2.5);
+    assert_eq!(resumed.revision(), source.revision());
+    assert_eq!(resumed.step(), Err(TickError::Paused));
+    let retry = resumed.apply_command(speed);
+    assert_eq!(retry.status, AckStatus::Applied);
+    assert!(retry.duplicate);
+    for sim in [&mut source, &mut resumed] {
+        sim.apply_command(CommandEnvelope::new(3, "scan", 0, CommandKind::SingleStep));
+        sim.step().unwrap();
+    }
+    assert_eq!(source.latest_snapshot(), resumed.latest_snapshot());
+    assert_eq!(source.command_ack(3), resumed.command_ack(3));
+}
+
+#[test]
+fn restored_pending_command_retry_is_not_enqueued_twice() {
+    let mut source = simulation();
+    source.step().unwrap();
+    let mut command = CommandEnvelope::new(1, "scan", 0, CommandKind::Pause);
+    command.requested_effective_tick = Some(1);
+    command.expected_revision = Some(source.revision());
+    source.apply_command(command.clone());
+    let mut resumed = simulation();
+    resumed.restore(&json_checkpoint(&source)).unwrap();
+    let retry = resumed.apply_command(command);
+    assert!(retry.duplicate);
+    assert_eq!(retry.status, AckStatus::Accepted);
+    assert_eq!(resumed.checkpoint().unwrap().pending_commands.len(), 1);
+    assert_eq!(resumed.step(), Err(TickError::Paused));
+    assert_eq!(resumed.command_ack(1).unwrap().status, AckStatus::Applied);
+}
+
+#[test]
+fn rejected_nonfinite_request_identity_survives_json_checkpoint() {
+    let mut source = simulation();
+    let command = CommandEnvelope::new(
+        1,
+        "scan",
+        0,
+        CommandKind::SetSpeed {
+            multiplier: f64::NAN,
+        },
+    );
+    source.apply_command(command.clone());
+    let mut resumed = simulation();
+    resumed.restore(&json_checkpoint(&source)).unwrap();
+    let retry = resumed.apply_command(command);
+    assert!(retry.duplicate);
+    assert_eq!(
+        retry.status,
+        AckStatus::Rejected(RejectReason::InvalidSpeed)
+    );
+    assert_eq!(
+        resumed
+            .apply_command(CommandEnvelope::new(
+                1,
+                "scan",
+                0,
+                CommandKind::SetSpeed {
+                    multiplier: f64::INFINITY
+                }
+            ))
+            .status,
+        AckStatus::Rejected(RejectReason::CommandIdConflict)
+    );
+}
+
+#[test]
+fn checkpoint_keeps_retired_ids_and_cancelled_outcomes() {
+    let mut source = simulation();
+    for id in 0..=CommandQueue::DEFAULT_DEDUP_CAPACITY as u64 {
+        source.apply_command(CommandEnvelope::new(
+            id,
+            "scan",
+            0,
+            CommandKind::Seek { tick: 0 },
+        ));
+    }
+    let mut resumed = simulation();
+    resumed.restore(&json_checkpoint(&source)).unwrap();
+    assert!(matches!(
+        resumed
+            .apply_command(CommandEnvelope::new(0, "scan", 0, CommandKind::Pause))
+            .status,
+        AckStatus::Rejected(RejectReason::DedupWindowExpired { .. })
+    ));
+    let id = CommandQueue::DEFAULT_DEDUP_CAPACITY as u64 + 1;
+    let mut pending = CommandEnvelope::new(id, "scan", 0, CommandKind::Pause);
+    pending.requested_effective_tick = Some(5);
+    resumed.apply_command(pending.clone());
+    resumed.reset();
+    let mut restored = simulation();
+    restored.restore(&json_checkpoint(&resumed)).unwrap();
+    let retry = restored.apply_command(pending);
+    assert!(retry.duplicate);
+    assert!(matches!(
+        retry.status,
+        AckStatus::Cancelled(RejectReason::StaleEpoch { .. })
+    ));
+}
+
+#[test]
+fn invalid_control_checkpoint_does_not_mutate_the_receiver() {
+    let mut source = simulation();
+    source.apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Pause));
+    let valid = source.checkpoint().unwrap();
+    let mut variants = Vec::new();
+    let mut bad = valid.clone();
+    bad.speed = 0.0;
+    variants.push(bad);
+    let mut bad = valid.clone();
+    bad.command_history.receipts.clear();
+    variants.push(bad);
+    let mut bad = valid.clone();
+    bad.command_history
+        .receipts
+        .push(bad.command_history.receipts[0].clone());
+    variants.push(bad);
+    let mut bad = valid.clone();
+    bad.command_history.receipts[0].ack.status = AckStatus::Applied;
+    variants.push(bad);
+    let mut bad = valid.clone();
+    bad.command_history.receipts[0].speed_bits = Some(1);
+    variants.push(bad);
+    let mut bad = valid.clone();
+    bad.command_history.receipts[0]
+        .request
+        .as_mut()
+        .unwrap()
+        .payload = CommandKind::Resume;
+    variants.push(bad);
+    let mut bad = valid.clone();
+    bad.command_history.receipts[0].ack.revision = 99;
+    variants.push(bad);
+    let mut bad = valid.clone();
+    bad.header.format_version = 1;
+    variants.push(bad);
+    let mut target = simulation();
+    target.step().unwrap();
+    let before = target.checkpoint().unwrap();
+    for bad in variants {
+        assert!(target.restore(&bad).is_err());
+        assert_eq!(target.checkpoint().unwrap(), before);
+    }
 }
