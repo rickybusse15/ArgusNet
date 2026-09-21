@@ -17,6 +17,7 @@ import unittest
 import numpy as np
 
 from argusnet.adapters.argusnet_grpc import (
+    BATTERY_NOT_APPLICABLE,
     TrackerConfig,
     _node_from_proto,
     _node_to_proto,
@@ -145,6 +146,70 @@ class NodeStateRoundTripTest(unittest.TestCase):
         original = self._node(is_mobile=False)
         recovered = _node_from_proto(_node_to_proto(original))
         self.assertFalse(recovered.is_mobile)
+
+
+class NodeBatteryRoundTripTest(unittest.TestCase):
+    """`battery_fraction` is the one node field with real wire presence.
+
+    The two sensor fields beside it are bare `double`s whose documented unset
+    value is `0`, so `None` and zero necessarily collapse. Battery cannot do
+    that: `0.0` is a flat battery and `-1.0` means the platform has no battery
+    at all, and a ground station reading as a drone at zero percent is exactly
+    the failure the `optional` wire field exists to prevent. These tests pin
+    the conversion in both directions, including the sentinel.
+    """
+
+    def _node(self, battery_fraction: float):
+        return NodeState(
+            node_id="node-battery",
+            position=np.array([1.0, 2.0, 50.0], dtype=float),
+            velocity=np.zeros(3, dtype=float),
+            is_mobile=True,
+            timestamp_s=5.0,
+            battery_fraction=battery_fraction,
+        )
+
+    def test_every_real_reading_survives_the_round_trip(self) -> None:
+        for value in (1.0, 0.75, 0.5, 0.0):
+            with self.subTest(battery_fraction=value):
+                recovered = _node_from_proto(_node_to_proto(self._node(value)))
+                self.assertEqual(recovered.battery_fraction, value)
+
+    def test_a_flat_battery_is_present_on_the_wire(self) -> None:
+        """`0.0` must set the optional field, not leave it absent.
+
+        Passing the value to the constructor would also set presence; the
+        branch exists for the sentinel. This asserts the wire itself rather
+        than only the round-trip, because a round-trip that decoded absence
+        back to 0.0 would agree while losing the distinction.
+        """
+        message = _node_to_proto(self._node(0.0))
+        self.assertTrue(message.HasField("battery_fraction"))
+        self.assertEqual(message.battery_fraction, 0.0)
+
+    def test_the_not_applicable_sentinel_becomes_wire_absence(self) -> None:
+        message = _node_to_proto(self._node(BATTERY_NOT_APPLICABLE))
+        self.assertFalse(
+            message.HasField("battery_fraction"),
+            "a platform with no battery must send absence, not a reading of -1",
+        )
+
+    def test_wire_absence_becomes_the_sentinel_again(self) -> None:
+        message = _node_to_proto(self._node(BATTERY_NOT_APPLICABLE))
+        recovered = _node_from_proto(message)
+        self.assertEqual(recovered.battery_fraction, BATTERY_NOT_APPLICABLE)
+
+    def test_absence_and_a_flat_battery_stay_distinguishable(self) -> None:
+        """The whole point, stated as one assertion.
+
+        A conversion that used the `0.0`-means-unset convention here -- as the
+        two sensor fields legitimately do -- would make these two equal.
+        """
+        empty = _node_from_proto(_node_to_proto(self._node(0.0)))
+        absent = _node_from_proto(_node_to_proto(self._node(BATTERY_NOT_APPLICABLE)))
+        self.assertNotEqual(empty.battery_fraction, absent.battery_fraction)
+        self.assertEqual(empty.battery_fraction, 0.0)
+        self.assertEqual(absent.battery_fraction, BATTERY_NOT_APPLICABLE)
 
 
 if __name__ == "__main__":

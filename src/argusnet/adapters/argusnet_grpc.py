@@ -212,8 +212,17 @@ def _tracker_config_from_proto(message: tracker_pb2.TrackerConfig) -> TrackerCon
     )
 
 
+#: What ``NodeState.battery_fraction`` means when a platform has no battery --
+#: a fixed ground station, say. The wire encodes the same thing by leaving the
+#: ``optional double`` unset, so the two representations convert into each
+#: other rather than a sentinel travelling over the wire as a real reading of
+#: minus one. Mirrors ``NOT_APPLICABLE_FRACTION`` in ``argusnet-sim``'s battery
+#: module.
+BATTERY_NOT_APPLICABLE = -1.0
+
+
 def _node_to_proto(node: NodeState) -> tracker_pb2.NodeState:
-    return tracker_pb2.NodeState(
+    message = tracker_pb2.NodeState(
         node_id=node.node_id,
         position=_vector_to_proto(node.position),
         velocity=_vector_to_proto(node.velocity),
@@ -224,6 +233,14 @@ def _node_to_proto(node: NodeState) -> tracker_pb2.NodeState:
         fov_half_angle_deg=float(getattr(node, "fov_half_angle_deg", 180.0) or 180.0),
         max_range_m=float(getattr(node, "max_range_m", 0.0)),
     )
+    # Assigned rather than passed to the constructor: assigning is what marks
+    # the optional field present, and a flat battery must arrive as 0.0 and
+    # not as "absent". Passing `battery_fraction=0.0` would also set presence,
+    # but the branch has to exist anyway for the not-applicable case.
+    battery = float(getattr(node, "battery_fraction", BATTERY_NOT_APPLICABLE))
+    if battery != BATTERY_NOT_APPLICABLE:
+        message.battery_fraction = battery
+    return message
 
 
 def _node_from_proto(node: tracker_pb2.NodeState) -> NodeState:
@@ -237,6 +254,11 @@ def _node_from_proto(node: tracker_pb2.NodeState) -> NodeState:
         sensor_type=str(node.sensor_type) if node.sensor_type else "optical",
         fov_half_angle_deg=float(node.fov_half_angle_deg) if node.fov_half_angle_deg else 180.0,
         max_range_m=float(node.max_range_m),
+        battery_fraction=(
+            float(node.battery_fraction)
+            if node.HasField("battery_fraction")
+            else BATTERY_NOT_APPLICABLE
+        ),
     )
 
 

@@ -52,6 +52,12 @@ message NodeState {
   uint64 sequence = 11;
   bytes signature = 12;
   string signer_pubkey_id = 13;
+
+  // Remaining energy as a fraction of capacity, 0.0-1.0. Explicitly optional
+  // rather than using the 0.0-means-unset convention the sensor fields above
+  // follow: a flat battery is a real, reportable reading, so "0.0" and "this
+  // platform has no battery" must stay distinguishable.
+  optional double battery_fraction = 14;
 }
 
 message BearingObservation {

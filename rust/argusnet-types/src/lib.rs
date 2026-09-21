@@ -14,6 +14,14 @@ pub type Matrix6 = SMatrix<f64, 6, 6>;
 /// `Matrix6` was already exposed for the same reason.
 pub use nalgebra::Vector3;
 
+/// The default `sensor_type` for a platform that does not name one.
+///
+/// The wire type has no presence for this field, so an empty string is what a
+/// producer that never set it sends. Both the replay reader and the Python
+/// writer already substitute `"optical"` there; naming the constant once keeps
+/// the third implementation from inventing a fourth answer.
+pub const DEFAULT_SENSOR_TYPE: &str = "optical";
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeState {
     pub node_id: String,
@@ -22,6 +30,60 @@ pub struct NodeState {
     pub is_mobile: bool,
     pub timestamp_s: f64,
     pub health: f64,
+    /// Sensor band, e.g. `"optical"`, `"thermal"`, `"radar"`.
+    ///
+    /// Carried here rather than looked up per consumer because it changes what
+    /// a frame *means*: `argusnet-sim`'s observation stage classifies it into a
+    /// [`SensorBand`](../argusnet_sim/observe/enum.SensorBand.html) that moves
+    /// both the noise multiplier and the confidence.
+    pub sensor_type: String,
+    /// Half-angle of the sensor's field of view, in **degrees**.
+    ///
+    /// Degrees, against the repository's radians-internally convention,
+    /// because this field is a verbatim passthrough of the wire and replay
+    /// field of the same name — converting here would mean converting back at
+    /// both boundaries, and a half-converted angle is the kind of bug that
+    /// survives a review. Consumers convert at the point of use.
+    ///
+    /// `None` is "omnidirectional", which is what the `0.0`-means-unset
+    /// convention on the wire encodes.
+    pub fov_half_angle_deg: Option<f64>,
+    /// Maximum sensing range in metres; `None` means the consumer's own
+    /// default applies. Modelled as an option rather than carrying the wire's
+    /// `0.0` sentinel inward: a zero-radius sensor and an unset one are
+    /// different claims, and the replay path used to conflate them.
+    pub max_range_m: Option<f64>,
+    /// Remaining energy as a fraction of capacity, `0.0..=1.0`.
+    ///
+    /// `None` means the platform has no battery in the ledger — a fixed ground
+    /// station, say — and is distinct from `Some(0.0)`, which is a real flat
+    /// battery. That distinction is why the wire field is `optional` rather
+    /// than following the sentinel convention of the two above it.
+    pub battery_fraction: Option<f64>,
+}
+
+impl Default for NodeState {
+    /// A stationary, fully-charged, unremarkable platform at the origin.
+    ///
+    /// Exists so a construction site can name only the fields it cares about.
+    /// Note `health` defaults to `1.0` and `sensor_type` to
+    /// [`DEFAULT_SENSOR_TYPE`], so this is not `Vector3::zeros()` all the way
+    /// down — a derived `Default` would give a platform at zero health, which
+    /// is a different platform.
+    fn default() -> Self {
+        Self {
+            node_id: String::new(),
+            position: Vector3::zeros(),
+            velocity: Vector3::zeros(),
+            is_mobile: false,
+            timestamp_s: 0.0,
+            health: 1.0,
+            sensor_type: DEFAULT_SENSOR_TYPE.to_string(),
+            fov_half_angle_deg: None,
+            max_range_m: None,
+            battery_fraction: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

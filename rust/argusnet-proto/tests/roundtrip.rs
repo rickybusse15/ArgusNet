@@ -28,6 +28,13 @@ fn distinctive_covariance() -> Matrix6 {
 
 #[test]
 fn node_state_round_trips_every_field() {
+    // Every field is set to something the encoder cannot produce by accident:
+    // a non-default sensor band, angles and ranges that are not the platform
+    // defaults, and a battery that is neither absent nor full. Before the
+    // fields existed on the runtime type the encoder hardcoded
+    // `"optical" / 180.0 / 0.0` here and the decoder dropped all three, so a
+    // test that only set the six original fields passed while the conversion
+    // was demonstrably lossy.
     let original = NodeState {
         node_id: "node-alpha".to_string(),
         position: Vector3::new(1.5, -2.5, 3.5),
@@ -35,11 +42,72 @@ fn node_state_round_trips_every_field() {
         is_mobile: true,
         timestamp_s: 12.25,
         health: 0.75,
+        sensor_type: "thermal".to_string(),
+        fov_half_angle_deg: Some(37.5),
+        max_range_m: Some(1234.5),
+        battery_fraction: Some(0.625),
     };
     let restored =
         argusnet_proto::node_state_from_pb(argusnet_proto::node_state_to_pb(original.clone()))
             .expect("node state round trip");
     assert_eq!(restored, original);
+}
+
+/// The three additions do not all encode "unset" the same way, and the
+/// difference is load-bearing.
+///
+/// `fov_half_angle_deg` and `max_range_m` are bare `double`s on the wire whose
+/// documented unset value is `0`, so `None` and `Some(0.0)` necessarily
+/// collapse together -- a zero-width field of view and a zero-radius sensor
+/// are not meaningful readings, so nothing is lost. `battery_fraction` is
+/// `optional` on the wire precisely because `Some(0.0)` *is* meaningful: a
+/// flat battery. This pins that asymmetry so a later "tidy-up" that makes the
+/// three consistent has to fail a test first.
+#[test]
+fn an_empty_battery_survives_the_wire_but_a_zero_range_reads_as_unset() {
+    let flat = NodeState {
+        node_id: "node-flat".to_string(),
+        battery_fraction: Some(0.0),
+        max_range_m: Some(0.0),
+        fov_half_angle_deg: Some(0.0),
+        ..Default::default()
+    };
+    let restored =
+        argusnet_proto::node_state_from_pb(argusnet_proto::node_state_to_pb(flat.clone()))
+            .expect("node state round trip");
+
+    assert_eq!(
+        restored.battery_fraction,
+        Some(0.0),
+        "a flat battery must not be mistaken for a platform without one"
+    );
+    assert_eq!(restored.max_range_m, None);
+    assert_eq!(restored.fov_half_angle_deg, None);
+
+    // And absence stays absence.
+    let absent = NodeState {
+        node_id: "node-mains".to_string(),
+        ..Default::default()
+    };
+    let restored =
+        argusnet_proto::node_state_from_pb(argusnet_proto::node_state_to_pb(absent.clone()))
+            .expect("node state round trip");
+    assert_eq!(restored, absent);
+}
+
+/// Proto3 strings have no presence, so a producer that never set `sensor_type`
+/// sends `""`. That is "unspecified", not a sensor whose name is empty --
+/// decoding it verbatim would put an unnamed band into the observation stage,
+/// which classifies on the string.
+#[test]
+fn an_unset_sensor_type_decodes_to_the_documented_default() {
+    let mut wire = argusnet_proto::node_state_to_pb(NodeState {
+        node_id: "node-silent".to_string(),
+        ..Default::default()
+    });
+    wire.sensor_type = String::new();
+    let restored = argusnet_proto::node_state_from_pb(wire).expect("node state round trip");
+    assert_eq!(restored.sensor_type, argusnet_types::DEFAULT_SENSOR_TYPE);
 }
 
 #[test]
@@ -193,6 +261,7 @@ fn the_imm_filter_never_emits_a_zero_mode_probability() {
                 is_mobile: false,
                 timestamp_s,
                 health: 1.0,
+                ..Default::default()
             })
             .collect::<Vec<_>>();
 
@@ -494,6 +563,7 @@ fn a_missing_required_vector_is_rejected_rather_than_defaulted() {
         is_mobile: true,
         timestamp_s: 1.0,
         health: 1.0,
+        ..Default::default()
     };
 
     let mut without_position = argusnet_proto::node_state_to_pb(node.clone());
@@ -524,6 +594,12 @@ fn owned_and_borrowed_encoders_agree_for_every_type() {
         is_mobile: true,
         timestamp_s: 7.5,
         health: 0.5,
+        // Non-default, so the two encoders are compared on the added fields
+        // rather than agreeing trivially because both left them blank.
+        sensor_type: "radar".to_string(),
+        fov_half_angle_deg: Some(22.5),
+        max_range_m: Some(800.0),
+        battery_fraction: Some(0.25),
     };
     assert_eq!(
         argusnet_proto::node_state_to_pb_ref(&node),

@@ -210,6 +210,15 @@ pub fn node_state_to_pb_ref(node: &NodeState) -> pb::NodeState {
     node_state_pb(Cow::Borrowed(node))
 }
 
+/// In-band "unset" for the two sensor fields that have no wire presence.
+///
+/// `fov_half_angle_deg` and `max_range_m` are bare `double`s in the proto and
+/// document `0` as unset, so the runtime `Option` has to collapse to zero on
+/// the way out and re-expand on the way in. `battery_fraction` deliberately
+/// does *not* use this: it is `optional` on the wire precisely because a flat
+/// battery is a real reading that zero would swallow.
+const UNSET_SENSOR_FIELD: f64 = 0.0;
+
 fn node_state_pb(node: Cow<'_, NodeState>) -> pb::NodeState {
     let node = node.into_owned();
     pb::NodeState {
@@ -219,11 +228,10 @@ fn node_state_pb(node: Cow<'_, NodeState>) -> pb::NodeState {
         is_mobile: node.is_mobile,
         timestamp_s: node.timestamp_s,
         health: node.health,
-        // Sensor fields are not carried in the core tracker struct;
-        // default to optical/omnidirectional when round-tripping via gRPC.
-        sensor_type: "optical".to_string(),
-        fov_half_angle_deg: 180.0,
-        max_range_m: 0.0,
+        sensor_type: node.sensor_type,
+        fov_half_angle_deg: node.fov_half_angle_deg.unwrap_or(UNSET_SENSOR_FIELD),
+        max_range_m: node.max_range_m.unwrap_or(UNSET_SENSOR_FIELD),
+        battery_fraction: node.battery_fraction,
         // Signed-envelope identity is verified and stripped at the Python
         // ingestion boundary before frames reach the core tracker; it is
         // never reconstructed on the way back out.
@@ -234,10 +242,24 @@ fn node_state_pb(node: Cow<'_, NodeState>) -> pb::NodeState {
     }
 }
 
+/// Re-expand a wire field that encodes "unset" as zero.
+fn optional_sensor_field(value: f64) -> Option<f64> {
+    if value == UNSET_SENSOR_FIELD {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 pub fn node_state_from_pb(node: pb::NodeState) -> Result<NodeState, String> {
-    // sensor_type / fov_half_angle_deg / max_range_m are not stored in the
-    // core NodeState (the tracker doesn't need them).  They pass through the
-    // Python adapter and are written into the replay JSON separately.
+    // An empty `sensor_type` is what a producer that never set the field
+    // sends -- proto3 strings have no presence -- so it means "unspecified",
+    // not "a sensor whose name is the empty string".
+    let sensor_type = if node.sensor_type.is_empty() {
+        argusnet_types::DEFAULT_SENSOR_TYPE.to_string()
+    } else {
+        node.sensor_type
+    };
     Ok(NodeState {
         node_id: node.node_id,
         position: vec3_from_pb(node.position, "node.position")?,
@@ -245,6 +267,10 @@ pub fn node_state_from_pb(node: pb::NodeState) -> Result<NodeState, String> {
         is_mobile: node.is_mobile,
         timestamp_s: node.timestamp_s,
         health: node.health,
+        sensor_type,
+        fov_half_angle_deg: optional_sensor_field(node.fov_half_angle_deg),
+        max_range_m: optional_sensor_field(node.max_range_m),
+        battery_fraction: node.battery_fraction,
     })
 }
 

@@ -286,14 +286,43 @@ impl StageHandler for BatteryStage {
             shared.previous_positions.insert(node_id, Some(position));
         }
 
-        Ok(if drew_any {
-            StageOutcome::Ran
-        } else {
-            // Every registered platform was on its first tick, so nothing was
-            // drawn -- distinct from having no batteries at all, and both are
-            // distinct from a stage that never ran.
-            StageOutcome::NoWork
-        })
+        // Publish the fraction onto the fleet, mirroring the reference's
+        // `replace(ns, battery_fraction=...)` pass -- and note it runs over
+        // *every* platform, not only the ones sampled above, because a
+        // platform with no entry in the ledger has to be marked as having no
+        // battery rather than left at whatever it held last tick.
+        //
+        // `None` is this crate's spelling of the reference's `-1.0`: a fixed
+        // ground station has no battery, which is a different claim from a
+        // drone at zero percent. Keeping it typed means a consumer cannot read
+        // the sentinel as a reading, which is what the wire's `optional`
+        // encoding preserves across the gRPC boundary.
+        let capacity_wh = model.capacity_wh;
+        let fractions: Vec<Option<f64>> = context
+            .world
+            .platforms()
+            .iter()
+            .map(|platform| {
+                shared
+                    .states
+                    .get(&platform.node_id)
+                    .map(|state| state.fraction_of(capacity_wh))
+            })
+            .collect();
+        for (platform, fraction) in context.world.platforms_mut().iter_mut().zip(fractions) {
+            platform.battery_fraction = fraction;
+        }
+
+        // `Ran`, not `drew_any`: the fractions above are a world mutation that
+        // happens on every tick with a non-empty ledger, including the first,
+        // where nothing is drawn because there is no previous position to
+        // measure against. Reporting `NoWork` for a tick that moved the world
+        // is exactly the conflation `StageOutcome`'s documentation warns about.
+        // "Nothing was drawn" is still observable -- through the ledger, which
+        // is where it belongs -- and the empty-ledger early return above still
+        // reports the genuinely idle case.
+        let _ = drew_any;
+        Ok(StageOutcome::Ran)
     }
 }
 
@@ -323,6 +352,7 @@ mod tests {
             is_mobile: mobile,
             timestamp_s: 0.0,
             health: 1.0,
+            ..Default::default()
         }
     }
 
@@ -345,6 +375,144 @@ mod tests {
             .position
             .x += dx;
         sim.step().expect("no stage fails");
+    }
+
+    // -----------------------------------------------------------------
+    // Publishing the fraction onto the fleet
+    // -----------------------------------------------------------------
+
+    /// The ledger is the stage's private state; the fleet is what a snapshot,
+    /// a replay and the viewer's battery readout all read. A stage that keeps
+    /// a perfect ledger and never publishes it leaves that readout empty, so
+    /// this asserts the world itself, not `BatteryLink::fraction`.
+    #[test]
+    fn the_fleet_carries_the_published_fraction_not_just_the_ledger() {
+        let (mut sim, link) = rig(vec![
+            node("drone-1", true, 0.0),
+            node("tower", false, 500.0),
+        ]);
+        link.register("drone-1", None);
+        sim.step().unwrap();
+
+        assert_eq!(
+            sim.world()
+                .platform("drone-1")
+                .expect("drone is in the fleet")
+                .battery_fraction,
+            Some(1.0)
+        );
+        // A ground station has no battery. `None`, not `Some(0.0)` -- the
+        // whole reason the wire field is `optional`.
+        assert_eq!(
+            sim.world()
+                .platform("tower")
+                .expect("tower is in the fleet")
+                .battery_fraction,
+            None
+        );
+    }
+
+    /// A registered platform publishes whether or not it is mobile.
+    ///
+    /// Consumption is gated on `is_mobile` -- a tower does not fly, so it is
+    /// never charged for a segment -- and it is tempting to gate publishing on
+    /// the same flag. That is wrong, and this is the test that says so: a
+    /// registered fixed platform has a battery in the ledger, so its fraction
+    /// is a real reading and has to reach the fleet. A mutant that published
+    /// only to mobile platforms survived the first round because every other
+    /// test's fixed platform was unregistered, and `None` is what both the
+    /// correct and the broken version leave behind.
+    #[test]
+    fn a_registered_fixed_platform_publishes_even_though_it_is_never_charged() {
+        let (mut sim, link) = rig(vec![
+            node("drone-1", true, 0.0),
+            node("tower", false, 500.0),
+        ]);
+        link.register("drone-1", None);
+        link.register("tower", None);
+        sim.step().unwrap();
+
+        assert_eq!(
+            sim.world().platform("tower").unwrap().battery_fraction,
+            Some(1.0),
+            "a registered platform publishes; being fixed only means it is never charged"
+        );
+
+        // And it stays published, at full, however far the drone flies.
+        fly(&mut sim, "drone-1", 400.0);
+        assert_eq!(
+            sim.world().platform("tower").unwrap().battery_fraction,
+            Some(1.0)
+        );
+        assert!(
+            sim.world().platform("drone-1").unwrap().battery_fraction < Some(1.0),
+            "the drone did fly, so it must have been charged"
+        );
+    }
+
+    /// Pins the published value to the ledger exactly. An implementation that
+    /// published a stale fraction, or recomputed it from the wrong capacity,
+    /// would still leave the field "plausibly populated" -- a monotonic
+    /// decrease is not enough to catch that.
+    #[test]
+    fn the_published_fraction_tracks_the_ledger_exactly_as_energy_is_drawn() {
+        let (mut sim, link) = rig(vec![node("drone-1", true, 0.0)]);
+        link.register("drone-1", None);
+        sim.step().unwrap();
+
+        let capacity_wh = link.model().capacity_wh;
+        let mut previous = 1.0;
+        for _ in 0..3 {
+            fly(&mut sim, "drone-1", 250.0);
+            let expected = link.remaining_wh("drone-1").expect("registered") / capacity_wh;
+            let published = sim
+                .world()
+                .platform("drone-1")
+                .expect("drone is in the fleet")
+                .battery_fraction
+                .expect("a registered drone publishes a fraction");
+            assert_eq!(
+                published, expected,
+                "the published fraction must be the ledger's, to the bit"
+            );
+            assert!(
+                published < previous,
+                "flying 250 m must cost something: {published} !< {previous}"
+            );
+            previous = published;
+        }
+    }
+
+    /// Registering a battery mid-run has to reach the fleet on the next tick.
+    /// Publishing only on the tick that *registers* would leave the field
+    /// stale for the rest of the run, which a single-step test cannot see.
+    #[test]
+    fn a_platform_registered_mid_run_starts_publishing_on_the_next_tick() {
+        let (mut sim, link) = rig(vec![node("drone-1", true, 0.0)]);
+        link.register("drone-1", None);
+        sim.step().unwrap();
+        assert_eq!(
+            sim.world().platform("drone-1").unwrap().battery_fraction,
+            Some(1.0)
+        );
+
+        // Clearing the ledger empties it, so the stage takes its early return
+        // and publishes nothing -- the last published value stands.
+        link.clear();
+        sim.step().unwrap();
+        assert_eq!(
+            sim.world().platform("drone-1").unwrap().battery_fraction,
+            Some(1.0),
+            "an empty ledger leaves the fleet untouched rather than blanking it"
+        );
+
+        // Re-register and the fleet picks it up again.
+        link.register("drone-1", None);
+        sim.step().unwrap();
+        assert_eq!(
+            sim.world().platform("drone-1").unwrap().battery_fraction,
+            Some(1.0)
+        );
     }
 
     // -----------------------------------------------------------------
@@ -497,14 +665,23 @@ mod tests {
         assert_eq!(record.outcome, StageOutcome::NoWork);
     }
 
-    /// A tick where every registered platform is on its first tick draws
-    /// nothing, and says so -- distinct from having no batteries at all.
+    /// The first tick draws nothing -- there is no previous position to
+    /// measure a segment against -- but it does publish the fleet's fractions,
+    /// so it is not a tick that did nothing. The "nothing was drawn"
+    /// distinction lives in the ledger, which is where it is observable.
     #[test]
-    fn a_first_tick_reports_no_work_and_the_second_reports_ran() {
+    fn a_first_tick_publishes_fractions_without_drawing_energy() {
         let (mut sim, link) = rig(vec![node("drone-1", true, 0.0)]);
         link.register("drone-1", None);
         sim.step().unwrap();
-        sim.step().unwrap();
+
+        let after_first = link.remaining_wh("drone-1").expect("drone has a battery");
+        assert_eq!(
+            after_first,
+            link.model().capacity_wh,
+            "the first tick has no segment to charge for"
+        );
+
         let outcomes: Vec<_> = sim
             .trace()
             .records()
@@ -512,7 +689,7 @@ mod tests {
             .filter(|r| r.stage == Stage::SampleControllersAndBattery)
             .map(|r| r.outcome.clone())
             .collect();
-        assert_eq!(outcomes, vec![StageOutcome::NoWork, StageOutcome::Ran]);
+        assert_eq!(outcomes, vec![StageOutcome::Ran]);
     }
 
     // -----------------------------------------------------------------

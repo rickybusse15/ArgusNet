@@ -107,9 +107,21 @@ and `active_zone_count: 0`. Zones do reach the viewer, but through replay JSON
 using a *separate* viewer-side struct that happens to share the name — an easy
 thing to mistake for the same type.
 
-`NodeState.sensor_type`, `fov_half_angle_deg` and `max_range_m` are the model to
-follow: dropped from the runtime type on purpose, with a comment in
-`argusnet-proto/src/lib.rs` saying why and where they survive instead.
+`NodeState.sensor_type`, `fov_half_angle_deg` and `max_range_m` were held up
+here as the model to follow: dropped from the runtime type on purpose, with a
+comment in `argusnet-proto/src/lib.rs` saying why and where they survive
+instead.
+
+**That reading did not survive P4.8d-i, and the paragraph is kept only so the
+correction is visible.** The comment was accurate about the *tracker*, which
+genuinely does not need them, and wrong about the conversion, which is shared
+with every other consumer. The encoder did not merely drop them: it
+*substituted* `"optical" / 180.0 / 0.0` on every call, so a thermal sensor
+round-tripped as an optical one and the substitution was indistinguishable
+from a producer that had said so. "Dropped on purpose, documented" is only a
+defensible disposition when the field is absent on the way out; a field that
+comes back holding a value nobody supplied is `lossy`, whatever the comment
+says. All three are now `carried`, along with the new `battery_fraction`.
 
 ## Scope
 
@@ -178,14 +190,15 @@ landed separately in #53, corrected by #55.
 | `NodeHealthMetrics.node_id` | `carried` |  |
 | `NodeHealthMetrics.observation_rate_hz` | `carried` |  |
 | `NodeHealthMetrics.rejected_count` | `carried` |  |
+| `NodeState.battery_fraction` | `carried` | `optional` on the wire, `Option<f64>` in the runtime type. Unlike the two sensor fields below it does **not** use the `0.0`-means-unset convention: `Some(0.0)` is a flat battery and `None` is a platform with no battery, and a ground station must not read as a drone at zero percent. Python's `-1.0` not-applicable sentinel converts to and from wire absence in `adapters/argusnet_grpc.py`. |
 | `NodeState.device_id` | `inert` | Rust writes an empty string and never reads it back; the runtime types have no such field, so a signed payload is discarded silently. |
-| `NodeState.fov_half_angle_deg` | `dropped-intentional` | The tracker does not need it; it survives via the Python adapter into the replay JSON. |
+| `NodeState.fov_half_angle_deg` | `carried` | `Option<f64>` in the runtime type, a bare `double` on the wire where `0` means unset. A genuine `Some(0.0)` is therefore indistinguishable from absent, which costs nothing: a zero-width field of view is not a reading. Degrees, not radians, deliberately — a verbatim passthrough of the wire and replay field of the same name. |
 | `NodeState.health` | `carried` |  |
 | `NodeState.is_mobile` | `carried` |  |
-| `NodeState.max_range_m` | `dropped-intentional` | The tracker does not need it; it survives via the Python adapter into the replay JSON. |
+| `NodeState.max_range_m` | `carried` | `Option<f64>` in the runtime type, a bare `double` on the wire where `0` means unset. Previously the replay path deserialized the sentinel to `Some(0.0)`, giving a zero-radius radar ring where the 400 m default was meant. |
 | `NodeState.node_id` | `carried` |  |
 | `NodeState.position` | `carried` |  |
-| `NodeState.sensor_type` | `dropped-intentional` | The tracker does not need it; it survives via the Python adapter into the replay JSON. |
+| `NodeState.sensor_type` | `carried` | proto3 strings have no presence, so `""` on the wire means "unspecified" and decodes to `argusnet_types::DEFAULT_SENSOR_TYPE`. Not merely a label: `argusnet-sim`'s observation stage classifies it into a `SensorBand` that moves both the noise multiplier and the confidence. |
 | `NodeState.sequence` | `carried` |  |
 | `NodeState.signature` | `inert` | Rust writes an empty string and never reads it back; the runtime types have no such field, so a signed payload is discarded silently. |
 | `NodeState.signer_pubkey_id` | `inert` | Rust writes an empty string and never reads it back; the runtime types have no such field, so a signed payload is discarded silently. |

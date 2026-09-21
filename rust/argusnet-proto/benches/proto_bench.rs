@@ -26,6 +26,7 @@ fn request(observation_count: usize) -> IngestFrameRequest {
             sequence: 0,
             signature: Vec::new(),
             signer_pubkey_id: String::new(),
+            battery_fraction: None,
         })
         .collect();
     let observations = (0..observation_count)

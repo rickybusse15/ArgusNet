@@ -12,6 +12,7 @@ pub mod mission;
 pub mod observe;
 pub mod overrides;
 pub mod particles;
+pub mod replay;
 pub mod safety;
 pub mod simulation;
 pub mod snapshot;

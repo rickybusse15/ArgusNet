@@ -49,6 +49,9 @@ fn node_from_json(value: &Value) -> NodeState {
         sensor_type: value["sensor_type"].as_str().unwrap_or("").to_string(),
         fov_half_angle_deg: value["fov_half_angle_deg"].as_f64().unwrap_or(0.0),
         max_range_m: value["max_range_m"].as_f64().unwrap_or(0.0),
+        // Optional on the wire, so absent in the fixture stays absent here --
+        // unlike the two above, zero is a real battery reading.
+        battery_fraction: value["battery_fraction"].as_f64(),
         device_id: String::new(),
         sequence: 0,
         signature: Vec::new(),
@@ -482,6 +485,7 @@ fn make_node(node_id: &str, t: f64, pos: [f64; 3]) -> NodeState {
         sensor_type: "optical".to_string(),
         fov_half_angle_deg: 180.0,
         max_range_m: 2000.0,
+        battery_fraction: None,
         device_id: String::new(),
         sequence: 0,
         signature: Vec::new(),
@@ -806,6 +810,7 @@ async fn oversized_ingest_frame_is_rejected() {
             sensor_type: "optical".to_string(),
             fov_half_angle_deg: 180.0,
             max_range_m: 0.0,
+            battery_fraction: None,
             device_id: String::new(),
             sequence: 0,
             signature: Vec::new(),

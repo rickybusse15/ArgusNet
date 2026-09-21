@@ -240,6 +240,20 @@
           "type": "number",
           "description": "Maximum detection range in meters.",
           "minimum": 0
+        },
+        "battery_fraction": {
+          "type": "number",
+          "description": "Remaining energy as a fraction of capacity: either a real reading in [0.0, 1.0], or the sentinel -1.0 meaning the platform has no battery (a fixed ground station). The sentinel is deliberately distinct from 0.0, which is a genuinely flat battery -- conflating them makes a tower read as a drone about to come down. The gap between the two is excluded rather than merely discouraged, so a truncated or sign-flipped value fails validation instead of arriving as a plausible reading. On the gRPC wire the same distinction is carried by NodeState.battery_fraction being an optional field rather than by a sentinel; adapters/argusnet_grpc.py converts between the two representations.",
+          "anyOf": [
+            {
+              "const": -1
+            },
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          ]
         }
       }
     },
