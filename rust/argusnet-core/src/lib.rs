@@ -16,7 +16,7 @@ pub type Vector6 = SVector<f64, 6>;
 /// exists to stop numerical blow-up during pathological long coasts.
 const MAX_COVARIANCE_TRACE: f64 = 1.0e12;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NodeHealthTracker {
     pub node_id: String,
     pub first_seen_s: f64,
@@ -342,7 +342,7 @@ pub struct TriangulatedEstimate {
 pub type Matrix7 = SMatrix<f64, 7, 7>;
 pub type Vector7 = SVector<f64, 7>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct KalmanTrack3D {
     pub(crate) timestamp_s: f64,
     pub(crate) state: Vector6,
@@ -453,7 +453,7 @@ impl KalmanTrack3D {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AdaptiveFilterConfig {
     pub cv_accel_std: f64,
     pub ct_accel_std: f64,
@@ -486,7 +486,7 @@ impl Default for AdaptiveFilterConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CoordinatedTurnTrack3D {
     timestamp_s: f64,
     state: Vector7,
@@ -630,7 +630,7 @@ impl CoordinatedTurnTrack3D {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct IMMTrack3D {
     pub(crate) cv_track: KalmanTrack3D,
     pub(crate) ct_track: CoordinatedTurnTrack3D,
@@ -869,7 +869,7 @@ fn gaussian_likelihood(innovation: &Vector3<f64>, covariance: &Matrix3<f64>) -> 
         .unwrap_or(1.0e-30)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LifecycleState {
     Tentative,
     Confirmed,
@@ -888,7 +888,7 @@ impl LifecycleState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TrackLifecycleConfig {
     pub confirmation_m: u32,
     pub confirmation_n: u32,
@@ -897,7 +897,7 @@ pub struct TrackLifecycleConfig {
     pub min_quality_score: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ManagedTrack {
     pub(crate) track_id: String,
     pub(crate) filter_state: IMMTrack3D,
@@ -1066,17 +1066,23 @@ impl ManagedTrack {
     }
 }
 
+/// Serializable so a simulation checkpoint can carry every track's filter,
+/// lifecycle and health state (P4.8e.4). The latest frame is output and the
+/// dedup map is scratch, so neither is part of the state.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct TrackingEngine {
     config: TrackerConfig,
     min_intersection_angle_rad: f64,
     near_parallel_rejection_angle_rad: f64,
     nodes: HashMap<String, NodeState>,
     tracks: HashMap<String, ManagedTrack>,
+    #[serde(skip)]
     latest_frame: Option<std::sync::Arc<PlatformFrame>>,
     node_health: HashMap<String, NodeHealthTracker>,
     frame_timestamps: Vec<f64>,
     next_track_index: u64,
     /// Scratch HashMap reused across frames to avoid per-cluster allocation in deduplicate_cluster.
+    #[serde(skip)]
     dedup_scratch: HashMap<String, BearingObservation>,
 }
 

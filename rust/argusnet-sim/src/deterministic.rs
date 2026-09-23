@@ -119,7 +119,7 @@ fn render_int(value: i64, buffer: &mut IntBuffer) -> &str {
 /// threading a single generator through the tick. That is what makes the
 /// result independent of iteration order, and it is the property ADR-006
 /// specifically preserves.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeterministicRng {
     inner: ChaCha8Rng,
 }

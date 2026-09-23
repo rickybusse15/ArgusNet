@@ -66,10 +66,14 @@ crossbeam-channel = "0.5"
 egui_extras = "0.36"
 egui_plot = "0.37"
 hdrhistogram = "7"
-nalgebra = "0.33"
+# `serde-serialize`: checkpoints carry the fusion engine's filter state
+# (P4.8e.4), which is nalgebra vectors and matrices.
+nalgebra = { version = "0.33", features = ["serde-serialize"] }
 prost = "0.14"
 prost-types = "0.14"
-serde = { version = "1.0", features = ["derive"] }
+# `rc`: the fusion engine shares contributor lists behind `Arc`, and a
+# checkpoint has to carry them.
+serde = { version = "1.0", features = ["derive", "rc"] }
 # `float_roundtrip` workspace-wide, not per crate: Cargo unifies features per
 # build, so enabling it only on argusnet-sim made `cargo build -p
 # argusnet-native` parse floats differently from a workspace build. Checkpoints

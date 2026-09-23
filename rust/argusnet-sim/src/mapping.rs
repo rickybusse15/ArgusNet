@@ -242,6 +242,15 @@ impl MappingLink {
     }
 }
 
+/// What stage 8 checkpoints.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MappingCheckpoint {
+    coverage: CoverageGrid,
+    localizer: Option<GridLocalizer>,
+    estimates: Vec<LocalizationEstimate>,
+    localizer_timed_out: bool,
+}
+
 /// [`Stage::UpdateMappingAndLocalization`]'s coverage and belief half.
 ///
 /// [`Stage::UpdateMappingAndLocalization`]: crate::stage::Stage::UpdateMappingAndLocalization
@@ -296,6 +305,58 @@ impl MappingStage {
 }
 
 impl StageHandler for MappingStage {
+    fn reset(&mut self) {
+        self.link.clear();
+    }
+
+    /// Coverage counts (and their running aggregates), the localizer, its
+    /// last estimates and the timeout latch.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let shared = self.link.lock();
+        let state = MappingCheckpoint {
+            coverage: shared.coverage.clone(),
+            localizer: shared.localizer.clone(),
+            estimates: shared.estimates.clone(),
+            localizer_timed_out: shared.localizer_timed_out,
+        };
+        Some(serde_json::to_value(state).expect("mapping state serialises"))
+    }
+
+    fn check_state(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let shared = self.link.lock();
+        let malformed = |detail: &str| crate::simulation::StageStateError::Malformed {
+            detail: detail.to_string(),
+        };
+        if decoded.coverage.bounds() != shared.coverage.bounds() {
+            return Err(malformed(
+                "coverage grid covers a different area or resolution",
+            ));
+        }
+        if decoded.localizer.is_some() != shared.localizer.is_some() {
+            return Err(malformed(
+                "localization is enabled in one run and not the other",
+            ));
+        }
+        Ok(())
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let mut shared = self.link.lock();
+        shared.coverage = decoded.coverage;
+        shared.localizer = decoded.localizer;
+        shared.estimates = decoded.estimates;
+        shared.localizer_timed_out = decoded.localizer_timed_out;
+        Ok(())
+    }
+
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let mut shared = self.link.lock();
 
@@ -1159,6 +1220,21 @@ mod tests {
         assert!(
             link.localizer_timed_out(),
             "running past the step budget must latch the timeout"
+        );
+
+        // The latch is checkpoint state: nothing re-derives it after the
+        // localizing phase, so a resumed run must be handed it.
+        let checkpoint = sim.checkpoint().expect("not faulted");
+        let (mut fresh, fresh_link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        fresh_link.enable_localization(LocalizationConfig {
+            localization_timeout_steps: 3,
+            ..LocalizationConfig::default()
+        });
+        assert!(!fresh_link.localizer_timed_out());
+        fresh.restore(&checkpoint).expect("restore accepted");
+        assert!(
+            fresh_link.localizer_timed_out(),
+            "a restore dropped the localization-timeout latch"
         );
     }
 

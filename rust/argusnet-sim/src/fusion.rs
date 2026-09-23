@@ -173,6 +173,47 @@ impl FusionStage {
 }
 
 impl StageHandler for FusionStage {
+    /// A new engine with the same configuration: no tracks, no health.
+    fn reset(&mut self) {
+        let mut shared = self.link.lock();
+        let config = shared.engine.config().clone();
+        shared.engine = TrackingEngine::new(config).expect("the config was valid at construction");
+        shared.inbox = Inbox::default();
+        shared.frame = None;
+    }
+
+    /// Every track's filters, lifecycle and history, and each node's health.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let shared = self.link.lock();
+        Some(serde_json::to_value(&shared.engine).expect("engine state serialises"))
+    }
+
+    fn check_state(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let engine: TrackingEngine = crate::simulation::decode_stage_state(state)?;
+        if engine.config() != self.link.lock().engine.config() {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: "the checkpoint's tracker was configured differently from this run's"
+                    .into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let engine: TrackingEngine = crate::simulation::decode_stage_state(state)?;
+        let mut shared = self.link.lock();
+        shared.engine = engine;
+        shared.inbox = Inbox::default();
+        shared.frame = None;
+        Ok(())
+    }
+
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let mut shared = self.link.lock();
 

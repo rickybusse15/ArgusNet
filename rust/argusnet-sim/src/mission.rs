@@ -457,6 +457,14 @@ impl MissionLink {
         self.lock().state
     }
 
+    /// Take a checkpoint's machine state back. Nothing pending survives.
+    pub fn restore_state(&self, state: MissionState) {
+        let mut shared = self.lock();
+        shared.state = state;
+        shared.pending = None;
+        shared.events.clear();
+    }
+
     /// Back to a fresh run's state: `Scanning`, no latches, nothing pending.
     pub fn reset(&self) {
         let mut shared = self.lock();

@@ -26,7 +26,7 @@ use std::collections::HashMap;
 pub const TRAVEL_POWER_W: f64 = 350.0;
 
 /// A point to inspect.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InspectionPoi {
     pub poi_id: String,
     pub name: String,
@@ -36,7 +36,7 @@ pub struct InspectionPoi {
 }
 
 /// Where a POI is in its lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PoiState {
     Pending,
     Active,
@@ -103,7 +103,7 @@ fn distance_xy(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 /// Tracks every POI's lifecycle.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PoiManager {
     /// Construction order. See the module docs — this is not incidental.
     pois: Vec<InspectionPoi>,

@@ -165,7 +165,7 @@ impl std::error::Error for LocalizationError {}
 ///
 /// As the map fills in, matching a sensor footprint against it becomes more
 /// discriminative, so the spread narrows and confidence rises.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GridLocalizer {
     config: LocalizationConfig,
     /// `BTreeMap` rather than a hash map so iteration order is deterministic.

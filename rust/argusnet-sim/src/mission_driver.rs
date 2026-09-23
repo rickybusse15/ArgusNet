@@ -200,6 +200,15 @@ impl LocalizationReplay {
     }
 }
 
+/// What stage 9 checkpoints.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct DriverCheckpoint {
+    machine: crate::mission::MissionState,
+    pois: PoiManager,
+    redirected: BTreeMap<String, String>,
+    rescored: bool,
+}
+
 /// Stage 9: the mission machine and the work its phases do.
 pub struct MissionDriverStage {
     machine: MissionStage,
@@ -448,6 +457,47 @@ impl StageHandler for MissionDriverStage {
             }
         }
         Ok(outcome)
+    }
+
+    /// The machine, the POI manager, which drone was last redirected where,
+    /// and the rescore latch. The POIs themselves and the homes are scenario,
+    /// rebuilt by assembly -- and checked against, below.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let state = DriverCheckpoint {
+            machine: self.mission.state(),
+            pois: self.pois.clone(),
+            redirected: self.redirected.clone(),
+            rescored: self.rescored,
+        };
+        Some(serde_json::to_value(state).expect("mission driver state serialises"))
+    }
+
+    fn check_state(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: DriverCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let ids = |statuses: Vec<argusnet_planning::poi::PoiStatus>| {
+            statuses.into_iter().map(|s| s.poi_id).collect::<Vec<_>>()
+        };
+        if ids(decoded.pois.statuses()) != ids(self.pois.statuses()) {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: "the checkpoint's POIs are not this run's".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: DriverCheckpoint = crate::simulation::decode_stage_state(state)?;
+        self.mission.restore_state(decoded.machine);
+        self.pois = decoded.pois;
+        self.redirected = decoded.redirected;
+        self.rescored = decoded.rescored;
+        Ok(())
     }
 
     fn reset(&mut self) {

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Every assembled stage resumes exactly (P4.8e.4)
+
+- Stages 2 (overrides), 6 (bias walks), 7 (the tracking engine), 8 (coverage,
+  localizer) and 9 (mission driver) implement the checkpoint contract, each
+  validating the checkpoint against the run before anything is mutated.
+- A whole assembled run, checkpointed to JSON in any phase and restored into a
+  fresh process, matches the uninterrupted run bit for bit: kinematics, fused
+  tracks, observation bearings, phase and coverage.
+- `argusnet-core`'s engine and filter types, and the mapping, localization and
+  planning state types, are serde-serialisable (additive).
+
 ## Unreleased — The default mission runs in the Rust tick (P4.8e.3)
 
 - `MissionDriverStage` (stage 9) turns the mission machine's phases into POI

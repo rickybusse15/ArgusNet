@@ -413,7 +413,7 @@ pub struct PairRecord {
 /// continuous across ticks while the pair streams are opened fresh for every
 /// `(node, target, tick)`. Mixing the two would make the bias depend on how
 /// many targets happened to be in view.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct SensorState {
     drift: BearingBiasDrift,
     rng: DeterministicRng,
@@ -453,15 +453,9 @@ impl ObserveLink {
     pub fn install_sensor(&self, node_id: &str, spec: SensorSpec) {
         let mut shared = self.lock();
         shared.sensors.insert(node_id.to_string(), spec);
-        shared.drifts.insert(
-            node_id.to_string(),
-            SensorState {
-                drift: BearingBiasDrift::from_config(&spec.error),
-                // Seeded from the node id alone: the walk is continuous across
-                // ticks, so it must not be re-keyed per tick.
-                rng: DeterministicRng::keyed(0, &[SeedPart::Str(node_id), SeedPart::Str("bias")]),
-            },
-        );
+        shared
+            .drifts
+            .insert(node_id.to_string(), SensorState::fresh(node_id, &spec));
     }
 
     pub fn remove_sensor(&self, node_id: &str) {
@@ -547,6 +541,18 @@ impl ObserveLink {
     /// Every pair considered on the last run, in `(node, target)` order.
     pub fn records(&self) -> Vec<PairRecord> {
         self.lock().records.clone()
+    }
+}
+
+impl SensorState {
+    /// A sensor's walk as installed: zero bias, and a stream seeded from the
+    /// node id alone -- the walk is continuous across ticks, so it must not be
+    /// re-keyed per tick.
+    fn fresh(node_id: &str, spec: &SensorSpec) -> Self {
+        Self {
+            drift: BearingBiasDrift::from_config(&spec.error),
+            rng: DeterministicRng::keyed(0, &[SeedPart::Str(node_id), SeedPart::Str("bias")]),
+        }
     }
 }
 
@@ -671,6 +677,54 @@ fn bearing_perturbation(noise_std_rad: f64, rng: &mut DeterministicRng) -> Vecto
 }
 
 impl StageHandler for ObserveStage {
+    /// Every sensor's walk back to zero, streams re-seeded: installation state.
+    fn reset(&mut self) {
+        let mut shared = self.link.lock();
+        let fresh: BTreeMap<String, SensorState> = shared
+            .sensors
+            .iter()
+            .map(|(id, spec)| (id.clone(), SensorState::fresh(id, spec)))
+            .collect();
+        shared.drifts = fresh;
+        shared.observations.clear();
+        shared.records.clear();
+        shared.tally = GenerationTally::default();
+    }
+
+    /// The bias walks, and where each walk's stream has got to. The sensor
+    /// table, oracle and feeds are configuration, rebuilt by assembly.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let shared = self.link.lock();
+        Some(serde_json::to_value(&shared.drifts).expect("drift state serialises"))
+    }
+
+    fn check_state(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let drifts: BTreeMap<String, SensorState> = crate::simulation::decode_stage_state(state)?;
+        let shared = self.link.lock();
+        if !drifts.keys().eq(shared.sensors.keys()) {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: "bias walks name a different sensor table from this run's".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let drifts: BTreeMap<String, SensorState> = crate::simulation::decode_stage_state(state)?;
+        let mut shared = self.link.lock();
+        shared.drifts = drifts;
+        shared.observations.clear();
+        shared.records.clear();
+        shared.tally = GenerationTally::default();
+        Ok(())
+    }
+
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let mut shared = self.link.lock();
         shared.observations.clear();

@@ -22,7 +22,7 @@ pub use nalgebra::Vector3;
 /// the third implementation from inventing a fourth answer.
 pub const DEFAULT_SENSOR_TYPE: &str = "optical";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NodeState {
     pub node_id: String,
     pub position: Vector3<f64>,
