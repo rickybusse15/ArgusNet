@@ -257,6 +257,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "argusnet-cli"
+version = "0.1.0"
+dependencies = [
+ "argusnet-sim",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "argusnet-core"
 version = "0.1.0"
 dependencies = [

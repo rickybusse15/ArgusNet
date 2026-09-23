@@ -1,0 +1,183 @@
+//! `argusnet-rs` as a user runs it: the real binary, real files, exit codes.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use argusnet_sim::replay::ReplayDocument;
+use argusnet_sim::scenario::{assemble, ScenarioBundle};
+
+fn binary() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_argusnet-rs"))
+}
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures")
+        .join(name)
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("argusnet-rs-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    dir.join(name)
+}
+
+fn read_replay(path: &Path) -> ReplayDocument {
+    serde_json::from_str(&std::fs::read_to_string(path).expect("replay written"))
+        .expect("replay parses")
+}
+
+/// The replay the binary writes is exactly the replay the runtime computes.
+#[test]
+fn sim_writes_the_runtimes_replay() {
+    let replay = scratch("tt_replay.json");
+    let status = binary()
+        .args(["sim", "--quiet", "--bundle"])
+        .arg(fixture("scenario_bundle_tt.json"))
+        .arg("--replay")
+        .arg(&replay)
+        .status()
+        .expect("runs");
+    assert!(status.success(), "exit {status}");
+
+    let bundle = ScenarioBundle::from_json(
+        &std::fs::read_to_string(fixture("scenario_bundle_tt.json")).unwrap(),
+    )
+    .unwrap();
+    let direct = assemble(&bundle).unwrap().run_to_replay().unwrap();
+    let written = read_replay(&replay);
+    assert_eq!(written.frames.len() as u64, bundle.steps);
+    assert_eq!(written, direct, "the binary's replay is not the runtime's");
+}
+
+/// Checkpoint then resume, through the command line, reproduces the tail of
+/// the uninterrupted run exactly -- and the scan run's mission is mid-flight
+/// at the checkpoint.
+#[test]
+fn a_checkpoint_resumed_from_the_command_line_continues_the_same_run() {
+    let bundle = fixture("scenario_bundle_scan.json");
+    let whole = scratch("scan_whole.json");
+    let checkpoint = scratch("scan_ck.json");
+    let rest = scratch("scan_rest.json");
+    let at = 150;
+
+    let run = |extra: &[&str], out: &Path| {
+        let status = binary()
+            .args(["sim", "--quiet", "--bundle"])
+            .arg(&bundle)
+            .arg("--replay")
+            .arg(out)
+            .args(extra)
+            .status()
+            .expect("runs");
+        assert!(status.success(), "exit {status} for {extra:?}");
+    };
+    run(&[], &whole);
+    let ck = checkpoint.to_str().unwrap().to_string();
+    let at_text = at.to_string();
+    run(
+        &["--checkpoint-at", &at_text, "--checkpoint", &ck],
+        &scratch("scan_first.json"),
+    );
+    run(&["--resume", &ck], &rest);
+
+    let whole = read_replay(&whole);
+    let rest = read_replay(&rest);
+    assert_eq!(rest.frames.len(), whole.frames.len() - at);
+    for (resumed, original) in rest.frames.iter().zip(&whole.frames[at..]) {
+        assert_eq!(resumed, original, "diverged at t={}", original.timestamp_s);
+    }
+}
+
+#[test]
+fn bad_input_and_unsupported_bundles_exit_distinctly() {
+    let missing = binary()
+        .args(["sim", "--bundle", "/definitely/not/here.json"])
+        .status()
+        .unwrap();
+    assert_eq!(missing.code(), Some(2));
+
+    let garbage = scratch("garbage.json");
+    std::fs::write(&garbage, "{ not json").unwrap();
+    let invalid = binary()
+        .args(["sim", "--bundle"])
+        .arg(&garbage)
+        .status()
+        .unwrap();
+    assert_eq!(invalid.code(), Some(2));
+
+    let text = std::fs::read_to_string(fixture("scenario_bundle_tt.json")).unwrap();
+    let unknown = scratch("unknown_mode.json");
+    std::fs::write(
+        &unknown,
+        text.replacen(
+            "\"mission_mode\":\"target_tracking\"",
+            "\"mission_mode\":\"patrol\"",
+            1,
+        ),
+    )
+    .unwrap();
+    let unsupported = binary()
+        .args(["sim", "--bundle"])
+        .arg(&unknown)
+        .status()
+        .unwrap();
+    assert_eq!(unsupported.code(), Some(3));
+}
+
+#[test]
+fn version_names_every_format() {
+    let output = binary().arg("version").output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for needle in ["argusnet-rs", "scenario bundle", "checkpoint format"] {
+        assert!(text.contains(needle), "{needle} missing from: {text}");
+    }
+}
+
+/// A run that faults mid-way exits 1, names the fault and its tick once, and
+/// writes no replay, rather than succeeding with a truncated one. A hole in
+/// the target's truth reaches both fault paths: at t=3 the truth table itself
+/// has nothing to prescribe; at t=10 the pursuing drone's oracle, which looks
+/// ahead, faults in stage 1 first.
+#[test]
+fn a_run_that_faults_exits_1_and_writes_no_replay() {
+    for (hole_s, expected) in [
+        (3.0, "tick 6: no truth for asset-lynx at t=3"),
+        (10.0, "stage sample_controllers_and_battery"),
+    ] {
+        let mut bundle: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(fixture("scenario_bundle_tt.json")).unwrap(),
+        )
+        .unwrap();
+        let samples = bundle["targets"][0]["samples"].as_array_mut().unwrap();
+        let before = samples.len();
+        samples.retain(|s| s["t"].as_f64() != Some(hole_s));
+        assert_eq!(samples.len(), before - 1, "no sample at t={hole_s}");
+        let broken = scratch(&format!("broken_truth_{hole_s}.json"));
+        std::fs::write(&broken, serde_json::to_string(&bundle).unwrap()).unwrap();
+        let replay = scratch(&format!("broken_replay_{hole_s}.json"));
+        let _ = std::fs::remove_file(&replay);
+
+        let output = binary()
+            .args(["sim", "--bundle"])
+            .arg(&broken)
+            .arg("--replay")
+            .arg(&replay)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "hole at t={hole_s}: {stderr}"
+        );
+        assert!(stderr.contains(expected), "hole at t={hole_s}: {stderr}");
+        assert_eq!(
+            stderr.matches("tick ").count(),
+            1,
+            "tick named twice: {stderr}"
+        );
+        assert!(!replay.exists(), "a faulted run wrote a replay");
+    }
+}

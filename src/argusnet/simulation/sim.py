@@ -6471,7 +6471,25 @@ def simulate(
     mission_profile: str | None = None,
     mission_profile_overrides: Mapping[str, object] | None = None,
     progress: Callable[[int, int], None] | None = None,
-) -> SimulationResult:
+    export_bundle_path: str | None = None,
+) -> SimulationResult | None:
+    if export_bundle_path is not None:
+        # Run-time options argusnet-rs does not honour: refused by name rather
+        # than silently dropped from the exported run.
+        from argusnet.simulation.scenario_bundle import UnsupportedScenario
+
+        run_time_options = {
+            "--continuous": continuous,
+            "--realtime": realtime,
+            "--streaming": streaming,
+            "--compact": compact,
+            "--replay-subsample": replay_subsample != 1,
+        }
+        refused = [flag for flag, used in run_time_options.items() if used]
+        if refused:
+            raise UnsupportedScenario(
+                f"{', '.join(refused)}: argusnet-rs writes a full, unpaced replay"
+            )
     if continuous:
         simulation_config = SimulationConfig(steps=sys.maxsize, dt_s=dt, seed=seed)
         progress = None
@@ -6526,6 +6544,20 @@ def simulate(
         seed=seed,
         constants=constants,
     )
+    if export_bundle_path is not None:
+        # Describe this exact scenario -- built by the same code path, with the
+        # tracker config this command would run with -- for `argusnet-rs sim`,
+        # instead of running it here.
+        from argusnet.simulation.scenario_bundle import export_bundle, write_bundle
+
+        bundle = export_bundle(scenario, simulation_config, DEFAULT_SIMULATION_TRACKER_CONFIG)
+        path = write_bundle(export_bundle_path, bundle)
+        print(
+            f"Scenario bundle written to {path} "
+            f"({len(bundle['nodes'])} nodes, {simulation_config.steps} ticks); "
+            f"run it with: argusnet-rs sim --bundle {path}"
+        )
+        return None
     # Derive streaming JSONL path alongside the replay output.
     streaming_jsonl_path: Path | None = None
     if streaming and replay_path:
@@ -6847,6 +6879,17 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Replay JSON output.",
     )
     parser.add_argument(
+        "--export-bundle",
+        dest="export_bundle",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Instead of running, write this scenario as a scenario bundle for the "
+            "Rust runtime (argusnet-rs sim --bundle PATH). Unsupported options are "
+            "refused by name."
+        ),
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         default=False,
@@ -7017,7 +7060,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_from_args(args: argparse.Namespace) -> SimulationResult:
+def run_from_args(args: argparse.Namespace) -> SimulationResult | None:
     try:
         constants = (
             _load_simulation_constants(args.config_file)
@@ -7153,6 +7196,7 @@ def run_from_args(args: argparse.Namespace) -> SimulationResult:
         mission_profile=getattr(args, "mission_profile", None),
         mission_profile_overrides=mission_profile_overrides,
         progress=build_progress_callback(quiet=getattr(args, "quiet", False)),
+        export_bundle_path=getattr(args, "export_bundle", None),
     )
 
 

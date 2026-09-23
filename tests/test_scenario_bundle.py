@@ -125,3 +125,90 @@ def test_a_scan_map_inspect_bundle_carries_the_reference_pois():
 
 def test_a_target_tracking_bundle_has_no_mission_section():
     assert export_bundle(_scenario(), CONFIG)["mission"] is None
+
+
+# --- argusnet sim --export-bundle ------------------------------------------
+
+_CLI_ARGS = [
+    "--map-preset", "small",
+    "--mission-mode", "target_tracking",
+    "--target-count", "1",
+    "--drone-count", "2",
+    "--ground-stations", "2",
+    "--steps", "6",
+    "--dt", "0.5",
+    "--seed", "3",
+]  # fmt: skip
+
+
+def _export_via_cli(tmp_path, extra=()):
+    from argusnet.simulation import sim
+
+    out = tmp_path / "bundle.json"
+    result = sim.run_from_args(sim.parse_args([*_CLI_ARGS, *extra, "--export-bundle", str(out)]))
+    assert result is None, "--export-bundle ran the simulation instead of exporting"
+    return out
+
+
+def test_export_bundle_writes_exactly_what_the_command_would_run(tmp_path):
+    from argusnet.simulation.sim import DEFAULT_SIMULATION_TRACKER_CONFIG
+
+    written = json.loads(_export_via_cli(tmp_path).read_text())
+    scenario = build_default_scenario(
+        ScenarioOptions(
+            map_preset="small",
+            mission_mode="target_tracking",
+            target_count=1,
+            drone_count=2,
+            ground_station_count=2,
+        ),
+        seed=3,
+    )
+    expected = export_bundle(
+        scenario,
+        SimulationConfig(steps=6, dt_s=0.5, seed=3),
+        DEFAULT_SIMULATION_TRACKER_CONFIG,
+    )
+    # The command's own tracker config, not the dataclass default.
+    assert (
+        written["tracker"]["max_stale_steps"] == DEFAULT_SIMULATION_TRACKER_CONFIG.max_stale_steps
+    )
+    assert written == json.loads(json.dumps(expected))
+
+
+def test_export_bundle_refuses_what_the_runtime_cannot_run(tmp_path):
+    with pytest.raises(UnsupportedScenario, match="enforce_flight_envelope"):
+        _export_via_cli(tmp_path, ["--enforce-flight-envelope"])
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [["--continuous"], ["--realtime"], ["--streaming"], ["--compact"], ["--replay-subsample", "2"]],
+)
+def test_export_bundle_refuses_run_time_options_it_would_drop(tmp_path, flag):
+    with pytest.raises(UnsupportedScenario, match=flag[0]):
+        _export_via_cli(tmp_path, flag)
+    assert not (tmp_path / "bundle.json").exists()
+
+
+def test_an_exported_bundle_runs_in_argusnet_rs_to_a_valid_replay(tmp_path):
+    import subprocess
+    from pathlib import Path
+
+    from argusnet.evaluation.replay import load_replay_document
+
+    binary = Path(__file__).resolve().parent.parent / "target" / "debug" / "argusnet-rs"
+    if not binary.exists():
+        pytest.skip("argusnet-rs is not built (cargo build -p argusnet-cli)")
+    bundle = _export_via_cli(tmp_path)
+    replay = tmp_path / "replay.json"
+    completed = subprocess.run(
+        [str(binary), "sim", "--quiet", "--bundle", str(bundle), "--replay", str(replay)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    document = load_replay_document(str(replay))
+    assert len(document["frames"]) == 6
+    assert document["meta"]["producer"] == "argusnet-sim"

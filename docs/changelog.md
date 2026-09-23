@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — `argusnet-rs`: the Rust simulation from a command line (P4.9a)
+
+- New crate `rust/argusnet-cli` builds the `argusnet-rs` binary. `argusnet-rs
+  sim --bundle B --replay R` runs a scenario bundle in the Rust tick and writes
+  its replay, with no Python at run time. `--checkpoint-at N --checkpoint C`
+  and `--resume C` checkpoint and resume from the command line. It prints
+  provenance and tick-time percentiles. Exit codes: 1 fault (no replay
+  written), 2 invalid input, 3 unsupported.
+- `argusnet sim ... --export-bundle PATH` writes the scenario those flags
+  describe as a bundle, with the command's own tracker config, instead of
+  running it. Options the Rust runtime cannot honour are refused by name,
+  including the run-time flags `--continuous`, `--realtime`, `--streaming`,
+  `--compact` and `--replay-subsample`.
+
 ## Unreleased — Every assembled stage resumes exactly (P4.8e.4)
 
 - Stages 2 (overrides), 6 (bias walks), 7 (the tracking engine), 8 (coverage,
