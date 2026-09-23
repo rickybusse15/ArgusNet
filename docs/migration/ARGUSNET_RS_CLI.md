@@ -9,6 +9,8 @@ same `assemble` the parity tests use, and writes a replay that the Python
 evaluation and the viewer read. No Python runs at simulation time.
 
 ```text
+argusnet-rs sim --config config.json --replay replay.json     # Rust only (P4.9b.2b)
+argusnet-rs build --config config.json --bundle scenario.json # Rust only (P4.9b.2b)
 argusnet sim --duration-s 60 --export-bundle scenario.json    # Python: describe
 argusnet-rs sim --bundle scenario.json --replay replay.json   # Rust: run
 argusnet-rs sim --bundle scenario.json --checkpoint-at 120 --checkpoint ck.json

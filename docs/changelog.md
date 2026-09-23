@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Scenarios from configs, with no Python at all (P4.9b.2b)
+
+- `argusnet-rs build --config C --bundle B` writes the bundle `argusnet sim
+  --export-bundle` would, and `argusnet-rs sim --config C` builds and runs it
+  in process. The native builder ports the scenario half of
+  `build_default_scenario`: targets, ground stations, drones and their
+  controllers, sensors, mission zones, POIs and the mission section.
+- Structurally identical to Python's bundles (every key, string, integer and
+  length) and numerically within 1e-12 m, over the three committed bundles,
+  an 11-scenario preset matrix, and a Python-vs-Rust round trip through both
+  CLIs.
+- The builder's constant tables are exported from the reference
+  (`scripts/export_builder_tables.py`) and checked for drift.
+
 ## Unreleased — numpy's `integers` and the target behaviours in Rust (P4.9b.2a)
 
 - `NumpyRng` reproduces `Generator.integers` (PCG64's `next_uint32` half-word

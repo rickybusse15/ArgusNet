@@ -7,6 +7,8 @@
 //! run time.
 //!
 //! ```text
+//! argusnet-rs build --config config.json --bundle scenario.json
+//! argusnet-rs sim --config config.json --replay replay.json
 //! argusnet-rs sim --bundle scenario.json --replay replay.json
 //! argusnet-rs sim --bundle scenario.json --checkpoint-at 120 --checkpoint ck.json
 //! argusnet-rs sim --bundle scenario.json --resume ck.json --replay rest.json
@@ -21,6 +23,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
+use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
 use argusnet_sim::scenario::{assemble, BundleError, RunError, ScenarioBundle};
 use argusnet_sim::simulation::TickError;
 use argusnet_sim::snapshot::SimulationCheckpoint;
@@ -39,17 +42,36 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run a scenario bundle to completion and write a replay.
+    /// Run a scenario bundle (or a scenario config) to completion and write a
+    /// replay.
     Sim(SimArgs),
+    /// Build the scenario bundle an `argusnet.scenario-config` describes.
+    Build(BuildArgs),
     /// Print the runtime, bundle and checkpoint format versions.
     Version,
 }
 
 #[derive(clap::Args)]
-struct SimArgs {
-    /// The scenario bundle (`argusnet sim --export-bundle`).
+struct BuildArgs {
+    /// The `argusnet.scenario-config` document.
+    #[arg(long)]
+    config: PathBuf,
+    /// Where to write the bundle.
     #[arg(long)]
     bundle: PathBuf,
+}
+
+#[derive(clap::Args)]
+#[command(group(clap::ArgGroup::new("input").required(true).args(["bundle", "config"])))]
+struct SimArgs {
+    /// The scenario bundle (`argusnet sim --export-bundle`, or `argusnet-rs
+    /// build`).
+    #[arg(long)]
+    bundle: Option<PathBuf>,
+    /// An `argusnet.scenario-config`, built in process -- no bundle file, and
+    /// no Python.
+    #[arg(long)]
+    config: Option<PathBuf>,
     /// Where to write the replay. Omit to run without one.
     #[arg(long)]
     replay: Option<PathBuf>,
@@ -85,11 +107,45 @@ fn percentile(sorted_ms: &[f64], fraction: f64) -> f64 {
     sorted_ms[index]
 }
 
+/// Read and build a config, mapping the builder's errors to exit codes.
+fn built_bundle(path: &std::path::Path) -> Result<serde_json::Value, ExitCode> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| fail(EXIT_INVALID, format!("{}: {error}", path.display())))?;
+    let config = ScenarioConfig::from_json(&text).map_err(|error| fail(EXIT_INVALID, error))?;
+    builder::build_bundle(&config).map_err(|error| match error {
+        BuildError::Unsupported(_) => fail(EXIT_UNSUPPORTED, error),
+        BuildError::Invalid(_) => fail(EXIT_INVALID, error),
+    })
+}
+
+fn build(args: BuildArgs) -> ExitCode {
+    let bundle = match built_bundle(&args.config) {
+        Ok(bundle) => bundle,
+        Err(code) => return code,
+    };
+    // Compact, as `write_bundle` writes it.
+    let json = match serde_json::to_string(&bundle) {
+        Ok(json) => json,
+        Err(error) => return fail(EXIT_FAULT, format!("serialising bundle: {error}")),
+    };
+    if let Err(error) = std::fs::write(&args.bundle, json) {
+        return fail(EXIT_FAULT, format!("{}: {error}", args.bundle.display()));
+    }
+    ExitCode::SUCCESS
+}
+
 fn sim(args: SimArgs) -> ExitCode {
     let started = Instant::now();
-    let text = match std::fs::read_to_string(&args.bundle) {
-        Ok(text) => text,
-        Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", args.bundle.display())),
+    let text = match (&args.bundle, &args.config) {
+        (Some(path), _) => match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
+        },
+        (None, Some(path)) => match built_bundle(path) {
+            Ok(bundle) => bundle.to_string(),
+            Err(code) => return code,
+        },
+        (None, None) => unreachable!("clap requires one of --bundle and --config"),
     };
     let bundle = match ScenarioBundle::from_json(&text) {
         Ok(bundle) => bundle,
@@ -201,10 +257,13 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Sim(args) => sim(args),
+        Command::Build(args) => build(args),
         Command::Version => {
             println!(
-                "argusnet-rs {}\nscenario bundle format {} v{}\ncheckpoint format {}, runtime algorithm {}, seed version {}",
+                "argusnet-rs {}\nscenario config format {} v{}\nscenario bundle format {} v{}\ncheckpoint format {}, runtime algorithm {}, seed version {}",
                 env!("CARGO_PKG_VERSION"),
+                builder::CONFIG_FORMAT,
+                builder::CONFIG_VERSION,
                 argusnet_sim::scenario::BUNDLE_FORMAT,
                 argusnet_sim::scenario::BUNDLE_VERSION,
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION,

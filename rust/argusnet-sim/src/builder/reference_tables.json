@@ -1,0 +1,452 @@
+{
+ "dynamics": {
+  "aerial_target_min_agl_m": 120.0,
+  "collision_max_iterations": 8,
+  "collision_push_margin_m": 1.0,
+  "default_dt_s": 0.25,
+  "default_duration_s": 180.0,
+  "default_max_stale_steps": 6,
+  "default_seed": 7,
+  "drone_agl_increment_m": 12.0,
+  "drone_base_agl_m": 230.0,
+  "drone_max_accel_mps2": 8.0,
+  "drone_search_lane_spacing_scale": 80.0,
+  "drone_search_speed_base_mps": 28.0,
+  "drone_search_speed_decrement_mps": 1.0,
+  "drone_vertical_amplitude_base_m": 16.0,
+  "drone_vertical_amplitude_increment_m": 1.0,
+  "drone_vertical_frequency_base_rad_s": 0.11,
+  "drone_vertical_frequency_decrement_rad_s": 0.015,
+  "follow_candidate_count": 12,
+  "follow_lead_s": 4.0,
+  "follow_min_agl_m": 18.0,
+  "follow_rotation_rate_rad_s": 0.08,
+  "ground_contact_top_pad_m": 3.0,
+  "interceptor_follow_altitude_offset_m": 35.0,
+  "interceptor_follow_candidate_count": 16,
+  "interceptor_follow_lead_s": 1.5,
+  "interceptor_follow_min_agl_m": 150.0,
+  "interceptor_follow_radius_m": 55.0,
+  "interceptor_follow_rotation_rate_rad_s": 0.03,
+  "interceptor_search_min_agl_m": 180.0,
+  "launch_climb_duration_s": 8.0,
+  "launch_operational_altitude_agl_m": 230.0,
+  "map_bounds_x_extent_m": 360.0,
+  "map_bounds_y_max_m": 360.0,
+  "map_bounds_y_min_m": -330.0,
+  "perimeter_inset_fraction": 0.18,
+  "terrain_following_agl_m": 30.0,
+  "terrain_following_smoothing_s": 1.5,
+  "tracker_altitude_offset_m": 70.0,
+  "tracker_candidate_count": 16,
+  "tracker_follow_min_agl_m": 155.0,
+  "tracker_lead_s": 2.5,
+  "tracker_rotation_rate_rad_s": 0.018,
+  "tracker_standoff_radius_m": 120.0,
+  "wind_drift_scale": 0.35
+ },
+ "gap_fill_min_fraction": 0.02,
+ "ground_station_layout": {
+  "bounds_margin_fraction": 0.06,
+  "normalized_offsets": [
+   [
+    -0.72,
+    -0.64
+   ],
+   [
+    0.7,
+    -0.28
+   ],
+   [
+    -0.08,
+    0.74
+   ],
+   [
+    0.76,
+    0.58
+   ],
+   [
+    -0.78,
+    -0.78
+   ],
+   [
+    0.04,
+    -0.82
+   ],
+   [
+    -0.74,
+    0.16
+   ],
+   [
+    0.82,
+    0.1
+   ],
+   [
+    0.18,
+    0.86
+   ],
+   [
+    -0.42,
+    0.88
+   ],
+   [
+    0.88,
+    -0.64
+   ],
+   [
+    -0.9,
+    -0.1
+   ]
+  ],
+  "overflow_angle_offset_rad": 0.35,
+  "overflow_radius_fraction": 0.42
+ },
+ "localization": {
+  "annealing_rate": 0.02,
+  "confidence_decay": 0.5,
+  "convergence_threshold_m": 15.0,
+  "localization_timeout_steps": 200,
+  "min_coverage_to_localize": 0.15,
+  "particle_count": 200,
+  "search_radius_m": 80.0
+ },
+ "platform_presets": {
+  "baseline": {
+   "drone_max_range_scale": 1.0,
+   "drone_search_speed_scale": 1.0,
+   "follow_speed_cap_mps": 42.0,
+   "ground_station_range_scale": 1.5,
+   "target_speed_scale": 1.0
+  },
+  "wide_area": {
+   "drone_max_range_scale": 1.8,
+   "drone_search_speed_scale": 1.45,
+   "follow_speed_cap_mps": 60.0,
+   "ground_station_range_scale": 2.4,
+   "target_speed_scale": 1.35
+  }
+ },
+ "poi_hover_agl_m": 40.0,
+ "sensor": {
+  "altitude_confidence_floor": 0.3,
+  "altitude_confidence_slope": 0.5,
+  "altitude_noise_multiplier_max": 1.2,
+  "altitude_quality_range_m": 400.0,
+  "altitude_quality_threshold_m": 200.0,
+  "confidence_floor": 0.15,
+  "confidence_range_slope": 0.7,
+  "drone_base_bearing_std_rad": 0.014,
+  "drone_base_dropout_probability": 0.08,
+  "drone_base_max_range_m": 650.0,
+  "drone_bearing_std_rad_increment": 0.001,
+  "drone_dropout_probability_increment": 0.005,
+  "drone_fov_half_angle_deg": 55.0,
+  "drone_look_down_angle_deg": 30.0,
+  "drone_sensor_type": "optical",
+  "fov_confidence_slope": 0.4,
+  "fov_noise_multiplier_slope": 1.5,
+  "ground_station_bearing_std_rad_scale": 1.3,
+  "ground_station_bearing_stds_rad": [
+   0.008,
+   0.01,
+   0.009,
+   0.009,
+   0.011,
+   0.01,
+   0.009,
+   0.01,
+   0.009,
+   0.011,
+   0.01,
+   0.009
+  ],
+  "ground_station_dropout_probabilities": [
+   0.03,
+   0.04,
+   0.05,
+   0.035,
+   0.045,
+   0.04,
+   0.038,
+   0.042,
+   0.036,
+   0.044,
+   0.039,
+   0.041
+  ],
+  "ground_station_dropout_probability_scale": 0.5,
+  "ground_station_fov_half_angle_deg": 180.0,
+  "ground_station_mast_agls_m": [
+   2.0,
+   3.0,
+   2.5,
+   2.8,
+   2.2,
+   2.6,
+   2.4,
+   2.9,
+   2.7,
+   2.3,
+   2.8,
+   2.5
+  ],
+  "ground_station_max_range_factors_m": [
+   520.0,
+   520.0,
+   520.0,
+   560.0,
+   540.0,
+   550.0,
+   545.0,
+   555.0,
+   550.0,
+   535.0,
+   560.0,
+   545.0
+  ],
+  "ground_station_sensor_type": "radar",
+  "launch_detection_range_fraction": 0.8,
+  "los_sample_step_m": 18.0,
+  "los_terrain_clearance_m": 1.0,
+  "min_elevation_deg": 0.5,
+  "mobile_min_elevation_deg": -89.0,
+  "transmittance_threshold": 0.999
+ },
+ "sensor_error_defaults": {
+  "atmospheric_attenuation_coeff": 0.0001,
+  "base_bearing_std_rad": 0.015,
+  "bias_drift_max_rad": 0.01,
+  "bias_drift_rate_rad_per_s": 0.0,
+  "clutter_bearing_std_rad": 0.3,
+  "clutter_max_range_m": 2000.0,
+  "clutter_min_range_m": 50.0,
+  "detection_range_falloff_m": 400.0,
+  "detection_range_knee_m": 800.0,
+  "false_alarm_rate_per_scan": 0.0,
+  "max_bearing_std_rad": 0.15,
+  "min_detection_probability": 0.1,
+  "range_noise_exponent": 1.5,
+  "range_noise_reference_m": 1000.0,
+  "snr_range_exponent": 2.0,
+  "snr_reference_db": 30.0
+ },
+ "tracker_default": {
+  "adaptive_measurement_noise": false,
+  "chi_squared_gate_threshold": 16.0,
+  "cluster_distance_threshold_m": 200.0,
+  "confirmation_m": 3,
+  "confirmation_n": 5,
+  "ct_process_accel_std": 8.0,
+  "ct_turn_rate_std": 0.1,
+  "cv_process_accel_std": 3.0,
+  "data_association_mode": "labeled",
+  "innovation_max_scale": 4.0,
+  "innovation_scale_factor": 1.5,
+  "innovation_window": 5,
+  "max_bearing_std_rad": 0.08,
+  "max_coast_frames": 10,
+  "max_coast_seconds": 5.0,
+  "max_stale_steps": 8,
+  "max_timestamp_skew_s": 1.5,
+  "min_confidence": 0.15,
+  "min_intersection_angle_deg": 2.5,
+  "min_observations": 2,
+  "min_quality_score": 0.1,
+  "near_parallel_rejection_angle_deg": 2.5,
+  "retain_history": false
+ },
+ "tracker_simulation": {
+  "adaptive_measurement_noise": false,
+  "chi_squared_gate_threshold": 16.0,
+  "cluster_distance_threshold_m": 200.0,
+  "confirmation_m": 3,
+  "confirmation_n": 5,
+  "ct_process_accel_std": 8.0,
+  "ct_turn_rate_std": 0.1,
+  "cv_process_accel_std": 3.0,
+  "data_association_mode": "labeled",
+  "innovation_max_scale": 4.0,
+  "innovation_scale_factor": 1.5,
+  "innovation_window": 5,
+  "max_bearing_std_rad": 0.08,
+  "max_coast_frames": 10,
+  "max_coast_seconds": 5.0,
+  "max_stale_steps": 6,
+  "max_timestamp_skew_s": 1.5,
+  "min_confidence": 0.15,
+  "min_intersection_angle_deg": 2.5,
+  "min_observations": 2,
+  "min_quality_score": 0.1,
+  "near_parallel_rejection_angle_deg": 2.5,
+  "retain_history": false
+ },
+ "weather_presets": {
+  "clear": {
+   "atmosphere": {
+    "relative_humidity": 0.35,
+    "visibility_m": 15000.0
+   },
+   "cloud_layers": [],
+   "precipitation": {
+    "precip_type": "none",
+    "rate_mmph": 0.0
+   },
+   "wind": {
+    "altitude_scaling": 0.2,
+    "base_heading_rad": 3.141592653589793,
+    "base_speed_mps": 3.0,
+    "gust_amplitude_mps": 1.0,
+    "gust_period_s": 20.0
+   }
+  },
+  "fog": {
+   "atmosphere": {
+    "relative_humidity": 0.98,
+    "visibility_m": 200.0
+   },
+   "cloud_layers": [
+    {
+     "base_altitude_m": 0.0,
+     "coverage": 1.0,
+     "top_altitude_m": 300.0
+    }
+   ],
+   "precipitation": {
+    "precip_type": "fog",
+    "rate_mmph": 0.0
+   },
+   "wind": {
+    "altitude_scaling": 0.1,
+    "base_heading_rad": 1.5707963267948966,
+    "base_speed_mps": 1.5,
+    "gust_amplitude_mps": 0.5,
+    "gust_period_s": 30.0
+   }
+  },
+  "heavy_rain": {
+   "atmosphere": {
+    "relative_humidity": 0.95,
+    "visibility_m": 2000.0
+   },
+   "cloud_layers": [
+    {
+     "base_altitude_m": 400.0,
+     "coverage": 1.0,
+     "top_altitude_m": 2000.0
+    }
+   ],
+   "precipitation": {
+    "precip_type": "rain",
+    "rate_mmph": 25.0
+   },
+   "wind": {
+    "altitude_scaling": 0.35,
+    "base_heading_rad": 3.490658503988659,
+    "base_speed_mps": 12.0,
+    "gust_amplitude_mps": 7.0,
+    "gust_period_s": 8.0
+   }
+  },
+  "light_rain": {
+   "atmosphere": {
+    "relative_humidity": 0.85,
+    "visibility_m": 6000.0
+   },
+   "cloud_layers": [
+    {
+     "base_altitude_m": 800.0,
+     "coverage": 0.95,
+     "top_altitude_m": 2500.0
+    }
+   ],
+   "precipitation": {
+    "precip_type": "rain",
+    "rate_mmph": 2.5
+   },
+   "wind": {
+    "altitude_scaling": 0.3,
+    "base_heading_rad": 3.6651914291880923,
+    "base_speed_mps": 6.0,
+    "gust_amplitude_mps": 3.0,
+    "gust_period_s": 12.0
+   }
+  },
+  "overcast": {
+   "atmosphere": {
+    "relative_humidity": 0.7,
+    "visibility_m": 8000.0
+   },
+   "cloud_layers": [
+    {
+     "base_altitude_m": 1500.0,
+     "coverage": 0.85,
+     "top_altitude_m": 3000.0
+    }
+   ],
+   "precipitation": {
+    "precip_type": "none",
+    "rate_mmph": 0.0
+   },
+   "wind": {
+    "altitude_scaling": 0.25,
+    "base_heading_rad": 4.1887902047863905,
+    "base_speed_mps": 5.0,
+    "gust_amplitude_mps": 2.0,
+    "gust_period_s": 15.0
+   }
+  },
+  "snow": {
+   "atmosphere": {
+    "relative_humidity": 0.8,
+    "visibility_m": 3000.0
+   },
+   "cloud_layers": [
+    {
+     "base_altitude_m": 600.0,
+     "coverage": 0.9,
+     "top_altitude_m": 3500.0
+    }
+   ],
+   "precipitation": {
+    "precip_type": "snow",
+    "rate_mmph": 5.0
+   },
+   "wind": {
+    "altitude_scaling": 0.25,
+    "base_heading_rad": 0.0,
+    "base_speed_mps": 4.0,
+    "gust_amplitude_mps": 2.0,
+    "gust_period_s": 18.0
+   }
+  },
+  "storm": {
+   "atmosphere": {
+    "relative_humidity": 0.97,
+    "visibility_m": 1000.0
+   },
+   "cloud_layers": [
+    {
+     "base_altitude_m": 200.0,
+     "coverage": 1.0,
+     "top_altitude_m": 1200.0
+    },
+    {
+     "base_altitude_m": 1500.0,
+     "coverage": 1.0,
+     "top_altitude_m": 8000.0
+    }
+   ],
+   "precipitation": {
+    "precip_type": "rain",
+    "rate_mmph": 50.0
+   },
+   "wind": {
+    "altitude_scaling": 0.4,
+    "base_heading_rad": 3.9269908169872414,
+    "base_speed_mps": 20.0,
+    "gust_amplitude_mps": 12.0,
+    "gust_period_s": 5.0
+   }
+  }
+ }
+}

@@ -1,8 +1,9 @@
 # P4.9b: the Rust-native scenario builder
 
-**Status:** P4.9b.1 (the world half) delivered 2026-09-23, locally verified
-only (not pushed). P4.9b.2 (the scenario half) is open. See
-[STATUS.md](STATUS.md).
+**Status:** delivered 2026-09-23, locally verified only (not pushed), in three
+parts: P4.9b.1 (the world half), P4.9b.2a (numpy's `integers` and the target
+behaviours) and P4.9b.2b (the scenario half, whole bundles, and
+`argusnet-rs build` / `sim --config`). See [STATUS.md](STATUS.md).
 
 P4.9's exit requires "no Python runtime dependency", with versioned config
 files as the canonical input. Since P4.8e.1, a scenario reaches the Rust
@@ -193,18 +194,106 @@ windows, so a dense blend sweep was added. The equivalent is `hypot` for a
 patrol leg's length. Every patrol leg is axis-aligned, so one component is
 exactly zero, and both forms return `|dx|` exactly.
 
-## Not in this slice (P4.9b.2)
+## P4.9b.2b: the scenario half, and whole bundles
 
-* **The scenario half.** Ground stations, targets and their behaviours
-  (`build_behavior_trajectory`, weather-adjusted), drones and their
-  controllers, roles, mission zones, the POIs, the weather preset and the
-  sensors, plus the assignment keys and `scenario_options` of
-  `presentation`. The random draws they make go beyond what P4.3 ported
-  (`default_rng` → `uniform`/`random`). `Generator.integers` is needed, and
-  one behaviour draws `standard_normal`: numpy's ziggurat.
-* **`argusnet-rs build`.** A command that writes a bundle from a config,
-  once a whole bundle can be built.
+**Delivered 2026-09-23, locally verified only.**
+
+`builder::build_bundle(config)` builds the whole bundle `argusnet sim
+--export-bundle` writes for the same options:
+
+* **targets.** Ids, motion preset, altitude over the map centre, preset
+  speed, the per-target seed, the P4.9b.2a behaviour, P4.8d's weather
+  adjustment (1 s drift step, 120 m floor), sampled at every tick and every
+  follow lead;
+* **ground stations.** The layout offsets, then the overflow ring past twelve,
+  clamped to bounds and pushed out of solid obstacles;
+* **drones.** Compass names, per-index sensor and flight parameters, the
+  drone-mode sequence, cooperative slots per role and target, search sectors
+  (planner-routed lawnmowers in target tracking; lawnmowers pushed clear of
+  obstacles, sorted west to east by station, in scan mode), follow and launch
+  controllers, with the shared generator's phases drawn in the reference's
+  order;
+* **sensors.** `_sensor_model_for_node`'s derived error configuration over the
+  defaults;
+* **mission zones.** `generate_mission_zones` in full: building anchors, a
+  16 x 16 terrain sample with numpy's `gradient` (both of its spacing
+  branches), peak and flat candidates by stable sort, and two placement
+  passes with separation and objective-relative sampling;
+* **the mission section and POIs.** `make_poi_positions` with its obstacle
+  rejection;
+* **presentation.** `scenario_options`, the zones and the four assignment
+  maps.
+
+Constant tables (platform and weather presets, dynamics and sensor
+constants, the station layout, tracker configurations, sensor-error and
+localization defaults) are exported from the reference by
+`scripts/export_builder_tables.py` into `builder/reference_tables.json` and
+embedded. `tests/test_builder_tables.py` fails if they drift.
+
+Refused as `Unsupported`, as `export_bundle` refuses them: the flight envelope,
+blocking safety, frontier exploration, occlusion-aware mapping and adaptive
+search. The native builder also refuses mission profiles, cooperative search
+in scan mode, target tracking with no targets (the reference raises there
+too) and a scenario with no ground stations.
+
+`argusnet-rs build --config C --bundle B` writes the bundle, and
+`argusnet-rs sim --config C` builds and runs it in one process. With either,
+no Python is involved anywhere. A 60 s default target-tracking scenario
+builds and runs in 0.65 s on a debug build.
+
+### numpy's `arange` fuses too
+
+numpy 2.5 on arm64 fills `arange` with `fma(i, delta, start)`. That held on
+3,000 of 3,000 random cases, where the unfused form agreed on 78%. This is
+the third instance of the same contraction, after `uniform` and matmul. The
+port stays unfused, reproducing a non-fusing build. Its unit test uses inputs
+where both forms agree but the rounded first difference is not `step`, so it
+pins numpy's delta rule on every platform.
+
+### Verification
+
+| Test | Shows |
+| --- | --- |
+| `builder_bundle::the_committed_bundles_are_rebuilt_whole` | all three committed bundles, every section. About 172,000 numbers exact and about 43,000 terrain-derived within 1e-12 m (worst 1.4e-13 m); every key, string, integer and array length exact |
+| `builder_bundle::a_matrix_of_scenarios_builds_the_references_bundles` | 11 scenarios (`scripts/capture_native_bundle_fixture.py`): every target motion, drone mode, weather and platform preset, station overflow (13 and 14 stations), 9 drones, building-anchored exclusion zones, large, xlarge and regional maps, scan with one drone and with several. 7,010 numbers exact, 442 within 1e-12 m (worst 2.3e-13 m, a POI coordinate from a fused `uniform`) |
+| `builder::scenario::tests` | `np.arange`'s rounded-difference fill; numpy's `gradient`, uniform and non-uniform branches, against numpy's bits; clamping's collapse to the midpoint; the candidate sorts' stability and tiebreak; a push that lands in a neighbour; the run-length rule |
+| `cli::a_config_builds_and_runs_without_python` | `build` writes the library's bundle; `sim --config` gives the same replay as `build`, then `sim --bundle` |
+| `cli::a_config_the_builder_refuses_exits_by_kind` | unsupported 3, invalid 2, for both commands; `sim` needs one input |
+| `test_argusnet_rs_builds_the_bundle_argusnet_sim_exports` | Python's `--export-bundle` and Rust's `build` for the same options, with the command's tracker: the same bundle |
+| `test_the_embedded_tables_match_the_reference` | the embedded constant tables are a fresh export |
+
+### Mutation round
+
+23 mutants. **22 caught and 1 equivalent**, after one strengthening pass. The
+first pass caught 18. The four survivors that were not equivalent were
+behaviour no scenario reaches: clamping with a margin wider than the span, a
+push landing in a neighbour, numpy's uniform-spacing gradient branch, and an
+exact gradient tie. Each now has a unit test. The equivalent is the
+bias-drift floor: the smallest bearing std any preset produces is 0.0104, and
+doubled it never falls to the 0.006 floor.
+
+### Gate
+
+Pinned toolchain 1.98.0-aarch64, exit codes read directly:
+
+| Check | Result |
+| --- | --- |
+| `cargo test --workspace` | 1079 passed, 0 failed |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo fmt --all -- --check` | clean |
+| `ruff check src/argusnet scripts tests`, `ruff format --check` on touched files | clean |
+| `pytest tests/` (`ARGUSNET_REQUIRE_RS=1`) | 1024 passed, 9 skipped, 0 failed |
+| CI | **not run**: nothing is pushed |
+
+## Not in this slice
+
+* **Mission profiles** (`--mission-profile`), which carry their own zones
+  and POIs. They are refused as `Unsupported`.
+* **Cooperative search in scan mode.** Its wedge paths are refused as
+  `Unsupported`.
+* **DEM and hybrid terrain.** These are an import step (P4.3).
 
 ## Next
 
-**P4.9b.2**: the scenario half, and `argusnet-rs build --config`.
+**P4.9c**: phase acceptance. Canonical scenarios, multi-seed envelopes and
+startup and tick timing, now all runnable from configs.

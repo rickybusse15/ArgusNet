@@ -31,7 +31,8 @@ side-effects that `MissionStage` emits as events, or runs from a command line.
 | P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay, checkpoint/resume from the command line; `argusnet sim --export-bundle` adapter refuses what it cannot carry | local | [ARGUSNET_RS_CLI.md](ARGUSNET_RS_CLI.md) |
 | P4.9a.2 | Additive replay enrichment: every frame payload and the scenario `meta` a Python replay carries, viewer-readable; deconfliction `hypot` fix | local | [REPLAY_ENRICHMENT.md](REPLAY_ENRICHMENT.md) |
 | P4.9b.1 | Native builder, world half: `argusnet.scenario-config` → terrain, environment obstacles and patches, land cover → bundle `world` + world `presentation`; exact except heights (numpy `exp`, ≤1e-12 m) | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9b.2 | Native builder, scenario half: stations, targets and behaviours, drones and controllers, zones, POIs, weather, sensors; `argusnet-rs build` | open | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
 | P4.9c | Phase acceptance: canonical scenarios, multi-seed envelopes, startup/tick timing | open | — |
 
 ## Track B — viewer engine

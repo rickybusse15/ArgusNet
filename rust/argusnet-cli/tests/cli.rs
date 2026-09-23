@@ -245,3 +245,91 @@ fn the_viewer_reads_everything_an_argusnet_rs_replay_carries() {
         .any(|f| !f.generation_rejections.is_empty()));
     assert!(follow.frames.iter().any(|f| f.localization_state.is_some()));
 }
+
+fn write_config(name: &str, options: serde_json::Value) -> PathBuf {
+    let path = scratch(name);
+    let config = serde_json::json!({
+        "format": "argusnet.scenario-config",
+        "version": 1,
+        "seed": 5,
+        "steps": 30,
+        "dt_s": 0.5,
+        "options": options,
+    });
+    std::fs::write(&path, config.to_string()).unwrap();
+    path
+}
+
+/// `build` writes the library's bundle, and `sim --config` runs exactly what
+/// `build` then `sim --bundle` runs: no Python, no difference.
+#[test]
+fn a_config_builds_and_runs_without_python() {
+    let config = write_config(
+        "config.json",
+        serde_json::json!({"map_preset": "small", "mission_mode": "target_tracking",
+                           "target_count": 2, "drone_count": 3, "ground_station_count": 3}),
+    );
+    let bundle_path = scratch("built_bundle.json");
+    let status = binary()
+        .args(["build", "--config"])
+        .arg(&config)
+        .arg("--bundle")
+        .arg(&bundle_path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "build: {status}");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&bundle_path).unwrap()).unwrap();
+    let parsed = argusnet_sim::builder::ScenarioConfig::from_json(
+        &std::fs::read_to_string(&config).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        written,
+        argusnet_sim::builder::build_bundle(&parsed).unwrap()
+    );
+
+    let via_config = scratch("via_config.json");
+    let via_bundle = scratch("via_bundle.json");
+    for (flag, input, out) in [
+        ("--config", &config, &via_config),
+        ("--bundle", &bundle_path, &via_bundle),
+    ] {
+        let status = binary()
+            .args(["sim", "--quiet", flag])
+            .arg(input)
+            .arg("--replay")
+            .arg(out)
+            .status()
+            .unwrap();
+        assert!(status.success(), "sim {flag}: {status}");
+    }
+    let config_replay = read_replay(&via_config);
+    assert_eq!(config_replay.frames.len(), 30);
+    assert_eq!(config_replay, read_replay(&via_bundle));
+}
+
+#[test]
+fn a_config_the_builder_refuses_exits_by_kind() {
+    let unsupported = write_config(
+        "unsupported.json",
+        serde_json::json!({"adaptive_search": true}),
+    );
+    let unknown = write_config("unknown.json", serde_json::json!({"map_presett": "small"}));
+    for (config, code) in [(&unsupported, 3), (&unknown, 2)] {
+        for command in ["build", "sim"] {
+            let mut run = binary();
+            run.args([command, "--config"]).arg(config);
+            if command == "build" {
+                run.arg("--bundle").arg(scratch("never.json"));
+            }
+            assert_eq!(
+                run.status().unwrap().code(),
+                Some(code),
+                "{command} {config:?}"
+            );
+        }
+    }
+    let neither = binary().args(["sim"]).status().unwrap();
+    assert_eq!(neither.code(), Some(2), "sim needs --bundle or --config");
+}

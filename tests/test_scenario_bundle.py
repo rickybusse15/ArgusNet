@@ -311,3 +311,59 @@ def test_the_coverage_grid_carries_the_scenarios_resolution():
         CONFIG,
     )
     assert scan["coverage_bounds"] == scan["mission"]["coverage_bounds"]
+
+
+def _assert_same_within(ours, theirs, path="bundle", tolerance=1e-12):
+    """Exact structure, strings, booleans and integers; floats within
+    `tolerance` (terrain heights and platform-fused `uniform` draws)."""
+    assert type(ours) is type(theirs) or {type(ours), type(theirs)} <= {int, float}, path
+    if isinstance(ours, dict):
+        assert set(ours) == set(theirs), f"{path}: keys"
+        for key in ours:
+            _assert_same_within(ours[key], theirs[key], f"{path}.{key}", tolerance)
+    elif isinstance(ours, list):
+        assert len(ours) == len(theirs), f"{path}: length"
+        for index, (a, b) in enumerate(zip(ours, theirs, strict=True)):
+            _assert_same_within(a, b, f"{path}[{index}]", tolerance)
+    elif isinstance(ours, float):
+        assert abs(ours - theirs) <= tolerance, f"{path}: {ours} vs {theirs}"
+    else:
+        assert ours == theirs, f"{path}: {ours!r} vs {theirs!r}"
+
+
+def test_argusnet_rs_builds_the_bundle_argusnet_sim_exports(tmp_path):
+    """P4.9b.2b end to end: the same options through Python's
+    `--export-bundle` and Rust's `argusnet-rs build` give the same bundle,
+    with the tracker the command runs with."""
+    import subprocess
+
+    binary = _argusnet_rs()
+    python_bundle = json.loads(_export_via_cli(tmp_path).read_text())
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "format": "argusnet.scenario-config",
+                "version": 1,
+                "seed": 3,
+                "steps": 6,
+                "dt_s": 0.5,
+                "options": {
+                    "map_preset": "small",
+                    "mission_mode": "target_tracking",
+                    "target_count": 1,
+                    "drone_count": 2,
+                    "ground_station_count": 2,
+                },
+            }
+        )
+    )
+    rust_path = tmp_path / "rust_bundle.json"
+    completed = subprocess.run(
+        [str(binary), "build", "--config", str(config), "--bundle", str(rust_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    _assert_same_within(json.loads(rust_path.read_text()), python_bundle)

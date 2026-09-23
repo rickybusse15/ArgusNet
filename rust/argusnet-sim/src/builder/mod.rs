@@ -26,6 +26,7 @@
 
 pub mod behaviors;
 pub mod environment;
+pub mod scenario;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -178,8 +179,16 @@ impl Default for ScenarioOptions {
     }
 }
 
+fn quarter() -> f64 {
+    0.25
+}
+
 /// An `argusnet.scenario-config` v1 document: the options, the seed and the
 /// run length -- what `argusnet sim`'s flags describe, as data.
+///
+/// The run length is `steps`, or `duration_s` (default 180 s, as
+/// `SimulationConfig.from_duration` gives `ceil(duration / dt) + 1` ticks),
+/// at `dt_s` (default 0.25 s).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScenarioConfig {
@@ -187,8 +196,28 @@ pub struct ScenarioConfig {
     pub version: u32,
     #[serde(default = "seven")]
     pub seed: u32,
+    #[serde(default = "quarter")]
+    pub dt_s: f64,
+    #[serde(default)]
+    pub steps: Option<u64>,
+    #[serde(default)]
+    pub duration_s: Option<f64>,
     #[serde(default)]
     pub options: ScenarioOptions,
+}
+
+/// Build the scenario bundle a config describes, as `argusnet sim
+/// --export-bundle` would write it: the tracker is the one that command runs
+/// with (`DEFAULT_SIMULATION_TRACKER_CONFIG`).
+pub fn build_bundle(config: &ScenarioConfig) -> Result<Value, BuildError> {
+    let world = build_world(&config.options)?;
+    scenario::build_bundle(
+        scenario::Assembly {
+            config,
+            tracker: scenario::TABLES["tracker_simulation"].clone(),
+        },
+        &world,
+    )
 }
 
 /// Why a config could not be built.
