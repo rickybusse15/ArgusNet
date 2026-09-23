@@ -1,6 +1,7 @@
 //! The Rust simulation runtime shell.
 
 pub mod battery;
+pub mod builder;
 pub mod clock;
 pub mod command;
 pub mod config;

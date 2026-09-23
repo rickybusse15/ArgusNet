@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — The native builder builds the world (P4.9b.1)
+
+- `argusnet_sim::builder` reads an `argusnet.scenario-config` v1 document
+  (`ScenarioOptions` field for field, unknown options refused) and builds the
+  world Python's `build_default_scenario` builds: terrain, the environment's
+  obstacles and land-cover patches for every terrain and map preset, and the
+  land cover. It writes the bundle's `world` section and the world keys of
+  `presentation`.
+- Exact against the reference except for terrain heights and what derives
+  from them, which are within 1e-12 m (numpy's `exp`, P4.3), across a
+  27-case preset matrix, 600 random box and wall footprints, and the three
+  committed bundles.
+
 ## Unreleased — `argusnet-rs` replays carry what the viewer shows (P4.9a.2)
 
 - Rust replay frames now carry generation rejections (with the reference's
