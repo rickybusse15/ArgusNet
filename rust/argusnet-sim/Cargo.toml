@@ -34,11 +34,9 @@ libm = "=0.2.16"
 rand_chacha = "=0.10.0"
 rand_core = "=0.10.1"
 serde.workspace = true
-# `float_roundtrip`: checkpoints are JSON, and a resumed run must equal an
-# uninterrupted one bit for bit. Without the feature serde_json's parser is
-# not correctly rounded and can hand back an f64 one ULP from the one written,
-# which the controller-stage differential test caught as a divergence.
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+# `float_roundtrip` comes from the workspace dependency; see the root
+# Cargo.toml for why it cannot be enabled per crate.
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

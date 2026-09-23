@@ -79,11 +79,27 @@ pub trait ConflictResolver: std::fmt::Debug + Send {
 ///
 /// Both reach `resolve_step` as closures; carrying them as data keeps the
 /// handler `Send` and keeps the terrain out of the stage.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct RoleTable {
     roles: std::collections::BTreeMap<String, String>,
     /// Lowest altitude any platform may hold, or `None` for no clamp.
     floor_m: Option<f64>,
+    /// The real terrain, when the run has one. Takes precedence over
+    /// `floor_m`: the reference's `_clamp_terrain` is
+    /// `terrain.clamp_altitude(xy, z, min_agl)`, a clamp against the ground
+    /// under the platform, not against a constant.
+    terrain: Option<std::sync::Arc<dyn crate::motion::TerrainSampler + Send + Sync>>,
+}
+
+impl std::fmt::Debug for RoleTable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RoleTable")
+            .field("roles", &self.roles)
+            .field("floor_m", &self.floor_m)
+            .field("has_terrain", &self.terrain.is_some())
+            .finish()
+    }
 }
 
 impl RoleTable {
@@ -102,6 +118,24 @@ impl RoleTable {
     pub fn with_floor_m(mut self, floor_m: Option<f64>) -> Self {
         self.floor_m = floor_m;
         self
+    }
+
+    /// Clamp against real terrain, as the reference does whenever its
+    /// deconfliction layer is given one (every production scenario).
+    pub fn with_terrain(
+        mut self,
+        terrain: std::sync::Arc<dyn crate::motion::TerrainSampler + Send + Sync>,
+    ) -> Self {
+        self.terrain = Some(terrain);
+        self
+    }
+
+    /// The altitude a platform at `xy_m`, `z_m` is clamped to, or `None`.
+    pub fn clamp(&self, xy_m: [f64; 2], z_m: f64, min_agl_m: f64) -> Option<f64> {
+        match &self.terrain {
+            Some(terrain) => Some(terrain.clamp_altitude(xy_m[0], xy_m[1], z_m, min_agl_m)),
+            None => self.floor_m,
+        }
     }
 
     pub fn role_of(&self, drone_id: &str) -> String {
@@ -127,13 +161,12 @@ impl ConflictResolver for PlanningResolver {
         corridors: &[FlightCorridor],
         roles: &RoleTable,
     ) -> (Vec<Proposal>, Vec<DeconflictionEvent>) {
-        let floor = roles.floor_m();
         resolve_step(
             config,
             proposals,
             timestamp_s,
             |id| roles.role_of(id),
-            |_xy, _z, _t| floor,
+            |xy, z, min_agl_m| roles.clamp(xy, z, min_agl_m),
             zones,
             corridors,
         )
@@ -166,6 +199,15 @@ impl DeconflictLink {
 
     pub fn config(&self) -> DeconflictionConfig {
         self.lock().config
+    }
+
+    /// The roles and terrain floor installed now.
+    pub fn roles(&self) -> RoleTable {
+        self.lock().roles.clone()
+    }
+
+    pub fn has_terrain(&self) -> bool {
+        self.lock().roles.terrain.is_some()
     }
 
     pub fn set_roles(&self, roles: RoleTable) {

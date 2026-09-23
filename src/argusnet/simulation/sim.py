@@ -1362,6 +1362,14 @@ def static_ground_point(
         position = np.array([x_m, y_m, ground_m + mast_agl_m], dtype=float)
         return position, zero.copy()
 
+    # Data, not behaviour: the scenario-bundle exporter reads how this closure
+    # was built, because a closure cannot otherwise be described to Rust.
+    trajectory.bundle_spec = {  # type: ignore[attr-defined]
+        "kind": "static_ground_point",
+        "x_m": float(x_m),
+        "y_m": float(y_m),
+        "mast_agl_m": float(mast_agl_m),
+    }
     return trajectory
 
 
@@ -1731,6 +1739,7 @@ def looped_waypoint_path(
     cumulative_lengths = np.cumsum(segment_lengths)
     path_length_m = float(cumulative_lengths[-1])
     phase_offset_m = (phase % math.tau) / math.tau * path_length_m
+    waypoint_speed_mps = float(speed_mps)
     speed_mps = max(float(speed_mps), 0.5)
 
     def trajectory(timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
@@ -1766,6 +1775,19 @@ def looped_waypoint_path(
             obstacle_layer=obstacle_layer,
         )
 
+    # Data, not behaviour: see `static_ground_point`. The *unfloored* speed is
+    # recorded, because the Rust port applies the 0.5 m/s floor itself.
+    trajectory.bundle_spec = {  # type: ignore[attr-defined]
+        "kind": "looped_waypoint_path",
+        "waypoints_xy_m": [[float(p[0]), float(p[1])] for p in points],
+        "speed_mps": waypoint_speed_mps,
+        "base_agl_m": float(base_agl_m),
+        "vertical_amplitude_m": float(vertical_amplitude),
+        "vertical_frequency_rad_s": float(vertical_frequency),
+        "phase": float(phase),
+        "min_agl_m": float(min_agl_m),
+        "avoid_obstacles": obstacle_layer is not None,
+    }
     return trajectory
 
 

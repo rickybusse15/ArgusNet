@@ -1,0 +1,191 @@
+//! One owned world, lent to every stage that reads it.
+//!
+//! [`crate::motion_world`] adapts `argusnet-world` by *borrowing*, which suits
+//! a test that holds the world on its stack. An assembled run does not: stage
+//! handlers are owned by the `Simulation`, must be `Send`, and outlive any one
+//! tick. So the world is built once, held behind `Arc`s, and each stage gets a
+//! cheap clone of the capability it needs. Every stage reads the **same**
+//! terrain rather than its own copy, and that is what keeps "the platform is
+//! above the ground" one fact across stages 1, 3 and 6.
+//!
+//! The arithmetic is not here. Each adapter builds the borrowed adapter from
+//! `motion_world` per call, which costs a pointer and a float, so there is one
+//! implementation of the default gradient step and of the blocker filter.
+
+use std::fmt;
+use std::sync::Arc;
+
+use argusnet_sensing::cascade::{Blocker, Visibility};
+use argusnet_world::index::ObstacleLayer;
+use argusnet_world::land_cover::LandCoverLayer;
+use argusnet_world::tiled::TiledTerrain;
+use argusnet_world::visibility::{self, VisibilityProfile, VisibilityResult};
+
+use crate::follow_path::VisibilitySampler;
+use crate::motion::{ObstacleSampler, TerrainSampler};
+use crate::motion_world::{WorldObstacles, WorldTerrain};
+use crate::observe::{SightLine, TerrainHeight, VisibilityOracle};
+
+/// The terrain, shared.
+#[derive(Clone)]
+pub struct SharedTerrain {
+    terrain: Arc<TiledTerrain>,
+    base_resolution_m: f64,
+}
+
+impl fmt::Debug for SharedTerrain {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SharedTerrain")
+            .field("base_resolution_m", &self.base_resolution_m)
+            .finish()
+    }
+}
+
+impl SharedTerrain {
+    pub fn new(terrain: Arc<TiledTerrain>, base_resolution_m: f64) -> Self {
+        Self {
+            terrain,
+            base_resolution_m,
+        }
+    }
+
+    fn borrowed(&self) -> WorldTerrain<'_> {
+        WorldTerrain::new(self.terrain.as_ref(), self.base_resolution_m)
+    }
+}
+
+impl TerrainSampler for SharedTerrain {
+    fn height_at(&self, x_m: f64, y_m: f64) -> f64 {
+        self.borrowed().height_at(x_m, y_m)
+    }
+
+    fn gradient_at(&self, x_m: f64, y_m: f64, delta_m: Option<f64>) -> [f64; 2] {
+        self.borrowed().gradient_at(x_m, y_m, delta_m)
+    }
+
+    fn clamp_altitude(&self, x_m: f64, y_m: f64, z_m: f64, min_agl_m: f64) -> f64 {
+        self.borrowed().clamp_altitude(x_m, y_m, z_m, min_agl_m)
+    }
+}
+
+impl TerrainHeight for SharedTerrain {
+    fn height_at(&self, x_m: f64, y_m: f64) -> f64 {
+        TerrainSampler::height_at(self, x_m, y_m)
+    }
+}
+
+/// The obstacle layer, shared.
+#[derive(Clone)]
+pub struct SharedObstacles {
+    layer: Arc<ObstacleLayer>,
+}
+
+impl SharedObstacles {
+    pub fn new(layer: Arc<ObstacleLayer>) -> Self {
+        Self { layer }
+    }
+}
+
+impl ObstacleSampler for SharedObstacles {
+    fn push_clear(&self, point_m: [f64; 3], margin_m: f64) -> Option<[f64; 2]> {
+        WorldObstacles::new(&self.layer).push_clear(point_m, margin_m)
+    }
+
+    fn collides(&self, point_m: [f64; 3]) -> bool {
+        WorldObstacles::new(&self.layer).collides(point_m)
+    }
+}
+
+/// Line of sight over the shared world, as `EnvironmentQuery.los` computes it.
+///
+/// Land cover is sampled at the sight line's **midpoint**, which is the
+/// reference's choice (one class for the whole line), and class 0 is used
+/// when the world has no land-cover layer.
+#[derive(Clone)]
+pub struct SharedVisibility {
+    terrain: Arc<TiledTerrain>,
+    obstacles: Arc<ObstacleLayer>,
+    land_cover: Option<Arc<LandCoverLayer>>,
+    profile: Arc<VisibilityProfile>,
+    clearance_m: f64,
+}
+
+impl fmt::Debug for SharedVisibility {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SharedVisibility")
+            .field("clearance_m", &self.clearance_m)
+            .field("has_land_cover", &self.land_cover.is_some())
+            .finish()
+    }
+}
+
+impl SharedVisibility {
+    pub fn new(
+        terrain: Arc<TiledTerrain>,
+        obstacles: Arc<ObstacleLayer>,
+        land_cover: Option<Arc<LandCoverLayer>>,
+        profile: Arc<VisibilityProfile>,
+        clearance_m: f64,
+    ) -> Self {
+        Self {
+            terrain,
+            obstacles,
+            land_cover,
+            profile,
+            clearance_m,
+        }
+    }
+
+    /// The same world at a different terrain clearance.
+    pub fn with_clearance(&self, clearance_m: f64) -> Self {
+        Self {
+            clearance_m,
+            ..self.clone()
+        }
+    }
+
+    pub fn los(&self, from: [f64; 3], to: [f64; 3]) -> VisibilityResult {
+        let land_cover = self.land_cover.as_ref().map_or(0, |layer| {
+            let midpoint = [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5];
+            i32::from(layer.sample(midpoint[0], midpoint[1]).0)
+        });
+        visibility::los(
+            &self.terrain,
+            &self.obstacles,
+            from,
+            to,
+            &self.profile,
+            land_cover,
+            self.clearance_m,
+        )
+    }
+}
+
+impl VisibilitySampler for SharedVisibility {
+    fn is_visible(&self, observer_m: [f64; 3], target_m: [f64; 3]) -> bool {
+        self.los(observer_m, target_m).visible
+    }
+}
+
+impl VisibilityOracle for SharedVisibility {
+    fn sight_line(&self, from: [f64; 3], to: [f64; 3]) -> SightLine {
+        let result = self.los(from, to);
+        SightLine {
+            visibility: if result.visible {
+                Visibility::Visible
+            } else {
+                Visibility::Blocked(match result.blocker_type.as_str() {
+                    "terrain" => Blocker::Terrain,
+                    "building" => Blocker::Building,
+                    "wall" => Blocker::Wall,
+                    "vegetation" => Blocker::Vegetation,
+                    "out_of_coverage" => Blocker::OutOfCoverage,
+                    _ => Blocker::Other,
+                })
+            },
+            noise_multiplier: result.noise_multiplier,
+        }
+    }
+}

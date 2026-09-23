@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — The Rust tick runs a Python-built scenario (P4.8e.1)
+
+- `argusnet.scenario-bundle/v1`: `argusnet.simulation.scenario_bundle.export_bundle`
+  describes a built target-tracking scenario as resolved data (world payloads
+  exactly as the native ABI takes them, controllers, sensors, truth tables).
+  Unsupported features are refused by name.
+- `argusnet-sim::scenario::assemble` builds a configured `Simulation` from a
+  bundle (stages 1, 3, 6 and 7 over one shared world) and runs it to a replay.
+  An all-follow scenario matches `run_simulation` bit for bit on every node
+  and tick, including 61 frames of deconfliction.
+- Deconfliction now clamps against real terrain (`RoleTable::with_terrain`),
+  not a constant floor. Motion weather (`WindModel`, flight-speed penalty) is
+  ported.
+- `serde_json/float_roundtrip` is enabled on the workspace dependency, so every
+  build parses floats identically, including `cargo build -p argusnet-native`.
+
 ## Unreleased — The Rust tick moves the fleet (P4.8d.3)
 
 - Stage 1 (`SampleControllersAndBattery`) now samples platform controllers and

@@ -70,7 +70,12 @@ nalgebra = "0.33"
 prost = "0.14"
 prost-types = "0.14"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# `float_roundtrip` workspace-wide, not per crate: Cargo unifies features per
+# build, so enabling it only on argusnet-sim made `cargo build -p
+# argusnet-native` parse floats differently from a workspace build. Checkpoints
+# and the scenario bundle need correctly rounded parsing; so does the native ABI,
+# which receives every terrain height Python sends over JSON.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_yaml = "0.9"
 tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-stream = "0.1"

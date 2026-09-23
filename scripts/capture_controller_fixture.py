@@ -242,9 +242,7 @@ def capture_observation_case(name: str, script: list[dict]) -> dict:
             outputs.append({"event": "reset", "engaged": controller.engaged})
         else:
             raise ValueError(kind)
-    serial_script = [
-        {**e, "t": exact(e["t"])} if "t" in e else dict(e) for e in script
-    ]
+    serial_script = [{**e, "t": exact(e["t"])} if "t" in e else dict(e) for e in script]
     return {
         "name": name,
         "script": serial_script,
@@ -344,7 +342,9 @@ def check_coverage(fixture: dict) -> None:
     assert not any(
         c["call"] == "seed" for c in observation["engage_before_any_sample_does_not_seed"]["calls"]
     )
-    assert not any(c["call"] == "follow" for c in observation["wrong_pair_does_not_engage"]["calls"])
+    assert not any(
+        c["call"] == "follow" for c in observation["wrong_pair_does_not_engage"]["calls"]
+    )
     reset_calls = observation["reset_then_reengage"]["calls"]
     assert {"call": "reset_follow"} in reset_calls
     assert [c for c in reset_calls if c["call"] == "seed"][-1]["t"] == "5.0"

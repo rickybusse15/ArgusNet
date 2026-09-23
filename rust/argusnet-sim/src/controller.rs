@@ -295,6 +295,17 @@ struct Shared {
     environment: Option<ControllerEnvironment>,
 }
 
+/// Which capabilities a [`ControllerEnvironment`] carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvironmentSummary {
+    pub has_obstacles: bool,
+    pub has_planner: bool,
+    pub has_weather: bool,
+    pub has_pursuit: bool,
+    pub zone_count: usize,
+    pub has_map_bounds: bool,
+}
+
 /// A handle onto stage 1, kept by the run driver and by stage 6.
 #[derive(Clone, Default)]
 pub struct ControllerLink {
@@ -371,6 +382,20 @@ impl ControllerLink {
             }
         }
         engaged
+    }
+
+    /// What the controllers have been lent, for diagnostics and wiring tests.
+    /// `None` before an environment is installed.
+    pub fn environment_summary(&self) -> Option<EnvironmentSummary> {
+        let shared = self.lock();
+        shared.environment.as_ref().map(|env| EnvironmentSummary {
+            has_obstacles: env.obstacles.is_some(),
+            has_planner: env.planner.is_some(),
+            has_weather: env.weather.is_some(),
+            has_pursuit: env.pursuit.is_some(),
+            zone_count: env.zones.len(),
+            has_map_bounds: env.map_bounds_m.is_some(),
+        })
     }
 
     /// Whether `node_id`'s search-then-follow controller is following.
