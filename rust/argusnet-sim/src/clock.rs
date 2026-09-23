@@ -111,6 +111,11 @@ impl Clock {
         self.tick += 1;
     }
 
+    /// Restore a validated checkpoint tick without replaying clock increments.
+    pub(crate) fn restore_tick(&mut self, tick: u64) {
+        self.tick = tick;
+    }
+
     /// Return to tick zero, keeping the timestep.
     pub fn reset(&mut self) {
         self.tick = 0;

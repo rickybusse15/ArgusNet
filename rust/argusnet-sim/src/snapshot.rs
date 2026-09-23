@@ -112,12 +112,10 @@ pub struct CheckpointHeader {
 
 /// The current versions this build writes and accepts.
 impl CheckpointHeader {
-    pub const FORMAT_VERSION: u32 = 1;
-    /// Still 1: no stage has been ported yet, so nothing has changed the
-    /// arithmetic. **Bump this in the same commit that changes stage order or
-    /// any stage's numerics**, or old checkpoints will restore into a runtime
-    /// that computes something else.
-    pub const RUNTIME_ALGORITHM_VERSION: u32 = 1;
+    pub const FORMAT_VERSION: u32 = 2;
+    /// Version 2 changes command-boundary recovery and single-step semantics.
+    /// Old checkpoints must not silently resume under a different control contract.
+    pub const RUNTIME_ALGORITHM_VERSION: u32 = 2;
     /// Still 1: the ChaCha8 stream and the Box–Muller transform in
     /// [`crate::deterministic`]. Bump alongside any re-baseline.
     pub const SEED_VERSION: u32 = 1;
@@ -129,6 +127,7 @@ impl CheckpointHeader {
 /// tells an operator nothing about what to change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestoreError {
+    InvalidState { detail: String },
     FormatVersion { found: u32, expected: u32 },
     AlgorithmVersion { found: u32, expected: u32 },
     SeedVersion { found: u32, expected: u32 },
@@ -139,6 +138,7 @@ pub enum RestoreError {
 impl std::fmt::Display for RestoreError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RestoreError::InvalidState { detail } => write!(formatter, "invalid checkpoint state: {detail}"),
             RestoreError::FormatVersion { found, expected } => write!(
                 formatter,
                 "checkpoint format version {found} cannot be read by this build (expects {expected})"
@@ -168,8 +168,8 @@ impl std::error::Error for RestoreError {}
 
 /// Everything needed to resume a run exactly where it stopped.
 ///
-/// P4.1's version carries the clock, the RNG contract version and the pending
-/// command queue. It grows a field per subsystem as stages land — and the rule
+/// Format 2 carries the clock, control state, RNG contract version, pending
+/// commands and bounded retry history. It grows a field per subsystem as stages land — and the rule
 /// from §6 is that *anything affecting a future decision* belongs here, while
 /// render entities, wall-clock timers and rebuildable caches do not. A cache
 /// may only be excluded once its rebuild is shown to be behaviourally neutral.
@@ -188,6 +188,10 @@ pub struct SimulationCheckpoint {
     /// Commands accepted but not yet applied. §6: *"Persist all causal state,
     /// including pending commands."*
     pub pending_commands: Vec<crate::command::CommandEnvelope>,
+    pub command_history: crate::command::CommandHistory,
+    pub revision: u64,
+    pub paused: bool,
+    pub speed: f64,
 }
 
 impl SimulationCheckpoint {
@@ -223,6 +227,113 @@ impl SimulationCheckpoint {
                 expected: config_hash,
             });
         }
+        let invalid = |detail: &str| RestoreError::InvalidState {
+            detail: detail.to_string(),
+        };
+        if self.tick != self.header.tick {
+            return Err(invalid("tick disagrees with header"));
+        }
+        if self.tick == u64::MAX {
+            return Err(invalid("tick cannot advance without overflow"));
+        }
+        if self.pending_commands.len() > crate::command::CommandQueue::DEFAULT_CAPACITY {
+            return Err(invalid("pending command queue exceeds capacity"));
+        }
+        if !self.speed.is_finite() || self.speed <= 0.0 {
+            return Err(invalid("invalid playback speed"));
+        }
+        if self.revision == u64::MAX {
+            return Err(invalid("revision cannot advance without overflow"));
+        }
+        if self.command_history.receipts.len()
+            > crate::command::CommandQueue::DEFAULT_DEDUP_CAPACITY
+        {
+            return Err(invalid("command history exceeds capacity"));
+        }
+        let mut receipt_ids = std::collections::BTreeSet::new();
+        for receipt in &self.command_history.receipts {
+            if !receipt_ids.insert(receipt.ack.command_id) || receipt.ack.duplicate {
+                return Err(invalid("duplicate receipt or stored retry flag"));
+            }
+            if receipt.ack.epoch > self.header.epoch || receipt.ack.revision > self.revision {
+                return Err(invalid("receipt refers to a future epoch or revision"));
+            }
+            match receipt.request.as_ref().map(|request| &request.payload) {
+                Some(crate::command::CommandKind::SetSpeed { multiplier }) => {
+                    if multiplier.to_bits() != 0.0f64.to_bits() || receipt.speed_bits.is_none() {
+                        return Err(invalid("invalid encoded request speed"));
+                    }
+                }
+                _ if receipt.speed_bits.is_some() => {
+                    return Err(invalid("unexpected request speed bits"))
+                }
+                _ => {}
+            }
+            if let Some(request) = &receipt.request {
+                if request.command_id != receipt.ack.command_id
+                    || request.run_id != self.header.run_id
+                {
+                    return Err(invalid("receipt request identity mismatch"));
+                }
+            }
+            let pending = self
+                .pending_commands
+                .iter()
+                .find(|command| command.command_id == receipt.ack.command_id);
+            if matches!(receipt.ack.status, crate::command::AckStatus::Accepted) {
+                let Some(pending) = pending else {
+                    return Err(invalid("accepted receipt has no pending command"));
+                };
+                if receipt
+                    .request()
+                    .is_none_or(|request| !request.same_request(pending))
+                {
+                    return Err(invalid("pending command disagrees with receipt"));
+                }
+            } else if pending.is_some() {
+                return Err(invalid("terminal receipt still has a pending command"));
+            }
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for command in &self.pending_commands {
+            if !receipt_ids.contains(&command.command_id)
+                && !self
+                    .command_history
+                    .retired_through
+                    .is_some_and(|id| command.command_id <= id)
+            {
+                return Err(invalid(
+                    "pending command has no receipt or retirement history",
+                ));
+            }
+            if !ids.insert(command.command_id) {
+                return Err(invalid("duplicate pending command ID"));
+            }
+            if command.run_id != self.header.run_id
+                || command.expected_epoch != self.header.epoch
+                || command.protocol_version != crate::command::PROTOCOL_VERSION
+            {
+                return Err(invalid("pending command identity or protocol mismatch"));
+            }
+            if command
+                .requested_effective_tick
+                .is_some_and(|tick| tick < self.tick)
+            {
+                return Err(invalid("pending command is scheduled before checkpoint"));
+            }
+            match &command.payload {
+                crate::command::CommandKind::SetSpeed { multiplier }
+                    if !multiplier.is_finite() || *multiplier <= 0.0 =>
+                {
+                    return Err(invalid("pending command has invalid speed"));
+                }
+                crate::command::CommandKind::Seek { .. }
+                | crate::command::CommandKind::Unsupported { .. } => {
+                    return Err(invalid("pending command is unsupported"));
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 }
@@ -252,6 +363,10 @@ mod tests {
             tick: 12,
             seed: 7,
             pending_commands: Vec::new(),
+            command_history: crate::command::CommandHistory::default(),
+            revision: 12,
+            paused: false,
+            speed: 1.0,
         }
     }
 

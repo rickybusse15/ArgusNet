@@ -246,6 +246,20 @@ without viewer/network/file output.
 
 #### P4.1 corrective gate before composition and viewer controls
 
+**Implemented locally after `45390b8`:** command protocol v2 repairs queued
+fault/completion reset, exactly-one-tick stepping, due/future reset cancellation,
+execution-time revision validation, invalid speed/past-tick refusal and bounded
+idempotency with payload conflict detection. `command_ack` exposes Accepted,
+Applied, Rejected and Cancelled; retries retain the outcome with `duplicate=true`.
+Checkpoint metadata validation and O(1) clock restoration are also implemented.
+Runtime algorithm version 2 rejects checkpoints carrying the previous control
+semantics. Checkpoint format 2 additionally persists pause/speed, revision,
+pending controls and bounded retry receipts/request identities/retirement state;
+JSON round-trip tests verify fresh-instance control resume and atomic refusal.
+Restore replaces the receiving run's old retry history. Full causal subsystem checkpointing and a durable event journal remain
+open; do not mark P4.1/P5 controls fully complete on this evidence alone.
+
+
 Fix queued reset while faulted/completed, exactly-one-tick SingleStep, duplicate
 result preservation, reset epoch barriers and speed/effective-tick validation.
 Use explicit subsystem-owned state with reset/checkpoint/restore coverage.

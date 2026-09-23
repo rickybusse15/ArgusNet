@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — Runtime command recovery and control checkpoints
+
+- Checkpoint format 2 preserves pause/speed, committed revision, pending controls,
+  retry receipts, request identities and retired-ID watermark. Restore replaces
+  destination command history instead of mixing timelines. Rejected nonfinite
+  speed requests retain exact identity through JSON using encoded float bits.
+- Validate receipt bounds/identity, pending-command consistency and control state
+  before mutation. Old checkpoint formats are rejected explicitly. This completes
+  control-state persistence only; domain-stage state and publication epochs for
+  interactive branching remain separate work.
+
+- Recover faulted/completed simulations through queued Reset, including tick zero;
+  reset cancels old-epoch commands already due and those scheduled for later.
+- SingleStep executes one tick and pauses. Scheduled controls revalidate revision
+  preconditions; invalid pacing and past-tick requests are rejected.
+- In-process command protocol v2 preserves retry outcomes/reasons, detects reused
+  IDs with different payloads, and exposes applied/cancelled results.
+- Checkpoint restore validates tick/seed/queue identity, bounds and payloads before
+  mutation and restores the clock in constant time. Runtime algorithm version 2
+  rejects old control semantics; complete domain-state checkpointing remains open.
+
 ## Unreleased — Point-In-Polygon Correctness For Rotated Footprints
 
 - World: fixed the edge-crossing test in `_point_in_polygon` (`src/argusnet/world/obstacles.py`).

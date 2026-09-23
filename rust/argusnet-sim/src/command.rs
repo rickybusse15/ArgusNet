@@ -12,7 +12,7 @@
 //! dedup window, and requires an id that has aged out of that window to force
 //! resynchronisation rather than a blind replay.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Separate from every other version in the system: a UI can be older than the
 /// runtime without the physics having changed.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// What the operator asked for.
 ///
@@ -69,6 +69,22 @@ pub struct CommandEnvelope {
 }
 
 impl CommandEnvelope {
+    pub fn same_request(&self, other: &Self) -> bool {
+        let same_payload = match (&self.payload, &other.payload) {
+            (CommandKind::SetSpeed { multiplier: a }, CommandKind::SetSpeed { multiplier: b }) => {
+                a.to_bits() == b.to_bits()
+            }
+            (a, b) => a == b,
+        };
+        self.protocol_version == other.protocol_version
+            && self.command_id == other.command_id
+            && self.run_id == other.run_id
+            && self.expected_epoch == other.expected_epoch
+            && self.expected_revision == other.expected_revision
+            && self.requested_effective_tick == other.requested_effective_tick
+            && same_payload
+    }
+
     /// A command for the current epoch, effective at the next boundary.
     pub fn new(
         command_id: u64,
@@ -110,6 +126,14 @@ pub enum RejectReason {
         found: u64,
         expected: u64,
     },
+    InvalidSpeed,
+    PastEffectiveTick {
+        requested: u64,
+        current: u64,
+    },
+    Completed,
+    RecoveryMustBeImmediate,
+    CommandIdConflict,
     /// The queue is full. The UI should back off and retry; the command was
     /// **not** accepted and **not** dropped in silence.
     Busy {
@@ -141,16 +165,19 @@ pub struct CommandAck {
     pub effective_tick: Option<u64>,
     pub epoch: u64,
     pub revision: u64,
+    /// A retry preserves the original outcome rather than replacing its reason.
+    #[serde(default)]
+    pub duplicate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum AckStatus {
     Accepted,
+    Applied,
+    Cancelled(RejectReason),
     Rejected(RejectReason),
-    /// This id was already answered; the original answer is repeated verbatim.
-    /// Distinguished from a fresh `Accepted` so a caller can tell a retry that
-    /// landed from a command that was applied twice.
+    /// Legacy decoding only; new replies use `CommandAck::duplicate`.
     Duplicate,
 }
 
@@ -158,6 +185,33 @@ impl CommandAck {
     pub fn is_accepted(&self) -> bool {
         matches!(self.status, AckStatus::Accepted)
     }
+}
+
+/// Portable retry history. Speed is stored as bits so rejected NaN/Infinity
+/// requests remain comparable after a JSON round trip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandReceipt {
+    pub ack: CommandAck,
+    pub request: Option<CommandEnvelope>,
+    pub speed_bits: Option<u64>,
+}
+
+impl CommandReceipt {
+    pub fn request(&self) -> Option<CommandEnvelope> {
+        let mut request = self.request.clone()?;
+        if let (Some(bits), CommandKind::SetSpeed { multiplier }) =
+            (self.speed_bits, &mut request.payload)
+        {
+            *multiplier = f64::from_bits(bits);
+        }
+        Some(request)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommandHistory {
+    pub receipts: Vec<CommandReceipt>,
+    pub retired_through: Option<u64>,
 }
 
 /// Bounded FIFO with a bounded dedup memory.
@@ -172,6 +226,8 @@ pub struct CommandQueue {
     /// Answered ids in arrival order, alongside the answer to repeat.
     answered: VecDeque<(u64, CommandAck)>,
     dedup_capacity: usize,
+    requests: BTreeMap<u64, CommandEnvelope>,
+    retired_through: Option<u64>,
 }
 
 impl Default for CommandQueue {
@@ -190,6 +246,8 @@ impl CommandQueue {
             capacity,
             answered: VecDeque::new(),
             dedup_capacity,
+            requests: BTreeMap::new(),
+            retired_through: None,
         }
     }
 
@@ -216,19 +274,24 @@ impl CommandQueue {
     /// Whether this id was answered and has since been forgotten.
     ///
     /// Cannot be known exactly without unbounded memory, so it is approximated
-    /// the way §5 permits: ids below the oldest remembered one are treated as
-    /// expired. Monotonic ids from a single UI make that exact; a caller that
+    /// the way §5 permits: ids at or below the highest evicted ID are treated
+    /// as expired unless still remembered. Monotonic IDs from a single UI make
+    /// that exact; a caller that
     /// reuses ids out of order gets a conservative answer, which errs toward
     /// resynchronisation rather than toward replaying a command twice.
     pub fn is_expired(&self, command_id: u64) -> bool {
-        match self.answered.front() {
-            Some((oldest, _)) => command_id < *oldest && self.forgot_any(),
-            None => false,
-        }
+        self.retired_through
+            .is_some_and(|retired| command_id <= retired)
     }
 
-    fn forgot_any(&self) -> bool {
-        self.answered.len() >= self.dedup_capacity
+    pub fn previous_request(&self, id: u64) -> Option<&CommandEnvelope> {
+        self.requests.get(&id)
+    }
+
+    pub fn remember_request(&mut self, envelope: CommandEnvelope) {
+        if self.previous_ack(envelope.command_id).is_some() {
+            self.requests.insert(envelope.command_id, envelope);
+        }
     }
 
     /// Push an accepted command. Returns `false` when the queue is full, which
@@ -243,9 +306,20 @@ impl CommandQueue {
 
     /// Remember an answer so a retry can be given the same one.
     pub fn remember(&mut self, ack: CommandAck) {
+        if let Some((_, previous)) = self
+            .answered
+            .iter_mut()
+            .find(|(id, _)| *id == ack.command_id)
+        {
+            *previous = ack;
+            return;
+        }
         self.answered.push_back((ack.command_id, ack));
         while self.answered.len() > self.dedup_capacity {
-            self.answered.pop_front();
+            if let Some((id, _)) = self.answered.pop_front() {
+                self.requests.remove(&id);
+                self.retired_through = Some(self.retired_through.map_or(id, |old| old.max(id)));
+            }
         }
     }
 
@@ -279,9 +353,49 @@ impl CommandQueue {
         &self.pending
     }
 
-    /// Restore pending commands from a checkpoint.
-    pub fn restore_pending(&mut self, commands: Vec<CommandEnvelope>) {
-        self.pending = commands.into();
+    pub fn history(&self) -> CommandHistory {
+        let receipts = self
+            .answered
+            .iter()
+            .map(|(id, ack)| {
+                let mut request = self.requests.get(id).cloned();
+                let speed_bits = match request.as_mut().map(|request| &mut request.payload) {
+                    Some(CommandKind::SetSpeed { multiplier }) => {
+                        let bits = multiplier.to_bits();
+                        *multiplier = 0.0;
+                        Some(bits)
+                    }
+                    _ => None,
+                };
+                CommandReceipt {
+                    ack: ack.clone(),
+                    request,
+                    speed_bits,
+                }
+            })
+            .collect();
+        CommandHistory {
+            receipts,
+            retired_through: self.retired_through,
+        }
+    }
+
+    /// Replace all queue state after checkpoint validation, including the
+    /// destination's unrelated retry history.
+    pub(crate) fn from_checkpoint(commands: &[CommandEnvelope], history: &CommandHistory) -> Self {
+        let mut queue = Self {
+            pending: commands.iter().cloned().collect(),
+            retired_through: history.retired_through,
+            ..Self::default()
+        };
+        for receipt in &history.receipts {
+            let id = receipt.ack.command_id;
+            queue.answered.push_back((id, receipt.ack.clone()));
+            if let Some(request) = receipt.request() {
+                queue.requests.insert(id, request);
+            }
+        }
+        queue
     }
 }
 
@@ -349,6 +463,7 @@ mod tests {
         let mut queue = CommandQueue::default();
         let ack = CommandAck {
             command_id: 7,
+            duplicate: false,
             status: AckStatus::Accepted,
             effective_tick: Some(3),
             epoch: 0,
@@ -365,6 +480,7 @@ mod tests {
         for id in 1..=4u64 {
             queue.remember(CommandAck {
                 command_id: id,
+                duplicate: false,
                 status: AckStatus::Accepted,
                 effective_tick: None,
                 epoch: 0,
@@ -386,6 +502,7 @@ mod tests {
         let mut queue = CommandQueue::new(4, 100);
         queue.remember(CommandAck {
             command_id: 50,
+            duplicate: false,
             status: AckStatus::Accepted,
             effective_tick: None,
             epoch: 0,
@@ -403,6 +520,7 @@ mod tests {
         queue.push(envelope(1));
         queue.remember(CommandAck {
             command_id: 1,
+            duplicate: false,
             status: AckStatus::Accepted,
             effective_tick: None,
             epoch: 0,

@@ -169,6 +169,7 @@ pub struct Simulation {
     handlers: BTreeMap<Stage, Box<dyn StageHandler>>,
     last_snapshot: Option<Arc<RuntimeSnapshot>>,
     paused: bool,
+    single_step: bool,
     /// Wall-clock pacing only. §5: *"Playback speed scales desired wall-clock
     /// pacing, never physics dt."* Nothing in `step` reads it.
     speed: f64,
@@ -212,6 +213,7 @@ impl Simulation {
             handlers: BTreeMap::new(),
             last_snapshot: None,
             paused: false,
+            single_step: false,
             speed: 1.0,
             world_revision: 0,
             belief_revision: 0,
@@ -315,21 +317,47 @@ impl Simulation {
 
     /// Validate a command and queue it. Always answers.
     pub fn apply_command(&mut self, envelope: CommandEnvelope) -> CommandAck {
-        // A retry must get the original answer, never a second application.
+        // Foreign callers must not read or poison this run's retry history.
+        if envelope.run_id != self.config.run_id() {
+            return self.rejection(
+                envelope.command_id,
+                RejectReason::StaleRun {
+                    found: envelope.run_id.clone(),
+                    expected: self.config.run_id().to_string(),
+                },
+            );
+        }
         if let Some(previous) = self.queue.previous_ack(envelope.command_id) {
+            if self
+                .queue
+                .previous_request(envelope.command_id)
+                .is_some_and(|request| !request.same_request(&envelope))
+            {
+                return self.rejection(envelope.command_id, RejectReason::CommandIdConflict);
+            }
             let mut repeated = previous.clone();
-            repeated.status = AckStatus::Duplicate;
+            repeated.duplicate = true;
             return repeated;
         }
         if self.queue.is_expired(envelope.command_id) {
-            return self.reject(
+            return self.rejection(
                 envelope.command_id,
                 RejectReason::DedupWindowExpired {
                     command_id: envelope.command_id,
                 },
             );
         }
+        let ack = self.admit_command(envelope.clone());
+        self.queue.remember_request(envelope);
+        ack
+    }
 
+    /// Latest bounded command outcome, including application or cancellation.
+    pub fn command_ack(&self, command_id: u64) -> Option<&CommandAck> {
+        self.queue.previous_ack(command_id)
+    }
+
+    fn admit_command(&mut self, envelope: CommandEnvelope) -> CommandAck {
         if envelope.protocol_version != PROTOCOL_VERSION {
             return self.reject(
                 envelope.command_id,
@@ -372,6 +400,36 @@ impl Simulation {
         if self.is_faulted() && !matches!(envelope.payload, CommandKind::Reset) {
             return self.reject(envelope.command_id, RejectReason::Faulted);
         }
+        if self
+            .config
+            .steps()
+            .is_some_and(|steps| self.tick() >= steps)
+            && !matches!(envelope.payload, CommandKind::Reset)
+        {
+            return self.reject(envelope.command_id, RejectReason::Completed);
+        }
+        if let CommandKind::SetSpeed { multiplier } = envelope.payload {
+            if !multiplier.is_finite() || multiplier <= 0.0 {
+                return self.reject(envelope.command_id, RejectReason::InvalidSpeed);
+            }
+        }
+        if let Some(requested) = envelope.requested_effective_tick {
+            if requested < self.tick() {
+                return self.reject(
+                    envelope.command_id,
+                    RejectReason::PastEffectiveTick {
+                        requested,
+                        current: self.tick(),
+                    },
+                );
+            }
+            if matches!(envelope.payload, CommandKind::Reset)
+                && requested > self.tick()
+                && (self.is_faulted() || self.config.steps().is_some_and(|n| self.tick() >= n))
+            {
+                return self.reject(envelope.command_id, RejectReason::RecoveryMustBeImmediate);
+            }
+        }
         if let CommandKind::Unsupported { name } = &envelope.payload {
             return self.reject(
                 envelope.command_id,
@@ -403,6 +461,7 @@ impl Simulation {
 
         let ack = CommandAck {
             command_id,
+            duplicate: false,
             status: AckStatus::Accepted,
             effective_tick: Some(effective_tick),
             epoch: self.epoch,
@@ -412,16 +471,30 @@ impl Simulation {
         ack
     }
 
-    fn reject(&mut self, command_id: u64, reason: RejectReason) -> CommandAck {
-        let ack = CommandAck {
+    fn rejection(&self, command_id: u64, reason: RejectReason) -> CommandAck {
+        CommandAck {
             command_id,
             status: AckStatus::Rejected(reason),
             effective_tick: None,
             epoch: self.epoch,
             revision: self.revision,
-        };
+            duplicate: false,
+        }
+    }
+
+    fn reject(&mut self, command_id: u64, reason: RejectReason) -> CommandAck {
+        let ack = self.rejection(command_id, reason);
         self.queue.remember(ack.clone());
         ack
+    }
+
+    fn cancel(&mut self, command_id: u64, reason: RejectReason) {
+        let mut ack = self.rejection(command_id, reason);
+        ack.status = match ack.status {
+            AckStatus::Rejected(reason) => AckStatus::Cancelled(reason),
+            _ => unreachable!(),
+        };
+        self.queue.remember(ack);
     }
 
     /// Run one tick, or explain why not.
@@ -429,22 +502,8 @@ impl Simulation {
     /// On success exactly one snapshot is committed. On failure nothing is
     /// published and the run is faulted.
     pub fn step(&mut self) -> Result<Arc<RuntimeSnapshot>, TickError> {
-        if let RunState::Faulted { at_tick, stage } = &self.state {
-            return Err(TickError::Faulted {
-                at_tick: *at_tick,
-                stage: *stage,
-            });
-        }
-        if let Some(steps) = self.config.steps() {
-            if self.clock.tick() >= steps {
-                return Err(TickError::Completed {
-                    tick: self.clock.tick(),
-                });
-            }
-        }
-
         let tick = self.clock.tick();
-        self.world.begin_tick();
+        let epoch = self.epoch;
 
         // Stage 0 runs before the pause check, and that ordering is load-bearing.
         // §5 says pause is "checked between ticks", and commands are admitted at
@@ -488,13 +547,32 @@ impl Simulation {
         // A Reset applied above returns the run to tick 0 on a new epoch, so
         // the rest of this tick would be operating on a clock that no longer
         // matches `tick`. Stop here and let the caller step the fresh run.
-        if self.clock.tick() != tick {
+        if self.epoch != epoch {
             return Ok(self.commit_current());
         }
 
-        if self.paused {
+        if let RunState::Faulted { at_tick, stage } = &self.state {
+            return Err(TickError::Faulted {
+                at_tick: *at_tick,
+                stage: *stage,
+            });
+        }
+        if let Some(steps) = self.config.steps() {
+            if self.clock.tick() >= steps {
+                return Err(TickError::Completed {
+                    tick: self.clock.tick(),
+                });
+            }
+        }
+
+        if self.paused && !self.single_step {
             return Err(TickError::Paused);
         }
+        if self.single_step {
+            self.single_step = false;
+            self.paused = true;
+        }
+        self.world.begin_tick();
 
         for stage in Stage::PIPELINE.into_iter().skip(1) {
             let mut notes = Vec::new();
@@ -591,15 +669,51 @@ impl Simulation {
             return Ok(StageOutcome::NoWork);
         }
         for envelope in due {
+            let reason = if envelope.expected_epoch != self.epoch {
+                Some(RejectReason::StaleEpoch {
+                    found: envelope.expected_epoch,
+                    expected: self.epoch,
+                })
+            } else if envelope
+                .expected_revision
+                .is_some_and(|revision| revision != self.revision)
+            {
+                Some(RejectReason::StaleRevision {
+                    found: envelope.expected_revision.expect("checked"),
+                    expected: self.revision,
+                })
+            } else if self.is_faulted() && !matches!(envelope.payload, CommandKind::Reset) {
+                Some(RejectReason::Faulted)
+            } else if self.config.steps().is_some_and(|n| self.tick() >= n)
+                && !matches!(envelope.payload, CommandKind::Reset)
+            {
+                Some(RejectReason::Completed)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                notes.push(format!(
+                    "cancelled command {}: {reason:?}",
+                    envelope.command_id
+                ));
+                self.cancel(envelope.command_id, reason);
+                continue;
+            }
             // §4: "Log accepted/rejected command and effective tick."
             notes.push(format!(
                 "applied command {} ({:?}) effective at tick {tick}",
                 envelope.command_id, envelope.payload
             ));
             match envelope.payload {
-                CommandKind::Pause => self.paused = true,
-                CommandKind::Resume => self.paused = false,
-                CommandKind::SingleStep => self.paused = false,
+                CommandKind::Pause => {
+                    self.paused = true;
+                    self.single_step = false;
+                }
+                CommandKind::Resume => {
+                    self.paused = false;
+                    self.single_step = false;
+                }
+                CommandKind::SingleStep => self.single_step = true,
                 CommandKind::SetSpeed { multiplier } => self.speed = multiplier,
                 CommandKind::Reset => self.reset(),
                 // Refused at admission; unreachable here, and an invariant
@@ -612,6 +726,14 @@ impl Simulation {
                     )))
                 }
             }
+            self.queue.remember(CommandAck {
+                command_id: envelope.command_id,
+                status: AckStatus::Applied,
+                effective_tick: Some(tick),
+                epoch: self.epoch,
+                revision: self.revision,
+                duplicate: false,
+            });
         }
         Ok(StageOutcome::Ran)
     }
@@ -630,10 +752,19 @@ impl Simulation {
         self.clock.reset();
         self.epoch += 1;
         self.state = RunState::Ready;
-        self.queue.clear_pending();
+        for pending in self.queue.drain_due(u64::MAX) {
+            self.cancel(
+                pending.command_id,
+                RejectReason::StaleEpoch {
+                    found: pending.expected_epoch,
+                    expected: self.epoch,
+                },
+            );
+        }
         self.trace.clear();
         self.last_snapshot = None;
         self.paused = false;
+        self.single_step = false;
         self.speed = 1.0;
         self.belief_revision = 0;
         self.journal_cursor = 0;
@@ -673,6 +804,10 @@ impl Simulation {
             tick: self.clock.tick(),
             seed: self.config.seed(),
             pending_commands: self.queue.pending().iter().cloned().collect(),
+            command_history: self.queue.history(),
+            revision: self.revision,
+            paused: self.paused,
+            speed: self.speed,
         })
     }
 
@@ -684,21 +819,37 @@ impl Simulation {
     pub fn restore(&mut self, checkpoint: &SimulationCheckpoint) -> Result<(), RestoreError> {
         checkpoint.verify(self.config.run_id(), self.config.content_hash())?;
 
-        self.clock.reset();
-        for _ in 0..checkpoint.tick {
-            self.clock.advance();
+        if checkpoint.seed != self.config.seed() {
+            return Err(RestoreError::InvalidState {
+                detail: "seed disagrees with configured seed".into(),
+            });
         }
+        if self
+            .config
+            .steps()
+            .is_some_and(|steps| checkpoint.tick > steps)
+        {
+            return Err(RestoreError::InvalidState {
+                detail: "tick exceeds configured run length".into(),
+            });
+        }
+        let restored_queue = CommandQueue::from_checkpoint(
+            &checkpoint.pending_commands,
+            &checkpoint.command_history,
+        );
+        self.clock.restore_tick(checkpoint.tick);
         self.epoch = checkpoint.header.epoch;
         self.belief_revision = checkpoint.header.belief_revision;
         self.journal_cursor = checkpoint.header.journal_cursor;
         self.world_revision = checkpoint.header.world_content_hash;
         self.state = RunState::Ready;
-        self.queue.clear_pending();
-        self.queue
-            .restore_pending(checkpoint.pending_commands.clone());
+        self.queue = restored_queue;
+        self.revision = checkpoint.revision;
         self.trace.clear();
         self.last_snapshot = None;
-        self.paused = false;
+        self.paused = checkpoint.paused;
+        self.speed = checkpoint.speed;
+        self.single_step = false;
         Ok(())
     }
 }
