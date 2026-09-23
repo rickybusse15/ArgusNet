@@ -362,6 +362,7 @@ def export_bundle(scenario: Any, simulation_config: Any, tracker_config: Any = N
         LaunchableTrajectoryController,
         ObservationTriggeredFollowController,
         _build_sensor_models,
+        scenario_replay_metadata,
     )
 
     if getattr(scenario, "use_vio_position", False):
@@ -390,9 +391,22 @@ def export_bundle(scenario: Any, simulation_config: Any, tracker_config: Any = N
             samples.append(
                 {"t": float(t), "position": _floats(position), "velocity": _floats(velocity)}
             )
-        targets.append({"target_id": target.target_id, "samples": samples})
+        targets.append(
+            {
+                "target_id": target.target_id,
+                # `TargetMetadata.behavior` in every replay frame.
+                "behavior": scenario.target_motion_assignments.get(target.target_id, "unknown"),
+                "samples": samples,
+            }
+        )
 
     environment = scenario.environment
+    bounds = scenario.map_bounds_m
+    requested_duration_s = (
+        simulation_config.requested_duration_s
+        if simulation_config.requested_duration_s is not None
+        else simulation_config.actual_duration_s
+    )
     return {
         "format": BUNDLE_FORMAT,
         "version": BUNDLE_VERSION,
@@ -402,6 +416,17 @@ def export_bundle(scenario: Any, simulation_config: Any, tracker_config: Any = N
         "dt_s": float(simulation_config.dt_s),
         "steps": int(simulation_config.steps),
         "map_bounds_m": {k: float(v) for k, v in scenario.map_bounds_m.items()},
+        # `_coverage_bounds`: the coverage map and the zone maps, which every
+        # mission mode keeps.
+        "coverage_bounds": {
+            "x_min_m": float(bounds["x_min_m"]),
+            "x_max_m": float(bounds["x_max_m"]),
+            "y_min_m": float(bounds["y_min_m"]),
+            "y_max_m": float(bounds["y_max_m"]),
+            "resolution_m": float(getattr(scenario.options, "coverage_resolution_m", 50.0)),
+        },
+        "cooperative_search": bool(getattr(scenario.options, "cooperative_search", False)),
+        "requested_duration_s": float(requested_duration_s),
         "world": {
             "terrain": _terrain_document(scenario.terrain),
             "obstacles": _obstacles_document(environment.obstacles),
@@ -429,6 +454,14 @@ def export_bundle(scenario: Any, simulation_config: Any, tracker_config: Any = N
             for node in scenario.nodes
         ],
         "targets": targets,
+        # The scenario half of the replay's `meta`, for the Rust writer to
+        # copy: the viewer's terrain mesh, obstacles, land cover, zones and
+        # assignments. Presentation, not simulation input. Serialised as
+        # `write_replay_document` serialises `meta` -- a plain dump, which
+        # keeps the terrain mesh's rows nested as the viewer reads them.
+        # (`to_jsonable`, which the writer applies to frames only, would
+        # flatten them.)
+        "presentation": json.loads(json.dumps(scenario_replay_metadata(scenario))),
     }
 
 

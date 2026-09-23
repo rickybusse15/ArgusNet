@@ -181,3 +181,67 @@ fn a_run_that_faults_exits_1_and_writes_no_replay() {
         assert!(!replay.exists(), "a faulted run wrote a replay");
     }
 }
+
+/// What the viewer shows is what it can read. An `argusnet-rs` replay, parsed
+/// by the viewer's own `argusnet-replay` types, carries the terrain mesh, the
+/// zones and the tracker's stale threshold in `meta`, and every panel's
+/// payload in its frames (P4.9a.2).
+#[test]
+fn the_viewer_reads_everything_an_argusnet_rs_replay_carries() {
+    let read_with_viewer = |case: &str| -> argusnet_replay::ReplayDocument {
+        let replay = scratch(&format!("viewer_{case}.json"));
+        let status = binary()
+            .args(["sim", "--quiet", "--bundle"])
+            .arg(fixture(&format!("scenario_bundle_{case}.json")))
+            .arg("--replay")
+            .arg(&replay)
+            .status()
+            .expect("runs");
+        assert!(status.success(), "{case}: exit {status}");
+        serde_json::from_str(&std::fs::read_to_string(&replay).unwrap())
+            .unwrap_or_else(|error| panic!("{case}: the viewer cannot parse it: {error}"))
+    };
+
+    let scan = read_with_viewer("scan");
+    assert!(scan.terrain_viewer_mesh().is_some(), "no terrain mesh");
+    assert!(!scan.zones().is_empty(), "no zones");
+    assert!(scan.max_stale_steps().is_some(), "no tracker threshold");
+    assert!(scan
+        .frames
+        .iter()
+        .all(|f| f.mapping_state.is_some() && f.scan_mission_state.is_some()));
+    let states = || {
+        scan.frames
+            .iter()
+            .filter_map(|f| f.scan_mission_state.as_ref())
+    };
+    assert!(
+        states().any(|s| !s.newly_scanned_cells.is_empty()),
+        "no scanned cells"
+    );
+    assert!(
+        states().any(|s| !s.egress_progress.is_empty()),
+        "no egress progress"
+    );
+    assert!(
+        states().any(|s| !s.localization_estimates.is_empty()),
+        "no estimates"
+    );
+    assert!(states()
+        .flat_map(|s| &s.poi_statuses)
+        .all(|poi| poi.position.is_some()));
+    assert!(states().all(|s| s.coordinator_drone_id.is_some()));
+    assert!(scan.frames.iter().any(|f| !f.inspection_events.is_empty()));
+
+    let follow = read_with_viewer("tt_follow");
+    assert!(follow.frames.iter().all(|f| f.target_metadata.len() == 1));
+    assert!(follow
+        .frames
+        .iter()
+        .any(|f| !f.deconfliction_events.is_empty()));
+    assert!(follow
+        .frames
+        .iter()
+        .any(|f| !f.generation_rejections.is_empty()));
+    assert!(follow.frames.iter().any(|f| f.localization_state.is_some()));
+}

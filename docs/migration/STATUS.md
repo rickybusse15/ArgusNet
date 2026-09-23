@@ -29,7 +29,7 @@ side-effects that `MissionStage` emits as events, or runs from a command line.
 | P4.8e.3 | Mission driver (POI assignment, redirects, dwell, egress); stages 2, 8 and 9 assembled; the default `scan_map_inspect` run end to end | local | [MISSION_DRIVER.md](MISSION_DRIVER.md) |
 | P4.8e.4 | Causal-state audit: every assembled stateful stage on the checkpoint contract; whole-run resume differential | local | [CAUSAL_STATE.md](CAUSAL_STATE.md) |
 | P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay, checkpoint/resume from the command line; `argusnet sim --export-bundle` adapter refuses what it cannot carry | local | [ARGUSNET_RS_CLI.md](ARGUSNET_RS_CLI.md) |
-| P4.9a.2 | Additive replay enrichment: mapping, localization, scan mission state, deconfliction events in the Rust replay | open | — |
+| P4.9a.2 | Additive replay enrichment: every frame payload and the scenario `meta` a Python replay carries, viewer-readable; deconfliction `hypot` fix | local | [REPLAY_ENRICHMENT.md](REPLAY_ENRICHMENT.md) |
 | P4.9b | Rust-native scenario builder (weather, target behaviours, environment, stations, sectors, zones, POIs); parity = identical bundle | open | — |
 | P4.9c | Phase acceptance: canonical scenarios, multi-seed envelopes, startup/tick timing | open | — |
 

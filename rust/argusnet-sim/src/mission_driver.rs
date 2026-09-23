@@ -34,7 +34,9 @@
 use std::collections::BTreeMap;
 
 use argusnet_planning::frontier::{find_gap_cells, CoverageView};
-use argusnet_planning::poi::{InspectionPoi, PoiAssignmentContext, PoiManager, PoiState};
+use argusnet_planning::poi::{
+    InspectionPoi, PoiAssignmentContext, PoiManager, PoiState, PoiStatus,
+};
 
 use crate::battery::BatteryLink;
 use crate::mapping::MappingLink;
@@ -207,6 +209,66 @@ struct DriverCheckpoint {
     pois: PoiManager,
     redirected: BTreeMap<String, String>,
     rescored: bool,
+    #[serde(default)]
+    coordinator: Option<String>,
+}
+
+/// What stage 9 reports for a replay: POI statuses with their positions, and
+/// the elected coordinator. Refreshed at the end of every run.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DriverReport {
+    /// Each POI's status beside its position, in construction order --
+    /// `replace(s, position=_poi_manager._pois[s.poi_id].position)`.
+    pub pois: Vec<(PoiStatus, [f64; 3])>,
+    pub completed_count: usize,
+    pub total_count: usize,
+    /// `_shared_state.coordinator_id`.
+    pub coordinator_drone_id: Option<String>,
+}
+
+/// A handle on the driver's [`DriverReport`].
+#[derive(Debug, Clone, Default)]
+pub struct DriverReportLink {
+    inner: std::sync::Arc<std::sync::Mutex<DriverReport>>,
+}
+
+impl DriverReportLink {
+    pub fn report(&self) -> DriverReport {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set(&self, report: DriverReport) {
+        *self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = report;
+    }
+}
+
+/// `CoordinationManager.elect_coordinator`: the highest battery fraction,
+/// the first in fleet order on a tie, and a drone off the ledger counted as
+/// full.
+pub fn elect_coordinator(
+    drone_ids: &[String],
+    battery: &BatteryLink,
+    capacity_wh: f64,
+) -> Option<String> {
+    let mut best: Option<(&String, f64)> = None;
+    for id in drone_ids {
+        let fraction = battery
+            .remaining_wh(id)
+            .map_or(1.0, |remaining| remaining / capacity_wh.max(1.0));
+        // `best_frac = -1.0` and a strict `>`.
+        if fraction > best.map_or(-1.0, |(_, f)| f) {
+            best = Some((id, fraction));
+        }
+    }
+    // `best_id = drone_ids[0]`, kept if no fraction ever beat -1.
+    best.map(|(id, _)| id.clone())
+        .or_else(|| drone_ids.first().cloned())
 }
 
 /// Stage 9: the mission machine and the work its phases do.
@@ -224,8 +286,12 @@ pub struct MissionDriverStage {
     redirected: BTreeMap<String, String>,
     /// `_poi_rescored`.
     rescored: bool,
+    /// `_shared_state.coordinator_id`, elected once on the first scanning
+    /// tick with a fleet (`_coordinator_elected`).
+    coordinator: Option<String>,
     config: MissionDriverConfig,
     replay: LocalizationReplay,
+    report: DriverReportLink,
 }
 
 impl std::fmt::Debug for MissionDriverStage {
@@ -261,9 +327,40 @@ impl MissionDriverStage {
             homes,
             redirected: BTreeMap::new(),
             rescored: false,
+            coordinator: None,
             config,
             replay: LocalizationReplay::default(),
+            report: DriverReportLink::default(),
         }
+    }
+
+    /// The handle a replay writer reads stage 9's report through.
+    pub fn report_link(&self) -> DriverReportLink {
+        self.report.clone()
+    }
+
+    fn publish_report(&self) {
+        let position_of = |poi_id: &str| {
+            self.initial_pois
+                .iter()
+                .find(|poi| poi.poi_id == poi_id)
+                .map(|poi| poi.position)
+                .expect("a status is for one of the manager's POIs")
+        };
+        self.report.set(DriverReport {
+            pois: self
+                .pois
+                .statuses()
+                .into_iter()
+                .map(|status| {
+                    let position = position_of(&status.poi_id);
+                    (status, position)
+                })
+                .collect(),
+            completed_count: self.pois.completed_count(),
+            total_count: self.pois.total_count(),
+            coordinator_drone_id: self.coordinator.clone(),
+        });
     }
 
     /// The localization replay seam. See [`LocalizationReplay`].
@@ -388,6 +485,14 @@ impl StageHandler for MissionDriverStage {
             })
             .collect();
 
+        // Coordinator election, once, on the first scanning tick that has a
+        // fleet. The reference reads the batteries as stage 1 left them.
+        if self.coordinator.is_none() && phase == MissionPhase::Scanning && !mobile.is_empty() {
+            let ids: Vec<String> = mobile.iter().map(|(id, _)| id.clone()).collect();
+            self.coordinator =
+                elect_coordinator(&ids, &self.battery, self.battery.model().capacity_wh);
+        }
+
         if phase == MissionPhase::Inspecting {
             self.inspect(timestamp_s, context.dt_s, &mobile);
         }
@@ -456,6 +561,7 @@ impl StageHandler for MissionDriverStage {
                 | MissionEvent::LocalizationTimedOut { .. } => {}
             }
         }
+        self.publish_report();
         Ok(outcome)
     }
 
@@ -468,6 +574,7 @@ impl StageHandler for MissionDriverStage {
             pois: self.pois.clone(),
             redirected: self.redirected.clone(),
             rescored: self.rescored,
+            coordinator: self.coordinator.clone(),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -497,6 +604,8 @@ impl StageHandler for MissionDriverStage {
         self.pois = decoded.pois;
         self.redirected = decoded.redirected;
         self.rescored = decoded.rescored;
+        self.coordinator = decoded.coordinator;
+        self.publish_report();
         Ok(())
     }
 
@@ -505,6 +614,8 @@ impl StageHandler for MissionDriverStage {
         self.pois = PoiManager::new(self.initial_pois.clone());
         self.redirected.clear();
         self.rescored = false;
+        self.coordinator = None;
+        self.publish_report();
     }
 }
 
@@ -727,5 +838,101 @@ mod tests {
         assert_eq!(pending, 1, "the setup no longer reaches the team branch");
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
         assert_eq!(stage.pois.assignment_for("drone-c"), None);
+    }
+
+    /// `elect_coordinator`: the highest battery fraction; the first in fleet
+    /// order on a tie; a drone off the ledger counts as full.
+    #[test]
+    fn the_coordinator_is_the_fullest_battery_first_on_a_tie() {
+        let battery = BatteryLink::default();
+        battery.register("a", None);
+        battery.register("b", None);
+        let capacity_wh = battery.model().capacity_wh;
+        let ids = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            elect_coordinator(&ids(&["a", "b"]), &battery, capacity_wh),
+            Some("a".into())
+        );
+        battery.set_remaining_wh("a", 0.2 * capacity_wh);
+        assert_eq!(
+            elect_coordinator(&ids(&["a", "b"]), &battery, capacity_wh),
+            Some("b".into())
+        );
+        battery.set_remaining_wh("b", 0.1 * capacity_wh);
+        assert_eq!(
+            elect_coordinator(&ids(&["a", "b", "ghost"]), &battery, capacity_wh),
+            Some("ghost".into()),
+            "off the ledger is full"
+        );
+        assert_eq!(elect_coordinator(&[], &battery, capacity_wh), None);
+    }
+
+    /// Elected once (`_coordinator_elected`): a later scanning tick on which
+    /// another drone's battery is fuller does not re-elect.
+    #[test]
+    fn the_coordinator_is_elected_once() {
+        use crate::config::SimulationConfig;
+        use crate::stage::Stage;
+        use argusnet_types::{NodeState, Vector3};
+
+        let mut sim = crate::simulation::Simulation::new(SimulationConfig {
+            seed: 3,
+            dt_s: 1.0,
+            steps: Some(10),
+            run_id: "coordinator".to_string(),
+        })
+        .expect("config");
+        let drone = |id: &str, x: f64| NodeState {
+            node_id: id.into(),
+            position: Vector3::new(x, 25.0, 80.0),
+            velocity: Vector3::new(0.0, 0.0, 0.0),
+            is_mobile: true,
+            timestamp_s: 0.0,
+            health: 1.0,
+            ..Default::default()
+        };
+        sim.load_world(
+            vec![drone("drone-1", 25.0), drone("drone-2", 475.0)],
+            Vec::new(),
+        );
+        let bounds = GridBounds {
+            x_min_m: 0.0,
+            x_max_m: 500.0,
+            y_min_m: 0.0,
+            y_max_m: 500.0,
+            resolution_m: 50.0,
+        };
+        let mapping = crate::mapping::MappingStage::new(bounds).expect("bounds");
+        let battery = BatteryLink::default();
+        battery.register("drone-1", None);
+        battery.register("drone-2", None);
+        let stage = MissionDriverStage::new(
+            MissionDriverConfig::default(),
+            Vec::new(),
+            BTreeMap::new(),
+            mapping.link(),
+            crate::overrides::MissionOverrideStage::new().link(),
+            battery.clone(),
+        );
+        let report = stage.report_link();
+        let mission = stage.mission_link();
+        sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
+            .expect("stage 8");
+        sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
+            .expect("stage 9");
+
+        sim.step().expect("tick 0");
+        assert_eq!(
+            report.report().coordinator_drone_id.as_deref(),
+            Some("drone-1")
+        );
+        battery.set_remaining_wh("drone-1", 10.0);
+        sim.step().expect("tick 1");
+        assert_eq!(mission.phase(), MissionPhase::Scanning);
+        assert_eq!(
+            report.report().coordinator_drone_id.as_deref(),
+            Some("drone-1"),
+            "re-elected"
+        );
     }
 }

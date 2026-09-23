@@ -4749,24 +4749,20 @@ def _cache_metric_total(cache_metrics: Mapping[str, object], names: set[str]) ->
     return total
 
 
-def _build_replay_metadata(
-    frames: Sequence[PlatformFrame],
-    scenario: ScenarioDefinition,
-    simulation_config: SimulationConfig,
-    tracker_config: TrackerConfig,
-    summary: dict[str, object],
-) -> dict[str, object]:
+def scenario_replay_metadata(scenario: ScenarioDefinition) -> dict[str, object]:
+    """The part of a replay's ``meta`` that describes the scenario, not the run.
+
+    Lifted verbatim out of ``_build_replay_metadata`` (P4.9a.2), so a scenario
+    bundle can carry it and ``argusnet-rs`` can write the same ``meta``
+    without rebuilding the viewer's terrain mesh. ``_build_replay_metadata``
+    reassembles the full ``meta`` in its original key order around the run's
+    own keys.
+    """
     environment = scenario.environment
     if environment is None:
         raise ValueError("ScenarioDefinition.environment must be populated before replay export.")
     terrain_metadata = environment.terrain.to_metadata()
-    requested_duration_s = (
-        simulation_config.requested_duration_s
-        if simulation_config.requested_duration_s is not None
-        else simulation_config.actual_duration_s
-    )
     return {
-        "schema_version": "2.0",
         "terrain": terrain_metadata,
         "occluding_objects": environment.obstacles.to_metadata(),
         "environment_id": environment.environment_id,
@@ -4775,10 +4771,6 @@ def _build_replay_metadata(
         "terrain_summary": environment.terrain.terrain_summary(),
         "land_cover": environment.land_cover.to_metadata(),
         "land_cover_legend": LandCoverClass.legend(),
-        "platform": {
-            "min_observations": tracker_config.min_observations,
-            "max_stale_steps": tracker_config.max_stale_steps,
-        },
         "scenario_options": {
             "map_preset": scenario.options.map_preset,
             "target_motion_preset": scenario.options.target_motion_preset,
@@ -4841,12 +4833,58 @@ def _build_replay_metadata(
             if scenario.enu_origin is not None
             else None
         ),
-        "requested_duration_s": float(requested_duration_s),
-        "actual_duration_s": float(simulation_config.actual_duration_s),
         "target_motion_assignments": dict(sorted(scenario.target_motion_assignments.items())),
         "drone_planner_modes": dict(sorted(scenario.drone_planner_modes.items())),
         "drone_target_assignments": dict(sorted(scenario.drone_target_assignments.items())),
         "drone_roles": dict(sorted(scenario.drone_roles.items())),
+    }
+
+
+# ``scenario_replay_metadata``'s keys, grouped by where ``meta`` interleaves
+# them with the run's own.
+_SCENARIO_META_BEFORE_PLATFORM = (
+    "terrain",
+    "occluding_objects",
+    "environment_id",
+    "crs_id",
+    "environment_bounds_m",
+    "terrain_summary",
+    "land_cover",
+    "land_cover_legend",
+)
+_SCENARIO_META_BEFORE_DURATIONS = ("scenario_options", "mission_profile", "zones", "enu_origin")
+_SCENARIO_META_AFTER_DURATIONS = (
+    "target_motion_assignments",
+    "drone_planner_modes",
+    "drone_target_assignments",
+    "drone_roles",
+)
+
+
+def _build_replay_metadata(
+    frames: Sequence[PlatformFrame],
+    scenario: ScenarioDefinition,
+    simulation_config: SimulationConfig,
+    tracker_config: TrackerConfig,
+    summary: dict[str, object],
+) -> dict[str, object]:
+    scenario_meta = scenario_replay_metadata(scenario)
+    requested_duration_s = (
+        simulation_config.requested_duration_s
+        if simulation_config.requested_duration_s is not None
+        else simulation_config.actual_duration_s
+    )
+    return {
+        "schema_version": "2.0",
+        **{key: scenario_meta[key] for key in _SCENARIO_META_BEFORE_PLATFORM},
+        "platform": {
+            "min_observations": tracker_config.min_observations,
+            "max_stale_steps": tracker_config.max_stale_steps,
+        },
+        **{key: scenario_meta[key] for key in _SCENARIO_META_BEFORE_DURATIONS},
+        "requested_duration_s": float(requested_duration_s),
+        "actual_duration_s": float(simulation_config.actual_duration_s),
+        **{key: scenario_meta[key] for key in _SCENARIO_META_AFTER_DURATIONS},
         "observation_generation": {
             "attempted_count": summary["generation_attempted_count"],
             "accepted_count": summary["generation_accepted_count"],

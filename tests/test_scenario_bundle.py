@@ -212,3 +212,93 @@ def test_an_exported_bundle_runs_in_argusnet_rs_to_a_valid_replay(tmp_path):
     document = load_replay_document(str(replay))
     assert len(document["frames"]) == 6
     assert document["meta"]["producer"] == "argusnet-sim"
+
+
+@pytest.mark.parametrize("case", ["scan", "tt_follow"])
+def test_an_argusnet_rs_replay_passes_the_schema_with_every_payload(tmp_path, case):
+    """P4.9a.2: the enriched Rust replay is a replay the schema accepts, and its
+    ``meta`` carries every key Python's does except the two it declines:
+    ``performance`` (wall-clock, so never byte-stable) and ``vio_tracked_nodes``
+    (stage 5 is not assembled)."""
+    import subprocess
+    from pathlib import Path
+
+    from argusnet.evaluation.replay import validate_replay_with_schema
+
+    root = Path(__file__).resolve().parent.parent
+    binary = root / "target" / "debug" / "argusnet-rs"
+    if not binary.exists():
+        pytest.skip("argusnet-rs is not built (cargo build -p argusnet-cli)")
+    bundle_path = root / "tests" / "fixtures" / f"scenario_bundle_{case}.json"
+    replay = tmp_path / "replay.json"
+    completed = subprocess.run(
+        [str(binary), "sim", "--quiet", "--bundle", str(bundle_path), "--replay", str(replay)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(replay.read_text())
+    assert validate_replay_with_schema(document) == []
+
+    reference = json.loads(
+        (root / "tests" / "fixtures" / f"scenario_bundle_{case}_reference.json").read_text()
+    )
+    bundle = json.loads(bundle_path.read_text())
+    python_meta_keys = (
+        {"schema_version", "scenario_name", "frame_count", "dt_s", "seed", "node_ids", "track_ids"}
+        | set(bundle["presentation"])
+        | set(reference["meta_run"])
+    )
+    assert python_meta_keys <= set(document["meta"])
+    payloads = {key for frame in document["frames"] for key in frame}
+    expected = {"mapping_state", "inspection_events"}
+    if case == "scan":
+        # No targets: nothing to observe, so no target metadata either.
+        expected |= {"scan_mission_state"}
+    else:
+        expected |= {
+            "generation_rejections",
+            "deconfliction_events",
+            "localization_state",
+            "target_metadata",
+        }
+    assert expected <= payloads
+
+
+def test_the_bundles_presentation_is_the_replay_writers_meta(tmp_path):
+    """The scenario half of ``meta`` rides in the bundle so ``argusnet-rs`` can
+    copy it. It must be byte-for-byte what ``write_replay_document`` writes --
+    in particular the terrain mesh's rows stay nested, as the viewer reads
+    them, which ``to_jsonable`` would flatten."""
+    from argusnet.evaluation.replay import write_replay_document
+    from argusnet.simulation.sim import (
+        DEFAULT_SIMULATION_TRACKER_CONFIG,
+        build_replay_document_from_result,
+        run_simulation,
+    )
+
+    scenario = _scenario()
+    config = SimulationConfig(steps=3, dt_s=0.5, seed=CONFIG.seed)
+    bundle = json.loads(json.dumps(export_bundle(scenario, config)))
+    result = run_simulation(scenario, config, tracker_config=DEFAULT_SIMULATION_TRACKER_CONFIG)
+    replay = tmp_path / "replay.json"
+    write_replay_document(str(replay), build_replay_document_from_result(result))
+    meta = json.loads(replay.read_text())["meta"]
+    for key, value in bundle["presentation"].items():
+        assert meta[key] == value, key
+    heights = bundle["presentation"]["terrain"]["viewer_mesh"]["heights_m"]
+    assert isinstance(heights[0], list), "the terrain mesh was flattened"
+    assert bundle["requested_duration_s"] == meta["requested_duration_s"]
+
+
+def test_the_coverage_grid_carries_the_scenarios_resolution():
+    """``coverage_bounds`` is ``_coverage_bounds``: the scenario's own
+    resolution, in every mode, agreeing with the mission section's."""
+    tracking = export_bundle(_scenario(coverage_resolution_m=25.0), CONFIG)
+    assert tracking["coverage_bounds"]["resolution_m"] == 25.0
+    scan = export_bundle(
+        _scenario(mission_mode="scan_map_inspect", coverage_resolution_m=25.0, poi_count=1),
+        CONFIG,
+    )
+    assert scan["coverage_bounds"] == scan["mission"]["coverage_bounds"]

@@ -623,8 +623,8 @@ fn detection_matches_the_reference() {
             "noise, {context}"
         );
         assert_eq!(
-            detection.transmittance_dominant,
-            d["dominant_loss_factor"].as_str() == Some("transmittance"),
+            Some(detection.dominant_loss_factor),
+            d["dominant_loss_factor"].as_str(),
             "dominant loss, {context}"
         );
         assert_eq!(

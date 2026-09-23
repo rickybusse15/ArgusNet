@@ -273,14 +273,134 @@ impl From<&PlatformMetrics> for ReplayMetrics {
     }
 }
 
-/// One frame, carrying the seven keys the schema marks required.
+/// `mapping_state`: the coverage map's four aggregates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayMappingState {
+    pub coverage_fraction: f64,
+    pub covered_cells: u64,
+    pub total_cells: u64,
+    pub mean_revisits: f64,
+}
+
+/// `localization_state`: track quality, derived from the frame's tracks and
+/// the tick's generated observations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayLocalizationState {
+    pub active_localizations: u32,
+    pub mean_position_std_m: f64,
+    pub mean_observation_confidence: f64,
+    /// Always empty from both writers; kept so the object matches Python's.
+    #[serde(default)]
+    pub status_counts: BTreeMap<String, u32>,
+    #[serde(default = "map_frame_id")]
+    pub frame_id: String,
+}
+
+fn map_frame_id() -> String {
+    "map".to_string()
+}
+
+/// One zone entry, exit, coverage update or violation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayInspectionEvent {
+    pub zone_id: String,
+    pub node_id: String,
+    pub event_type: String,
+    pub timestamp_s: f64,
+    pub zone_coverage_fraction: f64,
+}
+
+/// One stage-3 resolution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayDeconflictionEvent {
+    pub yielding_drone_id: String,
+    pub conflicting_drone_id: String,
+    pub predicted_separation_m: f64,
+    pub resolution: String,
+    pub timestamp_s: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayLocalizationEstimate {
+    pub drone_id: String,
+    pub timestamp_s: f64,
+    pub position_estimate: [f64; 3],
+    pub heading_rad: f64,
+    pub position_std_m: f64,
+    pub confidence: f64,
+}
+
+/// A POI's status, with the nulls Python writes for fields not yet reached.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayPoiStatus {
+    pub poi_id: String,
+    pub status: String,
+    pub assigned_drone_id: Option<String>,
+    pub arrival_time_s: Option<f64>,
+    pub completion_time_s: Option<f64>,
+    pub dwell_accumulated_s: f64,
+    pub position: Option<[f64; 3]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayEgressProgress {
+    pub drone_id: String,
+    pub distance_to_home_m: f64,
+    pub home_position: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayTeamLocalization {
+    pub position: [f64; 3],
+    pub position_std_m: f64,
+    pub confidence: f64,
+    pub contributing_node_ids: Vec<String>,
+}
+
+/// `scan_mission_state`, present on every frame of a `scan_map_inspect` run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayScanMissionState {
+    pub phase: String,
+    pub scan_coverage_fraction: f64,
+    pub scan_coverage_threshold: f64,
+    pub localization_estimates: Vec<ReplayLocalizationEstimate>,
+    pub poi_statuses: Vec<ReplayPoiStatus>,
+    pub completed_poi_count: usize,
+    pub total_poi_count: usize,
+    pub phase_started_at_s: f64,
+    /// `(x, y, terrain height)` triples, flattened as Python's writer
+    /// flattens its tuple of tuples.
+    pub newly_scanned_cells: Vec<f64>,
+    pub localization_timed_out: bool,
+    pub coordinator_drone_id: Option<String>,
+    pub egress_progress: Vec<ReplayEgressProgress>,
+    pub team_localization: Option<ReplayTeamLocalization>,
+}
+
+/// Operator-facing identity and status for one target.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayTargetMetadata {
+    pub target_id: String,
+    pub operator_label: String,
+    pub target_type: String,
+    pub priority: u32,
+    pub behavior: String,
+    pub status: String,
+    pub first_seen_s: f64,
+    pub last_seen_s: f64,
+    pub confidence: f64,
+    pub notes: String,
+}
+
+/// One frame: the seven keys the schema marks required, and the optional
+/// payloads this writer produces.
 ///
-/// The optional payloads the schema also admits — `mapping_state`,
-/// `belief_cells`, `pose_estimates`, `mission_events` and the rest — are
-/// **not** here yet, and their absence is legal: the schema requires only the
-/// seven. They are omitted rather than emitted empty, because an empty
-/// `belief_cells` array is a claim that the run observed nothing, while an
-/// absent key is the honest "this writer does not produce that yet".
+/// An optional payload is omitted rather than emitted empty. An absent key
+/// says "not produced here" -- `belief_cells`, `pose_estimates` and
+/// `mission_events` are never produced, and a run with no mission machine has
+/// no `scan_mission_state` -- and a consumer reads absence and emptiness the
+/// same way. The skip keeps documents from producers that fill none of them,
+/// such as the committed fixture, unchanged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReplayFrame {
     pub timestamp_s: f64,
@@ -292,6 +412,18 @@ pub struct ReplayFrame {
     pub metrics: ReplayMetrics,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub generation_rejections: Vec<ReplayRejection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping_state: Option<ReplayMappingState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localization_state: Option<ReplayLocalizationState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inspection_events: Vec<ReplayInspectionEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deconfliction_events: Vec<ReplayDeconflictionEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_mission_state: Option<ReplayScanMissionState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_metadata: Vec<ReplayTargetMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -313,6 +445,12 @@ pub struct ReplayMeta {
     /// timestamp taken at write time is the one field that cannot be.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_at_utc: Option<String>,
+    /// Everything else the reference's `meta` carries about the scenario and
+    /// the run -- terrain, obstacles, land cover, zones, assignments, the
+    /// tracker's platform settings, generation totals -- flattened into
+    /// `meta` beside the fields above. Empty from a writer given none.
+    #[serde(flatten)]
+    pub scenario: BTreeMap<String, serde_json::Value>,
 }
 
 /// The name this writer puts in [`ReplayMeta::producer`].
@@ -350,6 +488,7 @@ pub struct ReplayWriter {
     dt_s: f64,
     seed: u64,
     generated_at_utc: Option<String>,
+    meta: BTreeMap<String, serde_json::Value>,
     frames: Vec<ReplayFrame>,
 }
 
@@ -360,7 +499,30 @@ impl ReplayWriter {
             dt_s,
             seed,
             generated_at_utc: None,
+            meta: BTreeMap::new(),
             frames: Vec::new(),
+        }
+    }
+
+    /// Add keys to `meta`. A key the writer computes itself (`frame_count`,
+    /// `node_ids` and the rest of [`ReplayMeta`]'s fields) is not
+    /// overridable: it is dropped here rather than emitted twice.
+    pub fn extend_meta(&mut self, entries: impl IntoIterator<Item = (String, serde_json::Value)>) {
+        const OWN: [&str; 9] = [
+            "schema_version",
+            "scenario_name",
+            "frame_count",
+            "dt_s",
+            "seed",
+            "node_ids",
+            "track_ids",
+            "producer",
+            "generated_at_utc",
+        ];
+        for (key, value) in entries {
+            if !OWN.contains(&key.as_str()) {
+                self.meta.insert(key, value);
+            }
         }
     }
 
@@ -406,6 +568,12 @@ impl ReplayWriter {
                 .iter()
                 .map(ReplayRejection::from)
                 .collect(),
+            mapping_state: None,
+            localization_state: None,
+            inspection_events: Vec::new(),
+            deconfliction_events: Vec::new(),
+            scan_mission_state: None,
+            target_metadata: Vec::new(),
         }
     }
 
@@ -448,6 +616,7 @@ impl ReplayWriter {
                 track_ids,
                 producer: PRODUCER.to_string(),
                 generated_at_utc: self.generated_at_utc,
+                scenario: self.meta,
             },
             summary,
             frames: self.frames,

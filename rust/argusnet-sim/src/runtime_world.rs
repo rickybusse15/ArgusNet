@@ -216,10 +216,22 @@ impl VisibilityOracle for SharedVisibility {
             Some(Detection {
                 p_d: detection.p_d,
                 effective_noise_multiplier: detection.effective_noise_multiplier,
-                transmittance_dominant: detection.dominant_loss_factor == "transmittance",
+                dominant_loss_factor: dominant_loss_name(&detection.dominant_loss_factor),
                 cloud_factor,
             }),
         )
+    }
+}
+
+/// `visibility::dominant`'s four answers, as the `'static` names `Detection`
+/// carries.
+fn dominant_loss_name(name: &str) -> &'static str {
+    match name {
+        "blocked" => "blocked",
+        "range" => "range",
+        "transmittance" => "transmittance",
+        "weather" => "weather",
+        other => unreachable!("visibility::dominant has no answer {other:?}"),
     }
 }
 
@@ -239,6 +251,9 @@ fn sight_line_of(result: &VisibilityResult) -> SightLine {
                 })
             },
             noise_multiplier: result.noise_multiplier,
+            blocker_type: result.blocker_type.clone(),
+            first_hit_range_m: result.first_hit_range_m,
+            closest_point: result.closest_point,
         }
     }
 }

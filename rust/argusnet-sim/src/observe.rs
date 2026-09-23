@@ -70,12 +70,13 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use argusnet_sensing::cascade::{
-    evaluate_pair, DominantLoss, FovInput, GenerationTally, Outcome, PairInput, Visibility,
+    evaluate_pair_traced, Blocker, DominantLoss, FovInput, Gate, GenerationTally, Outcome,
+    PairInput, RejectReason, Visibility,
 };
 use argusnet_sensing::{
     atmospheric_attenuation, detection_probability, BearingBiasDrift, SensorErrorConfig,
 };
-use argusnet_types::{BearingObservation, Vector3};
+use argusnet_types::{BearingObservation, ObservationRejection, Vector3};
 
 use crate::controller::ControllerLink;
 use crate::deterministic::{DeterministicRng, SeedPart};
@@ -328,11 +329,28 @@ impl Default for SensorSpec {
 /// among its deferrals; this is where that is put right, and the multiplier
 /// lives on the oracle's result because that is where the reference computes
 /// it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// It also carries what the reference's `ObservationRejection` reports about
+/// the path -- the blocker's own name, where the ray first hit, and the
+/// closest point reached -- which stage 6 copies into a generation rejection.
+/// The blocker name is the world's string rather than [`Blocker`]'s, because
+/// a scene may declare a blocker type the cascade folds into `Other`, and the
+/// reference reports the declared name.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SightLine {
     pub visibility: Visibility,
     /// `>= 1.0`. Exactly 1.0 for a clear path.
     pub noise_multiplier: f64,
+    /// `visibility.blocker_type`: `"none"` for a clear path.
+    pub blocker_type: String,
+    pub first_hit_range_m: Option<f64>,
+    pub closest_point: Option<[f64; 3]>,
+}
+
+impl Detection {
+    pub fn transmittance_dominant(&self) -> bool {
+        self.dominant_loss_factor == "transmittance"
+    }
 }
 
 impl SightLine {
@@ -340,7 +358,32 @@ impl SightLine {
         Self {
             visibility: Visibility::Visible,
             noise_multiplier: 1.0,
+            blocker_type: "none".to_string(),
+            first_hit_range_m: None,
+            closest_point: None,
         }
+    }
+
+    /// A path blocked by `blocker`, with nothing else known about it.
+    pub fn blocked(blocker: Blocker) -> Self {
+        Self {
+            visibility: Visibility::Blocked(blocker),
+            blocker_type: blocker_name(blocker).to_string(),
+            ..Self::clear()
+        }
+    }
+}
+
+/// The world's name for a cascade blocker, for an oracle that only has the
+/// cascade's type to hand.
+fn blocker_name(blocker: Blocker) -> &'static str {
+    match blocker {
+        Blocker::Terrain => "terrain",
+        Blocker::Building => "building",
+        Blocker::Wall => "wall",
+        Blocker::Vegetation => "vegetation",
+        Blocker::OutOfCoverage => "out_of_coverage",
+        Blocker::Other => "",
     }
 }
 
@@ -376,9 +419,10 @@ pub struct Detection {
     /// `detection.effective_noise_multiplier`: the land cover's noise
     /// multiplier grown with range and scaled by weather.
     pub effective_noise_multiplier: f64,
-    /// `detection.dominant_loss_factor == "transmittance"`, which the
-    /// reference reports as a vegetation occlusion rather than a dropout.
-    pub transmittance_dominant: bool,
+    /// `detection.dominant_loss_factor`: `"range"`, `"transmittance"`,
+    /// `"weather"` or `"blocked"`. A transmittance-dominated miss is reported
+    /// as a vegetation occlusion rather than a dropout.
+    pub dominant_loss_factor: &'static str,
     /// Stage 6's cloud-layer factor for this sight line (1 without clouds).
     pub cloud_factor: f64,
 }
@@ -430,6 +474,8 @@ struct Shared {
     observations: Vec<BearingObservation>,
     tally: GenerationTally,
     records: Vec<PairRecord>,
+    /// The last run's generation rejections, as the reference writes them.
+    rejections: Vec<ObservationRejection>,
     fusion: Option<FusionLink>,
     controllers: Option<ControllerLink>,
 }
@@ -542,6 +588,12 @@ impl ObserveLink {
     pub fn records(&self) -> Vec<PairRecord> {
         self.lock().records.clone()
     }
+
+    /// The last run's generation rejections: `ObservationBatch.
+    /// generation_rejections`, in `(node, target)` order.
+    pub fn generation_rejections(&self) -> Vec<ObservationRejection> {
+        self.lock().rejections.clone()
+    }
 }
 
 impl SensorState {
@@ -584,6 +636,7 @@ impl ObserveStage {
                     observations: Vec::new(),
                     tally: GenerationTally::default(),
                     records: Vec::new(),
+                    rejections: Vec::new(),
                     fusion: None,
                     controllers: None,
                 })),
@@ -594,6 +647,90 @@ impl ObserveStage {
     /// A handle to keep before installing the stage.
     pub fn link(&self) -> ObserveLink {
         self.link.clone()
+    }
+}
+
+/// What a generation rejection says about its pair beyond the reason.
+struct RejectionDetail {
+    detail: String,
+    closest_point: Option<[f64; 3]>,
+    blocker_type: String,
+    first_hit_range_m: Option<f64>,
+}
+
+/// `build_observations`' rejection texts, gate by gate.
+///
+/// Python's `f"{x:.1f}"` and Rust's `{:.1}` both round the exact binary value
+/// half to even, so the texts agree digit for digit. Only the line-of-sight
+/// and detection gates carry the sight line's points; the earlier gates
+/// reject before the reference queries it.
+fn generation_rejection(
+    input: &PairInput,
+    gate: Gate,
+    reason: RejectReason,
+    sight_line: &SightLine,
+    dominant_loss_factor: Option<&'static str>,
+) -> RejectionDetail {
+    let bare = |detail: String| RejectionDetail {
+        detail,
+        closest_point: None,
+        blocker_type: String::new(),
+        first_hit_range_m: None,
+    };
+    let with_sight_line = |detail: String| RejectionDetail {
+        detail,
+        closest_point: sight_line.closest_point,
+        blocker_type: sight_line.blocker_type.clone(),
+        first_hit_range_m: sight_line.first_hit_range_m,
+    };
+    match gate {
+        Gate::Range if input.range_m < 1e-6 => {
+            bare("Target is coincident with the node origin.".to_string())
+        }
+        Gate::Range => bare(format!(
+            "Range {:.1} m exceeds max sensor range {:.1} m.",
+            input.range_m, input.max_range_m
+        )),
+        Gate::FieldOfView => {
+            let fov = input.fov.expect("the FOV gate needs an FOV");
+            bare(format!(
+                "Target angle {:.1} deg exceeds FOV half-angle {:.1} deg.",
+                fov.angle_deg, fov.half_angle_deg
+            ))
+        }
+        Gate::Dropout => bare(format!(
+            "Observation dropped with p={:.3}.",
+            input.dropout_probability
+        )),
+        Gate::Elevation => bare(format!(
+            "Elevation angle {:.1} deg is below required {:.1} deg.",
+            input.elevation_deg, input.required_elevation_deg
+        )),
+        Gate::LineOfSight => {
+            // `blocker_type or 'obstacle'`.
+            let named = if sight_line.blocker_type.is_empty() {
+                "obstacle"
+            } else {
+                sight_line.blocker_type.as_str()
+            };
+            with_sight_line(match sight_line.first_hit_range_m {
+                None => format!("LOS blocked by {named}."),
+                Some(range_m) => format!("LOS blocked by {named} at {range_m:.1} m."),
+            })
+        }
+        Gate::Detection => {
+            // Without a world detection model the cascade's own verdict on
+            // the loss is all there is to name.
+            let dominant = dominant_loss_factor.unwrap_or(match input.dominant_loss {
+                DominantLoss::Transmittance => "transmittance",
+                DominantLoss::Other => "range",
+            });
+            with_sight_line(format!(
+                "Probabilistic detection rejected the observation with P_d={:.3} ({dominant}).",
+                input.combined_pd
+            ))
+        }
+        Gate::Accepted => unreachable!("{reason:?} from a pair that passed every gate"),
     }
 }
 
@@ -688,6 +825,7 @@ impl StageHandler for ObserveStage {
         shared.drifts = fresh;
         shared.observations.clear();
         shared.records.clear();
+        shared.rejections.clear();
         shared.tally = GenerationTally::default();
     }
 
@@ -721,6 +859,7 @@ impl StageHandler for ObserveStage {
         shared.drifts = drifts;
         shared.observations.clear();
         shared.records.clear();
+        shared.rejections.clear();
         shared.tally = GenerationTally::default();
         Ok(())
     }
@@ -729,6 +868,7 @@ impl StageHandler for ObserveStage {
         let mut shared = self.link.lock();
         shared.observations.clear();
         shared.records.clear();
+        shared.rejections.clear();
         shared.tally = GenerationTally::default();
 
         // Stage 6 is one of the two stages §3 admits to truth, so `None` here
@@ -833,12 +973,14 @@ impl StageHandler for ObserveStage {
                     spec.max_range_m,
                 );
                 let visibility = sight_line.visibility;
+                let dominant_loss_factor =
+                    detection.map(|detection| detection.dominant_loss_factor);
                 let (combined_pd, dominant_loss, noise_multiplier) = match detection {
                     // The reference: `max(0, min(1, p_d * sensor_pd *
                     // cloud_factor))`, multiplied left to right.
                     Some(detection) => (
                         (detection.p_d * sensor_pd * detection.cloud_factor).clamp(0.0, 1.0),
-                        if detection.transmittance_dominant {
+                        if detection.transmittance_dominant() {
                             DominantLoss::Transmittance
                         } else {
                             DominantLoss::Other
@@ -879,10 +1021,31 @@ impl StageHandler for ObserveStage {
                         SeedPart::Int(seed_time_key),
                     ],
                 );
-                let outcome = {
+                let (outcome, gate) = {
                     let mut uniform = || pair_rng.uniform();
-                    evaluate_pair(&input, &mut uniform)
+                    evaluate_pair_traced(&input, &mut uniform)
                 };
+                if let Outcome::Rejected(reason) = outcome {
+                    let rejection = generation_rejection(
+                        &input,
+                        gate,
+                        reason,
+                        &sight_line,
+                        dominant_loss_factor,
+                    );
+                    shared.rejections.push(ObservationRejection {
+                        node_id: node_id.clone(),
+                        target_id: target_id.clone(),
+                        timestamp_s,
+                        reason: reason.as_str().to_string(),
+                        detail: rejection.detail,
+                        origin: Some(origin),
+                        attempted_point: Some(*target_position),
+                        closest_point: rejection.closest_point.map(Vector3::from),
+                        blocker_type: rejection.blocker_type,
+                        first_hit_range_m: rejection.first_hit_range_m,
+                    });
+                }
                 shared.tally.record(&node_id, target_id, outcome);
                 shared.records.push(PairRecord {
                     node_id: node_id.clone(),
@@ -1386,7 +1549,11 @@ mod tests {
         Detection {
             p_d,
             effective_noise_multiplier: noise,
-            transmittance_dominant,
+            dominant_loss_factor: if transmittance_dominant {
+                "transmittance"
+            } else {
+                "range"
+            },
             cloud_factor: cloud,
         }
     }
@@ -1463,10 +1630,7 @@ mod tests {
 
     impl VisibilityOracle for NeverVisible {
         fn sight_line(&self, _from: [f64; 3], _to: [f64; 3]) -> SightLine {
-            SightLine {
-                visibility: Visibility::Blocked(Blocker::Terrain),
-                noise_multiplier: 1.0,
-            }
+            SightLine::blocked(Blocker::Terrain)
         }
     }
 
@@ -2144,8 +2308,8 @@ mod tests {
         impl VisibilityOracle for Hazy {
             fn sight_line(&self, _from: [f64; 3], _to: [f64; 3]) -> SightLine {
                 SightLine {
-                    visibility: Visibility::Visible,
                     noise_multiplier: self.0,
+                    ..SightLine::clear()
                 }
             }
         }

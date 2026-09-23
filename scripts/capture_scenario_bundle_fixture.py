@@ -22,6 +22,15 @@ two runs disagree about an engagement. Engagement state is recorded per tick
 ``update_from_frame``) so the Rust test can find that tick instead of
 guessing it.
 
+THE REPLAY'S OPTIONAL PAYLOADS (P4.9a.2)
+
+Each frame also records, under ``replay``, the reference's own serialisation
+of the payloads the Rust writer now produces -- generation rejections,
+mapping and localization state, inspection and deconfliction events, the scan
+mission state and target metadata -- and the reference ``meta``'s run keys
+under ``meta_run``. The Rust test decides per field what is exact and what is
+draw-dependent; the capture only records.
+
 Usage:
     python3 scripts/capture_scenario_bundle_fixture.py --out-dir tests/fixtures
 """
@@ -48,8 +57,10 @@ from argusnet.simulation.sim import (  # noqa: E402
     ScenarioOptions,
     SimulationConfig,
     build_default_scenario,
+    build_replay_document_from_result,
     cloud_detection_factor,
     run_simulation,
+    scenario_replay_metadata,
 )
 from argusnet.world.weather import WEATHER_PRESETS  # noqa: E402
 
@@ -213,6 +224,21 @@ def capture_los(scenario) -> dict:
     }
 
 
+# The frame payloads P4.9a.2 adds to the Rust replay, by their replay keys.
+REPLAY_PAYLOADS = (
+    "generation_rejections",
+    "mapping_state",
+    "localization_state",
+    "inspection_events",
+    "deconfliction_events",
+    "scan_mission_state",
+    "target_metadata",
+)
+# The keys of the reference `meta` that describe the run rather than the
+# scenario, and that the Rust writer computes itself.
+META_RUN_KEYS = ("platform", "requested_duration_s", "actual_duration_s", "observation_generation")
+
+
 def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
     config = CONFIGS.get(name, CONFIG)
     scenario = build_default_scenario(options, seed=config.seed)
@@ -226,6 +252,15 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
         engaged_log.append({node_id: bool(c.engaged) for node_id, c in adaptive.items()})
 
     result = run_simulation(scenario, config, progress=progress)
+    # Exactly what `write_replay_document` puts on disk: frames through
+    # `to_jsonable`, `meta` dumped as it is.
+    document = json.loads(json.dumps(build_replay_document_from_result(result)))
+    # The bundle's presentation IS the scenario half of this replay's meta:
+    # checked here, where both are in hand, so the Rust side can trust it.
+    presentation = json.loads(json.dumps(scenario_replay_metadata(scenario)))
+    for key, value in presentation.items():
+        assert document["meta"][key] == value, f"presentation key {key} differs from meta"
+    assert bundle["presentation"] == presentation, "the bundle's presentation drifted"
     frames = []
     for index, frame in enumerate(result.frames):
         frames.append(
@@ -284,6 +319,7 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
                     {e.yielding_drone_id for e in frame.deconfliction_events}
                     | {e.conflicting_drone_id for e in frame.deconfliction_events}
                 ),
+                "replay": {key: document["frames"][index].get(key) for key in REPLAY_PAYLOADS},
             }
         )
     reference = {
@@ -293,6 +329,7 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
         "steps": config.steps,
         "dt_s": exact(config.dt_s),
         "frames": frames,
+        "meta_run": {key: document["meta"][key] for key in META_RUN_KEYS},
     }
     assert len(frames) == config.steps, f"expected {config.steps} frames, got {len(frames)}"
     if name == "scan":

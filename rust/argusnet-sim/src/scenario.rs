@@ -47,14 +47,19 @@ use crate::controller::{
 use crate::deconflict::{DeconflictLink, DeconflictStage, RoleTable};
 use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
 use crate::fusion::{FusionLink, FusionStage};
-use crate::mapping::{MappingLink, MappingStage};
+use crate::mapping::{InspectionZone, MappingLink, MappingStage};
 use crate::mission::{MissionConfig, MissionLink};
-use crate::mission_driver::{MissionDriverConfig, MissionDriverStage};
+use crate::mission_driver::{DriverReportLink, MissionDriverConfig, MissionDriverStage};
 use crate::motion::BoundsXy;
 use crate::observation_follow::ObservationTriggeredFollow;
 use crate::observe::{ObserveLink, ObserveStage, SensorBand, SensorSpec};
 use crate::overrides::MissionOverrideStage;
-use crate::replay::{ReplayDocument, ReplayWriter};
+use crate::replay::{
+    ReplayDeconflictionEvent, ReplayDocument, ReplayEgressProgress, ReplayFrame,
+    ReplayInspectionEvent, ReplayLocalizationEstimate, ReplayLocalizationState, ReplayMappingState,
+    ReplayPoiStatus, ReplayScanMissionState, ReplayTargetMetadata, ReplayTeamLocalization,
+    ReplayWriter,
+};
 use crate::runtime_world::{SharedObstacles, SharedTerrain, SharedVisibility};
 use crate::simulation::{Simulation, TickError};
 use crate::snapshot::RuntimeSnapshot;
@@ -112,6 +117,22 @@ pub struct ScenarioBundle {
     pub mission: Option<MissionDocument>,
     pub nodes: Vec<NodeDocument>,
     pub targets: Vec<TargetDocument>,
+    /// `_coverage_bounds`: the coverage map and the per-zone inspection maps
+    /// every mission mode keeps. Absent from bundles written before P4.9a.2,
+    /// whose target-tracking runs then have no stage 8.
+    #[serde(default)]
+    pub coverage_bounds: Option<CoverageBoundsDocument>,
+    /// `options.cooperative_search`: fuse the fleet's localization estimates.
+    #[serde(default)]
+    pub cooperative_search: bool,
+    /// `SimulationConfig.requested_duration_s`, for the replay's `meta`.
+    #[serde(default)]
+    pub requested_duration_s: Option<f64>,
+    /// The scenario half of the replay's `meta` (`scenario_replay_metadata`),
+    /// copied into every replay this bundle produces. Presentation only:
+    /// nothing in the run reads it.
+    #[serde(default)]
+    pub presentation: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// What `run_simulation`'s scan-map-inspect block reads.
@@ -360,7 +381,15 @@ impl FollowDocument {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TargetDocument {
     pub target_id: String,
+    /// `target_motion_assignments[target_id]`, for the replay's target
+    /// metadata. `"unknown"` when absent, as the reference defaults it.
+    #[serde(default = "unknown_behavior")]
+    pub behavior: String,
     pub samples: Vec<TruthSample>,
+}
+
+fn unknown_behavior() -> String {
+    "unknown".to_string()
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -640,6 +669,68 @@ pub struct AssembledRun {
     truth: Arc<TruthTable>,
     replay: ReplayWriter,
     dt_s: f64,
+    /// Stage 9's POI and coordinator report, scan-map-inspect runs only.
+    driver_report: Option<DriverReportLink>,
+    report: FrameReport,
+}
+
+/// What the replay frames need beyond the stages' own handles.
+#[derive(Debug, Clone)]
+struct FrameReport {
+    scan_coverage_threshold: Option<f64>,
+    /// `_drone_home_positions`, for the egress readout.
+    homes: BTreeMap<String, [f64; 3]>,
+    /// Each target's `target_motion_assignments` entry, in truth order.
+    behaviors: Vec<(String, String)>,
+    totals: GenerationTotals,
+    terrain: Option<SharedTerrain>,
+}
+
+/// Stage 6's tallies summed over the frames this replay holds.
+#[derive(Debug, Clone, Default)]
+struct GenerationTotals {
+    attempted: u64,
+    rejection_counts: BTreeMap<String, u64>,
+    accepted_by_target: BTreeMap<String, u64>,
+    rejected_by_target: BTreeMap<String, u64>,
+}
+
+impl GenerationTotals {
+    fn add(&mut self, tally: &argusnet_sensing::GenerationTally) {
+        self.attempted += tally.attempted;
+        for (reason, count) in &tally.rejection_counts {
+            *self
+                .rejection_counts
+                .entry((*reason).to_string())
+                .or_default() += count;
+        }
+        for (target, count) in &tally.accepted_by_target {
+            *self.accepted_by_target.entry(target.clone()).or_default() += count;
+        }
+        for (target, count) in &tally.rejected_by_target {
+            *self.rejected_by_target.entry(target.clone()).or_default() += count;
+        }
+    }
+
+    /// `meta.observation_generation`, as `_build_simulation_summary` counts
+    /// it: accepted and rejected are the by-target and by-reason sums.
+    fn document(&self) -> serde_json::Value {
+        let accepted: u64 = self.accepted_by_target.values().sum();
+        let rejected: u64 = self.rejection_counts.values().sum();
+        serde_json::json!({
+            "attempted_count": self.attempted,
+            "accepted_count": accepted,
+            "rejected_count": rejected,
+            "acceptance_rate": if self.attempted > 0 {
+                accepted as f64 / self.attempted as f64
+            } else {
+                0.0
+            },
+            "rejection_counts": self.rejection_counts,
+            "accepted_by_target": self.accepted_by_target,
+            "rejected_by_target": self.rejected_by_target,
+        })
+    }
 }
 
 impl fmt::Debug for AssembledRun {
@@ -896,18 +987,54 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
 
-    // Stages 2, 8 and 9: the scan/map/localize/inspect/egress mission.
+    // Stage 8: coverage and zone inspection, which every mission mode keeps
+    // (P4.9a.2). A pre-P4.9a.2 bundle names the grid only in its mission
+    // section, so a target-tracking run from one has no stage 8.
+    let coverage_bounds = match (&bundle.coverage_bounds, &bundle.mission) {
+        (Some(top), Some(mission)) if top.grid() != mission.coverage_bounds.grid() => {
+            return Err(BundleError::Invalid(
+                "coverage_bounds and mission.coverage_bounds disagree".into(),
+            ))
+        }
+        (Some(top), _) => Some(*top),
+        (None, Some(mission)) => Some(mission.coverage_bounds),
+        (None, None) => None,
+    };
+    let mut mapping_stage = None;
+    if let Some(bounds) = coverage_bounds {
+        let mobile_count = bundle.nodes.iter().filter(|n| n.is_mobile).count();
+        let mapping = MappingStage::with_derived_footprint(bounds.grid(), mobile_count)
+            .map_err(|error| BundleError::Invalid(format!("coverage bounds: {error}")))?;
+        let link = mapping.link();
+        link.set_scan_mode(bundle.mission.is_some());
+        link.set_cooperative_search(bundle.cooperative_search);
+        link.set_zones(
+            bundle
+                .mission_zones
+                .iter()
+                .map(|zone| InspectionZone {
+                    zone_id: zone.zone_id.clone(),
+                    zone_type: zone.zone_type.clone(),
+                    center_xy: [zone.center_m[0], zone.center_m[1]],
+                    radius_m: zone.radius_m,
+                })
+                .collect(),
+        )
+        .map_err(|error| BundleError::Invalid(format!("zone coverage: {error}")))?;
+        mapping_stage = Some(mapping);
+    }
+    let mapping_link = mapping_stage.as_ref().map(MappingStage::link);
+
+    // Stages 2 and 9: the scan/map/localize/inspect/egress mission.
     let mut mission_link = None;
-    let mut mapping_link = None;
     let mut localization_replay = None;
     let mut mission_setup = None;
+    let mut driver_report = None;
+    let mut homes_for_egress = BTreeMap::new();
     if let Some(mission) = &bundle.mission {
-        let mobile_count = bundle.nodes.iter().filter(|n| n.is_mobile).count();
-        let mapping =
-            MappingStage::with_derived_footprint(mission.coverage_bounds.grid(), mobile_count)
-                .map_err(|error| BundleError::Invalid(format!("coverage bounds: {error}")))?;
-        let mapping_handle = mapping.link();
-        mapping_handle.set_scan_mode(true);
+        let mapping_handle = mapping_link
+            .clone()
+            .expect("a mission names its coverage grid, so stage 8 exists");
         mapping_handle.enable_localization(mission.localization);
 
         let overrides = MissionOverrideStage::new();
@@ -924,6 +1051,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                 ControllerDocument::Static { .. } => None,
             })
             .collect();
+        homes_for_egress = homes.clone();
         let driver = MissionDriverStage::new(
             MissionDriverConfig {
                 mission: MissionConfig {
@@ -953,6 +1081,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         );
         let link = driver.mission_link();
         localization_replay = Some(driver.localization_replay());
+        driver_report = Some(driver.report_link());
         // Read back off the constructed driver, so a caller (and the wiring
         // test) sees what the stage was actually given.
         mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));
@@ -960,13 +1089,21 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         override_link.watch_mission(link.clone());
         sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(overrides))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
-        sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
-            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(driver))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
         mission_link = Some(link);
-        mapping_link = Some(mapping_handle);
     }
+    if let Some(mapping) = mapping_stage {
+        sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
+            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+    }
+
+    let mut replay = ReplayWriter::new(
+        bundle.scenario_name.clone(),
+        bundle.dt_s,
+        u64::from(bundle.seed),
+    );
+    replay.extend_meta(run_meta(bundle));
 
     Ok(AssembledRun {
         localization_replay,
@@ -980,13 +1117,170 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         fusion: fusion_link,
         deconflict: deconflict_link,
         truth,
-        replay: ReplayWriter::new(
-            bundle.scenario_name.clone(),
-            bundle.dt_s,
-            u64::from(bundle.seed),
-        ),
+        replay,
         dt_s: bundle.dt_s,
+        driver_report,
+        report: FrameReport {
+            terrain: Some(world.terrain.clone()),
+            scan_coverage_threshold: bundle
+                .mission
+                .as_ref()
+                .map(|mission| mission.scan_coverage_threshold),
+            homes: homes_for_egress,
+            behaviors: bundle
+                .targets
+                .iter()
+                .map(|target| (target.target_id.clone(), target.behavior.clone()))
+                .collect(),
+            totals: GenerationTotals::default(),
+        },
     })
+}
+
+/// The replay `meta` a bundle states before anything runs: the scenario half
+/// the bundle carries, and the tracker and duration keys `_build_replay_
+/// metadata` adds. The generation totals are added when the replay is
+/// finished; `vio_tracked_nodes` and `performance` are not written, because
+/// stage 5 is not assembled and a replay's bytes must not depend on the clock.
+fn run_meta(bundle: &ScenarioBundle) -> Vec<(String, serde_json::Value)> {
+    let mut meta: Vec<(String, serde_json::Value)> = bundle
+        .presentation
+        .iter()
+        .flat_map(|presentation| presentation.clone())
+        .collect();
+    // `SimulationConfig.actual_duration_s`: `max(0.0, (steps - 1) * dt_s)`.
+    let actual_duration_s = (bundle.steps.saturating_sub(1) as f64 * bundle.dt_s).max(0.0);
+    meta.push((
+        "platform".into(),
+        serde_json::json!({
+            "min_observations": bundle.tracker.min_observations,
+            "max_stale_steps": bundle.tracker.max_stale_steps,
+        }),
+    ));
+    meta.push((
+        "requested_duration_s".into(),
+        serde_json::json!(bundle.requested_duration_s.unwrap_or(actual_duration_s)),
+    ));
+    meta.push((
+        "actual_duration_s".into(),
+        serde_json::json!(actual_duration_s),
+    ));
+    meta
+}
+
+/// `np.mean` over a Python list: numpy's pairwise summation, then one
+/// division. Below eight values that is a plain left-to-right sum from 0.0;
+/// above, eight running partial sums combined in a fixed tree, and above 128
+/// a recursive split -- `pairwise_sum` in numpy's `loops_utils.h`.
+pub fn numpy_mean(values: &[f64]) -> f64 {
+    fn pairwise(values: &[f64]) -> f64 {
+        let n = values.len();
+        if n < 8 {
+            let mut sum = 0.0;
+            for value in values {
+                sum += value;
+            }
+            sum
+        } else if n <= 128 {
+            let mut r = [0.0f64; 8];
+            r.copy_from_slice(&values[..8]);
+            let mut i = 8;
+            while i < n - (n % 8) {
+                for (k, partial) in r.iter_mut().enumerate() {
+                    *partial += values[i + k];
+                }
+                i += 8;
+            }
+            let mut sum = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+            for value in &values[i..] {
+                sum += value;
+            }
+            sum
+        } else {
+            let mut half = n / 2;
+            half -= half % 8;
+            pairwise(&values[..half]) + pairwise(&values[half..])
+        }
+    }
+    pairwise(values) / values.len() as f64
+}
+
+/// `LocalizationState` from a frame's tracks and the tick's generated
+/// observations; `None` on a frame with no tracks, as the reference leaves it.
+fn localization_state(
+    tracks: &[crate::replay::ReplayTrack],
+    confidences: &[f64],
+) -> Option<ReplayLocalizationState> {
+    if tracks.is_empty() {
+        return None;
+    }
+    // `np.mean(np.sqrt(flat[[0, 7, 14]]))` for each 6x6 covariance.
+    let position_stds: Vec<f64> = tracks
+        .iter()
+        .filter(|track| track.covariance.len() == 36)
+        .map(|track| {
+            numpy_mean(&[
+                track.covariance[0].sqrt(),
+                track.covariance[7].sqrt(),
+                track.covariance[14].sqrt(),
+            ])
+        })
+        .collect();
+    Some(ReplayLocalizationState {
+        active_localizations: tracks.len() as u32,
+        mean_position_std_m: if position_stds.is_empty() {
+            0.0
+        } else {
+            numpy_mean(&position_stds)
+        },
+        mean_observation_confidence: if confidences.is_empty() {
+            0.0
+        } else {
+            numpy_mean(confidences)
+        },
+        status_counts: BTreeMap::new(),
+        frame_id: "map".to_string(),
+    })
+}
+
+/// `3 if index == 0 else 2 if index < 3 else 1`: the first target in truth
+/// order leads, the next two follow.
+pub fn target_priority(index: usize) -> u32 {
+    match index {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    }
+}
+
+/// Python's `str.title()`: a cased character is upper-cased after an uncased
+/// one and lower-cased after a cased one, so a letter after a digit is
+/// capitalised too (`"target 1a"` -> `"Target 1A"`).
+pub fn python_title(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut previous_cased = false;
+    for character in text.chars() {
+        let cased = character.is_lowercase() || character.is_uppercase();
+        if cased && previous_cased {
+            out.extend(character.to_lowercase());
+        } else if cased {
+            out.extend(character.to_uppercase());
+        } else {
+            out.push(character);
+        }
+        previous_cased = cased;
+    }
+    out
+}
+
+/// Python's `round(x, 1)`. Rust's `{:.1}` rounds the exact binary value half
+/// to even, as CPython's correctly rounded `round` does, and the string reads
+/// back as the float `round` returns: checked on 300,000 values, half of them
+/// exact ties, before this was relied on.
+pub fn python_round1(value: f64) -> f64 {
+    format!("{value:.1}")
+        .parse()
+        .expect("a formatted float parses")
 }
 
 /// Why a step of an assembled run failed.
@@ -1026,7 +1320,7 @@ impl AssembledRun {
         let frame = self.fusion.frame().ok_or_else(|| {
             RunError::Invariant(format!("stage 7 produced no frame at t={timestamp_s}"))
         })?;
-        self.replay.push_frame(ReplayWriter::frame(
+        let mut replay_frame = ReplayWriter::frame(
             timestamp_s,
             &snapshot.platforms,
             &frame.observations,
@@ -1034,9 +1328,183 @@ impl AssembledRun {
             &frame.tracks,
             &truths,
             &frame.metrics,
-            &[],
-        ));
+            &self.observe.generation_rejections(),
+        );
+        self.enrich(&mut replay_frame, timestamp_s, &snapshot.platforms, &truths);
+        self.replay.push_frame(replay_frame);
         Ok(snapshot)
+    }
+
+    /// The frame's optional payloads, each as `run_simulation` builds its
+    /// `PlatformFrame` (P4.9a.2).
+    fn enrich(
+        &mut self,
+        frame: &mut ReplayFrame,
+        timestamp_s: f64,
+        platforms: &[argusnet_types::NodeState],
+        truths: &[argusnet_types::TruthState],
+    ) {
+        let tally = self.observe.tally();
+        self.report.totals.add(&tally);
+
+        frame.deconfliction_events = self
+            .deconflict
+            .take_events()
+            .into_iter()
+            .map(|event| ReplayDeconflictionEvent {
+                yielding_drone_id: event.yielding_drone_id,
+                conflicting_drone_id: event.conflicting_drone_id,
+                predicted_separation_m: event.predicted_separation_m,
+                resolution: event.resolution.as_str().to_string(),
+                timestamp_s: event.timestamp_s,
+            })
+            .collect();
+
+        frame.localization_state = localization_state(
+            &frame.tracks,
+            &self
+                .observe
+                .observations()
+                .iter()
+                .map(|observation| observation.confidence)
+                .collect::<Vec<_>>(),
+        );
+
+        frame.target_metadata = truths
+            .iter()
+            .enumerate()
+            .map(|(index, truth)| {
+                let accepted = tally
+                    .accepted_by_target
+                    .get(&truth.target_id)
+                    .copied()
+                    .unwrap_or(0);
+                ReplayTargetMetadata {
+                    target_id: truth.target_id.clone(),
+                    operator_label: python_title(&truth.target_id.replace('-', " ")),
+                    target_type: "simulated_mobile".to_string(),
+                    priority: target_priority(index),
+                    behavior: self
+                        .report
+                        .behaviors
+                        .iter()
+                        .find(|(id, _)| *id == truth.target_id)
+                        .map_or_else(|| "unknown".to_string(), |(_, b)| b.clone()),
+                    status: if accepted > 0 {
+                        "observed"
+                    } else {
+                        "unobserved"
+                    }
+                    .to_string(),
+                    first_seen_s: 0.0,
+                    last_seen_s: timestamp_s,
+                    confidence: (accepted as f64 / 3.0).min(1.0),
+                    notes: String::new(),
+                }
+            })
+            .collect();
+
+        let Some(mapping) = &self.mapping else {
+            return;
+        };
+        let stats = mapping.stats();
+        frame.mapping_state = Some(ReplayMappingState {
+            coverage_fraction: stats.coverage_fraction,
+            covered_cells: stats.covered_cells,
+            total_cells: stats.total_cells,
+            mean_revisits: stats.mean_revisits,
+        });
+        frame.inspection_events = mapping
+            .inspection_events()
+            .into_iter()
+            .map(|event| ReplayInspectionEvent {
+                zone_id: event.zone_id,
+                node_id: event.node_id,
+                event_type: event.event_type,
+                timestamp_s: event.timestamp_s,
+                zone_coverage_fraction: event.zone_coverage_fraction,
+            })
+            .collect();
+
+        let (Some(mission), Some(driver)) = (&self.mission, &self.driver_report) else {
+            return;
+        };
+        let state = mission.state();
+        let report = driver.report();
+        let terrain = self.report.terrain.as_ref();
+        let newly_scanned_cells = mapping
+            .newly_covered_cells()
+            .into_iter()
+            .flat_map(|[x, y]| {
+                // `with contextlib.suppress(Exception)`: 0.0 when unknown.
+                let height = terrain.map_or(0.0, |terrain| {
+                    crate::observe::TerrainHeight::height_at(terrain, x, y)
+                });
+                [python_round1(x), python_round1(y), python_round1(height)]
+            })
+            .collect();
+        let egress_progress = if state.phase() == crate::mission::MissionPhase::Egress {
+            platforms
+                .iter()
+                .filter(|platform| platform.is_mobile)
+                .filter_map(|platform| {
+                    let home = self.report.homes.get(&platform.node_id)?;
+                    let (dx, dy) = (home[0] - platform.position.x, home[1] - platform.position.y);
+                    Some(ReplayEgressProgress {
+                        drone_id: platform.node_id.clone(),
+                        distance_to_home_m: (dx * dx + dy * dy).sqrt(),
+                        home_position: *home,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        frame.scan_mission_state = Some(ReplayScanMissionState {
+            phase: state.phase().as_str().to_string(),
+            scan_coverage_fraction: stats.coverage_fraction,
+            scan_coverage_threshold: self.report.scan_coverage_threshold.unwrap_or(0.0),
+            localization_estimates: mapping
+                .last_estimates()
+                .into_iter()
+                .map(|estimate| ReplayLocalizationEstimate {
+                    drone_id: estimate.platform_id,
+                    timestamp_s: estimate.timestamp_s,
+                    position_estimate: estimate.position_estimate,
+                    heading_rad: estimate.heading_rad,
+                    position_std_m: estimate.position_std_m,
+                    confidence: estimate.confidence,
+                })
+                .collect(),
+            poi_statuses: report
+                .pois
+                .iter()
+                .map(|(status, position)| ReplayPoiStatus {
+                    poi_id: status.poi_id.clone(),
+                    status: status.state.as_str().to_string(),
+                    assigned_drone_id: status.assigned_drone_id.clone(),
+                    arrival_time_s: status.arrival_time_s,
+                    completion_time_s: status.completion_time_s,
+                    dwell_accumulated_s: status.dwell_accumulated_s,
+                    position: Some(*position),
+                })
+                .collect(),
+            completed_poi_count: report.completed_count,
+            total_poi_count: report.total_count,
+            phase_started_at_s: state.phase_started_at_s(),
+            newly_scanned_cells,
+            localization_timed_out: state.localization_timed_out(),
+            coordinator_drone_id: report.coordinator_drone_id,
+            egress_progress,
+            team_localization: mapping
+                .team_localization()
+                .map(|team| ReplayTeamLocalization {
+                    position: team.position,
+                    position_std_m: team.position_std_m,
+                    confidence: team.confidence,
+                    contributing_node_ids: team.contributing_node_ids,
+                }),
+        });
     }
 
     /// Run every remaining tick and return the replay.
@@ -1048,6 +1516,9 @@ impl AssembledRun {
                 Err(error) => return Err(error),
             }
         }
+        let totals = self.report.totals.document();
+        self.replay
+            .extend_meta([("observation_generation".to_string(), totals)]);
         Ok(self.replay.finish())
     }
 }

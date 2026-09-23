@@ -260,6 +260,7 @@ dependencies = [
 name = "argusnet-cli"
 version = "0.1.0"
 dependencies = [
+ "argusnet-replay",
  "argusnet-sim",
  "clap",
  "serde_json",

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — `argusnet-rs` replays carry what the viewer shows (P4.9a.2)
+
+- Rust replay frames now carry generation rejections (with the reference's
+  detail text and sight-line points), mapping state, zone inspection events,
+  deconfliction events, localization state, target metadata and, under
+  `scan_map_inspect`, the full scan mission state (POIs with positions,
+  coordinator, newly scanned cells, egress progress, team localization).
+- Replay `meta` carries the scenario half of the reference's metadata
+  (terrain mesh, obstacles, land cover, zones, assignments), exported in the
+  bundle as `presentation` by the newly lifted `scenario_replay_metadata`,
+  plus the tracker thresholds, durations and generation totals.
+- Stage 8 runs in every mission mode and checkpoints per-zone coverage and
+  membership; stage 9 elects and checkpoints the coordinator.
+- Bundle v1 gains optional `coverage_bounds`, `targets[].behavior`,
+  `cooperative_search`, `requested_duration_s` and `presentation`.
+- Fix: deconfliction measured predicted separation with `hypot`; it now uses
+  `np.linalg.norm`'s arithmetic, as the reference does. The value sizes the
+  lateral push.
+
 ## Unreleased — `argusnet-rs`: the Rust simulation from a command line (P4.9a)
 
 - New crate `rust/argusnet-cli` builds the `argusnet-rs` binary. `argusnet-rs

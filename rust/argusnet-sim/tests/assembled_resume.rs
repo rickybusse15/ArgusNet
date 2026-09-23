@@ -245,7 +245,7 @@ fn a_checkpoint_for_a_different_scenario_is_refused_stage_by_stage() {
     let original = serde_json::to_value(source.sim.checkpoint().expect("not faulted")).unwrap();
 
     type Tamper = fn(&mut serde_json::Value);
-    let tampers: [(&str, &str, Tamper); 4] = [
+    let tampers: [(&str, &str, Tamper); 6] = [
         (
             "generate_observations",
             "a sensor the run does not have",
@@ -268,6 +268,20 @@ fn a_checkpoint_for_a_different_scenario_is_refused_stage_by_stage() {
             "a different coverage grid",
             |state| {
                 state["coverage"]["bounds"]["resolution_m"] = serde_json::json!(25.0);
+            },
+        ),
+        (
+            "update_mapping_and_localization",
+            "different inspected zones",
+            |state| {
+                state["zones"][0]["zone_id"] = serde_json::json!("zone-99");
+            },
+        ),
+        (
+            "update_mapping_and_localization",
+            "a zone map over a different grid",
+            |state| {
+                state["zones"][0]["coverage"]["bounds"]["resolution_m"] = serde_json::json!(25.0);
             },
         ),
         ("evaluate_mission_transitions", "different POIs", |state| {

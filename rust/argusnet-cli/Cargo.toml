@@ -15,3 +15,8 @@ path = "src/main.rs"
 argusnet-sim = { path = "../argusnet-sim" }
 clap.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# The viewer's own replay reader, to prove an argusnet-rs replay is one the
+# viewer can present (P4.9a.2).
+argusnet-replay = { path = "../argusnet-replay" }
