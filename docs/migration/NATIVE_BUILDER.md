@@ -133,6 +133,66 @@ Pinned toolchain 1.98.0-aarch64, exit codes read directly:
 | `pytest tests/` (`ARGUSNET_REQUIRE_RS=1`) | 1022 passed, 9 skipped, 0 failed |
 | CI | **not run**: nothing is pushed |
 
+## P4.9b.2a: numpy's `integers`, and the target behaviours
+
+**Delivered 2026-09-23, locally verified only.**
+
+The scenario half draws from numpy beyond what P4.3 ported. The behaviours
+and mission zones call `Generator.integers`, and `NumpyRng` now reproduces it:
+
+* **PCG64's half-word buffer.** `next_uint32` returns the low half of a fresh
+  64-bit draw and keeps the high half for the next call. `next_uint64` and
+  `next_double` neither read nor clear it, so an `integers` draw's second
+  half can come back after any number of doubles.
+* **Lemire's bounded method,** with its rejection loop, and the exact
+  `2^32 - 1` path. Ranges wider than 32 bits are refused, because no caller
+  uses them.
+
+`standard_normal` (numpy's ziggurat) is **not** needed. Its only user,
+`TurbulenceModel`, is referenced nowhere outside `behaviors.py`, and neither
+are the policy behaviours.
+
+`builder::behaviors` ports `build_target_trajectory` and the eight presets it
+reaches: loiter, transit (Hermite, then a loiter), evasive (nap-of-earth
+windows over a sinusoid), expanding-square search, sinusoid, racetrack,
+waypoint patrol, and the `mixed` composite with its 2 s smooth-step blends.
+The evaluation order follows the reference wherever it can change the last
+bit: numpy's elementwise expressions are separate passes, `**` is C `pow`,
+and float `%` takes the divisor's sign.
+
+### numpy's `uniform` is platform-dependent too
+
+numpy 2.5 on arm64 computes `uniform` as `fma(high - low, u, low)`. That is
+true on 4,000 of 4,000 draws tested, where the unfused form agrees on only
+55%. The committed `numpy_rng.json` `uniform` section was recorded on a build
+that does not fuse, and `NumpyRng::uniform` reproduces that build. Rather
+than chase each machine's contraction, the parity fixtures separate the two
+effects:
+
+* `numpy_rng.json`'s new `mixed` section interleaves `integers` with
+  `random()`. `next_double` is integer-exact everywhere, so the section is
+  platform-independent. The capture script's `--sections` flag adds it
+  without overwriting the committed `uniform` section, which a fusing build
+  would move by one ulp in about 45% of its values.
+* `behaviors.json` is recorded with `default_rng` wrapped so `uniform` is the
+  unfused form. The behaviour logic is then pinned bit for bit, and the
+  platform's FMA is left to the builder's end-to-end comparison.
+
+### Verification
+
+| Test | Shows |
+| --- | --- |
+| `numpy_rng_parity::integers_interleaved_with_doubles_match_numpy` | 684 `integers` draws over 19 seeds, interleaved with `random()`, including the rejection loop (a range of 2^31 + 1) and the 2^32 - 1 path |
+| `behaviors_parity::every_preset_matches_the_reference_bit_for_bit` | all eight presets, three bounds, four seeds each, 10,464 samples plus a dense sweep of both `mixed` blend windows. Every position and velocity component is exact |
+
+### Mutation round
+
+16 mutants. **15 caught and 1 equivalent.** The first pass left `pow` against
+`powi` in the blend: the 2.5 s sample grid put too few points inside the 2 s
+windows, so a dense blend sweep was added. The equivalent is `hypot` for a
+patrol leg's length. Every patrol leg is axis-aligned, so one component is
+exactly zero, and both forms return `|dx|` exactly.
+
 ## Not in this slice (P4.9b.2)
 
 * **The scenario half.** Ground stations, targets and their behaviours

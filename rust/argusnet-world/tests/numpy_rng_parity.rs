@@ -213,3 +213,60 @@ fn numpy_rejects_a_reversed_range_so_the_port_is_only_defined_for_low_le_high() 
     let value = rng.uniform(-1.0, 1.0);
     assert!((-1.0..1.0).contains(&value));
 }
+
+/// `integers` interleaved with double draws, as the target behaviours and
+/// mission zones draw them (P4.9b.2). `integers` reads 32 bits at a time
+/// through PCG64's half-word buffer, which the double draws neither read nor
+/// clear, so the operation order is what is under test -- including Lemire's
+/// rejection loop (a range of 2^31 + 1) and the exact 2^32 - 1 path. The
+/// doubles are `random()`, which is integer-exact on every platform; see the
+/// capture script for why not `uniform()`.
+#[test]
+fn integers_interleaved_with_doubles_match_numpy() {
+    #[derive(Deserialize)]
+    struct Mixed {
+        mixed: Vec<MixedCase>,
+    }
+    #[derive(Deserialize)]
+    struct MixedCase {
+        name: String,
+        seed: u32,
+        draws: Vec<MixedDraw>,
+    }
+    #[derive(Deserialize)]
+    struct MixedDraw {
+        op: String,
+        low: serde_json::Value,
+        high: serde_json::Value,
+        value: String,
+    }
+    let path = format!(
+        "{}/../../tests/fixtures/numpy_rng.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let fixture: Mixed = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert!(fixture.mixed.len() >= 19, "seed count");
+    let mut integers = 0;
+    for case in &fixture.mixed {
+        let mut rng = NumpyRng::new(case.seed);
+        for (index, draw) in case.draws.iter().enumerate() {
+            match draw.op.as_str() {
+                "integers" => {
+                    let got = rng.integers(draw.low.as_i64().unwrap(), draw.high.as_i64().unwrap());
+                    assert_eq!(got.to_string(), draw.value, "{} draw {index}", case.name);
+                    integers += 1;
+                }
+                "random" => {
+                    assert_eq!(
+                        rng.random().to_bits(),
+                        f(&draw.value).to_bits(),
+                        "{} draw {index}",
+                        case.name
+                    );
+                }
+                other => panic!("unknown op {other}"),
+            }
+        }
+    }
+    assert!(integers >= 684, "integer draws compared: {integers}");
+}

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — numpy's `integers` and the target behaviours in Rust (P4.9b.2a)
+
+- `NumpyRng` reproduces `Generator.integers` (PCG64's `next_uint32` half-word
+  buffer and Lemire's bounded method) and `random()`, proven against 684
+  interleaved draws.
+- `builder::behaviors` ports `build_target_trajectory`'s eight presets,
+  bit for bit over 10,464 samples.
+- Recorded: numpy 2.5 on arm64 fuses `uniform`'s affine step into an FMA, so
+  the reference's `uniform` is platform-dependent in the last place.
+
 ## Unreleased — The native builder builds the world (P4.9b.1)
 
 - `argusnet_sim::builder` reads an `argusnet.scenario-config` v1 document

@@ -24,6 +24,7 @@
 //! identifiers, footprints, counts, masks, classes -- is compared exactly;
 //! heights and what is computed from them are compared within that bound.
 
+pub mod behaviors;
 pub mod environment;
 
 use serde::{Deserialize, Serialize};

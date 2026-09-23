@@ -126,6 +126,9 @@ const PCG_MULT: u128 = 0x2360_ED05_1FC6_5DA4_4385_DF64_9FCC_F645;
 pub struct NumpyRng {
     state: u128,
     increment: u128,
+    /// `has_uint32` / `uinteger`: the high half of the last 64-bit draw that
+    /// `next_uint32` split, waiting to be returned by the next one.
+    buffered_u32: Option<u32>,
 }
 
 impl NumpyRng {
@@ -145,6 +148,7 @@ impl NumpyRng {
         let mut rng = Self {
             state: 0,
             increment: (initial_sequence << 1) | 1,
+            buffered_u32: None,
         };
         rng.step();
         rng.state = rng.state.wrapping_add(initial_state);
@@ -182,5 +186,67 @@ impl NumpyRng {
     /// `low * (1 - t) + high * t`. The spelling is observable in the low bits.
     pub fn uniform(&mut self, low: f64, high: f64) -> f64 {
         low + (high - low) * self.next_f64()
+    }
+
+    /// `Generator.random()`: one `next_double`.
+    pub fn random(&mut self) -> f64 {
+        self.next_f64()
+    }
+
+    /// PCG64's `next_uint32`: the **low** half of a fresh 64-bit draw, with
+    /// the high half kept for the next call.
+    ///
+    /// `next_uint64` and `next_double` neither read nor clear that buffer, so
+    /// a stream that interleaves `integers` with `uniform` depends on it: a
+    /// draw's second half can surface after any number of doubles.
+    pub fn next_u32(&mut self) -> u32 {
+        if let Some(high) = self.buffered_u32.take() {
+            return high;
+        }
+        let next = self.next_u64();
+        self.buffered_u32 = Some((next >> 32) as u32);
+        next as u32
+    }
+
+    /// `buffered_bounded_lemire_uint32`: a uniform integer in `0..=range`,
+    /// by Lemire's multiply-shift with rejection.
+    fn bounded_lemire_u32(&mut self, range: u32) -> u32 {
+        debug_assert!(range != u32::MAX);
+        let range_excl = u64::from(range) + 1;
+        let mut m = u64::from(self.next_u32()) * range_excl;
+        let mut leftover = m as u32;
+        if u64::from(leftover) < range_excl {
+            let threshold = ((u64::from(u32::MAX) - u64::from(range)) % range_excl) as u32;
+            while leftover < threshold {
+                m = u64::from(self.next_u32()) * range_excl;
+                leftover = m as u32;
+            }
+        }
+        (m >> 32) as u32
+    }
+
+    /// `Generator.integers(low, high)` for a scalar `int64` in `[low, high)`.
+    ///
+    /// numpy's `_rand_int64` path: a range of zero returns `low` without
+    /// drawing; a range that fits 32 bits draws through `next_uint32` (and
+    /// its buffer), by Lemire's method unless it is exactly `2^32 - 1`.
+    /// Wider ranges are not used by any caller and are refused rather than
+    /// guessed at.
+    pub fn integers(&mut self, low: i64, high: i64) -> i64 {
+        assert!(high > low, "integers needs low < high, got {low}..{high}");
+        let range = (high - 1).wrapping_sub(low) as u64;
+        if range == 0 {
+            return low;
+        }
+        assert!(
+            range <= u64::from(u32::MAX),
+            "64-bit integer ranges are not reproduced"
+        );
+        let draw = if range == u64::from(u32::MAX) {
+            self.next_u32()
+        } else {
+            self.bounded_lemire_u32(range as u32)
+        };
+        low.wrapping_add(i64::from(draw))
     }
 }
