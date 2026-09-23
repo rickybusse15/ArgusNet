@@ -85,7 +85,18 @@ CASES = {
         drone_count=4,
         ground_station_count=3,
     ),
+    # The default mission mode: lawnmower scan, localization, POI inspection,
+    # egress. A lowered coverage threshold lets 400 one-second ticks reach
+    # every phase, through `complete`.
+    "scan": ScenarioOptions(
+        map_preset="small",
+        drone_count=2,
+        ground_station_count=3,
+        poi_count=3,
+        scan_coverage_threshold=0.3,
+    ),
 }
+CONFIGS = {"scan": SimulationConfig(steps=400, dt_s=1.0, seed=5)}
 
 
 def capture_los(scenario) -> dict:
@@ -203,8 +214,9 @@ def capture_los(scenario) -> dict:
 
 
 def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
-    scenario = build_default_scenario(options, seed=SEED)
-    bundle = export_bundle(scenario, CONFIG)
+    config = CONFIGS.get(name, CONFIG)
+    scenario = build_default_scenario(options, seed=config.seed)
+    bundle = export_bundle(scenario, config)
     write_bundle(out_dir / f"scenario_bundle_{name}.json", bundle)
 
     adaptive = scenario.adaptive_drone_controllers
@@ -213,7 +225,7 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
     def progress(_step: int, _total: int) -> None:
         engaged_log.append({node_id: bool(c.engaged) for node_id, c in adaptive.items()})
 
-    result = run_simulation(scenario, CONFIG, progress=progress)
+    result = run_simulation(scenario, config, progress=progress)
     frames = []
     for index, frame in enumerate(result.frames):
         frames.append(
@@ -251,6 +263,20 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
                 "generated_observations": len(frame.observations)
                 + len(frame.rejected_observations),
                 "tracks": len(frame.tracks),
+                "mission": None
+                if frame.scan_mission_state is None
+                else {
+                    "phase": frame.scan_mission_state.phase,
+                    "coverage_fraction": exact(frame.scan_mission_state.scan_coverage_fraction),
+                    "pois": [
+                        [p.poi_id, p.status, p.assigned_drone_id or ""]
+                        for p in frame.scan_mission_state.poi_statuses
+                    ],
+                    "confidences": [
+                        exact(e.confidence) for e in frame.scan_mission_state.localization_estimates
+                    ],
+                    "localization_timed_out": bool(frame.scan_mission_state.localization_timed_out),
+                },
                 "engaged": engaged_log[index] if index < len(engaged_log) else {},
                 # Both parties to every resolution: either one's position is
                 # then a function of the other's.
@@ -263,15 +289,18 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
     reference = {
         "_source": "scripts/capture_scenario_bundle_fixture.py",
         "los": capture_los(scenario),
-        "seed": SEED,
-        "steps": CONFIG.steps,
-        "dt_s": exact(CONFIG.dt_s),
+        "seed": config.seed,
+        "steps": config.steps,
+        "dt_s": exact(config.dt_s),
         "frames": frames,
     }
-    assert len(frames) == CONFIG.steps, f"expected {CONFIG.steps} frames, got {len(frames)}"
-    if name == "tt":
+    assert len(frames) == config.steps, f"expected {config.steps} frames, got {len(frames)}"
+    if name == "scan":
+        phases = {f["mission"]["phase"] for f in frames}
+        assert phases >= {"scanning", "inspecting", "egress", "complete"}, phases
+    elif name == "tt":
         assert adaptive, "the scenario has no search-then-follow drone; the handover is untested"
-    else:
+    elif name == "tt_follow":
         assert not adaptive, "the all-follow case grew an observation-fed drone"
         assert any(f["deconfliction_drones"] for f in frames), "no deconfliction to compare"
     (out_dir / f"scenario_bundle_{name}_reference.json").write_text(

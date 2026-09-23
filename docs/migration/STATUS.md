@@ -26,7 +26,7 @@ side-effects that `MissionStage` emits as events, or runs from a command line.
 | P4.8d.3 | Controller stage; stage-state checkpoint contract | local | [CONTROLLER_STAGE.md](CONTROLLER_STAGE.md) |
 | P4.8e.1 | ScenarioBundle v1, runtime assembly (stages 1, 3, 6, 7), replay frames, Python exporter; target-tracking parity | local | [SCENARIO_BUNDLE.md](SCENARIO_BUNDLE.md) |
 | P4.8e.2 | Stage 6 senses as the reference does: nominal pose, tilted look direction, the world detection model (`p_d`, effective noise, dominant loss), sensing weather | local | [STAGE6_REFERENCE_SENSING.md](STAGE6_REFERENCE_SENSING.md) |
-| P4.8e.3 | Mission driver: POI assignment, egress routes, frontier redirects; stages 2, 8 and 9 assembled; default `scan_map_inspect` run | open | — |
+| P4.8e.3 | Mission driver (POI assignment, redirects, dwell, egress); stages 2, 8 and 9 assembled; the default `scan_map_inspect` run end to end | local | [MISSION_DRIVER.md](MISSION_DRIVER.md) |
 | P4.8e.4 | Causal-state audit: every stateful handler on the checkpoint contract, `TickWorld` persisted; full-run resume differential | open | — |
 | P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay; `argusnet export-bundle` adapter | open | — |
 | P4.9b | Rust-native scenario builder (weather, target behaviours, environment, stations, sectors, zones, POIs); parity = identical bundle | open | — |

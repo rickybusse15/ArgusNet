@@ -192,9 +192,17 @@ fn the_bundle_parses_and_refuses_what_it_does_not_know() {
         Err(BundleError::Format { .. })
     ));
 
+    // A scan bundle must carry its mission section; a mode this build does
+    // not know is refused by name.
     let mut scan = bundle.clone();
     scan.mission_mode = "scan_map_inspect".into();
-    assert!(matches!(assemble(&scan), Err(BundleError::Unsupported(_))));
+    assert!(matches!(assemble(&scan), Err(BundleError::Invalid(_))));
+    let mut unknown = bundle.clone();
+    unknown.mission_mode = "patrol".into();
+    assert!(matches!(
+        assemble(&unknown),
+        Err(BundleError::Unsupported(_))
+    ));
 }
 
 #[test]
@@ -624,5 +632,222 @@ fn detection_matches_the_reference() {
             num(&d["cloud_factor"]).to_bits(),
             "cloud, {context}"
         );
+    }
+}
+
+/// The default mission mode, end to end: scan, localize, inspect, egress,
+/// complete. Every node, the coverage fraction and the phase match the
+/// reference bit for bit until the first tick the two runs disagree about the
+/// phase -- which localization (ADR-006 streams) decides -- and stations match
+/// for the whole run. Past that point the Rust run must still finish the
+/// mission on its own.
+#[test]
+fn a_scan_map_inspect_run_matches_until_localization_decides() {
+    use argusnet_sim::mission::MissionPhase;
+
+    let reference = reference_of("scan");
+    let frames = reference["frames"].as_array().expect("frames");
+    let bundle = bundle_of("scan");
+    let mut run = assemble(&bundle).expect("scan bundle assembles");
+    let mission = run.mission.clone().expect("a scan run has a mission");
+    let mapping = run.mapping.clone().expect("a scan run has mapping");
+
+    let phase_name = |phase: MissionPhase| phase.to_string();
+    let mut divergence = None;
+    let mut exact_node_ticks = 0;
+    let mut phases_seen = std::collections::BTreeSet::new();
+    for (i, frame) in frames.iter().enumerate() {
+        let snapshot = run.step().expect("tick runs");
+        let rust_phase = phase_name(mission.phase());
+        phases_seen.insert(rust_phase.clone());
+        let python_phase = frame["mission"]["phase"].as_str().unwrap().to_string();
+        if divergence.is_none() && rust_phase != python_phase {
+            divergence = Some(i);
+        }
+        for platform in &snapshot.platforms {
+            let comparable = divergence.is_none() || !platform.is_mobile;
+            if !comparable {
+                continue;
+            }
+            let expected = reference_kinematics(frame, &platform.node_id);
+            let actual: Kinematics = (
+                bits([
+                    platform.position.x,
+                    platform.position.y,
+                    platform.position.z,
+                ]),
+                bits([
+                    platform.velocity.x,
+                    platform.velocity.y,
+                    platform.velocity.z,
+                ]),
+                [
+                    platform.health.to_bits(),
+                    platform.battery_fraction.unwrap_or(-1.0).to_bits(),
+                ],
+            );
+            assert_eq!(
+                actual,
+                expected,
+                "{} at tick {i} ({rust_phase}): rust {:?} python {:?}",
+                platform.node_id,
+                (actual.0.map(f64::from_bits), actual.1.map(f64::from_bits)),
+                (
+                    expected.0.map(f64::from_bits),
+                    expected.1.map(f64::from_bits)
+                ),
+            );
+            exact_node_ticks += 1;
+        }
+        if divergence.is_none() {
+            assert_eq!(
+                mapping.coverage_fraction().to_bits(),
+                num(&frame["mission"]["coverage_fraction"]).to_bits(),
+                "coverage fraction at tick {i}"
+            );
+        }
+    }
+    eprintln!(
+        "scan: phase divergence at {divergence:?}; {exact_node_ticks} exact node-ticks; \
+         rust phases {phases_seen:?}"
+    );
+    assert!(
+        exact_node_ticks >= 400,
+        "only {exact_node_ticks} exact node-ticks"
+    );
+    for phase in ["scanning", "inspecting", "egress", "complete"] {
+        assert!(
+            phases_seen.contains(phase),
+            "the Rust run never reached {phase}"
+        );
+    }
+}
+
+/// With the reference's localization replayed in, the mission has no
+/// stochastic input left, so the whole run must match: every node on every
+/// tick -- lanes, POI redirects, dwell, handoffs, egress -- and the phase and
+/// coverage fraction on every tick, through `complete`.
+#[test]
+fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
+    use argusnet_sim::mission_driver::RecordedLocalization;
+
+    let reference = reference_of("scan");
+    let frames = reference["frames"].as_array().expect("frames");
+    let bundle = bundle_of("scan");
+    let mut run = assemble(&bundle).expect("scan bundle assembles");
+    let mission = run.mission.clone().expect("mission");
+    let mapping = run.mapping.clone().expect("mapping");
+    run.localization_replay
+        .as_ref()
+        .expect("a scan run has the seam")
+        .load(
+            frames
+                .iter()
+                .map(|f| RecordedLocalization {
+                    confidences: f["mission"]["confidences"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(num)
+                        .collect(),
+                    timed_out: f["mission"]["localization_timed_out"].as_bool().unwrap(),
+                })
+                .collect(),
+        );
+
+    let mut phases = Vec::new();
+    for (i, frame) in frames.iter().enumerate() {
+        let snapshot = run.step().expect("tick runs");
+        let phase = mission.phase().to_string();
+        assert_eq!(
+            phase,
+            frame["mission"]["phase"].as_str().unwrap(),
+            "phase at tick {i}"
+        );
+        assert_eq!(
+            mission.state().localization_timed_out(),
+            frame["mission"]["localization_timed_out"]
+                .as_bool()
+                .unwrap(),
+            "localization-timeout latch at tick {i}"
+        );
+        if phases.last() != Some(&phase) {
+            phases.push(phase.clone());
+        }
+        assert_eq!(
+            mapping.coverage_fraction().to_bits(),
+            num(&frame["mission"]["coverage_fraction"]).to_bits(),
+            "coverage fraction at tick {i}"
+        );
+        for platform in &snapshot.platforms {
+            let expected = reference_kinematics(frame, &platform.node_id);
+            let actual: Kinematics = (
+                bits([
+                    platform.position.x,
+                    platform.position.y,
+                    platform.position.z,
+                ]),
+                bits([
+                    platform.velocity.x,
+                    platform.velocity.y,
+                    platform.velocity.z,
+                ]),
+                [
+                    platform.health.to_bits(),
+                    platform.battery_fraction.unwrap_or(-1.0).to_bits(),
+                ],
+            );
+            assert_eq!(
+                actual,
+                expected,
+                "{} at tick {i} ({phase}): rust {:?} python {:?}",
+                platform.node_id,
+                (actual.0.map(f64::from_bits), actual.1.map(f64::from_bits)),
+                (
+                    expected.0.map(f64::from_bits),
+                    expected.1.map(f64::from_bits)
+                ),
+            );
+        }
+    }
+    eprintln!("scan with replayed localization: phases {phases:?}");
+    assert_eq!(phases.last().map(String::as_str), Some("complete"));
+}
+
+/// The scan assembly hands the driver exactly what the bundle says: every
+/// threshold and speed, and every POI with its priority. Values a single
+/// scenario may never make decisive, so they are checked at the wiring.
+#[test]
+fn the_scan_assembly_wires_the_mission_as_the_bundle_describes() {
+    let bundle = bundle_of("scan");
+    let doc = bundle
+        .mission
+        .clone()
+        .expect("scan bundle has a mission section");
+    let run = assemble(&bundle).expect("assembles");
+    let (config, pois) = run.mission_setup.clone().expect("a scan run has a driver");
+    assert_eq!(
+        config.mission.scan_coverage_threshold,
+        doc.scan_coverage_threshold
+    );
+    assert_eq!(
+        config.mission.localization_confidence_threshold,
+        doc.localization_confidence_threshold
+    );
+    assert_eq!(
+        config.mission.gap_fill_min_fraction,
+        doc.gap_fill_min_fraction
+    );
+    assert_eq!(
+        config.mission.egress_arrival_radius_m,
+        doc.egress_arrival_radius_m
+    );
+    assert_eq!(config.redirect_speed_mps, doc.redirect_speed_mps);
+    assert_eq!(pois.len(), doc.pois.len());
+    for (poi, expected) in pois.iter().zip(&doc.pois) {
+        assert_eq!(poi.poi_id, expected.poi_id);
+        assert_eq!(poi.priority, expected.priority);
+        assert_eq!(poi.position, expected.position);
+        assert_eq!(poi.required_dwell_s, expected.required_dwell_s);
     }
 }

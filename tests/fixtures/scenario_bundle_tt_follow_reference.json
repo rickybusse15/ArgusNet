@@ -11,6 +11,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "1.0",
@@ -140,6 +141,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9998564995659722",
@@ -270,6 +272,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9994509548611111",
@@ -400,6 +403,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.99882080078125",
@@ -530,6 +534,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9980034722222222",
@@ -660,6 +665,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.997036404079861",
@@ -790,6 +796,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.99595703125",
@@ -920,6 +927,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9948027886284722",
@@ -1050,6 +1058,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9936111111111111",
@@ -1180,6 +1189,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.99241943359375",
@@ -1310,6 +1320,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9912651909722222",
@@ -1440,6 +1451,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9901858181423611",
@@ -1570,6 +1582,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.98921875",
@@ -1700,6 +1713,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 0,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9884014214409722",
@@ -1830,6 +1844,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9877712673611111",
@@ -1960,6 +1975,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 5,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.98736572265625",
@@ -2111,6 +2127,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9816338731538958",
@@ -2248,6 +2265,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9816221420311532",
@@ -2385,6 +2403,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.981599413760803",
@@ -2523,6 +2542,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9815485097832718",
@@ -2655,6 +2675,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9814754775524466",
@@ -2788,6 +2809,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9813085936962991",
@@ -2921,6 +2943,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9811430563577547",
@@ -3051,6 +3074,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9809625587640523",
@@ -3182,6 +3206,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 6,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9809620397583387",
@@ -3319,6 +3344,7 @@
    ],
    "engaged": {},
    "generated_observations": 5,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.980730631972455",
@@ -3461,6 +3487,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9805986750845325",
@@ -3604,6 +3631,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9805979595703215",
@@ -3735,6 +3763,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9805974355202041",
@@ -3872,6 +3901,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9805971158380333",
@@ -4011,6 +4041,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9800867906523015",
@@ -4155,6 +4186,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9797501967746581",
@@ -4304,6 +4336,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9797491777397869",
@@ -4453,6 +4486,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9797475072514303",
@@ -4601,6 +4635,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9797452264425558",
@@ -4755,6 +4790,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9796058860265844",
@@ -4908,6 +4944,7 @@
    ],
    "engaged": {},
    "generated_observations": 0,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9793129184543625",
@@ -5061,6 +5098,7 @@
    ],
    "engaged": {},
    "generated_observations": 0,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.979069136525892",
@@ -5214,6 +5252,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9786611507104331",
@@ -5366,6 +5405,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9782453561685558",
@@ -5515,6 +5555,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9779409808002222",
@@ -5659,6 +5700,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.977892181894397",
@@ -5798,6 +5840,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.977847925298695",
@@ -5936,6 +5979,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9778254005757261",
@@ -6073,6 +6117,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9777795698303369",
@@ -6211,6 +6256,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9777061220880928",
@@ -6355,6 +6401,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9776107789913109",
@@ -6494,6 +6541,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.977430769900552",
@@ -6633,6 +6681,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9771612534189249",
@@ -6771,6 +6820,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769587443385118",
@@ -6912,6 +6962,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769584018491464",
@@ -7055,6 +7106,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769582172255107",
@@ -7193,6 +7245,7 @@
    ],
    "engaged": {},
    "generated_observations": 5,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769576679006501",
@@ -7336,6 +7389,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769567674007658",
@@ -7480,6 +7534,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769555378991536",
@@ -7618,6 +7673,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769540096702236",
@@ -7752,6 +7808,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.976952220344044",
@@ -7896,6 +7953,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769502139797638",
@@ -8039,6 +8097,7 @@
    ],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9769480399807303",
@@ -8177,6 +8236,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9765668868965446",
@@ -8321,6 +8381,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9730781615935185",
@@ -8465,6 +8526,7 @@
    ],
    "engaged": {},
    "generated_observations": 0,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9727010302975069",
@@ -8604,6 +8666,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9722835405193225",
@@ -8732,6 +8795,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9719792744553811",
@@ -8868,6 +8932,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.971810313023385",
@@ -9016,6 +9081,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9715007977400727",
@@ -9164,6 +9230,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9712615994633825",
@@ -9317,6 +9384,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9712026754262348",
@@ -9470,6 +9538,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9710549242095958",
@@ -9617,6 +9686,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9708271088875173",
@@ -9748,6 +9818,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 2,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9704029898888713",
@@ -9879,6 +9950,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9702724362678533",
@@ -10016,6 +10088,7 @@
    ],
    "engaged": {},
    "generated_observations": 3,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9702713200306026",
@@ -10148,6 +10221,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 5,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9701167104516147",
@@ -10279,6 +10353,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9697503575856544",
@@ -10410,6 +10485,7 @@
    "draw_free_rejections": [],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9695058156421587",
@@ -10552,6 +10628,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9693352737029135",
@@ -10690,6 +10767,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9692832559860215",
@@ -10833,6 +10911,7 @@
    ],
    "engaged": {},
    "generated_observations": 4,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9690892203840253",
@@ -10984,6 +11063,7 @@
    ],
    "engaged": {},
    "generated_observations": 1,
+   "mission": null,
    "nodes": {
     "drone-east": {
      "battery_fraction": "0.9689117003717914",

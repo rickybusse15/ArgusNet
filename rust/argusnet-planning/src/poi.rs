@@ -94,8 +94,12 @@ impl PoiAssignmentContext {
     }
 }
 
+/// `np.linalg.norm` of the horizontal difference: the plain square root of the
+/// sum of squares. Not `hypot`, which rounds differently in the last bit and
+/// so can move a dwell exactly at the 30 m boundary or an energy tie.
 fn distance_xy(a: [f64; 3], b: [f64; 3]) -> f64 {
-    (b[0] - a[0]).hypot(b[1] - a[1])
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    (dx * dx + dy * dy).sqrt()
 }
 
 /// Tracks every POI's lifecycle.

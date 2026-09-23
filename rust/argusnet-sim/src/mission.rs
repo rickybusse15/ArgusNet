@@ -457,6 +457,14 @@ impl MissionLink {
         self.lock().state
     }
 
+    /// Back to a fresh run's state: `Scanning`, no latches, nothing pending.
+    pub fn reset(&self) {
+        let mut shared = self.lock();
+        shared.state = MissionState::default();
+        shared.pending = None;
+        shared.events.clear();
+    }
+
     pub fn phase(&self) -> MissionPhase {
         self.lock().state.phase()
     }

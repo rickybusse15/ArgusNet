@@ -4878,6 +4878,97 @@ def _generate_poi_positions(
     return positions
 
 
+# metres above ground the drone hovers while dwelling
+POI_HOVER_AGL_M = 40.0
+
+
+# Auto-generate POIs spread across the map interior.
+# Each POI is placed at a valid drone-accessible altitude above the terrain
+# and rejected if it falls inside an obstacle at hover height.
+
+
+def make_poi_positions(
+    bounds: dict,
+    count: int,
+    seed: int,
+    terrain=None,
+    obstacles=None,
+) -> list[np.ndarray]:
+    rng2 = np.random.default_rng(seed + 999)
+    x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
+    y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
+    margin_x = (x_max - x_min) * 0.15
+    margin_y = (y_max - y_min) * 0.15
+    positions: list[np.ndarray] = []
+    for _ in range(count):
+        for _attempt in range(200):
+            x = float(rng2.uniform(x_min + margin_x, x_max - margin_x))
+            y = float(rng2.uniform(y_min + margin_y, y_max - margin_y))
+            terrain_h = float(terrain.height_at(x, y)) if terrain is not None else 0.0
+            z = terrain_h + POI_HOVER_AGL_M
+            # Reject if an obstacle blocks the hover position.
+            if obstacles is not None and obstacles.point_collides(x, y, z):
+                continue
+            positions.append(np.array([x, y, z], dtype=float))
+            break
+        else:
+            # Fallback: last sampled position even if slightly inside an obstacle.
+            positions.append(np.array([x, y, z], dtype=float))  # type: ignore[possibly-undefined]
+    return positions
+
+
+def build_run_inspection_pois(scenario: ScenarioDefinition, seed: int, poi_count: int) -> list:
+    """The inspection POIs `run_simulation` builds for a scan-map-inspect run.
+
+    Lifted verbatim out of `run_simulation` (P4.8e.3) so the scenario-bundle
+    exporter can carry exactly the POIs the reference would fly to.
+    """
+    if scenario.options.mission_profile_id and scenario.options.mission_mode == "scan_map_inspect":
+        from argusnet.mission.profiles import build_profile_inspection_pois
+
+        bounds = dict(scenario.map_bounds_m)
+        map_extent_m = min(
+            float(bounds["x_max_m"]) - float(bounds["x_min_m"]),
+            float(bounds["y_max_m"]) - float(bounds["y_min_m"]),
+        )
+        profile_pois = build_profile_inspection_pois(
+            scenario.options.mission_profile_id, map_extent_m=map_extent_m
+        )
+        _pois = [
+            replace(
+                poi,
+                position=vec3(
+                    float(poi.position[0]),
+                    float(poi.position[1]),
+                    float(
+                        scenario.terrain.height_at(float(poi.position[0]), float(poi.position[1]))
+                    )
+                    + POI_HOVER_AGL_M,
+                ),
+            )
+            for poi in profile_pois[:poi_count]
+        ]
+    else:
+        _poi_positions = make_poi_positions(
+            dict(scenario.map_bounds_m),
+            poi_count,
+            seed,
+            terrain=scenario.terrain,
+            obstacles=getattr(scenario.environment, "obstacles", None),
+        )
+        _pois = [
+            InspectionPOI(
+                poi_id=f"poi-{i:02d}",
+                name=f"Site {chr(65 + i % 26)}",
+                position=pos,
+                priority=poi_count - i,
+                required_dwell_s=15.0,
+            )
+            for i, pos in enumerate(_poi_positions)
+        ]
+    return _pois
+
+
 def run_simulation(
     scenario: ScenarioDefinition,
     simulation_config: SimulationConfig,
@@ -5142,83 +5233,7 @@ def run_simulation(
             ts + max(dist_m / max(speed_mps, 1.0e-9), 1.0e-3),
         )
 
-    # Auto-generate POIs spread across the map interior.
-    # Each POI is placed at a valid drone-accessible altitude above the terrain
-    # and rejected if it falls inside an obstacle at hover height.
-    _POI_HOVER_AGL_M = 40.0  # metres above ground the drone hovers while dwelling
-
-    def _make_poi_positions(
-        bounds: dict,
-        count: int,
-        seed: int,
-        terrain=None,
-        obstacles=None,
-    ) -> list[np.ndarray]:
-        rng2 = np.random.default_rng(seed + 999)
-        x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
-        y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
-        margin_x = (x_max - x_min) * 0.15
-        margin_y = (y_max - y_min) * 0.15
-        positions: list[np.ndarray] = []
-        for _ in range(count):
-            for _attempt in range(200):
-                x = float(rng2.uniform(x_min + margin_x, x_max - margin_x))
-                y = float(rng2.uniform(y_min + margin_y, y_max - margin_y))
-                terrain_h = float(terrain.height_at(x, y)) if terrain is not None else 0.0
-                z = terrain_h + _POI_HOVER_AGL_M
-                # Reject if an obstacle blocks the hover position.
-                if obstacles is not None and obstacles.point_collides(x, y, z):
-                    continue
-                positions.append(np.array([x, y, z], dtype=float))
-                break
-            else:
-                # Fallback: last sampled position even if slightly inside an obstacle.
-                positions.append(np.array([x, y, z], dtype=float))  # type: ignore[possibly-undefined]
-        return positions
-
-    if scenario.options.mission_profile_id and _mission_mode == "scan_map_inspect":
-        from argusnet.mission.profiles import build_profile_inspection_pois
-
-        bounds = dict(scenario.map_bounds_m)
-        map_extent_m = min(
-            float(bounds["x_max_m"]) - float(bounds["x_min_m"]),
-            float(bounds["y_max_m"]) - float(bounds["y_min_m"]),
-        )
-        profile_pois = build_profile_inspection_pois(
-            scenario.options.mission_profile_id, map_extent_m=map_extent_m
-        )
-        _pois = [
-            replace(
-                poi,
-                position=vec3(
-                    float(poi.position[0]),
-                    float(poi.position[1]),
-                    float(
-                        scenario.terrain.height_at(float(poi.position[0]), float(poi.position[1]))
-                    )
-                    + _POI_HOVER_AGL_M,
-                ),
-            )
-            for poi in profile_pois[:_poi_count_cfg]
-        ]
-    else:
-        _poi_positions = _make_poi_positions(
-            dict(scenario.map_bounds_m),
-            _poi_count_cfg,
-            simulation_config.seed,
-            terrain=scenario.terrain,
-            obstacles=getattr(scenario.environment, "obstacles", None),
-        )
-        _pois = [
-            InspectionPOI(
-                poi_id=f"poi-{i:02d}",
-                name=f"Site {chr(65 + i % 26)}",
-                position=pos,
-                priority=_poi_count_cfg - i,
-                required_dwell_s=15.0,
-            )
-            for i, pos in enumerate(_poi_positions)
-        ]
+    _pois = build_run_inspection_pois(scenario, simulation_config.seed, _poi_count_cfg)
     _poi_manager = POIManager(_pois)
 
     # Open streaming file if requested.

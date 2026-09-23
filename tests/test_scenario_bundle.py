@@ -70,7 +70,8 @@ def test_truth_is_sampled_at_every_tick_and_every_lead():
 @pytest.mark.parametrize(
     ("overrides", "fragment"),
     [
-        ({"mission_mode": "scan_map_inspect"}, "mission_mode"),
+        ({"mission_mode": "scan_map_inspect", "frontier_exploration": True}, "frontier"),
+        ({"mission_mode": "scan_map_inspect", "occlusion_aware_mapping": True}, "occlusion"),
         ({"enforce_flight_envelope": True}, "enforce_flight_envelope"),
         ({"safety_blocking": True}, "safety_blocking"),
     ],
@@ -105,3 +106,22 @@ def test_the_closure_specs_describe_how_the_closure_was_built():
     assert lane.bundle_spec["speed_mps"] == 0.1
     assert lane.bundle_spec["avoid_obstacles"] is False
     assert lane.bundle_spec["waypoints_xy_m"] == [[0.0, 0.0], [10.0, 0.0]]
+
+
+def test_a_scan_map_inspect_bundle_carries_the_reference_pois():
+    from argusnet.simulation.sim import build_run_inspection_pois
+
+    scenario = _scenario(mission_mode="scan_map_inspect", poi_count=4)
+    bundle = export_bundle(scenario, CONFIG)
+    mission = bundle["mission"]
+    expected = build_run_inspection_pois(scenario, CONFIG.seed, 4)
+    assert [p["poi_id"] for p in mission["pois"]] == [p.poi_id for p in expected]
+    assert [p["position"] for p in mission["pois"]] == [
+        [float(v) for v in p.position] for p in expected
+    ]
+    assert mission["coverage_bounds"]["resolution_m"] == scenario.options.coverage_resolution_m
+    assert mission["scan_coverage_threshold"] == scenario.options.scan_coverage_threshold
+
+
+def test_a_target_tracking_bundle_has_no_mission_section():
+    assert export_bundle(_scenario(), CONFIG)["mission"] is None

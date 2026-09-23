@@ -120,7 +120,11 @@ impl GotoHover {
         t_start: f64,
         speed_mps: f64,
     ) -> Self {
-        let dist_m = (target_xy[0] - start[0]).hypot(target_xy[1] - start[1]);
+        // `np.linalg.norm`: the plain square root of the sum of squares, not
+        // `hypot`, which rounds differently in the last bit (see
+        // `follow_path::norm`). Found by the P4.8e.3 full-run comparison.
+        let (dx, dy) = (target_xy[0] - start[0], target_xy[1] - start[1]);
+        let dist_m = (dx * dx + dy * dy).sqrt();
         let flight_s = (dist_m / speed_mps.max(EPSILON_S)).max(MIN_FLIGHT_TIME_S);
         Self::over(start, target_xy, target_z, t_start, t_start + flight_s)
     }

@@ -141,6 +141,20 @@ impl BatteryLink {
         self.lock().wind_mps = wind_mps;
     }
 
+    /// Set a registered platform's remaining energy -- a scenario that starts
+    /// partly charged, or a test that needs a drone near empty. Returns
+    /// whether the platform was registered.
+    pub fn set_remaining_wh(&self, node_id: &str, remaining_wh: f64) -> bool {
+        let mut shared = self.lock();
+        match shared.states.get_mut(node_id) {
+            Some(state) => {
+                state.remaining_wh = remaining_wh;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn remaining_wh(&self, node_id: &str) -> Option<f64> {
         self.lock().states.get(node_id).map(|s| s.remaining_wh)
     }

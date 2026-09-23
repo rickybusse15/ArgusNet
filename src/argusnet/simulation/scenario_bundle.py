@@ -297,11 +297,61 @@ def _refuse_unsupported_options(options: Any) -> None:
     for flag, what in refusals.items():
         if getattr(options, flag, False):
             raise UnsupportedScenario(f"{flag}: {what}")
-    if options.mission_mode != "target_tracking":
-        raise UnsupportedScenario(
-            f"mission_mode {options.mission_mode!r}: bundle v1 assembles target tracking; "
-            "scan_map_inspect needs the mission driver (P4.8e.3)"
-        )
+    if options.mission_mode not in ("target_tracking", "scan_map_inspect"):
+        raise UnsupportedScenario(f"mission_mode {options.mission_mode!r}")
+
+
+def _mission_document(scenario: Any, simulation_config: Any) -> dict[str, Any] | None:
+    """What `run_simulation`'s scan/map/localize/inspect/egress block reads.
+
+    `None` for target tracking, which never enters that block. The POIs are
+    built by the reference's own `build_run_inspection_pois`, with the same
+    seed, so they are the POIs the reference run flies to.
+    """
+    from argusnet.localization.engine import LocalizationConfig
+    from argusnet.planning.frontier import FrontierPlanner
+    from argusnet.simulation.sim import build_run_inspection_pois
+
+    options = scenario.options
+    if options.mission_mode != "scan_map_inspect":
+        return None
+    bounds = scenario.map_bounds_m
+    pois = build_run_inspection_pois(scenario, simulation_config.seed, options.poi_count)
+    localization = LocalizationConfig()
+    return {
+        "coverage_bounds": {
+            "x_min_m": float(bounds["x_min_m"]),
+            "x_max_m": float(bounds["x_max_m"]),
+            "y_min_m": float(bounds["y_min_m"]),
+            "y_max_m": float(bounds["y_max_m"]),
+            "resolution_m": float(options.coverage_resolution_m),
+        },
+        "scan_coverage_threshold": float(options.scan_coverage_threshold),
+        # Literals in `run_simulation`, carried so the bundle states them.
+        "localization_confidence_threshold": 0.65,
+        "egress_arrival_radius_m": 15.0,
+        "redirect_speed_mps": 28.0,
+        "gap_fill_min_fraction": float(FrontierPlanner().cfg.gap_fill_min_fraction),
+        "localization": {
+            "search_radius_m": float(localization.search_radius_m),
+            "particle_count": int(localization.particle_count),
+            "convergence_threshold_m": float(localization.convergence_threshold_m),
+            "min_coverage_to_localize": float(localization.min_coverage_to_localize),
+            "confidence_decay": float(localization.confidence_decay),
+            "annealing_rate": float(localization.annealing_rate),
+            "localization_timeout_steps": int(localization.localization_timeout_steps),
+        },
+        "pois": [
+            {
+                "poi_id": str(poi.poi_id),
+                "name": str(poi.name),
+                "position": _floats(poi.position),
+                "priority": int(poi.priority),
+                "required_dwell_s": float(poi.required_dwell_s),
+            }
+            for poi in pois
+        ],
+    }
 
 
 def export_bundle(scenario: Any, simulation_config: Any, tracker_config: Any = None) -> dict:
@@ -365,6 +415,7 @@ def export_bundle(scenario: Any, simulation_config: Any, tracker_config: Any = N
         "tracker": asdict(tracker_config or TrackerConfig()),
         "drone_roles": dict(scenario.drone_roles),
         "mission_zones": [_zone_document(z) for z in scenario.mission_zones],
+        "mission": _mission_document(scenario, simulation_config),
         "nodes": [
             {
                 "node_id": node.node_id,

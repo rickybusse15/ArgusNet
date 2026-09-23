@@ -47,9 +47,13 @@ use crate::controller::{
 use crate::deconflict::{DeconflictLink, DeconflictStage, RoleTable};
 use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
 use crate::fusion::{FusionLink, FusionStage};
+use crate::mapping::{MappingLink, MappingStage};
+use crate::mission::{MissionConfig, MissionLink};
+use crate::mission_driver::{MissionDriverConfig, MissionDriverStage};
 use crate::motion::BoundsXy;
 use crate::observation_follow::ObservationTriggeredFollow;
 use crate::observe::{ObserveLink, ObserveStage, SensorBand, SensorSpec};
+use crate::overrides::MissionOverrideStage;
 use crate::replay::{ReplayDocument, ReplayWriter};
 use crate::runtime_world::{SharedObstacles, SharedTerrain, SharedVisibility};
 use crate::simulation::{Simulation, TickError};
@@ -58,6 +62,7 @@ use crate::stage::Stage;
 use crate::trajectory::LaunchController;
 use crate::waypoint_path::{LoopedWaypointPath, WaypointPathConfig};
 use crate::weather::MotionWeather;
+use argusnet_planning::poi::InspectionPoi;
 
 pub const BUNDLE_FORMAT: &str = "argusnet.scenario-bundle";
 pub const BUNDLE_VERSION: u32 = 1;
@@ -102,8 +107,55 @@ pub struct ScenarioBundle {
     pub tracker: TrackerConfig,
     pub drone_roles: BTreeMap<String, String>,
     pub mission_zones: Vec<ZoneDocument>,
+    /// The scan/map/localize/inspect/egress block's configuration; `None` for
+    /// target tracking, which never enters it.
+    pub mission: Option<MissionDocument>,
     pub nodes: Vec<NodeDocument>,
     pub targets: Vec<TargetDocument>,
+}
+
+/// What `run_simulation`'s scan-map-inspect block reads.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MissionDocument {
+    pub coverage_bounds: CoverageBoundsDocument,
+    pub scan_coverage_threshold: f64,
+    pub localization_confidence_threshold: f64,
+    pub egress_arrival_radius_m: f64,
+    pub redirect_speed_mps: f64,
+    pub gap_fill_min_fraction: f64,
+    pub localization: argusnet_localization::LocalizationConfig,
+    pub pois: Vec<PoiDocument>,
+}
+
+/// The coverage grid's extent and cell size.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct CoverageBoundsDocument {
+    pub x_min_m: f64,
+    pub x_max_m: f64,
+    pub y_min_m: f64,
+    pub y_max_m: f64,
+    pub resolution_m: f64,
+}
+
+impl CoverageBoundsDocument {
+    fn grid(self) -> argusnet_mapping::GridBounds {
+        argusnet_mapping::GridBounds {
+            x_min_m: self.x_min_m,
+            x_max_m: self.x_max_m,
+            y_min_m: self.y_min_m,
+            y_max_m: self.y_max_m,
+            resolution_m: self.resolution_m,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PoiDocument {
+    pub poi_id: String,
+    pub name: String,
+    pub position: [f64; 3],
+    pub priority: i64,
+    pub required_dwell_s: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -578,6 +630,13 @@ pub struct AssembledRun {
     pub observe: ObserveLink,
     pub fusion: FusionLink,
     pub deconflict: DeconflictLink,
+    /// Scan-map-inspect runs only.
+    pub mission: Option<MissionLink>,
+    pub mapping: Option<MappingLink>,
+    /// The mission driver's configuration and POIs, as constructed.
+    pub mission_setup: Option<(MissionDriverConfig, Vec<InspectionPoi>)>,
+    /// The mission driver's replay seam; see `LocalizationReplay`.
+    pub localization_replay: Option<crate::mission_driver::LocalizationReplay>,
     truth: Arc<TruthTable>,
     replay: ReplayWriter,
     dt_s: f64,
@@ -654,11 +713,16 @@ fn operational(
 
 /// Build a configured [`Simulation`] from a bundle.
 pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
-    if bundle.mission_mode != "target_tracking" {
-        return Err(BundleError::Unsupported(format!(
-            "mission_mode {:?} (v1 assembles target_tracking)",
-            bundle.mission_mode
-        )));
+    match (bundle.mission_mode.as_str(), &bundle.mission) {
+        ("target_tracking", None) | ("scan_map_inspect", Some(_)) => {}
+        ("scan_map_inspect", None) => {
+            return Err(BundleError::Invalid(
+                "scan_map_inspect bundle carries no mission section".into(),
+            ))
+        }
+        (mode, _) => {
+            return Err(BundleError::Unsupported(format!("mission_mode {mode:?}")));
+        }
     }
     let world = build_world(&bundle.world)?;
     let truth = Arc::new(TruthTable::new(&bundle.targets)?);
@@ -832,7 +896,83 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
 
+    // Stages 2, 8 and 9: the scan/map/localize/inspect/egress mission.
+    let mut mission_link = None;
+    let mut mapping_link = None;
+    let mut localization_replay = None;
+    let mut mission_setup = None;
+    if let Some(mission) = &bundle.mission {
+        let mobile_count = bundle.nodes.iter().filter(|n| n.is_mobile).count();
+        let mapping =
+            MappingStage::with_derived_footprint(mission.coverage_bounds.grid(), mobile_count)
+                .map_err(|error| BundleError::Invalid(format!("coverage bounds: {error}")))?;
+        let mapping_handle = mapping.link();
+        mapping_handle.set_scan_mode(true);
+        mapping_handle.enable_localization(mission.localization);
+
+        let overrides = MissionOverrideStage::new();
+        let override_link = overrides.link();
+
+        // `_drone_home_positions`: every launched drone's station.
+        let homes: BTreeMap<String, [f64; 3]> = bundle
+            .nodes
+            .iter()
+            .filter_map(|node| match &node.controller {
+                ControllerDocument::Launched {
+                    station_position_m, ..
+                } => Some((node.node_id.clone(), *station_position_m)),
+                ControllerDocument::Static { .. } => None,
+            })
+            .collect();
+        let driver = MissionDriverStage::new(
+            MissionDriverConfig {
+                mission: MissionConfig {
+                    scan_coverage_threshold: mission.scan_coverage_threshold,
+                    localization_confidence_threshold: mission.localization_confidence_threshold,
+                    gap_fill_min_fraction: mission.gap_fill_min_fraction,
+                    egress_arrival_radius_m: mission.egress_arrival_radius_m,
+                },
+                redirect_speed_mps: mission.redirect_speed_mps,
+                ..MissionDriverConfig::default()
+            },
+            mission
+                .pois
+                .iter()
+                .map(|poi| InspectionPoi {
+                    poi_id: poi.poi_id.clone(),
+                    name: poi.name.clone(),
+                    position: poi.position,
+                    priority: poi.priority,
+                    required_dwell_s: poi.required_dwell_s,
+                })
+                .collect(),
+            homes,
+            mapping_handle.clone(),
+            override_link.clone(),
+            battery_link.clone(),
+        );
+        let link = driver.mission_link();
+        localization_replay = Some(driver.localization_replay());
+        // Read back off the constructed driver, so a caller (and the wiring
+        // test) sees what the stage was actually given.
+        mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));
+        mapping_handle.watch_mission(link.clone());
+        override_link.watch_mission(link.clone());
+        sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(overrides))
+            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+        sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
+            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+        sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(driver))
+            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+        mission_link = Some(link);
+        mapping_link = Some(mapping_handle);
+    }
+
     Ok(AssembledRun {
+        localization_replay,
+        mission_setup,
+        mission: mission_link,
+        mapping: mapping_link,
         sim,
         controllers,
         battery: battery_link,

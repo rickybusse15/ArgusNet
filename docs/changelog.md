@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — The default mission runs in the Rust tick (P4.8e.3)
+
+- `MissionDriverStage` (stage 9) turns the mission machine's phases into POI
+  rescoring, energy-aware assignment, redirects, handoffs, dwell and egress
+  routes, in the reference's in-tick order. The scenario bundle carries a
+  `mission` section, and `assemble` builds stages 2, 8 and 9 for
+  `scan_map_inspect`.
+- With the reference's localization replayed, a 400-tick default mission
+  matches `run_simulation` bit for bit on every node and tick, through
+  `complete`. Free-running, it is exact until localization diverges and then
+  completes the mission on its own.
+- Distances in the POI manager and redirects use `np.linalg.norm`'s arithmetic,
+  not `hypot`. At a searched boundary offset the reference credits a dwell that
+  `hypot` would deny.
+- Python: POI construction is lifted verbatim out of `run_simulation`
+  (`make_poi_positions`, `build_run_inspection_pois`); a before/after 400-tick
+  run is byte-identical.
+
 ## Unreleased — Stage 6 senses as the reference does (P4.8e.2)
 
 - Observations originate at each node's nominal controller pose (before

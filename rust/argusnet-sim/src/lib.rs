@@ -11,6 +11,7 @@ pub mod follow_path;
 pub mod fusion;
 pub mod mapping;
 pub mod mission;
+pub mod mission_driver;
 pub mod motion;
 pub mod motion_world;
 pub mod observation_follow;
