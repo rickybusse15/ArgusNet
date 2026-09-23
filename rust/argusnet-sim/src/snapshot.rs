@@ -112,7 +112,8 @@ pub struct CheckpointHeader {
 
 /// The current versions this build writes and accepts.
 impl CheckpointHeader {
-    pub const FORMAT_VERSION: u32 = 2;
+    /// Format 3 adds per-stage handler state (`stage_states`).
+    pub const FORMAT_VERSION: u32 = 3;
     /// Version 2 changes command-boundary recovery and single-step semantics.
     /// Old checkpoints must not silently resume under a different control contract.
     pub const RUNTIME_ALGORITHM_VERSION: u32 = 2;
@@ -127,12 +128,38 @@ impl CheckpointHeader {
 /// tells an operator nothing about what to change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestoreError {
-    InvalidState { detail: String },
-    FormatVersion { found: u32, expected: u32 },
-    AlgorithmVersion { found: u32, expected: u32 },
-    SeedVersion { found: u32, expected: u32 },
-    ConfigHash { found: u64, expected: u64 },
-    RunId { found: String, expected: String },
+    InvalidState {
+        detail: String,
+    },
+    FormatVersion {
+        found: u32,
+        expected: u32,
+    },
+    AlgorithmVersion {
+        found: u32,
+        expected: u32,
+    },
+    SeedVersion {
+        found: u32,
+        expected: u32,
+    },
+    ConfigHash {
+        found: u64,
+        expected: u64,
+    },
+    RunId {
+        found: String,
+        expected: String,
+    },
+    /// The checkpoint carries state for a stage this run has no handler for.
+    UnknownStageState {
+        stage: String,
+    },
+    /// A handler refused the state recorded for it.
+    StageState {
+        stage: String,
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for RestoreError {
@@ -157,6 +184,13 @@ impl std::fmt::Display for RestoreError {
                 formatter,
                 "checkpoint was taken under config hash {found:#x}; this run is {expected:#x}"
             ),
+            RestoreError::UnknownStageState { stage } => write!(
+                formatter,
+                "checkpoint carries state for stage {stage}, which has no handler in this run"
+            ),
+            RestoreError::StageState { stage, detail } => {
+                write!(formatter, "stage {stage} refused its checkpointed state: {detail}")
+            }
             RestoreError::RunId { found, expected } => {
                 write!(formatter, "checkpoint belongs to run {found:?}, not {expected:?}")
             }
@@ -192,6 +226,11 @@ pub struct SimulationCheckpoint {
     pub revision: u64,
     pub paused: bool,
     pub speed: f64,
+    /// Each stateful stage handler's causal state, keyed by stage name.
+    ///
+    /// Format 3. A handler whose state is absent here is reset on restore
+    /// rather than left holding whatever the restoring object had.
+    pub stage_states: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl SimulationCheckpoint {
@@ -367,6 +406,7 @@ mod tests {
             revision: 12,
             paused: false,
             speed: 1.0,
+            stage_states: Default::default(),
         }
     }
 

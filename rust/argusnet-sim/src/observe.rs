@@ -77,6 +77,7 @@ use argusnet_sensing::{
 };
 use argusnet_types::{BearingObservation, Vector3};
 
+use crate::controller::ControllerLink;
 use crate::deterministic::{DeterministicRng, SeedPart};
 use crate::fusion::FusionLink;
 use crate::simulation::{StageHandler, TickContext};
@@ -332,6 +333,7 @@ struct Shared {
     tally: GenerationTally,
     records: Vec<PairRecord>,
     fusion: Option<FusionLink>,
+    controllers: Option<ControllerLink>,
 }
 
 /// A handle on the sensor table and the last batch.
@@ -406,6 +408,16 @@ impl ObserveLink {
         self.lock().fusion = Some(fusion);
     }
 
+    /// Hand each tick's accepted-observation counts to the controller stage.
+    ///
+    /// This is the reference's `controller.update_from_frame(frame, batch)`
+    /// loop. It runs after fusion there and inside stage 6 here; the
+    /// difference is unobservable, because the only reader of the engagement
+    /// it sets is the *next* tick's stage 1.
+    pub fn feed_controllers(&self, controllers: ControllerLink) {
+        self.lock().controllers = Some(controllers);
+    }
+
     pub fn observations(&self) -> Vec<BearingObservation> {
         self.lock().observations.clone()
     }
@@ -448,6 +460,7 @@ impl ObserveStage {
                     tally: GenerationTally::default(),
                     records: Vec::new(),
                     fusion: None,
+                    controllers: None,
                 })),
             },
         }
@@ -816,7 +829,19 @@ impl StageHandler for ObserveStage {
         if let Some(fusion) = shared.fusion.clone() {
             fusion.submit_observations(shared.observations.clone());
         }
+        let engagement_feed = shared
+            .controllers
+            .clone()
+            .map(|link| (link, shared.tally.accepted_by_node_target.clone()));
         drop(shared);
+        // Outside this stage's lock: the controller link takes its own.
+        if let Some((controllers, accepted)) = engagement_feed {
+            for node_id in controllers.observe(&accepted) {
+                context.note(format!(
+                    "controller {node_id} engaged; follows from next tick"
+                ));
+            }
+        }
 
         context.note(format!("generated {accepted} of {attempted} attempted"));
         Ok(StageOutcome::Ran)

@@ -170,7 +170,7 @@ impl Default for FollowPathConfig {
 /// made handler state a checkpoint concern: a controller stage has to be
 /// able to hand this over and take it back, or a resumed mission flies a
 /// different path from an uninterrupted one.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FollowPathState {
     /// The memo. A second call at the same timestamp returns the first
     /// call's answer rather than recomputing — and the reference compares
@@ -199,6 +199,7 @@ pub struct FollowPathContext<'a> {
 }
 
 /// Orbit a moving target at a standoff radius, avoiding obstacles and zones.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FollowPathController {
     config: FollowPathConfig,
     state: FollowPathState,

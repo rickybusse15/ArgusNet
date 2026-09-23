@@ -19,7 +19,7 @@ sub-slice, with its prerequisites and remaining work stated.
 | 1 | Bevy 0.19, shared dependencies/features, real headless renderer and CI smoke | Ongoing compatibility maintenance; no migration redo |
 | 2 | Interpolation, typed selection, stage gating, HDR/bloom/fog/sky, persistent typed mesh markers and holographic shader | Full ECS snapshot path, terrain/belief material, sensor/zone/trail geometry, picking, camera/time/UI, visual regression and frame budget |
 | 3 | Rust world/safety authority, native bridge, shared viewer sampling; P4.3g procedural landscape builders now merged | Integrate world boot/LOD and preprocessed imported-world consumers |
-| 4 | Shared types/replay, domain ports, P4.3g landscapes, P4.6d belief revisions, P4.8a mission state, P4.8b TickWorld and P4.8c stage bodies/direct fusion | Correct commands and complete checkpoints; finish controller/scenario composition, replay writer and Rust CLI qualification |
+| 4 | Shared types/replay, domain ports, P4.3g landscapes, P4.6d belief revisions, P4.8a mission state, P4.8b TickWorld, P4.8c stage bodies/direct fusion and (locally verified) P4.8d.3 controller stage | Correct commands and complete checkpoints; world-backed stage 1 and scenario builder, remaining stage-state audit, replay writer and Rust CLI qualification |
 | 5 | No in-process viewer simulation yet | Worker/snapshots/commands, world boot/LOD, live world protocol, rewind and removal of Python boot dependencies |
 | 6 | No broad Python reduction yet | Caller-driven deletions, analysis packaging, entry-point ownership and documentation |
 
@@ -295,6 +295,17 @@ snapshots and stage bodies including direct fusion. See
 [LANDSCAPE_BUILDERS.md](LANDSCAPE_BUILDERS.md),
 [BELIEF_REVISIONS.md](BELIEF_REVISIONS.md), [MISSION_STATE.md](MISSION_STATE.md),
 [TICK_WORLD.md](TICK_WORLD.md) and [TICK_STAGES.md](TICK_STAGES.md).
+
+**P4.8d.3, locally verified and not yet pushed:** stage 1 samples every controller
+the default scenario composes (station, `Launch(Follow)`,
+`Launch(ObservationTriggered(search, follow))`), then accounts battery, with
+stage 6 feeding engagement. `StageHandler` gains reset/checkpoint/check/restore,
+checkpoint format 3 carries per-stage state, and a JSON checkpoint resumed into
+a fresh `Simulation` reproduces an uninterrupted run bit for bit. The legacy
+follow controller's truth-fed pursuit is an explicit, traced capability. Open:
+world-backed adapters, the scenario builder, and the causal-state audit of
+stages 2–9. See [CONTROLLER_STAGE.md](CONTROLLER_STAGE.md).
+
 Package descriptions below remain acceptance contracts. Integration into an
 installed representative mission and viewer is a separate completion gate.
 
@@ -535,6 +546,8 @@ installed release by itself.
 3. Consume merged P4.3g landscapes and P4.6d belief publication; finish P4.8
    controller/scenario composition, checkpoints/replay and P4.9 qualification.
    Preserve P4.8a–c mission/TickWorld/stage work rather than restarting it.
+   Next after P4.8d.3: world-backed stage 1 plus a Python-vs-Rust stage-1
+   scenario parity run (P4.8d.4), then the stage-2–9 causal-state audit.
 4. Start F1/F2/F3 replay/evaluation slices and F4 paired comparisons. Qualify
    physical truth isolation, localization and validated execution separately
    from legacy parity.

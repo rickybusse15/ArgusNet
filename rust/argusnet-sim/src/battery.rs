@@ -56,7 +56,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use argusnet_planning::battery::{BatteryModel, BatteryState};
 use serde::{Deserialize, Serialize};
 
-use crate::simulation::{StageHandler, TickContext};
+use crate::simulation::{decode_stage_state, StageHandler, StageStateError, TickContext};
 use crate::stage::{StageError, StageOutcome};
 
 /// `battery_fraction` for a platform with no battery in the ledger.
@@ -196,6 +196,24 @@ impl BatteryStage {
     }
 }
 
+/// What the battery stage checkpoints: the ledger, not the configuration.
+///
+/// The model, home positions and wind are set by the run driver when it
+/// builds the scenario and are identical in a resumed run. Energy drawn, the
+/// previous position the next draw is measured from, and the one-shot
+/// reserve latch are *history*, and each decides a future tick: without the
+/// ledger a resumed platform is full again, without the previous position
+/// its first resumed tick is free, and without the latch it warns twice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct BatteryCheckpoint {
+    /// `(remaining_wh, timestamp_s)` per platform. A local DTO rather than a
+    /// serde derive on `argusnet_planning::BatteryState`, so the planning
+    /// crate's public types do not grow a persistence contract for this.
+    ledger: BTreeMap<String, (f64, f64)>,
+    previous_positions: BTreeMap<String, Option<[f64; 3]>>,
+    warned: BTreeSet<String>,
+}
+
 impl StageHandler for BatteryStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let mut shared = self.link.lock();
@@ -323,6 +341,85 @@ impl StageHandler for BatteryStage {
         // reports the genuinely idle case.
         let _ = drew_any;
         Ok(StageOutcome::Ran)
+    }
+
+    /// Drop the ledger's history but keep the fleet registered, full.
+    ///
+    /// Not [`BatteryLink::clear`]: a reset is a fresh run of the *same*
+    /// scenario, so every platform the driver registered is still there, with
+    /// a full battery, no previous position and no warning.
+    fn reset(&mut self) {
+        let mut shared = self.link.lock();
+        let capacity_wh = shared.model.capacity_wh;
+        for state in shared.states.values_mut() {
+            *state = BatteryState {
+                remaining_wh: capacity_wh,
+                timestamp_s: 0.0,
+            };
+        }
+        for previous in shared.previous_positions.values_mut() {
+            *previous = None;
+        }
+        shared.warned.clear();
+        shared.events.clear();
+    }
+
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let shared = self.link.lock();
+        let state = BatteryCheckpoint {
+            ledger: shared
+                .states
+                .iter()
+                .map(|(id, s)| (id.clone(), (s.remaining_wh, s.timestamp_s)))
+                .collect(),
+            previous_positions: shared.previous_positions.clone(),
+            warned: shared.warned.clone(),
+        };
+        Some(serde_json::to_value(state).expect("battery checkpoint serialises"))
+    }
+
+    fn check_state(&self, state: &serde_json::Value) -> Result<(), StageStateError> {
+        let decoded: BatteryCheckpoint = decode_stage_state(state)?;
+        let shared = self.link.lock();
+        // The ledger must describe the fleet this run registered. A platform
+        // present on one side only is a checkpoint from a different scenario.
+        if decoded.ledger.keys().ne(shared.states.keys()) {
+            return Err(StageStateError::Malformed {
+                detail: "battery ledger names a different fleet from this run's".into(),
+            });
+        }
+        if let Some((id, _)) = decoded
+            .ledger
+            .iter()
+            .find(|(_, (remaining, _))| !remaining.is_finite() || *remaining < 0.0)
+        {
+            return Err(StageStateError::Malformed {
+                detail: format!("battery {id} has an impossible remaining energy"),
+            });
+        }
+        Ok(())
+    }
+
+    fn restore_state(&mut self, state: &serde_json::Value) -> Result<(), StageStateError> {
+        let decoded: BatteryCheckpoint = decode_stage_state(state)?;
+        let mut shared = self.link.lock();
+        shared.states = decoded
+            .ledger
+            .into_iter()
+            .map(|(id, (remaining_wh, timestamp_s))| {
+                (
+                    id,
+                    BatteryState {
+                        remaining_wh,
+                        timestamp_s,
+                    },
+                )
+            })
+            .collect();
+        shared.previous_positions = decoded.previous_positions;
+        shared.warned = decoded.warned;
+        shared.events.clear();
+        Ok(())
     }
 }
 

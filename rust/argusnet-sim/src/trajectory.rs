@@ -205,7 +205,8 @@ pub fn apply_weather_adjustments(
 /// is **zero at both ends** — the climb starts and finishes at zero vertical
 /// speed, and is symmetric about the midpoint. A linear ramp would be close
 /// in position and wrong in velocity everywhere.
-pub struct LaunchController<T: Trajectory> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaunchController<T> {
     station_position_m: [f64; 3],
     operational: T,
     climb_duration_s: f64,
@@ -214,7 +215,7 @@ pub struct LaunchController<T: Trajectory> {
     launch_target_id: Option<String>,
 }
 
-impl<T: Trajectory> LaunchController<T> {
+impl<T> LaunchController<T> {
     /// The reference's defaults.
     pub const DEFAULT_CLIMB_DURATION_S: f64 = 8.0;
     pub const DEFAULT_OPERATIONAL_ALTITUDE_AGL_M: f64 = 230.0;
@@ -264,10 +265,25 @@ impl<T: Trajectory> LaunchController<T> {
     /// changing it would move every existing run, and it belongs in a
     /// decision of its own rather than arriving inside a port. The caller
     /// supplies the context, so the caller is where that decision lands.
-    pub fn sample(
+    pub fn sample(&mut self, timestamp_s: f64, context: &WeatherContext<'_>) -> ([f64; 3], [f64; 3])
+    where
+        T: Trajectory,
+    {
+        self.sample_with(timestamp_s, context, |inner, t| inner.sample(t))
+    }
+
+    /// [`LaunchController::sample`] with the operational half sampled by the
+    /// caller, for an inner controller that needs per-tick context the
+    /// [`Trajectory`] trait cannot carry (the stage lends it the world).
+    ///
+    /// `operational` is called only in the operational phase -- never while
+    /// parked or climbing -- which is the reference's behaviour and matters
+    /// because the inner controller may be stateful.
+    pub fn sample_with(
         &mut self,
         timestamp_s: f64,
         context: &WeatherContext<'_>,
+        operational: impl FnOnce(&mut T, f64) -> ([f64; 3], [f64; 3]),
     ) -> ([f64; 3], [f64; 3]) {
         let Some(launched_at_s) = self.launched_at_s else {
             return (self.station_position_m, [0.0; 3]);
@@ -294,7 +310,7 @@ impl<T: Trajectory> LaunchController<T> {
             );
         }
 
-        let (position, velocity) = self.operational.sample(timestamp_s);
+        let (position, velocity) = operational(&mut self.operational, timestamp_s);
         apply_weather_adjustments(position, velocity, timestamp_s, context)
     }
 
@@ -303,10 +319,34 @@ impl<T: Trajectory> LaunchController<T> {
         &self.operational
     }
 
-    /// Return to the ground, and reset what is underneath.
-    pub fn reset_state(&mut self) {
+    pub fn operational_mut(&mut self) -> &mut T {
+        &mut self.operational
+    }
+
+    /// When the launch happened, if it has.
+    pub fn launched_at_s(&self) -> Option<f64> {
+        self.launched_at_s
+    }
+
+    /// Take a checkpoint's launch state back. The operational half is
+    /// restored by whoever owns its type.
+    pub fn restore_launch(&mut self, launched_at_s: Option<f64>, target_id: Option<String>) {
+        self.launched_at_s = launched_at_s;
+        self.launch_target_id = target_id;
+    }
+
+    /// Back on the ground, leaving the operational half alone.
+    pub fn reset_launch(&mut self) {
         self.launched_at_s = None;
         self.launch_target_id = None;
+    }
+
+    /// Return to the ground, and reset what is underneath.
+    pub fn reset_state(&mut self)
+    where
+        T: Trajectory,
+    {
+        self.reset_launch();
         self.operational.reset_state();
     }
 }

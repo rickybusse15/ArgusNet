@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — The Rust tick moves the fleet (P4.8d.3)
+
+- Stage 1 (`SampleControllersAndBattery`) now samples platform controllers and
+  then accounts battery (`argusnet-sim::controller`). Ports
+  `looped_waypoint_path` (search lanes) and `ObservationTriggeredFollowController`
+  bit-exact against recorded Python fixtures; stage 6 feeds engagement to
+  stage 1 for the next tick.
+- `StageHandler` gains `reset`, `checkpoint_state`, `check_state` and
+  `restore_state`. Checkpoint format 3 adds `stage_states`; every handler's
+  state is validated before anything is mutated. `Simulation::reset` now resets
+  handlers. `BatteryStage` checkpoints its ledger, previous positions and
+  warning latch.
+- `argusnet-sim` enables `serde_json/float_roundtrip`. Without it a JSON
+  checkpoint could return an f64 one ULP off, and a resumed run diverged from
+  an uninterrupted one.
+- The follow controller's pursuit of true target state (the reference's
+  behaviour) is now an explicit `PursuitOracle` capability, noted in the stage
+  trace every tick it is read.
+
 ## Unreleased — Runtime command recovery and control checkpoints
 
 - Checkpoint format 2 preserves pause/speed, committed revision, pending controls,

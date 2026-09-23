@@ -96,6 +96,86 @@ impl TickContext<'_> {
 /// else.
 pub trait StageHandler: fmt::Debug + Send {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError>;
+
+    /// Return to the state a freshly constructed handler would have.
+    ///
+    /// [`Simulation::reset`] calls this on every installed handler. Without
+    /// it, `reset` returned the clock to zero and left every handler's
+    /// accumulated state in place, so a "fresh" run inherited the previous
+    /// one's battery ledger and controller memory.
+    ///
+    /// The default is **a declaration, not a freebie**: implementing nothing
+    /// asserts that this handler holds no state that survives a tick.
+    fn reset(&mut self) {}
+
+    /// Causal state this handler needs back in order to resume identically.
+    ///
+    /// `None` means "I hold nothing that affects a future decision". §6: what
+    /// belongs here is *anything affecting a future decision*; render state,
+    /// wall-clock timers and rebuildable caches do not.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Check that `state` is something [`StageHandler::restore_state`] would
+    /// accept, **without** taking it.
+    ///
+    /// Separate from `restore_state` because a restore must be refused before
+    /// anything is mutated: with several stateful handlers, taking each one's
+    /// state as it validated would leave the first ones restored and the rest
+    /// not when a later one refused.
+    fn check_state(&self, state: &serde_json::Value) -> Result<(), StageStateError> {
+        Err(StageStateError::Unexpected {
+            found: state.to_string(),
+        })
+    }
+
+    /// Take back what [`StageHandler::checkpoint_state`] produced.
+    ///
+    /// Only called after [`StageHandler::check_state`] accepted the same
+    /// value, so an error here is an invariant failure rather than a refusal.
+    fn restore_state(&mut self, state: &serde_json::Value) -> Result<(), StageStateError> {
+        Err(StageStateError::Unexpected {
+            found: state.to_string(),
+        })
+    }
+}
+
+/// Why a handler could not take its state back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageStateError {
+    /// The handler does not checkpoint anything, but was handed something --
+    /// a checkpoint written by a build that knew more than this one.
+    Unexpected { found: String },
+    /// The value was not the shape this handler writes.
+    Malformed { detail: String },
+}
+
+impl fmt::Display for StageStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StageStateError::Unexpected { found } => write!(
+                formatter,
+                "this handler holds no checkpointable state, but the checkpoint carries {found}"
+            ),
+            StageStateError::Malformed { detail } => {
+                write!(formatter, "handler state could not be read: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StageStateError {}
+
+/// Decode a handler's checkpointed state, mapping a shape error to
+/// [`StageStateError::Malformed`]. The helper every stateful handler's
+/// `check_state`/`restore_state` pair wants.
+pub fn decode_stage_state<T: serde::de::DeserializeOwned>(
+    state: &serde_json::Value,
+) -> Result<T, StageStateError> {
+    serde_json::from_value(state.clone()).map_err(|error| StageStateError::Malformed {
+        detail: error.to_string(),
+    })
 }
 
 /// The default body for a stage that has not been ported yet.
@@ -774,6 +854,10 @@ impl Simulation {
         // world for one tick.
         self.world.clear();
         self.truth.clear();
+        // Handlers are part of the run, not part of the harness around it.
+        for handler in self.handlers.values_mut() {
+            handler.reset();
+        }
     }
 
     /// Freeze everything needed to resume.
@@ -808,6 +892,15 @@ impl Simulation {
             revision: self.revision,
             paused: self.paused,
             speed: self.speed,
+            stage_states: self
+                .handlers
+                .iter()
+                .filter_map(|(stage, handler)| {
+                    handler
+                        .checkpoint_state()
+                        .map(|state| (stage.to_string(), state))
+                })
+                .collect(),
         })
     }
 
@@ -833,6 +926,26 @@ impl Simulation {
                 detail: "tick exceeds configured run length".into(),
             });
         }
+        // Every stage named in the checkpoint must have a handler here, and
+        // every handler must accept its own state, BEFORE anything is
+        // mutated. A restore that failed halfway would leave a run that is
+        // neither where it was nor where it was going.
+        for (name, state) in &checkpoint.stage_states {
+            let handler = self
+                .handlers
+                .iter()
+                .find(|(stage, _)| stage.to_string() == *name)
+                .map(|(_, handler)| handler)
+                .ok_or_else(|| RestoreError::UnknownStageState {
+                    stage: name.clone(),
+                })?;
+            handler
+                .check_state(state)
+                .map_err(|error| RestoreError::StageState {
+                    stage: name.clone(),
+                    detail: error.to_string(),
+                })?;
+        }
         let restored_queue = CommandQueue::from_checkpoint(
             &checkpoint.pending_commands,
             &checkpoint.command_history,
@@ -850,6 +963,25 @@ impl Simulation {
         self.paused = checkpoint.paused;
         self.speed = checkpoint.speed;
         self.single_step = false;
+        for (stage, handler) in self.handlers.iter_mut() {
+            match checkpoint.stage_states.get(&stage.to_string()) {
+                // `check_state` accepted this value above, so a refusal now
+                // is the handler contradicting itself, not a bad checkpoint.
+                Some(state) => {
+                    handler
+                        .restore_state(state)
+                        .map_err(|error| RestoreError::InvalidState {
+                            detail: format!(
+                                "stage {stage} accepted its state and then refused it: {error}"
+                            ),
+                        })?
+                }
+                // A handler with no state in the checkpoint returns to fresh
+                // rather than keeping this object's: the checkpoint is the
+                // authority on what the run knows.
+                None => handler.reset(),
+            }
+        }
         Ok(())
     }
 }
