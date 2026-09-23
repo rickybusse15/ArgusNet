@@ -15,6 +15,9 @@
   membership; stage 9 elects and checkpoints the coordinator.
 - Bundle v1 gains optional `coverage_bounds`, `targets[].behavior`,
   `cooperative_search`, `requested_duration_s` and `presentation`.
+- CI builds `argusnet-rs` before pytest and sets `ARGUSNET_REQUIRE_RS`, so
+  the Rust round-trip tests fail rather than skip when the binary is missing.
+  Until now they were skipped in CI.
 - Fix: deconfliction measured predicted separation with `hypot`; it now uses
   `np.linalg.norm`'s arithmetic, as the reference does. The value sizes the
   lateral push.

@@ -87,7 +87,15 @@ jobs:
       # it should be, which is what "no silent missing-field success" needs.
       - name: Proto fields have a recorded disposition
         run: python3 scripts/check_field_parity.py
+      # The argusnet-rs round trips (export a bundle, run it in Rust, read the
+      # replay back in Python) need the binary. ARGUSNET_REQUIRE_RS turns their
+      # skip-when-unbuilt into a failure, so a lost build step cannot quietly
+      # drop the coverage.
+      - name: Build argusnet-rs for the round-trip tests
+        run: cargo build -p argusnet-cli
       - name: Run tests
+        env:
+          ARGUSNET_REQUIRE_RS: "1"
         run: python -m pytest tests/ -q --timeout=120
       - name: Fast benchmark smoke
         run: python -m pytest tests/benchmarks/ -q -m benchmark_fast --benchmark-only --benchmark-json=bench.json

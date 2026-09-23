@@ -141,6 +141,20 @@ _CLI_ARGS = [
 ]  # fmt: skip
 
 
+def _argusnet_rs():
+    """The built ``argusnet-rs``, or a skip -- a failure under CI's
+    ``ARGUSNET_REQUIRE_RS``, which builds it first."""
+    import os
+    from pathlib import Path
+
+    binary = Path(__file__).resolve().parent.parent / "target" / "debug" / "argusnet-rs"
+    if not binary.exists():
+        if os.environ.get("ARGUSNET_REQUIRE_RS"):
+            pytest.fail(f"ARGUSNET_REQUIRE_RS is set but {binary} is not built")
+        pytest.skip("argusnet-rs is not built (cargo build -p argusnet-cli)")
+    return binary
+
+
 def _export_via_cli(tmp_path, extra=()):
     from argusnet.simulation import sim
 
@@ -193,13 +207,10 @@ def test_export_bundle_refuses_run_time_options_it_would_drop(tmp_path, flag):
 
 def test_an_exported_bundle_runs_in_argusnet_rs_to_a_valid_replay(tmp_path):
     import subprocess
-    from pathlib import Path
 
     from argusnet.evaluation.replay import load_replay_document
 
-    binary = Path(__file__).resolve().parent.parent / "target" / "debug" / "argusnet-rs"
-    if not binary.exists():
-        pytest.skip("argusnet-rs is not built (cargo build -p argusnet-cli)")
+    binary = _argusnet_rs()
     bundle = _export_via_cli(tmp_path)
     replay = tmp_path / "replay.json"
     completed = subprocess.run(
@@ -226,9 +237,7 @@ def test_an_argusnet_rs_replay_passes_the_schema_with_every_payload(tmp_path, ca
     from argusnet.evaluation.replay import validate_replay_with_schema
 
     root = Path(__file__).resolve().parent.parent
-    binary = root / "target" / "debug" / "argusnet-rs"
-    if not binary.exists():
-        pytest.skip("argusnet-rs is not built (cargo build -p argusnet-cli)")
+    binary = _argusnet_rs()
     bundle_path = root / "tests" / "fixtures" / f"scenario_bundle_{case}.json"
     replay = tmp_path / "replay.json"
     completed = subprocess.run(
