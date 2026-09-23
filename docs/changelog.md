@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Stage 6 senses as the reference does (P4.8e.2)
+
+- Observations originate at each node's nominal controller pose (before
+  overrides and deconfliction), and directional sensors look along the nominal
+  velocity tilted down 30° above 0.5 m/s of horizontal speed. Both match
+  `build_observations`.
+- The detection draw now includes the world detection model's `p_d` (path loss,
+  transmittance, weather visibility, land cover) and cloud layers, and bearing
+  noise uses the effective noise multiplier. Without them the Rust run accepted
+  ~60% more observations than the reference. The totals are now within
+  statistical noise of it.
+- Weather's sensing half is ported (`visibility_at_range`, `bearing_noise_scale`,
+  cloud layers) and carried in the scenario bundle.
+- Python: `sensor_look_direction`, `fov_angle_deg` and `cloud_detection_factor`
+  are lifted verbatim out of `build_observations`; recaptured references are
+  unchanged.
+
 ## Unreleased — The Rust tick runs a Python-built scenario (P4.8e.1)
 
 - `argusnet.scenario-bundle/v1`: `argusnet.simulation.scenario_bundle.export_bundle`

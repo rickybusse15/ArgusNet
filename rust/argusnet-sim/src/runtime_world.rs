@@ -24,7 +24,8 @@ use argusnet_world::visibility::{self, VisibilityProfile, VisibilityResult};
 use crate::follow_path::VisibilitySampler;
 use crate::motion::{ObstacleSampler, TerrainSampler};
 use crate::motion_world::{WorldObstacles, WorldTerrain};
-use crate::observe::{SightLine, TerrainHeight, VisibilityOracle};
+use crate::observe::{Detection, SightLine, TerrainHeight, VisibilityOracle};
+use crate::weather::MotionWeather;
 
 /// The terrain, shared.
 #[derive(Clone)]
@@ -109,6 +110,9 @@ pub struct SharedVisibility {
     land_cover: Option<Arc<LandCoverLayer>>,
     profile: Arc<VisibilityProfile>,
     clearance_m: f64,
+    /// Weather for the detection model; `None` is clear conditions (factor
+    /// 1, noise scale 1), as `compute_weather_factor(range, None)` is.
+    weather: Option<Arc<MotionWeather>>,
 }
 
 impl fmt::Debug for SharedVisibility {
@@ -135,6 +139,15 @@ impl SharedVisibility {
             land_cover,
             profile,
             clearance_m,
+            weather: None,
+        }
+    }
+
+    /// The same world, with weather for the detection model.
+    pub fn with_weather(&self, weather: Option<Arc<MotionWeather>>) -> Self {
+        Self {
+            weather,
+            ..self.clone()
         }
     }
 
@@ -171,7 +184,47 @@ impl VisibilitySampler for SharedVisibility {
 
 impl VisibilityOracle for SharedVisibility {
     fn sight_line(&self, from: [f64; 3], to: [f64; 3]) -> SightLine {
+        sight_line_of(&self.los(from, to))
+    }
+
+    fn sight_and_detection(
+        &self,
+        from: [f64; 3],
+        to: [f64; 3],
+        max_range_m: f64,
+    ) -> (SightLine, Option<Detection>) {
         let result = self.los(from, to);
+        // `float(np.linalg.norm(target - origin))`.
+        let delta = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+        let range_m = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+        let (weather_factor, weather_noise, cloud_factor) = match &self.weather {
+            Some(weather) => (
+                weather.visibility_at_range(range_m).max(0.0),
+                weather.bearing_noise_scale(),
+                if weather.cloud_layers.is_empty() {
+                    1.0
+                } else {
+                    weather.cloud_factor(from[2], to[2])
+                },
+            ),
+            None => (1.0, 1.0, 1.0),
+        };
+        let detection =
+            visibility::detection(&result, range_m, max_range_m, weather_factor, weather_noise);
+        (
+            sight_line_of(&result),
+            Some(Detection {
+                p_d: detection.p_d,
+                effective_noise_multiplier: detection.effective_noise_multiplier,
+                transmittance_dominant: detection.dominant_loss_factor == "transmittance",
+                cloud_factor,
+            }),
+        )
+    }
+}
+
+fn sight_line_of(result: &VisibilityResult) -> SightLine {
+    {
         SightLine {
             visibility: if result.visible {
                 Visibility::Visible

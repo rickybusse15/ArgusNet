@@ -39,13 +39,19 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from argusnet.simulation.scenario_bundle import export_bundle, write_bundle  # noqa: E402
+from argusnet.simulation.scenario_bundle import (  # noqa: E402
+    export_bundle,
+    motion_weather_document,
+    write_bundle,
+)
 from argusnet.simulation.sim import (  # noqa: E402
     ScenarioOptions,
     SimulationConfig,
     build_default_scenario,
+    cloud_detection_factor,
     run_simulation,
 )
+from argusnet.world.weather import WEATHER_PRESETS  # noqa: E402
 
 
 def exact(value: float) -> str:
@@ -135,11 +141,65 @@ def capture_los(scenario) -> dict:
                     "noise_multiplier": exact(r.noise_multiplier),
                 }
             )
+    # The world's detection model on the same sight lines, as stage 6 calls
+    # it: the sensing clearance, the optical profile, and a weather -- this
+    # scenario's, and two with cloud slabs and precipitation, so every factor
+    # (path loss against two sensor ranges, weather visibility, weather noise,
+    # cloud occlusion, the dominant loss) takes more than one value.
+    weathers = {
+        "scenario": scenario.weather,
+        "fog": WEATHER_PRESETS["fog"],
+        "heavy_rain": WEATHER_PRESETS["heavy_rain"],
+    }
+    # Sight lines that cross a whole cloud slab (from near the ground to
+    # 2.5 km up), so the full-occlusion branch is reached; the map's own
+    # sight lines never climb that high.
+    tall_pairs = []
+    for _ in range(6):
+        low = point(3.0)
+        high = point(0.0)
+        high[2] = 2500.0
+        tall_pairs.append((low, high))
+    detections = []
+    for weather_name, weather in weathers.items():
+        for max_range_m in (1200.0, 400.0):
+            for a, b in pairs[:60] + tall_pairs:
+                d = query.compute_detection_probability(
+                    a,
+                    b,
+                    weather=weather,
+                    max_range_m=max_range_m,
+                    terrain_clearance_m=sensing_clearance,
+                )
+                detections.append(
+                    {
+                        "weather": weather_name,
+                        "from": vec(a),
+                        "to": vec(b),
+                        "max_range_m": exact(max_range_m),
+                        "p_d": exact(d.p_d),
+                        "effective_noise_multiplier": exact(d.effective_noise_multiplier),
+                        "dominant_loss_factor": str(d.dominant_loss_factor),
+                        "cloud_factor": exact(
+                            cloud_detection_factor(weather, float(a[2]), float(b[2]))
+                            if weather is not None and weather.cloud_layers
+                            else 1.0
+                        ),
+                    }
+                )
+    factors = {d["dominant_loss_factor"] for d in detections}
+    assert len(factors) >= 3, f"dominant loss barely varied: {factors}"
+    assert any(d["cloud_factor"] == "0.0" for d in detections), "no cloud ever blocked"
     blocked = sum(1 for q in queries if not q["visible"])
     multipliers = {q["noise_multiplier"] for q in queries if q["visible"]}
     assert blocked > 10, "almost nothing was blocked; the LOS set tests little"
     assert len(multipliers) > 2, "land cover never varied the noise multiplier"
-    return {"default_clearance_m": exact(default_clearance), "queries": queries}
+    return {
+        "default_clearance_m": exact(default_clearance),
+        "queries": queries,
+        "weathers": {name: motion_weather_document(w) for name, w in weathers.items()},
+        "detections": detections,
+    }
 
 
 def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
@@ -173,6 +233,23 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
                     for t in frame.truths
                 },
                 "accepted_observations": len(frame.observations),
+                # The pair gates that run before the pair's first random
+                # draw: which (node, target) pairs each rejected is
+                # deterministic, so it is compared exactly while the
+                # kinematics agree, even though later draws differ (ADR-006).
+                "draw_free_rejections": sorted(
+                    [r.node_id, r.target_id, r.reason]
+                    for r in frame.generation_rejections
+                    if r.reason in ("out_of_range", "outside_fov")
+                ),
+                # Every generation rejection by reason, for statistical
+                # comparison of the draw-dependent gates.
+                "rejection_counts": {
+                    reason: sum(1 for r in frame.generation_rejections if r.reason == reason)
+                    for reason in sorted({r.reason for r in frame.generation_rejections})
+                },
+                "generated_observations": len(frame.observations)
+                + len(frame.rejected_observations),
                 "tracks": len(frame.tracks),
                 "engaged": engaged_log[index] if index < len(engaged_log) else {},
                 # Both parties to every resolution: either one's position is

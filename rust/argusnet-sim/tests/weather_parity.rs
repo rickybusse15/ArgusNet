@@ -47,6 +47,32 @@ fn every_preset_matches_the_reference_bit_for_bit() {
             );
             checked += 1;
         }
+        for sample in case["visibility"].as_array().unwrap() {
+            let range = num(&sample["range_m"]);
+            let factor = weather.visibility_at_range(range);
+            assert_eq!(
+                factor.to_bits(),
+                num(&sample["factor"]).to_bits(),
+                "{name}: visibility_at_range({range}) = {factor}"
+            );
+            checked += 1;
+        }
+        let scale = weather.bearing_noise_scale();
+        assert_eq!(
+            scale.to_bits(),
+            num(&case["bearing_noise_scale"]).to_bits(),
+            "{name}: bearing_noise_scale = {scale}"
+        );
+        for sample in case["cloud_factors"].as_array().unwrap() {
+            let (observer, target) = (num(&sample["observer_alt_m"]), num(&sample["target_alt_m"]));
+            let factor = weather.cloud_factor(observer, target);
+            assert_eq!(
+                factor.to_bits(),
+                num(&sample["factor"]).to_bits(),
+                "{name}: cloud_factor({observer}, {target}) = {factor}"
+            );
+            checked += 1;
+        }
         for sample in case["penalties"].as_array().unwrap() {
             let altitude = num(&sample["altitude_m"]);
             let penalty = weather.flight_speed_penalty(altitude);
@@ -67,7 +93,9 @@ fn an_unknown_precipitation_type_is_refused() {
     let weather: MotionWeather = serde_json::from_value(serde_json::json!({
         "wind": {"base_speed_mps": 1.0, "base_heading_rad": 0.0, "gust_amplitude_mps": 0.0,
                  "gust_period_s": 10.0, "altitude_scaling": 0.0},
-        "precipitation": {"precip_type": "hail", "rate_mmph": 1.0}
+        "precipitation": {"precip_type": "hail", "rate_mmph": 1.0},
+        "atmosphere": {"visibility_m": 10000.0, "relative_humidity": 0.5},
+        "cloud_layers": []
     }))
     .expect("shape is fine");
     assert!(weather.precipitation.validate().is_err());

@@ -4155,6 +4155,51 @@ def _generation_rejection(
     )
 
 
+def sensor_look_direction(velocity: np.ndarray, look_down_angle_deg: float) -> np.ndarray | None:
+    """Where a directional sensor on a moving platform looks: along its velocity,
+    tilted down, or nowhere below 0.5 m/s of horizontal speed.
+
+    Lifted verbatim out of `build_observations` so the look direction can be
+    compared against a port directly (P4.8e.2); the arithmetic is unchanged.
+    """
+    speed_xy = float(np.linalg.norm(velocity[:2]))
+    if speed_xy > 0.5:
+        look = velocity.copy()
+        look[2] = -np.tan(np.radians(look_down_angle_deg)) * speed_xy
+        return look / np.linalg.norm(look)
+    return None
+
+
+def cloud_detection_factor(weather: WeatherModel, observer_alt: float, target_alt: float) -> float:
+    """Detection-probability factor from cloud layers along one sight line.
+
+    Lifted verbatim out of `build_observations` (P4.8e.2), like
+    `sensor_look_direction`; the arithmetic is unchanged.
+    """
+    cloud_factor = 1.0
+    for cloud in weather.cloud_layers:
+        if cloud.obscures_los(observer_alt, target_alt):
+            # Full occlusion — detection impossible
+            cloud_factor = 0.0
+            break
+        # Partial coverage reduces detection probability
+        low_alt = min(observer_alt, target_alt)
+        high_alt = max(observer_alt, target_alt)
+        if low_alt < cloud.top_altitude_m and high_alt > cloud.base_altitude_m:
+            cloud_factor *= max(1.0 - cloud.coverage * 0.7, 0.05)
+    return cloud_factor
+
+
+def fov_angle_deg(line_of_sight: np.ndarray, range_m: float, sensor_dir: np.ndarray) -> float:
+    """Angle between the sight line and the look direction, in degrees.
+
+    Lifted verbatim out of `build_observations`; see `sensor_look_direction`.
+    """
+    los_unit = line_of_sight / range_m
+    cos_angle = float(np.dot(los_unit, sensor_dir))
+    return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
+
+
 def build_observations(
     rng: np.random.Generator,
     nodes: Sequence[SimNode],
@@ -4221,11 +4266,7 @@ def build_observations(
                 node_sensor_dir = node.sensor_direction_fn(timestamp_s)
             if node_sensor_dir is None:
                 _, vel = node.trajectory(timestamp_s)
-                speed_xy = float(np.linalg.norm(vel[:2]))
-                if speed_xy > 0.5:
-                    look = vel.copy()
-                    look[2] = -np.tan(np.radians(sensor_cfg.drone_look_down_angle_deg)) * speed_xy
-                    node_sensor_dir = look / np.linalg.norm(look)
+                node_sensor_dir = sensor_look_direction(vel, sensor_cfg.drone_look_down_angle_deg)
         for truth in truths:
             attempted_count += 1
             line_of_sight = truth.position - node_state.position
@@ -4255,9 +4296,7 @@ def build_observations(
             if node.fov_half_angle_deg < 179.0:
                 sensor_dir = node_sensor_dir
                 if sensor_dir is not None:
-                    los_unit = line_of_sight / range_m
-                    cos_angle = float(np.dot(los_unit, sensor_dir))
-                    angle_deg = float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
+                    angle_deg = fov_angle_deg(line_of_sight, range_m, sensor_dir)
                     if angle_deg > node.fov_half_angle_deg:
                         rejection_counts[REJECT_OUTSIDE_FOV] += 1
                         rejected_by_target[truth.target_id] += 1
@@ -4378,18 +4417,9 @@ def build_observations(
             # --- Cloud layer attenuation ---
             cloud_factor = 1.0
             if weather is not None and weather.cloud_layers:
-                observer_alt = float(node_state.position[2])
-                target_alt = float(truth.position[2])
-                for cloud in weather.cloud_layers:
-                    if cloud.obscures_los(observer_alt, target_alt):
-                        # Full occlusion — detection impossible
-                        cloud_factor = 0.0
-                        break
-                    # Partial coverage reduces detection probability
-                    low_alt = min(observer_alt, target_alt)
-                    high_alt = max(observer_alt, target_alt)
-                    if low_alt < cloud.top_altitude_m and high_alt > cloud.base_altitude_m:
-                        cloud_factor *= max(1.0 - cloud.coverage * 0.7, 0.05)
+                cloud_factor = cloud_detection_factor(
+                    weather, float(node_state.position[2]), float(truth.position[2])
+                )
             combined_pd = max(0.0, min(1.0, detection.p_d * sensor_pd * cloud_factor))
             if pair_rng.random() > combined_pd:
                 reason = (

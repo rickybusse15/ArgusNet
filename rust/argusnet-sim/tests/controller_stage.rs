@@ -699,3 +699,31 @@ fn launch_drift_is_integrated_over_the_reference_one_second() {
         "the late drone barely flew its lane"
     );
 }
+
+/// Stage 1's nominal poses answer only for the tick they were sampled on: a
+/// later stage asking about any other time is refused rather than handed a
+/// stale pose.
+#[test]
+fn nominal_poses_answer_only_for_their_own_tick() {
+    let mut rig = Rig::new();
+    for _ in 0..12 {
+        rig.step();
+    }
+    let sampled_at = 11.0 * DT_S;
+    let (position, _) = rig
+        .controllers
+        .nominal_pose("drone-follow", sampled_at)
+        .expect("the last tick's pose");
+    assert!(position.iter().all(|v| v.is_finite()));
+    assert_eq!(
+        rig.controllers
+            .nominal_pose("drone-follow", sampled_at + DT_S),
+        None
+    );
+    assert_eq!(
+        rig.controllers
+            .nominal_pose("drone-follow", sampled_at - DT_S),
+        None
+    );
+    assert_eq!(rig.controllers.nominal_pose("nobody", sampled_at), None);
+}

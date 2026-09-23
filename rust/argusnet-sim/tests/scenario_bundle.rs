@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use argusnet_core::AssociationMode;
+use argusnet_sensing::cascade::{Outcome, RejectReason};
 use argusnet_sim::scenario::{
     assemble, build_world, reference_battery_model, BundleError, ScenarioBundle,
     FOLLOW_LOS_CLEARANCE_M,
@@ -69,6 +70,11 @@ struct RustRun {
     engaged: Vec<BTreeMap<String, bool>>,
     accepted: Vec<usize>,
     tracks: Vec<usize>,
+    /// Per tick, sorted `[node, target, reason]` for every pair rejected by a
+    /// gate that runs before the pair's first draw.
+    draw_free: Vec<Vec<[String; 3]>>,
+    /// Every generation rejection over the run, by reason.
+    rejections: BTreeMap<String, u64>,
 }
 
 fn run_rust(case: &str, steps: usize, search_drones: &[String]) -> RustRun {
@@ -79,6 +85,8 @@ fn run_rust(case: &str, steps: usize, search_drones: &[String]) -> RustRun {
         engaged: Vec::new(),
         accepted: Vec::new(),
         tracks: Vec::new(),
+        draw_free: Vec::new(),
+        rejections: BTreeMap::new(),
     };
     for _ in 0..steps {
         let snapshot = run.step().expect("tick runs");
@@ -110,8 +118,44 @@ fn run_rust(case: &str, steps: usize, search_drones: &[String]) -> RustRun {
         let frame = run.fusion.frame().expect("stage 7 ran");
         out.accepted.push(frame.observations.len());
         out.tracks.push(frame.tracks.len());
+        let mut draw_free: Vec<[String; 3]> = run
+            .observe
+            .records()
+            .into_iter()
+            .filter_map(|record| match record.outcome {
+                Outcome::Rejected(
+                    reason @ (RejectReason::OutOfRange | RejectReason::OutsideFov),
+                ) => Some([
+                    record.node_id,
+                    record.target_id,
+                    reason.as_str().to_string(),
+                ]),
+                _ => None,
+            })
+            .collect();
+        draw_free.sort();
+        for record in run.observe.records() {
+            if let Outcome::Rejected(reason) = record.outcome {
+                *out.rejections
+                    .entry(reason.as_str().to_string())
+                    .or_default() += 1;
+            }
+        }
+        out.draw_free.push(draw_free);
     }
     out
+}
+
+fn reference_draw_free(frame: &Value) -> Vec<[String; 3]> {
+    frame["draw_free_rejections"]
+        .as_array()
+        .expect("draw_free_rejections")
+        .iter()
+        .map(|r| {
+            let r = r.as_array().expect("triple");
+            [0, 1, 2].map(|i| r[i].as_str().expect("string").to_string())
+        })
+        .collect()
 }
 
 fn reference_kinematics(frame: &Value, node_id: &str) -> Kinematics {
@@ -190,6 +234,7 @@ fn a_python_scenario_runs_in_the_rust_tick_and_matches_where_it_must() {
         .collect();
 
     let mut exact_samples = 0;
+    let mut gate_samples = 0;
     let mut decoupled: BTreeMap<String, usize> = BTreeMap::new();
     for (i, frame) in frames.iter().enumerate() {
         let comparable: Vec<String> = if i < divergence {
@@ -218,6 +263,23 @@ fn a_python_scenario_runs_in_the_rust_tick_and_matches_where_it_must() {
                 )
                 .collect()
         };
+        // The draw-free gates, for pairs whose sensor is still comparable:
+        // range and field of view from the nominal pose (P4.8e.2).
+        let keep = |r: &[String; 3]| comparable.contains(&r[0]);
+        let expected_gates: Vec<_> = reference_draw_free(frame)
+            .into_iter()
+            .filter(keep)
+            .collect();
+        let actual_gates: Vec<_> = rust.draw_free[i]
+            .iter()
+            .filter(|r| keep(r))
+            .cloned()
+            .collect();
+        assert_eq!(
+            actual_gates, expected_gates,
+            "draw-free rejections at tick {i}"
+        );
+        gate_samples += expected_gates.len();
         for id in comparable {
             let expected = reference_kinematics(frame, &id);
             let actual = rust.frames[i][&id];
@@ -246,6 +308,12 @@ fn a_python_scenario_runs_in_the_rust_tick_and_matches_where_it_must() {
     assert!(
         exact_samples >= 200,
         "only {exact_samples} node-ticks compared exactly"
+    );
+    // Few in this scenario (its engagement diverges within ticks, and stations
+    // never reject); the all-follow test carries the strict requirement.
+    assert!(
+        gate_samples >= 5,
+        "only {gate_samples} draw-free rejections compared"
     );
     // The Rust run engages too, through its own stage 6 -> stage 1 feed. The
     // divergence above is found by comparing engagement; if Rust never
@@ -293,7 +361,17 @@ fn an_all_follow_scenario_matches_on_every_tick() {
     let bundle = bundle_of("tt_follow");
     let rust = run_rust("tt_follow", frames.len(), &[]);
     let mut resolved_ticks = 0;
+    let mut fov_rejections = 0;
     for (i, frame) in frames.iter().enumerate() {
+        let expected_gates = reference_draw_free(frame);
+        assert_eq!(
+            rust.draw_free[i], expected_gates,
+            "draw-free rejections at tick {i}"
+        );
+        fov_rejections += expected_gates
+            .iter()
+            .filter(|r| r[2] == "outside_fov")
+            .count();
         if !frame["deconfliction_drones"].as_array().unwrap().is_empty() {
             resolved_ticks += 1;
         }
@@ -321,6 +399,46 @@ fn an_all_follow_scenario_matches_on_every_tick() {
     assert!(
         resolved_ticks >= 20,
         "only {resolved_ticks} ticks exercised deconfliction"
+    );
+    assert!(
+        fov_rejections >= 50,
+        "only {fov_rejections} FOV rejections compared"
+    );
+    let mut python_rejections: BTreeMap<String, u64> = BTreeMap::new();
+    for frame in frames {
+        for (reason, count) in frame["rejection_counts"].as_object().unwrap() {
+            *python_rejections.entry(reason.clone()).or_default() += count.as_u64().unwrap();
+        }
+    }
+    let python_accepted: u64 = frames
+        .iter()
+        .map(|f| f["accepted_observations"].as_u64().unwrap())
+        .sum();
+    let rust_accepted = rust.accepted.iter().sum::<usize>() as u64;
+    eprintln!(
+        "all-follow: python accepted {python_accepted} rejections {python_rejections:?}; \
+         rust accepted {rust_accepted} rejections {:?}",
+        rust.rejections
+    );
+    // The draw-dependent gates, statistically. Kinematics are identical, so
+    // the only difference is the stream (ADR-006): about 340 pairs reach the
+    // detection draw at p ~ 0.55, a standard deviation near 9. The envelope
+    // is three of them. Before P4.8e.2, stage 6 ignored the world's detection
+    // probability and accepted 303 against the reference's 185 -- the
+    // regression this bound exists to catch. Formal multi-seed envelopes are
+    // P4.9c.
+    let within = |name: &str, python: u64, rust: u64| {
+        let gap = python.abs_diff(rust);
+        assert!(
+            gap <= 27,
+            "{name}: python {python}, rust {rust} (gap {gap} > 27)"
+        );
+    };
+    within("accepted", python_accepted, rust_accepted);
+    within(
+        "dropout",
+        python_rejections.get("dropout").copied().unwrap_or(0),
+        rust.rejections.get("dropout").copied().unwrap_or(0),
     );
 }
 
@@ -370,6 +488,29 @@ fn the_assembly_wires_every_capability() {
     let roles = run.deconflict.roles();
     for (drone, role) in &bundle.drone_roles {
         assert_eq!(&roles.role_of(drone), role);
+    }
+
+    // Stage 6 senses through the bundle's world *and weather*: probe the
+    // installed oracle with the reference's scenario-weather detections.
+    let reference = reference();
+    let scenario_weather: Vec<&Value> = reference["los"]["detections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["weather"] == "scenario")
+        .collect();
+    assert!(!scenario_weather.is_empty());
+    for d in scenario_weather {
+        let (_, detection) =
+            run.observe
+                .probe(vec3(&d["from"]), vec3(&d["to"]), num(&d["max_range_m"]));
+        let detection = detection.expect("stage 6 has a world detection model");
+        assert_eq!(detection.p_d.to_bits(), num(&d["p_d"]).to_bits(), "{d}");
+        assert_eq!(
+            detection.effective_noise_multiplier.to_bits(),
+            num(&d["effective_noise_multiplier"]).to_bits(),
+            "{d}"
+        );
     }
 
     // Past the reference's first resolution (tick 25): stage 3 must have
@@ -427,5 +568,61 @@ fn line_of_sight_matches_the_reference() {
                 "{field}, {context}"
             );
         }
+    }
+}
+
+/// The world's detection model -- what stage 6 multiplies into its detection
+/// draw and its bearing noise -- against the reference's
+/// `compute_detection_probability`, under three weathers and two sensor
+/// ranges, including sight lines that cross a whole cloud slab.
+#[test]
+fn detection_matches_the_reference() {
+    use argusnet_sim::observe::VisibilityOracle;
+    use argusnet_sim::weather::MotionWeather;
+    use std::sync::Arc;
+
+    let reference = reference();
+    let los = &reference["los"];
+    let world = build_world(&bundle().world).expect("world builds");
+    let weathers: BTreeMap<String, MotionWeather> = los["weathers"]
+        .as_object()
+        .expect("weathers")
+        .iter()
+        .map(|(name, doc)| {
+            (
+                name.clone(),
+                serde_json::from_value(doc.clone()).expect("weather document"),
+            )
+        })
+        .collect();
+    let detections = los["detections"].as_array().expect("detections");
+    assert!(detections.len() >= 300);
+    for (i, d) in detections.iter().enumerate() {
+        let weather = weathers[d["weather"].as_str().unwrap()].clone();
+        let oracle = world.visibility.with_weather(Some(Arc::new(weather)));
+        let (_, detection) =
+            oracle.sight_and_detection(vec3(&d["from"]), vec3(&d["to"]), num(&d["max_range_m"]));
+        let detection = detection.expect("a world oracle always reports detection");
+        let context = format!("detection {i}: {d}");
+        assert_eq!(
+            detection.p_d.to_bits(),
+            num(&d["p_d"]).to_bits(),
+            "p_d, {context}"
+        );
+        assert_eq!(
+            detection.effective_noise_multiplier.to_bits(),
+            num(&d["effective_noise_multiplier"]).to_bits(),
+            "noise, {context}"
+        );
+        assert_eq!(
+            detection.transmittance_dominant,
+            d["dominant_loss_factor"].as_str() == Some("transmittance"),
+            "dominant loss, {context}"
+        );
+        assert_eq!(
+            detection.cloud_factor.to_bits(),
+            num(&d["cloud_factor"]).to_bits(),
+            "cloud, {context}"
+        );
     }
 }

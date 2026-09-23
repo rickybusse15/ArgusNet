@@ -24,8 +24,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from argusnet.simulation.scenario_bundle import motion_weather_document  # noqa: E402
+from argusnet.simulation.sim import cloud_detection_factor  # noqa: E402
 from argusnet.world.weather import (  # noqa: E402
     WEATHER_PRESETS,
+    AtmosphericConditions,
     PrecipitationModel,
     WeatherModel,
     WindModel,
@@ -38,6 +40,8 @@ def exact(value: float) -> str:
 
 ALTITUDES = [-30.0, 0.0, 12.5, 80.0, 230.0, 612.0]
 TIMES = [0.0, 1.0, 5.0, 7.25, 13.0, 20.0, 33.3]
+RANGES = [-5.0, 0.0, 120.0, 1500.0, 9000.0]
+CLOUD_ALTITUDES = [0.0, 150.0, 350.0, 900.0, 2200.0, 5000.0]
 
 
 def record(name: str, model: WeatherModel) -> dict:
@@ -56,6 +60,19 @@ def record(name: str, model: WeatherModel) -> dict:
         "penalties": [
             {"altitude_m": exact(a), "penalty": exact(model.flight_speed_penalty(a))}
             for a in ALTITUDES
+        ],
+        "visibility": [
+            {"range_m": exact(r), "factor": exact(model.visibility_at_range(r))} for r in RANGES
+        ],
+        "bearing_noise_scale": exact(model.bearing_noise_scale()),
+        "cloud_factors": [
+            {
+                "observer_alt_m": exact(o),
+                "target_alt_m": exact(t),
+                "factor": exact(cloud_detection_factor(model, o, t)),
+            }
+            for o in CLOUD_ALTITUDES
+            for t in CLOUD_ALTITUDES
         ],
     }
 
@@ -99,6 +116,16 @@ def capture() -> dict:
         )
     )
     # A gust deeper than the base: speed would go negative and is floored at 0.
+    for precip in ("rain", "snow", "sleet"):
+        cases.append(
+            record(
+                f"light_{precip}_humid",
+                WeatherModel(
+                    atmosphere=AtmosphericConditions(visibility_m=4000.0, relative_humidity=0.95),
+                    precipitation=PrecipitationModel(precip_type=precip, rate_mmph=2.5),
+                ),
+            )
+        )
     cases.append(
         record(
             "gust_floors_speed_at_zero",
@@ -115,6 +142,11 @@ def capture() -> dict:
         if w["wind"][0] in ("-0.0", "0.0") and w["wind"][1] in ("-0.0", "0.0")
     ]
     assert zero_speed, "the negative-speed floor never bound"
+    clouds = [f["factor"] for c in cases for f in c["cloud_factors"]]
+    assert "0.0" in clouds, "no full cloud occlusion was recorded"
+    assert any(v not in ("0.0", "1.0") for v in clouds), "no partial cloud penalty recorded"
+    humid = [c["bearing_noise_scale"] for c in cases]
+    assert any(v != "1.0" for v in humid), "bearing noise scale never left 1"
     return {"_source": "scripts/capture_weather_fixture.py", "cases": cases}
 
 

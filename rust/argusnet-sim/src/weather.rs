@@ -2,10 +2,11 @@
 //!
 //! `trajectory.rs` defined [`WeatherSampler`] as the capability and left the
 //! model for later; this is that model, for exactly the fields motion reads.
-//! `WindModel` is ported whole (it is one method). Of `WeatherModel`, only
-//! `flight_speed_penalty` is here, which needs the wind and the precipitation
-//! *drag* term. Visibility, bearing-noise scaling and cloud occlusion are
-//! sensing's reads and belong with stage 6's weather wiring.
+//! `WindModel` is ported whole (it is one method). Of `WeatherModel`, the
+//! motion reads (`flight_speed_penalty`, via wind and precipitation drag) came
+//! first (P4.8e.1); the sensing reads -- `visibility_at_range`,
+//! `bearing_noise_scale` and stage 6's cloud factor -- followed in P4.8e.2,
+//! when stage 6 started using the world's detection model.
 //!
 //! Serializable because it arrives in the scenario bundle as parameters, not
 //! as a preset name: the bundle is resolved data, so a preset table edited in
@@ -91,6 +92,34 @@ impl Precipitation {
         }
     }
 
+    /// `visibility_reduction_factor`: multiplicative, in `(0, 1]`.
+    pub fn visibility_reduction_factor(&self) -> f64 {
+        let rate = self.rate_mmph.max(0.0);
+        match self.precip_type.as_str() {
+            "none" => 1.0,
+            "fog" => 0.15,
+            _ if rate <= 0.0 => 1.0,
+            "rain" => (1800.0 / rate.powf(0.6).max(0.01) / 10000.0).min(1.0),
+            "snow" => (1200.0 / rate.powf(0.75).max(0.01) / 10000.0).min(1.0),
+            "sleet" => (1500.0 / rate.powf(0.65).max(0.01) / 10000.0).min(1.0),
+            _ => 1.0,
+        }
+    }
+
+    /// `sensor_noise_multiplier`: always `>= 1`.
+    pub fn sensor_noise_multiplier(&self) -> f64 {
+        let rate = self.rate_mmph.max(0.0);
+        match self.precip_type.as_str() {
+            "none" => 1.0,
+            "fog" => 1.6,
+            _ if rate <= 0.0 => 1.0,
+            "rain" => 1.0 + 0.15 * rate.powf(0.5),
+            "snow" => 1.0 + 0.25 * rate.powf(0.5),
+            "sleet" => 1.0 + 0.20 * rate.powf(0.5),
+            _ => 1.0,
+        }
+    }
+
     fn drag(&self) -> f64 {
         match self.precip_type.as_str() {
             "rain" => (1.0 - 0.02 * self.rate_mmph).max(0.5),
@@ -102,11 +131,90 @@ impl Precipitation {
     }
 }
 
-/// The motion half of `WeatherModel`.
+/// The two `AtmosphericConditions` fields a weather read uses.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Atmosphere {
+    pub visibility_m: f64,
+    pub relative_humidity: f64,
+}
+
+impl Default for Atmosphere {
+    fn default() -> Self {
+        Self {
+            visibility_m: 10_000.0,
+            relative_humidity: 0.5,
+        }
+    }
+}
+
+/// `CloudLayer`: a slab between two altitudes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CloudLayer {
+    pub base_altitude_m: f64,
+    pub top_altitude_m: f64,
+    pub coverage: f64,
+}
+
+impl CloudLayer {
+    /// A hard block only at full coverage, with the slab strictly between.
+    pub fn obscures_los(&self, observer_alt_m: f64, target_alt_m: f64) -> bool {
+        if self.coverage < 1.0 {
+            return false;
+        }
+        let low = observer_alt_m.min(target_alt_m);
+        let high = observer_alt_m.max(target_alt_m);
+        low < self.base_altitude_m && high > self.top_altitude_m
+    }
+}
+
+/// `WeatherModel`, as the scenario bundle carries it.
+///
+/// Named for its first consumer, motion; it now also carries what sensing
+/// reads. Kept under this name because the bundle format and three call sites
+/// use it, and the name is no longer the whole truth.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MotionWeather {
     pub wind: WindModel,
     pub precipitation: Precipitation,
+    pub atmosphere: Atmosphere,
+    pub cloud_layers: Vec<CloudLayer>,
+}
+
+impl MotionWeather {
+    /// `visibility_at_range`: Koschmieder over the precipitation-reduced
+    /// visibility, floored at 1 m.
+    pub fn visibility_at_range(&self, range_m: f64) -> f64 {
+        let precip_factor = self.precipitation.visibility_reduction_factor();
+        let effective_vis = (self.atmosphere.visibility_m * precip_factor).max(1.0);
+        let sigma = 3.912 / effective_vis;
+        (-sigma * range_m.max(0.0)).exp().max(0.0)
+    }
+
+    /// `bearing_noise_scale`: precipitation noise times a humidity penalty.
+    pub fn bearing_noise_scale(&self) -> f64 {
+        let precip_noise = self.precipitation.sensor_noise_multiplier();
+        let humidity_noise = 1.0 + 0.3 * (self.atmosphere.relative_humidity - 0.8).max(0.0);
+        (precip_noise * humidity_noise).max(1.0)
+    }
+
+    /// Stage 6's cloud factor for one sight line: 0 through a full slab,
+    /// otherwise the product of partial-coverage penalties. Not a
+    /// `WeatherModel` method in the reference -- it is inline in
+    /// `build_observations` -- and ported from there.
+    pub fn cloud_factor(&self, observer_alt_m: f64, target_alt_m: f64) -> f64 {
+        let mut factor = 1.0;
+        for cloud in &self.cloud_layers {
+            if cloud.obscures_los(observer_alt_m, target_alt_m) {
+                return 0.0;
+            }
+            let low = observer_alt_m.min(target_alt_m);
+            let high = observer_alt_m.max(target_alt_m);
+            if low < cloud.top_altitude_m && high > cloud.base_altitude_m {
+                factor *= (1.0 - cloud.coverage * 0.7).max(0.05);
+            }
+        }
+        factor
+    }
 }
 
 impl WeatherSampler for MotionWeather {

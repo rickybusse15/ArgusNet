@@ -45,7 +45,8 @@ def _floats(values: Any) -> list[float]:
 
 
 def motion_weather_document(weather: Any) -> dict[str, Any] | None:
-    """The motion half of a `WeatherModel`: wind and precipitation drag."""
+    """A `WeatherModel`'s parameters: what motion reads (wind, precipitation
+    drag) and what sensing reads (atmosphere, precipitation, cloud layers)."""
     if weather is None:
         return None
     wind = weather.wind
@@ -61,6 +62,18 @@ def motion_weather_document(weather: Any) -> dict[str, Any] | None:
             "precip_type": str(weather.precipitation.precip_type),
             "rate_mmph": float(weather.precipitation.rate_mmph),
         },
+        "atmosphere": {
+            "visibility_m": float(weather.atmosphere.visibility_m),
+            "relative_humidity": float(weather.atmosphere.relative_humidity),
+        },
+        "cloud_layers": [
+            {
+                "base_altitude_m": float(c.base_altitude_m),
+                "top_altitude_m": float(c.top_altitude_m),
+                "coverage": float(c.coverage),
+            }
+            for c in weather.cloud_layers
+        ],
     }
 
 
@@ -133,6 +146,9 @@ def _sensor_document(node: Any, error_config: Any, constants: Any) -> dict[str, 
         ),
         "dropout_probability": float(node.dropout_probability),
         "bearing_std_rad": float(node.bearing_std_rad),
+        # Every directional sensor tilts its look direction down by this
+        # (`build_observations` reads it off the sensor config for any node).
+        "look_down_angle_deg": float(sensor_cfg.drone_look_down_angle_deg),
         "error": {k: float(v) for k, v in asdict(error_config).items()},
     }
 

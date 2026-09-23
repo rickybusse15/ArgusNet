@@ -382,3 +382,55 @@ fn observation_triggered_follow_makes_the_reference_calls() {
         );
     }
 }
+
+/// `sensor_look_direction` and `fov_angle_deg` against the reference, at the
+/// speed gate, under a pure climb, and across tilts.
+#[test]
+fn the_look_direction_matches_the_reference() {
+    use argusnet_sim::observe::{fov_angle_deg, sensor_look_direction};
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/look_direction.json"
+    );
+    let fixture: Value = serde_json::from_str(
+        &std::fs::read_to_string(path)
+            .expect("regenerate with scripts/capture_look_direction_fixture.py"),
+    )
+    .expect("json");
+    assert_eq!(
+        argusnet_sim::observe::DEFAULT_LOOK_DOWN_ANGLE_DEG,
+        num(&fixture["reference_look_down_angle_deg"]),
+        "the default tilt is not the reference's drone_look_down_angle_deg"
+    );
+    let mut gated = 0;
+    for case in fixture["directions"].as_array().expect("directions") {
+        let velocity = vec3(&case["velocity"]);
+        let tilt = num(&case["tilt_deg"]);
+        let actual = sensor_look_direction(velocity, tilt);
+        match case["look"].as_array() {
+            None => {
+                assert_eq!(
+                    actual, None,
+                    "{velocity:?} at {tilt} deg should have no look"
+                );
+                gated += 1;
+            }
+            Some(_) => {
+                let expected = vec3(&case["look"]);
+                let actual = actual.unwrap_or_else(|| panic!("{velocity:?} lost its look"));
+                assert_eq!(bits(&actual), bits(&expected), "{velocity:?} at {tilt} deg");
+            }
+        }
+    }
+    assert!(gated >= 15, "only {gated} gated cases");
+    let angles = fixture["angles"].as_array().expect("angles");
+    assert!(angles.len() >= 60, "only {} angle cases", angles.len());
+    for case in angles {
+        let angle = fov_angle_deg(
+            vec3(&case["line_of_sight"]),
+            num(&case["range_m"]),
+            vec3(&case["look"]),
+        );
+        assert_eq!(angle.to_bits(), num(&case["angle_deg"]).to_bits(), "{case}");
+    }
+}

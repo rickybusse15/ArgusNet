@@ -183,6 +183,8 @@ pub struct SensorDocument {
     pub required_elevation_deg: f64,
     pub dropout_probability: f64,
     pub bearing_std_rad: f64,
+    /// `drone_look_down_angle_deg`, applied to every directional sensor.
+    pub look_down_angle_deg: f64,
     /// The reference's `SensorErrorConfig`. It carries clutter fields the
     /// Rust config keeps on [`SensorSpec`] instead, so both are read from it.
     pub error: SensorErrorDocument,
@@ -202,6 +204,7 @@ impl SensorDocument {
             max_range_m: self.max_range_m,
             fov_half_angle_deg: (self.fov_half_angle_deg < OMNIDIRECTIONAL_FOV_DEG)
                 .then_some(self.fov_half_angle_deg),
+            look_down_angle_deg: self.look_down_angle_deg,
             required_elevation_deg: self.required_elevation_deg,
             dropout_probability: self.dropout_probability,
             base_bearing_std_rad: self.bearing_std_rad,
@@ -813,10 +816,17 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     for node in &bundle.nodes {
         observe_link.install_sensor(&node.node_id, node.sensor.spec());
     }
-    observe_link.set_visibility_oracle(Box::new(world.visibility.clone()));
+    observe_link.set_visibility_oracle(Box::new(
+        world
+            .visibility
+            .with_weather(bundle.weather.clone().map(Arc::new)),
+    ));
     observe_link.set_terrain(Box::new(world.terrain.clone()));
     observe_link.feed_fusion(fusion_link.clone());
     observe_link.feed_controllers(controllers.clone());
+    // The reference senses from each node's nominal controller pose, not
+    // from where overrides and deconfliction moved it (P4.8e.2).
+    observe_link.set_pose_source(Box::new(controllers.clone()));
     sim.set_stage_handler(Stage::GenerateObservations, Box::new(observe))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))

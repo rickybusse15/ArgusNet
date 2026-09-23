@@ -293,6 +293,11 @@ fn controller_accepts(controller: &PlatformController, state: &ControllerState) 
 struct Shared {
     controllers: Vec<(String, PlatformController)>,
     environment: Option<ControllerEnvironment>,
+    /// This tick's controller output per platform, keyed by the sample
+    /// time's bits: the *nominal* pose, before overrides and deconfliction
+    /// move the platform. Transient -- rebuilt every tick by the stage that
+    /// reads it first -- so it is not checkpoint state.
+    nominal: std::collections::BTreeMap<String, (u64, [f64; 3], [f64; 3])>,
 }
 
 /// Which capabilities a [`ControllerEnvironment`] carries.
@@ -544,6 +549,42 @@ fn sample_platform(
     }
 }
 
+fn guard_nominal(
+    nominal: &mut std::collections::BTreeMap<String, (u64, [f64; 3], [f64; 3])>,
+    node_id: &str,
+    timestamp_s: f64,
+    position: [f64; 3],
+    velocity: [f64; 3],
+) {
+    nominal.insert(
+        node_id.to_string(),
+        (timestamp_s.to_bits(), position, velocity),
+    );
+}
+
+impl ControllerLink {
+    /// This tick's nominal pose for `node_id`, if it was sampled at exactly
+    /// `timestamp_s`. A request for any other time is refused rather than
+    /// answered with a stale pose.
+    pub fn nominal_pose(&self, node_id: &str, timestamp_s: f64) -> Option<([f64; 3], [f64; 3])> {
+        let shared = self.lock();
+        let (bits, position, velocity) = shared.nominal.get(node_id)?;
+        (*bits == timestamp_s.to_bits()).then_some((*position, *velocity))
+    }
+}
+
+impl crate::observe::SensorPoseSource for ControllerLink {
+    fn pose(&self, node_id: &str, timestamp_s: f64) -> Option<([f64; 3], [f64; 3])> {
+        self.nominal_pose(node_id, timestamp_s)
+    }
+}
+
+impl crate::vio::NominalTrajectory for ControllerLink {
+    fn sample(&self, node_id: &str, timestamp_s: f64) -> Option<([f64; 3], [f64; 3])> {
+        self.nominal_pose(node_id, timestamp_s)
+    }
+}
+
 /// [`Stage::SampleControllersAndBattery`] as a [`StageHandler`].
 ///
 /// [`Stage::SampleControllersAndBattery`]: crate::stage::Stage::SampleControllersAndBattery
@@ -592,7 +633,9 @@ impl ControllerStage {
         let Shared {
             controllers,
             environment,
+            nominal,
         } = &mut *guard;
+        nominal.clear();
         if controllers.is_empty() {
             return Ok(false);
         }
@@ -609,6 +652,7 @@ impl ControllerStage {
             let platform = context.world.platform_mut(node_id).ok_or_else(|| {
                 StageError::Invariant(format!("controller {node_id} has no platform in the world"))
             })?;
+            guard_nominal(nominal, node_id, timestamp_s, position, velocity);
             platform.position = Vector3::new(position[0], position[1], position[2]);
             platform.velocity = Vector3::new(velocity[0], velocity[1], velocity[2]);
             platform.timestamp_s = timestamp_s;
@@ -639,9 +683,12 @@ impl StageHandler for ControllerStage {
     }
 
     fn reset(&mut self) {
-        for (_, controller) in self.link.lock().controllers.iter_mut() {
+        let mut shared = self.link.lock();
+        shared.nominal.clear();
+        for (_, controller) in shared.controllers.iter_mut() {
             controller.reset_to_constructed();
         }
+        drop(shared);
         if let Some(battery) = self.battery.as_mut() {
             battery.reset();
         }
