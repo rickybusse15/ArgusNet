@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — The viewer presents frames without rebuilding them (P2.0)
+
+- A snapshot adapter (`argusnet-viewer::presentation`) replaces the per-frame
+  marker rebuild. Entities have typed, interned keys; membership is rebuilt
+  only when the source frame changes, poses are re-blended in place, and a
+  paused frame does nothing. On a 240-entity replay, allocations per rendered
+  frame fell from 1,108 to about 5 playing, and from 1,210 to about 2 paused.
+- Marker entities persist, keyed and indexed, and are written only where
+  something changed. Presentation epochs (reload, or a live session change)
+  void keys, entities, selection and interpolation.
+- Fixed: selecting a truth resolved to the track that shares its label.
+- The viewer's `Update` runs in ordered `ViewerSet`s: Input, SnapshotApply,
+  Presentation, Picking, Overlays.
+
 ## Unreleased — Blocking safety and mission profiles, with no Python (P4.9d)
 
 - Stage 4, the hard safety monitor, is assembled when a bundle says

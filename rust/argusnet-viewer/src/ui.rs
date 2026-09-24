@@ -4,13 +4,13 @@ use egui_extras::{Column, TableBuilder};
 use egui_plot::{HLine, Line, Plot, PlotPoints, Points, Polygon, VLine};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
-use crate::replay::{EgressProgress, MarkerKind, ReplayState, RuntimeMarker};
+use crate::replay::{EgressProgress, MarkerKind, ReplayState};
 use crate::schema::ScenePackage;
 use crate::state::{
-    CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MapLayerPreset,
-    MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility, SelectionDetails,
-    SelectionState, SimulationRunner, ViewMode, ViewerMode, ViewerUiState, ZoneFocus,
-    ZoneOverlapModel,
+    CurrentFrameMetrics, CurrentRuntimeMarkers, LayerVisibilityState, LoadedMissionZones,
+    MapLayerPreset, MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility,
+    SelectionDetails, SelectionState, SimulationRunner, ViewMode, ViewerMode, ViewerUiState,
+    ZoneFocus, ZoneOverlapModel,
 };
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
@@ -65,7 +65,8 @@ pub fn viewer_ui_system(
     mut runtime_visibility: ResMut<RuntimeOverlayVisibility>,
     mut mission_overlay: ResMut<MissionOverlaySettings>,
     mut view_mode: ResMut<ViewMode>,
-    selection: Res<SelectionState>,
+    // Paired: the system is at Bevy's sixteen-parameter limit.
+    (selection, markers): (Res<SelectionState>, Res<CurrentRuntimeMarkers>),
     frame_metrics: Res<CurrentFrameMetrics>,
     mission_zones: Res<LoadedMissionZones>,
     mut zone_overlap_model: ResMut<ZoneOverlapModel>,
@@ -133,6 +134,7 @@ pub fn viewer_ui_system(
                             &mut runtime_visibility,
                             &mut mission_overlay,
                             &selection,
+                            &markers,
                             &mut layer_visibility,
                             &mut zone_overlap_model,
                             &mut ui_state,
@@ -342,6 +344,7 @@ fn drawer_mission_content(
     runtime_visibility: &mut RuntimeOverlayVisibility,
     mission_overlay: &mut MissionOverlaySettings,
     selection: &SelectionState,
+    markers: &CurrentRuntimeMarkers,
     layer_visibility: &mut LayerVisibilityState,
     zone_overlap_model: &mut ZoneOverlapModel,
     ui_state: &mut ViewerUiState,
@@ -357,6 +360,7 @@ fn drawer_mission_content(
         ui,
         scene_package,
         replay_state,
+        markers,
         mission_zones,
         reconstruction,
     );
@@ -834,6 +838,7 @@ fn tab_mission_content(
     ui: &mut egui::Ui,
     scene_package: &ScenePackage,
     replay_state: &ReplayState,
+    markers: &CurrentRuntimeMarkers,
     mission_zones: &LoadedMissionZones,
     reconstruction: &ReconstructionCloud,
 ) {
@@ -1028,22 +1033,17 @@ fn tab_mission_content(
                     }
                 }
 
-                // Trails: last 16 positions per mobile node
-                for node in &frame.nodes {
-                    if !node.is_mobile {
+                // Trails: the last 16 frames' positions per mobile node, as the
+                // adapter keeps them.
+                for (index, marker) in markers.markers.iter().enumerate() {
+                    if marker.kind != MarkerKind::Node || marker.is_mobile != Some(true) {
                         continue;
                     }
-                    let marker = RuntimeMarker {
-                        kind: MarkerKind::Node,
-                        label: node.node_id.clone(),
-                        position: Vec3::ZERO,
-                        velocity: Vec3::ZERO,
-                        is_mobile: Some(true),
-                    };
-                    let trail_3d = replay_state.trail_points(&marker, 16);
-                    if trail_3d.len() >= 2 {
-                        let trail_xy: Vec<[f64; 2]> =
-                            trail_3d.iter().map(|p| [p.x as f64, p.y as f64]).collect();
+                    let trail_xy: Vec<[f64; 2]> = markers
+                        .trail(index, 16)
+                        .map(|p| [p.x as f64, p.y as f64])
+                        .collect();
+                    if trail_xy.len() >= 2 {
                         plot_ui.line(
                             Line::new("", PlotPoints::new(trail_xy))
                                 .color(egui::Color32::from_rgba_unmultiplied(180, 180, 80, 80))

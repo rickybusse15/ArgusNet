@@ -40,7 +40,7 @@ const FALLBACK_METRES_PER_PIXEL: f32 = 1.2;
 const MIN_VIEW_DEPTH_M: f32 = 1.0;
 
 /// The camera-facing basis and depth scaling used to draw glyphs.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphProjection {
     /// World direction that is "right" on screen.
     pub right: Vec3,
@@ -49,7 +49,7 @@ pub struct GlyphProjection {
     scale: GlyphScale,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum GlyphScale {
     /// Constant on screen: the world radius grows with view depth.
     Screen {

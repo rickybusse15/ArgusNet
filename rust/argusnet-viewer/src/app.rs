@@ -24,6 +24,7 @@ use crate::glyphs::{GlyphProjection, NODE_GLYPH_PX, TRACK_GLYPH_PX, TRUTH_GLYPH_
 use crate::headless::{HeadlessRequest, HeadlessTarget};
 use crate::mission_zones::{self, build_projected_badges_system, ProjectedZoneBadges};
 use crate::orbit_camera::{OrbitCamera, OrbitCameraPlugin};
+use crate::presentation::{PresentationChange, TRAIL_MAX_FRAMES};
 use crate::replay::{
     MarkerKind, RejectedObservation, ReplayDocument, ReplayState, RuntimeMarker, TerrainViewerMesh,
 };
@@ -38,9 +39,6 @@ use crate::state::{
 };
 use crate::terrain_material::{is_terrain_layer, TerrainLayerRoot, TerrainMaterialPlugin};
 use crate::ui::viewer_ui_system;
-
-/// Maximum number of historical positions kept in a trail.
-const TRAIL_MAX_POINTS: usize = 32;
 
 /// Marker component on the persistent GPU line-list mesh used to render the
 /// LiDAR reconstruction point cloud.  Rebuilt only when the cloud is dirty.
@@ -243,56 +241,55 @@ fn run_inner(
             crate::marker_meshes::MarkerMeshPlugin,
             TerrainMaterialPlugin,
         ))
-        .add_systems(Startup, (setup_world, setup_reconstruction_mesh))
-        .add_systems(
-            Update,
-            // Grouped into ordered stages rather than one flat list. The stages
-            // still run in sequence — later ones read what earlier ones write —
-            // but the grouping says which systems belong together, and keeps the
-            // tuple under the arity `.chain()` accepts.
+        .add_systems(Startup, (setup_world, setup_reconstruction_mesh));
+    configure_viewer_sets(&mut app);
+    app.add_systems(
+        Update,
+        (
             (
-                // Advance time and take operator input.
-                (
-                    advance_playback_system,
-                    keyboard_playback_system,
-                    sync_split_viewports_system,
-                )
-                    .chain(),
-                // Pull in whatever the simulation produced.
-                (spawn_simulation_system, poll_simulation_system).chain(),
-                // Derive this frame's view of the world.
-                (
-                    mission_zones::refresh_zone_overlap_model_system,
-                    sync_current_markers_system,
-                    crate::marker_meshes::sync_marker_meshes,
-                    sync_base_layer_visibility_system,
-                    pick_runtime_marker_system,
-                    sync_fog_to_camera_system,
-                )
-                    .chain(),
-                // Reconstruction owns real state, so it runs regardless of its
-                // overlay toggle — see the note on the run conditions below.
-                (
-                    update_reconstruction_system,
-                    maintain_reconstruction_mesh_system,
-                )
-                    .chain(),
-                // Immediate-mode overlays, each gated on its own toggle.
-                (
-                    draw_runtime_overlays_system,
-                    draw_sensor_overlays_system.run_if(sensor_overlays_enabled),
-                    mission_zones::draw_mission_zones_system,
-                    build_projected_badges_system,
-                    draw_scan_grid_system.run_if(scan_grid_enabled),
-                    draw_poi_markers_system.run_if(poi_markers_enabled),
-                    draw_team_localization_system.run_if(loc_ellipses_enabled),
-                    draw_coord_frame_system.run_if(coord_frame_enabled),
-                    draw_egress_paths_system.run_if(egress_paths_enabled),
-                )
-                    .chain(),
+                advance_playback_system,
+                keyboard_playback_system,
+                sync_split_viewports_system,
             )
-                .chain(),
-        );
+                .chain()
+                .in_set(ViewerSet::Input),
+            // Pull in whatever the simulation produced, then present it.
+            (
+                spawn_simulation_system,
+                poll_simulation_system,
+                sync_current_markers_system,
+            )
+                .chain()
+                .in_set(ViewerSet::SnapshotApply),
+            (
+                mission_zones::refresh_zone_overlap_model_system,
+                crate::marker_meshes::sync_marker_meshes,
+                sync_base_layer_visibility_system,
+                sync_fog_to_camera_system,
+                // Reconstruction owns real state, so it runs regardless of its
+                // overlay toggle -- see the note on the run conditions below.
+                update_reconstruction_system,
+                maintain_reconstruction_mesh_system,
+            )
+                .chain()
+                .in_set(ViewerSet::Presentation),
+            pick_runtime_marker_system.in_set(ViewerSet::Picking),
+            // Immediate-mode overlays, each gated on its own toggle.
+            (
+                draw_runtime_overlays_system,
+                draw_sensor_overlays_system.run_if(sensor_overlays_enabled),
+                mission_zones::draw_mission_zones_system,
+                build_projected_badges_system,
+                draw_scan_grid_system.run_if(scan_grid_enabled),
+                draw_poi_markers_system.run_if(poi_markers_enabled),
+                draw_team_localization_system.run_if(loc_ellipses_enabled),
+                draw_coord_frame_system.run_if(coord_frame_enabled),
+                draw_egress_paths_system.run_if(egress_paths_enabled),
+            )
+                .chain()
+                .in_set(ViewerSet::Overlays),
+        ),
+    );
 
     #[cfg(feature = "live-stream")]
     if let Some((endpoint, tls)) = live_endpoint {
@@ -301,7 +298,9 @@ fn run_inner(
         app.insert_resource(crate::live::connect(endpoint, tls)?);
         app.add_systems(
             Update,
-            crate::live::ingest_live_frames_system.before(advance_playback_system),
+            crate::live::ingest_live_frames_system
+                .in_set(ViewerSet::Input)
+                .before(advance_playback_system),
         );
         app.add_systems(
             EguiPrimaryContextPass,
@@ -314,6 +313,41 @@ fn run_inner(
     app.run();
 
     Ok(())
+}
+
+/// The viewer's frame, in order (P2.0).
+///
+/// * `Input`: advance time, take operator input, ingest live frames.
+/// * `SnapshotApply`: take in new runs, then bring the presentation up to
+///   date with the replay cursor (the snapshot adapter).
+/// * `Presentation`: persistent entities, visibility, fog, reconstruction.
+/// * `Picking`: what the pointer selects, against this frame's presentation.
+/// * `Overlays`: immediate-mode gizmos.
+///
+/// The operator UI runs in egui's own pass (`EguiPrimaryContextPass`), after
+/// `Update`, so it reads a finished frame.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ViewerSet {
+    Input,
+    SnapshotApply,
+    Presentation,
+    Picking,
+    Overlays,
+}
+
+/// Order [`ViewerSet`] in `Update`.
+pub fn configure_viewer_sets(app: &mut App) {
+    app.configure_sets(
+        Update,
+        (
+            ViewerSet::Input,
+            ViewerSet::SnapshotApply,
+            ViewerSet::Presentation,
+            ViewerSet::Picking,
+            ViewerSet::Overlays,
+        )
+            .chain(),
+    );
 }
 
 /// Keeps fog distances tracking the orbit camera.
@@ -834,83 +868,82 @@ fn sync_split_viewports_system(
     }
 }
 
-fn sync_current_markers_system(
+/// The snapshot-apply stage: bring the presentation up to date with the
+/// replay cursor, and re-resolve the selection against it.
+///
+/// Membership and poses are updated in place by the adapter, and only when
+/// their inputs changed; a paused frame does nothing here.
+pub fn sync_current_markers_system(
     replay_state: Res<ReplayState>,
     mut markers: ResMut<CurrentRuntimeMarkers>,
     mut frame_metrics: ResMut<CurrentFrameMetrics>,
     mut selection: ResMut<SelectionState>,
 ) {
-    // Interpolated rather than raw: replay frames arrive at the simulation's
-    // tick rate, so drawing them directly makes platforms jump once per tick and
-    // sit still in between. Seeking zeroes the blend, so scrubbing still lands on
-    // exact recorded frames.
-    markers.markers = replay_state.interpolated_markers();
+    // Checked through `bypass_change_detection` so an unchanged frame does not
+    // mark the resource changed for every reader downstream.
+    let change = markers.bypass_change_detection().apply(&replay_state);
+    if change == PresentationChange::default() {
+        return;
+    }
+    markers.set_changed();
 
-    if let Some(frame) = replay_state.current_frame() {
-        frame_metrics.metrics = Some(frame.metrics.clone());
-    } else {
-        frame_metrics.metrics = None;
+    // Every frame has its own metrics, whether or not its entities changed.
+    if change.frame {
+        frame_metrics.metrics = replay_state
+            .current_frame()
+            .map(|frame| frame.metrics.clone());
     }
 
-    // Re-resolve the selection against the new frame. Each kind builds its own
-    // detail variant, so there is no need to null the other kinds' fields —
-    // which is what the previous flat struct required, and inconsistently did.
-    let Some(selected_label) = selection.label().map(str::to_owned) else {
+    // Re-resolve the selection by key. Each kind builds its own detail
+    // variant, so there is no other kind's data to null.
+    let Some(selected) = selection.selected.as_ref() else {
         return;
     };
-    let Some(marker) = markers
-        .markers
-        .iter()
-        .find(|m| m.label == selected_label)
-        .cloned()
-    else {
-        // The selected entity is gone from this frame.
-        selection.clear();
-        return;
+    let (key, epoch) = (selected.key, selected.epoch);
+    let marker = match markers.get(key) {
+        Some(marker) if epoch == markers.epoch() => marker,
+        // Gone from this frame, or from another run altogether.
+        _ => {
+            selection.clear();
+            return;
+        }
     };
     let Some(frame) = replay_state.current_frame() else {
         return;
     };
+    let id = &*marker.label;
 
     let details = match marker.kind {
-        MarkerKind::Track => frame
-            .tracks
-            .iter()
-            .find(|t| t.track_id == selected_label)
-            .map(|track| {
-                SelectionDetails::Track(TrackDetails {
-                    measurement_std_m: Some(track.measurement_std_m),
-                    update_count: Some(track.update_count),
-                    stale_steps: Some(track.stale_steps),
-                    track_error_m: frame_metrics
-                        .metrics
-                        .as_ref()
-                        .and_then(|m| m.track_errors_m.get(&selected_label).copied()),
-                    covariance_diag: track
-                        .covariance
-                        .as_ref()
-                        .map(|cov| crate::ui::covariance_diagonal(cov)),
-                    mode_probability_cv: track.mode_probability_cv,
-                    contributing_nodes: track.contributing_node_ids.clone(),
-                })
-            }),
-        MarkerKind::Node => frame
-            .nodes
-            .iter()
-            .find(|n| n.node_id == selected_label)
-            .map(|node| {
-                SelectionDetails::Node(NodeDetails {
-                    health: Some(node.health),
-                    sensor_type: Some(node.sensor_type.clone()),
-                    fov_half_angle_deg: node.fov_half_angle_deg,
-                    max_range_m: node.max_range_m,
-                    is_mobile: Some(node.is_mobile),
-                })
-            }),
+        MarkerKind::Track => frame.tracks.iter().find(|t| t.track_id == id).map(|track| {
+            SelectionDetails::Track(TrackDetails {
+                measurement_std_m: Some(track.measurement_std_m),
+                update_count: Some(track.update_count),
+                stale_steps: Some(track.stale_steps),
+                track_error_m: frame_metrics
+                    .metrics
+                    .as_ref()
+                    .and_then(|m| m.track_errors_m.get(id).copied()),
+                covariance_diag: track
+                    .covariance
+                    .as_ref()
+                    .map(|cov| crate::ui::covariance_diagonal(cov)),
+                mode_probability_cv: track.mode_probability_cv,
+                contributing_nodes: track.contributing_node_ids.clone(),
+            })
+        }),
+        MarkerKind::Node => frame.nodes.iter().find(|n| n.node_id == id).map(|node| {
+            SelectionDetails::Node(NodeDetails {
+                health: Some(node.health),
+                sensor_type: Some(node.sensor_type.clone()),
+                fov_half_angle_deg: node.fov_half_angle_deg,
+                max_range_m: node.max_range_m,
+                is_mobile: Some(node.is_mobile),
+            })
+        }),
         MarkerKind::Truth => frame
             .truths
             .iter()
-            .find(|t| t.target_id == selected_label)
+            .find(|t| t.target_id == id)
             .map(|truth| {
                 let truth_pos = Vec3::from_array(truth.position);
                 let nearest = frame
@@ -925,10 +958,14 @@ fn sync_current_markers_system(
     };
 
     if let Some(details) = details {
+        let (label, position, velocity) =
+            (marker.label.to_string(), marker.position, marker.velocity);
         selection.selected = Some(Selection {
-            label: selected_label,
-            position: marker.position,
-            velocity: marker.velocity,
+            key,
+            epoch,
+            label,
+            position,
+            velocity,
             details,
         });
     }
@@ -993,12 +1030,12 @@ fn draw_runtime_overlays_system(
         .fold(f32::NEG_INFINITY, f32::max);
     let alt_span = (alt_max - alt_min).max(1.0);
 
-    for marker in &markers.markers {
+    for (index, marker) in markers.markers.iter().enumerate() {
         if !is_marker_visible(marker, &runtime_visibility) {
             continue;
         }
 
-        let (draw_color, radius_scale) = marker_appearance(marker, &replay_state, &scene_package);
+        let (draw_color, radius_scale) = marker_appearance(marker, &scene_package);
         if runtime_visibility.diagnostic_glyphs {
             draw_marker_scaled(&mut gizmos, &glyphs, marker, draw_color, radius_scale);
         } else {
@@ -1016,9 +1053,15 @@ fn draw_runtime_overlays_system(
         }
 
         // Item 15: trail with alpha fading and altitude-based hue coloring.
-        let trail_points = replay_state.trail_points(marker, TRAIL_MAX_POINTS);
-        let n = trail_points.len();
-        for (seg_idx, segment) in trail_points.windows(2).enumerate() {
+        // The adapter keeps each marker's trail; nothing is rescanned here.
+        let n = markers.trail(index, TRAIL_MAX_FRAMES).count();
+        let mut previous: Option<Vec3> = None;
+        for (point_idx, point) in markers.trail(index, TRAIL_MAX_FRAMES).enumerate() {
+            let Some(start) = previous.replace(point) else {
+                continue;
+            };
+            let segment = [start, point];
+            let seg_idx = point_idx - 1;
             // t goes from 0 (oldest segment) to 1 (newest segment).
             let t = if n > 2 {
                 seg_idx as f32 / (n - 2) as f32
@@ -1344,7 +1387,9 @@ fn pick_runtime_marker_system(
         // Details are empty here and filled in by `sync_current_markers_system`
         // against the current frame; picking only establishes what is selected.
         selection.selected = Some(Selection {
-            label: marker.label.clone(),
+            key: marker.key,
+            epoch: markers.epoch(),
+            label: marker.label.to_string(),
             position: marker.position,
             velocity: marker.velocity,
             details: match marker.kind {
@@ -1456,16 +1501,12 @@ const LEADER_RADII_AT_MAX_SPEED: f32 = 4.0;
 
 pub(crate) fn marker_appearance(
     marker: &RuntimeMarker,
-    replay_state: &ReplayState,
     scene_package: &ScenePackage,
 ) -> (Color, f32) {
     let base_color = marker_color(marker.kind, scene_package);
     let (draw_color, radius_scale) = if marker.kind == crate::replay::MarkerKind::Track {
-        let std_m = replay_state
-            .current_frame()
-            .and_then(|f| f.tracks.iter().find(|t| t.track_id == marker.label))
-            .map(|t| t.measurement_std_m)
-            .unwrap_or(0.0);
+        // Carried on the marker by the adapter: no search of the frame.
+        let std_m = marker.measurement_std_m.unwrap_or(0.0);
         let conf_color = if std_m < 5.0 {
             Color::srgba(0.2, 0.9, 0.2, 1.0) // green
         } else if std_m < 20.0 {
@@ -2332,7 +2373,6 @@ fn poll_simulation_system(
     mut layer_visibility: ResMut<LayerVisibilityState>,
     mut layer_entities: ResMut<LayerEntityIndex>,
     mut selection: ResMut<SelectionState>,
-    mut current_markers: ResMut<CurrentRuntimeMarkers>,
     mut frame_metrics: ResMut<CurrentFrameMetrics>,
     mut reconstruction: ResMut<ReconstructionCloud>,
     asset_server: Res<AssetServer>,
@@ -2377,7 +2417,6 @@ fn poll_simulation_system(
                             &mut layer_visibility,
                             &mut layer_entities,
                             &mut selection,
-                            &mut current_markers,
                             &mut frame_metrics,
                             &process.next_scene_root,
                         );
@@ -2435,7 +2474,6 @@ fn reload_rebuilt_scene(
     layer_visibility: &mut LayerVisibilityState,
     layer_entities: &mut LayerEntityIndex,
     selection: &mut SelectionState,
-    current_markers: &mut CurrentRuntimeMarkers,
     frame_metrics: &mut CurrentFrameMetrics,
     next_scene_root: &Path,
 ) -> Result<()> {
@@ -2466,8 +2504,9 @@ fn reload_rebuilt_scene(
     *layer_visibility = bundle.layer_visibility;
     working_scene_root.advance_to(scene_package.root.clone());
 
+    // The new run is a new epoch (see `preserved_replay_state`): the adapter
+    // drops every entity keyed to the old one on its next apply.
     selection.clear();
-    current_markers.markers.clear();
     frame_metrics.metrics = None;
 
     spawn_base_layers(
@@ -2530,6 +2569,7 @@ fn preserved_replay_state(previous: &ReplayState, document: Option<ReplayDocumen
         0.0
     };
     let mut next = ReplayState::new(document);
+    next.succeed(previous);
     next.playback_speed = previous.playback_speed;
     if next.frame_count() > 1 {
         let max_index = next.frame_count().saturating_sub(1);

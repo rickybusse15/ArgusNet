@@ -6,6 +6,7 @@ pub mod live;
 pub mod marker_meshes;
 pub mod mission_zones;
 pub mod orbit_camera;
+pub mod presentation;
 pub mod replay;
 pub mod schema;
 pub mod sky;

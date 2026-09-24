@@ -568,12 +568,31 @@ fn apply_camera_preset(
             orbit.yaw = std::f32::consts::FRAC_PI_4;
             orbit.pitch = ISOMETRIC_PITCH_RAD;
             if let Some(target_id) = request.target_id.as_deref() {
-                if let Some(marker) = replay_state
-                    .current_markers()
-                    .into_iter()
-                    .find(|marker| marker.label == target_id)
-                {
-                    orbit.focus = marker.position;
+                // The recorded pose, looked up once: tracks first, then
+                // truths, then nodes, as the markers were ordered.
+                let position = replay_state.current_frame().and_then(|frame| {
+                    frame
+                        .tracks
+                        .iter()
+                        .find(|t| t.track_id == target_id)
+                        .map(|t| t.position)
+                        .or_else(|| {
+                            frame
+                                .truths
+                                .iter()
+                                .find(|t| t.target_id == target_id)
+                                .map(|t| t.position)
+                        })
+                        .or_else(|| {
+                            frame
+                                .nodes
+                                .iter()
+                                .find(|n| n.node_id == target_id)
+                                .map(|n| n.position)
+                        })
+                });
+                if let Some(position) = position {
+                    orbit.focus = Vec3::from_array(position);
                     orbit.radius = (orbit.radius * 0.25).max(orbit.min_radius);
                 }
             }

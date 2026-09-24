@@ -44,7 +44,7 @@ metric's definition, which needs a decision; see
 
 | ID | Slice | State |
 | --- | --- | --- |
-| P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state | open |
+| P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | local ([SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
 | P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot` | open (terrain material exists; belief does not) |
 | P2.2 | Sensor frusta, zone volumes, trail ribbons | open (zones exist) |
 | P2.3 | Raycast picking, hover, selection outline | open |
