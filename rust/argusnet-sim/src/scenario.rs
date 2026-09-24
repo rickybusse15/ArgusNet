@@ -1507,6 +1507,15 @@ impl AssembledRun {
         });
     }
 
+    /// Add keys to the replay's `meta` -- provenance a caller knows and the
+    /// run does not, such as the config it was built from.
+    pub fn extend_replay_meta(
+        &mut self,
+        entries: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) {
+        self.replay.extend_meta(entries);
+    }
+
     /// Run every remaining tick and return the replay.
     pub fn run_to_replay(mut self) -> Result<ReplayDocument, RunError> {
         loop {

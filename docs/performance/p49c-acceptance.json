@@ -1,0 +1,4076 @@
+{
+ "_source": "scripts/run_phase_acceptance.py",
+ "machine": {
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "python": "3.12.13"
+ },
+ "seeds": [
+  7,
+  42,
+  137,
+  9999,
+  31415
+ ],
+ "duration_override_s": null,
+ "results": [
+  {
+   "scenario": "baseline_coverage",
+   "passed": true,
+   "checks": [
+    {
+     "kind": "exact",
+     "check": "seed 7 frames",
+     "passed": true,
+     "detail": "241 / 241"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 frames",
+     "passed": true,
+     "detail": "241 / 241"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 frames",
+     "passed": true,
+     "detail": "241 / 241"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 frames",
+     "passed": true,
+     "detail": "241 / 241"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 frames",
+     "passed": true,
+     "detail": "241 / 241"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "statistical",
+     "check": "localisation_rmse_m",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "track_continuity_mean",
+     "passed": true,
+     "detail": "reference 0, rust 0, |delta| 0 <= 0.1"
+    },
+    {
+     "kind": "statistical",
+     "check": "time_to_reacquire_mean_s",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "covariance_reduction_mean",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "mission_completion_rate",
+     "passed": true,
+     "detail": "reference 1, rust 1, |delta| 0 <= 0.2"
+    },
+    {
+     "kind": "statistical",
+     "check": "energy_reserve_min",
+     "passed": true,
+     "detail": "reference 0.9, rust 0.9, |delta| 0 <= 0.02"
+    },
+    {
+     "kind": "verdict",
+     "check": "check_pass_fail agreement",
+     "passed": true,
+     "detail": "5/5 seeds agree"
+    },
+    {
+     "kind": "performance",
+     "check": "tick p95",
+     "passed": true,
+     "detail": "worst p95 0.045 ms <= 5.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "startup",
+     "passed": true,
+     "detail": "worst 32.4 ms <= 2000.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "speed-up",
+     "passed": true,
+     "detail": "24.8x >= 5.0x"
+    }
+   ],
+   "runs": [
+    {
+     "seed": 7,
+     "reference": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 7,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": 0.2649105830350891,
+      "frame_time_mean_ms": 1.0980065394190874,
+      "frame_time_p95_ms": 1.35625,
+      "frame_time_p99_ms": 1.9076831999999997,
+      "peak_rss_mb": 146.40625,
+      "replay_size_mb": 2.4303293228149414,
+      "terrain_queries_per_sec": 48616.4042691118,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:14.166740+00:00"
+     },
+     "rust": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 7,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:14.638421+00:00"
+     },
+     "reference_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.2649105830350891,
+     "reference_process_s": 1.8069614169653505,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 32.419708,
+      "tick_ms": {
+       "max": 0.262959,
+       "mean": 0.04137672614107884,
+       "p50": 0.039792,
+       "p95": 0.0455,
+       "p99": 0.057290999999999995
+      },
+      "ticks": 241,
+      "total_ms": 45.311875
+     }
+    },
+    {
+     "seed": 42,
+     "reference": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 42,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.9,
+      "wall_clock_s": 0.26589220797177404,
+      "frame_time_mean_ms": 1.1020190290456433,
+      "frame_time_p95_ms": 1.379333,
+      "frame_time_p99_ms": 1.9017753999999993,
+      "peak_rss_mb": 163.59375,
+      "replay_size_mb": 2.430429458618164,
+      "terrain_queries_per_sec": 48418.116868496756,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:16.776247+00:00"
+     },
+     "rust": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 42,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.9,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:17.091103+00:00"
+     },
+     "reference_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.26589220797177404,
+     "reference_process_s": 2.136640416982118,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 19.887167,
+      "tick_ms": {
+       "max": 0.085542,
+       "mean": 0.03264347302904563,
+       "p50": 0.031875,
+       "p95": 0.035083,
+       "p99": 0.051625000000000004
+      },
+      "ticks": 241,
+      "total_ms": 30.169083
+     }
+    },
+    {
+     "seed": 137,
+     "reference": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 137,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": 0.2628602090408094,
+      "frame_time_mean_ms": 1.0895663858921163,
+      "frame_time_p95_ms": 1.346625,
+      "frame_time_p99_ms": 1.766799999999999,
+      "peak_rss_mb": 168.0,
+      "replay_size_mb": 2.4234046936035156,
+      "terrain_queries_per_sec": 48892.907933451075,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:19.328480+00:00"
+     },
+     "rust": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 137,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:19.643861+00:00"
+     },
+     "reference_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.2628602090408094,
+     "reference_process_s": 2.236237249977421,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 19.747792,
+      "tick_ms": {
+       "max": 0.087208,
+       "mean": 0.03226002904564316,
+       "p50": 0.031917,
+       "p95": 0.034666999999999996,
+       "p99": 0.043459
+      },
+      "ticks": 241,
+      "total_ms": 29.955334
+     }
+    },
+    {
+     "seed": 9999,
+     "reference": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 9999,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": 0.27273470803629607,
+      "frame_time_mean_ms": 1.1305552863070538,
+      "frame_time_p95_ms": 1.336084,
+      "frame_time_p99_ms": 2.1365751999999967,
+      "peak_rss_mb": 173.609375,
+      "replay_size_mb": 2.4352540969848633,
+      "terrain_queries_per_sec": 47199.713203670566,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:21.770475+00:00"
+     },
+     "rust": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 9999,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:22.088149+00:00"
+     },
+     "reference_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.27273470803629607,
+     "reference_process_s": 2.1253968329983763,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 20.053458,
+      "tick_ms": {
+       "max": 0.08479099999999999,
+       "mean": 0.03224931950207469,
+       "p50": 0.031541,
+       "p95": 0.035457999999999996,
+       "p99": 0.040417
+      },
+      "ticks": 241,
+      "total_ms": 30.239915999999997
+     }
+    },
+    {
+     "seed": 31415,
+     "reference": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 31415,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": 0.26707520900527015,
+      "frame_time_mean_ms": 1.107067053941909,
+      "frame_time_p95_ms": 1.367709,
+      "frame_time_p99_ms": 2.0142997999999976,
+      "peak_rss_mb": 175.03125,
+      "replay_size_mb": 2.4422874450683594,
+      "terrain_queries_per_sec": 48289.76844400974,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:24.217489+00:00"
+     },
+     "rust": {
+      "scenario_name": "baseline_coverage",
+      "mission_type": "coverage",
+      "difficulty": 0.2,
+      "seed": 31415,
+      "duration_s": 60.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8999999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:24.531946+00:00"
+     },
+     "reference_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 241,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.26707520900527015,
+     "reference_process_s": 2.128123458009213,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 20.31125,
+      "tick_ms": {
+       "max": 0.089167,
+       "mean": 0.03236721991701245,
+       "p50": 0.031792,
+       "p95": 0.035875,
+       "p99": 0.041375
+      },
+      "ticks": 241,
+      "total_ms": 30.534167
+     }
+    }
+   ]
+  },
+  {
+   "scenario": "intercept_stress",
+   "passed": true,
+   "checks": [
+    {
+     "kind": "exact",
+     "check": "seed 7 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf', 'ground-hotel']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-hawk', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "statistical",
+     "check": "localisation_rmse_m",
+     "passed": true,
+     "detail": "reference 25.32, rust 31.04, |delta| 5.725 <= 6.329"
+    },
+    {
+     "kind": "statistical",
+     "check": "track_continuity_mean",
+     "passed": true,
+     "detail": "reference 0.6464, rust 0.6453, |delta| 0.001108 <= 0.1"
+    },
+    {
+     "kind": "statistical",
+     "check": "time_to_reacquire_mean_s",
+     "passed": true,
+     "detail": "reference 0.5687, rust 0.5823, |delta| 0.01356 <= 2"
+    },
+    {
+     "kind": "statistical",
+     "check": "covariance_reduction_mean",
+     "passed": true,
+     "detail": "reference 0.88, rust 0.8497, |delta| 0.03029 <= 0.1"
+    },
+    {
+     "kind": "statistical",
+     "check": "mission_completion_rate",
+     "passed": true,
+     "detail": "reference 1, rust 1, |delta| 0 <= 0.2"
+    },
+    {
+     "kind": "statistical",
+     "check": "energy_reserve_min",
+     "passed": true,
+     "detail": "reference 0.85, rust 0.85, |delta| 0 <= 0.02"
+    },
+    {
+     "kind": "verdict",
+     "check": "check_pass_fail agreement",
+     "passed": true,
+     "detail": "5/5 seeds agree"
+    },
+    {
+     "kind": "performance",
+     "check": "tick p95",
+     "passed": true,
+     "detail": "worst p95 0.115 ms <= 5.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "startup",
+     "passed": true,
+     "detail": "worst 24.3 ms <= 2000.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "speed-up",
+     "passed": true,
+     "detail": "67.5x >= 5.0x"
+    }
+   ],
+   "runs": [
+    {
+     "seed": 7,
+     "reference": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 7,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.49765258215962443,
+      "time_to_reacquire_p95_s": 1.5,
+      "track_continuity_mean": 0.6696675900277008,
+      "localisation_rmse_m": 21.52798030667515,
+      "covariance_reduction_mean": 0.8432584555723402,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": 3.3988966250326484,
+      "frame_time_mean_ms": 9.414015329639888,
+      "frame_time_p95_ms": 10.529083,
+      "frame_time_p99_ms": 19.008333399999923,
+      "peak_rss_mb": 251.0,
+      "replay_size_mb": 15.531364440917969,
+      "terrain_queries_per_sec": 11556.10315145219,
+      "observations_per_sec": 930.0076903544063,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.670 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:33.634208+00:00"
+     },
+     "rust": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 7,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5165094339622641,
+      "time_to_reacquire_p95_s": 1.75,
+      "track_continuity_mean": 0.6800554016620498,
+      "localisation_rmse_m": 19.948018600673148,
+      "covariance_reduction_mean": 0.9090655321909105,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.680 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:36.228485+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.3988966250326484,
+     "reference_process_s": 9.104736707988195,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 23.861959,
+      "tick_ms": {
+       "max": 0.19025,
+       "mean": 0.10350059002770086,
+       "p50": 0.10337500000000001,
+       "p95": 0.112458,
+       "p99": 0.146042
+      },
+      "ticks": 361,
+      "total_ms": 74.927875
+     }
+    },
+    {
+     "seed": 42,
+     "reference": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 42,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5710526315789474,
+      "time_to_reacquire_p95_s": 1.3874999999999957,
+      "track_continuity_mean": 0.682825484764543,
+      "localisation_rmse_m": 28.36195035218652,
+      "covariance_reduction_mean": 0.8719507176000776,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8500000000000001,
+      "wall_clock_s": 3.463214791030623,
+      "frame_time_mean_ms": 9.592110451523546,
+      "frame_time_p95_ms": 10.528417,
+      "frame_time_p99_ms": 22.004874999999934,
+      "peak_rss_mb": 315.578125,
+      "replay_size_mb": 15.509198188781738,
+      "terrain_queries_per_sec": 11245.043218474648,
+      "observations_per_sec": 925.1519739110715,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.683 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:45.567992+00:00"
+     },
+     "rust": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 42,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5193236714975845,
+      "time_to_reacquire_p95_s": 1.4249999999999972,
+      "track_continuity_mean": 0.6869806094182825,
+      "localisation_rmse_m": 33.188559741402116,
+      "covariance_reduction_mean": 0.8360984862895052,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.85,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.687 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:48.171206+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.463214791030623,
+     "reference_process_s": 9.3321628330159,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 23.857291,
+      "tick_ms": {
+       "max": 0.17083399999999999,
+       "mean": 0.10396270637119118,
+       "p50": 0.104167,
+       "p95": 0.113625,
+       "p99": 0.139959
+      },
+      "ticks": 361,
+      "total_ms": 75.14004100000001
+     }
+    },
+    {
+     "seed": 137,
+     "reference": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 137,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6719409282700421,
+      "time_to_reacquire_p95_s": 2.049999999999997,
+      "track_continuity_mean": 0.5346260387811634,
+      "localisation_rmse_m": 26.66158007174462,
+      "covariance_reduction_mean": 0.9327474248878339,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": 3.4481479169917293,
+      "frame_time_mean_ms": 9.550472512465374,
+      "frame_time_p95_ms": 10.732333,
+      "frame_time_p99_ms": 22.888641799999945,
+      "peak_rss_mb": 326.0,
+      "replay_size_mb": 15.637845039367676,
+      "terrain_queries_per_sec": 11279.098500487353,
+      "observations_per_sec": 722.7068153660002,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.535 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:55:57.717590+00:00"
+     },
+     "rust": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 137,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6694214876033058,
+      "time_to_reacquire_p95_s": 2.0,
+      "track_continuity_mean": 0.5270083102493075,
+      "localisation_rmse_m": 22.90633700232126,
+      "covariance_reduction_mean": 0.946461131340588,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.527 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:00.353216+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.4481479169917293,
+     "reference_process_s": 9.539551457972266,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 23.658583,
+      "tick_ms": {
+       "max": 0.160834,
+       "mean": 0.10089233518005547,
+       "p50": 0.10133400000000001,
+       "p95": 0.109458,
+       "p99": 0.139791
+      },
+      "ticks": 361,
+      "total_ms": 73.82900000000001
+     }
+    },
+    {
+     "seed": 9999,
+     "reference": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 9999,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5442708333333334,
+      "time_to_reacquire_p95_s": 1.5,
+      "track_continuity_mean": 0.695983379501385,
+      "localisation_rmse_m": 32.68078090020091,
+      "covariance_reduction_mean": 0.8751376275638383,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8500000000000001,
+      "wall_clock_s": 3.4192721670260653,
+      "frame_time_mean_ms": 9.470503130193906,
+      "frame_time_p95_ms": 10.692083,
+      "frame_time_p99_ms": 22.234200199999933,
+      "peak_rss_mb": 343.15625,
+      "replay_size_mb": 15.512371063232422,
+      "terrain_queries_per_sec": 11447.465451117925,
+      "observations_per_sec": 977.9859094716248,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.696 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:09.592632+00:00"
+     },
+     "rust": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 9999,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5647668393782384,
+      "time_to_reacquire_p95_s": 1.5,
+      "track_continuity_mean": 0.6849030470914128,
+      "localisation_rmse_m": 29.30982951743595,
+      "covariance_reduction_mean": 0.5928342994910569,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.85,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.685 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:12.205177+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.4192721670260653,
+     "reference_process_s": 9.232431957963854,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 24.256208,
+      "tick_ms": {
+       "max": 0.161167,
+       "mean": 0.1044008670360112,
+       "p50": 0.10450000000000001,
+       "p95": 0.114709,
+       "p99": 0.13745900000000003
+      },
+      "ticks": 361,
+      "total_ms": 75.29454100000001
+     }
+    },
+    {
+     "seed": 31415,
+     "reference": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 31415,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5588235294117647,
+      "time_to_reacquire_p95_s": 1.7124999999999986,
+      "track_continuity_mean": 0.6488919667590027,
+      "localisation_rmse_m": 17.345168428290737,
+      "covariance_reduction_mean": 0.8767143579805241,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.85,
+      "wall_clock_s": 3.438076207996346,
+      "frame_time_mean_ms": 9.522542808864266,
+      "frame_time_p95_ms": 10.54675,
+      "frame_time_p99_ms": 22.467833399999957,
+      "peak_rss_mb": 343.15625,
+      "replay_size_mb": 15.514841079711914,
+      "terrain_queries_per_sec": 11402.306879883352,
+      "observations_per_sec": 887.4148842029515,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.649 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:21.559563+00:00"
+     },
+     "rust": {
+      "scenario_name": "intercept_stress",
+      "mission_type": "intercept",
+      "difficulty": 0.65,
+      "seed": 31415,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6415343915343915,
+      "time_to_reacquire_p95_s": 2.0,
+      "track_continuity_mean": 0.6475069252077562,
+      "localisation_rmse_m": 49.85125408537491,
+      "covariance_reduction_mean": 0.963895990765225,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.648 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:24.177208+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf",
+       "ground-hotel"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-hawk",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.438076207996346,
+     "reference_process_s": 9.347094083030242,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 23.802542,
+      "tick_ms": {
+       "max": 0.15729200000000002,
+       "mean": 0.102385833795014,
+       "p50": 0.102375,
+       "p95": 0.112458,
+       "p99": 0.134291
+      },
+      "ticks": 361,
+      "total_ms": 74.42004200000001
+     }
+    }
+   ]
+  },
+  {
+   "scenario": "persistent_long",
+   "passed": true,
+   "checks": [
+    {
+     "kind": "exact",
+     "check": "seed 7 frames",
+     "passed": true,
+     "detail": "1201 / 1201"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 frames",
+     "passed": true,
+     "detail": "1201 / 1201"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 frames",
+     "passed": true,
+     "detail": "1201 / 1201"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 frames",
+     "passed": true,
+     "detail": "1201 / 1201"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 frames",
+     "passed": true,
+     "detail": "1201 / 1201"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-ne', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "statistical",
+     "check": "localisation_rmse_m",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "track_continuity_mean",
+     "passed": true,
+     "detail": "reference 0, rust 0, |delta| 0 <= 0.1"
+    },
+    {
+     "kind": "statistical",
+     "check": "time_to_reacquire_mean_s",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "covariance_reduction_mean",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "mission_completion_rate",
+     "passed": true,
+     "detail": "reference 1, rust 1, |delta| 0 <= 0.2"
+    },
+    {
+     "kind": "statistical",
+     "check": "energy_reserve_min",
+     "passed": true,
+     "detail": "reference 0.5, rust 0.5, |delta| 5.551e-17 <= 0.02"
+    },
+    {
+     "kind": "verdict",
+     "check": "check_pass_fail agreement",
+     "passed": true,
+     "detail": "5/5 seeds agree"
+    },
+    {
+     "kind": "performance",
+     "check": "tick p95",
+     "passed": true,
+     "detail": "worst p95 0.213 ms <= 5.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "startup",
+     "passed": true,
+     "detail": "worst 42.9 ms <= 2000.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "speed-up",
+     "passed": true,
+     "detail": "16.4x >= 5.0x"
+    }
+   ],
+   "runs": [
+    {
+     "seed": 7,
+     "reference": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 7,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.4999999999999991,
+      "wall_clock_s": 3.520006207982078,
+      "frame_time_mean_ms": 2.9287757477102416,
+      "frame_time_p95_ms": 3.30025,
+      "frame_time_p99_ms": 3.619875,
+      "peak_rss_mb": 404.296875,
+      "replay_size_mb": 8.104061126708984,
+      "terrain_queries_per_sec": 41357.59751499313,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:31.307515+00:00"
+     },
+     "rust": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 7,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.499999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:33.498209+00:00"
+     },
+     "reference_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 3.520006207982078,
+     "reference_process_s": 7.122327582968865,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 42.283292,
+      "tick_ms": {
+       "max": 0.317083,
+       "mean": 0.16496641465445458,
+       "p50": 0.16224999999999998,
+       "p95": 0.205875,
+       "p99": 0.223666
+      },
+      "ticks": 1201,
+      "total_ms": 254.24075000000002
+     }
+    },
+    {
+     "seed": 42,
+     "reference": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 42,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.4999999999999981,
+      "wall_clock_s": 3.585737041023094,
+      "frame_time_mean_ms": 2.983607334721066,
+      "frame_time_p95_ms": 3.217292,
+      "frame_time_p99_ms": 3.542959,
+      "peak_rss_mb": 442.015625,
+      "replay_size_mb": 8.108532905578613,
+      "terrain_queries_per_sec": 40540.61921911684,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:40.492145+00:00"
+     },
+     "rust": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 42,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.499999999999998,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:42.711408+00:00"
+     },
+     "reference_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 3.585737041023094,
+     "reference_process_s": 6.9894646250177175,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 40.621042,
+      "tick_ms": {
+       "max": 0.31375000000000003,
+       "mean": 0.1735504762697752,
+       "p50": 0.18920800000000002,
+       "p95": 0.207334,
+       "p99": 0.226875
+      },
+      "ticks": 1201,
+      "total_ms": 263.398959
+     }
+    },
+    {
+     "seed": 137,
+     "reference": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 137,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.49999999999999767,
+      "wall_clock_s": 3.6241487500374205,
+      "frame_time_mean_ms": 3.015402987510408,
+      "frame_time_p95_ms": 3.374,
+      "frame_time_p99_ms": 3.626041,
+      "peak_rss_mb": 447.421875,
+      "replay_size_mb": 8.068909645080566,
+      "terrain_queries_per_sec": 40066.78809706712,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:49.814269+00:00"
+     },
+     "rust": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 137,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.49999999999999767,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:52.015389+00:00"
+     },
+     "reference_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 3.6241487500374205,
+     "reference_process_s": 7.097010833967943,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 41.106042,
+      "tick_ms": {
+       "max": 0.31437499999999996,
+       "mean": 0.1726948576186515,
+       "p50": 0.188417,
+       "p95": 0.205459,
+       "p99": 0.225375
+      },
+      "ticks": 1201,
+      "total_ms": 262.171542
+     }
+    },
+    {
+     "seed": 9999,
+     "reference": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 9999,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.4999999999999952,
+      "wall_clock_s": 3.460485375020653,
+      "frame_time_mean_ms": 2.879466850124896,
+      "frame_time_p95_ms": 3.173416,
+      "frame_time_p99_ms": 3.366166,
+      "peak_rss_mb": 460.984375,
+      "replay_size_mb": 8.124103546142578,
+      "terrain_queries_per_sec": 42011.158622258976,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:56:58.885397+00:00"
+     },
+     "rust": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 9999,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.4999999999999952,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:01.059923+00:00"
+     },
+     "reference_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 3.460485375020653,
+     "reference_process_s": 6.8646424589678645,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 41.8075,
+      "tick_ms": {
+       "max": 0.315583,
+       "mean": 0.16579598917568708,
+       "p50": 0.16091599999999998,
+       "p95": 0.212875,
+       "p99": 0.2245
+      },
+      "ticks": 1201,
+      "total_ms": 254.47112500000003
+     }
+    },
+    {
+     "seed": 31415,
+     "reference": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 31415,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.49999999999999245,
+      "wall_clock_s": 3.719195374986157,
+      "frame_time_mean_ms": 3.095051441298917,
+      "frame_time_p95_ms": 3.466042,
+      "frame_time_p99_ms": 3.698209,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 8.114862442016602,
+      "terrain_queries_per_sec": 39035.593821295384,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:08.200803+00:00"
+     },
+     "rust": {
+      "scenario_name": "persistent_long",
+      "mission_type": "persistent_surveillance",
+      "difficulty": 0.75,
+      "seed": 31415,
+      "duration_s": 300.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.49999999999999345,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:10.503884+00:00"
+     },
+     "reference_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 1201,
+      "node_ids": [
+       "drone-east",
+       "drone-ne",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 3.719195374986157,
+     "reference_process_s": 7.136465583986137,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 42.885082999999995,
+      "tick_ms": {
+       "max": 0.344833,
+       "mean": 0.1768880116569526,
+       "p50": 0.18929200000000002,
+       "p95": 0.212333,
+       "p99": 0.23075
+      },
+      "ticks": 1201,
+      "total_ms": 269.617458
+     }
+    }
+   ]
+  },
+  {
+   "scenario": "search_acquisition",
+   "passed": true,
+   "checks": [
+    {
+     "kind": "exact",
+     "check": "seed 7 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 frames",
+     "passed": true,
+     "detail": "361 / 361"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot'] / ['drone-east', 'drone-north', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 target_ids",
+     "passed": true,
+     "detail": "['asset-fox', 'asset-lynx', 'asset-orca'] / ['asset-fox', 'asset-lynx', 'asset-orca']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "statistical",
+     "check": "localisation_rmse_m",
+     "passed": true,
+     "detail": "reference 34.09, rust 40.32, |delta| 6.231 <= 8.523"
+    },
+    {
+     "kind": "statistical",
+     "check": "track_continuity_mean",
+     "passed": true,
+     "detail": "reference 0.5223, rust 0.5005, |delta| 0.02179 <= 0.1"
+    },
+    {
+     "kind": "statistical",
+     "check": "time_to_reacquire_mean_s",
+     "passed": true,
+     "detail": "reference 0.5873, rust 0.603, |delta| 0.01565 <= 2"
+    },
+    {
+     "kind": "statistical",
+     "check": "covariance_reduction_mean",
+     "passed": true,
+     "detail": "reference 0.8286, rust 0.8723, |delta| 0.04369 <= 0.1"
+    },
+    {
+     "kind": "statistical",
+     "check": "mission_completion_rate",
+     "passed": true,
+     "detail": "reference 1, rust 1, |delta| 0 <= 0.2"
+    },
+    {
+     "kind": "statistical",
+     "check": "energy_reserve_min",
+     "passed": true,
+     "detail": "reference 0.85, rust 0.85, |delta| 0 <= 0.02"
+    },
+    {
+     "kind": "verdict",
+     "check": "check_pass_fail agreement",
+     "passed": true,
+     "detail": "5/5 seeds agree"
+    },
+    {
+     "kind": "performance",
+     "check": "tick p95",
+     "passed": true,
+     "detail": "worst p95 0.079 ms <= 5.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "startup",
+     "passed": true,
+     "detail": "worst 19.7 ms <= 2000.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "speed-up",
+     "passed": true,
+     "detail": "81.0x >= 5.0x"
+    }
+   ],
+   "runs": [
+    {
+     "seed": 7,
+     "reference": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 7,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6272123893805309,
+      "time_to_reacquire_p95_s": 1.75,
+      "track_continuity_mean": 0.46537396121883656,
+      "localisation_rmse_m": 26.14077815765902,
+      "covariance_reduction_mean": 0.8224880822534332,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": 2.4949296670383774,
+      "frame_time_mean_ms": 6.910008911357341,
+      "frame_time_p95_ms": 7.993541,
+      "frame_time_p99_ms": 8.345341399999999,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 10.615880966186523,
+      "terrain_queries_per_sec": 13211.995686888018,
+      "observations_per_sec": 666.5518559383179,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.465 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:17.732128+00:00"
+     },
+     "rust": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 7,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6112334801762115,
+      "time_to_reacquire_p95_s": 1.5,
+      "track_continuity_mean": 0.46906740535549396,
+      "localisation_rmse_m": 47.70782438275878,
+      "covariance_reduction_mean": 0.8635546684793028,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.469 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:19.512555+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 2.4949296670383774,
+     "reference_process_s": 7.223043207952287,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 19.716542,
+      "tick_ms": {
+       "max": 0.127667,
+       "mean": 0.07113377839335176,
+       "p50": 0.07104200000000001,
+       "p95": 0.076167,
+       "p99": 0.09033300000000001
+      },
+      "ticks": 361,
+      "total_ms": 54.998167
+     }
+    },
+    {
+     "seed": 42,
+     "reference": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 42,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.7034632034632035,
+      "time_to_reacquire_p95_s": 1.75,
+      "track_continuity_mean": 0.3979686057248384,
+      "localisation_rmse_m": 26.428763827174283,
+      "covariance_reduction_mean": 0.9520925610141214,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.85,
+      "wall_clock_s": 2.5711144999950193,
+      "frame_time_mean_ms": 7.121024703601108,
+      "frame_time_p95_ms": 7.8695,
+      "frame_time_p99_ms": 13.225408799999725,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 10.546916961669922,
+      "terrain_queries_per_sec": 12725.99878382055,
+      "observations_per_sec": 564.3467064585458,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.398 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:27.012702+00:00"
+     },
+     "rust": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 42,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6730769230769231,
+      "time_to_reacquire_p95_s": 1.5874999999999986,
+      "track_continuity_mean": 0.40904893813481075,
+      "localisation_rmse_m": 28.8030934539479,
+      "covariance_reduction_mean": 0.808517282878884,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.85,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.409 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:28.807038+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 2.5711144999950193,
+     "reference_process_s": 7.495607500022743,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 19.384999999999998,
+      "tick_ms": {
+       "max": 0.139625,
+       "mean": 0.07264844044321325,
+       "p50": 0.07212500000000001,
+       "p95": 0.077417,
+       "p99": 0.097167
+      },
+      "ticks": 361,
+      "total_ms": 55.162083
+     }
+    },
+    {
+     "seed": 137,
+     "reference": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 137,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5785024154589372,
+      "time_to_reacquire_p95_s": 1.5,
+      "track_continuity_mean": 0.5457063711911357,
+      "localisation_rmse_m": 41.52196651938624,
+      "covariance_reduction_mean": 0.5611956330603698,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": 3.246705750003457,
+      "frame_time_mean_ms": 8.99238746537396,
+      "frame_time_p95_ms": 10.157625,
+      "frame_time_p99_ms": 21.94274999999996,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 10.664083480834961,
+      "terrain_queries_per_sec": 11123.27472237407,
+      "observations_per_sec": 584.5925520038209,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.546 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:36.892469+00:00"
+     },
+     "rust": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 137,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6050531914893617,
+      "time_to_reacquire_p95_s": 1.6625000000000014,
+      "track_continuity_mean": 0.5660203139427517,
+      "localisation_rmse_m": 48.396592751662425,
+      "covariance_reduction_mean": 0.9104955164536565,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999998,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.566 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:38.693325+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.246705750003457,
+     "reference_process_s": 8.08047937497031,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 19.288375,
+      "tick_ms": {
+       "max": 0.1255,
+       "mean": 0.07372242659279785,
+       "p50": 0.073833,
+       "p95": 0.079125,
+       "p99": 0.089334
+      },
+      "ticks": 361,
+      "total_ms": 55.643499999999996
+     }
+    },
+    {
+     "seed": 9999,
+     "reference": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 9999,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5261904761904762,
+      "time_to_reacquire_p95_s": 1.5,
+      "track_continuity_mean": 0.5891043397968606,
+      "localisation_rmse_m": 49.83086923790264,
+      "covariance_reduction_mean": 0.9314115827919106,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8499999999999999,
+      "wall_clock_s": 3.138767917000223,
+      "frame_time_mean_ms": 8.693413066481993,
+      "frame_time_p95_ms": 9.916834,
+      "frame_time_p99_ms": 21.291632999999933,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 10.675923347473145,
+      "terrain_queries_per_sec": 11371.978095823471,
+      "observations_per_sec": 648.3435710483769,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.589 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:46.531201+00:00"
+     },
+     "rust": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 9999,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.6210045662100456,
+      "time_to_reacquire_p95_s": 1.75,
+      "track_continuity_mean": 0.4884579870729455,
+      "localisation_rmse_m": 23.548923706914888,
+      "covariance_reduction_mean": 0.894595786469385,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.85,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.488 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:48.308173+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.138767917000223,
+     "reference_process_s": 7.833034167008009,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 19.517333,
+      "tick_ms": {
+       "max": 0.12925,
+       "mean": 0.07203796398891966,
+       "p50": 0.07291600000000001,
+       "p95": 0.078958,
+       "p99": 0.092708
+      },
+      "ticks": 361,
+      "total_ms": 55.221375
+     }
+    },
+    {
+     "seed": 31415,
+     "reference": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 31415,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5012135922330098,
+      "time_to_reacquire_p95_s": 1.25,
+      "track_continuity_mean": 0.6131117266851339,
+      "localisation_rmse_m": 26.543606263308643,
+      "covariance_reduction_mean": 0.8759473066463541,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8500000000000001,
+      "wall_clock_s": 3.0359250000328757,
+      "frame_time_mean_ms": 8.408591504155124,
+      "frame_time_p95_ms": 9.421083,
+      "frame_time_p99_ms": 19.073516799999872,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 10.78989315032959,
+      "terrain_queries_per_sec": 11704.505216569976,
+      "observations_per_sec": 689.4109702898903,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.613 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:56.061348+00:00"
+     },
+     "rust": {
+      "scenario_name": "search_acquisition",
+      "mission_type": "search",
+      "difficulty": 0.45,
+      "seed": 31415,
+      "duration_s": 90.0,
+      "time_to_reacquire_mean_s": 0.5044444444444445,
+      "time_to_reacquire_p95_s": 1.25,
+      "track_continuity_mean": 0.569713758079409,
+      "localisation_rmse_m": 53.16628843821919,
+      "covariance_reduction_mean": 0.8844036793289237,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.85,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.570 < 0.80",
+       "localisation_rmse_m=53.2 > 50.0 (hard fail)"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:57:57.864572+00:00"
+     },
+     "reference_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "rust_identity": {
+      "frames": 361,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot"
+      ],
+      "target_ids": [
+       "asset-fox",
+       "asset-lynx",
+       "asset-orca"
+      ]
+     },
+     "reference_wall_s": 3.0359250000328757,
+     "reference_process_s": 7.748311500006821,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 19.484,
+      "tick_ms": {
+       "max": 0.126292,
+       "mean": 0.07126547368421052,
+       "p50": 0.071125,
+       "p95": 0.07675,
+       "p99": 0.095542
+      },
+      "ticks": 361,
+      "total_ms": 55.266583000000004
+     }
+    }
+   ]
+  },
+  {
+   "scenario": "planner_adversarial",
+   "passed": true,
+   "checks": [
+    {
+     "kind": "exact",
+     "check": "seed 7 frames",
+     "passed": true,
+     "detail": "481 / 481"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 7 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 frames",
+     "passed": true,
+     "detail": "481 / 481"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 42 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 frames",
+     "passed": true,
+     "detail": "481 / 481"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 137 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 frames",
+     "passed": true,
+     "detail": "481 / 481"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 9999 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 frames",
+     "passed": true,
+     "detail": "481 / 481"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 node_ids",
+     "passed": true,
+     "detail": "['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf'] / ['drone-east', 'drone-north', 'drone-south', 'drone-west', 'ground-alpha', 'ground-bravo', 'ground-charlie', 'ground-delta', 'ground-echo', 'ground-foxtrot', 'ground-golf']"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 target_ids",
+     "passed": true,
+     "detail": "[] / []"
+    },
+    {
+     "kind": "exact",
+     "check": "seed 31415 required_objectives_total",
+     "passed": true,
+     "detail": "0 / 0"
+    },
+    {
+     "kind": "statistical",
+     "check": "localisation_rmse_m",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "track_continuity_mean",
+     "passed": true,
+     "detail": "reference 0, rust 0, |delta| 0 <= 0.1"
+    },
+    {
+     "kind": "statistical",
+     "check": "time_to_reacquire_mean_s",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "covariance_reduction_mean",
+     "passed": true,
+     "detail": "None / None"
+    },
+    {
+     "kind": "statistical",
+     "check": "mission_completion_rate",
+     "passed": true,
+     "detail": "reference 1, rust 1, |delta| 0 <= 0.2"
+    },
+    {
+     "kind": "statistical",
+     "check": "energy_reserve_min",
+     "passed": true,
+     "detail": "reference 0.8, rust 0.8, |delta| 0 <= 0.02"
+    },
+    {
+     "kind": "verdict",
+     "check": "check_pass_fail agreement",
+     "passed": true,
+     "detail": "5/5 seeds agree"
+    },
+    {
+     "kind": "performance",
+     "check": "tick p95",
+     "passed": true,
+     "detail": "worst p95 0.106 ms <= 5.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "startup",
+     "passed": true,
+     "detail": "worst 18.0 ms <= 2000.0 ms"
+    },
+    {
+     "kind": "performance",
+     "check": "speed-up",
+     "passed": true,
+     "detail": "25.5x >= 5.0x"
+    }
+   ],
+   "runs": [
+    {
+     "seed": 7,
+     "reference": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 7,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999997,
+      "wall_clock_s": 0.935580542020034,
+      "frame_time_mean_ms": 1.9442990457380458,
+      "frame_time_p95_ms": 2.066209,
+      "frame_time_p99_ms": 2.4535077999999984,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 5.723796844482422,
+      "terrain_queries_per_sec": 48640.3873917095,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:01.961974+00:00"
+     },
+     "rust": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 7,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999997,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:02.745188+00:00"
+     },
+     "reference_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.935580542020034,
+     "reference_process_s": 4.08981891698204,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 17.996334,
+      "tick_ms": {
+       "max": 0.118,
+       "mean": 0.06261947193347195,
+       "p50": 0.056375,
+       "p95": 0.105542,
+       "p99": 0.107959
+      },
+      "ticks": 481,
+      "total_ms": 53.454125
+     }
+    },
+    {
+     "seed": 42,
+     "reference": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 42,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999996,
+      "wall_clock_s": 0.8778373750392348,
+      "frame_time_mean_ms": 1.824277478170478,
+      "frame_time_p95_ms": 2.048542,
+      "frame_time_p99_ms": 2.4405171999999995,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 5.740710258483887,
+      "terrain_queries_per_sec": 51810.27977758094,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:06.648441+00:00"
+     },
+     "rust": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 42,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999996,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:07.425606+00:00"
+     },
+     "reference_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.8778373750392348,
+     "reference_process_s": 3.9002164999837987,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 17.757375,
+      "tick_ms": {
+       "max": 0.12587500000000001,
+       "mean": 0.05832164241164245,
+       "p50": 0.056708,
+       "p95": 0.06516699999999999,
+       "p99": 0.10024999999999999
+      },
+      "ticks": 481,
+      "total_ms": 51.179167
+     }
+    },
+    {
+     "seed": 137,
+     "reference": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 137,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999997,
+      "wall_clock_s": 0.8908429159782827,
+      "frame_time_mean_ms": 1.8512636486486487,
+      "frame_time_p95_ms": 2.00375,
+      "frame_time_p99_ms": 2.3679005999999987,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 5.727435111999512,
+      "terrain_queries_per_sec": 51031.44357395133,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:11.332518+00:00"
+     },
+     "rust": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 137,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999997,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:12.105558+00:00"
+     },
+     "reference_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.8908429159782827,
+     "reference_process_s": 3.9047682079835795,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 17.873125,
+      "tick_ms": {
+       "max": 0.11820800000000001,
+       "mean": 0.06374162785862778,
+       "p50": 0.056833999999999996,
+       "p95": 0.106333,
+       "p99": 0.108709
+      },
+      "ticks": 481,
+      "total_ms": 53.780834
+     }
+    },
+    {
+     "seed": 9999,
+     "reference": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 9999,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999999,
+      "wall_clock_s": 0.8715427499846555,
+      "frame_time_mean_ms": 1.8111765155925155,
+      "frame_time_p95_ms": 2.001875,
+      "frame_time_p99_ms": 2.2963415999999994,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 5.72689151763916,
+      "terrain_queries_per_sec": 52171.8527298868,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:15.792932+00:00"
+     },
+     "rust": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 9999,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.7999999999999999,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:16.577311+00:00"
+     },
+     "reference_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.8715427499846555,
+     "reference_process_s": 3.684564958966803,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 17.7835,
+      "tick_ms": {
+       "max": 0.116458,
+       "mean": 0.05612729729729732,
+       "p50": 0.056625,
+       "p95": 0.062916,
+       "p99": 0.076375
+      },
+      "ticks": 481,
+      "total_ms": 52.196125
+     }
+    },
+    {
+     "seed": 31415,
+     "reference": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 31415,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8,
+      "wall_clock_s": 0.8914925419958308,
+      "frame_time_mean_ms": 1.8526819334719333,
+      "frame_time_p95_ms": 1.980125,
+      "frame_time_p99_ms": 2.450041399999998,
+      "peak_rss_mb": 487.359375,
+      "replay_size_mb": 5.747288703918457,
+      "terrain_queries_per_sec": 51075.020659245114,
+      "observations_per_sec": 0.0,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:20.594698+00:00"
+     },
+     "rust": {
+      "scenario_name": "planner_adversarial",
+      "mission_type": "planner_adversarial",
+      "difficulty": 0.85,
+      "seed": 31415,
+      "duration_s": 120.0,
+      "time_to_reacquire_mean_s": null,
+      "time_to_reacquire_p95_s": null,
+      "track_continuity_mean": 0.0,
+      "localisation_rmse_m": null,
+      "covariance_reduction_mean": null,
+      "false_handoff_rate": 0.0,
+      "infeasible_path_rejection_count": 0,
+      "safety_override_count": 0,
+      "comms_dropout_count": 0,
+      "comms_dropout_duration_s": 0.0,
+      "mission_completion_rate": 1.0,
+      "required_objectives_met": 0,
+      "required_objectives_total": 0,
+      "energy_reserve_min": 0.8,
+      "wall_clock_s": null,
+      "frame_time_mean_ms": null,
+      "frame_time_p95_ms": null,
+      "frame_time_p99_ms": null,
+      "peak_rss_mb": null,
+      "replay_size_mb": null,
+      "terrain_queries_per_sec": null,
+      "observations_per_sec": null,
+      "passed": false,
+      "failure_reasons": [
+       "track_continuity_mean=0.000 < 0.80"
+      ],
+      "tags": [],
+      "generated_at_utc": "2026-09-24T01:58:21.377451+00:00"
+     },
+     "reference_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "rust_identity": {
+      "frames": 481,
+      "node_ids": [
+       "drone-east",
+       "drone-north",
+       "drone-south",
+       "drone-west",
+       "ground-alpha",
+       "ground-bravo",
+       "ground-charlie",
+       "ground-delta",
+       "ground-echo",
+       "ground-foxtrot",
+       "ground-golf"
+      ],
+      "target_ids": []
+     },
+     "reference_wall_s": 0.8914925419958308,
+     "reference_process_s": 4.0147217500489205,
+     "rust_timing": {
+      "build": "release",
+      "startup_ms": 17.710625,
+      "tick_ms": {
+       "max": 0.139084,
+       "mean": 0.06438894178794177,
+       "p50": 0.056125,
+       "p95": 0.106,
+       "p99": 0.109292
+      },
+      "ticks": 481,
+      "total_ms": 53.853917
+     }
+    }
+   ]
+  },
+  {
+   "scenario": "sar_person_search",
+   "unsupported": "argusnet-rs: unsupported by the native builder: safety_blocking"
+  },
+  {
+   "scenario": "industrial_asset_survey",
+   "unsupported": "argusnet-rs: unsupported by the native builder: safety_blocking"
+  }
+ ]
+}

@@ -45,7 +45,15 @@ fn sim_writes_the_runtimes_replay() {
     )
     .unwrap();
     let direct = assemble(&bundle).unwrap().run_to_replay().unwrap();
-    let written = read_replay(&replay);
+    let mut written = read_replay(&replay);
+    // The binary adds its provenance; the run itself is the runtime's.
+    let provenance = written
+        .meta
+        .scenario
+        .remove("provenance")
+        .expect("provenance");
+    assert_eq!(provenance["runtime"], "argusnet-rs");
+    assert_eq!(provenance["input"], "bundle");
     assert_eq!(written.frames.len() as u64, bundle.steps);
     assert_eq!(written, direct, "the binary's replay is not the runtime's");
 }
@@ -304,9 +312,18 @@ fn a_config_builds_and_runs_without_python() {
             .unwrap();
         assert!(status.success(), "sim {flag}: {status}");
     }
-    let config_replay = read_replay(&via_config);
+    let mut config_replay = read_replay(&via_config);
+    let mut bundle_replay = read_replay(&via_bundle);
     assert_eq!(config_replay.frames.len(), 30);
-    assert_eq!(config_replay, read_replay(&via_bundle));
+    // The provenance says which input each run came from; the runs are one.
+    let from_config = config_replay.meta.scenario.remove("provenance").unwrap();
+    let from_bundle = bundle_replay.meta.scenario.remove("provenance").unwrap();
+    assert_eq!(
+        (from_config["input"].as_str(), from_bundle["input"].as_str()),
+        (Some("config"), Some("bundle"))
+    );
+    assert!(from_bundle["config"].is_null());
+    assert_eq!(config_replay, bundle_replay);
 }
 
 #[test]
@@ -332,4 +349,60 @@ fn a_config_the_builder_refuses_exits_by_kind() {
     }
     let neither = binary().args(["sim"]).status().unwrap();
     assert_eq!(neither.code(), Some(2), "sim needs --bundle or --config");
+}
+
+/// A run from a config records the resolved config -- every option, defaults
+/// filled in -- and `--timing-json` writes the tick distribution, which stays
+/// out of the replay.
+#[test]
+fn a_config_run_records_its_resolved_config_and_timing() {
+    let config = write_config(
+        "provenance.json",
+        serde_json::json!({"map_preset": "small", "mission_mode": "target_tracking",
+                           "target_count": 1, "drone_count": 2, "ground_station_count": 2}),
+    );
+    let replay = scratch("provenance_replay.json");
+    let timing = scratch("timing.json");
+    let status = binary()
+        .args(["sim", "--quiet", "--config"])
+        .arg(&config)
+        .arg("--replay")
+        .arg(&replay)
+        .arg("--timing-json")
+        .arg(&timing)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let document = read_replay(&replay);
+    let provenance = &document.meta.scenario["provenance"];
+    assert_eq!(provenance["input"], "config");
+    let resolved = &provenance["config"]["options"];
+    assert_eq!(resolved["map_preset"], "small");
+    assert_eq!(
+        resolved["weather_preset"], "clear",
+        "defaults are filled in"
+    );
+    assert_eq!(provenance["config"]["steps"], 30);
+    let timing: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&timing).unwrap()).unwrap();
+    assert_eq!(provenance["runtime"], "argusnet-rs");
+    assert_eq!(provenance["bundle_format"], "argusnet.scenario-bundle");
+    assert_eq!(timing["ticks"], 30);
+    let ms = |key: &str| timing["tick_ms"][key].as_f64().unwrap();
+    assert!(ms("p50") > 0.0);
+    assert!(ms("p50") <= ms("p95") && ms("p95") <= ms("p99") && ms("p99") <= ms("max"));
+    assert!(ms("mean") > 0.0 && ms("mean") <= ms("max"));
+    let startup = timing["startup_ms"].as_f64().unwrap();
+    let total = timing["total_ms"].as_f64().unwrap();
+    assert!(startup > 0.0, "startup includes the world build");
+    // The ticks and the startup both happen inside the total.
+    assert!(total >= startup + ms("mean") * 30.0 * 0.999);
+    // This test and the binary it runs share a profile.
+    let build = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    assert_eq!(timing["build"], build);
+    assert!(!document.meta.scenario.contains_key("performance"));
 }

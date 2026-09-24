@@ -47,8 +47,23 @@ enum Command {
     Sim(SimArgs),
     /// Build the scenario bundle an `argusnet.scenario-config` describes.
     Build(BuildArgs),
+    /// Run captured `IngestFrameRequest`s through the in-process fusion engine
+    /// and write its `IngestFrameResponse`s -- the direct-fusion parity check
+    /// against `argusnetd` (P4.9c).
+    #[command(hide = true)]
+    Fuse(FuseArgs),
     /// Print the runtime, bundle and checkpoint format versions.
     Version,
+}
+
+#[derive(clap::Args)]
+struct FuseArgs {
+    /// `{"tracker": hex(TrackerConfig), "requests": [hex(IngestFrameRequest)]}`.
+    #[arg(long)]
+    capture: PathBuf,
+    /// Where to write `{"responses": [hex(IngestFrameResponse)]}`.
+    #[arg(long)]
+    output: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -88,6 +103,10 @@ struct SimArgs {
     /// Print nothing but errors.
     #[arg(long)]
     quiet: bool,
+    /// Write the run's timing -- startup, and the tick-time distribution --
+    /// as JSON. Timing is kept out of the replay so its bytes stay stable.
+    #[arg(long)]
+    timing_json: Option<PathBuf>,
 }
 
 const EXIT_FAULT: u8 = 1;
@@ -107,6 +126,22 @@ fn percentile(sorted_ms: &[f64], fraction: f64) -> f64 {
     sorted_ms[index]
 }
 
+/// The `tick_ms` block of `--timing-json`, from ascending tick times.
+fn tick_summary(sorted_ms: &[f64]) -> serde_json::Value {
+    let mean = if sorted_ms.is_empty() {
+        0.0
+    } else {
+        sorted_ms.iter().sum::<f64>() / sorted_ms.len() as f64
+    };
+    serde_json::json!({
+        "mean": mean,
+        "p50": percentile(sorted_ms, 0.5),
+        "p95": percentile(sorted_ms, 0.95),
+        "p99": percentile(sorted_ms, 0.99),
+        "max": sorted_ms.last().copied().unwrap_or(0.0),
+    })
+}
+
 /// Read and build a config, mapping the builder's errors to exit codes.
 fn built_bundle(path: &std::path::Path) -> Result<serde_json::Value, ExitCode> {
     let text = std::fs::read_to_string(path)
@@ -116,6 +151,96 @@ fn built_bundle(path: &std::path::Path) -> Result<serde_json::Value, ExitCode> {
         BuildError::Unsupported(_) => fail(EXIT_UNSUPPORTED, error),
         BuildError::Invalid(_) => fail(EXIT_INVALID, error),
     })
+}
+
+fn hex_decode(text: &str) -> Result<Vec<u8>, String> {
+    if !text.len().is_multiple_of(2) {
+        return Err("odd-length hex".into());
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).map_err(|e| e.to_string()))
+        .collect()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `argusnetd`'s ingest path, in process: the same proto conversion as its
+/// `convert_request`, the same `TrackingEngine::ingest_frame`, the same
+/// response message -- minus the transport.
+fn fuse(args: FuseArgs) -> ExitCode {
+    use argusnet_proto::pb;
+    use prost::Message;
+
+    let run = || -> Result<Vec<String>, String> {
+        let text = std::fs::read_to_string(&args.capture).map_err(|e| e.to_string())?;
+        let capture: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let tracker = pb::TrackerConfig::decode(
+            hex_decode(capture["tracker"].as_str().ok_or("no tracker")?)?.as_slice(),
+        )
+        .map_err(|e| e.to_string())?;
+        let mut engine =
+            argusnet_core::TrackingEngine::new(argusnet_proto::tracker_config_from_pb(tracker)?)?;
+        let mut responses = Vec::new();
+        for request in capture["requests"].as_array().ok_or("no requests")? {
+            let request = pb::IngestFrameRequest::decode(
+                hex_decode(request.as_str().ok_or("request is not hex")?)?.as_slice(),
+            )
+            .map_err(|e| e.to_string())?;
+            let target_metadata = request
+                .target_metadata
+                .iter()
+                .cloned()
+                .map(argusnet_proto::target_metadata_from_pb)
+                .collect();
+            let safety_events = request
+                .safety_events
+                .iter()
+                .cloned()
+                .map(argusnet_proto::safety_event_from_pb)
+                .collect();
+            let nodes = request
+                .node_states
+                .into_iter()
+                .map(argusnet_proto::node_state_from_pb)
+                .collect::<Result<Vec<_>, _>>()?;
+            let observations = request
+                .observations
+                .into_iter()
+                .map(argusnet_proto::observation_from_pb)
+                .collect::<Result<Vec<_>, _>>()?;
+            let truths = request
+                .truths
+                .into_iter()
+                .map(argusnet_proto::truth_from_pb)
+                .collect::<Result<Vec<_>, _>>()?;
+            let frame = engine.ingest_frame(
+                request.timestamp_s,
+                nodes,
+                observations,
+                truths,
+                target_metadata,
+                safety_events,
+            );
+            let response = pb::IngestFrameResponse {
+                frame: Some(argusnet_proto::frame_to_pb_ref(&frame)),
+            };
+            responses.push(hex_encode(&response.encode_to_vec()));
+        }
+        Ok(responses)
+    };
+    match run() {
+        Ok(responses) => {
+            let document = serde_json::json!({ "responses": responses });
+            match std::fs::write(&args.output, document.to_string()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => fail(EXIT_FAULT, format!("{}: {error}", args.output.display())),
+            }
+        }
+        Err(error) => fail(EXIT_INVALID, error),
+    }
 }
 
 fn build(args: BuildArgs) -> ExitCode {
@@ -136,13 +261,21 @@ fn build(args: BuildArgs) -> ExitCode {
 
 fn sim(args: SimArgs) -> ExitCode {
     let started = Instant::now();
+    let mut resolved_config = None;
     let text = match (&args.bundle, &args.config) {
         (Some(path), _) => match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
         },
         (None, Some(path)) => match built_bundle(path) {
-            Ok(bundle) => bundle.to_string(),
+            Ok(bundle) => {
+                // Every option, defaults filled in: what was actually built.
+                resolved_config = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| ScenarioConfig::from_json(&text).ok())
+                    .and_then(|config| serde_json::to_value(config).ok());
+                bundle.to_string()
+            }
             Err(code) => return code,
         },
         (None, None) => unreachable!("clap requires one of --bundle and --config"),
@@ -156,6 +289,21 @@ fn sim(args: SimArgs) -> ExitCode {
         Err(error @ BundleError::Unsupported(_)) => return fail(EXIT_UNSUPPORTED, error),
         Err(error) => return fail(EXIT_INVALID, error),
     };
+    // P4.9: "emit resolved config/version/provenance". No clock and no host,
+    // so a replay's bytes depend only on what was run.
+    run.extend_replay_meta([(
+        "provenance".to_string(),
+        serde_json::json!({
+            "runtime": "argusnet-rs",
+            "version": env!("CARGO_PKG_VERSION"),
+            "bundle_format": bundle.format,
+            "bundle_version": bundle.version,
+            "checkpoint_format": argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION,
+            "runtime_algorithm": argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+            "input": if args.config.is_some() { "config" } else { "bundle" },
+            "config": resolved_config,
+        }),
+    )]);
     if let Some(path) = &args.resume {
         let checkpoint: SimulationCheckpoint = match std::fs::read_to_string(path)
             .map_err(|error| error.to_string())
@@ -230,9 +378,21 @@ fn sim(args: SimArgs) -> ExitCode {
             return fail(EXIT_FAULT, format!("{}: {error}", path.display()));
         }
     }
+    let mut sorted = tick_ms.clone();
+    sorted.sort_by(f64::total_cmp);
+    if let Some(path) = &args.timing_json {
+        let timing = serde_json::json!({
+            "startup_ms": startup_ms,
+            "ticks": sorted.len(),
+            "tick_ms": tick_summary(&sorted),
+            "total_ms": started.elapsed().as_secs_f64() * 1e3,
+            "build": if cfg!(debug_assertions) { "debug" } else { "release" },
+        });
+        if let Err(error) = std::fs::write(path, timing.to_string()) {
+            return fail(EXIT_FAULT, format!("{}: {error}", path.display()));
+        }
+    }
     if !args.quiet {
-        let mut sorted = tick_ms.clone();
-        sorted.sort_by(f64::total_cmp);
         println!(
             "{} ticks | startup {:.1} ms | tick p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms{}",
             tick_ms.len(),
@@ -258,6 +418,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Sim(args) => sim(args),
         Command::Build(args) => build(args),
+        Command::Fuse(args) => fuse(args),
         Command::Version => {
             println!(
                 "argusnet-rs {}\nscenario config format {} v{}\nscenario bundle format {} v{}\ncheckpoint format {}, runtime algorithm {}, seed version {}",
@@ -272,5 +433,42 @@ fn main() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tick_summary_reads_its_percentiles_off_the_sorted_times() {
+        // 1..=101 ms: index = round(100 * fraction), so each percentile is
+        // one more than its own number.
+        let sorted: Vec<f64> = (1..=101).map(f64::from).collect();
+        let summary = tick_summary(&sorted);
+        assert_eq!(summary["p50"], 51.0);
+        assert_eq!(summary["p95"], 96.0);
+        assert_eq!(summary["p99"], 100.0);
+        assert_eq!(summary["max"], 101.0);
+        assert_eq!(summary["mean"], 51.0);
+    }
+
+    #[test]
+    fn an_empty_run_summarises_to_zeros() {
+        let summary = tick_summary(&[]);
+        for key in ["mean", "p50", "p95", "p99", "max"] {
+            assert_eq!(summary[key], 0.0, "{key}");
+        }
+    }
+
+    #[test]
+    fn hex_decoding_refuses_what_is_not_bytes() {
+        assert_eq!(hex_decode("0aff").unwrap(), vec![0x0a, 0xff]);
+        assert!(hex_decode("abc").is_err(), "odd length");
+        assert!(hex_decode("zz").is_err(), "not hex");
+        assert_eq!(
+            hex_decode(&hex_encode(&[0, 1, 254, 255])).unwrap(),
+            vec![0, 1, 254, 255]
+        );
     }
 }

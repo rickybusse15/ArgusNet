@@ -13,9 +13,11 @@ States: **done** (merged), **local** (committed and locally verified but not pus
 
 P5.0 needs P4.9, a Rust CLI running supported scenarios with no Python runtime,
 and P2.x, a viewer engine that presents the runtime's snapshots. At 2026-09-23
-every tick stage has a Rust body, and stage 1 moves the fleet (P4.8d.3). Nothing
-yet **composes** a scenario into a configured `Simulation`, drives the mission
-side-effects that `MissionStage` emits as events, or runs from a command line.
+`argusnet-rs sim --config` builds and runs scenarios with no Python. It passes
+phase acceptance on the five canonical scenarios the native builder supports
+(P4.9c). Two gaps remain. On the runtime side, stage 4 is not assembled from
+bundles, so blocking-safety mission profiles are refused (P4.9d). All of the
+viewer track (P2.x) is still open.
 
 ## Track A — runtime (critical path)
 
@@ -33,7 +35,8 @@ side-effects that `MissionStage` emits as events, or runs from a command line.
 | P4.9b.1 | Native builder, world half: `argusnet.scenario-config` → terrain, environment obstacles and patches, land cover → bundle `world` + world `presentation`; exact except heights (numpy `exp`, ≤1e-12 m) | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
 | P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
 | P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9c | Phase acceptance: canonical scenarios, multi-seed envelopes, startup/tick timing | open | — |
+| P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | local | [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
+| P4.9d | Stage 4 (hard safety monitor) assembled from bundles; `safety_blocking` and mission profiles through exporter and native builder; the two refused canonical scenarios scored | open | — |
 
 ## Track B — viewer engine
 

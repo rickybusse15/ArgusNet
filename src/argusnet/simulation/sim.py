@@ -10,7 +10,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -6510,8 +6510,9 @@ def simulate(
     mission_profile_overrides: Mapping[str, object] | None = None,
     progress: Callable[[int, int], None] | None = None,
     export_bundle_path: str | None = None,
+    export_config_path: str | None = None,
 ) -> SimulationResult | None:
-    if export_bundle_path is not None:
+    if export_bundle_path is not None or export_config_path is not None:
         # Run-time options argusnet-rs does not honour: refused by name rather
         # than silently dropped from the exported run.
         from argusnet.simulation.scenario_bundle import UnsupportedScenario
@@ -6577,6 +6578,31 @@ def simulate(
             frontier_exploration=frontier_exploration,
             occlusion_aware_mapping=occlusion_aware_mapping,
         )
+    if export_config_path is not None:
+        # The versioned config these flags resolve to (P4.9's "adapters
+        # translate legacy CLI flags"): `argusnet-rs sim --config` builds the
+        # same scenario natively. Custom constants have no place in a config.
+        from argusnet.simulation.scenario_bundle import UnsupportedScenario
+
+        if constants is not _DEFAULT_CONSTANTS:
+            raise UnsupportedScenario("--config-file: a scenario config carries no constants")
+        document = {
+            "format": "argusnet.scenario-config",
+            "version": 1,
+            "seed": int(seed),
+            "dt_s": float(dt),
+            **(
+                {"steps": int(steps)}
+                if steps is not None
+                else {"duration_s": float(simulation_config.requested_duration_s)}
+            ),
+            "options": json.loads(json.dumps(asdict(scenario_options))),
+        }
+        path = Path(export_config_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, indent=2) + "\n")
+        print(f"Scenario config written to {path}; run it with: argusnet-rs sim --config {path}")
+        return None
     scenario = build_default_scenario(
         options=scenario_options,
         seed=seed,
@@ -6917,6 +6943,16 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Replay JSON output.",
     )
     parser.add_argument(
+        "--export-config",
+        dest="export_config",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Instead of running, write the argusnet.scenario-config these flags "
+            "resolve to (argusnet-rs sim --config PATH builds it natively)."
+        ),
+    )
+    parser.add_argument(
         "--export-bundle",
         dest="export_bundle",
         default=None,
@@ -7235,6 +7271,7 @@ def run_from_args(args: argparse.Namespace) -> SimulationResult | None:
         mission_profile_overrides=mission_profile_overrides,
         progress=build_progress_callback(quiet=getattr(args, "quiet", False)),
         export_bundle_path=getattr(args, "export_bundle", None),
+        export_config_path=getattr(args, "export_config", None),
     )
 
 

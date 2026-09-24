@@ -34,6 +34,7 @@ Status labels:
 | Sensor noise model | **Implemented** | `src/argusnet/sensing/models/noise.py` |
 | Rust IMM fusion and association | **Implemented** | `rust/argusnet-core/src/lib.rs`, `association.rs` |
 | Labeled/GNN/JPDA association | **Implemented** | `rust/argusnet-core` |
+| Poorly conditioned two-ray triangulation | **Gap** | A cluster of two nearly parallel rays that still clears `min_intersection_angle_deg` (2.5°) can triangulate hundreds of metres off, and the fix is admitted with a small measurement std. P4.9c saw one such run-off at 3.6° (intercept_stress, seed 31415). The fix is tracker tuning: a larger minimum angle, or a range-aware measurement std. See `docs/migration/PHASE_ACCEPTANCE.md`. |
 | Python Kalman/triangulation utilities | **Partial** | `src/argusnet/mapping/fusion.py` and localization helpers are utility/reference paths, not runtime fusion authority. |
 | Clutter / false-alarm generation | **Partial** | Parameters exist; scenario-wide clutter generation remains limited. |
 | Formal observation-source interface | **Implemented** | `argusnet.sensing.observation_source.ObservationSource` is the versioned, injectable runtime boundary; the deterministic simulator generator remains available as `build_observations()`. |
@@ -96,7 +97,7 @@ Status labels:
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
 | Replay schema | **Implemented** | `docs/replay-schema.json`, `src/argusnet/evaluation/replay.py`. Enforced with `jsonschema` and guarded end-to-end by `tests/test_replay_contract.py` plus `replay.rs::contract_fixture_tests`. |
-| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py` |
+| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py`. `check_pass_fail`'s `track_continuity_mean` threshold fails every canonical scenario, including the target-free scan scenarios where continuity is 0 by construction (P4.9c). |
 | Benchmark aggregation | **Implemented** | `src/argusnet/evaluation/benchmarks.py` |
 | Reports/export helpers | **Implemented** | `src/argusnet/evaluation/reports.py`, `export.py` |
 | Benchmark standards | **Implemented as documentation** | `docs/PERFORMANCE_AND_BENCHMARKING.md` |

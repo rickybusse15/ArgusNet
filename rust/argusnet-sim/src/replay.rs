@@ -215,6 +215,11 @@ pub struct ReplayTrack {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode_probability_cv: Option<f64>,
     pub contributing_node_ids: Vec<String>,
+    /// `tentative`/`confirmed`/`coasting`, as the reference writer emits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_score: Option<f64>,
 }
 
 impl From<&TrackState> for ReplayTrack {
@@ -236,6 +241,8 @@ impl From<&TrackState> for ReplayTrack {
             stale_steps: track.stale_steps,
             mode_probability_cv: track.mode_probability_cv,
             contributing_node_ids: track.contributing_node_ids.as_ref().clone(),
+            lifecycle_state: track.lifecycle_state.clone(),
+            quality_score: track.quality_score,
         }
     }
 }
@@ -925,6 +932,15 @@ mod tests {
             column_major, expected,
             "fixture is symmetric -- this test cannot detect a transpose"
         );
+    }
+
+    /// The reference writer emits the lifecycle and quality of every track
+    /// (P4.9c found them missing here).
+    #[test]
+    fn a_track_carries_its_lifecycle_and_quality() {
+        let value = serde_json::to_value(ReplayTrack::from(&track("t"))).expect("serializes");
+        assert_eq!(value["lifecycle_state"], "confirmed");
+        assert_eq!(value["quality_score"], 0.8);
     }
 
     /// 36 elements, because `evaluation/replay.py` reshapes to (6, 6)

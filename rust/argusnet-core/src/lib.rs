@@ -784,7 +784,14 @@ impl IMMTrack3D {
             self.mode_probabilities[0] * cv_likelihood.max(1.0e-30),
             self.mode_probabilities[1] * ct_likelihood.max(1.0e-30),
         ];
-        let total = (posterior[0] + posterior[1]).max(1.0e-12);
+        // Normalise by the true total. `state()` blends the two filters by
+        // these probabilities and `predict` mixes by them, so they must sum
+        // to one. A floored denominator (both likelihoods underflowing on a
+        // large innovation) once left them near 1e-20, which collapsed the
+        // track to the origin for good. The likelihood floors keep the total
+        // above 5e-31 (`max` also discards a NaN), and when both floors bind
+        // they cancel: the prior stands, favouring neither model.
+        let total = posterior[0] + posterior[1];
         self.mode_probabilities = [posterior[0] / total, posterior[1] / total];
 
         self.innovation_history.push(nis_ct);
@@ -2294,6 +2301,37 @@ mod tests {
         assert!(trace.is_finite());
         assert!(trace <= MAX_COVARIANCE_TRACE);
         assert!(track.state.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn imm_survives_an_innovation_both_models_reject() {
+        // Both likelihoods underflow on a kilometre-scale innovation against
+        // a tight track. The mode probabilities must still sum to one, and
+        // the blended state must stay with the filters, not collapse to the
+        // origin (the P4.9c search_acquisition tail).
+        let config = TrackerConfig::default();
+        let mut track = IMMTrack3D::initialize(0.0, vec3(300.0, -30.0, 170.0), 2.0, 1.0, &config);
+        for step in 1..=4 {
+            track.predict(step as f64 * 0.25);
+            track
+                .update_position(vec3(300.0, -30.0, 170.0), 1.0)
+                .expect("update");
+        }
+        track.predict(1.25);
+        track
+            .update_position(vec3(5_000.0, 4_000.0, 170.0), 1.0)
+            .expect("update");
+        let [p_cv, p_ct] = track.mode_probabilities;
+        assert!((p_cv + p_ct - 1.0).abs() < 1e-12, "{p_cv} + {p_ct}");
+        for _ in 0..3 {
+            track.predict(track.timestamp_s() + 0.25);
+        }
+        assert!(
+            track.position().norm() > 100.0,
+            "collapsed to {}",
+            track.position()
+        );
+        assert!(track.state().iter().all(|value| value.is_finite()));
     }
 
     #[test]

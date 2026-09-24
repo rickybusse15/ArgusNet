@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — Phase acceptance for the Rust CLI (P4.9c)
+
+- `scripts/run_phase_acceptance.py` runs the seven canonical scenarios on five
+  seeds. The reference is `argusnet sim`; Rust is `argusnet sim
+  --export-config` then a release `argusnet-rs sim --config`. It applies the
+  envelopes `docs/migration/PHASE_ACCEPTANCE.md` declared before the first
+  run. All five supported scenarios pass. The tick p95 is at most 0.21 ms,
+  startup at most 43 ms, and the tick loop 16–81x faster than the reference's.
+  The two mission profiles are refused (blocking safety; P4.9d).
+- **Fusion fix (`argusnet-core`, both runtimes):** the IMM filter normalised
+  its mode probabilities by `max(sum, 1e-12)`. When both likelihoods
+  underflowed, the probabilities fell to about 1e-20, and the track collapsed
+  to the origin for good. They are now divided by the true sum.
+- **Metric fix:** `compute_localisation_rmse` paired tracks with truths only
+  in the replay's first tracked frame, by distance. Later tracks went
+  unscored, and one passing another target was scored against it. Each track
+  is now paired at its own first appearance, and by target ID where the track
+  is named for one.
+- Direct fusion parity: `tests/test_direct_fusion_parity.py` replays the
+  daemon's recorded requests through a hidden `argusnet-rs fuse`. Every
+  response must be the same protobuf message.
+- `argusnet sim --export-config PATH` writes the versioned scenario config the
+  flags resolve to. `argusnet-rs sim` records `provenance` (runtime, version,
+  formats, input and resolved config) in the replay's meta, and writes
+  `--timing-json`.
+- Rust replay tracks now carry `lifecycle_state` and `quality_score`, as the
+  reference's do. Both are declared, optional, in `docs/replay-schema.json`.
+
 ## Unreleased — Scenarios from configs, with no Python at all (P4.9b.2b)
 
 - `argusnet-rs build --config C --bundle B` writes the bundle `argusnet sim

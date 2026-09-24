@@ -173,7 +173,9 @@
           "mode_probability_cv": 0.6,
           "contributing_node_ids": [
             "node-a"
-          ]
+          ],
+          "lifecycle_state": "confirmed",
+          "quality_score": 0.8
         }
       ],
       "truths": [
@@ -356,7 +358,9 @@
           "mode_probability_cv": 0.6,
           "contributing_node_ids": [
             "node-a"
-          ]
+          ],
+          "lifecycle_state": "confirmed",
+          "quality_score": 0.8
         }
       ],
       "truths": [

@@ -11,6 +11,8 @@ evaluation and the viewer read. No Python runs at simulation time.
 ```text
 argusnet-rs sim --config config.json --replay replay.json     # Rust only (P4.9b.2b)
 argusnet-rs build --config config.json --bundle scenario.json # Rust only (P4.9b.2b)
+argusnet sim --duration-s 60 --export-config config.json      # flags -> config (P4.9c)
+argusnet-rs sim --config config.json --timing-json t.json     # timing record (P4.9c)
 argusnet sim --duration-s 60 --export-bundle scenario.json    # Python: describe
 argusnet-rs sim --bundle scenario.json --replay replay.json   # Rust: run
 argusnet-rs sim --bundle scenario.json --checkpoint-at 120 --checkpoint ck.json
@@ -37,6 +39,16 @@ bundle version, the scenario name, the seed, the tick count and `dt`, and the
 tick it starts from. When the run ends, it prints the startup time, tick-time
 p50/p95/max and the mission's final phase. `version` prints the bundle format
 and version, plus the checkpoint format, runtime-algorithm and seed versions.
+
+Every replay also carries the same provenance in `meta.provenance`: runtime,
+version, the bundle and checkpoint formats, the runtime-algorithm version, the
+input (`config` or `bundle`) and, for a config, the resolved config with every
+default filled in. It records no clock and no host, so a replay's bytes depend
+only on what was run. `--timing-json PATH` writes `startup_ms`, the tick count,
+the tick-time `mean`/`p50`/`p95`/`p99`/`max`, `total_ms` and the build profile
+(P4.9c). A hidden `fuse --capture C --output O` replays recorded
+`IngestFrameRequest`s through the in-process engine, for the direct fusion
+parity test ([PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md)).
 
 A resumed run's replay holds the ticks from the resume point on. The
 checkpoint is `SimulationCheckpoint` format 3, and restore checks every stage's

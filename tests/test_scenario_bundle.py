@@ -367,3 +367,71 @@ def test_argusnet_rs_builds_the_bundle_argusnet_sim_exports(tmp_path):
     )
     assert completed.returncode == 0, completed.stderr
     _assert_same_within(json.loads(rust_path.read_text()), python_bundle)
+
+
+def test_export_config_is_the_config_the_same_flags_export_as_a_bundle(tmp_path):
+    """P4.9's adapter: `--export-config` writes the versioned config these
+    flags resolve to, and `argusnet-rs build` of it is the bundle
+    `--export-bundle` writes for the same flags."""
+    import subprocess
+
+    from argusnet.simulation import sim
+
+    binary = _argusnet_rs()
+    config_path = tmp_path / "exported_config.json"
+    result = sim.run_from_args(sim.parse_args([*_CLI_ARGS, "--export-config", str(config_path)]))
+    assert result is None, "--export-config ran the simulation"
+    config = json.loads(config_path.read_text())
+    assert config["format"] == "argusnet.scenario-config"
+    assert (config["seed"], config["steps"], config["dt_s"]) == (3, 6, 0.5)
+    assert config["options"]["target_count"] == 1
+    assert config["options"]["mission_mode"] == "target_tracking"
+
+    built = tmp_path / "built.json"
+    completed = subprocess.run(
+        [str(binary), "build", "--config", str(config_path), "--bundle", str(built)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    exported = json.loads(_export_via_cli(tmp_path).read_text())
+    _assert_same_within(json.loads(built.read_text()), exported)
+
+
+@pytest.mark.parametrize("flag", [["--streaming"], ["--compact"], ["--realtime"]])
+def test_export_config_refuses_output_options(tmp_path, flag):
+    from argusnet.simulation import sim
+
+    with pytest.raises(UnsupportedScenario, match=flag[0]):
+        sim.run_from_args(
+            sim.parse_args([*_CLI_ARGS, *flag, "--export-config", str(tmp_path / "c.json")])
+        )
+    assert not (tmp_path / "c.json").exists()
+
+
+def test_export_config_refuses_custom_constants(tmp_path):
+    """A scenario config has no constants, so a run built on custom ones is
+    refused rather than exported as if it used the defaults."""
+    from argusnet.core.config import SimulationConstants
+    from argusnet.simulation import sim
+
+    constants_path = tmp_path / "constants.json"
+    constants_path.write_text(
+        json.dumps(
+            SimulationConstants.from_dict({"dynamics": {"default_duration_s": 2.0}}).to_dict()
+        )
+    )
+    with pytest.raises(UnsupportedScenario, match="--config-file"):
+        sim.run_from_args(
+            sim.parse_args(
+                [
+                    *_CLI_ARGS,
+                    "--config-file",
+                    str(constants_path),
+                    "--export-config",
+                    str(tmp_path / "c.json"),
+                ]
+            )
+        )
+    assert not (tmp_path / "c.json").exists()
