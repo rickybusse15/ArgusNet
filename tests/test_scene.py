@@ -415,3 +415,81 @@ class SceneObstacleRoundTripTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LandCoverDocumentTest(unittest.TestCase):
+    """P2.1: a scene built from an environment carries its land-cover classes
+    for the terrain material, as the bundle's own `land_cover` payload."""
+
+    def _environment(self):
+        from argusnet.world.environment import (
+            Bounds2D,
+            EnvironmentCRS,
+            EnvironmentModel,
+            LandCoverClass,
+            LandCoverLayer,
+            ObstacleLayer,
+            TerrainLayer,
+        )
+
+        bounds = Bounds2D(-100.0, 100.0, -80.0, 80.0)
+        terrain = TerrainLayer.from_height_grid(
+            environment_id="lc",
+            bounds_xy_m=bounds,
+            heights_m=np.full((17, 21), 110.0),
+            resolution_m=10.0,
+            tile_size_cells=8,
+        )
+        rows, cols = 16, 20
+        classes = np.zeros((rows, cols), dtype=np.uint8)
+        classes[:, 10:] = int(LandCoverClass.FOREST)
+        classes[4:8, :] = int(LandCoverClass.WATER)
+        classes[12, 3] = int(LandCoverClass.ROAD)
+        land_cover = LandCoverLayer.from_rasters(
+            bounds_xy_m=bounds,
+            classes=classes,
+            density=None,
+            resolution_m=10.0,
+            tile_size_cells=8,
+        )
+        return EnvironmentModel(
+            environment_id="lc",
+            crs=EnvironmentCRS(runtime_crs_id="local-enu"),
+            bounds_xy_m=bounds,
+            terrain=terrain,
+            obstacles=ObstacleLayer(bounds_xy_m=bounds, tile_size_m=20.0, primitives=()),
+            land_cover=land_cover,
+        )
+
+    def test_a_scene_built_from_an_environment_carries_its_land_cover(self) -> None:
+        from argusnet.world.environment_io import write_environment_bundle
+
+        environment = self._environment()
+        with tempfile.TemporaryDirectory(prefix="smartscene-lc-") as temp_dir:
+            bundle = Path(temp_dir) / "map"
+            write_environment_bundle(str(bundle), environment)
+            scene = Path(temp_dir) / "scene"
+            manifest = build_scene_from_replay(
+                _sample_replay_document(), scene, environment_bundle=bundle
+            )
+            self.assertEqual("metadata/land_cover.json", manifest["metadata"]["land_cover"])
+            document = json.loads((scene / "metadata" / "land_cover.json").read_text())
+
+        self.assertEqual(("argusnet.land-cover", 1), (document["format"], document["version"]))
+        layer = environment.land_cover
+        self.assertEqual(layer.tile_size_cells, document["tile_size_cells"])
+        self.assertEqual(layer.base_resolution_m, document["resolution"])
+        tiles = {(t["tx"], t["ty"]): t for t in document["tiles"]}
+        self.assertEqual(set(layer._tiles), set(tiles))
+        for key, tile in layer._tiles.items():
+            np.testing.assert_array_equal(tile.classes, np.asarray(tiles[key]["classes"]))
+            self.assertEqual(tile.x_min_m, tiles[key]["x_min_m"])
+        self.assertEqual(9, len(document["legend"]))
+        self.assertEqual(set(document["legend"]), set(document["palette"]))
+        self.assertEqual(4, len(document["palette"]["forest"]))
+
+    def test_a_scene_built_without_an_environment_declares_no_land_cover(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="smartscene-nolc-") as temp_dir:
+            manifest = build_scene_from_replay(_sample_replay_document(), temp_dir)
+            self.assertNotIn("land_cover", manifest["metadata"])
+            self.assertFalse((Path(temp_dir) / "metadata" / "land_cover.json").exists())

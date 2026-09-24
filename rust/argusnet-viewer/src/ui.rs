@@ -66,7 +66,12 @@ pub fn viewer_ui_system(
     mut mission_overlay: ResMut<MissionOverlaySettings>,
     mut view_mode: ResMut<ViewMode>,
     // Paired: the system is at Bevy's sixteen-parameter limit.
-    (selection, markers): (Res<SelectionState>, Res<CurrentRuntimeMarkers>),
+    (selection, markers, rasters, belief): (
+        Res<SelectionState>,
+        Res<CurrentRuntimeMarkers>,
+        Res<crate::terrain_rasters::TerrainRasters>,
+        Res<crate::belief_render::BeliefLayer>,
+    ),
     frame_metrics: Res<CurrentFrameMetrics>,
     mission_zones: Res<LoadedMissionZones>,
     mut zone_overlap_model: ResMut<ZoneOverlapModel>,
@@ -84,6 +89,8 @@ pub fn viewer_ui_system(
     let context = context.clone();
     let supports_hot_swap = scene_package.is_synthetic_source();
     ui_state.focused_entity_label = selection.label().map(str::to_owned);
+    let raster_status =
+        terrain_raster_status(&rasters.report(), &belief, &scene_package.land_cover);
     configure_operator_style(&context);
 
     // egui 0.36 unified `TopBottomPanel`/`SidePanel` into `Panel`, which attaches
@@ -135,6 +142,7 @@ pub fn viewer_ui_system(
                             &mut mission_overlay,
                             &selection,
                             &markers,
+                            &raster_status,
                             &mut layer_visibility,
                             &mut zone_overlap_model,
                             &mut ui_state,
@@ -345,6 +353,7 @@ fn drawer_mission_content(
     mission_overlay: &mut MissionOverlaySettings,
     selection: &SelectionState,
     markers: &CurrentRuntimeMarkers,
+    raster_status: &str,
     layer_visibility: &mut LayerVisibilityState,
     zone_overlap_model: &mut ZoneOverlapModel,
     ui_state: &mut ViewerUiState,
@@ -369,7 +378,7 @@ fn drawer_mission_content(
     section_targets(ui, replay_state);
     section_selection(ui, selection, replay_state.max_stale_steps());
     ui.separator();
-    section_runtime_overlays(ui, runtime_visibility, mission_overlay);
+    section_runtime_overlays(ui, runtime_visibility, mission_overlay, Some(raster_status));
     ui.separator();
     section_layers(ui, scene_package, layer_visibility);
     ui.separator();
@@ -1216,7 +1225,7 @@ fn tab_scene_content(
     section_layers(ui, scene_package, layer_visibility);
     ui.separator();
 
-    section_runtime_overlays(ui, runtime_visibility, mission_overlay);
+    section_runtime_overlays(ui, runtime_visibility, mission_overlay, None);
     ui.separator();
 
     section_mission_zones(ui, mission_zones, zone_overlap_model);
@@ -2439,6 +2448,40 @@ fn section_layers(
     });
 }
 
+/// What the terrain rasters are doing, in words an operator can act on: why
+/// belief is unavailable, and whether any tile failed to upload.
+pub fn terrain_raster_status(
+    report: &crate::terrain_rasters::RasterReport,
+    belief: &crate::belief_render::BeliefLayer,
+    land_cover: &crate::schema::LandCoverState,
+) -> String {
+    let belief_text = match belief {
+        crate::belief_render::BeliefLayer::Unavailable(reason) => {
+            format!("Belief unavailable: {reason}.")
+        }
+        crate::belief_render::BeliefLayer::Ready(snapshot) => {
+            let (nx, ny) = snapshot.dimensions();
+            format!(
+                "Belief r{}, {nx} x {ny} cells; {} tile(s) uploaded, {} waiting, {} refused.",
+                snapshot.revision().0,
+                report.uploaded_tiles,
+                report.waiting_tiles,
+                report.refused_tiles
+            )
+        }
+    };
+    let land_cover_text = match land_cover {
+        crate::schema::LandCoverState::Absent => "No land cover in this scene.".to_string(),
+        crate::schema::LandCoverState::Ready(raster) => {
+            format!("Land cover {} x {} cells.", raster.cols, raster.rows)
+        }
+        crate::schema::LandCoverState::Unavailable(reason) => {
+            format!("Land cover unavailable: {reason}.")
+        }
+    };
+    format!("{belief_text} {land_cover_text}")
+}
+
 // ---------------------------------------------------------------------------
 // Section: Runtime Overlays
 // ---------------------------------------------------------------------------
@@ -2447,6 +2490,7 @@ fn section_runtime_overlays(
     ui: &mut egui::Ui,
     runtime_visibility: &mut RuntimeOverlayVisibility,
     mission_overlay: &mut MissionOverlaySettings,
+    raster_status: Option<&str>,
 ) {
     ui.collapsing("Runtime Overlays", |ui| {
         ui.checkbox(
@@ -2465,6 +2509,11 @@ fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.fov_cones, "FOV Cones");
         ui.checkbox(&mut runtime_visibility.radar_rings, "Radar Rings");
         ui.checkbox(&mut runtime_visibility.coverage_overlay, "Coverage Overlay");
+        ui.checkbox(&mut runtime_visibility.belief, "Belief (terrain)");
+        ui.checkbox(&mut runtime_visibility.land_cover_tint, "Land-cover tint");
+        if let Some(status) = raster_status {
+            ui.small(status);
+        }
         ui.checkbox(
             &mut runtime_visibility.inspection_events,
             "Inspection Events",
@@ -2869,6 +2918,36 @@ fn combo_box(
 
 #[cfg(test)]
 mod tests {
+    /// The operator is told why belief is missing, not shown a blank.
+    #[test]
+    fn the_raster_status_says_why_belief_is_unavailable() {
+        use crate::belief_render::{BeliefLayer, BeliefRenderSnapshot, BeliefUnavailable};
+        use crate::terrain_material::BeliefMode;
+        use crate::terrain_rasters::RasterReport;
+        let report = RasterReport {
+            belief_mode: BeliefMode::Unavailable,
+            land_cover_bound: false,
+            uploaded_tiles: 3,
+            waiting_tiles: 1,
+            refused_tiles: 2,
+        };
+        let absent = crate::schema::LandCoverState::Absent;
+        let text = terrain_raster_status(&report, &BeliefLayer::default(), &absent);
+        assert!(text.contains("no belief data"), "{text}");
+        assert!(text.contains("No land cover"), "{text}");
+        let too_large = BeliefLayer::Unavailable(BeliefUnavailable::TooLarge { nx: 5000, ny: 3 });
+        assert!(terrain_raster_status(&report, &too_large, &absent).contains("5000 x 3"));
+        let ready = BeliefLayer::Ready(Box::new(
+            BeliefRenderSnapshot::from_store(&crate::belief_render::synthetic_belief_store())
+                .unwrap(),
+        ));
+        let text = terrain_raster_status(&report, &ready, &absent);
+        assert!(
+            text.contains("3 tile(s) uploaded, 1 waiting, 2 refused"),
+            "{text}"
+        );
+    }
+
     use super::*;
 
     #[test]

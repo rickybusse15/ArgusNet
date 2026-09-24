@@ -404,6 +404,7 @@ name = "argusnet-viewer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argusnet-mapping",
  "argusnet-proto",
  "argusnet-replay",
  "argusnet-world",

@@ -45,7 +45,7 @@ metric's definition, which needs a decision; see
 | ID | Slice | State |
 | --- | --- | --- |
 | P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | local ([SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
-| P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot` | open (terrain material exists; belief does not) |
+| P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | local ([TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
 | P2.2 | Sensor frusta, zone volumes, trail ribbons | open (zones exist) |
 | P2.3 | Raycast picking, hover, selection outline | open |
 | P2.4 | Free-fly, follow/chase, focus, bookmarks, time scrubbing | open (orbit camera exists) |

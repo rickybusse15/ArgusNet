@@ -1,6 +1,8 @@
 pub mod app;
+pub mod belief_render;
 pub mod glyphs;
 pub mod headless;
+pub mod land_cover_raster;
 #[cfg(feature = "live-stream")]
 pub mod live;
 pub mod marker_meshes;
@@ -12,6 +14,7 @@ pub mod schema;
 pub mod sky;
 pub mod state;
 pub mod terrain_material;
+pub mod terrain_rasters;
 pub mod ui;
 
 pub use app::run;

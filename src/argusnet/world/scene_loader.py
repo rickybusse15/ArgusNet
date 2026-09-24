@@ -208,6 +208,7 @@ def _build_manifest(
     environment_path: str,
     style_path: str,
     provenance: Mapping[str, object],
+    land_cover_path: str | None = None,
 ) -> dict[str, object]:
     manifest = {
         "format_version": SCENE_FORMAT_VERSION,
@@ -220,6 +221,9 @@ def _build_manifest(
         "metadata": {
             "environment": environment_path,
             "style": style_path,
+            # Optional (P2.1): the land-cover classes the terrain material
+            # tints by. Absent when the scene was built without an environment.
+            **({"land_cover": land_cover_path} if land_cover_path else {}),
         },
         "build": {
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -229,6 +233,52 @@ def _build_manifest(
     }
     validate_scene_manifest(manifest)
     return manifest
+
+
+LAND_COVER_FORMAT = "argusnet.land-cover"
+LAND_COVER_VERSION = 1
+
+
+def _land_cover_document(environment) -> dict[str, object] | None:
+    """The environment's land-cover classes, for the terrain material (P2.1).
+
+    The tiles are the bundle's `land_cover` payload exactly, so the viewer can
+    rebuild the runtime's own `LandCoverLayer` and sample it with the
+    runtime's rule rather than a second one. The legend and each class's
+    style colour ride along, so the document is self-contained.
+    """
+    layer = getattr(environment, "land_cover", None)
+    if layer is None or not hasattr(layer, "_tiles"):
+        return None
+    style = default_style()
+    legend = {cls.name.lower(): int(cls) for cls in LandCoverClass}
+    return {
+        "format": LAND_COVER_FORMAT,
+        "version": LAND_COVER_VERSION,
+        "bounds": layer.bounds_xy_m.to_metadata(),
+        "tile_size_cells": int(layer.tile_size_cells),
+        "resolution": float(layer.base_resolution_m),
+        "tiles": [
+            {
+                "tx": int(tile.tx),
+                "ty": int(tile.ty),
+                "x_min_m": float(tile.x_min_m),
+                "y_min_m": float(tile.y_min_m),
+                "cell_size_m": float(tile.cell_size_m),
+                "classes": np.asarray(tile.classes, dtype=np.uint8).tolist(),
+                "density": None
+                if tile.density is None
+                else np.asarray(tile.density, dtype=np.uint8).tolist(),
+            }
+            for tile in layer._tiles.values()
+        ],
+        "legend": legend,
+        "palette": {
+            name: list(style[f"landcover-{name}"]["color_rgba"])
+            for name in legend
+            if f"landcover-{name}" in style
+        },
+    }
 
 
 def _build_landcover_meshes_from_environment(environment) -> Sequence[SceneLayerMesh]:
@@ -474,6 +524,7 @@ def build_scene_from_replay(
         bounds_xy_m = environment.bounds_xy_m
         runtime_crs = _runtime_crs_metadata(environment.crs)
         landcover_layers = _build_landcover_meshes_from_environment(environment)
+        land_cover_document = _land_cover_document(environment)
         occluding_objects = environment.obstacles.to_metadata()
     else:
         environment = None
@@ -488,6 +539,7 @@ def build_scene_from_replay(
             "z_datum": "local",
         }
         landcover_layers = []
+        land_cover_document = None
         occluding_objects = list(meta.get("occluding_objects", []))
 
     if not isinstance(terrain_meta, Mapping) or not isinstance(
@@ -531,6 +583,8 @@ def build_scene_from_replay(
         },
     )
 
+    if land_cover_document:
+        _write_json(output_path / "metadata" / "land_cover.json", land_cover_document)
     manifest = _build_manifest(
         scene_id=active_scene_id,
         bounds_xy_m=bounds_xy_m,
@@ -541,6 +595,7 @@ def build_scene_from_replay(
         source_kind="synthetic",
         environment_path="metadata/environment.json",
         style_path="metadata/style.json",
+        land_cover_path="metadata/land_cover.json" if land_cover_document else None,
         provenance={
             "tool": "argusnet.world.scene_loader.build_scene_from_replay",
             "replay_source": str(replay) if not isinstance(replay, Mapping) else "<in-memory>",

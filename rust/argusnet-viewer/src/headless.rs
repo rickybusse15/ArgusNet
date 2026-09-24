@@ -64,7 +64,30 @@ pub struct HeadlessRenderOptions {
     /// accumulated scan-map reconstruction, so the believed terrain and team
     /// co-localization are captured in the still / sequence.
     pub view_mode: ViewMode,
+    /// Pixel probes (P2.1): not on the command line; the probe tests use it.
+    pub probe: Option<ProbeRequest>,
 }
+
+/// Probe the captured still at world points, projected through the live
+/// camera, and write what was drawn there.
+#[derive(Clone, Debug)]
+pub struct ProbeRequest {
+    /// Belief to draw.
+    pub belief: Option<argusnet_mapping::BeliefStore>,
+    /// Turn the belief overlay on. With no `belief`, that draws the explicit
+    /// unavailable state.
+    pub belief_overlay: bool,
+    /// Tile patches applied once the scene has loaded, after the belief
+    /// textures exist: they reach the GPU as tile writes, not a new upload.
+    pub late_patches: Vec<argusnet_mapping::BeliefTilePatch>,
+    /// World points, `(x, y)`; `z` is the terrain's there.
+    pub points: Vec<[f64; 2]>,
+    /// Where to write the probe results, as JSON.
+    pub output: PathBuf,
+}
+
+/// Half-width of the window of pixels recorded around each probe.
+pub const PROBE_WINDOW_RADIUS: i64 = 4;
 
 /// What a headless run should produce, after validation.
 #[derive(Clone, Debug, Resource)]
@@ -76,6 +99,7 @@ pub struct HeadlessRequest {
     pub record_dir: Option<PathBuf>,
     pub camera: CameraPreset,
     pub target_id: Option<String>,
+    pub probe: Option<ProbeRequest>,
 }
 
 impl HeadlessRenderOptions {
@@ -96,6 +120,7 @@ impl HeadlessRenderOptions {
                 record_dir: self.record_dir,
                 camera: self.camera,
                 target_id: self.target_id,
+                probe: self.probe,
             },
         ))
     }
@@ -130,6 +155,10 @@ struct RenderWorldSender(Sender<RenderedFrame>);
 struct RenderedFrame {
     pixels: Vec<u8>,
     pipelines_pending: bool,
+    /// Pipelines that failed for good: a shader that does not compile. Such a
+    /// frame still draws (whatever used the pipeline is simply missing), so
+    /// only this says it is wrong.
+    pipeline_errors: Vec<String>,
 }
 
 /// The offscreen image the cameras render into, plus its extent. Systems that
@@ -270,6 +299,22 @@ fn receive_image_from_buffer(
     pipeline_cache: Res<PipelineCache>,
 ) {
     let pipelines_pending = pipeline_cache.waiting_pipelines().next().is_some();
+    // Retryable states (a shader or import still loading) are not failures.
+    let pipeline_errors: Vec<String> = pipeline_cache
+        .pipelines()
+        .filter_map(|pipeline| match &pipeline.state {
+            bevy::render::render_resource::CachedPipelineState::Err(error)
+                if !matches!(
+                    error,
+                    bevy::shader::ShaderCacheError::ShaderNotLoaded(_)
+                        | bevy::shader::ShaderCacheError::ShaderImportNotYetAvailable
+                ) =>
+            {
+                Some(error.to_string())
+            }
+            _ => None,
+        })
+        .collect();
     for image_copier in image_copiers.0.iter() {
         if !image_copier.enabled() {
             continue;
@@ -299,6 +344,7 @@ fn receive_image_from_buffer(
         let _ = sender.send(RenderedFrame {
             pixels: buffer_slice.get_mapped_range().to_vec(),
             pipelines_pending,
+            pipeline_errors: pipeline_errors.clone(),
         });
         image_copier.buffer.unmap();
     }
@@ -318,6 +364,8 @@ fn receive_image_from_buffer(
 /// black, before the scene appears.
 #[derive(Resource)]
 struct HeadlessCapture {
+    /// Set when the run must exit with an error rather than success.
+    failed: bool,
     output: Option<PathBuf>,
     record_dir: Option<PathBuf>,
     fps: u32,
@@ -467,6 +515,7 @@ const MAX_SETTLE_FRAMES: u32 = 2000;
 impl HeadlessCapture {
     fn new(request: &HeadlessRequest) -> Self {
         Self {
+            failed: false,
             output: request.output.clone(),
             record_dir: request.record_dir.clone(),
             fps: request.fps,
@@ -622,7 +671,104 @@ fn is_uniform(frame: &[u8], width: u32, height: u32) -> bool {
     pixels.all(|pixel| pixel == first)
 }
 
+/// The main camera's projection, for probes.
+type ProbeCamera<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Camera, &'static GlobalTransform),
+    (With<MainCamera>, Without<ReconstructionCamera>),
+>;
+
+/// What the probes need from the world at capture time.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct ProbeContext<'w, 's> {
+    request: Res<'w, HeadlessRequest>,
+    camera: ProbeCamera<'w, 's>,
+    zones: Res<'w, crate::state::LoadedMissionZones>,
+    scene: Res<'w, crate::schema::ScenePackage>,
+    belief: ResMut<'w, crate::belief_render::BeliefLayer>,
+    rasters: Res<'w, crate::terrain_rasters::TerrainRasters>,
+}
+
+fn write_probes(
+    request: &ProbeRequest,
+    context: &ProbeContext,
+    padded: &[u8],
+    target: &HeadlessTarget,
+) -> Result<()> {
+    let (camera, transform) = context
+        .camera
+        .single()
+        .map_err(|error| anyhow::anyhow!("no main camera to project probes: {error}"))?;
+    let rows: Vec<&[u8]> = pixel_rows(padded, target.width, target.height).collect();
+    let pixel = |x: i64, y: i64| -> Option<[u8; 4]> {
+        if x < 0 || y < 0 || x >= i64::from(target.width) || y >= i64::from(target.height) {
+            return None;
+        }
+        let row = rows.get(y as usize)?;
+        let at = x as usize * 4;
+        Some([row[at], row[at + 1], row[at + 2], row[at + 3]])
+    };
+    let ground = context
+        .scene
+        .environment
+        .terrain_summary
+        .as_ref()
+        .and_then(|summary| summary.min_height_m)
+        .unwrap_or(0.0);
+    let mut points = Vec::with_capacity(request.points.len());
+    for xy in &request.points {
+        let z = context
+            .zones
+            .terrain_mesh
+            .as_ref()
+            .and_then(|mesh| mesh.height_at(xy[0] as f32, xy[1] as f32))
+            .unwrap_or(ground);
+        let world = Vec3::new(xy[0] as f32, xy[1] as f32, z);
+        let projected = camera.world_to_viewport(transform, world).ok();
+        let (centre, window) = match projected {
+            Some(p) => {
+                let (px, py) = (p.x.floor() as i64, p.y.floor() as i64);
+                let window: Vec<[u8; 4]> = (-PROBE_WINDOW_RADIUS..=PROBE_WINDOW_RADIUS)
+                    .flat_map(|dy| {
+                        (-PROBE_WINDOW_RADIUS..=PROBE_WINDOW_RADIUS).map(move |dx| (dx, dy))
+                    })
+                    .filter_map(|(dx, dy)| pixel(px + dx, py + dy))
+                    .collect();
+                (Some([px, py]), window)
+            }
+            None => (None, Vec::new()),
+        };
+        points.push(serde_json::json!({
+            "xy": xy,
+            "z": z,
+            "pixel": centre,
+            "rgba": centre.and_then(|[x, y]| pixel(x, y)),
+            "window": window,
+        }));
+    }
+    if let Some(parent) = request.output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let report = context.rasters.report();
+    std::fs::write(
+        &request.output,
+        serde_json::to_string(&serde_json::json!({
+            "points": points,
+            "rasters": {
+                "belief_mode": report.belief_mode as u32,
+                "land_cover_bound": report.land_cover_bound,
+                "uploaded_tiles": report.uploaded_tiles,
+                "waiting_tiles": report.waiting_tiles,
+                "refused_tiles": report.refused_tiles,
+            },
+        }))?,
+    )?;
+    Ok(())
+}
+
 /// Drives the capture state machine described on [`HeadlessCapture`].
+#[allow(clippy::too_many_arguments)]
 fn headless_capture_system(
     mut capture: ResMut<HeadlessCapture>,
     mut replay_state: ResMut<ReplayState>,
@@ -631,6 +777,7 @@ fn headless_capture_system(
     asset_server: Res<AssetServer>,
     layer_roots: Query<&WorldAssetRoot>,
     mut exit: MessageWriter<AppExit>,
+    mut probe: ProbeContext,
 ) {
     let Some(target) = target else {
         return;
@@ -652,6 +799,18 @@ fn headless_capture_system(
                 return;
             }
             capture.timing.assets_ready = Some(Instant::now());
+            // Late belief patches land now, after the textures were created.
+            let late = probe
+                .request
+                .probe
+                .as_ref()
+                .map(|request| request.late_patches.clone())
+                .unwrap_or_default();
+            if let crate::belief_render::BeliefLayer::Ready(snapshot) = &mut *probe.belief {
+                for patch in &late {
+                    snapshot.apply_patch(patch);
+                }
+            }
             // A single still shows the completed mission, so jump to the final
             // frame rather than capturing an empty opening one.
             if capture.record_dir.is_none() {
@@ -716,6 +875,16 @@ fn headless_capture_system(
                 // Nothing has arrived yet; try again next tick.
                 return;
             };
+            // A shader that failed to compile leaves a plausible picture with
+            // something missing from it. Refuse it rather than save it.
+            if !frame.pipeline_errors.is_empty() {
+                for error in &frame.pipeline_errors {
+                    error!("headless render refused: a pipeline failed: {error}");
+                }
+                capture.failed = true;
+                capture.phase = CapturePhase::Done;
+                return;
+            }
 
             // Once per run: a --record-dir sequence re-enters Capture for every
             // frame and only the first is the cold one.
@@ -727,6 +896,13 @@ fn headless_capture_system(
                 if let Err(error) = save_frame(&output, &frame.pixels, target.width, target.height)
                 {
                     error!("failed to write {}: {error:#}", output.display());
+                    capture.failed = true;
+                }
+                if let Some(request) = probe.request.probe.as_ref() {
+                    if let Err(error) = write_probes(request, &probe, &frame.pixels, &target) {
+                        error!("failed to write probes: {error:#}");
+                        capture.failed = true;
+                    }
                 }
                 if capture.record_dir.is_none() {
                     capture.phase = CapturePhase::Done;
@@ -742,6 +918,7 @@ fn headless_capture_system(
             let path = record_dir.join(format!("frame_{index:05}.png"));
             if let Err(error) = save_frame(&path, &frame.pixels, target.width, target.height) {
                 error!("failed to write {}: {error:#}", path.display());
+                capture.failed = true;
             }
             capture.next_index += 1;
             capture.next_time_s += 1.0 / capture.fps as f32;
@@ -755,7 +932,11 @@ fn headless_capture_system(
             }
         }
         CapturePhase::Done => {
-            exit.write(AppExit::Success);
+            exit.write(if capture.failed {
+                AppExit::error()
+            } else {
+                AppExit::Success
+            });
         }
     }
 }
@@ -931,6 +1112,7 @@ mod tests {
             height: 360,
             fps: 30,
             view_mode: ViewMode::RealWorld,
+            probe: None,
         }
     }
 
@@ -951,6 +1133,7 @@ mod tests {
             height: 720,
             fps: 12,
             view_mode: ViewMode::Split,
+            probe: None,
         };
         let (view_mode, request) = opts.into_request().unwrap();
         assert_eq!(view_mode, ViewMode::Split);

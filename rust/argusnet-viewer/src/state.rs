@@ -30,6 +30,11 @@ pub struct RuntimeOverlayVisibility {
     pub inspection_events: bool,
     pub launch_lines: bool,
     pub show_covariance_ellipsoids: bool,
+    /// The terrain material's belief overlay (P2.1). Off by default: with no
+    /// belief data it draws the explicit unavailable state over everything.
+    pub belief: bool,
+    /// The terrain material's land-cover tint, where the scene carries one.
+    pub land_cover_tint: bool,
 }
 
 impl Default for RuntimeOverlayVisibility {
@@ -48,6 +53,8 @@ impl Default for RuntimeOverlayVisibility {
             inspection_events: true,
             launch_lines: true,
             show_covariance_ellipsoids: false,
+            belief: false,
+            land_cover_tint: true,
         }
     }
 }

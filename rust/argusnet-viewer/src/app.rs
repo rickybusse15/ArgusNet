@@ -156,6 +156,19 @@ fn run_inner(
 
     let asset_root = working_scene_root.asset_root.clone();
 
+    // Pixel probes (P2.1) bring their own belief, with the overlay on.
+    let mut runtime_visibility = RuntimeOverlayVisibility::default();
+    let mut belief_layer = crate::belief_render::BeliefLayer::default();
+    if let Some(probe) = headless.as_ref().and_then(|request| request.probe.as_ref()) {
+        if let Some(store) = probe.belief.as_ref() {
+            belief_layer = match crate::belief_render::BeliefRenderSnapshot::from_store(store) {
+                Ok(snapshot) => crate::belief_render::BeliefLayer::Ready(Box::new(snapshot)),
+                Err(reason) => crate::belief_render::BeliefLayer::Unavailable(reason),
+            };
+        }
+        runtime_visibility.belief = probe.belief_overlay;
+    }
+
     let mut replay_state = ReplayState::new(replay_document);
     // Autoplay starts the timeline immediately so the scan-map reconstruction
     // accumulates without the operator pressing Space (has no effect on a
@@ -173,7 +186,8 @@ fn run_inner(
         .insert_resource(working_scene_root)
         .insert_resource(replay_state)
         .insert_resource(layer_visibility)
-        .insert_resource(RuntimeOverlayVisibility::default())
+        .insert_resource(runtime_visibility)
+        .insert_resource(belief_layer)
         .insert_resource(CurrentRuntimeMarkers::default())
         .insert_resource(CurrentFrameMetrics::default())
         .insert_resource(SelectionState::default())
@@ -240,6 +254,7 @@ fn run_inner(
             GradientSkyPlugin,
             crate::marker_meshes::MarkerMeshPlugin,
             TerrainMaterialPlugin,
+            crate::terrain_rasters::TerrainRastersPlugin,
         ))
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh));
     configure_viewer_sets(&mut app);
@@ -263,6 +278,7 @@ fn run_inner(
                 .in_set(ViewerSet::SnapshotApply),
             (
                 mission_zones::refresh_zone_overlap_model_system,
+                crate::terrain_rasters::sync_terrain_rasters_system,
                 crate::marker_meshes::sync_marker_meshes,
                 sync_base_layer_visibility_system,
                 sync_fog_to_camera_system,
@@ -310,7 +326,11 @@ fn run_inner(
     #[cfg(not(feature = "live-stream"))]
     let _ = live_endpoint;
 
-    app.run();
+    // A headless capture that refused its frame exits with an error; so
+    // must the process.
+    if let AppExit::Error(code) = app.run() {
+        anyhow::bail!("the viewer exited with error code {code}");
+    }
 
     Ok(())
 }

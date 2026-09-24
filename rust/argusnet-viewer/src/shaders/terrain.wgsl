@@ -32,9 +32,124 @@ struct TerrainSettings {
     slope_softness_rad: f32,
     /// 0 disables the banding, 1 applies it fully.
     band_strength: f32,
+    /// x_min, y_min, cell size, tint strength.
+    land_cover_grid: vec4<f32>,
+    /// columns, rows, 1 when bound.
+    land_cover_dims: vec4<u32>,
+    land_cover_palette: array<vec4<f32>, 16>,
+    /// x_min, y_min, cell size, overlay strength.
+    belief_grid: vec4<f32>,
+    /// columns, rows, mode (0 off, 1 unavailable, 2 ready).
+    belief_dims: vec4<u32>,
+    /// simulation time now, stale-after age.
+    belief_time: vec4<f32>,
+    belief_safe_color: vec4<f32>,
+    belief_uncertain_color: vec4<f32>,
+    belief_obstacle_color: vec4<f32>,
+    belief_unknown_color: vec4<f32>,
+    belief_outside_color: vec4<f32>,
 }
 
 @group(3) @binding(100) var<uniform> terrain: TerrainSettings;
+// Belief (see belief_render.rs): class/observed exact, confidence/time numeric.
+// Every read is a textureLoad: nothing categorical is ever filtered.
+@group(3) @binding(101) var belief_class: texture_2d<u32>;
+@group(3) @binding(102) var belief_numeric: texture_2d<f32>;
+// Land-cover class per cell (see land_cover_raster.rs).
+@group(3) @binding(103) var land_cover: texture_2d<u32>;
+
+// Belief class codes, as BeliefClass in belief_render.rs.
+const CLASS_OUTSIDE: u32 = 1u;
+const CLASS_UNKNOWN: u32 = 2u;
+const CLASS_OBSTACLE: u32 = 3u;
+const CLASS_UNCERTAIN: u32 = 4u;
+const CLASS_SAFE: u32 = 5u;
+
+// The cell containing a world point, or (-1, -1) off the grid. `floor`, not
+// truncation: a point below the origin is outside, not in cell 0.
+fn cell_of(xy: vec2<f32>, grid: vec4<f32>, dims: vec4<u32>) -> vec2<i32> {
+    let cell = floor((xy - grid.xy) / max(grid.z, 1e-6));
+    if cell.x < 0.0 || cell.y < 0.0 || cell.x >= f32(dims.x) || cell.y >= f32(dims.y) {
+        return vec2<i32>(-1, -1);
+    }
+    return vec2<i32>(cell);
+}
+
+// Confidence, bilinear between the four nearest cell centres among observed
+// cells only, renormalised: BeliefRenderSnapshot::sample, texel for texel.
+fn belief_confidence(xy: vec2<f32>) -> f32 {
+    let f = (xy - terrain.belief_grid.xy) / max(terrain.belief_grid.z, 1e-6) - vec2<f32>(0.5);
+    let base = floor(f);
+    let t = f - base;
+    var weighted = 0.0;
+    var weight = 0.0;
+    for (var k = 0; k < 4; k = k + 1) {
+        let offset = vec2<f32>(f32(k & 1), f32(k >> 1u));
+        let cell = base + offset;
+        if cell.x < 0.0 || cell.y < 0.0
+            || cell.x >= f32(terrain.belief_dims.x) || cell.y >= f32(terrain.belief_dims.y) {
+            continue;
+        }
+        let texel = vec2<i32>(cell);
+        if textureLoad(belief_class, texel, 0).g == 0u {
+            continue;
+        }
+        let w = mix(1.0 - t.x, t.x, offset.x) * mix(1.0 - t.y, t.y, offset.y);
+        weighted = weighted + w * textureLoad(belief_numeric, texel, 0).r;
+        weight = weight + w;
+    }
+    return select(0.0, weighted / weight, weight > 0.0);
+}
+
+// Diagonal stripes in screen space, anti-aliased, 0..1. Unknown and
+// unavailable are drawn as this pattern so they can never be mistaken for a
+// measured value.
+fn hatch(frag: vec2<f32>) -> f32 {
+    let phase = fract((frag.x + frag.y) / 12.0);
+    let edge = 1.0 / 12.0;
+    return smoothstep(0.5 - edge, 0.5 + edge, phase) * (1.0 - smoothstep(1.0 - edge, 1.0, phase));
+}
+
+// The belief overlay's colour and weight at a point: vec4(rgb, weight).
+fn belief_overlay(xy: vec2<f32>, frag: vec2<f32>) -> vec4<f32> {
+    let mode = terrain.belief_dims.z;
+    let strength = terrain.belief_grid.w;
+    if mode == 0u {
+        return vec4<f32>(0.0);
+    }
+    let stripes = hatch(frag);
+    if mode == 1u {
+        // Unavailable: no belief exists to draw, so everywhere is unknown.
+        return vec4<f32>(terrain.belief_unknown_color.rgb, strength * (0.55 + 0.45 * stripes));
+    }
+    let cell = cell_of(xy, terrain.belief_grid, terrain.belief_dims);
+    if cell.x < 0 {
+        return vec4<f32>(0.0);
+    }
+    let class_code = textureLoad(belief_class, cell, 0).r;
+    if class_code == CLASS_UNKNOWN {
+        return vec4<f32>(terrain.belief_unknown_color.rgb, strength * (0.55 + 0.45 * stripes));
+    }
+    if class_code == CLASS_OUTSIDE {
+        return vec4<f32>(terrain.belief_outside_color.rgb, strength);
+    }
+    var color = terrain.belief_safe_color.rgb;
+    if class_code == CLASS_OBSTACLE {
+        color = terrain.belief_obstacle_color.rgb;
+    } else if class_code == CLASS_UNCERTAIN {
+        color = terrain.belief_uncertain_color.rgb;
+    } else {
+        // Known safe: brighter the more confident.
+        color = color * (0.45 + 0.55 * belief_confidence(xy));
+    }
+    // Stale: observed long enough ago to have faded toward grey.
+    let last = textureLoad(belief_numeric, cell, 0).g;
+    let age = terrain.belief_time.x - last;
+    if age > terrain.belief_time.y {
+        color = mix(color, vec3<f32>(dot(color, vec3<f32>(0.333))), 0.6);
+    }
+    return vec4<f32>(color, strength);
+}
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -80,10 +195,24 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let contour = 1.0 - smoothstep(0.0, terrain.contour_width_px, line_px);
     tint = mix(tint, terrain.contour_color.rgb, contour * terrain.contour_color.a);
 
-    pbr_input.material.base_color = vec4<f32>(
-        pbr_input.material.base_color.rgb * tint,
-        pbr_input.material.base_color.a,
-    );
+    let xy = in.world_position.xy;
+
+    // Land cover: the class's colour, where the scene carries a raster.
+    if terrain.land_cover_dims.z == 1u && terrain.land_cover_grid.w > 0.0 {
+        let cell = cell_of(xy, terrain.land_cover_grid, terrain.land_cover_dims);
+        if cell.x >= 0 {
+            let code = min(textureLoad(land_cover, cell, 0).r, 15u);
+            let class_color = terrain.land_cover_palette[code];
+            tint = mix(tint, class_color.rgb, class_color.a * terrain.land_cover_grid.w);
+        }
+    }
+
+    var base_rgb = pbr_input.material.base_color.rgb * tint;
+    // Belief replaces rather than multiplies, so its classes stay legible over
+    // whatever colour the terrain was baked with.
+    let overlay = belief_overlay(xy, in.position.xy);
+    base_rgb = mix(base_rgb, overlay.rgb, overlay.a);
+    pbr_input.material.base_color = vec4<f32>(base_rgb, pbr_input.material.base_color.a);
 
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
 

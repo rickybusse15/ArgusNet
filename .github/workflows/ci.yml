@@ -216,6 +216,13 @@ jobs:
           assert green_pixels > 30, f"holographic track missing: {green_pixels} green pixels"
           print(f"headless render OK: {len(colors)} distinct colours")
           PY
+      # The terrain material's belief and land cover (P2.1), read back pixel by
+      # pixel through the real pipeline and held to the CPU's belief and
+      # land-cover queries. Needs the same software Vulkan as the step above.
+      - name: Belief and land-cover pixel probes
+        env:
+          ARGUSNET_GPU_TESTS: "1"
+        run: cargo test -p argusnet-viewer --test belief_probes -- --test-threads=1
 
   rust-lint:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}

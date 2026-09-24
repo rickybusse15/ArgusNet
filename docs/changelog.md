@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Belief and land cover on the terrain (P2.1)
+
+- The terrain material draws belief from `argusnet-mapping`'s tile patches
+  through one adapter (`BeliefRenderSnapshot`), whose classes and confidence
+  are `WorldBeliefQuery`'s, cell for cell. Categorical channels are never
+  filtered. Unknown cells are hatched and stale ones faded. With no belief
+  data the whole terrain is drawn as unavailable, and the overlay panel says
+  why. Changed tiles reach the GPU as tile writes; uploads are capped and
+  counted.
+- Scenes built from an environment carry `metadata/land_cover.json`
+  (additive), and the terrain is tinted by the runtime layer's class.
+- Pixel probes read real headless renders back against the CPU queries; CI's
+  viewer job runs them. They caught the belief mode written into the wrong
+  uniform lane.
+- Headless renders now exit non-zero when a shader fails to compile or a PNG
+  cannot be written, instead of saving a plausible image.
+
 ## Unreleased — The viewer presents frames without rebuilding them (P2.0)
 
 - A snapshot adapter (`argusnet-viewer::presentation`) replaces the per-frame
