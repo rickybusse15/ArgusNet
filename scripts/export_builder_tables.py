@@ -58,7 +58,53 @@ def tables() -> dict:
         "localization": dataclasses.asdict(LocalizationConfig()),
         "gap_fill_min_fraction": float(FrontierPlanner().cfg.gap_fill_min_fraction),
         "poi_hover_agl_m": float(sim.POI_HOVER_AGL_M),
+        "mission_profiles": mission_profiles(),
     }
+
+
+def mission_profiles() -> dict:
+    """Each profile's identity, and its zones and POIs on a unit map.
+
+    `build_profile_mission_zones` and `build_profile_inspection_pois` scale
+    every coordinate and radius by the map extent with one multiplication,
+    so at an extent of 1.0 they give the coefficients themselves, and the
+    builder's `extent * coefficient` is the reference's product exactly.
+    """
+    from argusnet.mission.profiles import (
+        build_profile_inspection_pois,
+        build_profile_mission_zones,
+        list_mission_profiles,
+    )
+
+    out = {}
+    for profile in list_mission_profiles():
+        out[profile.profile_id] = {
+            "domain": profile.domain.value,
+            "workflow": profile.workflow,
+            "mission_mode": profile.mission_mode,
+            "zones": [
+                {
+                    "zone_id": zone.zone_id,
+                    "zone_type": zone.zone_type,
+                    "center": [float(v) for v in zone.center],
+                    "radius_m": float(zone.radius_m),
+                    "priority": int(zone.priority),
+                    "label": zone.label,
+                }
+                for zone in build_profile_mission_zones(profile.profile_id, map_extent_m=1.0)
+            ],
+            "pois": [
+                {
+                    "poi_id": poi.poi_id,
+                    "name": poi.name,
+                    "position": [float(v) for v in poi.position],
+                    "priority": int(poi.priority),
+                    "required_dwell_s": float(poi.required_dwell_s),
+                }
+                for poi in build_profile_inspection_pois(profile.profile_id, map_extent_m=1.0)
+            ],
+        }
+    return out
 
 
 def render() -> str:

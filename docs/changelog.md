@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — Blocking safety and mission profiles, with no Python (P4.9d)
+
+- Stage 4, the hard safety monitor, is assembled when a bundle says
+  `"safety_blocking": true`. Both bundle writers set that key only when the
+  option is on. Assembling it found three arguments that were not the
+  reference's: `dt_s` was the tick's timestamp, the caution fraction was 0.85
+  where `SafetyMonitor` defaults to 0.9, and the terrain was one constant.
+  The stage is now on the checkpoint contract, its validations reach fusion
+  as `safety_events`, and replays carry them.
+- Parity: an all-follow run and a whole scan mission under the hard floor
+  match the reference bit for bit on every tick, every safety event included.
+- The native builder builds mission profiles: the profile's zones and POIs,
+  exported from the reference on a unit map, the profile's scenario name, and
+  `meta.mission_profile`. It validates profiles as `ScenarioOptions` does.
+- All seven canonical scenarios are now scored. Six pass every envelope.
+  `sar_person_search` fails `covariance_reduction_mean`, which here measures a
+  single coasting track per seed at most; it is analysed and not widened.
+- Finding, kept for parity: after an abort, the reference monitor keeps
+  aborting, because it differences the next command against the zeroed
+  velocity it allowed.
+
 ## Unreleased — Phase acceptance for the Rust CLI (P4.9c)
 
 - `scripts/run_phase_acceptance.py` runs the seven canonical scenarios on five

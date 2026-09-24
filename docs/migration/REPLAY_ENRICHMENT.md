@@ -28,8 +28,10 @@ serialization, or proven to differ only where stage 6's draws reach
 
 A payload the writer does not produce is omitted, not written empty. That
 covers `belief_cells`, `pose_estimates`, `evidence_records`,
-`platform_health`, `mission_events` and `safety_events`, which Python writes
-empty in these scenarios. It also covers an empty event list, a scan state
+`platform_health` and `mission_events`, which Python writes empty in these
+scenarios, and `safety_events` in a run without blocking safety. Since P4.9d,
+a `safety_blocking` run writes stage 4's events
+([SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md)). It also covers an empty event list, a scan state
 outside `scan_map_inspect`, and target metadata with no targets. The viewer
 reads an absent key and an empty one the same way. The skip also keeps the
 committed writer fixture unchanged.

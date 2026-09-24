@@ -117,6 +117,20 @@ fn the_committed_bundles_are_rebuilt_whole() {
             1.0,
             json!({"map_preset":"small","drone_count":2,"ground_station_count":3,"poi_count":3,"scan_coverage_threshold":0.3}),
         ),
+        (
+            "tt_safety",
+            11,
+            80,
+            0.5,
+            json!({"map_preset":"small","mission_mode":"target_tracking","drone_mode_preset":"follow","target_count":1,"drone_count":4,"ground_station_count":3,"safety_blocking":true}),
+        ),
+        (
+            "scan_safety",
+            5,
+            400,
+            1.0,
+            json!({"map_preset":"small","drone_count":2,"ground_station_count":3,"poi_count":3,"scan_coverage_threshold":0.3,"safety_blocking":true}),
+        ),
     ];
     for (case, seed, steps, dt, options) in cases {
         let reference: Value =
@@ -150,7 +164,7 @@ fn a_matrix_of_scenarios_builds_the_references_bundles() {
     ];
     let mut tally = Tally::default();
     let cases = fixture["cases"].as_array().unwrap();
-    assert!(cases.len() >= 11);
+    assert!(cases.len() >= 15);
     for case in cases {
         let seed = case["seed"].as_u64().unwrap();
         let mut ours = build(&config(seed, steps, dt, &case["options"]));
@@ -162,4 +176,65 @@ fn a_matrix_of_scenarios_builds_the_references_bundles() {
         assert_same(&ours, &case["bundle"], &format!("seed {seed}"), &mut tally);
     }
     println!("matrix: {tally:?}");
+}
+
+/// A profile is checked as `ScenarioOptions.__post_init__` checks it: a
+/// known id, and the domain, workflow and mission mode it declares. Anything
+/// else is an invalid config, not an unsupported one (P4.9d).
+#[test]
+fn a_mission_profile_is_checked_as_the_reference_checks_it() {
+    use argusnet_sim::builder::BuildError;
+
+    let sar = json!({
+        "map_preset": "small",
+        "mission_mode": "target_tracking",
+        "target_count": 1,
+        "drone_count": 2,
+        "ground_station_count": 3,
+        "mission_profile_id": "sar_person_search",
+        "mission_domain": "search_and_rescue",
+        "mission_workflow": "person_search_and_localization",
+        "mission_tags": ["type:search"],
+    });
+    let attempt = |options: &Value| {
+        let config = config(3, 4, 0.5, options);
+        let world = build_world(&config.options).unwrap();
+        build_bundle(
+            Assembly {
+                config: &config,
+                tracker: TABLES["tracker_default"].clone(),
+            },
+            &world,
+        )
+    };
+    let built = attempt(&sar).expect("a consistent profile builds");
+    assert_eq!(built["scenario_name"], "sar_person_search");
+    assert_eq!(
+        built["presentation"]["mission_profile"],
+        json!({"profile_id": "sar_person_search", "domain": "search_and_rescue",
+               "workflow": "person_search_and_localization", "tags": ["type:search"]})
+    );
+    assert_eq!(built["mission_zones"].as_array().unwrap().len(), 1);
+    assert!(
+        built.get("safety_blocking").is_none(),
+        "the flag is the option's, not the profile's"
+    );
+
+    for (key, value) in [
+        ("mission_profile_id", json!("no_such_profile")),
+        ("mission_domain", json!("industrial_survey")),
+        ("mission_domain", Value::Null),
+        (
+            "mission_workflow",
+            json!("fixed_asset_mapping_and_inspection"),
+        ),
+        ("mission_mode", json!("scan_map_inspect")),
+    ] {
+        let mut options = sar.clone();
+        options[key] = value.clone();
+        match attempt(&options) {
+            Err(BuildError::Invalid(_)) => {}
+            other => panic!("{key} = {value}: expected Invalid, got {other:?}"),
+        }
+    }
 }

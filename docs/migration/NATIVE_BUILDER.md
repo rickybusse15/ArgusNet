@@ -231,10 +231,11 @@ localization defaults) are exported from the reference by
 embedded. `tests/test_builder_tables.py` fails if they drift.
 
 Refused as `Unsupported`, as `export_bundle` refuses them: the flight envelope,
-blocking safety, frontier exploration, occlusion-aware mapping and adaptive
-search. The native builder also refuses mission profiles, cooperative search
-in scan mode, target tracking with no targets (the reference raises there
-too) and a scenario with no ground stations.
+frontier exploration, occlusion-aware mapping and adaptive search. The native
+builder also refuses cooperative search in scan mode, target tracking with no
+targets (the reference raises there too) and a scenario with no ground
+stations. Blocking safety and mission profiles were refused until P4.9d, which
+builds them ([SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md)).
 
 `argusnet-rs build --config C --bundle B` writes the bundle, and
 `argusnet-rs sim --config C` builds and runs it in one process. With either,
@@ -288,7 +289,7 @@ Pinned toolchain 1.98.0-aarch64, exit codes read directly:
 ## Not in this slice
 
 * **Mission profiles** (`--mission-profile`), which carry their own zones
-  and POIs. They are refused as `Unsupported`.
+  and POIs. They were refused as `Unsupported` until P4.9d.
 * **Cooperative search in scan mode.** Its wedge paths are refused as
   `Unsupported`.
 * **DEM and hybrid terrain.** These are an import step (P4.3).

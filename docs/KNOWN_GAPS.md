@@ -80,6 +80,7 @@ Status labels:
 
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
+| Blocking safety monitor after an abort | **Reference behaviour, ported** | An abort zeroes the allowed velocity, which is stored as `previous_velocity`. The controller's next normal command then reads as an acceleration violation and aborts again: in the scan fixture every tick of both drones aborts. The clamp does not accumulate, so missions still complete. Whether the policy should difference against the commanded velocity after an abort is a policy decision (`docs/migration/SAFETY_AND_PROFILES.md`). |
 | 2D visibility-graph planner | **Implemented** | `src/argusnet/planning/planner_base.py` |
 | Route cache and obstacle expansion | **Implemented** | `PathPlanner2D`, `PlannerConfig` |
 | Frontier enclosed-gap gate | **Implemented** | `FrontierPlanner.find_gap_cells()` is wired into `scan_map_inspect`. |
@@ -97,7 +98,7 @@ Status labels:
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
 | Replay schema | **Implemented** | `docs/replay-schema.json`, `src/argusnet/evaluation/replay.py`. Enforced with `jsonschema` and guarded end-to-end by `tests/test_replay_contract.py` plus `replay.rs::contract_fixture_tests`. |
-| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py`. `check_pass_fail`'s `track_continuity_mean` threshold fails every canonical scenario, including the target-free scan scenarios where continuity is 0 by construction (P4.9c). |
+| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py`. `check_pass_fail`'s `track_continuity_mean` threshold fails every canonical scenario, including the target-free scan scenarios where continuity is 0 by construction (P4.9c). `covariance_reduction_mean` compares a track's first covariance with its covariance at its *last appearance*, which is usually mid-coast just before deletion, so it measures the coast. In `sar_person_search` at most one track per seed qualifies, and this is the one P4.9d envelope that fails (`docs/migration/SAFETY_AND_PROFILES.md`). Whether to measure at the last update, or require a minimum sample, is an open decision. |
 | Benchmark aggregation | **Implemented** | `src/argusnet/evaluation/benchmarks.py` |
 | Reports/export helpers | **Implemented** | `src/argusnet/evaluation/reports.py`, `export.py` |
 | Benchmark standards | **Implemented as documentation** | `docs/PERFORMANCE_AND_BENCHMARKING.md` |

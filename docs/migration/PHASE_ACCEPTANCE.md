@@ -1,9 +1,11 @@
 # P4.9c: phase acceptance for the Rust CLI
 
-**Status:** envelopes declared 2026-09-23, before any acceptance run. All five
-scenarios the native builder supports pass every envelope. Two scenarios, the
-mission profiles, are refused and so are not scored. Reaching a pass took two
-defect fixes and no widening; see [Results](#results) and
+**Status:** envelopes declared 2026-09-23, before any acceptance run. Reaching
+a pass for the five scenarios the builder then supported took two defect
+fixes and no widening; see [Results](#results). Since P4.9d all seven are
+scored. Six pass every envelope, and `sar_person_search` fails one,
+`covariance_reduction_mean`; see
+[After P4.9d](#after-p49d-all-seven-scenarios-scored) and
 [STATUS.md](STATUS.md).
 
 DELIVERY_PLAN P4.9 closes Phase 4 with: *"Run the canonical scenario suite,
@@ -211,9 +213,14 @@ After the third acceptance run, only tests changed, plus one refactor
 (`tick_summary`) whose output is byte-identical. So the report stands without
 another run.
 
-## Next
+## After P4.9d: all seven scenarios scored
 
-**P4.9d**: assemble stage 4, the hard safety monitor, from a bundle. Then
-carry `safety_blocking` and mission profiles through the exporter and the
-native builder, so `sar_person_search` and `industrial_asset_survey` are
-scored too.
+[SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) assembles stage 4 and builds
+the mission profiles natively, so the two refused scenarios are now scored.
+The report was rerun whole on the final build. **Six of seven scenarios pass
+every envelope.** `industrial_asset_survey` passes. `sar_person_search` passes
+everything except `covariance_reduction_mean` (reference −1.875, Rust −0.181,
+against 0.10 allowed). That metric is decided by at most one track per seed,
+reported on one reference seed against three Rust seeds, and it measures the
+coast before a track's deletion. The analysis is in that doc. The envelope is
+not widened; the metric's definition is an open decision.

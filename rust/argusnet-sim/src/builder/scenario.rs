@@ -711,6 +711,7 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
     let config = assembly.config;
     let options = &config.options;
     refuse_unsupported(options)?;
+    let mission_profile = mission_profile(options)?;
     let seed = config.seed;
     let scale = world.scale;
     let bounds = world.bounds;
@@ -1119,7 +1120,13 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
     }
 
     // --- zones, then everything that reads them --------------------------
-    let zones = generate_mission_zones(&ground, bounds, scale, &mut rng);
+    // A profile's zones replace the generated ones, which then draw nothing:
+    // they are the last thing the reference's generator draws for, so
+    // skipping them moves no other value.
+    let zones = match mission_profile {
+        Some(profile) => profile_zones(&ground, profile, map_extent_m(bounds)),
+        None => generate_mission_zones(&ground, bounds, scale, &mut rng),
+    };
     let zone_documents: Vec<Value> = zones
         .iter()
         .map(|z| {
@@ -1169,7 +1176,13 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
         .collect();
 
     let mission = if options.mission_mode == "scan_map_inspect" {
-        Some(mission_document(&ground, bounds, options, seed)?)
+        Some(mission_document(
+            &ground,
+            bounds,
+            options,
+            seed,
+            mission_profile,
+        )?)
     } else {
         None
     };
@@ -1180,7 +1193,18 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
         "scenario_options".into(),
         scenario_options_document(options),
     );
-    presentation.insert("mission_profile".into(), Value::Null);
+    presentation.insert(
+        "mission_profile".into(),
+        match &options.mission_profile_id {
+            Some(id) if mission_profile.is_some() => json!({
+                "profile_id": id,
+                "domain": options.mission_domain,
+                "workflow": options.mission_workflow,
+                "tags": options.mission_tags,
+            }),
+            _ => Value::Null,
+        },
+    );
     presentation.insert(
         "zones".into(),
         json!(zones
@@ -1207,11 +1231,14 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
     );
     presentation.insert("drone_roles".into(), Value::Object(drone_roles.clone()));
 
-    let scenario_name = format!(
-        "civilian-observation-{}-{}-{}",
-        options.map_preset, options.target_motion_preset, options.drone_mode_preset
-    );
-    Ok(json!({
+    let scenario_name = match (&options.mission_profile_id, mission_profile) {
+        (Some(id), Some(_)) => id.clone(),
+        _ => format!(
+            "civilian-observation-{}-{}-{}",
+            options.map_preset, options.target_motion_preset, options.drone_mode_preset
+        ),
+    };
+    let mut bundle = json!({
         "format": crate::scenario::BUNDLE_FORMAT,
         "version": crate::scenario::BUNDLE_VERSION,
         "scenario_name": scenario_name,
@@ -1238,21 +1265,90 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
         "nodes": nodes,
         "targets": target_documents,
         "presentation": presentation,
-    }))
+    });
+    // Written only when set, as `export_bundle` writes it.
+    if options.safety_blocking {
+        bundle["safety_blocking"] = json!(true);
+    }
+    Ok(bundle)
+}
+
+/// The mission profile `options` names, checked as `ScenarioOptions` checks
+/// it on construction: a known id, and the domain, workflow and mission mode
+/// that profile declares. `None` when no profile is named.
+fn mission_profile(options: &ScenarioOptions) -> Result<Option<&'static Value>, BuildError> {
+    let Some(id) = options
+        .mission_profile_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let profile = &TABLES["mission_profiles"][id];
+    if profile.is_null() {
+        return Err(BuildError::Invalid(format!(
+            "unknown mission profile {id:?}"
+        )));
+    }
+    let declared = |key: &str| profile[key].as_str();
+    if options.mission_domain.as_deref() != declared("domain") {
+        return Err(BuildError::Invalid(
+            "mission_domain does not match mission_profile_id".into(),
+        ));
+    }
+    if options.mission_workflow.as_deref() != declared("workflow") {
+        return Err(BuildError::Invalid(
+            "mission_workflow does not match mission_profile_id".into(),
+        ));
+    }
+    if Some(options.mission_mode.as_str()) != declared("mission_mode") {
+        return Err(BuildError::Invalid(
+            "mission_mode does not match mission_profile_id".into(),
+        ));
+    }
+    Ok(Some(profile))
+}
+
+/// `min(x span, y span)`, the extent a profile's zones and POIs scale by.
+fn map_extent_m(bounds: MapBounds) -> f64 {
+    (bounds.x_max_m - bounds.x_min_m).min(bounds.y_max_m - bounds.y_min_m)
+}
+
+/// `build_profile_mission_zones`, lifted onto the terrain as the reference
+/// lifts them.
+fn profile_zones(ground: &Ground<'_>, profile: &Value, extent: f64) -> Vec<Zone> {
+    profile["zones"]
+        .as_array()
+        .expect("profile zones")
+        .iter()
+        .map(|zone| {
+            let x = extent * zone["center"][0].as_f64().expect("x");
+            let y = extent * zone["center"][1].as_f64().expect("y");
+            Zone {
+                zone_id: zone["zone_id"].as_str().expect("id").to_string(),
+                zone_type: match zone["zone_type"].as_str().expect("type") {
+                    "objective" => "objective",
+                    "exclusion" => "exclusion",
+                    "surveillance" => "surveillance",
+                    "patrol" => "patrol",
+                    other => panic!("profile zone type {other:?} the builder does not know"),
+                },
+                center: [x, y, ground.height_at(x, y)],
+                radius_m: extent * zone["radius_m"].as_f64().expect("radius"),
+                priority: zone["priority"].as_i64().expect("priority"),
+                label: zone["label"].as_str().expect("label").to_string(),
+            }
+        })
+        .collect()
 }
 
 /// `export_bundle`'s refusals, and the native builder's own.
 fn refuse_unsupported(options: &ScenarioOptions) -> Result<(), BuildError> {
     let refusals = [
         (options.enforce_flight_envelope, "enforce_flight_envelope"),
-        (options.safety_blocking, "safety_blocking"),
         (options.frontier_exploration, "frontier_exploration"),
         (options.occlusion_aware_mapping, "occlusion_aware_mapping"),
         (options.adaptive_search, "adaptive_search"),
-        (
-            options.mission_profile_id.is_some(),
-            "mission_profile_id (mission profiles)",
-        ),
     ];
     for (used, name) in refusals {
         if used {
@@ -1321,9 +1417,83 @@ fn mission_document(
     bounds: MapBounds,
     options: &ScenarioOptions,
     seed: u32,
+    mission_profile: Option<&Value>,
 ) -> Result<Value, BuildError> {
     let count = options.poi_count as usize;
     let hover = number(&["poi_hover_agl_m"]);
+    let pois = match mission_profile {
+        Some(profile) => profile_pois(ground, profile, map_extent_m(bounds), count, hover),
+        None => generated_pois(ground, bounds, count, hover, seed),
+    };
+    let localization = table(&["localization"]);
+    let (x_min, x_max, y_min, y_max) = (
+        bounds.x_min_m,
+        bounds.x_max_m,
+        bounds.y_min_m,
+        bounds.y_max_m,
+    );
+    Ok(json!({
+        "coverage_bounds": {
+            "x_min_m": x_min,
+            "x_max_m": x_max,
+            "y_min_m": y_min,
+            "y_max_m": y_max,
+            "resolution_m": options.coverage_resolution_m,
+        },
+        "scan_coverage_threshold": options.scan_coverage_threshold,
+        "localization_confidence_threshold": 0.65,
+        "egress_arrival_radius_m": 15.0,
+        "redirect_speed_mps": 28.0,
+        "gap_fill_min_fraction": number(&["gap_fill_min_fraction"]),
+        "localization": {
+            "search_radius_m": localization["search_radius_m"],
+            "particle_count": localization["particle_count"],
+            "convergence_threshold_m": localization["convergence_threshold_m"],
+            "min_coverage_to_localize": localization["min_coverage_to_localize"],
+            "confidence_decay": localization["confidence_decay"],
+            "annealing_rate": localization["annealing_rate"],
+            "localization_timeout_steps": localization["localization_timeout_steps"],
+        },
+        "pois": pois,
+    }))
+}
+
+/// `build_profile_inspection_pois`, the first `poi_count` of them, at the
+/// hover height over the terrain.
+fn profile_pois(
+    ground: &Ground<'_>,
+    profile: &Value,
+    extent: f64,
+    count: usize,
+    hover: f64,
+) -> Vec<Value> {
+    profile["pois"]
+        .as_array()
+        .expect("profile pois")
+        .iter()
+        .take(count)
+        .map(|poi| {
+            let x = extent * poi["position"][0].as_f64().expect("x");
+            let y = extent * poi["position"][1].as_f64().expect("y");
+            json!({
+                "poi_id": poi["poi_id"],
+                "name": poi["name"],
+                "position": [x, y, ground.height_at(x, y) + hover],
+                "priority": poi["priority"],
+                "required_dwell_s": poi["required_dwell_s"],
+            })
+        })
+        .collect()
+}
+
+/// `make_poi_positions` and the POIs `run_simulation` builds on them.
+fn generated_pois(
+    ground: &Ground<'_>,
+    bounds: MapBounds,
+    count: usize,
+    hover: f64,
+    seed: u32,
+) -> Vec<Value> {
     let mut rng = NumpyRng::new(seed + 999);
     let (x_min, x_max, y_min, y_max) = (
         bounds.x_min_m,
@@ -1357,31 +1527,7 @@ fn mission_document(
             "required_dwell_s": 15.0,
         }));
     }
-    let localization = table(&["localization"]);
-    Ok(json!({
-        "coverage_bounds": {
-            "x_min_m": x_min,
-            "x_max_m": x_max,
-            "y_min_m": y_min,
-            "y_max_m": y_max,
-            "resolution_m": options.coverage_resolution_m,
-        },
-        "scan_coverage_threshold": options.scan_coverage_threshold,
-        "localization_confidence_threshold": 0.65,
-        "egress_arrival_radius_m": 15.0,
-        "redirect_speed_mps": 28.0,
-        "gap_fill_min_fraction": number(&["gap_fill_min_fraction"]),
-        "localization": {
-            "search_radius_m": localization["search_radius_m"],
-            "particle_count": localization["particle_count"],
-            "convergence_threshold_m": localization["convergence_threshold_m"],
-            "min_coverage_to_localize": localization["min_coverage_to_localize"],
-            "confidence_decay": localization["confidence_decay"],
-            "annealing_rate": localization["annealing_rate"],
-            "localization_timeout_steps": localization["localization_timeout_steps"],
-        },
-        "pois": pois,
-    }))
+    pois
 }
 
 /// `scenario_replay_metadata`'s `scenario_options`.

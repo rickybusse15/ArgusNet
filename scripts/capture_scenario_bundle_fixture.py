@@ -106,8 +106,33 @@ CASES = {
         poi_count=3,
         scan_coverage_threshold=0.3,
     ),
+    # Stage 4 (P4.9d). The all-follow fleet again, under the hard safety
+    # floor: interceptor envelopes, and nothing an observation decides, so
+    # every clamp and every event must match on every tick.
+    "tt_safety": ScenarioOptions(
+        map_preset="small",
+        mission_mode="target_tracking",
+        drone_mode_preset="follow",
+        target_count=1,
+        drone_count=4,
+        ground_station_count=3,
+        safety_blocking=True,
+    ),
+    # Scan drones take the tracker envelope, and with localization replayed
+    # nothing an observation decides moves them either.
+    "scan_safety": ScenarioOptions(
+        map_preset="small",
+        drone_count=2,
+        ground_station_count=3,
+        poi_count=3,
+        scan_coverage_threshold=0.3,
+        safety_blocking=True,
+    ),
 }
-CONFIGS = {"scan": SimulationConfig(steps=400, dt_s=1.0, seed=5)}
+CONFIGS = {
+    "scan": SimulationConfig(steps=400, dt_s=1.0, seed=5),
+    "scan_safety": SimulationConfig(steps=400, dt_s=1.0, seed=5),
+}
 
 
 def capture_los(scenario) -> dict:
@@ -234,6 +259,9 @@ REPLAY_PAYLOADS = (
     "scan_mission_state",
     "target_metadata",
 )
+# Recorded only for the stage-4 cases, so the other references stay as they
+# were captured.
+SAFETY_PAYLOADS = ("safety_events",)
 # The keys of the reference `meta` that describe the run rather than the
 # scenario, and that the Rust writer computes itself.
 META_RUN_KEYS = ("platform", "requested_duration_s", "actual_duration_s", "observation_generation")
@@ -319,7 +347,11 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
                     {e.yielding_drone_id for e in frame.deconfliction_events}
                     | {e.conflicting_drone_id for e in frame.deconfliction_events}
                 ),
-                "replay": {key: document["frames"][index].get(key) for key in REPLAY_PAYLOADS},
+                "replay": {
+                    key: document["frames"][index].get(key)
+                    for key in REPLAY_PAYLOADS
+                    + (SAFETY_PAYLOADS if options.safety_blocking else ())
+                },
             }
         )
     reference = {
@@ -332,7 +364,7 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
         "meta_run": {key: document["meta"][key] for key in META_RUN_KEYS},
     }
     assert len(frames) == config.steps, f"expected {config.steps} frames, got {len(frames)}"
-    if name == "scan":
+    if name in ("scan", "scan_safety"):
         phases = {f["mission"]["phase"] for f in frames}
         assert phases >= {"scanning", "inspecting", "egress", "complete"}, phases
     elif name == "tt":
@@ -340,6 +372,18 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
     elif name == "tt_follow":
         assert not adaptive, "the all-follow case grew an observation-fed drone"
         assert any(f["deconfliction_drones"] for f in frames), "no deconfliction to compare"
+    if options.safety_blocking:
+        events = [e for f in frames for e in f["replay"]["safety_events"] or []]
+        reasons = {e["reason"] for e in events}
+        assert "abort" in reasons, f"stage 4 never aborted: {reasons}"
+        if name == "tt_safety":
+            assert "warning" in reasons, f"stage 4 never warned first: {reasons}"
+        assert any(e["clamped"] for e in events), "stage 4 never clamped"
+    if name == "tt_safety":
+        assert not adaptive, "the all-follow safety case grew an observation-fed drone"
+        assert set(scenario.drone_roles.values()) == {"interceptor"}, scenario.drone_roles
+    elif name == "scan_safety":
+        assert set(scenario.drone_roles.values()) == {"tracker"}, scenario.drone_roles
     (out_dir / f"scenario_bundle_{name}_reference.json").write_text(
         json.dumps(reference, indent=1, sort_keys=True) + "\n"
     )
@@ -354,10 +398,16 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--cases", default="", help="comma-separated names (default: all)")
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    wanted = {name for name in args.cases.split(",") if name}
+    unknown = wanted - set(CASES)
+    if unknown:
+        parser.error(f"unknown cases: {sorted(unknown)}")
     for name, options in CASES.items():
-        capture(args.out_dir, name, options)
+        if not wanted or name in wanted:
+            capture(args.out_dir, name, options)
     return 0
 
 

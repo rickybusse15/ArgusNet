@@ -431,6 +431,41 @@ pub struct ReplayFrame {
     pub scan_mission_state: Option<ReplayScanMissionState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_metadata: Vec<ReplayTargetMetadata>,
+    /// Stage 4's validations, as the fused frame echoes them (P4.9d).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub safety_events: Vec<ReplaySafetyEvent>,
+}
+
+/// A `SafetyValidationResult` as the reference writes it: the fused frame's
+/// `SafetyEvent`, read back by `_safety_event_from_proto`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplaySafetyEvent {
+    pub validation_id: String,
+    pub subject_id: String,
+    pub accepted: bool,
+    pub timestamp_s: f64,
+    pub validator: String,
+    pub violations: Vec<String>,
+    pub clamped: bool,
+    pub reason: Option<String>,
+}
+
+impl From<&argusnet_types::SafetyEvent> for ReplaySafetyEvent {
+    fn from(event: &argusnet_types::SafetyEvent) -> Self {
+        let nonempty = |text: &str| (!text.is_empty()).then(|| text.to_string());
+        Self {
+            validation_id: event.event_id.clone(),
+            subject_id: event.subject_id.clone(),
+            accepted: !event.blocked,
+            timestamp_s: event.timestamp_s,
+            // `_safety_event_from_proto` names the validator itself.
+            validator: "blocking_monitor".to_string(),
+            violations: event.violations.clone(),
+            clamped: event.command_clamped,
+            // `value.reason or value.state or None`.
+            reason: nonempty(&event.reason).or_else(|| nonempty(&event.state)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -581,6 +616,7 @@ impl ReplayWriter {
             deconfliction_events: Vec::new(),
             scan_mission_state: None,
             target_metadata: Vec::new(),
+            safety_events: Vec::new(),
         }
     }
 
@@ -932,6 +968,34 @@ mod tests {
             column_major, expected,
             "fixture is symmetric -- this test cannot detect a transpose"
         );
+    }
+
+    /// `_safety_event_from_proto`: `reason or state or None`, the validator
+    /// named by the reader, and `accepted` as the inverse of `blocked`.
+    #[test]
+    fn a_safety_event_reads_back_as_the_reference_reads_it() {
+        let event = |state: &str, reason: &str| argusnet_types::SafetyEvent {
+            event_id: "safety-3-drone-1".into(),
+            subject_id: "drone-1".into(),
+            timestamp_s: 1.5,
+            state: state.into(),
+            violations: vec!["max_speed".into()],
+            command_clamped: true,
+            blocked: true,
+            reason: reason.into(),
+        };
+        let read = ReplaySafetyEvent::from(&event("abort", "overspeed"));
+        assert_eq!(read.reason.as_deref(), Some("overspeed"));
+        assert_eq!(read.validator, "blocking_monitor");
+        assert!(!read.accepted && read.clamped);
+        assert_eq!(read.validation_id, "safety-3-drone-1");
+        assert_eq!(
+            ReplaySafetyEvent::from(&event("abort", ""))
+                .reason
+                .as_deref(),
+            Some("abort")
+        );
+        assert_eq!(ReplaySafetyEvent::from(&event("", "")).reason, None);
     }
 
     /// The reference writer emits the lifecycle and quality of every track

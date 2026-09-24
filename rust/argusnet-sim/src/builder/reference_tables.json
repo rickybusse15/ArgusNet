@@ -110,6 +110,94 @@
   "particle_count": 200,
   "search_radius_m": 80.0
  },
+ "mission_profiles": {
+  "industrial_asset_survey": {
+   "domain": "industrial_survey",
+   "mission_mode": "scan_map_inspect",
+   "pois": [
+    {
+     "name": "Asset Intake",
+     "poi_id": "industrial_asset_survey-asset-intake",
+     "position": [
+      -0.2,
+      -0.08,
+      0.0
+     ],
+     "priority": 3,
+     "required_dwell_s": 15.0
+    },
+    {
+     "name": "Asset Process",
+     "poi_id": "industrial_asset_survey-asset-process",
+     "position": [
+      0.02,
+      0.14,
+      0.0
+     ],
+     "priority": 3,
+     "required_dwell_s": 15.0
+    },
+    {
+     "name": "Asset Storage",
+     "poi_id": "industrial_asset_survey-asset-storage",
+     "position": [
+      0.22,
+      -0.12,
+      0.0
+     ],
+     "priority": 3,
+     "required_dwell_s": 15.0
+    }
+   ],
+   "workflow": "fixed_asset_mapping_and_inspection",
+   "zones": [
+    {
+     "center": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "label": "Industrial Survey Area",
+     "priority": 3,
+     "radius_m": 0.28,
+     "zone_id": "industrial_asset_survey-objective",
+     "zone_type": "objective"
+    },
+    {
+     "center": [
+      -0.32,
+      0.25,
+      0.0
+     ],
+     "label": "Authorized Exclusion Area",
+     "priority": 4,
+     "radius_m": 0.06,
+     "zone_id": "industrial-asset-survey-exclusion",
+     "zone_type": "exclusion"
+    }
+   ]
+  },
+  "sar_person_search": {
+   "domain": "search_and_rescue",
+   "mission_mode": "target_tracking",
+   "pois": [],
+   "workflow": "person_search_and_localization",
+   "zones": [
+    {
+     "center": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "label": "Person Search Area",
+     "priority": 3,
+     "radius_m": 0.28,
+     "zone_id": "sar_person_search-objective",
+     "zone_type": "objective"
+    }
+   ]
+  }
+ },
  "platform_presets": {
   "baseline": {
    "drone_max_range_scale": 1.0,

@@ -41,10 +41,12 @@ Resolved data, never a preset name that could be re-resolved differently:
 anything else, so a v2 bundle is refused as a version, not as whichever field
 v2 renamed. Unsupported features are refused by name on both sides: the
 exporter raises `UnsupportedScenario` and `assemble` returns
-`BundleError::Unsupported`. v1 refuses `scan_map_inspect` (the mission driver
-is P4.8e.3), the flight envelope, blocking safety, frontier and
+`BundleError::Unsupported`. v1 refused `scan_map_inspect` until the mission
+driver landed (P4.8e.3). It still refuses the flight envelope, frontier and
 occlusion-aware mapping, adaptive search, VIO position substitution, and a
-follow controller with a route planner.
+follow controller with a route planner. Blocking safety is carried since
+P4.9d, as `"safety_blocking": true`, written only when set so older bundles
+read as off ([SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md)).
 
 ## What is compared, and how exactly
 

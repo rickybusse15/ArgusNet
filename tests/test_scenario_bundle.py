@@ -73,12 +73,18 @@ def test_truth_is_sampled_at_every_tick_and_every_lead():
         ({"mission_mode": "scan_map_inspect", "frontier_exploration": True}, "frontier"),
         ({"mission_mode": "scan_map_inspect", "occlusion_aware_mapping": True}, "occlusion"),
         ({"enforce_flight_envelope": True}, "enforce_flight_envelope"),
-        ({"safety_blocking": True}, "safety_blocking"),
     ],
 )
 def test_unsupported_scenarios_are_refused_by_name(overrides, fragment):
     with pytest.raises(UnsupportedScenario, match=fragment):
         export_bundle(_scenario(**overrides), CONFIG)
+
+
+def test_blocking_safety_is_carried_only_when_asked_for():
+    """P4.9d: stage 4 assembles from the bundle's flag. Written only when set,
+    so a bundle without it is the bundle it was before stage 4 assembled."""
+    assert export_bundle(_scenario(safety_blocking=True), CONFIG)["safety_blocking"] is True
+    assert "safety_blocking" not in export_bundle(_scenario(), CONFIG)
 
 
 def test_the_closure_specs_describe_how_the_closure_was_built():
@@ -225,7 +231,7 @@ def test_an_exported_bundle_runs_in_argusnet_rs_to_a_valid_replay(tmp_path):
     assert document["meta"]["producer"] == "argusnet-sim"
 
 
-@pytest.mark.parametrize("case", ["scan", "tt_follow"])
+@pytest.mark.parametrize("case", ["scan", "tt_follow", "tt_safety"])
 def test_an_argusnet_rs_replay_passes_the_schema_with_every_payload(tmp_path, case):
     """P4.9a.2: the enriched Rust replay is a replay the schema accepts, and its
     ``meta`` carries every key Python's does except the two it declines:
@@ -272,6 +278,8 @@ def test_an_argusnet_rs_replay_passes_the_schema_with_every_payload(tmp_path, ca
             "localization_state",
             "target_metadata",
         }
+    if bundle.get("safety_blocking"):
+        expected |= {"safety_events"}
     assert expected <= payloads
 
 

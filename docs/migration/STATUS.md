@@ -13,11 +13,13 @@ States: **done** (merged), **local** (committed and locally verified but not pus
 
 P5.0 needs P4.9, a Rust CLI running supported scenarios with no Python runtime,
 and P2.x, a viewer engine that presents the runtime's snapshots. At 2026-09-23
-`argusnet-rs sim --config` builds and runs scenarios with no Python. It passes
-phase acceptance on the five canonical scenarios the native builder supports
-(P4.9c). Two gaps remain. On the runtime side, stage 4 is not assembled from
-bundles, so blocking-safety mission profiles are refused (P4.9d). All of the
-viewer track (P2.x) is still open.
+`argusnet-rs sim --config` builds and runs every canonical scenario with no
+Python, mission profiles and the blocking safety monitor included (P4.9d). Six
+of the seven pass every declared envelope. One envelope,
+`sar_person_search`'s `covariance_reduction_mean`, fails for a reason in the
+metric's definition, which needs a decision; see
+[SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md). All of the viewer track
+(P2.x) is still open.
 
 ## Track A — runtime (critical path)
 
@@ -36,7 +38,7 @@ viewer track (P2.x) is still open.
 | P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
 | P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
 | P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | local | [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
-| P4.9d | Stage 4 (hard safety monitor) assembled from bundles; `safety_blocking` and mission profiles through exporter and native builder; the two refused canonical scenarios scored | open | — |
+| P4.9d | Stage 4 (hard safety monitor) assembled from bundles, three reference-argument defects fixed, checkpointed; `safety_blocking` and mission profiles through exporter and native builder; all 7 canonical scenarios scored, 6 within every envelope (`sar_person_search` fails `covariance_reduction_mean`, analysed, not widened) | local | [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) |
 
 ## Track B — viewer engine
 

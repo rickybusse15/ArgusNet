@@ -851,3 +851,203 @@ fn the_scan_assembly_wires_the_mission_as_the_bundle_describes() {
         assert_eq!(poi.required_dwell_s, expected.required_dwell_s);
     }
 }
+
+// ---------------------------------------------------------------------
+// Stage 4: the hard safety floor (P4.9d)
+// ---------------------------------------------------------------------
+
+/// This tick's safety events as the replay writes them, and as the reference
+/// did.
+fn safety_events(run: &argusnet_sim::scenario::AssembledRun) -> Value {
+    let frame = run.fusion.frame().expect("stage 7 ran");
+    serde_json::to_value(
+        frame
+            .safety_events
+            .iter()
+            .map(argusnet_sim::replay::ReplaySafetyEvent::from)
+            .collect::<Vec<_>>(),
+    )
+    .expect("events serialise")
+}
+
+fn reference_safety_events(frame: &Value) -> Value {
+    match &frame["replay"]["safety_events"] {
+        Value::Null => Value::Array(Vec::new()),
+        events => events.clone(),
+    }
+}
+
+/// Every platform's kinematics at one tick, from a snapshot.
+fn snapshot_kinematics(platform: &argusnet_types::NodeState) -> Kinematics {
+    (
+        bits([
+            platform.position.x,
+            platform.position.y,
+            platform.position.z,
+        ]),
+        bits([
+            platform.velocity.x,
+            platform.velocity.y,
+            platform.velocity.z,
+        ]),
+        [
+            platform.health.to_bits(),
+            platform.battery_fraction.unwrap_or(-1.0).to_bits(),
+        ],
+    )
+}
+
+/// The all-follow fleet under `safety_blocking`: interceptor envelopes over
+/// real terrain, `dt` from the config, a caution fraction of 0.9. No
+/// observation moves anything, so every clamp and every event must match the
+/// reference on every tick.
+#[test]
+fn a_blocking_safety_run_matches_on_every_tick() {
+    let reference = reference_of("tt_safety");
+    let frames = reference["frames"].as_array().expect("frames");
+    let bundle = bundle_of("tt_safety");
+    assert!(bundle.safety_blocking);
+    let mut run = assemble(&bundle).expect("bundle assembles");
+    assert!(run.safety.is_some(), "stage 4 is assembled when asked for");
+    let (mut events, mut warnings, mut clamped) = (0, 0, 0);
+    for (i, frame) in frames.iter().enumerate() {
+        let snapshot = run.step().expect("tick runs");
+        for platform in &snapshot.platforms {
+            let expected = reference_kinematics(frame, &platform.node_id);
+            let actual = snapshot_kinematics(platform);
+            assert_eq!(
+                actual,
+                expected,
+                "{} at tick {i}: rust {:?} python {:?}",
+                platform.node_id,
+                (actual.0.map(f64::from_bits), actual.1.map(f64::from_bits)),
+                (
+                    expected.0.map(f64::from_bits),
+                    expected.1.map(f64::from_bits)
+                ),
+            );
+        }
+        let expected = reference_safety_events(frame);
+        assert_eq!(safety_events(&run), expected, "safety events at tick {i}");
+        for event in expected.as_array().unwrap() {
+            events += 1;
+            warnings += usize::from(event["reason"] == "warning");
+            clamped += usize::from(event["clamped"] == true);
+        }
+    }
+    eprintln!("blocking safety: {events} events, {warnings} warnings, {clamped} clamped");
+    assert!(events >= 100 && warnings >= 10 && clamped >= 50);
+}
+
+/// The scan fleet under `safety_blocking`, with localization replayed: the
+/// tracker envelope, and the whole mission through `complete`.
+#[test]
+fn a_blocking_safety_scan_run_matches_throughout() {
+    use argusnet_sim::mission_driver::RecordedLocalization;
+
+    let reference = reference_of("scan_safety");
+    let frames = reference["frames"].as_array().expect("frames");
+    let mut run = assemble(&bundle_of("scan_safety")).expect("assembles");
+    let mission = run.mission.clone().expect("mission");
+    run.localization_replay
+        .as_ref()
+        .expect("a scan run has the seam")
+        .load(
+            frames
+                .iter()
+                .map(|f| RecordedLocalization {
+                    confidences: f["mission"]["confidences"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(num)
+                        .collect(),
+                    timed_out: f["mission"]["localization_timed_out"].as_bool().unwrap(),
+                })
+                .collect(),
+        );
+    let mut violations: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, frame) in frames.iter().enumerate() {
+        let snapshot = run.step().expect("tick runs");
+        assert_eq!(
+            mission.phase().to_string(),
+            frame["mission"]["phase"].as_str().unwrap(),
+            "phase at tick {i}"
+        );
+        for platform in &snapshot.platforms {
+            assert_eq!(
+                snapshot_kinematics(platform),
+                reference_kinematics(frame, &platform.node_id),
+                "{} at tick {i}",
+                platform.node_id
+            );
+        }
+        let expected = reference_safety_events(frame);
+        assert_eq!(safety_events(&run), expected, "safety events at tick {i}");
+        for event in expected.as_array().unwrap() {
+            for violation in event["violations"].as_array().unwrap() {
+                *violations
+                    .entry(violation.as_str().unwrap().to_string())
+                    .or_default() += 1;
+            }
+        }
+    }
+    assert_eq!(mission.phase().to_string(), "complete");
+    // `max_descent_rate` only the tracker envelope reaches here.
+    assert!(violations.len() >= 6, "{violations:?}");
+}
+
+/// The replay carries the events, and a run without `safety_blocking` has no
+/// stage 4 at all: not a quiet one, none.
+#[test]
+fn safety_events_reach_the_replay_and_an_unblocked_run_has_no_stage_four() {
+    let run = assemble(&bundle_of("tt_safety")).expect("assembles");
+    let replay = run.run_to_replay().expect("runs");
+    let value = serde_json::to_value(&replay).expect("serialises");
+    let written: usize = value["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["safety_events"].as_array().map_or(0, Vec::len))
+        .sum();
+    assert!(written >= 100, "only {written} events reached the replay");
+
+    // Without it, the placeholder holds the slot: no monitor, no events.
+    let mut unblocked = assemble(&bundle_of("tt_follow")).expect("assembles");
+    assert!(unblocked.safety.is_none());
+    unblocked.step().expect("tick runs");
+    let record = unblocked
+        .sim
+        .trace()
+        .records()
+        .iter()
+        .rev()
+        .find(|r| r.stage == Stage::SafetyMonitor)
+        .expect("the slot is traced")
+        .clone();
+    assert_eq!(record.outcome, StageOutcome::NoWork);
+    assert!(record.notes.is_empty());
+    assert!(unblocked.fusion.frame().unwrap().safety_events.is_empty());
+}
+
+/// Stage 4 reads energy from stage 1's ledger, as the reference passes
+/// `ns.battery_fraction`: a drained platform violates its reserve. (The
+/// fixture run never drains that far, so the wiring is checked here.)
+#[test]
+fn the_assembled_safety_monitor_reads_the_battery_ledger() {
+    let mut run = assemble(&bundle_of("tt_safety")).expect("assembles");
+    let drone = "drone-north";
+    assert!(run.battery.set_remaining_wh(drone, 0.5));
+    run.step().expect("tick runs");
+    let frame = run.fusion.frame().expect("stage 7 ran");
+    let event = frame
+        .safety_events
+        .iter()
+        .find(|e| e.subject_id == drone)
+        .expect("the drained drone violated something");
+    assert!(
+        event.violations.iter().any(|v| v == "min_energy_reserve"),
+        "{:?}",
+        event.violations
+    );
+}

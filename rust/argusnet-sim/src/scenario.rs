@@ -18,9 +18,10 @@
 //! Target tracking: stage 1 (controllers, then battery), stage 3
 //! (deconfliction over the real terrain), stage 6 (observations, with line of
 //! sight over the real world), stage 7 (fusion). The mission stages (2, 8, 9)
-//! and the opt-in ones (4 safety, 5 VIO substitution) are refused by the
-//! exporter until their assembly lands, and [`assemble`] refuses a bundle
-//! whose `mission_mode` it does not know rather than running half a mission.
+//! came with P4.8e.3. Stage 4, the opt-in hard safety monitor, is assembled
+//! when the bundle says `safety_blocking` (P4.9d); stage 5, VIO substitution,
+//! is still refused by the exporter. [`assemble`] refuses a bundle whose
+//! `mission_mode` it does not know rather than running half a mission.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -61,6 +62,7 @@ use crate::replay::{
     ReplayWriter,
 };
 use crate::runtime_world::{SharedObstacles, SharedTerrain, SharedVisibility};
+use crate::safety::{SafetyLink, SafetyStage};
 use crate::simulation::{Simulation, TickError};
 use crate::snapshot::RuntimeSnapshot;
 use crate::stage::Stage;
@@ -125,6 +127,10 @@ pub struct ScenarioBundle {
     /// `options.cooperative_search`: fuse the fleet's localization estimates.
     #[serde(default)]
     pub cooperative_search: bool,
+    /// `options.safety_blocking`: assemble stage 4's hard safety monitor.
+    /// Written only when set, so bundles from before P4.9d still read as off.
+    #[serde(default)]
+    pub safety_blocking: bool,
     /// `SimulationConfig.requested_duration_s`, for the replay's `meta`.
     #[serde(default)]
     pub requested_duration_s: Option<f64>,
@@ -659,6 +665,8 @@ pub struct AssembledRun {
     pub observe: ObserveLink,
     pub fusion: FusionLink,
     pub deconflict: DeconflictLink,
+    /// `safety_blocking` runs only.
+    pub safety: Option<SafetyLink>,
     /// Scan-map-inspect runs only.
     pub mission: Option<MissionLink>,
     pub mapping: Option<MappingLink>,
@@ -966,6 +974,25 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     // Stages 6 and 7: observations over the real world, fused in process.
     let fusion = FusionStage::new(bundle.tracker.clone()).map_err(BundleError::Invalid)?;
     let fusion_link = fusion.link();
+
+    // Stage 4: the hard floor under deconfliction, only when asked for. Not
+    // installed otherwise, so a run without it is the run it always was.
+    let safety_link = if bundle.safety_blocking {
+        let safety = SafetyStage::new();
+        let link = safety.link();
+        link.set_enabled(true);
+        for (drone_id, role) in &bundle.drone_roles {
+            link.set_role(drone_id.clone(), role.clone());
+        }
+        link.set_terrain(Box::new(world.terrain.clone()));
+        link.use_battery(battery_link.clone());
+        link.feed_fusion(fusion_link.clone());
+        sim.set_stage_handler(Stage::SafetyMonitor, Box::new(safety))
+            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+        Some(link)
+    } else {
+        None
+    };
     let observe = ObserveStage::new();
     let observe_link = observe.link();
     for node in &bundle.nodes {
@@ -1116,6 +1143,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         observe: observe_link,
         fusion: fusion_link,
         deconflict: deconflict_link,
+        safety: safety_link,
         truth,
         replay,
         dt_s: bundle.dt_s,
@@ -1330,6 +1358,11 @@ impl AssembledRun {
             &frame.metrics,
             &self.observe.generation_rejections(),
         );
+        replay_frame.safety_events = frame
+            .safety_events
+            .iter()
+            .map(crate::replay::ReplaySafetyEvent::from)
+            .collect();
         self.enrich(&mut replay_frame, timestamp_s, &snapshot.platforms, &truths);
         self.replay.push_frame(replay_frame);
         Ok(snapshot)

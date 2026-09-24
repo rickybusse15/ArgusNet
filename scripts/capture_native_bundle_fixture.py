@@ -7,7 +7,8 @@ half: every target motion preset, every drone mode preset, every weather
 preset, both platform presets, more ground stations than the layout table
 has offsets (the overflow ring), more drones than compass names, building-
 anchored objective and exclusion zones, larger maps, and scan runs with one
-and several drones.
+and several drones. Since P4.9d, both mission profiles (their zones, POIs and
+name) and a blocking-safety run as well.
 
 The `world` section and the world keys of `presentation` are dropped: P4.9b.1
 covers them (`scenario_world.json`), and they are most of a bundle's bytes.
@@ -185,6 +186,38 @@ CASES = [
             terrain_seed=35,
             season_month=1,
             detail_strength=0.6,
+        ),
+    ),
+]
+
+
+def _profile_case(seed: int, profile_id: str, **overrides) -> dict:
+    """A mission profile's resolved options, as `--mission-profile` resolves
+    them (P4.9d): its zones and, for inspection, its POIs replace the
+    generated ones, and it turns on the blocking safety monitor."""
+    import dataclasses
+
+    from argusnet.mission.profiles import build_profile_scenario_options
+
+    options = dataclasses.asdict(build_profile_scenario_options(profile_id))
+    return dict(seed=seed, options=json.loads(json.dumps({**options, **overrides})))
+
+
+CASES += [
+    _profile_case(21, "sar_person_search"),
+    _profile_case(22, "industrial_asset_survey"),
+    # Fewer POIs than the profile lists: the reference takes the first ones.
+    _profile_case(24, "industrial_asset_survey", poi_count=2),
+    # Blocking safety without a profile: only the bundle flag differs.
+    dict(
+        seed=23,
+        options=dict(
+            map_preset="small",
+            mission_mode=TT,
+            target_count=1,
+            drone_count=2,
+            ground_station_count=3,
+            safety_blocking=True,
         ),
     ),
 ]

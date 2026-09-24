@@ -289,7 +289,6 @@ def _target_sample_times(simulation_config: Any, leads: set[float]) -> list[floa
 def _refuse_unsupported_options(options: Any) -> None:
     refusals = {
         "enforce_flight_envelope": "the flight envelope wrapper",
-        "safety_blocking": "the blocking safety monitor (stage 4 assembly is P4.8e.3)",
         "frontier_exploration": "frontier redirects (P4.8e.3)",
         "occlusion_aware_mapping": "occlusion-aware mapping (P4.8e.3)",
         "adaptive_search": "adaptive cooperative search (P4.8e.3)",
@@ -426,6 +425,9 @@ def export_bundle(scenario: Any, simulation_config: Any, tracker_config: Any = N
             "resolution_m": float(getattr(scenario.options, "coverage_resolution_m", 50.0)),
         },
         "cooperative_search": bool(getattr(scenario.options, "cooperative_search", False)),
+        # Stage 4's hard floor (P4.9d). Written only when set, so a bundle
+        # without it is byte-identical to one written before stage 4 assembled.
+        **({"safety_blocking": True} if scenario.options.safety_blocking else {}),
         "requested_duration_s": float(requested_duration_s),
         "world": {
             "terrain": _terrain_document(scenario.terrain),

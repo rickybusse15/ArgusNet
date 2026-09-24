@@ -36,6 +36,8 @@ struct Frame {
     observations: Vec<(String, String, Vec<u64>)>,
     phase: Option<String>,
     coverage: Option<u64>,
+    /// Stage 4's events: `(subject, state, violations, clamped)`.
+    safety: Vec<(String, String, Vec<String>, bool)>,
 }
 
 fn bits(values: &[f64]) -> Vec<u64> {
@@ -106,6 +108,18 @@ fn step(run: &mut AssembledRun) -> Frame {
             .mapping
             .as_ref()
             .map(|m| m.coverage_fraction().to_bits()),
+        safety: frame
+            .safety_events
+            .iter()
+            .map(|e| {
+                (
+                    e.subject_id.clone(),
+                    e.state.clone(),
+                    e.violations.clone(),
+                    e.command_clamped,
+                )
+            })
+            .collect(),
     }
 }
 
@@ -203,29 +217,60 @@ fn a_scan_map_inspect_run_resumes_exactly_in_every_phase() {
     }
 }
 
+/// Stage 4 under the hard floor (P4.9d): each platform's escalation record
+/// and the velocity the monitor last allowed are both causal. Checkpointed
+/// mid-abort and mid-warning.
+#[test]
+fn a_blocking_safety_run_resumes_exactly() {
+    let reference = straight("tt_safety", 80);
+    let states: std::collections::BTreeSet<&str> = reference
+        .iter()
+        .flat_map(|f| f.safety.iter().map(|e| e.1.as_str()))
+        .collect();
+    assert!(
+        states.contains("warning") && states.contains("abort"),
+        "{states:?}"
+    );
+    for at in [3, 12, 25, 40, 70] {
+        resume_matches("tt_safety", &reference, at);
+    }
+}
+
 /// A reset run is a fresh run, for a whole assembled scenario.
 #[test]
 fn a_reset_assembled_run_is_a_fresh_run() {
-    let reference = straight("tt", 50);
-    let mut run = assemble(&bundle("tt")).expect("assembles");
+    for case in ["tt", "tt_safety"] {
+        reset_is_fresh(case);
+    }
+}
+
+fn reset_is_fresh(case: &str) {
+    let reference = straight(case, 50);
+    let mut run = assemble(&bundle(case)).expect("assembles");
     for _ in 0..30 {
         step(&mut run);
     }
     run.sim.reset();
     // `reset` clears the world; the driver reloads it, as assembly did.
-    let fresh = assemble(&bundle("tt")).expect("assembles");
+    let fresh = assemble(&bundle(case)).expect("assembles");
     run.sim
         .load_world(fresh.sim.world().platforms().to_vec(), Vec::new());
     for expected in &reference {
         let actual = step(&mut run);
         assert_eq!(
-            (&actual.platforms, &actual.tracks, &actual.observations),
+            (
+                &actual.platforms,
+                &actual.tracks,
+                &actual.observations,
+                &actual.safety
+            ),
             (
                 &expected.platforms,
                 &expected.tracks,
-                &expected.observations
+                &expected.observations,
+                &expected.safety
             ),
-            "a reset run diverged from a fresh one at tick {}",
+            "{case}: a reset run diverged from a fresh one at tick {}",
             expected.tick
         );
     }
