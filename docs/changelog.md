@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Sensor, zone and trail geometry (P2.2)
+
+- Fields of view are persistent meshes: the region stage 6 actually accepts,
+  a spherical sector along the runtime's own look (the look rule moved into
+  `argusnet_sensing::look`, shared by the sim and the viewer), or the range
+  sphere when the sensor does not gate. An unset range draws nothing,
+  instead of an invented 400 m. A volume that encloses the camera is hidden.
+- Radar ranges are rings draped on the terrain, built once per station.
+- Mission zones are extruded walls along each overlap group's contour,
+  taller for exclusion zones; focus changes restyle them without a rebuild.
+  The gizmo outline now draws only with the diagnostic glyphs.
+- Trails are ribbons sampled by simulation time and distance, bounded in
+  memory, restarted on teleports and removed with their entity. Playing to a
+  frame and seeking to it give the same trail. A new **Trails** toggle.
+- Fixed: a zone contour could come out as half a ring, when the circle's
+  padded edge fell on the marching-squares grid's last column.
+- Pixel probes check the volumes, walls and trails in real renders; CI's
+  viewer job runs them.
+
 ## Unreleased — Belief and land cover on the terrain (P2.1)
 
 - The terrain material draws belief from `argusnet-mapping`'s tile patches

@@ -29,6 +29,7 @@ live-stream = [
 argusnet-replay = { path = "../argusnet-replay" }
 argusnet-world = { path = "../argusnet-world" }
 argusnet-mapping = { path = "../argusnet-mapping" }
+argusnet-sensing = { path = "../argusnet-sensing" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

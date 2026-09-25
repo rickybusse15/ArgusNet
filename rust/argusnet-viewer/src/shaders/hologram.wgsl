@@ -2,9 +2,14 @@
 #import bevy_pbr::mesh_view_bindings::view
 
 @group(3) @binding(0) var<uniform> color: vec4<f32>;
+// x: the world height below which nothing is drawn.
+@group(3) @binding(1) var<uniform> clip_floor: vec4<f32>;
 
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
+    if mesh.world_position.z < clip_floor.x {
+        discard;
+    }
     let eye = normalize(view.world_position - mesh.world_position.xyz);
     let rim = pow(1.0 - abs(dot(normalize(mesh.world_normal), eye)), 2.0);
     // Z-up world scan bands. Derivative filtering avoids distant band aliasing.

@@ -223,6 +223,12 @@ jobs:
         env:
           ARGUSNET_GPU_TESTS: "1"
         run: cargo test -p argusnet-viewer --test belief_probes -- --test-threads=1
+      # P2.2: sensor volumes, zone walls and trail ribbons drawn where the
+      # runtime puts them, and no volume washing out a view from inside it.
+      - name: Sensor, zone and trail geometry probes
+        env:
+          ARGUSNET_GPU_TESTS: "1"
+        run: cargo test -p argusnet-viewer --test geometry_probes -- --test-threads=1
 
   rust-lint:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}

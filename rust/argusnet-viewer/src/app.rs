@@ -24,7 +24,7 @@ use crate::glyphs::{GlyphProjection, NODE_GLYPH_PX, TRACK_GLYPH_PX, TRUTH_GLYPH_
 use crate::headless::{HeadlessRequest, HeadlessTarget};
 use crate::mission_zones::{self, build_projected_badges_system, ProjectedZoneBadges};
 use crate::orbit_camera::{OrbitCamera, OrbitCameraPlugin};
-use crate::presentation::{PresentationChange, TRAIL_MAX_FRAMES};
+use crate::presentation::PresentationChange;
 use crate::replay::{
     MarkerKind, RejectedObservation, ReplayDocument, ReplayState, RuntimeMarker, TerrainViewerMesh,
 };
@@ -160,6 +160,9 @@ fn run_inner(
     let mut runtime_visibility = RuntimeOverlayVisibility::default();
     let mut belief_layer = crate::belief_render::BeliefLayer::default();
     if let Some(probe) = headless.as_ref().and_then(|request| request.probe.as_ref()) {
+        if let Some(overlays) = probe.overlays.clone() {
+            runtime_visibility = overlays;
+        }
         if let Some(store) = probe.belief.as_ref() {
             belief_layer = match crate::belief_render::BeliefRenderSnapshot::from_store(store) {
                 Ok(snapshot) => crate::belief_render::BeliefLayer::Ready(Box::new(snapshot)),
@@ -197,6 +200,10 @@ fn run_inner(
             terrain_mesh,
         })
         .insert_resource(LayerEntityIndex::default())
+        .init_resource::<crate::sensor_volumes::SensorVolumes>()
+        .init_resource::<crate::sensor_volumes::RangeRings>()
+        .init_resource::<crate::trail_ribbons::TrailRibbons>()
+        .init_resource::<crate::zone_walls::ZoneWalls>()
         .insert_resource(SimulationRunner::default())
         .insert_resource(ProjectedZoneBadges::default())
         .insert_resource(MissionOverlaySettings::default())
@@ -280,6 +287,11 @@ fn run_inner(
                 mission_zones::refresh_zone_overlap_model_system,
                 crate::terrain_rasters::sync_terrain_rasters_system,
                 crate::marker_meshes::sync_marker_meshes,
+                // Persistent sensor, range and trail geometry (P2.2).
+                crate::sensor_volumes::sync_sensor_volumes,
+                crate::sensor_volumes::sync_range_rings,
+                crate::trail_ribbons::sync_trail_ribbons,
+                crate::zone_walls::sync_zone_walls,
                 sync_base_layer_visibility_system,
                 sync_fog_to_camera_system,
                 // Reconstruction owns real state, so it runs regardless of its
@@ -293,7 +305,6 @@ fn run_inner(
             // Immediate-mode overlays, each gated on its own toggle.
             (
                 draw_runtime_overlays_system,
-                draw_sensor_overlays_system.run_if(sensor_overlays_enabled),
                 mission_zones::draw_mission_zones_system,
                 build_projected_badges_system,
                 draw_scan_grid_system.run_if(scan_grid_enabled),
@@ -440,10 +451,6 @@ fn coord_frame_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
 
 fn egress_paths_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
     overlay.show_egress_paths
-}
-
-fn sensor_overlays_enabled(visibility: Res<RuntimeOverlayVisibility>) -> bool {
-    visibility.radar_rings || visibility.fov_cones
 }
 
 // Eight system parameters: the scene resources it reads, plus the two asset
@@ -1037,20 +1044,7 @@ fn draw_runtime_overlays_system(
         })
         .unwrap_or_default();
 
-    // Compute altitude range across all current markers for color normalization.
-    let alt_min = markers
-        .markers
-        .iter()
-        .map(|m| m.position.z)
-        .fold(f32::INFINITY, f32::min);
-    let alt_max = markers
-        .markers
-        .iter()
-        .map(|m| m.position.z)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let alt_span = (alt_max - alt_min).max(1.0);
-
-    for (index, marker) in markers.markers.iter().enumerate() {
+    for marker in &markers.markers {
         if !is_marker_visible(marker, &runtime_visibility) {
             continue;
         }
@@ -1072,31 +1066,7 @@ fn draw_runtime_overlays_system(
             );
         }
 
-        // Item 15: trail with alpha fading and altitude-based hue coloring.
-        // The adapter keeps each marker's trail; nothing is rescanned here.
-        let n = markers.trail(index, TRAIL_MAX_FRAMES).count();
-        let mut previous: Option<Vec3> = None;
-        for (point_idx, point) in markers.trail(index, TRAIL_MAX_FRAMES).enumerate() {
-            let Some(start) = previous.replace(point) else {
-                continue;
-            };
-            let segment = [start, point];
-            let seg_idx = point_idx - 1;
-            // t goes from 0 (oldest segment) to 1 (newest segment).
-            let t = if n > 2 {
-                seg_idx as f32 / (n - 2) as f32
-            } else {
-                1.0
-            };
-            let alpha = 0.1 + 0.9 * t;
-            // Use midpoint altitude for hue
-            let mid_z = (segment[0].z + segment[1].z) * 0.5;
-            let norm_alt = ((mid_z - alt_min) / alt_span).clamp(0.0, 1.0);
-            // blue (hue=240) at low alt → red (hue=0) at high alt
-            let hue = 240.0 * (1.0 - norm_alt);
-            let trail_color = Color::hsla(hue, 1.0, 0.55, alpha);
-            gizmos.line(segment[0], segment[1], trail_color);
-        }
+        // Trails are persistent ribbons now: `crate::trail_ribbons`.
     }
 
     if let Some(frame) = replay_state.current_frame() {
@@ -1566,128 +1536,6 @@ fn marker_color(kind: MarkerKind, scene_package: &ScenePackage) -> Color {
         .map(|style| style.color_rgba)
         .unwrap_or([1.0, 1.0, 1.0, 1.0]);
     Color::srgba(rgba[0], rgba[1], rgba[2], rgba[3])
-}
-
-/// Draws FOV cones for optical nodes, radar range rings for radar nodes,
-/// and vertical launch lines for drones in their climb phase.
-fn draw_sensor_overlays_system(
-    mut gizmos: Gizmos,
-    replay_state: Res<ReplayState>,
-    runtime_visibility: Res<RuntimeOverlayVisibility>,
-    scene_package: Res<crate::schema::ScenePackage>,
-    mission_zones: Res<LoadedMissionZones>,
-) {
-    let Some(frame) = replay_state.current_frame() else {
-        return;
-    };
-
-    for node in &frame.nodes {
-        let pos = Vec3::from_array(node.position);
-        let vel = Vec3::from_array(node.velocity);
-
-        // Radar range rings for ground stations
-        if runtime_visibility.radar_rings && node.sensor_type == "radar" {
-            if let Some(max_range) = node.max_range_m {
-                let ring_color = Color::srgba(0.3, 0.7, 0.95, 0.35);
-                let bounds = &scene_package.environment.bounds_xy_m;
-                let seg_count = 48;
-                for i in 0..seg_count {
-                    let a0 = std::f32::consts::TAU * i as f32 / seg_count as f32;
-                    let a1 = std::f32::consts::TAU * (i + 1) as f32 / seg_count as f32;
-                    let raw_p0 = [pos.x + a0.cos() * max_range, pos.y + a0.sin() * max_range];
-                    let raw_p1 = [pos.x + a1.cos() * max_range, pos.y + a1.sin() * max_range];
-                    let Some([c0, c1]) =
-                        mission_zones::clip_segment_to_bounds(raw_p0, raw_p1, bounds)
-                    else {
-                        continue;
-                    };
-                    let z0 = mission_zones
-                        .terrain_mesh
-                        .as_ref()
-                        .and_then(|m| m.height_at(c0[0], c0[1]))
-                        .unwrap_or(pos.z)
-                        + 1.5;
-                    let z1 = mission_zones
-                        .terrain_mesh
-                        .as_ref()
-                        .and_then(|m| m.height_at(c1[0], c1[1]))
-                        .unwrap_or(pos.z)
-                        + 1.5;
-                    let p0 = Vec3::new(c0[0], c0[1], z0);
-                    let p1 = Vec3::new(c1[0], c1[1], z1);
-                    gizmos.line(p0, p1, ring_color);
-                }
-            }
-        }
-
-        // FOV cones for optical drones
-        if runtime_visibility.fov_cones && node.sensor_type == "optical" {
-            if let Some(fov_half) = node.fov_half_angle_deg {
-                let fov_color = Color::srgba(0.95, 0.75, 0.2, 0.4);
-                let cone_length = node.max_range_m.unwrap_or(400.0).min(1500.0);
-                let half_rad = fov_half.to_radians();
-
-                // Omnidirectional sensor: draw a detection dome in multiple azimuth planes
-                if half_rad >= std::f32::consts::PI - 0.05 {
-                    let dome_radius = cone_length;
-                    let ring_segs = 24;
-                    // Horizontal ring at node altitude
-                    for i in 0..ring_segs {
-                        let a0 = std::f32::consts::TAU * i as f32 / ring_segs as f32;
-                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / ring_segs as f32;
-                        let p0 =
-                            pos + Vec3::new(a0.cos() * dome_radius, a0.sin() * dome_radius, 0.0);
-                        let p1 =
-                            pos + Vec3::new(a1.cos() * dome_radius, a1.sin() * dome_radius, 0.0);
-                        gizmos.line(p0, p1, fov_color);
-                    }
-                    // Four vertical great-circle arcs
-                    let vert_segs = 16;
-                    for plane in 0..4 {
-                        let az = std::f32::consts::TAU * plane as f32 / 4.0;
-                        let axis = Vec3::new(az.cos(), az.sin(), 0.0);
-                        let perp = Vec3::new(-az.sin(), az.cos(), 0.0);
-                        for i in 0..vert_segs {
-                            let el0 = std::f32::consts::PI * i as f32 / vert_segs as f32
-                                - std::f32::consts::FRAC_PI_2;
-                            let el1 = std::f32::consts::PI * (i + 1) as f32 / vert_segs as f32
-                                - std::f32::consts::FRAC_PI_2;
-                            let _ = perp; // used indirectly via axis below
-                            let p0 = pos + (axis * el0.cos() + Vec3::Z * el0.sin()) * dome_radius;
-                            let p1 = pos + (axis * el1.cos() + Vec3::Z * el1.sin()) * dome_radius;
-                            gizmos.line(p0, p1, fov_color);
-                        }
-                    }
-                } else if vel.length_squared() > 0.25 {
-                    let radius_at_tip = cone_length * half_rad.tan();
-                    let look = vel.normalize();
-                    // Build a local frame from the look direction
-                    let right = if look.cross(Vec3::Z).length_squared() > 1e-6 {
-                        look.cross(Vec3::Z).normalize()
-                    } else {
-                        Vec3::X
-                    };
-                    let up = right.cross(look).normalize_or_zero();
-                    let tip_center = pos + look * cone_length;
-                    // Smooth cone rim: 24 segments
-                    let rim_segs = 24;
-                    for i in 0..rim_segs {
-                        let a0 = std::f32::consts::TAU * i as f32 / rim_segs as f32;
-                        let a1 = std::f32::consts::TAU * (i + 1) as f32 / rim_segs as f32;
-                        let p0 = tip_center + (right * a0.cos() + up * a0.sin()) * radius_at_tip;
-                        let p1 = tip_center + (right * a1.cos() + up * a1.sin()) * radius_at_tip;
-                        gizmos.line(p0, p1, fov_color);
-                    }
-                    // 12 edge lines from origin to cone boundary (was 4)
-                    for i in 0..12 {
-                        let a = std::f32::consts::TAU * i as f32 / 12.0;
-                        let edge = tip_center + (right * a.cos() + up * a.sin()) * radius_at_tip;
-                        gizmos.line(pos, edge, fov_color);
-                    }
-                }
-            }
-        }
-    }
 }
 
 fn draw_scan_grid_system(
@@ -3154,31 +3002,6 @@ mod overlay_gating_tests {
             ..Default::default()
         });
         assert!(run_condition(poi_markers_enabled, &mut world));
-    }
-
-    #[test]
-    fn sensor_overlays_run_for_either_rings_or_cones() {
-        let mut world = World::new();
-        world.insert_resource(RuntimeOverlayVisibility {
-            radar_rings: false,
-            fov_cones: false,
-            ..Default::default()
-        });
-        assert!(!run_condition(sensor_overlays_enabled, &mut world));
-
-        world.insert_resource(RuntimeOverlayVisibility {
-            radar_rings: true,
-            fov_cones: false,
-            ..Default::default()
-        });
-        assert!(run_condition(sensor_overlays_enabled, &mut world));
-
-        world.insert_resource(RuntimeOverlayVisibility {
-            radar_rings: false,
-            fov_cones: true,
-            ..Default::default()
-        });
-        assert!(run_condition(sensor_overlays_enabled, &mut world));
     }
 }
 

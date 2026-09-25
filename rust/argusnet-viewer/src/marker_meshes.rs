@@ -59,6 +59,28 @@ impl MarkerEntityIndex {
 pub struct HologramMaterial {
     #[uniform(0)]
     pub color: Vec4,
+    /// `x` is a world height below which nothing is drawn (P2.2): sensor
+    /// volumes stop at the terrain's lowest point instead of hanging under
+    /// the map. [`HologramMaterial::NO_FLOOR`] for none.
+    #[uniform(1)]
+    pub floor: Vec4,
+}
+
+impl HologramMaterial {
+    pub const NO_FLOOR: f32 = -1.0e30;
+
+    /// A material with no floor.
+    pub fn new(color: Vec4) -> Self {
+        Self::with_floor(color, Self::NO_FLOOR)
+    }
+
+    /// A material that draws nothing below `floor_z`.
+    pub fn with_floor(color: Vec4, floor_z: f32) -> Self {
+        Self {
+            color,
+            floor: Vec4::new(floor_z, 0.0, 0.0, 0.0),
+        }
+    }
 }
 impl Material for HologramMaterial {
     fn fragment_shader() -> ShaderRef {
@@ -237,7 +259,7 @@ fn presentation(
     let material = assets
         .materials
         .entry(key)
-        .or_insert_with(|| materials.add(HologramMaterial { color: linear }))
+        .or_insert_with(|| materials.add(HologramMaterial::new(linear)))
         .clone();
     let (mesh, pixels) = match marker.kind {
         MarkerKind::Node if marker.is_mobile == Some(true) => (assets.drone.clone(), NODE_GLYPH_PX),

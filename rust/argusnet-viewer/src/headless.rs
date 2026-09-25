@@ -80,8 +80,13 @@ pub struct ProbeRequest {
     /// Tile patches applied once the scene has loaded, after the belief
     /// textures exist: they reach the GPU as tile writes, not a new upload.
     pub late_patches: Vec<argusnet_mapping::BeliefTilePatch>,
+    /// Overlay toggles for the render; the defaults when `None`. The belief
+    /// toggle is `belief_overlay`'s either way.
+    pub overlays: Option<crate::state::RuntimeOverlayVisibility>,
     /// World points, `(x, y)`; `z` is the terrain's there.
     pub points: Vec<[f64; 2]>,
+    /// World points at a given height, probed after `points`.
+    pub elevated: Vec<[f64; 3]>,
     /// Where to write the probe results, as JSON.
     pub output: PathBuf,
 }
@@ -716,14 +721,22 @@ fn write_probes(
         .as_ref()
         .and_then(|summary| summary.min_height_m)
         .unwrap_or(0.0);
-    let mut points = Vec::with_capacity(request.points.len());
-    for xy in &request.points {
-        let z = context
-            .zones
-            .terrain_mesh
-            .as_ref()
-            .and_then(|mesh| mesh.height_at(xy[0] as f32, xy[1] as f32))
-            .unwrap_or(ground);
+    let mut points = Vec::with_capacity(request.points.len() + request.elevated.len());
+    let located = request
+        .points
+        .iter()
+        .map(|xy| {
+            let z = context
+                .zones
+                .terrain_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.height_at(xy[0] as f32, xy[1] as f32))
+                .unwrap_or(ground);
+            [xy[0], xy[1], f64::from(z)]
+        })
+        .chain(request.elevated.iter().copied());
+    for [x, y, z] in located {
+        let (xy, z) = ([x, y], z as f32);
         let world = Vec3::new(xy[0] as f32, xy[1] as f32, z);
         let projected = camera.world_to_viewport(transform, world).ok();
         let (centre, window) = match projected {

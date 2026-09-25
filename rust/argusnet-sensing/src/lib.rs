@@ -257,6 +257,7 @@ impl BearingBiasDrift {
 }
 
 pub mod cascade;
+pub mod look;
 
 pub use cascade::{
     evaluate_pair, evaluate_pair_traced, Blocker, DominantLoss, FovInput, Gate, GenerationTally,

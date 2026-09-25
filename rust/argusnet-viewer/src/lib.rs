@@ -11,11 +11,14 @@ pub mod orbit_camera;
 pub mod presentation;
 pub mod replay;
 pub mod schema;
+pub mod sensor_volumes;
 pub mod sky;
 pub mod state;
 pub mod terrain_material;
 pub mod terrain_rasters;
+pub mod trail_ribbons;
 pub mod ui;
+pub mod zone_walls;
 
 pub use app::run;
 #[cfg(feature = "live-stream")]

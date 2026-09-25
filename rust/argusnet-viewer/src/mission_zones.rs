@@ -41,7 +41,7 @@ use crate::state::{
 
 const ZONE_CONNECT_EPSILON_M: f32 = 4.0;
 const ZONE_CONTOUR_PADDING_M: f32 = 2.5;
-const ZONE_CONTOUR_MIN_CELL_SIZE_M: f32 = 2.0;
+pub const ZONE_CONTOUR_MIN_CELL_SIZE_M: f32 = 2.0;
 const ZONE_CONTOUR_TARGET_CELLS: f32 = 96.0;
 const ZONE_GLYPH_LIFT_M: f32 = 1.6;
 const ZONE_BADGE_LIFT_M: f32 = 2.2;
@@ -341,8 +341,13 @@ pub fn build_group_contour_segments(
     let span_y = (max_y - min_y).max(ZONE_CONTOUR_MIN_CELL_SIZE_M * 4.0);
     let cell_size =
         (span_x.max(span_y) / ZONE_CONTOUR_TARGET_CELLS).max(ZONE_CONTOUR_MIN_CELL_SIZE_M);
-    let cols = ((span_x / cell_size).ceil() as usize).max(4) + 2;
-    let rows = ((span_y / cell_size).ceil() as usize).max(4) + 2;
+    // One empty cell beyond the padded extent on every side, so the contour
+    // is always closed. The grid starts a cell before the minimum, so it
+    // needs `span / cell + 3` samples to reach a cell past the maximum; with
+    // only `+ 2`, a circle whose padded edge fell on the last sample left the
+    // contour open there, and the walk below kept one half of it.
+    let cols = ((span_x / cell_size).ceil() as usize).max(4) + 3;
+    let rows = ((span_y / cell_size).ceil() as usize).max(4) + 3;
 
     let origin_x = min_x - cell_size;
     let origin_y = min_y - cell_size;
@@ -872,7 +877,11 @@ fn draw_zone_ring(
     }
 }
 
+/// The gizmo outline: diagnostic only since P2.2 (`zone_walls` draws the
+/// boundary as a mesh), so `enabled` is the diagnostic-glyph toggle.
+#[allow(clippy::too_many_arguments)]
 fn draw_zone_group_outline(
+    enabled: bool,
     gizmos: &mut Gizmos,
     group: &ZoneOverlapGroup,
     zones: &[MissionZone],
@@ -880,7 +889,7 @@ fn draw_zone_group_outline(
     scene_bounds: &Bounds2d,
     alpha: f32,
 ) {
-    if group.contour_segments.is_empty() {
+    if !enabled || group.contour_segments.is_empty() {
         return;
     }
 
@@ -994,6 +1003,7 @@ pub fn draw_mission_zones_system(
             // Multi-zone groups suppress member glyphs.
             for group in &overlap_model.groups {
                 draw_zone_group_outline(
+                    runtime_visibility.diagnostic_glyphs,
                     &mut gizmos,
                     group,
                     &zones.zones,
@@ -1014,6 +1024,7 @@ pub fn draw_mission_zones_system(
             // Contours + center glyphs sized from tier constants.
             for group in &overlap_model.groups {
                 draw_zone_group_outline(
+                    runtime_visibility.diagnostic_glyphs,
                     &mut gizmos,
                     group,
                     &zones.zones,
@@ -1039,6 +1050,7 @@ pub fn draw_mission_zones_system(
                 };
                 let alpha = if has_focus && !is_focused { 0.25 } else { 0.72 };
                 draw_zone_group_outline(
+                    runtime_visibility.diagnostic_glyphs,
                     &mut gizmos,
                     group,
                     &zones.zones,
@@ -1365,6 +1377,41 @@ mod tests {
 
         let contour = build_group_contour_segments(&zones, &groups[0]);
         assert!(contour.len() > 8);
+    }
+
+    /// The contour of a single circle goes all the way round it: every
+    /// angular sector holds contour, and every vertex is on the circle.
+    #[test]
+    fn a_single_circle_contour_goes_all_the_way_round() {
+        for (cx, cy, r) in [
+            (0.0, 0.0, 20.0),
+            (-800.0, 1000.0, 350.0),
+            (1234.5, -987.0, 60.0),
+        ] {
+            let zones = vec![zone("a", "exclusion", cx, cy, r)];
+            let contour = build_group_contour_segments(&zones, &[0]);
+            let mut sectors = [0usize; 8];
+            for [a, b] in &contour {
+                for p in [a, b] {
+                    let (dx, dy) = (p[0] - cx, p[1] - cy);
+                    let angle = dy.atan2(dx) + std::f32::consts::PI;
+                    sectors[((angle / std::f32::consts::FRAC_PI_4) as usize).min(7)] += 1;
+                    let off = (dx.hypot(dy) - r).abs();
+                    assert!(
+                        off < r * 0.05 + 5.0,
+                        "vertex {p:?} is {off} m off the circle"
+                    );
+                }
+            }
+            assert!(
+                sectors.iter().all(|&n| n > 0),
+                "circle ({cx}, {cy}, {r}): sectors {sectors:?}"
+            );
+            // Closed: each segment starts where the previous one ended.
+            for (i, [_, end]) in contour.iter().enumerate() {
+                assert_eq!(*end, contour[(i + 1) % contour.len()][0]);
+            }
+        }
     }
 
     #[test]

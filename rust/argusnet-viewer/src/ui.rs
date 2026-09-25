@@ -2519,6 +2519,7 @@ fn section_runtime_overlays(
             "Inspection Events",
         );
         ui.checkbox(&mut runtime_visibility.launch_lines, "Launch Lines");
+        ui.checkbox(&mut runtime_visibility.trails, "Trails");
         ui.checkbox(
             &mut runtime_visibility.show_covariance_ellipsoids,
             "Covariance Ellipsoids",

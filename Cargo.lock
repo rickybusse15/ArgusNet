@@ -407,6 +407,7 @@ dependencies = [
  "argusnet-mapping",
  "argusnet-proto",
  "argusnet-replay",
+ "argusnet-sensing",
  "argusnet-world",
  "bevy",
  "bevy_egui",

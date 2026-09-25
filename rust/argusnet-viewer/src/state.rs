@@ -35,6 +35,8 @@ pub struct RuntimeOverlayVisibility {
     pub belief: bool,
     /// The terrain material's land-cover tint, where the scene carries one.
     pub land_cover_tint: bool,
+    /// Trail ribbons behind every presented entity (P2.2).
+    pub trails: bool,
 }
 
 impl Default for RuntimeOverlayVisibility {
@@ -55,6 +57,7 @@ impl Default for RuntimeOverlayVisibility {
             show_covariance_ellipsoids: false,
             belief: false,
             land_cover_tint: true,
+            trails: true,
         }
     }
 }
