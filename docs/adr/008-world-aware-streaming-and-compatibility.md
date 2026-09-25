@@ -1,5 +1,9 @@
 # ADR-008: World-Aware Streaming and Versioned Compatibility
 
+> Timing extension: [ADR-009](009-independently-scheduled-runtime.md) requires
+> component as-of times and freshness within coherent revision sets. A coherent
+> stream does not imply simultaneous acquisition or grant control authority.
+
 **Status:** accepted (architecture plan; no new RPC implemented)
 **Date:** 2026-09-08
 **Supersedes:** none

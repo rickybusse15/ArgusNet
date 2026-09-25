@@ -30,6 +30,20 @@ missing backend state.
 | F6 Persistent spatial memory | Extend indexing foundations into reusable site maps, evidence and mission history with versioned alignment and change candidates | One mutable belief owner; durable immutable tile/evidence store and site/spatial index; stable CRS, content identity, provenance and aging policy | Site catalog, Plan prior selection, Review synchronized prior/current comparison | Two missions reload the same site; known scene changes are attributable; stale priors remain distinguishable from new observations; alignment uncertainty can prevent a change claim; restart preserves references |
 | F7 Adaptive inspection | Extend POI dwell/coverage completion into requested-versus-achieved evidence quality and safe revisits for missing viewpoints or uncertainty | Inspection quality evaluator + evidence manifests + task pipeline + F5; F6 enables cross-mission revisits, but is not required for a single-mission slice | Operate unmet criteria and revisit reason; Plan viewpoints; Review evidence acceptance | Occluded/insufficient-angle evidence cannot complete inspection; safe useful revisit is selected or an unmet requirement is reported; energy/time/retry bounds prevent endless revisits |
 
+## Scheduling and delivery amendment (2026-09-23)
+
+All F1–F7 features use [the Rust runtime contracts](RUST_RUNTIME_ARCHITECTURE.md).
+F1/F4 compare elapsed source time and actual work across execution profiles;
+F2 preserves acquisition/delivery timing and supported clock/failure models;
+F3 reads durable decisions even when display snapshots are replaced. F5 runs
+reserve/availability checks without waiting for visualization; F6/F7 consume
+versioned evidence and bounded reconstruction jobs. No feature introduces a
+second map/mission writer or reads hidden truth to improve its score.
+
+Ship P5.0 basic controls alongside P4.10, then expose freshness, delayed work,
+recording gaps and unavailable timing capabilities in Operate/Review/Diagnostics.
+SIL/HIL/live feature promotion additionally needs [hardware evidence](HARDWARE_INTEGRATION.md).
+
 ## Architecture that supports the features
 
 1. Truth belongs to synthetic sensing, physical collision and evaluation through

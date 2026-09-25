@@ -4,6 +4,18 @@ ArgusNet mission profiles are additive, declarative presets for domain workflows
 existing simulation, planning, replay, sensing, and evaluation primitives; they do not implement a
 separate fusion stack or domain-specific autonomy.
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+Existing profile names remain usable through the current Python CLI. Future
+Rust profiles add execution-model, sensor-rate, freshness and hardware-capability
+requirements without copying domain algorithms. Unsupported sensor timing or
+control capabilities fail validation before start. Record the resolved profile
+and versions with every run; current presets are not SIL/HIL qualifications.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## Included profiles
 
 `sar_person_search` models authorized missing-person search and localization. It selects target

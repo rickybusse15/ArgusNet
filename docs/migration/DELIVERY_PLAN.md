@@ -11,6 +11,19 @@ Work package IDs are stable references for PRs and handoffs; they are not dates.
 An implementation PR should normally close one package or a clearly identified
 sub-slice, with its prerequisites and remaining work stated.
 
+## September 23 execution-model amendment
+
+Target architecture: [independently scheduled Rust runtime](../RUST_RUNTIME_ARCHITECTURE.md),
+accepted by [ADR-009](../adr/009-independently-scheduled-runtime.md). The inventory
+below retains its dated baseline; reviewed `ec9c2f7` also includes Rust replay
+writing and control-state checkpoint/command fixes. Full domain lifecycle,
+causal checkpoints and production scenario composition remain open.
+
+Complete P4.8/P4.9, then run P5.0 basic viewer integration alongside P4.10a–f.
+P5 history/live work consumes the final timestamp/freshness contracts. Existing
+P/F/S identifiers are unchanged. Hardware qualification follows
+[HARDWARE_INTEGRATION.md](../HARDWARE_INTEGRATION.md), not migration completion.
+
 ## 1. Baseline and scope
 
 | Phase | Delivered | Still open |
@@ -259,7 +272,6 @@ JSON round-trip tests verify fresh-instance control resume and atomic refusal.
 Restore replaces the receiving run's old retry history. Full causal subsystem checkpointing and a durable event journal remain
 open; do not mark P4.1/P5 controls fully complete on this evidence alone.
 
-
 Fix queued reset while faulted/completed, exactly-one-tick SingleStep, duplicate
 result preservation, reset epoch barriers and speed/effective-tick validation.
 Use explicit subsystem-owned state with reset/checkpoint/restore coverage.
@@ -401,6 +413,17 @@ with the gRPC adapter using identical fixture inputs. Export failures and tick
 failures have distinct states. Exit: a full representative run is owned by Rust,
 with no Python callbacks inside a tick, and all relevant fields survive replay.
 
+### P4.8 completion gate — production ownership and lifecycle
+
+Reject missing required production stages; retain empty shells only for explicit
+tests. The session owns subsystem instances instead of exposing mutable stage
+links to arbitrary callers. Reset reconstructs controllers, VIO/fusion, sensor
+biases, mission/safety/battery and belief from resolved configuration. Complete
+checkpoints contain these states and validate real world/config content identity.
+Control-state persistence alone does not close this package. Exit: reset equals
+a fresh run; restore equals uninterrupted execution; no Python callback in the
+representative Rust mission. Keep behavior fixes separate from mechanical ports.
+
 ### P4.9 — Rust CLI and phase acceptance
 
 Add `argusnet-cli` with a Rust `argusnet sim` command using the same library as the
@@ -416,11 +439,56 @@ changes; new simulation goldens do not automatically require changing transport
 fixtures. Exit: Rust CLI reproduces supported scenarios within approved envelopes,
 no Python runtime dependency, direct fusion parity and meaningful perf gates.
 
+### P4.10 — independently scheduled execution (new, planned)
+
+P4.9 is the baseline dependency. Reuse domain algorithms; retain
+`legacy_stages_v1` during opt-in `scheduled_v1` qualification. This is a versioned
+behavior change, not permission to silently reorder compatibility fixtures.
+
+| Package | Deliverable | Exit evidence |
+| --- | --- | --- |
+| P4.10a | Checked integer-time event scheduler, independent/rational sensor rates, fixed physical integration and declared off-boundary sampling | No cumulative deadline drift; stable ties; unsupported sampling rejected; pacing cannot change causal order |
+| P4.10b | Timestamped sensor envelopes, source epochs/clock quality, elapsed-time estimator updates, prediction/expiry deadlines and buffered mapping inputs | Capture versus delivery preserved; empty-input track aging; explicit late/drop policy; no lost evidence at unequal rates |
+| P4.10c | Dirty tile updates, spatial indexing, affected-route invalidation and buffer reuse | Reduced work counters, equivalent unchanged-input outputs, measured CPU/allocation cost |
+| P4.10d | Bounded workers, job input revisions, cancellation and deterministic application boundaries | Same causal state across worker counts/completion order; stale jobs rejected; current safety revalidation |
+| P4.10e | Full scheduler/sensor/job checkpoints, branch publication epochs, recording/backpressure and viewer freshness | Restore with delayed deliveries/pending jobs equals uninterrupted run; old-epoch messages ignored; bounded history |
+| P4.10f | Balanced workload qualification and default promotion | Published accuracy, timing, memory and usability results; no new safety failures; rollback profile retained |
+
+Periods do not have to be multiples of a global tick. A sensor model must support
+its requested capture times; a high output frequency cannot manufacture physical
+fidelity. Advanced delayed-measurement smoothing and flight dynamics are separate
+capabilities. Live hardware deadlines/fallbacks are qualified in S3/S4.
+
+P5.0 may ship after P4.9 without waiting for P4.10; expose only completed controls.
+Retain legacy execution through scheduled qualification and the following release,
+then retire it under P6 while preserving historical replay readers. Each package
+PR records algorithm/seed/schema changes, evidence and rollback boundaries.
+
+### Architecture completeness handoffs before promotion
+
+- P4.3/P4.8/P5.1: resolved world manifests, physical/visual semantics, content
+  validation, cancellation, deterministic tile generation and atomic publication.
+- P4.8/P4.10b: track source identity, evidence versus prediction age, time-based
+  lifecycle, deletion events and honest labeled/unlabeled source capabilities.
+- P4.10a/f and S3/S4: distinguish unrestricted/paced virtual time from external
+  deadline-coupled operation; freeze supported model/rate/sampling capabilities.
+- P2/P5: compatible transform revisions, bounded upload/apply budgets, stale-pick
+  checks and renderer-resource recovery without restarting the simulation.
+- P4.8/P4.10e/P5.2: immutable run configuration, journal commit/durable cursors,
+  verified crash recovery and explicit incomplete artifacts. Remote multi-client
+  actuation is not included in read-stream completion.
+
+See [simulation fidelity](../SIMULATION_FIDELITY.md) and the
+[verification matrix](VERIFICATION_AND_ROLLOUT.md#additional-architecture-audit-gates).
+These refine existing packages; they do not require replacing ported algorithms.
+
 ## 7. Phase 5 — run the world in the viewer
 
 ### P5.0 — worker and command integration
 
 Link `argusnet-sim` into the viewer with the worker/command/snapshot protocol.
+Deliver basic controls after P4.9 while P4.10 is opt-in; do not wait for full
+scheduler completion. Seek remains unavailable until complete history is qualified.
 Wire Run, pause/resume, speed, step and stop to acknowledged commands. World
 preparation is cancellable and off the render thread. Loading a second scenario
 must release old workers/handles/assets only when readers are finished. Invalid
@@ -540,7 +608,9 @@ installed release by itself.
 
 ## 9. Immediate execution queue
 
-1. Repair P4.1 command and checkpoint behavior; update causal-state inventories.
+1. Retain implemented P4.1 command/control-state fixes; complete subsystem
+   lifecycle and causal checkpoints rather than treating control persistence as
+   full restore. Update causal-state inventories.
 2. Retain implemented G1 regeneration/field checks; finish G0 semantic conversion
    and G2 visual/frame-time baselines. Follow the viewer specification for P2.
 3. Consume merged P4.3g landscapes and P4.6d belief publication; finish P4.8
@@ -551,10 +621,12 @@ installed release by itself.
 4. Start F1/F2/F3 replay/evaluation slices and F4 paired comparisons. Qualify
    physical truth isolation, localization and validated execution separately
    from legacy parity.
-5. Connect P5 worker/history/world-aware live state after correctness gates;
-   complete F5–F7 through the capability dependency matrix.
-6. Re-profile after integration, share coverage tables/tiles where measured, and
-   retire Python consumers under P6 packaging and compatibility gates.
+5. Ship P5.0 basic worker/controls after P4.9; run P4.10a–f alongside it.
+   Connect full P5 history/live state to qualified timing/freshness contracts.
+6. Complete F5–F7 through their dependency matrix; hardware promotion follows
+   S3–S7 evidence independently of desktop acceptance.
+7. Re-profile each profile, qualify scheduled execution, and retire old execution
+   and Python runtime consumers under P6 packaging/compatibility gates.
 
 ## 10. Latest autonomous/viewer system handoff
 

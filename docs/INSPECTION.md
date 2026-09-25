@@ -13,6 +13,19 @@ Inspection   -> sends drones to useful map-relative POIs
 Inspection is not only a photo-taking step. It should support multi-view capture, local 3D
 reconstruction, quality scoring, repeat inspection, and change detection.
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+Evidence quality and completion depend on timestamped captures, calibrated
+sensor geometry and qualified estimated poses, not render frames or nominal
+dwell ticks. Slow reconstruction runs on bounded workers and reports progress;
+stale results cannot complete a new epoch's task. Missing coverage/angle/quality
+triggers a bounded revisit proposal through planning/safety and reserve checks.
+Operate shows unmet criteria; Review links findings to actual evidence.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## Current Implementation
 
 Current `scan_map_inspect` inspection is a POI-based runtime bridge:

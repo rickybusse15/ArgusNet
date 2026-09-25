@@ -32,6 +32,32 @@ belief world, flight-software SIL/HIL, GNSS-denied localization, contained
 autonomous aircraft and coordinated operations. Its S0–S8 release gates do not
 renumber the migration or feature packages in this document.
 
+## Scheduled Rust runtime and operator delivery
+
+The target is [independently scheduled Rust execution](RUST_RUNTIME_ARCHITECTURE.md),
+not merely the existing Python loop translated to Rust. Complete and baseline
+P4.8/P4.9; deliver basic P5.0 viewer controls early; add P4.10a–f independent rates,
+measurement timing, incremental work, bounded jobs and causal history. Promote
+scheduled execution only after named-workload accuracy and performance gates.
+P6 retires superseded execution paths after installed-package/consumer acceptance.
+
+The visual target remains the flat Operate/Plan/Review instrument interface,
+Perspective/Top-down/Section, explicit uncertainty/unknown space and one source-time
+timeline. Add source freshness, pending commands, achieved speed and recording
+health; detailed deadlines/queues belong in Diagnostics. Visual polish cannot
+substitute for coherent domain outputs or hide unavailable capabilities.
+
+S0 establishes a usable Rust-owned runtime; scheduled-profile qualification is
+tracked independently in P4.10. S3/S4 require actual flight-software/hardware
+execution and recorded timing evidence under [hardware integration](HARDWARE_INTEGRATION.md).
+A passed desktop benchmark is not an onboard readiness gate.
+
+Architecture completion also includes reproducible world manifests, explicit
+track identity/expiry, versioned frame corrections, bounded viewer uploads and
+verified journal recovery. [Simulation fidelity](SIMULATION_FIDELITY.md) separates
+model accuracy, visual quality and real-time pacing. These refine P4/P5 gates;
+advanced flight dynamics and sensor rendering remain separately qualified work.
+
 ## Next delivery priorities
 
 The [refactor review](NEXT_REFACTOR_REVIEW.md) supplies source findings;
@@ -44,7 +70,7 @@ viewer surfaces and acceptance criteria. Both are planned work, not shipped clai
 | 2 | Compose and qualify a complete mission using merged landscape builders, belief publication and stage bodies | Product 0–2; P4.3/P4.6/P4.8/P4.9 |
 | 3 | Truth/belief separation, validated task-to-execution pipeline, physical localization semantics and independent accuracy evaluation | Product 2–3; P4 integration plus separately versioned physical profile |
 | Alongside 1–3 | F1 scorecards, F2 failure scenarios, F3 explanations; F4 paired scenario comparisons | Product 0–1 and early operator slices; reuse current replay/evaluation first |
-| 4 | Viewer Operate/Plan/Review, world-aware live protocol, responsive worker, acknowledged controls and durable events | P2 and P5; product 5 is final operator acceptance, not the start of UI work |
+| 4 (basic controls early) | Viewer Operate/Plan/Review, world-aware live protocol, responsive worker, acknowledged controls and durable events | P2 and P5; product 5 is final operator acceptance, not the start of UI work |
 | 5 | F5 continuous battery contingencies and task handoff | Product 3; validated execution and current belief/localization |
 | 6 | F6 cross-mission spatial memory and F7 evidence-driven adaptive inspection | Product 4; single-mission F7 may precede F6 |
 | Throughout / after migration | Measure startup/tick/render/storage costs, share coverage work, bound snapshots/recordings, then retire unused Python paths | Migration P6 only after consumer and installed-package gates |

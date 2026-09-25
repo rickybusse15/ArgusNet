@@ -41,7 +41,9 @@ check to CI before the first `argusnet-sim` release.
 
 ## 2. Types, coordinates and compatibility DTOs
 
-Runtime spatial/time calculations use f64. The renderer converts to f32 in one
+Runtime spatial calculations use f64. Compatibility timestamps and interchange
+seconds remain f64; the scheduled runtime clock/deadlines use checked integer
+nanoseconds under ADR-009. The renderer converts to f32 in one
 adapter, with a scene-local render origin for large coordinates. Moving that
 origin MUST NOT change runtime positions or exported coordinates. Runtime axes
 remain local ENU: X east, Y north, Z up; units are metres, seconds and radians.
@@ -81,7 +83,8 @@ old packages globally or rotate replay coordinates.
 - A `PriorWorld` is imported, attributed data. It initializes belief with source,
   uncertainty and validity metadata; import does not make it certain ground truth.
 - Mapping alone creates `BeliefSnapshot { revision, as_of_tick, grid_layout,
-  cells/tiles, provenance }`. Cells distinguish unknown from measured zero height
+  cells/tiles, provenance }`. Scheduled views additionally carry source as-of
+  time and component freshness; a tick alone is not a sensor timestamp. Cells distinguish unknown from measured zero height
   or zero occupancy. Evidence source, observation time and uncertainty are stored.
 - Planning takes a belief view and a pose estimate with status. Unknown space has
   an explicit mission-policy response; a failed query MUST NOT become zero height
@@ -104,7 +107,24 @@ Timeout is a distinct localization status. The existing forced-confidence path
 is ported as legacy behavior first, then changed in a separately reviewed
 behavioral step; new inspection gates MUST NOT mistake it for observed convergence.
 
-## 4. Deterministic tick transaction
+## Scheduled execution amendment (ADR-009)
+
+[The Rust runtime target](../RUST_RUNTIME_ARCHITECTURE.md) defines the final
+execution model. Section 4 below specifies `legacy_stages_v1` for port parity;
+it is not a requirement to run every future subsystem at that rate.
+`scheduled_v1` uses independent integer-time deadlines (including rational sensor
+rates), explicit acquisition/availability/receipt times, bounded workers and
+component freshness in coherent snapshots. Physical integration stays fixed-step;
+off-boundary capture requires a declared physical sampling capability.
+
+Substantial local computation uses typed calls, not internal gRPC. Background
+results carry source epoch/input revisions and are revalidated before application.
+Deterministic simulation waits for causal results without advancing virtual time;
+live hardware follows separately qualified deadlines and fallback policies.
+Complete checkpoints include event queues, next occurrence indices, measurement
+buffers and pending jobs. No wire change is implied by this documentation update.
+
+## 4. Compatibility model: deterministic tick transaction
 
 One worker owns a `Simulation` instance and all mutable runtime subsystems.
 Public conceptual entry points are `new(config, world, sources)`,
@@ -196,7 +216,6 @@ monotonic IDs per run; multi-client identity and durable result delivery remain
 future work. Busy is a stable refusal for that ID; a later submission uses a new
 ID. Reset cancellation is observable through the same bounded result API.
 
-
 Distinguish admission (`Accepted`) from execution (`Applied`) and terminal
 `Rejected`/`Cancelled` outcomes. A retry flag accompanies the original result;
 it must not erase the original refusal reason. Scope identity by run/client/ID,
@@ -241,9 +260,10 @@ playback as read-only unless all inputs support deterministic replay.
 
 Recording must preserve every committed frame/event selected by its declared
 recording policy. A bounded writer queue may throttle a recording/batch worker;
-it MUST NOT silently lose frames. In interactive mode a full recorder queue may
-pause recording with an explicit incomplete-artifact error according to the
-selected policy. Render remains responsive. Large terrain blobs are referenced
+it MUST NOT silently lose frames. Required deterministic recording suspends simulation advancement at a committed
+boundary under pressure. An explicitly optional best-effort recording may stop
+with an incomplete-artifact error; live recording follows its qualified
+retention policy and reports gaps. Render remains responsive. Large terrain blobs are referenced
 by immutable content hash, not embedded into every frame. Write temporary files
 and finalize manifests atomically; partial output is labelled and never reported
 as a complete replay.
@@ -257,7 +277,6 @@ infinite requests keep exact retry identity after JSON transport. Validate
 history bounds, identity and pending/receipt consistency before replacing state.
 This is control-state resume, not complete domain restore: subsystem handlers,
 world identity verification and fresh interactive publication epochs remain open.
-
 
 Concrete subsystem state belongs to the Simulation owner; stateful handlers
 cannot sit outside reset/checkpoint/restore. Persist idempotency history needed
@@ -324,6 +343,51 @@ request. Existing signed ingest identity/sequence checks remain intact. Initial
 runtime command protocol is local; remote operator control is a separate feature
 requiring authenticated command authorization and auditing, not implied by the
 read stream. This migration does not authorize physical actuation.
+
+### Session configuration, admission and recovery (target)
+
+Resolve and validate the entire session configuration before starting. World
+identity, execution model, algorithm/seed versions, physical/sensor model and
+source topology are immutable within an execution epoch. Initially changing
+these requires a new run/branch; do not mutate rates in place through UI settings.
+Future live calibration/rate changes require an explicit versioned source event
+and qualified estimator behavior. Presentation preferences remain local.
+
+One runtime owns command order. The local protocol's single producer does not
+establish multi-client arbitration. Before remote command support, define client
+identity/idempotency scope, authorized operator ownership and deterministic
+admission ordering. Reject a stale revision or unauthorized writer; do not let
+multiple views directly mutate the same mission. Remote viewing remains read-only
+until that feature is implemented. Session budgets also obey process-wide limits;
+reject new work explicitly when admission would overcommit resources.
+
+Maintain distinct accepted, applied and durably recorded states. Current in-memory
+acknowledgements make no crash-survival or global exactly-once promise. On losing
+a connection/receipt, query or resynchronize; do not infer success or blindly
+retry an expired command. No automatic reissue of external physical commands
+is allowed after restart without the qualified adapter's reconciliation policy.
+
+For resumable deterministic recording, use a versioned append-only journal with
+bounded segments, sequence IDs, checksums and commit markers. Record admitted
+inputs/commands, effective source times, nondeterministic external decisions and
+required evidence references separately from selected display frames. Publish
+the durable cursor only after the configured flush policy is satisfied. An
+optional best-effort recording may be incomplete; required simulation recording
+suspends advancement on pressure. Live operation follows its qualified retention
+policy and records gaps without blocking control.
+
+Atomically finalize checkpoint/artifact manifests after referenced content is
+complete. Recover only the verified journal prefix through its last complete
+commit marker; mark truncated output incomplete. Restore a compatible checkpoint
+and replay recorded inputs to a verified commit, or fail explicitly. After a
+process restart allocate a new session identity and publication epoch while
+preserving source provenance; old receipts, deltas and jobs cannot appear current.
+Automatic recovery is a planned capability, not current format-2 checkpoint support.
+
+Acceptance includes mid-write termination, truncated/corrupt segments, missing
+content, reconnect after command admission, duplicate clients, process quota
+exhaustion and restart at a different config/world version. Place these in
+P4.8/P4.10e/P5.2; remote operator control remains a separate authenticated feature.
 
 ## 8. Native ABI and Python transition
 

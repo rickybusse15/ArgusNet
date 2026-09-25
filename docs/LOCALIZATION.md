@@ -15,6 +15,33 @@ This capability matters when:
 
 ---
 
+## Frame correction and map alignment (target)
+
+The estimator/alignment owner publishes frame transforms with source/destination
+IDs, validity time, transform revision and uncertainty. A loop closure or prior
+alignment may correct map-relative poses without representing physical motion.
+Apply that correction consistently to dependent poses, map/evidence references
+and trajectories, or mark incompatible data unavailable until revalidated.
+Consumers never reconstruct a competing transform from rendered positions.
+Keep continuous local odometry distinct from corrected global/map pose; planned
+pose-graph corrections need their own validation and are not claimed implemented.
+Changing only the render origin affects neither frame identity nor runtime state.
+
+## Scheduled Rust integration (target, 2026-09-23)
+
+Keep per-vehicle estimated pose, covariance, integrity and acquisition history
+separate from physical simulation state. Trigger corrections from supported
+measurement arrivals and prediction/expiry from deadlines, passing actual elapsed
+time. Preserve clock uncertainty and define supported lateness before enabling
+delayed profiles. Shared landmarks/relative constraints require evidence identity
+and correlation handling; averaging different drone positions is not cooperative
+SLAM. Timeout remains distinct from convergence. Reset/restore includes VIO,
+filter, bias and relocalization state, not only displayed estimates.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## 1. Purpose
 
 The localization subsystem estimates the current pose of a platform relative to the active world model.

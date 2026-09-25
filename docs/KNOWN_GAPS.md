@@ -1,5 +1,22 @@
 # Known Gaps — ArgusNet
 
+## Scheduled-runtime status (reviewed 2026-09-23)
+
+| Capability | Status | Remaining evidence |
+| --- | --- | --- |
+| Rust stage composition, direct fusion and replay writer | Partial | Libraries/stages exist; complete production mission and CLI acceptance remain |
+| Command recovery and format-2 control checkpoints | Implemented in reviewed `ec9c2f7` | Not full causal checkpointing or proof of remote release |
+| Subsystem-wide reset/restore | Partial | Reconstruct filters/controllers/sensors/mission; match a fresh or uninterrupted run |
+| Independent/rational task and sensor rates | Planned P4.10 | Stable event order, physical sampling support and actual elapsed-time updates |
+| Bounded causal jobs and complete scheduler history | Planned P4.10 | Deterministic application, stale result checks and restore during pending work |
+| Operate/Plan/Review visual redesign and freshness | Planned/partial foundations | P2/P5 acceptance; current replay controls remain distinct |
+| Qualified hardware adapters and deadlines | Planned S3–S7 | Actual SIL/HIL and device/clock/fault evidence; telemetry viewing grants no control |
+
+See [target architecture](RUST_RUNTIME_ARCHITECTURE.md),
+[viewer specification](VIEWER_UI.md) and [hardware integration](HARDWARE_INTEGRATION.md).
+The older domain inventory below must not be read as completed Rust production
+integration merely because a Python path or ported library exists.
+
 This document records current implementation status and unresolved gaps. It replaces older
 Smart-Trajectory-Tracker-era wording with the current ArgusNet module layout.
 
@@ -48,7 +65,7 @@ Status labels:
 | Occlusion-aware scan coverage | **Implemented (opt-in)** | `--occlusion-aware-mapping` gates coverage/reconstruction through `EnvironmentQuery.los()` |
 | Replay `MappingState` | **Implemented** | `argusnet.core.types.MappingState`, populated in `src/argusnet/simulation/sim.py` |
 | Elevation/occupancy/semantic/uncertainty modules | **Partial** | Modules exist under `src/argusnet/mapping/*`; closed-loop runtime integration is incomplete. |
-| Belief-world planning authority | **Partial** | Rust `WorldBeliefQuery` facade exists; unified revisioned mutable ownership and mandatory planning integration remain planned. |
+| Belief-world planning authority | **Partial** | Rust queries and P4.6d revisioned belief publication exist; mandatory planning use and complete production ownership remain unqualified. |
 | Truth-isolation tests for physical-mode mapping | **Implemented (opt-in)** | `tests/test_occlusion_aware_mapping.py` covers LOS-gated reconstruction and obstacle-routed redirects. |
 
 ## Localization

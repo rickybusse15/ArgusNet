@@ -1,5 +1,11 @@
 # ArgusNet Next-Generation Viewer System Specification
 
+**Design alignment updated: 2026-09-23.** The
+[independently scheduled Rust runtime](RUST_RUNTIME_ARCHITECTURE.md) and
+[hardware qualification](HARDWARE_INTEGRATION.md) govern source timing,
+freshness and control authority. These remain target requirements, not a claim
+that the current viewer implements the new UI or scheduler.
+
 ## Document status
 
 This document defines the target viewer system at the end of the Rust runtime
@@ -28,6 +34,46 @@ The specification is governed by:
 
 If this document conflicts with an authority, safety, protocol, or compatibility
 rule in those documents, the governing architecture wins.
+
+## Scheduled-runtime presentation amendment
+
+The visual target remains a flat, typography-led Swiss/Braun instrument layout:
+restrained monochrome with purposeful accent, readable labels, no decorative
+card wall, neon or glass. Operate / Plan / Review are workspaces; Perspective /
+Top-down / Section are projections; Operational / Reconstruction / Safety are
+layer presets. Keep these controls distinct and preserve selection across them.
+
+Terrain, structures, unknown/free/occupied volumes, uncertainty, trajectories,
+sensor volumes and evidence anchors retain their 3D meaning in every projection.
+A low quality tier may simplify rendering, not remove a hazard or turn unknown
+space into empty space. Truth overlays remain a labeled evaluation capability.
+
+Independent rates add these required states:
+
+| Surface | Required behavior |
+| --- | --- |
+| Source bar and timeline | Simulation/SIL/HIL/Live/Replay, current versus historical time, achieved versus requested simulation speed, available history and recording health |
+| Operate inspector | Pose/map/plan as-of time, stale/degraded/unavailable reason, localization integrity, active contingency and command pending/applied/rejected state |
+| Plan | Show capability/rate incompatibility and stale input revisions before accepting a proposal; revalidation is backend-owned |
+| Review | Correlate acquisition/delivery/decision times and evidence gaps; distinguish render-skipped snapshots from lost measurements |
+| Diagnostics | Per-subsystem rate, execution/queue latency, deadline misses, clock quality, rejected stale jobs, recorder backlog and resource ceilings |
+| Scenario Studio | Configure only supported source rates/delays and execution profiles; unsupported timing fails visibly before start |
+
+A committed revision may contain a fresh pose and an older map; label both ages.
+Interpolate compatible presentation poses only; do not invent fresh map evidence,
+extrapolate stale tracks indefinitely or interpolate across epochs/frame changes.
+Skip superseded display updates without dropping decisions from the event journal.
+
+P5.0 delivers basic controls against the qualified legacy Rust model while
+P4.10 is opt-in. Pause/Step/Speed affect virtual simulation; Step processes one
+control interval including intervening sensor events. Playback of external
+history cannot pause an aircraft. Disable unsupported controls with a reason.
+Large world loads, mesh jobs and recorder waits must not block the render thread.
+
+Acceptance fixtures include mixed-rate fresh/stale components, no observations,
+clock reset, overloaded workers, full recorder, branch/seek and disconnect.
+Check flat-layout typography, keyboard/text-entry behavior, picking and semantic
+layers in overview, close perspective, top-down and section on named hardware.
 
 ## 1. Product definition
 
@@ -596,7 +642,8 @@ an explicit resynchronization state.
 
 ### 10.3 Coordinate handling
 
-Runtime spatial/time calculations remain f64. One adapter converts to f32 for
+Runtime spatial calculations remain f64; scheduled source time is integer
+nanoseconds, with derived seconds at interchange boundaries. One adapter converts to f32 for
 Bevy using a scene-local render origin. The viewer always exposes the active CRS,
 axis convention, origin, units, and altitude datum where relevant. New packages
 follow the explicit glTF axis contract; legacy Z-up behavior remains versioned at
@@ -634,6 +681,35 @@ source input
 Persistent entities update transforms and changed quality data in place. They
 spawn/despawn only on membership change. Visibility toggles gate optional
 presentation work but do not disable resource cleanup.
+
+### 11.2a Display-time, frame and resource consistency
+
+Choose one displayed source time and a compatible revision set before ECS apply.
+Validate on workers, then apply bounded deltas without exposing a half-installed
+required world revision. Large uploads are staged across frames; show the prior
+valid revision/loading state until required resources are ready. Optional tiles
+may arrive progressively with explicit unavailable regions.
+
+Frame transforms are versioned domain outputs. Map alignment/localization
+corrections must update poses, maps, trails and evidence through compatible
+transform revisions; clear interpolation where that continuity is not known.
+A render-origin shift only changes local presentation coordinates. It must not
+appear as physical motion, change exported positions or contaminate sensor input.
+Picking resolves an entity ID and the displayed revision; commands are checked
+against current backend state rather than blindly executing an old screen pick.
+
+Bound trail history, GPU uploads, decoded tiles, outstanding requests and retained
+revisions by configured byte/work budgets. Cancel obsolete camera/epoch work and
+reject late GPU/decode results. Quality reduction may defer cosmetic detail but
+must preserve uncertainty, unknown regions and safety cues. Release assets only
+when their readers are done, and expose memory pressure rather than growing
+without limit. A desktop context/device loss rebuilds presentation resources from
+a committed source; it does not reset the simulation.
+
+Sensor imagery uses the dedicated capture path in
+[simulation fidelity](SIMULATION_FIDELITY.md), not the operator viewport. Test
+headless versus visible runs, origin shifts, map corrections, picking on old
+revisions, lifecycle cleanup and interrupted world uploads.
 
 ### 11.3 Required module boundaries
 
@@ -715,7 +791,10 @@ On the named reference hardware and representative fixed workloads:
 - warmed p95 render frame time is at most 16.7 ms;
 - warmed p99 render frame time is at most 25 ms;
 - no unexplained stall exceeds 100 ms;
-- simulation p95 tick processing remains below its fixed dt at 1×;
+- compatibility-mode p95 tick processing remains below its fixed dt at 1×;
+- scheduled mode measures per-subsystem release-to-start, execution and
+  completion latency against its own deadline; simulation overload reduces
+  achieved speed rather than silently dropping physical work;
 - catch-up work is bounded and simulation ticks are not dropped;
 - selection, pause acknowledgement, and local layer changes remain responsive
   during world loading and recording;
@@ -724,7 +803,7 @@ On the named reference hardware and representative fixed workloads:
 - world, belief, history, and recording memory have observable eviction or
   backpressure behavior.
 
-CPU presentation time, GPU time, simulation tick time, transport/native cost,
+CPU presentation time, GPU time, simulation step/task time, transport/native cost,
 world-build time, shader warmup, and recording backlog are measured separately.
 Lavapipe smoke validates shader execution, not interactive frame rate.
 
@@ -820,7 +899,6 @@ The UI redesign follows architecture, not the reverse:
 into concrete interactions, 3D projections, integrity/contingency presentation,
 SIL/HIL qualification, client outputs, ML provenance and offline governance.
 S0–S8 are system release gates; they do not replace P2/P4/P5 or F1–F7 IDs.
-
 
 The [capability delivery plan](CAPABILITY_DELIVERY.md) assigns backend ownership,
 prerequisites and acceptance for these product surfaces:

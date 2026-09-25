@@ -4,11 +4,27 @@ Guide for engineers and AI agents. This document maps the current ArgusNet codeb
 documentation set, identifies authoritative state owners, and separates implemented behavior from
 roadmap architecture.
 
+## Target execution architecture
+
+[The Rust runtime design](RUST_RUNTIME_ARCHITECTURE.md) is the canonical target:
+one Rust session owner, independent physical/control/sensor deadlines,
+measurement-driven estimation, incremental mapping, event/deadline-driven
+planning and independent rendering. Modules exchange typed timestamped results;
+coherent revisions expose component age instead of forcing simultaneous updates.
+Python is optional offline tooling, not a production boot/runtime dependency.
+
+[ADR-009](adr/009-independently-scheduled-runtime.md) preserves the initial
+compatibility tick while introducing opt-in scheduled execution in P4.10a–f.
+The [hardware contract](HARDWARE_INTEGRATION.md) distinguishes virtual-time
+simulation from qualified onboard deadlines and firmware interfaces. The module
+map below describes existing components; target ownership does not imply delivery.
+
 ## Current migration boundary and next architecture
 
-At integrated checkout `ba163ac`, Rust includes landscape construction, belief
+At reviewed checkout `ec9c2f7`, Rust includes landscape construction, belief
 publication, localization/sensing/planning libraries, mission state, TickWorld
-and stage bodies with populated snapshots. Full scenario/CLI/checkpoint
+and stage bodies with populated snapshots, replay writing and control-state
+checkpoint recovery. Full scenario/CLI/checkpoint
 qualification remains open; Python still composes the existing production mission. See
 [STATE_OWNERSHIP.md](STATE_OWNERSHIP.md) for library versus active-consumer status.
 
@@ -96,11 +112,11 @@ be labeled as planned until the referenced code exists.
 | World Model | `src/argusnet/world/*` | `argusnet-world`, `argusnet-native` | `TERRAIN.md` |
 | Sensing/Fusion | `src/argusnet/sensing/*`, `src/argusnet/adapters/argusnet_grpc.py` | `argusnet-core`, `argusnet-server`, `argusnet-proto` | `FUSION.md` |
 | Localization | `src/argusnet/localization/*`, replay state in `argusnet.core.types` | `argusnet-localization` (library; mission composition pending) | `LOCALIZATION.md` |
-| Mapping | `src/argusnet/mapping/*`, replay state in `argusnet.core.types` | `argusnet-mapping` (kernels/query facade; belief owner pending) | `MAPPING.md` |
+| Mapping | `src/argusnet/mapping/*`, replay state in `argusnet.core.types` | `argusnet-mapping` (kernels, queries and revisioned belief publication; full runtime composition pending) | `MAPPING.md` |
 | Indexing | `src/argusnet/indexing/*` | planned `indexing-engine` | `INDEXING.md` |
 | Inspection | `src/argusnet/planning/poi.py`, `src/argusnet/planning/inspection.py`, inspection state in `argusnet.core.types` | planned `inspection-engine` | `INSPECTION.md` |
 | Planning / Trajectory / Safety | `src/argusnet/planning/*`, `src/argusnet/simulation/behaviors.py`, `src/argusnet/safety/*` | `safety-engine`, `argusnet-planning`; full trajectory execution integration pending | `PLANNING.md`, `SAFETY.md` |
-| Mission Execution / Evaluation | `src/argusnet/simulation/sim.py`, `src/argusnet/mission/*`, `src/argusnet/evaluation/*` | `argusnet-sim` (shell), `argusnet-replay`, `argusnet-viewer`; complete Rust mission pending | `MISSION_EXECUTION.md`, `SCENARIOS.md`, `PERFORMANCE_AND_BENCHMARKING.md` |
+| Mission Execution / Evaluation | `src/argusnet/simulation/sim.py`, `src/argusnet/mission/*`, `src/argusnet/evaluation/*` | `argusnet-sim` (stage runtime under integration), `argusnet-replay`, `argusnet-viewer`; complete Rust mission pending | `MISSION_EXECUTION.md`, `SCENARIOS.md`, `PERFORMANCE_AND_BENCHMARKING.md` |
 
 ## Core Architectural Rule
 
@@ -155,7 +171,8 @@ For `scan_map_inspect`, `src/argusnet/simulation/sim.py` also populates:
 
 ## Target Data Flow
 
-The required direction is a closed-loop mission runtime:
+The required direction is a closed-loop mission runtime. This is a logical
+data dependency chain, not a requirement to execute all modules at one rate:
 
 ```text
 Mission constraints / geofence
@@ -214,12 +231,18 @@ hidden truth in physical-mode tests.
 | `argusnet-world` | World | Authoritative terrain, obstacle, land-cover and visibility queries |
 | `argusnet-native` | Python bridge | Owned world/safety handles and batched native queries |
 | `safety-engine` | Safety | Runtime constraint validators and stateful safety monitors |
-| planned `world-engine` | World / Mapping | Obstacle/world query acceleration |
-| planned `mapping-engine` | Mapping | Dense belief tile updates |
-| planned `localization-engine` | Localization | Map-relative pose recovery and confidence state |
-| planned `planner-engine` | Planning | Route/viewpoint/task planning from belief state |
-| planned `trajectory-engine` | Trajectory | Feasible path generation and smoothing |
-| planned `indexing-engine` | Indexing | Spatial memory and artifact retrieval |
+| `argusnet-types` | Shared contracts | Runtime value types and domain identity |
+| `argusnet-sensing` | Sensing | Sensor kernels; timing/source integration remains staged |
+| `argusnet-localization` | Localization | Estimator components and map-relative localization |
+| `argusnet-mapping` | Mapping | Scoring/raster kernels, queries and revisioned belief publication |
+| `argusnet-planning` | Planning | Ported routing, frontier, POI and coordination components |
+| `argusnet-sim` | Composition | Clock/commands, domain stages and replay writing; complete runtime and scheduler remain staged |
+| `argusnet-replay` | Interchange | Shared replay contracts and conversions |
+
+Full trajectory, spatial-memory and inspection features extend these owners first;
+any later crate extraction requires an actual independent boundary. Older
+`world-engine`/`mapping-engine` names are superseded placeholders, not missing
+crates to create.
 
 ## Environment And Belief-World Stack
 
@@ -245,7 +268,8 @@ Prior world / geofence / live observations
    -> Localization, planning, inspection, safety
 ```
 
-`BeliefWorldModel` and `WorldBeliefQuery` are roadmap terms. The current runtime bridge is
+`BeliefWorldModel` remains a broader roadmap contract; Rust `WorldBeliefQuery`
+and revisioned belief publication already exist. The existing Python mission bridge is
 `CoverageMap`, `WorldMap`, and `MappingState`.
 
 ## State Authority

@@ -3,6 +3,31 @@
 This document defines benchmark scenario families for ArgusNet’s current purpose: mapping,
 localization, inspection, revisit, multi-drone coordination, safety, and replay evaluation.
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+Retain the existing canonical scenarios/seeds as smoke coverage; add unequal
+sensor/control/render rates, delayed and reordered inputs, source-clock reboot,
+empty-input track aging, stale plans, queue saturation and recording failure.
+Compare legacy and scheduled profiles on matched source/world/config identities;
+separate intentional algorithm changes from port parity. Full qualification uses
+predeclared multi-seed/held-out sets and named-hardware timing. SIL/HIL must execute
+the actual selected software/hardware, not merely a renamed simulation.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
+## Fidelity and reference-data identity
+
+A scenario resolves a world-build manifest, physical/sensor model and time policy
+as defined in [simulation fidelity](SIMULATION_FIDELITY.md). Keep those independent
+of visual quality and playback speed. Record model/calibration versions and
+limitations; unsupported sensor quantities fail validation. Randomization changes
+named physical parameters within declared ranges, using independently keyed
+streams; it does not substitute for validation against recorded reference data.
+Use separate tuning and held-out evaluation cases. Score tracking identity and
+measurement age as well as position error, coverage and mission outcome.
+
 ## Metric Families
 
 ### Mapping Metrics
