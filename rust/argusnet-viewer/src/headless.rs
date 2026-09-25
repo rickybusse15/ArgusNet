@@ -68,9 +68,17 @@ pub struct HeadlessRenderOptions {
     pub probe: Option<ProbeRequest>,
 }
 
+/// A pointer position for a probe: a world point's pixel through the live
+/// main camera, plus an offset in pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ProbePointer {
+    pub world: [f64; 3],
+    pub offset_px: [f32; 2],
+}
+
 /// Probe the captured still at world points, projected through the live
 /// camera, and write what was drawn there.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ProbeRequest {
     /// Belief to draw.
     pub belief: Option<argusnet_mapping::BeliefStore>,
@@ -87,6 +95,14 @@ pub struct ProbeRequest {
     pub points: Vec<[f64; 2]>,
     /// World points at a given height, probed after `points`.
     pub elevated: Vec<[f64; 3]>,
+    /// Select a marker directly, by kind (`"node"`, `"track"` or `"truth"`)
+    /// and id, as the keyboard and list paths do (P2.3).
+    pub select: Option<(String, String)>,
+    /// Clicks, in order, through the real picker; each one's outcome is
+    /// reported (P2.3).
+    pub clicks: Vec<ProbePointer>,
+    /// Where the pointer rests for the capture, for the hover ring (P2.3).
+    pub hover: Option<ProbePointer>,
     /// Where to write the probe results, as JSON.
     pub output: PathBuf,
 }
@@ -378,6 +394,9 @@ struct HeadlessCapture {
     next_index: usize,
     next_time_s: f32,
     timing: CaptureTiming,
+    /// The probe's interactions have run; what each click selected.
+    interacted: bool,
+    clicks: Vec<serde_json::Value>,
 }
 
 /// Where a headless run spent its time, and on which frame each milestone fell.
@@ -462,6 +481,13 @@ enum CapturePhase {
         last_hash: Option<u64>,
         min_frames: u32,
     },
+    /// Driving the probe's selection, clicks and hover through the picker,
+    /// one step at a time: `step` is the next to issue, `waiting` a click the
+    /// picker has not handled yet.
+    Interacting {
+        step: usize,
+        waiting: Option<u64>,
+    },
     Capture,
     Done,
 }
@@ -528,6 +554,8 @@ impl HeadlessCapture {
             next_index: 0,
             next_time_s: 0.0,
             timing: CaptureTiming::new(),
+            interacted: false,
+            clicks: Vec::new(),
         }
     }
 }
@@ -684,6 +712,55 @@ type ProbeCamera<'w, 's> = Query<
     (With<MainCamera>, Without<ReconstructionCamera>),
 >;
 
+/// What the probe interactions drive: the picker's input and its results.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct ProbeInteraction<'w> {
+    pointer: ResMut<'w, crate::picking::PointerInput>,
+    log: Res<'w, crate::picking::PickLog>,
+    hover: Res<'w, crate::picking::HoverState>,
+    selection: ResMut<'w, crate::state::SelectionState>,
+    markers: Res<'w, crate::presentation::CurrentRuntimeMarkers>,
+}
+
+fn marker_kind(name: &str) -> Option<crate::replay::MarkerKind> {
+    use crate::replay::MarkerKind;
+    match name {
+        "node" => Some(MarkerKind::Node),
+        "track" => Some(MarkerKind::Track),
+        "truth" => Some(MarkerKind::Truth),
+        _ => None,
+    }
+}
+
+fn kind_name(kind: crate::replay::MarkerKind) -> &'static str {
+    use crate::replay::MarkerKind;
+    match kind {
+        MarkerKind::Node => "node",
+        MarkerKind::Track => "track",
+        MarkerKind::Truth => "truth",
+    }
+}
+
+/// A key as `{"kind", "id"}`, or `null`.
+fn key_json(
+    markers: &crate::presentation::CurrentRuntimeMarkers,
+    key: Option<crate::presentation::EntityKey>,
+) -> serde_json::Value {
+    key.and_then(|key| markers.get(key))
+        .map(|marker| serde_json::json!({"kind": kind_name(marker.kind), "id": &*marker.label}))
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// The window pixel of a probe pointer, through the main camera.
+fn pointer_pixel(context: &ProbeContext, pointer: &ProbePointer) -> Option<Vec2> {
+    let (camera, transform) = context.camera.single().ok()?;
+    let [x, y, z] = pointer.world;
+    let at = camera
+        .world_to_viewport(transform, Vec3::new(x as f32, y as f32, z as f32))
+        .ok()?;
+    Some(at + Vec2::from(pointer.offset_px))
+}
+
 /// What the probes need from the world at capture time.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct ProbeContext<'w, 's> {
@@ -698,6 +775,8 @@ pub struct ProbeContext<'w, 's> {
 fn write_probes(
     request: &ProbeRequest,
     context: &ProbeContext,
+    interaction: &ProbeInteraction,
+    clicks: &[serde_json::Value],
     padded: &[u8],
     target: &HeadlessTarget,
 ) -> Result<()> {
@@ -768,6 +847,12 @@ fn write_probes(
         &request.output,
         serde_json::to_string(&serde_json::json!({
             "points": points,
+            "clicks": clicks,
+            "selected": key_json(
+                &interaction.markers,
+                interaction.selection.selected.as_ref().map(|s| s.key),
+            ),
+            "hovered": key_json(&interaction.markers, interaction.hover.hovered()),
             "rasters": {
                 "belief_mode": report.belief_mode as u32,
                 "land_cover_bound": report.land_cover_bound,
@@ -791,6 +876,7 @@ fn headless_capture_system(
     layer_roots: Query<&WorldAssetRoot>,
     mut exit: MessageWriter<AppExit>,
     mut probe: ProbeContext,
+    mut interaction: ProbeInteraction,
 ) {
     let Some(target) = target else {
         return;
@@ -883,7 +969,90 @@ fn headless_capture_system(
                 }
             };
         }
+        CapturePhase::Interacting { step, waiting } => {
+            let Some(request) = probe.request.probe.clone() else {
+                capture.phase = CapturePhase::Capture;
+                return;
+            };
+            // A click issued last frame: wait for the picker to handle it.
+            if let Some(expected) = waiting {
+                if interaction.log.clicks < expected {
+                    return;
+                }
+                let pixel = interaction.pointer.position.map(|p| [p.x, p.y]);
+                let selected = key_json(&interaction.markers, interaction.log.last);
+                let ignored = interaction.log.last_ignored;
+                capture.clicks.push(serde_json::json!({
+                    "pixel": pixel,
+                    "selected": selected,
+                    "ignored": ignored,
+                }));
+                capture.phase = CapturePhase::Interacting {
+                    step,
+                    waiting: None,
+                };
+                return;
+            }
+            // Step 0 is the direct selection; then the clicks; then the hover.
+            let clicks = request.clicks.len();
+            if step == 0 {
+                if let Some((kind, id)) = request.select.as_ref() {
+                    let key =
+                        marker_kind(kind).and_then(|kind| interaction.markers.key_of(kind, id));
+                    if key.is_none() {
+                        error!("probe select: no {kind} {id:?} in the frame");
+                        capture.failed = true;
+                    }
+                    let markers = interaction.markers.as_ref();
+                    crate::picking::select_key(interaction.selection.as_mut(), markers, key);
+                }
+                capture.phase = CapturePhase::Interacting {
+                    step: 1,
+                    waiting: None,
+                };
+            } else if step <= clicks {
+                let pointer = &request.clicks[step - 1];
+                let Some(pixel) = pointer_pixel(&probe, pointer) else {
+                    error!("probe click {step}: {:?} is not in view", pointer.world);
+                    capture.failed = true;
+                    capture.phase = CapturePhase::Done;
+                    return;
+                };
+                *interaction.pointer = crate::picking::PointerInput {
+                    position: Some(pixel),
+                    over_ui: false,
+                    pressed: true,
+                };
+                capture.phase = CapturePhase::Interacting {
+                    step: step + 1,
+                    waiting: Some(interaction.log.clicks + 1),
+                };
+            } else {
+                *interaction.pointer = crate::picking::PointerInput {
+                    position: request
+                        .hover
+                        .as_ref()
+                        .and_then(|p| pointer_pixel(&probe, p)),
+                    over_ui: false,
+                    pressed: false,
+                };
+                capture.interacted = true;
+                capture.phase = CapturePhase::settling(MIN_SETTLE_FRAMES);
+            }
+        }
         CapturePhase::Capture => {
+            // The probe's selection, clicks and hover run once, before the
+            // still is taken.
+            let interacts = probe.request.probe.as_ref().is_some_and(|request| {
+                request.select.is_some() || !request.clicks.is_empty() || request.hover.is_some()
+            });
+            if interacts && !capture.interacted {
+                capture.phase = CapturePhase::Interacting {
+                    step: 0,
+                    waiting: None,
+                };
+                return;
+            }
             let Some(frame) = latest else {
                 // Nothing has arrived yet; try again next tick.
                 return;
@@ -912,7 +1081,15 @@ fn headless_capture_system(
                     capture.failed = true;
                 }
                 if let Some(request) = probe.request.probe.as_ref() {
-                    if let Err(error) = write_probes(request, &probe, &frame.pixels, &target) {
+                    let clicks = std::mem::take(&mut capture.clicks);
+                    if let Err(error) = write_probes(
+                        request,
+                        &probe,
+                        &interaction,
+                        &clicks,
+                        &frame.pixels,
+                        &target,
+                    ) {
                         error!("failed to write probes: {error:#}");
                         capture.failed = true;
                     }

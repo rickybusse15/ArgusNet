@@ -18,8 +18,14 @@ Python, mission profiles and the blocking safety monitor included (P4.9d). Six
 of the seven pass every declared envelope. One envelope,
 `sar_person_search`'s `covariance_reduction_mean`, fails for a reason in the
 metric's definition, which needs a decision; see
-[SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md). All of the viewer track
-(P2.x) is still open.
+[SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md).
+
+At 2026-09-25 the viewer track has P2.0 to P2.3 locally: the snapshot
+adapter, the terrain and belief material, persistent sensor, zone and trail
+geometry, and picking and selection. P2.4 to P2.6 (camera and time
+controls, the mission-control shell and quality tiers, graphics acceptance)
+are open, as are guardrails G0, G2 and G3. Nothing is pushed, so CI has run
+none of it.
 
 ## Track A — runtime (critical path)
 
@@ -47,7 +53,7 @@ metric's definition, which needs a decision; see
 | P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | local ([SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
 | P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | local ([TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
 | P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | local ([PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
-| P2.3 | Raycast picking, hover, selection outline | open |
+| P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | local ([PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
 | P2.4 | Free-fly, follow/chase, focus, bookmarks, time scrubbing | open (orbit camera exists) |
 | P2.5 | Mission-control shell, quality tiers | open |
 | P2.6 | Graphics acceptance across tiers | open |

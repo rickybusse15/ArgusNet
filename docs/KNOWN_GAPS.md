@@ -105,6 +105,7 @@ Status labels:
 | CI benchmark markers and golden performance files | **Implemented** | Deterministic work-counter gate runs on every PR; timing comparison is opt-in (`ARGUSNET_RUN_PERF_TIMING`). Baseline profile in `docs/performance/baseline-profile-2026-09.md`. |
 | Viewer replay playback | **Implemented** | `rust/argusnet-viewer` |
 | Viewer live streaming | **Implemented** | Legacy `WatchFrames` plus operator-focused `WatchFramesV2`, reconnect, bounded queues/history, truth filtering, sequence/drop telemetry |
+| Scene GLB triangle winding | **Gap** | Every one of the committed `terrain-base.glb`'s 9,656 triangles is wound facing down while its normals face up; it draws correctly only because its material is double-sided. (`buildings.glb` agrees with its normals on all 432.) The viewer's picker casts occluders from both faces to match (P2.3, `docs/migration/PICKING_AND_SELECTION.md`). The writer (`src/argusnet/world/_glb.py` and its callers) should emit counter-clockwise front faces; single-sided culling, or any consumer that trusts the winding, would otherwise see through the ground. |
 | Viewer headless CI/render path | **Implemented smoke coverage** | CI renders through Bevy and checks a non-empty image. Fixed-image regression and steady-state frame-budget gates remain open. |
 
 ## Interface Boundaries That Need Formalization

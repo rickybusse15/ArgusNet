@@ -16,7 +16,9 @@ use crate::{
     state::{CurrentRuntimeMarkers, RuntimeOverlayVisibility},
 };
 use bevy::asset::embedded_asset;
+use bevy::camera::primitives::MeshAabb;
 use bevy::ecs::query::QueryData;
+use bevy::picking::mesh_picking::ray_cast::SimplifiedMesh;
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
@@ -100,6 +102,8 @@ impl Material for HologramMaterial {
 #[derive(Resource)]
 pub struct MarkerAssets {
     drone: Handle<Mesh>,
+    /// What a drone is picked by: see [`pick_proxy`].
+    drone_proxy: Handle<Mesh>,
     station: Handle<Mesh>,
     track: Handle<Mesh>,
     truth: Handle<Mesh>,
@@ -126,9 +130,22 @@ fn drone_mesh() -> Mesh {
     }
     mesh
 }
+/// The mesh a glyph is picked by (P2.3): its bounding box. For a drone that
+/// fills the gaps between its thin arms, so the whole symbol is a target, and
+/// stops at the arms' reach, so nothing outside the symbol is.
+pub fn pick_proxy(mesh: &Mesh) -> Mesh {
+    let aabb = mesh.compute_aabb().expect("glyph meshes have positions");
+    let half = Vec3::from(aabb.half_extents);
+    Mesh::from(Cuboid::new(half.x * 2.0, half.y * 2.0, half.z * 2.0))
+        .translated_by(Vec3::from(aabb.center))
+}
+
 pub fn setup_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    let drone = drone_mesh();
+    let drone_proxy = pick_proxy(&drone);
     commands.insert_resource(MarkerAssets {
-        drone: meshes.add(drone_mesh()),
+        drone: meshes.add(drone),
+        drone_proxy: meshes.add(drone_proxy),
         station: meshes.add(Cuboid::new(1.2, 1.2, 1.5)),
         track: meshes.add(Sphere::new(1.0).mesh().ico(0).unwrap()),
         truth: meshes.add(Sphere::new(0.85).mesh().uv(12, 8)),
@@ -142,6 +159,7 @@ pub struct MarkerEntity {
     transform: &'static mut Transform,
     visible: &'static mut Visibility,
     mesh: &'static mut Mesh3d,
+    proxy: &'static mut SimplifiedMesh,
     material: &'static mut MeshMaterial3d<HologramMaterial>,
 }
 
@@ -194,8 +212,9 @@ pub fn sync_marker_meshes(
                 &mut assets,
                 &mut materials,
             );
+            let proxy = SimplifiedMesh(assets.proxy_for(&m));
             let entity = commands
-                .spawn((marker.key, Mesh3d(m), MeshMaterial3d(mat), t, v))
+                .spawn((marker.key, Mesh3d(m), proxy, MeshMaterial3d(mat), t, v))
                 .id();
             index.entities.insert(marker.key, entity);
         }
@@ -230,6 +249,7 @@ pub fn sync_marker_meshes(
         current.transform.set_if_neq(t);
         current.visible.set_if_neq(v);
         if current.mesh.0 != m {
+            current.proxy.0 = assets.proxy_for(&m);
             current.mesh.0 = m;
         }
         if current.material.0 != mat {
@@ -238,6 +258,17 @@ pub fn sync_marker_meshes(
     }
     index.pose_revision = Some(markers.pose_revision());
     index.view = Some(projection);
+}
+
+impl MarkerAssets {
+    /// The pick proxy for a glyph mesh: the drone's box, or the mesh itself.
+    fn proxy_for(&self, mesh: &Handle<Mesh>) -> Handle<Mesh> {
+        if *mesh == self.drone {
+            self.drone_proxy.clone()
+        } else {
+            mesh.clone()
+        }
+    }
 }
 
 fn presentation(
@@ -464,7 +495,8 @@ mod tests {
         }
         // Four track-quality bands and the three kind colours, at most.
         assert!(max_materials <= 7, "{max_materials} materials");
-        assert!(app.world().resource::<Assets<Mesh>>().len() <= 4);
+        // The four glyph meshes and the drone's pick proxy, shared by all.
+        assert!(app.world().resource::<Assets<Mesh>>().len() <= 5);
     }
 
     /// A paused frame, with the view still, recomputes nothing and writes
@@ -554,6 +586,138 @@ mod tests {
     }
 
     /// Selecting a truth that shares its track's label stays on the truth.
+    /// The drone is picked by its bounding box: a ray through the gap
+    /// between its arms misses the drawn glyph and hits the proxy, and the
+    /// proxy reaches no further than the arms do.
+    #[test]
+    fn a_drone_is_picked_across_its_whole_footprint() {
+        use bevy::picking::mesh_picking::ray_cast::{ray_mesh_intersection, Backfaces};
+        let drone = drone_mesh();
+        let proxy = pick_proxy(&drone);
+        let hit = |mesh: &Mesh, x: f32, y: f32| {
+            let ray = Ray3d::new(Vec3::new(x, y, 10.0), Dir3::NEG_Z);
+            let positions = mesh
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .unwrap()
+                .as_float3()
+                .unwrap();
+            let indices = mesh
+                .indices()
+                .map(|i| i.iter().map(|v| v as u32).collect::<Vec<_>>());
+            ray_mesh_intersection(
+                ray,
+                &bevy::math::Affine3A::IDENTITY,
+                positions,
+                None,
+                indices.as_deref(),
+                None,
+                Backfaces::Cull,
+            )
+            .is_some()
+        };
+        // Between the arms, outside the body.
+        assert!(!hit(&drone, 0.6, 0.0), "the gap is not in the drawn glyph");
+        assert!(hit(&proxy, 0.6, 0.0), "the gap is not in the proxy");
+        // The arm tips are the reach: just past them, neither.
+        let reach = Vec3::from(drone.compute_aabb().unwrap().half_extents);
+        assert!(!hit(&proxy, reach.x + 0.01, 0.0));
+        assert!(!hit(&drone, reach.x + 0.01, 0.0));
+    }
+
+    /// Each marker carries its pick proxy: a drone its box, the rest their
+    /// own mesh.
+    #[test]
+    fn markers_carry_their_pick_proxies() {
+        let mut app = test_app(ReplayState::new(Some(walking(4))));
+        app.update();
+        app.update();
+        let mut query = app
+            .world_mut()
+            .query::<(&EntityKey, &Mesh3d, &SimplifiedMesh)>();
+        let rows: Vec<_> = query
+            .iter(app.world())
+            .map(|(key, mesh, proxy)| (key.kind(), mesh.0 == proxy.0))
+            .collect();
+        assert!(!rows.is_empty());
+        for (kind, same) in rows {
+            assert_eq!(
+                same,
+                kind != MarkerKind::Node,
+                "{kind:?}: drones use the box, others their mesh"
+            );
+        }
+    }
+
+    /// A node that lands (stops being mobile) changes glyph, and its pick
+    /// proxy changes with it.
+    #[test]
+    fn a_marker_that_changes_glyph_changes_proxy() {
+        let frames = (0..2)
+            .map(|f| {
+                serde_json::json!({"timestamp_s": f as f64, "tracks": [], "truths": [],
+                    "nodes": [{"node_id": "n", "position": [0.0, 0.0, 20.0], "velocity": [0.0, 0.0, 0.0],
+                               "is_mobile": f == 0}]})
+            })
+            .collect();
+        let mut app = test_app(ReplayState::new(Some(document(frames))));
+        app.update();
+        app.update();
+        let pair = |app: &mut App| {
+            let mut query = app.world_mut().query::<(&Mesh3d, &SimplifiedMesh)>();
+            let (mesh, proxy) = query.single(app.world()).unwrap();
+            (mesh.0.clone(), proxy.0.clone())
+        };
+        let (drone, drone_proxy) = pair(&mut app);
+        assert_ne!(drone, drone_proxy, "a drone is picked by its box");
+        seek(&mut app, 1);
+        let (station, station_proxy) = pair(&mut app);
+        assert_ne!(station, drone, "the glyph did not change");
+        assert_eq!(station_proxy, station, "the proxy did not follow the glyph");
+    }
+
+    #[test]
+    fn a_selection_on_a_paused_frame_gets_its_details_at_once() {
+        let mut app = test_app(ReplayState::new(Some(walking(10))));
+        app.update();
+        app.update();
+        let key = app
+            .world()
+            .resource::<CurrentRuntimeMarkers>()
+            .key_of(MarkerKind::Track, "same-id")
+            .unwrap();
+        // As the picker selects: details empty, to be filled from the frame.
+        let marker = app
+            .world()
+            .resource::<CurrentRuntimeMarkers>()
+            .get(key)
+            .unwrap()
+            .clone();
+        let epoch = app.world().resource::<CurrentRuntimeMarkers>().epoch();
+        app.world_mut().resource_mut::<SelectionState>().selected =
+            Some(crate::picking::selection_of(&marker, epoch));
+        // Paused: the frame does not move.
+        app.update();
+        let details = app
+            .world()
+            .resource::<SelectionState>()
+            .selected
+            .clone()
+            .unwrap()
+            .details;
+        let crate::state::SelectionDetails::Track(track) = details else {
+            panic!("not a track: {details:?}");
+        };
+        assert_eq!(
+            track.measurement_std_m,
+            Some(0.0),
+            "details not resolved while paused"
+        );
+        // Stable from there: resolving does not re-trigger itself.
+        let resolved = app.world().resource::<SelectionState>().selected.clone();
+        app.update();
+        assert_eq!(app.world().resource::<SelectionState>().selected, resolved);
+    }
+
     #[test]
     fn a_selected_truth_is_not_resolved_to_its_track() {
         let mut app = test_app(ReplayState::new(Some(walking(10))));

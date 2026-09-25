@@ -126,6 +126,7 @@ fn render(
                 points: ground.to_vec(),
                 elevated: points.to_vec(),
                 output: probes.clone(),
+                ..Default::default()
             }),
         },
     )

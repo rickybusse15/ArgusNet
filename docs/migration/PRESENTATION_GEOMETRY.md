@@ -109,14 +109,21 @@ the interpolated glyph. A new overlay toggle, **Trails**, defaults to on.
 | Geometry | Material | Depth | Faces |
 | --- | --- | --- | --- |
 | Sensor volumes, zone walls | the existing additive hologram | tested, not written | volumes cull back faces; walls are double-sided |
-| Trail ribbons | unlit, alpha-blended, vertex colour | tested, not written | both |
+| Trail ribbons | unlit, additive, vertex colour (alpha-blended until P2.3; see below) | tested, not written | both |
 | Range rings | unlit, alpha-blended lines | tested, not written | n/a |
 
-Additive geometry commutes, so ordering between volumes and walls does not
-matter. Nothing here writes depth, so none of it hides what is behind it.
-Everything carries `PresentationOnly`, which P2.3's picking will exclude.
-Today's picker is the 18-pixel marker proximity search, which never looked at
-these entities.
+Additive geometry commutes, so ordering between volumes, walls, trails and
+the glyphs does not matter. Nothing here writes depth, so none of it hides
+what is behind it. Everything carries `PresentationOnly`, which P2.3's
+picking excludes.
+
+**Corrected in P2.3.** As first committed, trails were alpha-blended, and the
+claim above was not true of them. At a trail's head the ribbon and the
+additive glyph sort by almost the same distance. Blend-then-add and
+add-then-blend give different pixels, and an unrelated mesh entering the
+world could flip the order. P2.3's pixel-exact ring probes found this: a
+ring hidden under the terrain changed the drone's centre pixel. Trails are
+now additive too.
 
 **No volume encloses the camera.** A volume whose region contains the camera
 eye is hidden outright. For a convex volume (a sphere, or a sector up to

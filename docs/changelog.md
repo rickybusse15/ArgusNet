@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — Picking and selection (P2.3)
+
+- Clicks pick by ray against the scene's meshes, not by an 18-pixel radius:
+  the nearest visible marker under the pointer, and nothing when terrain or
+  a building is in front of it. Sensor volumes, trails and zone walls never
+  take a pick. A drone is picked across its whole glyph, including the gaps
+  between its arms.
+- In split view only the main viewport picks; a pointer over the UI never
+  reaches the world.
+- The selected marker has an amber ring and the hovered one a blue ring,
+  hidden by terrain like the glyph itself.
+- Tab and Shift+Tab step through the shown markers, Escape clears, and the
+  inspector lists every shown entity by kind.
+- Fixed: a click on a paused frame showed empty details until the frame
+  moved.
+- Fixed: picks went through the ground. The committed terrain is wound
+  facing down (recorded in KNOWN_GAPS), so the picker now tests both faces
+  of terrain and buildings.
+- Trails are additive, like every other overlay, so their draw order can no
+  longer flip.
+
 ## Unreleased — Sensor, zone and trail geometry (P2.2)
 
 - Fields of view are persistent meshes: the region stage 6 actually accepts,

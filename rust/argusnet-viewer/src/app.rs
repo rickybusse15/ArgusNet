@@ -204,6 +204,11 @@ fn run_inner(
         .init_resource::<crate::sensor_volumes::RangeRings>()
         .init_resource::<crate::trail_ribbons::TrailRibbons>()
         .init_resource::<crate::zone_walls::ZoneWalls>()
+        .init_resource::<crate::picking::PointerInput>()
+        .init_resource::<crate::picking::PickGeneration>()
+        .init_resource::<crate::picking::HoverState>()
+        .init_resource::<crate::picking::PickLog>()
+        .init_resource::<crate::selection_outline::SelectionRings>()
         .insert_resource(SimulationRunner::default())
         .insert_resource(ProjectedZoneBadges::default())
         .insert_resource(MissionOverlaySettings::default())
@@ -272,6 +277,7 @@ fn run_inner(
                 advance_playback_system,
                 keyboard_playback_system,
                 sync_split_viewports_system,
+                crate::picking::pointer_from_window_system,
             )
                 .chain()
                 .in_set(ViewerSet::Input),
@@ -301,9 +307,17 @@ fn run_inner(
             )
                 .chain()
                 .in_set(ViewerSet::Presentation),
-            pick_runtime_marker_system.in_set(ViewerSet::Picking),
+            // Ray-cast picking, hover and keyboard selection (P2.3).
+            (
+                crate::picking::tag_pick_occluders_system,
+                crate::picking::pick_world_system,
+                crate::picking::keyboard_selection_system,
+            )
+                .chain()
+                .in_set(ViewerSet::Picking),
             // Immediate-mode overlays, each gated on its own toggle.
             (
+                crate::selection_outline::sync_selection_rings,
                 draw_runtime_overlays_system,
                 mission_zones::draw_mission_zones_system,
                 build_projected_badges_system,
@@ -909,10 +923,15 @@ pub fn sync_current_markers_system(
     // Checked through `bypass_change_detection` so an unchanged frame does not
     // mark the resource changed for every reader downstream.
     let change = markers.bypass_change_detection().apply(&replay_state);
-    if change == PresentationChange::default() {
+    // A new selection is resolved at once, paused or not: before P2.3 a
+    // click on a paused frame showed empty details until the frame moved.
+    let fresh_selection = selection.is_changed();
+    if change == PresentationChange::default() && !fresh_selection {
         return;
     }
-    markers.set_changed();
+    if change != PresentationChange::default() {
+        markers.set_changed();
+    }
 
     // Every frame has its own metrics, whether or not its entities changed.
     if change.frame {
@@ -987,14 +1006,19 @@ pub fn sync_current_markers_system(
     if let Some(details) = details {
         let (label, position, velocity) =
             (marker.label.to_string(), marker.position, marker.velocity);
-        selection.selected = Some(Selection {
+        let resolved = Selection {
             key,
             epoch,
             label,
             position,
             velocity,
             details,
-        });
+        };
+        // Written only when it differs, so resolving does not itself read as
+        // a fresh selection next frame.
+        if selection.selected.as_ref() != Some(&resolved) {
+            selection.selected = Some(resolved);
+        }
     }
 }
 
@@ -1329,67 +1353,6 @@ fn draw_rejection_marker(
                 gizmos.line(p0, p1, style.color);
             }
         }
-    }
-}
-
-fn pick_runtime_marker_system(
-    buttons: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
-    markers: Res<CurrentRuntimeMarkers>,
-    runtime_visibility: Res<RuntimeOverlayVisibility>,
-    mut selection: ResMut<SelectionState>,
-) {
-    if !buttons.just_pressed(MouseButton::Left) {
-        return;
-    }
-
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(cursor_position) = window.cursor_position() else {
-        return;
-    };
-    let Ok((camera, camera_transform)) = camera_query.single() else {
-        return;
-    };
-
-    let mut best_match: Option<(&RuntimeMarker, f32)> = None;
-    for marker in &markers.markers {
-        if !is_marker_visible(marker, &runtime_visibility) {
-            continue;
-        }
-        let Ok(viewport_position) = camera.world_to_viewport(camera_transform, marker.position)
-        else {
-            continue;
-        };
-        let distance = cursor_position.distance(viewport_position);
-        if distance > 18.0 {
-            continue;
-        }
-        match best_match {
-            Some((_, best_distance)) if best_distance <= distance => {}
-            _ => best_match = Some((marker, distance)),
-        }
-    }
-
-    if let Some((marker, _)) = best_match {
-        // Details are empty here and filled in by `sync_current_markers_system`
-        // against the current frame; picking only establishes what is selected.
-        selection.selected = Some(Selection {
-            key: marker.key,
-            epoch: markers.epoch(),
-            label: marker.label.to_string(),
-            position: marker.position,
-            velocity: marker.velocity,
-            details: match marker.kind {
-                MarkerKind::Track => SelectionDetails::Track(TrackDetails::default()),
-                MarkerKind::Truth => SelectionDetails::Truth(TruthDetails::default()),
-                MarkerKind::Node => SelectionDetails::Node(NodeDetails::default()),
-            },
-        });
-    } else {
-        selection.clear();
     }
 }
 

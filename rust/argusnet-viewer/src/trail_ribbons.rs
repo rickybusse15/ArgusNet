@@ -33,8 +33,8 @@
 //! the view's scale moves by more than a quarter. A mesh is rewritten only
 //! when its trail changed, which happens when the source frame does, never
 //! per rendered frame. Trails end at the newest recorded sample, at most one
-//! frame behind the interpolated glyph. They are unlit, alpha-blended,
-//! depth-tested, write no depth, and carry
+//! frame behind the interpolated glyph. They are unlit and additive (alpha
+//! scales the light they add), depth-tested, write no depth, and carry
 //! [`crate::sensor_volumes::PresentationOnly`], which picking excludes.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -355,6 +355,22 @@ pub fn needs_rescale(cut: Option<f32>, scale: f32) -> bool {
     cut.is_none_or(|cut| (scale / cut - 1.0).abs() > 0.25)
 }
 
+/// The ribbons' shared material: unlit vertex colour, both faces.
+///
+/// Additive, like the glyphs, volumes and walls, so every transparent layer
+/// commutes. Blended, the ribbon's order against the glyph it ends at hung
+/// on near-equal sort distances, and an unrelated mesh could flip it (P2.3).
+pub fn ribbon_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::WHITE,
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    }
+}
+
 #[derive(Component, Debug, Clone, Copy)]
 pub struct TrailRibbon {
     pub key: EntityKey,
@@ -427,16 +443,7 @@ pub fn sync_trail_ribbons(
     }
     let material = ribbons
         .material
-        .get_or_insert_with(|| {
-            materials.add(StandardMaterial {
-                base_color: Color::WHITE,
-                unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                double_sided: true,
-                cull_mode: None,
-                ..default()
-            })
-        })
+        .get_or_insert_with(|| materials.add(ribbon_material()))
         .clone();
     let z_range = ribbons
         .store
@@ -689,6 +696,16 @@ mod tests {
         // 0.2 s is 80 s, one sample a frame, inside the horizon for 300.
         let trail = trail_after(moving(400, 0.2, |_| 30.0), 400);
         assert_eq!(trail.len(), MAX_SAMPLES_PER_TRAIL);
+    }
+
+    /// Every presentation layer is additive, so none of their draw orders
+    /// matter; a blended ribbon made the order at its head visible.
+    #[test]
+    fn ribbons_are_additive_like_every_other_layer() {
+        let material = ribbon_material();
+        assert_eq!(material.alpha_mode, AlphaMode::Add);
+        assert!(material.unlit);
+        assert_eq!(material.cull_mode, None);
     }
 
     #[test]

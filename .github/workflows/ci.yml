@@ -229,6 +229,12 @@ jobs:
         env:
           ARGUSNET_GPU_TESTS: "1"
         run: cargo test -p argusnet-viewer --test geometry_probes -- --test-threads=1
+      # P2.3: clicks through the real picker against the committed terrain,
+      # and the hover and selection rings, pixel for pixel.
+      - name: Picking and selection probes
+        env:
+          ARGUSNET_GPU_TESTS: "1"
+        run: cargo test -p argusnet-viewer --test picking_probes -- --test-threads=1
 
   rust-lint:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}

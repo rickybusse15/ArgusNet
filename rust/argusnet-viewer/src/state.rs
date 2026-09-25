@@ -157,6 +157,9 @@ pub struct ViewerUiState {
     pub selected_timeline_frame: Option<usize>,
     pub focused_entity_label: Option<String>,
     pub map_layer_preset: MapLayerPreset,
+    /// A selection the inspector's entity list asks for, applied by
+    /// `picking::keyboard_selection_system` (the UI only reads the selection).
+    pub select_request: Option<crate::picking::SelectRequest>,
 }
 
 impl Default for ViewerUiState {
@@ -167,6 +170,7 @@ impl Default for ViewerUiState {
             selected_timeline_frame: None,
             focused_entity_label: None,
             map_layer_preset: MapLayerPreset::Operator,
+            select_request: None,
         }
     }
 }

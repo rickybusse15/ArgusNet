@@ -377,6 +377,7 @@ fn drawer_mission_content(
     section_safety_alerts(ui, replay_state, mission_zones);
     section_targets(ui, replay_state);
     section_selection(ui, selection, replay_state.max_stale_steps());
+    section_entity_list(ui, markers, runtime_visibility, selection, ui_state);
     ui.separator();
     section_runtime_overlays(ui, runtime_visibility, mission_overlay, Some(raster_status));
     ui.separator();
@@ -1961,13 +1962,71 @@ fn section_track_summary(
 }
 
 // ---------------------------------------------------------------------------
+// Section: Entity list (P2.3)
+// ---------------------------------------------------------------------------
+
+/// Every shown marker, by kind: the list path to a selection, equivalent to
+/// clicking one. Rows are keyed, so a track and a truth that share an id are
+/// two rows under two headings. The click becomes a request the picking
+/// stage applies; this panel only reads the selection.
+fn section_entity_list(
+    ui: &mut egui::Ui,
+    markers: &CurrentRuntimeMarkers,
+    runtime_visibility: &RuntimeOverlayVisibility,
+    selection: &SelectionState,
+    ui_state: &mut ViewerUiState,
+) {
+    let selected = selection.selected.as_ref().map(|s| s.key);
+    let shown: Vec<_> = markers
+        .markers
+        .iter()
+        .filter(|marker| crate::app::is_marker_visible(marker, runtime_visibility))
+        .collect();
+    egui::CollapsingHeader::new(format!("Entities ({} shown)", shown.len()))
+        .id_salt("entity_list")
+        .show(ui, |ui| {
+            if shown.is_empty() {
+                ui.label("Nothing shown: turn on tracks, truths or nodes.");
+                return;
+            }
+            ui.small("Tab / Shift+Tab step through these; Esc clears.");
+            egui::ScrollArea::vertical()
+                .max_height(180.0)
+                .id_salt("entity_list_scroll")
+                .show(ui, |ui| {
+                    for (kind, heading) in [
+                        (MarkerKind::Node, "Platforms"),
+                        (MarkerKind::Track, "Tracks"),
+                        (MarkerKind::Truth, "Truth (evaluation)"),
+                    ] {
+                        let rows: Vec<_> = shown.iter().filter(|m| m.kind == kind).collect();
+                        if rows.is_empty() {
+                            continue;
+                        }
+                        ui.label(egui::RichText::new(heading).strong());
+                        for marker in rows {
+                            let is_selected = selected == Some(marker.key);
+                            if ui.selectable_label(is_selected, &*marker.label).clicked() {
+                                ui_state.select_request =
+                                    Some(crate::picking::SelectRequest::Select(marker.key));
+                            }
+                        }
+                    }
+                });
+            if selected.is_some() && ui.button("Clear selection").clicked() {
+                ui_state.select_request = Some(crate::picking::SelectRequest::Clear);
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
 // Section: Selection Inspector
 // ---------------------------------------------------------------------------
 
 fn section_selection(ui: &mut egui::Ui, selection: &SelectionState, max_stale_steps: u32) {
     ui.heading("Selection");
     let Some(selected) = selection.selected.as_ref() else {
-        ui.label("Click a marker to inspect it.");
+        ui.label("Click a marker, press Tab, or pick one from the list.");
         return;
     };
 

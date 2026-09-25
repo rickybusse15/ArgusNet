@@ -156,6 +156,7 @@ fn the_rendered_belief_is_the_cpu_belief() {
             elevated: Vec::new(),
             points: targets.iter().map(|t| t.xy).collect(),
             output: scratch("belief-json").join("probes.json"),
+            ..Default::default()
         },
     );
     let by_label = |label: &str| {
@@ -267,6 +268,7 @@ fn a_late_revision_is_drawn_through_tile_writes_alone() {
             elevated: Vec::new(),
             points,
             output: scratch("late-json").join("probes.json"),
+            ..Default::default()
         },
     );
     eprintln!("rasters {rasters}");
@@ -308,6 +310,7 @@ fn no_belief_renders_as_unavailable_not_as_a_guess() {
             elevated: Vec::new(),
             points: targets.iter().map(|t| t.xy).collect(),
             output: scratch("unavailable-json").join("probes.json"),
+            ..Default::default()
         },
     );
     for (target, probe) in targets.iter().zip(&probes) {
@@ -399,6 +402,7 @@ fn the_land_cover_tint_is_the_runtime_layers_class() {
             elevated: Vec::new(),
             points: points.to_vec(),
             output: scratch("land-cover-json").join("probes.json"),
+            ..Default::default()
         },
     );
     for (p, probe) in points.iter().zip(&probes) {
