@@ -1,5 +1,10 @@
 # Cross-tick state in `run_simulation`
 
+> Scope: this document records compatibility-port behavior and its dated evidence.
+> The final [independently scheduled Rust runtime](../RUST_RUNTIME_ARCHITECTURE.md)
+> is delivered separately by P4.10 in [the delivery plan](DELIVERY_PLAN.md).
+> Do not reinterpret stage-fixture results as full runtime or hardware acceptance.
+
 P4.1 requires this before code moves: *"Identify every mutable
 controller/cache and future-tick side effect before moving code."*
 

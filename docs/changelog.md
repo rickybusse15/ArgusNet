@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Scheduled Rust System Documentation (2026-09-23)
+
+- Complete the architecture audit with world-generation manifests, track identity
+  and expiry, fidelity/time profiles, frame-consistent viewer resources and
+  verified backend recovery requirements.
+- Define the final Rust-only runtime: independently scheduled sensors/tasks,
+  virtual versus live time, lifecycle ownership and bounded communication.
+- Add ADR-009 and planned P4.10a–f while retaining port-parity gates and early
+  P5.0 viewer delivery; reconcile seed documentation with the implemented RNG.
+- Align viewer visual/freshness workflows, performance tracking, hardware
+  qualification, scenario/testing goals and subsystem contracts.
+- Refresh README, usage and contributor guidance; separate runnable current
+  commands from planned controls. This entry records documentation only, not a
+  scheduler implementation, measured speedup or hardware readiness.
+
 ## Unreleased — Runtime command recovery and control checkpoints
 
 - Checkpoint format 2 preserves pause/speed, committed revision, pending controls,

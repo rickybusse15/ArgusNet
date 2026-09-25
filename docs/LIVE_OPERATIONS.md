@@ -3,6 +3,21 @@
 ArgusNet live mode separates sensing platforms, operational targets, fused tracks, and
 simulation truth. Operator mode hides truth by default.
 
+## Current behavior versus target runtime
+
+The launch instructions below describe the existing Python-managed live session
+and Rust streaming viewer, not the planned Rust-only scheduler or aircraft
+control. [The target runtime](RUST_RUNTIME_ARCHITECTURE.md) moves session ownership
+into Rust; [hardware integration](HARDWARE_INTEGRATION.md) separately qualifies
+sensor clocks, autopilot adapters, deadlines and onboard contingencies.
+
+In the target viewer, always distinguish Simulation/SIL/HIL/Live/Replay and
+current versus historical state. Component timestamps/freshness are independent;
+a newly received frame does not make an old map or pose current. Connection loss,
+clock reset, late measurements, recording gaps and command status need explicit
+indicators. Playback pause/seek never pauses or rewinds an external aircraft.
+Read access and a successful telemetry stream grant no control capability.
+
 ## Start a live session
 
 Build the live-enabled Rust binaries once, then run `argusnet live --scene scene.smartscene`.

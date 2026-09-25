@@ -1,5 +1,20 @@
 # State Ownership Map
 
+## Reviewed state and target (2026-09-23)
+
+The reviewed code baseline is `ec9c2f7` (including main through `45390b8`), not a
+claim about the latest remote or release. Rust stage bodies, direct fusion,
+belief publication and replay writing exist. Command recovery/dedup and format-2
+control-state checkpoints exist locally in this baseline. Complete production
+composition, subsystem reset/restore, full causal checkpoints and viewer-worker
+acceptance remain open. No scheduler or aircraft qualification is claimed.
+
+The [Rust-only runtime target](RUST_RUNTIME_ARCHITECTURE.md) now specifies
+independent sensor/task deadlines, one session owner, timestamped measurements,
+bounded workers and separate virtual/live time. P4.10a–f adds this after P4.9;
+P5.0 basic controls ships alongside it. [Hardware integration](HARDWARE_INTEGRATION.md)
+remains a separate S3–S7 qualification track.
+
 This document describes current ArgusNet state ownership. It intentionally uses the current
 `src/argusnet` package, `argusnet-*` Rust crates, and split mapping/localization/planning modules.
 Roadmap contracts belong in the subsystem docs; this file should reflect implemented ownership.
@@ -10,7 +25,7 @@ This file continues to describe implemented behavior; accepted design is not a
 claim that the existing `argusnet-sim` shell and domain ports compose a complete
 mission, or that world-aware live RPCs exist.
 
-## Integration status at `ba163ac`
+## Historical integration status at `ba163ac`
 
 This plan now includes the merged P4.3g landscape builders, P4.6d belief
 publication and P4.8a–c mission/world/stage work. Evidence is recorded in
@@ -140,9 +155,9 @@ inspection documentation.
 
 ## Current Gaps To Keep Visible
 
-- `WorldBeliefQuery` exists as a Rust read-only facade. A unified revisioned mutable
-  belief owner remains planned; the active Python bridge is `CoverageMap`,
-  `WorldMap`, and `MappingState`.
+- `WorldBeliefQuery` and P4.6d immutable belief revisions exist in Rust. Full
+  production composition remains open; the existing Python consumer still uses
+  `CoverageMap`, `WorldMap`, and `MappingState`.
 - Persistent inspection site records, evidence sets, reconstructions, and change records are roadmap
   inspection contracts; the current runtime uses `InspectionPOI`, `POIStatus`, and
   `InspectionEvent`.

@@ -1,5 +1,69 @@
 # Usage Guide
 
+## Start here: current checkout
+
+The installed `argusnet` CLI is currently Python orchestration with Rust
+world/safety/fusion components. The following commands are existing entrypoints;
+the [Rust-only scheduled runtime](RUST_RUNTIME_ARCHITECTURE.md) is a target,
+not an additional available CLI flag. Use Python 3.10+ and the repository-pinned
+Rust toolchain; source installation builds the native library.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+mkdir -p runs
+argusnet sim --map-preset small --duration-s 30 --seed 7 --replay runs/demo.json
+argusnet build-scene --replay runs/demo.json --output runs/demo.smartscene
+cargo run -p argusnet-viewer --release -- --scene runs/demo.smartscene --autoplay
+```
+
+Run from the repository root. Building the viewer needs the platform's graphics
+and windowing dependencies. First builds are not startup-performance measurements.
+For more options use `argusnet --help`, `argusnet sim --help`, and
+`cargo run -p argusnet-viewer -- --help`. The current viewer opens a scene package,
+not a bare replay through a `--replay` argument.
+
+The planned [fidelity/time profiles](SIMULATION_FIDELITY.md) are not current CLI
+flags. More sensor samples or a higher visual tier do not establish a more
+accurate model. Current `target_count` configures scenario objects; a fused track
+is the estimator's output, while an inspection POI identifies required work.
+See [track semantics](FUSION.md#track-identity-lifecycle-and-time-contract-target).
+
+## What is changing in the viewer (planned)
+
+Current `real-world` / `scan-map` / `split` controls below remain current behavior.
+The new [viewer specification](VIEWER_UI.md) introduces Operate/Plan/Review,
+Perspective/Top-down/Section and independent layer presets with flat, restrained
+instrument styling. Those names describe planned UI, not existing CLI values.
+
+Basic Rust-worker Run/Pause/Step/Speed/Reset controls ship before the independent
+scheduler is fully qualified. The target then shows source identity, pose/map/plan
+freshness, pending commands, achieved speed, recording health and history bounds.
+Diagnostics contains rates, deadline misses and queue details. Simulation Step
+processes one control interval; playback on a live source changes only the viewed
+history. Unsupported controls display a reason.
+
+## Interpreting results and common problems
+
+- Default mapping missions have no targets: an empty fused-track list is expected.
+  Use coverage and inspection results, or the target-tracking example below.
+- A scene is the current viewer input; build it from the replay before opening it.
+- Rust/native loading errors require a working pinned toolchain and a successful
+  source install; there is no silent Python world/safety fallback.
+- Current split-view and team-localization graphics describe existing legacy
+  behavior; they are not proof of qualified cooperative SLAM.
+- Existing live sequence/drop counters describe transport delivery. Planned
+  sensor-loss, freshness and recording-gap diagnostics distinguish different
+  causes; do not infer one from another.
+- SIL/HIL or flight capability is not enabled by opening a live stream. See
+  [hardware qualification](HARDWARE_INTEGRATION.md) and [live operations](LIVE_OPERATIONS.md).
+
+When reporting a problem, include command/config, seed, build/commit, OS/hardware,
+source mode, execution profile if available, logs and the replay/scene manifest.
+For performance reports also state cold/warm state, sensor/entity counts and
+viewport/quality; compare quality/error as well as speed.
+
 ## CLI Commands
 
 ### Simulation

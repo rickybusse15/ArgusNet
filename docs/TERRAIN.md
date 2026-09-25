@@ -5,6 +5,61 @@ separation, and caching strategy for terrain access across Python and Rust.
 
 ---
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+`argusnet-world` remains analytic authority. Simulated truth, imported priors
+and observed belief are separate views. Share immutable tiles and build visual
+LOD/meshes in bounded workers; render readiness never gates control or analytic
+queries. Results carry world/frame identity and are discarded after invalidation.
+Sensor capture between physical steps needs a declared sampling model rather
+than incorrectly reusing a pose. No scheduler change permits terrain penetration.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
+## World generation and publication contract (target)
+
+A resolved world-build manifest records generator/version, root seed and derived
+stream version, bounds/resolution, coordinate frame/CRS and altitude datum,
+terrain/obstacle/land-cover parameters, imported asset digests and required
+physical/sensing semantics. Preserve the manifest with replay/checkpoints.
+A seed alone cannot reproduce a world after generator or asset changes.
+
+Generate a complete immutable world revision off the runtime/render thread,
+validate it, then publish atomically. Cancellation leaves the previous revision
+usable. Validate finite samples, bounds, scale, axes, mesh transforms, collision
+semantics and required assets; missing input is an explicit failure/unknown
+region, never fabricated flat terrain. Static replacement creates a new world
+revision; moving objects/weather have timestamped state and model identities,
+not unrecorded edits to the static asset.
+
+Analytic geometry, collision, sensor occlusion and visual meshes derive from
+one attributed world description, with distinct capability-filtered views.
+Render LOD must not change analytic queries. Where an imported visual surface
+has no supported collision/sensing representation, identify it as visual-only
+and reject profiles requiring physical interaction with it. Declared semantic
+layers distinguish optical opacity, physical occupancy and traversability;
+one material flag must not silently stand in for all three.
+
+Tile generation uses stable global coordinates/IDs and independent random
+streams. Neighbor-dependent operations declare halo/border inputs. Building in
+a different tile order or worker count must not change logical output; changing
+tile layout may change encoding but must preserve sampled world semantics.
+Preserve ADR-006's explicit numeric exceptions and seed versioning during ports.
+
+Cache by generator/config/input-content identity plus tile/layer/LOD/format,
+not filename or seed alone. Validate actual output content hashes; a revision
+counter is not a checksum. Analytic and render caches have separate bounded
+budgets. Frame/origin changes invalidate only affected representations and do
+not change physical coordinates. Retain old revisions until readers release
+them, within declared lifecycle limits.
+
+Acceptance: cold/warm/rebuilt worlds, cancellation during load, corrupt/missing
+assets, altered input with the same seed, different tile build order, seam
+queries, render-LOD/query invariance and replay against the wrong world digest.
+These are P4.3/P4.8/P5.1 completion requirements, not evidence they already pass.
+
 ## 1. Role Separation: Visual vs Analytic Terrain
 
 The codebase already maintains two terrain representations. This section makes

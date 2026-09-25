@@ -4,6 +4,19 @@ This document defines ArgusNet mission structure for mapping, localization, insp
 coordination, and safe return. Multi-drone behavior is a coordination tool for map and inspection
 work.
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+Mission configuration declares execution model, sensor timing capabilities,
+freshness requirements, resource limits and fallback policy alongside intent.
+Task changes invalidate relevant plans instead of rerunning every planner each
+physics step. Operator intent travels through acknowledged commands; the viewer
+owns no mission state. A scenario's compatibility profile is separate from a
+qualified hardware profile and does not authorize real actuation.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## Mission Inputs
 
 ```text

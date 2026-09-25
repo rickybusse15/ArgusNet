@@ -1,5 +1,14 @@
 # Architecture Decisions — ArgusNet
 
+## Current execution decision
+
+[ADR-009](adr/009-independently-scheduled-runtime.md) adopts independently
+scheduled Rust execution, retaining ADR-007's stage order for port compatibility.
+See [the target architecture](RUST_RUNTIME_ARCHITECTURE.md) and
+[hardware boundaries](HARDWARE_INTEGRATION.md). Earlier decisions below retain
+their historical context; references to a gRPC response mean the external path,
+not a requirement to route in-process Rust fusion through a server.
+
 This document records three explicit decisions that resolve contradictions identified in
 `docs/CRITICAL_REVIEW.md`. All subsequent implementation work cites these decisions as
 authoritative.
@@ -33,8 +42,8 @@ designated as:
 
 ### Consequences
 
-- Any code reading fused object state must read from the Rust gRPC response, not
-  from a Python `ManagedTrack`.
+- Any code reading fused object state must read from `argusnet-core` output,
+  directly in Rust or through gRPC externally, not a Python `ManagedTrack`.
 - `test_fusion_advanced.py` tests are correctness reference tests, not integration tests.
 - The Python filter may be removed in a future cleanup phase after test coverage migrates to Rust.
 
@@ -50,7 +59,6 @@ designated as:
 > or interpret the historical phase numbering as permission to bypass Rust safety.
 > See [the protocol plan](migration/ARCHITECTURE_AND_PROTOCOLS.md) and
 > [next delivery](CAPABILITY_DELIVERY.md).
-
 
 **Date:** 2026-03-22
 **Status:** Accepted

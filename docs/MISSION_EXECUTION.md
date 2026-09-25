@@ -6,6 +6,20 @@ The purpose of this document is to prevent ArgusNet from becoming a set of disco
 
 ---
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+One Rust session owns subsystem lifecycle and one mission executive owns task
+transitions. Independent rates communicate through explicit dependencies, not a
+second world inside the viewer. Apply acknowledged intent at safe boundaries;
+mission dwell, reserve and timeout logic use elapsed source time. Reset rebuilds
+all subsystem state; restore validates complete causal state before swapping it.
+Control/safety continue independently of slow planning. Onboard execution and
+contingencies remain available after ground disconnection.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## 1. Purpose
 
 The mission execution subsystem answers:

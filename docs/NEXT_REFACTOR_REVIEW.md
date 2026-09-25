@@ -1,5 +1,11 @@
 # Next refactor: finish Rust ownership, then improve the model
 
+> Historical source review: retain its dated findings as evidence, not a live
+> completion list. The 2026-09-23 agreed execution target is
+> [RUST_RUNTIME_ARCHITECTURE.md](RUST_RUNTIME_ARCHITECTURE.md), with P4.10 packages
+> in [the delivery plan](migration/DELIVERY_PLAN.md). Current command/control
+> fixes and remaining lifecycle gaps are distinguished in [KNOWN_GAPS.md](KNOWN_GAPS.md).
+
 Review of checkout `388f74b`, 2026-09-19. This is a source-based proposal, not
 an implementation or a fresh performance baseline. Existing local edits to
 `VIEWER_UI.md` and the scene-manifest backup were left untouched.

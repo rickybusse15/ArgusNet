@@ -6,6 +6,20 @@ ArgusNet should not assume that a prior map is available in physical deployments
 
 ---
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+The Rust belief owner consumes timestamped evidence in bounded batches and
+publishes immutable revisions with dirty tiles, provenance and as-of times.
+Slower mapping must not discard intervening observations or count repeated
+presentation frames as new coverage. Share unaffected tiles; invalidate only
+routes/localization queries affected by changed regions. Meshing is a background
+consumer, not a prerequisite for analytic map updates. Pending evidence belongs
+in checkpoints; full 3D occupancy/reconstruction remains a separate capability.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## 1. Purpose
 
 The mapping subsystem turns sensor observations into a continuously updated belief about the world.

@@ -1,5 +1,11 @@
 # Viewer feature integration and interaction contract
 
+**Design alignment updated: 2026-09-23.** The
+[independently scheduled Rust runtime](RUST_RUNTIME_ARCHITECTURE.md) and
+[hardware qualification](HARDWARE_INTEGRATION.md) govern source timing,
+freshness and control authority. These remain target requirements, not a claim
+that the current viewer implements the new UI or scheduler.
+
 ## Status, sources and analysis
 
 Planned UI behavior, not a claim of implementation. The supplied autonomous
@@ -55,6 +61,25 @@ orientation in a small context view and identify clipped versus absent geometry.
 Top-down overlap is never evidence of a collision: selecting a potential conflict
 opens vertical clearance and a time-indexed Section. Picking in every projection
 resolves the same typed object and full 3D coordinates.
+
+## Timing, freshness and visual delivery
+
+A source snapshot selects compatible committed revisions; its components need
+not have the same acquisition time. Operate shows pose/map/plan freshness and
+integrity; Review aligns capture, delivery, decisions and gaps on source time;
+Diagnostics owns rate/deadline/queue detail. The source bar distinguishes paused
+simulation, paused historical playback and a live vehicle still executing.
+
+Keep the flat typography-led visual design, shared 3D entity selection, one
+timeline, and independent projection/layer controls. Unknown occupancy,
+uncertainty and safety semantics survive every quality tier. Source capabilities
+control whether Run/Step/Seek or control intent is available, not the selected
+workspace. A stale worker result cannot replace a newer reconstruction or route.
+
+Deliver P5.0 basic controls early, then incremental P2 visual layers and P4.10
+freshness/overload states. Acceptance includes delayed sensor evidence, stale map
+with fresh pose, pending/rejected command, exhausted history, incomplete recording,
+clock reset, source disconnect and a historical HIL view with no actuation.
 
 ## 2. Feature-to-view matrix
 

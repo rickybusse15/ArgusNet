@@ -1,5 +1,25 @@
 # Contributing Guide
 
+## Current and target runtime
+
+Start with [state ownership](docs/STATE_OWNERSHIP.md) for implemented behavior and
+[the Rust runtime target](docs/RUST_RUNTIME_ARCHITECTURE.md) for the end state.
+[ADR-009](docs/adr/009-independently-scheduled-runtime.md) introduces independently
+scheduled execution after the compatibility port; do not silently change legacy
+causal order while moving code. Python remains supported offline tooling.
+
+Each runtime PR names its P package, state owner, input/output timestamps,
+execution model, resource/loss policy and tests. Preserve acquisition time and
+component freshness; do not derive domain dt from render frames. Never hold
+shared runtime locks across I/O or let worker completion order alter deterministic
+results. Profile before adding threads or replacing data structures.
+
+Keep implementation, local verification, pushed status, remote checks and release
+status separate. Update runnable usage only for implemented interfaces. New
+sensor/actuation adapters require [hardware qualification](docs/HARDWARE_INTEGRATION.md),
+not just a desktop test. Documentation-only changes need link/consistency checks;
+code changes run the relevant checks in [local CI](docs/LOCAL_CI.md).
+
 ## Architecture Governance
 
 All changes must follow the architecture update plan. See `docs/` for subsystem documentation.
@@ -79,16 +99,12 @@ argusnet sim --duration-s 60        # Run simulation
 
 ## Crate / Module Map
 
-See `docs/architecture.md` for the current map. The planned evolution (docs/STATE_OWNERSHIP.md) adds:
-- `argusnet-world` — authoritative terrain, obstacle and visibility queries
-- `argusnet-native` — Python world/safety bindings (built by `pip install -e .`)
-- `argusnet-core` — current fused object-state authority
-- `argusnet-server` / `argusnet-proto` — current gRPC service boundary
-- `argusnet-viewer` — current replay/scene viewer
-- `mapping-engine` — planned dense belief-world updates
-- `localization-engine` — planned map-relative pose recovery
-- `trajectory-engine` — feasible path generation
-- `safety-engine` — constraint enforcement
-- `planner-engine` — cooperative role-based planning
-- `indexing-engine` — planned spatial memory and retrieval
-- `eval-suite` — metrics and benchmarking
+See [architecture](docs/architecture.md) for current components and
+[the target ownership table](docs/RUST_RUNTIME_ARCHITECTURE.md#2-runtime-modules-and-owned-state)
+for their final roles. Reuse `argusnet-world`, `argusnet-core`,
+`argusnet-localization`, `argusnet-sensing`, `argusnet-mapping`,
+`argusnet-planning`, `safety-engine`, `argusnet-sim` and `argusnet-replay`.
+`argusnet-viewer` owns presentation; `argusnet-server`/`argusnet-proto` own external
+transport. `argusnet-native` supports transitional/offline Python consumers.
+Do not create duplicate `*-engine` crates just because an older roadmap used a
+placeholder name. New crate extraction needs a demonstrated ownership boundary.
