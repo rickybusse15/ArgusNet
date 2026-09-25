@@ -6,6 +6,19 @@ Indexing is what turns ArgusNet from a one-time mission system into a persistent
 
 ---
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+Index immutable evidence and spatial revisions asynchronously with source time,
+frames, provenance and content identity. Preserve durable references separately
+from replaceable display snapshots. Expose ingestion/retention lag and evidence
+gaps; a pending index update is not proof that evidence is absent. Bound queues,
+record cancellations, and make recorder pressure explicit. Checkpoint state and
+retrievable replay products are different persistence contracts.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## 1. Purpose
 
 The indexing subsystem answers:

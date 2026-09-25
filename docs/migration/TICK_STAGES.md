@@ -1,5 +1,10 @@
 # P4.8c: the first tick stage bodies
 
+> Scope: this document records compatibility-port behavior and its dated evidence.
+> The final [independently scheduled Rust runtime](../RUST_RUNTIME_ARCHITECTURE.md)
+> is delivered separately by P4.10 in [the delivery plan](DELIVERY_PLAN.md).
+> Do not reinterpret stage-fixture results as full runtime or hardware acceptance.
+
 **Status:** delivered 2026-09-17. The first stage bodies wired into the tick, after
 P4.8a (the mission machine, stage 9) and P4.8b (`TickWorld` and the truth
 capability).

@@ -6,6 +6,20 @@ web frontend, no database, no user accounts, and no cloud service. This document
 describes the actual trust boundaries, what is enforced at each of them, and what
 is deliberately left as the operator's responsibility.
 
+## Planned Rust runtime and hardware boundary
+
+The [runtime target](docs/RUST_RUNTIME_ARCHITECTURE.md) moves production session
+ownership into Rust; this does not weaken the current file/transport protections.
+[Hardware integration](docs/HARDWARE_INTEGRATION.md) adds separately qualified
+source clocks/epochs, command capabilities and onboard authority. Those are
+requirements, not security controls claimed to be implemented today.
+
+A source ID or clock conversion does not authenticate a device. Read access,
+replay viewing and telemetry ingestion grant no actuation authority. Future
+command adapters need authenticated capabilities, expiry, acknowledgement and
+current safety validation independently of the observation stream. Queue budgets,
+explicit loss reporting and stale-epoch rejection apply at external boundaries.
+
 ## Threat model
 
 The realistic attack surface is:

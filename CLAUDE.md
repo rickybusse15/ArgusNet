@@ -2,7 +2,12 @@
 
 ## Project
 
-Civilian 3D world-modeling platform. Python simulation + Rust sensor-fusion service + Bevy 3D viewer.
+Civilian 3D world-modeling platform. Current entry path: Python simulation + Rust world/safety/fusion + Bevy viewer. Target: Rust-only production execution with independently scheduled subsystems; Python remains optional offline tooling.
+
+Read `docs/RUST_RUNTIME_ARCHITECTURE.md` and ADR-009 for the target, and
+`docs/STATE_OWNERSHIP.md` for implemented versus planned behavior. Preserve the
+legacy stage order during port acceptance; the independent scheduler is P4.10.
+Hardware timing and actuation require the separate S3–S7 qualification gates.
 
 ## Structure
 
@@ -27,7 +32,7 @@ python3 -m pytest tests/ -q         # Python tests
 
 - **Frozen dataclasses** for shared runtime/replay state (`src/argusnet/core/types.py`)
 - **gRPC boundary**: Python calls Rust via `TrackingService.ingest_frame()`
-- **Replay-as-contract**: replay JSON is the interface between simulation and viewer
+- **Replay-as-contract**: replay JSON remains the persisted interchange contract; the target in-process viewer consumes immutable snapshots, not a second mutable simulation
 - **Deterministic simulation** for fixed seed + config
 - **Meter-based coordinates** throughout (XY local projected, Z above datum)
 - **Radians** for angles internally (CLI flags labeled when degrees)

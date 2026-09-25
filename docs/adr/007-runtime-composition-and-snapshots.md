@@ -1,5 +1,10 @@
 # ADR-007: Deterministic Runtime Composition and Snapshot Boundaries
 
+> Extended by [ADR-009](009-independently-scheduled-runtime.md), 2026-09-23.
+> The fixed stage order below remains the compatibility-port contract. The final
+> runtime uses independently scheduled subsystems while preserving one owner,
+> explicit causal order, complete checkpoints and coherent committed publication.
+
 **Status:** accepted (architecture plan; implementation staged)
 **Date:** 2026-09-08
 **Supersedes:** none; operationalizes ADR-005 and retains ADR-006

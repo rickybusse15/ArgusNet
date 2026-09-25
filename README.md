@@ -1,483 +1,176 @@
 # ArgusNet
 
-**ArgusNet: world models for autonomous aerial mapping, inspection, localization, and spatial memory.**
+**World models for civilian aerial mapping, inspection, localization and spatial memory.**
 
-ArgusNet is an open-source platform for building and using **world models** from drone observations. It is designed to support **search, mapping, inspection, localization, and structured data collection** in simulation and authorized real-world research environments.
+ArgusNet combines simulation, sensing, localization, mapping, planning and replay
+so a mission can establish where a vehicle is, what it has observed, what remains
+uncertain and what it should inspect next. Its intended uses include research,
+infrastructure inspection, survey, environmental observation and search coverage.
 
-Rather than treating a drone flight as a one-time stream of sensor data, ArgusNet treats each mission as part of a growing spatial understanding of the environment. The platform is intended to help answer four core questions:
+## Current status
 
-- **Where am I?**
-- **What does the world look like?**
-- **What have I already seen?**
-- **Where should I go next?**
+The current supported entry path uses Python mission orchestration with Rust
+world queries, safety and sensor fusion, plus a native Bevy viewer. Rust also has
+ported sensing/localization/planning components, belief revisions, simulation
+stages and replay writing. Complete Rust production composition and viewer-worker
+integration remain migration work.
 
-ArgusNet combines environment modeling, sensing, localization, mapping, indexing, planning, and evaluation into one modular system. It is intended for research, education, infrastructure inspection, survey workflows, benchmarking, and controlled field testing.
+The documentation was aligned on **2026-09-23**, using checkout `ec9c2f7` as the
+implementation baseline. This is not a claim about the latest remote release.
+[State ownership](docs/STATE_OWNERSHIP.md) and [known gaps](docs/KNOWN_GAPS.md)
+distinguish implemented libraries, integrated behavior and planned capabilities.
 
-## Overview
+## Run the current system
 
-ArgusNet is built around the idea that an aerial system should not only sense the world, but also remember it, organize it, and use that memory to make better decisions over time.
-
-The long-term goal is a simulation-first drone world-modeling platform that can:
-
-- build structured representations of environments from aerial observations
-- localize relative to both live sensor streams and prior world models
-- index and retrieve previous observations, landmarks, and map regions
-- plan search, mapping, and inspection actions based on uncertainty and coverage
-- generate replayable, measurable mission outputs for training and evaluation
-
-## Current Repository Status
-
-This repository currently contains the foundations of that broader vision, including:
-
-- Python-based simulation, terrain, replay, export, and mission tooling
-- Rust sensor-fusion and filtering services with gRPC boundaries
-- Environment-aware observation synthesis with terrain, obstacle, and line-of-sight reasoning
-- Replay-driven visualization and scene packaging workflows
-- CLI and test infrastructure for simulation and evaluation workflows
-
-In other words: **the current codebase is a working prototype and foundation for the larger ArgusNet architecture described below**.
-
-## Design Principles
-
-- **World-model first** — the environment is a structured, queryable internal representation, not just a background map
-- **Localization-aware** — the platform must continuously estimate where the drone is relative to both local motion and persistent maps
-- **Memory and indexing** — observations should be stored, retrieved, compared, and reused across missions
-- **Simulation-first** — all major capabilities should work in realistic simulation before field use
-- **Modular architecture** — sensing, localization, mapping, planning, and evaluation should remain separable
-- **Human-supervised use** — real-world deployment should remain controlled, reviewable, and safety-bounded
-
-## Primary Use Cases
-
-ArgusNet is intended to support:
-
-- aerial mapping
-- infrastructure and roof inspection
-- construction progress capture
-- environmental survey
-- agricultural observation
-- search coverage of unobserved regions
-- repeated inspection over time
-- synthetic dataset generation
-- localization and world-model benchmarking
-
-## Safety and Scope Boundary
-
-ArgusNet is intended for:
-
-- mapping
-- inspection
-- localization
-- survey
-- scene understanding
-- coverage planning
-- authorized research and field testing
-
-ArgusNet is **not** intended for:
-
-- weaponization
-- unsafe autonomous operation
-- privacy-invasive monitoring
-- cyber intrusion or takeover
-- harmful pursuit workflows
-- any deployment that violates applicable aviation, privacy, or local laws
-
-Users are responsible for ensuring that any real-world use complies with all applicable laws, regulations, permissions, and safety requirements.
-
-## System Vision
-
-ArgusNet should support:
-
-- simulated and imported environments
-- terrain and obstacle-aware world modeling
-- drone sensor simulation and sensor ingestion
-- localization through GNSS, inertial, visual, and map-relative methods
-- mapping through occupancy, elevation, semantic, and inspection layers
-- persistent indexing of keyframes, landmarks, and observations
-- search and coverage planning
-- inspection route planning and repeat capture
-- replay, benchmarking, and evaluation
-- synthetic data generation for training perception and navigation systems
-
-## Running Benchmarks
-
-Fast Python smoke benchmarks and the canonical scenario harness are available from the CLI:
+Use Python 3.10+ and the repository-pinned Rust toolchain. Source installation
+builds the native world/safety library; the viewer additionally needs your
+platform's graphics/windowing dependencies. Run these commands from the repository
+root:
 
 ```bash
-python -m pytest tests/benchmarks/ -q -m benchmark_fast --benchmark-only
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+mkdir -p runs
+argusnet sim --map-preset small --duration-s 30 --seed 7 --replay runs/demo.json
+argusnet build-scene --replay runs/demo.json --output runs/demo.smartscene
+cargo run -p argusnet-viewer --release -- --scene runs/demo.smartscene --autoplay
+```
+
+The default simulation is a mapping/inspection mission with no targets; empty
+fused-track output is expected. Evaluate coverage and inspection results. The
+current viewer opens a scene package built from a replay, not a bare replay file.
+First compilation is separate from runtime startup performance.
+
+See [usage](docs/usage.md) for existing modes, split-view controls, target-tracking
+examples, ingestion and exports. Use `argusnet --help` or `argusnet sim --help`
+for current options. [Live operations](docs/LIVE_OPERATIONS.md) describes the
+existing live-enabled build and TLS connection workflow.
+
+## The Rust-only target
+
+Starting, running, controlling, viewing and recording simulations will use Rust
+components only. Python remains optional for offline analysis, experiment
+orchestration, GIS and export workflows. Existing Rust domain crates are reused;
+this is an incremental migration within this repository.
+
+The [target runtime architecture](docs/RUST_RUNTIME_ARCHITECTURE.md) replaces an
+all-subsystems tick with **independently scheduled work**:
+
+- Physics and vehicle control follow fixed integration/control deadlines.
+- Sensors sample at their own rates, preserving acquisition and delivery times.
+- Estimation reacts to measurements and prediction/expiry deadlines.
+- Mapping updates affected regions from accumulated evidence.
+- Planning runs on relevant changes or deadlines, using current belief.
+- Rendering, meshing and recording have independent bounded execution paths.
+
+One session owns causal state. Modules communicate through typed local calls,
+immutable revisioned results and explicit worker queues. gRPC serves external
+boundaries. Deterministic simulation uses virtual time; hardware uses separately
+qualified deadlines and clock conversion. Neither rendering nor faster playback
+changes physical dt. See [ADR-009](docs/adr/009-independently-scheduled-runtime.md).
+
+[Simulation fidelity](docs/SIMULATION_FIDELITY.md) keeps physical/sensor realism,
+execution speed and visual quality separate. Paced simulation can report slower
+achieved speed under load; hardware-coupled operation instead needs explicit
+synchronization limits and qualified deadline responses.
+
+## Viewer changes coming
+
+The [viewer specification](docs/VIEWER_UI.md) describes a flat, restrained,
+typography-led instrument interface with **Operate / Plan / Review** workspaces.
+**Perspective / Top-down / Section** are separate projections, with independent
+Operational / Reconstruction / Safety layer presets and one source-time timeline.
+
+The viewer will expose 3D belief, unknown space, uncertainty, trajectories,
+sensor volumes and evidence. It will show pose/map/plan freshness, command status,
+achieved simulation speed, recording health and available history. Detailed task
+rates and deadline/queue metrics belong in Diagnostics. Low visual quality must
+preserve safety and uncertainty semantics.
+
+These are planned interfaces, not replacements already available for the current
+`real-world`, `scan-map` and `split` CLI values. Basic Rust-worker controls ship
+before the scheduler redesign is complete. The
+[feature integration guide](docs/VIEWER_FEATURE_INTEGRATION.md) maps workflows to
+backend contracts and explicit unavailable states.
+
+## Delivery sequence
+
+| Track | Next outcome |
+| --- | --- |
+| P4.8–P4.9 | Complete Rust production composition, reset/restore and correctness/performance baseline |
+| P5.0, early | Responsive viewer worker with acknowledged basic controls |
+| P4.10a–f | Independent schedules, sensor timing, incremental work, bounded jobs and complete history; opt-in until qualified |
+| Remaining P2/P5 | Visual system, history/seek, recording and coherent live-world presentation |
+| P6 | Retire superseded execution paths after consumer and packaging acceptance |
+| S3–S7 | Actual flight-software SIL, HIL, contained aircraft, qualified field envelope and coordinated fleet |
+
+P IDs are migration packages; S IDs are autonomous-system gates; F1–F7 are
+capability features. They are not interchangeable phase numbers. The
+[delivery plan](docs/migration/DELIVERY_PLAN.md), [product roadmap](docs/ROADMAP.md)
+and [autonomous system plan](docs/AUTONOMOUS_SYSTEM_PLAN.md) define their dependencies.
+
+## Performance and testing
+
+Track startup, simulation CPU/throughput, task deadlines, sensor-to-estimate age,
+render CPU/GPU time, memory, queues and recording separately. Speed improvements
+must preserve accuracy, mission outcomes, safety and repeatability. Published
+historical profiles are not measurements of the future scheduler.
+
+Existing test and benchmark entrypoints:
+
+```bash
+cargo test --workspace --exclude argusnet-viewer
+cargo test -p argusnet-viewer
+python -m pytest tests/ -q
 argusnet benchmark --suite fast --seeds 7 --output runs/benchmarks/fast
 ```
 
-Rust microbenchmarks use Criterion:
-
-```bash
-cargo bench --workspace
-```
-
-Accepted fast-suite baselines live under `tests/golden/performance/`, and the nightly workflow runs
-the slow suite with multi-seed artifacts.
-
-## Conceptual Architecture
-
-```text
-                           +----------------------+
-                           |      ArgusNet        |
-                           |  World Model System  |
-                           +----------+-----------+
-                                      |
-      -----------------------------------------------------------------
-      |                |                |               |              |
-      v                v                v               v              v
-
-+-------------+  +-------------+  +-------------+  +-------------+  +-------------+
-|    World    |  |   Sensing   |  | Localization|  |   Mapping   |  |  Indexing   |
-| Environment |  |  Perception |  |  Pose Est.  |  | World State |  | Spatial Mem.|
-+------+------+  +------+------+  +------+------+  +------+------+  +------+------+
-       |                |                |               |              |
-       |                |                |               |              |
-       +----------------+----------------+---------------+--------------+
-                                      |
-                                      v
-                             +------------------+
-                             |     Planning     |
-                             | Search / Inspect |
-                             | Coverage / Reuse |
-                             +--------+---------+
-                                      |
-                                      v
-                             +------------------+
-                             | Evaluation / UI  |
-                             | Replay / Metrics |
-                             | Training Export  |
-                             +------------------+
-```
-
-## Subsystems
-
-### 1. World
-
-The **World** subsystem defines the environment in which the drone operates.
-
-It should represent:
-
-- terrain
-- elevation
-- land cover
-- structures
-- obstacles
-- weather and visibility
-- coordinate systems and geodesy
-- static and dynamic environment layers
-
-This subsystem answers:
-
-- What exists in the environment?
-- What is visible from a location?
-- What physical constraints affect flight, sensing, and mapping?
-
-### 2. Sensing
-
-The **Sensing** subsystem models or ingests drone observations.
-
-It should support:
-
-- RGB cameras
-- thermal cameras
-- depth sensors
-- IMU
-- GNSS
-- altimeters
-- optional lidar or acoustic extensions
-- sensor timing, noise, latency, and field-of-view constraints
-
-This subsystem answers:
-
-- What is the drone seeing right now?
-- How reliable is the measurement?
-- What part of the world is observable from this pose?
-
-### 3. Localization
-
-The **Localization** subsystem estimates the drone pose in space over time.
-
-It should combine:
-
-- GNSS
-- IMU
-- visual odometry
-- visual-inertial odometry
-- map-relative correction
-- loop closure
-- relocalization against prior missions
-- coordinate frame transforms
-
-This subsystem answers:
-
-- Where am I right now?
-- How certain is that estimate?
-- How does this pose align with previous maps and observations?
-
-### 4. Mapping
-
-The **Mapping** subsystem updates the internal world model.
-
-It should maintain multiple possible layers:
-
-- occupancy map
-- elevation map
-- semantic map
-- obstacle map
-- inspection history layer
-- confidence / uncertainty layer
-- observed vs unobserved regions
-- temporal change layer
-
-This subsystem answers:
-
-- What does the environment look like?
-- Which areas are well understood?
-- What has changed since the last mission?
-
-### 5. Indexing
-
-The **Indexing** subsystem is ArgusNet's persistent memory and retrieval layer.
-
-It should store and retrieve:
-
-- keyframes
-- landmarks
-- descriptors and embeddings
-- geotagged observations
-- map tiles
-- mission events
-- region metadata
-- inspection findings
-- time-linked site history
-
-This subsystem answers:
-
-- Have I seen this place before?
-- Where was this image or feature captured?
-- What observations exist for this structure or region?
-- Which areas still need more coverage?
-
-### 6. Planning
-
-The **Planning** subsystem turns the world model into action.
-
-It should support:
-
-- search planning
-- frontier exploration
-- inspection route generation
-- revisit planning
-- battery-aware mission updates
-- uncertainty reduction planning
-- adaptive sensing decisions
-- multi-pass coverage logic
-
-This subsystem answers:
-
-- Where should the drone go next?
-- Which area gives the most value if observed now?
-- What path best improves coverage, map quality, or inspection completeness?
-
-### 7. Evaluation
-
-The **Evaluation** subsystem makes the platform measurable and reproducible.
-
-It should support:
-
-- mission replay
-- scenario comparison
-- benchmark suites
-- localization error metrics
-- map completeness metrics
-- coverage scoring
-- inspection success metrics
-- dataset export for downstream training
-
-This subsystem answers:
-
-- How well did the mission perform?
-- How accurate was localization?
-- How complete or useful was the map?
-- Which planning or sensing strategy worked best?
-
-## Recommended Internal Data Flow
-
-```text
-Environment State
-   ↓
-Sensor Simulation / Ingestion
-   ↓
-Observation Processing
-   ↓
-Localization Update
-   ↓
-World Model Update
-   ↓
-Index + Memory Update
-   ↓
-Planning / Action Selection
-   ↓
-Mission Log / Replay / Evaluation
-```
-
-## Target Module Tree
-
-```text
-argusnet/
-├── README.md
-├── LICENSE
-├── SAFETY.md
-├── LEGAL.md
-├── CONTRIBUTING.md
-├── SECURITY.md
-├── CODE_OF_CONDUCT.md
-├── pyproject.toml
-├── configs/
-│   ├── environments/
-│   ├── sensors/
-│   ├── missions/
-│   ├── planners/
-│   └── evaluation/
-├── docs/
-│   ├── architecture/
-│   ├── design/
-│   ├── examples/
-│   └── api/
-├── data/
-│   ├── terrain/
-│   ├── scenes/
-│   ├── sample_missions/
-│   └── benchmarks/
-├── argusnet/
-│   ├── __init__.py
-│   ├── core/
-│   ├── world/
-│   ├── sensing/
-│   ├── localization/
-│   ├── mapping/
-│   ├── indexing/
-│   ├── planning/
-│   ├── evaluation/
-│   ├── ui/
-│   ├── adapters/
-│   └── cli/
-├── tests/
-└── examples/
-```
-
-## Suggested Feature Priorities
-
-### Phase 1 — World Model Core
-
-Build the minimum foundation:
-
-- coordinate frames
-- terrain and scene ingestion
-- basic sensor simulation
-- pose representation
-- world model container
-- mission logs and replay format
-
-### Phase 2 — Localization Foundation
-
-Add pose estimation and correction:
-
-- GNSS + IMU fusion
-- local odometry pipeline
-- pose graph structure
-- relocalization hooks
-- keyframe generation
-
-### Phase 3 — Mapping and Memory
-
-Turn flights into persistent world knowledge:
-
-- occupancy and elevation layers
-- coverage map
-- keyframe store
-- landmark store
-- observation index
-- low-confidence region monitoring
-
-### Phase 4 — Planning
-
-Use the world model to drive action:
-
-- frontier exploration
-- inspection routing
-- revisit planning
-- next-best-view scoring
-- battery-aware mission planning
-
-### Phase 5 — Evaluation and Benchmarks
-
-Make the platform measurable:
-
-- replay viewer
-- localization drift metrics
-- map completeness metrics
-- inspection coverage scoring
-- dataset export
-- benchmark scenarios
-
-### Phase 6 — Controlled Real-World Adapters
-
-Only after simulation is strong:
-
-- telemetry ingest
-- real sensor sync
-- field mission logging
-- human-supervised execution tools
-
-## Non-Goals
-
-ArgusNet does not aim to be:
-
-- an unsafe autonomous operation platform
-- a privacy-invasive monitoring toolkit
-- a cyber intrusion or drone takeover framework
-- a product for unlawful or unsafe deployment
-
-The project focuses on world modeling, localization, mapping, inspection, coverage planning, and mission evaluation in simulation and controlled research settings.
-
-## Suggested First Milestone
-
-**Milestone 1: Persistent Mapping Demo**
-
-A single drone flies a simulated mission over terrain and structures, collects camera and IMU/GNSS data, builds a basic world model with occupancy and elevation layers, stores keyframes and landmarks, and later relocalizes against that stored map during a second mission. The mission can be replayed visually and scored for localization drift, map completeness, and revisit success.
-
-## Existing Documentation
-
-For implementation details already present in this repository, see:
-
-- [Architecture & module map](docs/architecture.md)
-- [Product and capability roadmap](docs/ROADMAP.md)
-- [Next refactor review](docs/NEXT_REFACTOR_REVIEW.md)
-- [Feature delivery and viewer integration](docs/CAPABILITY_DELIVERY.md)
-- [Autonomous system plan](docs/AUTONOMOUS_SYSTEM_PLAN.md)
-- [Viewer feature workflows and data contracts](docs/VIEWER_FEATURE_INTEGRATION.md)
-- [Next-generation viewer specification](docs/VIEWER_UI.md)
-- [Rust migration delivery plan](docs/migration/DELIVERY_PLAN.md)
-- [Usage guide & CLI reference](docs/usage.md)
-- [Terrain notes](docs/TERRAIN.md)
-- [Mapping contract](docs/MAPPING.md)
-- [Localization contract](docs/LOCALIZATION.md)
-- [Indexing contract](docs/INDEXING.md)
-- [Inspection contract](docs/INSPECTION.md)
-- [Mission execution contract](docs/MISSION_EXECUTION.md)
-- [Planning notes](docs/PLANNING.md)
-- [Safety notes](docs/SAFETY.md)
-- [Benchmark scenarios](docs/SCENARIOS.md)
-- [Performance and benchmarking standard](docs/PERFORMANCE_AND_BENCHMARKING.md)
-- [Changelog](docs/changelog.md)
-
-### Native world library
-
-Python simulation and the Bevy viewer share `argusnet-world` for terrain and
-visibility. Source installs (`pip install -e .`) require the pinned Rust toolchain
-and build the native world/safety library. Binary wheels include that library.
-See [terrain authority](docs/TERRAIN.md#phase-3-runtime-authority) for ownership
-and development details.
+Install test/development dependencies with `python -m pip install -e ".[dev]"`. See
+[local CI](docs/LOCAL_CI.md) for the complete existing checks and
+[performance tracking](docs/PERFORMANCE_AND_BENCHMARKING.md) for measurement rules.
+The [verification plan](docs/migration/VERIFICATION_AND_ROLLOUT.md) adds mixed-rate,
+worker-order, delayed-data, full checkpoint, stale-result and overload acceptance.
+Those planned gates do not imply the corresponding jobs already exist.
+
+## Hardware integration
+
+Live telemetry viewing is not aircraft control. Future adapters must qualify
+sensor clocks, calibration, frames, capabilities, deadlines and failure behavior.
+Stabilization, safety and contingencies remain onboard despite ground-link loss.
+The Rust-only application goal does not require rewriting autopilot firmware.
+
+[Hardware integration](docs/HARDWARE_INTEGRATION.md) defines the adapter contract
+and SIL/HIL progression. No board, autopilot, nominal sensor rate or flight
+readiness is selected or established by this documentation. Hardware profiles
+require actual timing and fault evidence before promotion.
+
+## Repository and documentation
+
+| Location | Role |
+| --- | --- |
+| `rust/` | Domain libraries, simulation runtime under integration, server, replay and viewer |
+| `src/argusnet/` | Current Python orchestration, adapters and retained offline tooling |
+| `proto/` | External service contracts; binding changes update both languages |
+| `tests/` | Python/contract fixtures and evaluation checks; Rust crates also contain tests |
+| `docs/` | Current behavior, accepted designs, delivery and evidence |
+
+Start with [architecture](docs/architecture.md), [state ownership](docs/STATE_OWNERSHIP.md),
+[usage](docs/usage.md), [contributing](CONTRIBUTING.md) and
+[capability delivery](docs/CAPABILITY_DELIVERY.md). Domain contracts cover
+[terrain](docs/TERRAIN.md), [fusion](docs/FUSION.md),
+[localization](docs/LOCALIZATION.md), [mapping](docs/MAPPING.md),
+[planning](docs/PLANNING.md), [mission execution](docs/MISSION_EXECUTION.md),
+[safety](docs/SAFETY.md), [inspection](docs/INSPECTION.md),
+[spatial memory](docs/INDEXING.md) and [scenarios](docs/SCENARIOS.md).
+See [changelog](docs/changelog.md) for changes and [security](SECURITY.md) for
+supported security practices.
+
+## Scope
+
+ArgusNet is intended for civilian mapping, inspection, localization, survey,
+research and controlled testing. It is not intended for weaponization, harmful
+pursuit, privacy-invasive monitoring, cyber intrusion or unsafe autonomous use.
+Real-world operation requires the applicable permissions and qualified operating
+envelope. Simulation results and a functioning viewer do not establish that
+qualification.

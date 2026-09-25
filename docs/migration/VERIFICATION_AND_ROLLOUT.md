@@ -34,37 +34,19 @@ numeric tolerance between Rust platforms. If exact cross-platform runtime state
 cannot be achieved at acceptable cost, propose an explicit amendment before
 accepting weaker behavior; this is a known delivery risk, not a solved property.
 
-The planned seed contract, `argusnet.seed/v1`, is:
+The implemented simulation seed contract is the current 32-bit keyed derivation,
+pinned ChaCha8 stream and versioned math/conformance fixtures in
+`argusnet-sim/src/deterministic.rs`. The earlier proposed 64-bit/SHA-256/ChaCha12
+scheme is not the implemented contract and is withdrawn from this plan. Preserve
+ADR-006 and its explicit terrain/NumPy exceptions; do not silently replace the
+PRNG while changing scheduling.
 
-1. Root seed is an unsigned 64-bit integer. Inputs encode little-endian root
-   seed and tick, then length-prefixed UTF-8 domain/platform/subject IDs and
-   named stream purpose. Empty IDs have explicit zero length. Do not concatenate
-   delimiter-separated labels or use process-randomized language hashers.
-2. SHA-256 over the domain tag plus canonical input bytes produces a 256-bit
-   key. Names distinguish sensing acceptance, bearing noise, bias, particle
-   scatter, VIO features and world generation. World generation uses a stable
-   generation index rather than wall time. IDs and draw purposes are versioned.
-3. Use ChaCha12 with that key and a documented zero initial stream/block state.
-   Pin its Rust implementation and test vectors in the P4.1 manifest/lockfile PR;
-   no dependency version is guessed by this plan. Specify output word order and
-   byte-to-u64 assembly in the fixture. Never seed from thread ID, entity spawn
-   order, wall clock or a platform-dependent hash.
-4. Uniform doubles use the top 53 bits of a specified u64 word multiplied by
-   `2^-53`, giving [0,1). Normal draws use a versioned Box-Muller pair: `u1=1-u`,
-   `u2=v`, `r=sqrt(-2*ln(u1))`, then `r*cos(2*pi*u2)` and `r*sin(2*pi*u2)`.
-   Fix the pi constant's bit pattern, pair ordering and whether an unused second
-   sample is consumed. Do not inherit an unspecified distribution implementation.
-5. Pin and audit the transcendental math implementation used by deterministic
-   runtime stages. Avoid implicit platform library variation, unordered floating
-   reductions and undocumented FMA changes. Canonical output normalizes signed
-   zero, rejects nonfinite state and sorts unordered records. Dynamic SIMD or
-   parallel reductions must prove conformance before activation.
-
-The exact seed encoding, algorithm/library pins and fixture vectors must land
-before a production caller uses this contract. This is an intentional
-stochastic re-baseline against Python, not a claim to emulate NumPy. The current
-native scoring slice does not use this new RNG and preserves NumPy-generated
-particle offsets.
+For scheduled sensing, distinguish sample identity from delivery time. Any change
+to seed-key encoding (for example source/sample index instead of legacy tick)
+requires a new seed version, committed vectors and an isolated rebaseline.
+Never seed from worker order, host clock or runtime hashes. Pin deterministic
+math dependencies, preserve canonical reduction order and reject nonfinite state.
+Current same-machine fixtures do not establish cross-platform full-runtime parity.
 
 Stateful processes (bias drift, integrators) own prior state explicitly; keyed
 innovations do not remove their need for checkpointing. Adding/reordering an
@@ -84,6 +66,61 @@ Required deterministic tests:
   compare canonical bytes/hashes. Add Windows when supported for runtime release.
 - Old seed/algorithm versions are explicitly rejected or replayed by a retained
   compatible reader; never relabel changed output with an old version.
+
+## Scheduled execution acceptance (P4.10)
+
+The [target runtime](../RUST_RUNTIME_ARCHITECTURE.md) has independent rates,
+not one universal tick budget. Keep legacy port-parity tests separate from
+scheduled-model acceptance and behavior rebaselines. Required scenarios:
+
+- Mixed 200 Hz / 30 Hz / 5 Hz synthetic sources against separate control/render
+  schedules, using fixtures with declared sampling support; these example rates
+  are scheduler tests, not hardware recommendations or achieved sensor fidelity.
+- Long virtual-time deadline tests for rational rates, stable same-time phase
+  ordering, startup, pause/step and checked time/sequence overflow.
+- Same causal state across pacing, render rates, worker counts and shuffled job
+  completion; renderer-only completion timing is excluded.
+- Acquisition versus receipt time, supported delayed/reordered inputs, duplicate
+  sequence, source epoch reset and explicit unsupported-profile rejection.
+- Empty-input prediction/track aging; actual elapsed-time dwell/energy accounting;
+  faster sensing than mapping with no silently lost evidence.
+- Stale routes/maps/jobs, epoch/frame mismatch and current safety revalidation;
+  hidden-truth perturbation cannot alter fixed-input planning.
+- Reset equals fresh construction; restore equals uninterrupted execution with
+  queued measurements, pending jobs, filter/bias state and command history.
+- Recorder-full/write-failure, command saturation, background cancellation and
+  bounded shutdown; faulted partial state is never published or resumed.
+- Mixed-age viewer state, disconnected live source, unsupported controls, source
+  transitions and history browsing without external actuation.
+
+Canonical existing seeds provide smoke coverage; section 3's predeclared multi-seed
+and held-out qualification still applies. Cross-platform results must respect
+ADR-006's explicitly documented world-generation exceptions, not erase them or
+silently weaken the runtime contract. Complete checkpoints validate actual
+world/config identity before mutation; incomplete old formats cannot resume a
+full mission through defaults.
+
+Use [the performance standard](../PERFORMANCE_AND_BENCHMARKING.md) for P4.10f's
+10% balanced-suite CPU improvement target, five-run same-machine comparison,
+per-workload regression rules, per-task deadlines and lifecycle bounds. Keep
+all prior accuracy/safety gates. Publish failed runs and missing measurements.
+[SIL/HIL qualification](../HARDWARE_INTEGRATION.md) requires separate actual
+software/hardware execution, timing and contingency evidence.
+
+### Additional architecture audit gates
+
+| Area | Required scenarios | Delivery owner |
+| --- | --- | --- |
+| World generation | Same seed with changed asset/version; tile build-order invariance; seam queries; corrupt/missing geometry; cancellation/atomic swap | P4.3/P4.8/P5.1 |
+| Track lifecycle | Unequal rates, no-observation expiry, duplicate relay, crossing association, reacquisition, deletion/resync and evidence age | P4.8/P4.10b |
+| Frames and viewer | Map-alignment correction, origin shift, stale pick, partial GPU upload, device-resource rebuild, bounded trails/tiles | P2/P5 |
+| Fidelity | Fixed-input integration refinement, declared sensor sampling, hidden-label isolation, rendered-sensor/viewport separation | P4.9/P4.10b and qualified model profiles |
+| Time policy | Paced pause reanchor, bounded catch-up, sustained overload, external synchronization error and watchdog response | P4.10a/f and S3/S4 |
+| Recovery | Mid-write crash, journal corruption/truncation, missing checkpoint content, immutable config mismatch and old-session messages | P4.8/P4.10e/P5.2 |
+
+The [fidelity contract](../SIMULATION_FIDELITY.md) and domain specifications define
+expected outcomes. Add these to existing packages instead of declaring another
+migration complete. Documentation is not evidence these tests already exist.
 
 ## 3. Python-to-Rust statistical qualification
 
@@ -168,7 +205,9 @@ G2 establishes a reference GPU machine and two fixed workloads: representative
 mission and declared stress scale. For 60 Hz interactive acceptance, initial
 budgets are p95 render frame <=16.7 ms and p99 <=25 ms over a warmed 120-second
 run, with no unexplained >100 ms stall. Measure simulation independently: p95
-tick processing below its fixed dt at 1x, bounded backlog and no dropped ticks.
+compatibility tick processing below its fixed dt at 1x; scheduled mode measures
+each task against its own deadline, with bounded backlog and no dropped physical
+steps. Its source rates need not divide the integration interval.
 These are target gates to calibrate on the named reference hardware; they are
 not assertions about arbitrary laptops or lavapipe. Warmup and startup timing
 are measured separately, never discarded without reporting.

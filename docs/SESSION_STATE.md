@@ -5,6 +5,8 @@ snapshot used outdated names and product framing that no longer apply.
 
 Use the current docs for implementation context:
 
+- [Rust runtime target and independent scheduling](RUST_RUNTIME_ARCHITECTURE.md)
+- [Hardware qualification](HARDWARE_INTEGRATION.md)
 - [Rust runtime migration plan and implementation snapshot](RUST_RUNTIME_MIGRATION.md)
 - `docs/architecture.md`
 - `docs/STATE_OWNERSHIP.md`

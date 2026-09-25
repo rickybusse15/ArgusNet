@@ -19,6 +19,22 @@ They are not exclusive; the local script is the faster inner loop either way.
 
 ---
 
+## Runtime verification additions (planned)
+
+Existing jobs below remain the runnable local checks. P4.10 adds independent-rate
+and rational-deadline tests, worker-order invariance, acquisition/delivery timing,
+full reset/restore with queued jobs, bounded recorder/command overload and
+freshness/epoch viewer fixtures. Do not label those jobs implemented until they
+are actually wired into the script/workflow.
+
+Use [verification and rollout](migration/VERIFICATION_AND_ROLLOUT.md) for acceptance
+and [performance tracking](PERFORMANCE_AND_BENCHMARKING.md) for named-hardware
+benchmarks. Software rendering smoke is not a GPU frame-budget pass. Local tests
+are not remote CI, and neither is [SIL/HIL qualification](HARDWARE_INTEGRATION.md).
+For documentation-only updates, inspect the diff, check local links/anchors and
+confirm example commands against current parsers; do not report runtime tests
+as passed merely because no source code changed.
+
 ## 1. `scripts/ci-local.sh`
 
 ```bash

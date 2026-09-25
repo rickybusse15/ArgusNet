@@ -6,6 +6,21 @@ behaviours.
 
 ---
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+Safety/control execute on qualified deadlines independently of mapping,
+rendering and route searches. Validate estimates for age/integrity and revalidate
+trajectories before execution. Preserve existing opt-in legacy clamp semantics
+for port parity; physical/onboard profiles require separately qualified blocking
+behavior and vehicle-specific fallbacks. Physical truth collision is distinct
+from knowledge-based safety. A paused viewer, missing planner result or full
+recorder cannot disable onboard safety; timing evidence is required per hardware
+profile, not inferred from Rust or desktop tests.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## 1. Drone Physical Limits Schema
 
 ### 1.1 Canonical Rust type

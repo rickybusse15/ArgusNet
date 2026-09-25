@@ -6,6 +6,68 @@ ArgusNet is a closed-loop belief-world mission system, not only a replay viewer.
 
 ---
 
+## Scheduled Rust performance tracking (target, 2026-09-23)
+
+The [runtime architecture](RUST_RUNTIME_ARCHITECTURE.md) changes work frequency
+and scheduling, not just implementation language. P4.9 records the completed-port
+baseline; P4.10f compares opt-in scheduled execution on the same resolved worlds,
+missions, source profiles and named hardware. Earlier profile percentages and
+microbenchmark speedups are historical evidence, not current end-to-end results.
+
+| Measurement | Required breakdown |
+| --- | --- |
+| Startup | Build/install, world creation/import, shader warmup and first usable view separately |
+| Simulation throughput | Simulated seconds per wall second and CPU time per simulated second; requested versus achieved pacing |
+| Task timing | Per subsystem release-to-start, execution, completion, deadline misses and oldest pending input |
+| Sensor/estimator timing | Capture-to-arrival and arrival-to-estimate; clock uncertainty, late/duplicate/drop counts and estimate age |
+| Incremental work | Observations consumed, cells/tiles touched, routes invalidated, allocations/bytes copied, cache hits and jobs cancelled |
+| Presentation | CPU and GPU frame times, publication-to-display age and skipped display revisions |
+| Recording/history | Queue occupancy/age, write latency, committed versus durable cursor, byte budget and evidence gaps |
+| Quality | Error/calibration, coverage, mission completion, battery/reserve and safety alongside runtime costs |
+
+Record units, definitions, build/toolchain, execution/seed versions, config/world
+hashes, hardware/OS/driver, viewport/quality, entity/source rates, warmup and test
+duration in every artifact. Wall-clock metrics are diagnostic outputs, excluded
+from deterministic causal-state hashes. Deterministic work counters remain useful
+in CI where timing is noisy. Thresholds are per workload/profile, not universal
+sensor-rate or CPU promises.
+
+P4.10f promotion targets (not measured results): at least 10% lower median CPU
+per simulated second across `baseline_coverage`, `search_acquisition` and
+`industrial_asset_survey`, with five same-machine runs per case and equally
+weighted per-case ratios. No case may exceed the existing 20% red regression
+limit without its required ADR. Keep the existing 5–20% yellow review rule;
+quality and safety gates always apply. Freeze source rates and quality settings
+before comparing; reduced evidence/fidelity is a different experiment, not a free
+speedup. If variance obscures the gain, collect more runs before promotion.
+
+Interactive qualification retains p95 <=16.7 ms and p99 <=25 ms on the named
+reference GPU over a warmed 120-second run, with startup reported separately.
+Legacy ticks must meet their fixed-dt budget at 1x. Scheduled profiles report
+individual task deadlines and backlog; no dropped physical steps. A 30-minute
+run and 100 lifecycle reload/reset cycles must stay within configured resource
+ceilings. Lower memory targets may not silently evict required evidence.
+
+[Hardware timing](HARDWARE_INTEGRATION.md) additionally needs selected-device
+clock, thermal/power, deadline and fault evidence. Desktop speed and virtual-time
+determinism cannot establish onboard schedulability. These jobs remain planned
+until their commands, runner identities and results are recorded.
+
+## Fidelity and real-time comparison requirements
+
+Record the independent model/time/quality choices in
+[simulation fidelity](SIMULATION_FIDELITY.md). Compare runtime cost at fixed
+fidelity before evaluating a lower-cost model as a separate accuracy tradeoff.
+Include source-rate sweeps, simulation lag/catch-up, estimator measurement age,
+world build/cache cost and mixed-revision presentation latency. Hardware-coupled
+runs report synchronization error and failed qualification, not merely an average
+real-time factor near one. Frame rate is not sensor throughput.
+
+Track identity-switch/fragmentation and false-track rates alongside RMSE; a
+smoother-looking trajectory with stale evidence is not an accuracy improvement.
+Rendered sensor models identify their device/driver and reproducibility limits;
+operator visual quality changes must not alter sensor inputs or causal state.
+
 ## 1. Goals
 
 ArgusNet performance work has four goals:
@@ -325,8 +387,8 @@ Every cache must document:
 
 Python is appropriate for:
 
-- CLI orchestration
-- Scenario generation
+- Offline experiment CLI orchestration
+- Offline scenario authoring (production construction moves to Rust)
 - Research experiments and sweeps
 - Data export/import tools
 - Replay post-processing
@@ -346,17 +408,20 @@ Move a module or kernel to Rust when at least one condition is true:
 - It must be shared by the viewer, daemon, and simulation without Python dependency.
 - It requires safe concurrency over large state.
 
-Candidate Rust modules:
+Use the existing Rust owners rather than the former placeholder crate names:
 
-- `terrain-engine`: analytic terrain grids, interpolation, LOS raycasts, slope/curvature queries
-- `world-engine`: obstacle spatial indexes, map bounds, visibility acceleration
-- `mapping-engine`: occupancy/elevation/belief tile updates
-- `localization-engine`: pose graph, relocalization, map-relative correction
-- `planner-engine`: route/viewpoint planning, frontier search, next-best-view scoring
-- `trajectory-engine`: dynamic feasibility and path smoothing
-- `safety-engine`: geofence, collision, altitude, comms, and abort validation
-- `indexing-engine`: spatial memory lookup and keyframe retrieval when query volume is high
-- `eval-suite`: deterministic large scenario evaluation and metric aggregation
+- `argusnet-world`: terrain, obstacle indexes and visibility queries
+- `argusnet-sensing`: sensor generation/ingestion components
+- `argusnet-localization`: pose estimation and map-relative correction
+- `argusnet-mapping`: belief updates and shared spatial kernels
+- `argusnet-planning`: route, frontier, task and viewpoint planning
+- `safety-engine`: constraint validation and safety policy
+- `argusnet-sim`: production composition, schedules and lifecycle
+- `argusnet-replay`: durable interchange contracts
+
+Ported components do not imply a qualified complete runtime. Spatial memory,
+advanced trajectories and evaluation extensions follow their domain contracts;
+create a separate crate only when a real ownership boundary warrants it.
 
 ### 8.3 Use C++ only by exception
 
@@ -715,7 +780,12 @@ Docs should answer:
 
 ---
 
-## 14. Implementation Roadmap
+## 14. Historical performance workstreams
+
+The original phases below record the performance program, not current port
+status or migration IDs. World/indexing/planning ports now exist; use
+[the delivery plan](migration/DELIVERY_PLAN.md) and the scheduled-runtime tracking
+section above for remaining work. Do not re-port a component from this older list.
 
 ### Phase 1: Baseline and reporting
 

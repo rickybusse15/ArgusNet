@@ -3,6 +3,20 @@
 This document describes ArgusNet planning for the current product direction: map an area, localize
 platforms within that map, inspect map-relative POIs, coordinate multiple drones, and return safely.
 
+## Scheduled Rust integration (target, 2026-09-23)
+
+Run on a mission/availability/reserve change, affected geometry or a periodic
+deadline. Read immutable belief/pose revisions and emit a trajectory proposal
+with source epoch, dependencies and decision reason. Bound search work, cancel
+obsolete requests and revalidate current safety before adoption. The last plan
+may continue only while valid; a fallback is profile-specific. Planner latency
+cannot stall control/safety. Scheduling does not make existing 2D routes into
+qualified 3D trajectories or implement multi-vehicle SLAM.
+
+The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.md);
+[delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
+and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
+
 ## Current Planner Modules
 
 | Capability | Current implementation | Runtime status |

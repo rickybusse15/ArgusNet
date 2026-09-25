@@ -19,6 +19,21 @@ It extends, rather than renumbers, the existing plans:
 The `S0`–`S8` releases below describe system-level outcomes. They are dependency
 gates, not calendar estimates and not replacements for migration package IDs.
 
+## Runtime and hardware execution amendment (2026-09-23)
+
+[The Rust-only target](RUST_RUNTIME_ARCHITECTURE.md) replaces lockstep execution
+with independently scheduled control, sensing, estimation, mapping and planning.
+Virtual-time simulation and live-time operation share domain contracts, not one
+wall-clock policy. A coherent revision includes component ages; it does not imply
+simultaneous acquisition. P4.10a–f qualifies this model after the P4.9 baseline,
+while P5.0 delivers basic viewer controls early.
+
+[Hardware integration](HARDWARE_INTEGRATION.md) defines clock conversion, adapter
+capabilities, onboard authority, deadline evidence and the S3–S7 ladder. The
+Rust-only application target does not require rewriting existing autopilot
+firmware in Rust. Hardware profiles must be selected and qualified before S3;
+no board, sensor rate or flight readiness is implied by the desktop migration.
+
 ## 1. Product definition
 
 ArgusNet plans, validates, executes, records and explains autonomous civilian
@@ -281,7 +296,9 @@ requirements; source support and control authority remain capability-declared.
 Finish P4.3 world construction, P4.6 belief publication, P4.8 tick composition,
 P4.9 CLI parity and the P5 worker boundary. Exit with a nonempty representative
 mission owned by Rust, direct fusion, immutable snapshots, complete checkpoints,
-durable events and no Python callback inside a tick.
+durable events and no Python callback inside a tick. P4.10 scheduled execution
+then qualifies independent task/sensor rates; basic P5.0 controls need not wait
+for that qualification. S0 completion alone is not an aircraft timing guarantee.
 
 ### S1 — Canonical contracts and client output skeleton
 
