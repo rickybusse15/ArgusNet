@@ -188,6 +188,22 @@ and the paused-details fix removed. All 26 are caught now.
 | The interactive window | **not driven.** Pointer to ray to pick runs for real in the headless probes, and UI capture, keyboard and list selection run in CPU app tests; egui's own hit-testing in a live window has not been exercised by hand |
 | CI | **not run** before this PR. The viewer job gains a *Picking and selection probes* step |
 
+## Found after the PR opened: a trail pixel that is sometimes missing
+
+Repeating the ring probe showed it failing about one run in three, always
+on the same 13 pixels at the drone's centre, never on a ring. The drone's
+trail in that two-frame scene is a ribbon about a pixel long, ending under
+the glyph. In roughly one render in twelve that has probe interactions, it
+is not drawn at all. With trails off the pixel never varies (12 of 12);
+with trails on and no interactions it never varied either (6 of 6).
+
+What was ruled out: draw order (trails are additive now), and the ribbon's
+data (its samples, colour and width inputs are the same in good and bad
+runs). A per-trail width re-cut was tried and did not help, so it was not
+kept. The cause is still **open**. The ring probes now render without
+trails, since rings do not involve them, and pass repeatedly (4 of 4 runs
+of all six renders).
+
 ## Not in this slice
 
 * **Selecting presentation geometry.** No interaction mode selects a zone,

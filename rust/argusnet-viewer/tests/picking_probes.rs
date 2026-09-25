@@ -314,6 +314,18 @@ fn split_view_picks_only_in_the_main_viewport() {
     );
 }
 
+/// The default overlays without trails. The drone's trail in this two-frame
+/// scene is a ribbon about a pixel long ending under the glyph's centre, and
+/// in roughly one render in twelve with probe interactions it is not drawn
+/// (open; `docs/migration/PICKING_AND_SELECTION.md`). Rings have nothing to do with
+/// trails, so their pixel-exact comparisons leave them out.
+fn rings_only() -> RuntimeOverlayVisibility {
+    RuntimeOverlayVisibility {
+        trails: false,
+        ..Default::default()
+    }
+}
+
 /// The selection ring is drawn around the selected marker and nowhere else;
 /// around a marker the terrain hides, it is hidden too. The hover ring is
 /// drawn around the hovered marker, in its own colour.
@@ -330,6 +342,7 @@ fn rings_are_drawn_around_their_marker_and_not_through_terrain() {
         ViewMode::RealWorld,
         ProbeRequest {
             elevated: vec![DRONE],
+            overlays: Some(rings_only()),
             ..Default::default()
         },
     );
@@ -339,6 +352,7 @@ fn rings_are_drawn_around_their_marker_and_not_through_terrain() {
         ViewMode::RealWorld,
         ProbeRequest {
             elevated: vec![DRONE],
+            overlays: Some(rings_only()),
             select: Some(("node".into(), "drone-1".into())),
             ..Default::default()
         },
@@ -349,6 +363,7 @@ fn rings_are_drawn_around_their_marker_and_not_through_terrain() {
         ViewMode::RealWorld,
         ProbeRequest {
             elevated: vec![DRONE],
+            overlays: Some(rings_only()),
             select: Some(("node".into(), "buried".into())),
             ..Default::default()
         },
@@ -359,6 +374,7 @@ fn rings_are_drawn_around_their_marker_and_not_through_terrain() {
         ViewMode::RealWorld,
         ProbeRequest {
             elevated: vec![DRONE],
+            overlays: Some(rings_only()),
             hover: Some(at(DRONE)),
             ..Default::default()
         },
@@ -370,6 +386,7 @@ fn rings_are_drawn_around_their_marker_and_not_through_terrain() {
         ViewMode::RealWorld,
         ProbeRequest {
             elevated: vec![DRONE],
+            overlays: Some(rings_only()),
             select: Some(("truth".into(), "t-1".into())),
             ..Default::default()
         },
@@ -381,6 +398,7 @@ fn rings_are_drawn_around_their_marker_and_not_through_terrain() {
         ViewMode::RealWorld,
         ProbeRequest {
             elevated: vec![DRONE],
+            overlays: Some(rings_only()),
             select: Some(("node".into(), "drone-1".into())),
             hover: Some(at(DRONE)),
             ..Default::default()
