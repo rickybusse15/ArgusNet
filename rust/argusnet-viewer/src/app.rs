@@ -852,6 +852,13 @@ fn keyboard_playback_system(
         let last = replay_state.frame_count().saturating_sub(1);
         replay_state.step_to(last);
     }
+    // Jump to the previous or next frame with events (P2.4a).
+    if keys.just_pressed(KeyCode::BracketLeft) {
+        replay_state.jump_to_event(false);
+    }
+    if keys.just_pressed(KeyCode::BracketRight) {
+        replay_state.jump_to_event(true);
+    }
     if keys.just_pressed(KeyCode::KeyM) {
         *view_mode = match *view_mode {
             ViewMode::RealWorld => ViewMode::ScanMap,

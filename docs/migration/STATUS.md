@@ -54,7 +54,8 @@ none of it.
 | P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | local ([TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
 | P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | local ([PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
 | P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | local ([PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
-| P2.4 | Free-fly, follow/chase, focus, bookmarks, time scrubbing | open (orbit camera exists) |
+| P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | local, `claude/p24a-time-controls` ([TIME_CONTROLS.md](TIME_CONTROLS.md)) |
+| P2.4b | Camera: damped free-fly, follow/chase, `F` focus, `1`-`9` bookmarks, remappable bindings | open (orbit camera exists) |
 | P2.5 | Mission-control shell, quality tiers | open |
 | P2.6 | Graphics acceptance across tiers | open |
 

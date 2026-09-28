@@ -373,11 +373,12 @@ pub fn ingest(
         appended += 1;
     }
     if appended > 0 {
+        replay_state.live = true;
         let frame_count = replay_state.frame_count();
         let was_at_tail = frame_count as u64 <= appended
             || replay_state.frame_index + (appended as usize) + 1 >= frame_count;
         if was_at_tail {
-            replay_state.frame_index = frame_count.saturating_sub(1);
+            replay_state.step_to(frame_count.saturating_sub(1));
         }
     }
     appended
@@ -485,6 +486,10 @@ mod tests {
         assert_eq!(replay.epoch(), epoch);
         assert_eq!(replay.frame_count(), LIVE_HISTORY_CAPACITY);
         assert_eq!(replay.current_frame().unwrap().timestamp_s, 10.0);
+        // Live history is read-only review, and says what it dropped (P2.4a).
+        assert!(replay.live);
+        assert_eq!(replay.trimmed_before_s(), Some(4.0));
+        assert_eq!(replay.time_s(), 10.0);
     }
 
     fn tls_with_ca() -> LiveTlsConfig {
