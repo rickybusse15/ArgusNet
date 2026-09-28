@@ -114,7 +114,7 @@ def _land_cover_document(layer: Any) -> dict[str, Any] | None:
     """The `land_cover_new` payload, or `None` for an environment with none."""
     if layer is None or not hasattr(layer, "_tiles"):
         return None
-    return json.loads(
+    document: dict[str, Any] = json.loads(
         json.dumps(
             {
                 "bounds": layer.bounds_xy_m.to_metadata(),
@@ -125,6 +125,7 @@ def _land_cover_document(layer: Any) -> dict[str, Any] | None:
             default=_json_default,
         )
     )
+    return document
 
 
 def _sensor_document(node: Any, error_config: Any, constants: Any) -> dict[str, Any]:
