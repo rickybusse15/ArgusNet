@@ -776,7 +776,9 @@ Default bindings retained or added:
 | Home / End | First/latest available state |
 | `[` / `]` | Previous/next event |
 | `F` | Focus selected entity |
-| `1`-`9` | Recall camera bookmark |
+| `L` / `C` | Follow / chase the selected entity |
+| `G` | Free-fly (`W A S D`, `E`/`Q`, `Shift`, right-drag to look) |
+| `1`-`9` | Recall camera bookmark (`Ctrl`/`Cmd`: save) |
 | Right drag | Orbit |
 | Middle drag or Shift+right drag | Pan |
 | Scroll | Zoom / scale movement speed |

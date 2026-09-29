@@ -6,7 +6,7 @@ use bevy_egui::EguiContexts;
 use crate::schema::Bounds2d;
 use crate::state::{ReconstructionCamera, ViewMode};
 
-const MIN_PITCH_RAD: f32 = 0.1;
+pub(crate) const MIN_PITCH_RAD: f32 = 0.1;
 pub(crate) const MAX_PITCH_RAD: f32 = 1.4;
 
 pub struct OrbitCameraPlugin;
@@ -79,12 +79,17 @@ fn update_orbit_camera(
     contexts: Option<EguiContexts>,
     windows: Query<&Window, With<PrimaryWindow>>,
     view_mode: Res<ViewMode>,
+    control: Option<Res<crate::camera_control::CameraControl>>,
     mut query: Query<(
         &mut OrbitCamera,
         &mut Transform,
         Option<&ReconstructionCamera>,
     )>,
 ) {
+    use crate::camera_control::CameraMode;
+    // The main camera's mode (P2.4b): free-fly takes no orbit input; follow
+    // and chase keep their focus on the entity, so no pan; chase owns yaw.
+    let main_mode = control.map_or(CameraMode::Orbit, |control| control.mode);
     // Accumulate input deltas. Always drain the readers so events never pile up.
     let mut orbit_delta = Vec2::ZERO;
     let mut pan_delta = Vec2::ZERO;
@@ -137,14 +142,20 @@ fn update_orbit_camera(
                 is_recon.is_none()
             };
 
+        let main = is_recon.is_none();
+        let is_target = is_target && !(main && main_mode == CameraMode::FreeFly);
+        let pans = !(main && matches!(main_mode, CameraMode::Follow(_) | CameraMode::Chase(_)));
+        let yaws = !(main && matches!(main_mode, CameraMode::Chase(_)));
         if is_target {
             if orbit_delta.length_squared() > 0.0 {
-                camera.yaw -= orbit_delta.x * 0.005;
+                if yaws {
+                    camera.yaw -= orbit_delta.x * 0.005;
+                }
                 camera.pitch =
                     (camera.pitch + orbit_delta.y * 0.004).clamp(MIN_PITCH_RAD, MAX_PITCH_RAD);
             }
 
-            if pan_delta.length_squared() > 0.0 {
+            if pans && pan_delta.length_squared() > 0.0 {
                 let forward = (camera.focus - camera.eye_position()).normalize_or_zero();
                 let right = forward.cross(Vec3::Z).normalize_or_zero();
                 let up = right.cross(forward).normalize_or_zero();
@@ -159,10 +170,12 @@ fn update_orbit_camera(
             }
         }
 
-        // Keep every camera's transform in sync with its orbit parameters so both
-        // panes render correctly even on frames where they receive no input.
-        transform.translation = camera.eye_position();
-        transform.look_at(camera.focus, Vec3::Z);
+        // Keep the reconstruction camera's transform in sync with its orbit.
+        // The main camera is placed by `camera_control`, which also flies it.
+        if !main {
+            transform.translation = camera.eye_position();
+            transform.look_at(camera.focus, Vec3::Z);
+        }
     }
 }
 

@@ -52,6 +52,14 @@ pub const TELEPORT_SPEED_MPS: f32 = 200.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IdIndex(u32);
 
+impl IdIndex {
+    /// An index for tests that need a key without an id table.
+    #[cfg(test)]
+    pub fn for_tests(n: usize) -> Self {
+        Self(n as u32)
+    }
+}
+
 /// Which domain entity a marker presents: its kind, and its interned id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Component)]
 pub enum EntityKey {

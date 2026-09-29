@@ -1,5 +1,7 @@
 pub mod app;
 pub mod belief_render;
+pub mod bindings;
+pub mod camera_control;
 pub mod glyphs;
 pub mod headless;
 pub mod land_cover_raster;
@@ -9,6 +11,7 @@ pub mod marker_meshes;
 pub mod mission_zones;
 pub mod orbit_camera;
 pub mod picking;
+pub mod prefs;
 pub mod presentation;
 pub mod replay;
 pub mod schema;

@@ -57,7 +57,7 @@ CI green. The remaining slices land one PR each, merged when CI is green.
 | P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | done, #122 ([PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
 | P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | done, #122 ([PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
 | P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | local, `claude/p24a-time-controls` ([TIME_CONTROLS.md](TIME_CONTROLS.md)) |
-| P2.4b | Camera: damped free-fly, follow/chase, `F` focus, `1`-`9` bookmarks, remappable bindings | open (orbit camera exists) |
+| P2.4b | Camera: damped free-fly, follow/chase with loss to the last known position, `F` focus, `1`-`9` bookmarks as per-scene preferences, one remappable binding table gated on typing; 0 allocations a frame | local, `claude/p24b-camera` ([CAMERA_CONTROLS.md](CAMERA_CONTROLS.md)) |
 | P2.5 | Mission-control shell, quality tiers | open |
 | P2.6 | Graphics acceptance across tiers | open |
 

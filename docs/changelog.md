@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Camera controls and bindings (P2.4b)
+
+- `F` focuses the selection, `L` follows it and `C` chases it, and `G` flies
+  freely (`W A S D`, `E`/`Q`, `Shift`, right-drag to look, scroll for speed).
+  Transitions are damped, on render time. Losing a followed entity holds its
+  last known position and says so.
+- `1`-`9` recall camera bookmarks and `Ctrl`/`Cmd`+digit saves them, per
+  scene, in `~/.config/argusnet/viewer.json` (or `$ARGUSNET_VIEWER_PREFS`).
+- Every key is remappable in that file. No binding fires while a text field
+  has the keyboard, and `Esc` leaves a camera mode before it clears the
+  selection.
+- The top bar shows the camera's mode and notices.
+- Fixed: `M` did nothing in a scene without a replay.
+
 ## Unreleased — Time controls over source time (P2.4a)
 
 - Replays play and scrub by source time, not frame count. A recording with

@@ -56,6 +56,18 @@ const TOP_STATUS_HEIGHT: f32 = 52.0;
 const BOTTOM_TIMELINE_HEIGHT: f32 = 126.0;
 const DRAWER_WIDTH: f32 = 390.0;
 
+/// Read-only resources the UI shows, grouped: the system is at Bevy's
+/// sixteen-parameter limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct UiReads<'w> {
+    selection: Res<'w, SelectionState>,
+    markers: Res<'w, CurrentRuntimeMarkers>,
+    rasters: Res<'w, crate::terrain_rasters::TerrainRasters>,
+    belief: Res<'w, crate::belief_render::BeliefLayer>,
+    camera: Res<'w, crate::camera_control::CameraControl>,
+    prefs: Res<'w, crate::prefs::ViewerPrefs>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn viewer_ui_system(
     mut contexts: EguiContexts,
@@ -65,13 +77,7 @@ pub fn viewer_ui_system(
     mut runtime_visibility: ResMut<RuntimeOverlayVisibility>,
     mut mission_overlay: ResMut<MissionOverlaySettings>,
     mut view_mode: ResMut<ViewMode>,
-    // Paired: the system is at Bevy's sixteen-parameter limit.
-    (selection, markers, rasters, belief): (
-        Res<SelectionState>,
-        Res<CurrentRuntimeMarkers>,
-        Res<crate::terrain_rasters::TerrainRasters>,
-        Res<crate::belief_render::BeliefLayer>,
-    ),
+    reads: UiReads,
     frame_metrics: Res<CurrentFrameMetrics>,
     mission_zones: Res<LoadedMissionZones>,
     mut zone_overlap_model: ResMut<ZoneOverlapModel>,
@@ -81,6 +87,14 @@ pub fn viewer_ui_system(
     mut ui_state: ResMut<ViewerUiState>,
     reconstruction: Res<ReconstructionCloud>,
 ) {
+    let UiReads {
+        selection,
+        markers,
+        rasters,
+        belief,
+        camera,
+        prefs,
+    } = reads;
     // `ctx_mut` is fallible in bevy_egui 0.42: no primary context means there is
     // no frame to draw into yet.
     let Ok(context) = contexts.ctx_mut() else {
@@ -113,6 +127,8 @@ pub fn viewer_ui_system(
                 &mut replay_state,
                 &mut view_mode,
                 &mut ui_state,
+                &camera,
+                &prefs,
             );
         });
 
@@ -192,6 +208,8 @@ fn top_status_bar(
     replay_state: &mut ReplayState,
     view_mode: &mut ViewMode,
     ui_state: &mut ViewerUiState,
+    camera: &crate::camera_control::CameraControl,
+    prefs: &crate::prefs::ViewerPrefs,
 ) {
     ui.horizontal(|ui| {
         ui.strong("ArgusNet");
@@ -217,6 +235,21 @@ fn top_status_bar(
                 .map(|frame| frame.timestamp_s)
                 .unwrap_or(0.0);
             ui.monospace(format_time_range(cur_s, total_s));
+        }
+
+        // The camera's mode, and what it last had to say (P2.4b): a lost
+        // follow is reported here, not silently dropped.
+        ui.separator();
+        ui.label(format!("Camera: {}", camera.mode_label()));
+        if let Some(notice) = camera.notice() {
+            ui.colored_label(egui::Color32::from_rgb(230, 190, 110), notice);
+        }
+        if !prefs.problems.is_empty() {
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 120, 100),
+                "Preferences problem",
+            )
+            .on_hover_text(prefs.problems.join("\n"));
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2744,6 +2777,11 @@ fn section_keyboard_shortcuts(ui: &mut egui::Ui) {
         ui.label("[ / ]       Previous / next event");
         ui.label("M           Cycle view mode");
         ui.label("R           Reset camera");
+        ui.label("F           Focus the selection");
+        ui.label("L / C       Follow / chase the selection");
+        ui.label("G           Free-fly (WASD, E/Q, Shift)");
+        ui.label("1-9         Bookmark (Ctrl/Cmd: save)");
+        ui.label("Esc         Leave free-fly/follow/chase");
         ui.label("Right-drag  Orbit camera");
         ui.label("Mid-drag    Pan camera");
         ui.label("Scroll      Zoom");

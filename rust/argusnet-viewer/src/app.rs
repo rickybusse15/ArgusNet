@@ -13,7 +13,7 @@ use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 
 /// Render layer holding only the scan-map reconstruction mesh. The reconstruction
 /// camera renders this layer alone, so the Split-mode right pane shows the believed
@@ -44,15 +44,6 @@ use crate::ui::viewer_ui_system;
 /// LiDAR reconstruction point cloud.  Rebuilt only when the cloud is dirty.
 #[derive(Component)]
 struct ReconstructionMeshMarker;
-
-/// Stores the initial camera orbit parameters so the R key can snap back.
-#[derive(Resource, Clone)]
-struct CameraHomePosition {
-    yaw: f32,
-    pitch: f32,
-    radius: f32,
-    focus: Vec3,
-}
 
 /// Active simulation subprocess — inserted as a resource while running.
 #[derive(Resource)]
@@ -184,7 +175,29 @@ fn run_inner(
     // The sky dome covers every direction the main camera can look, so this is
     // now only what shows for the one frame before the dome spawns, and behind
     // any camera that opts out of layer 0.
+    // Presentation preferences (P2.4b): the operator's camera bookmarks and
+    // key remaps. Headless reads none, so a render does not depend on who
+    // ran it.
+    let mut prefs = if headless.is_some() {
+        crate::prefs::ViewerPrefs::default()
+    } else {
+        crate::prefs::ViewerPrefs::load(
+            crate::prefs::default_path(),
+            &scene_package.manifest.scene_id,
+        )
+    };
+    let (bindings, binding_problems) =
+        crate::bindings::Bindings::with_overrides(&prefs.file.bindings);
+    prefs.problems.extend(binding_problems);
+    for problem in &prefs.problems {
+        warn!("viewer preferences: {problem}");
+    }
+
     app.insert_resource(ClearColor(HORIZON_COLOR))
+        .insert_resource(prefs)
+        .insert_resource(bindings)
+        .init_resource::<crate::bindings::KeyboardGate>()
+        .init_resource::<crate::camera_control::EscapeUsed>()
         .insert_resource(scene_package)
         .insert_resource(working_scene_root)
         .insert_resource(replay_state)
@@ -274,6 +287,7 @@ fn run_inner(
         Update,
         (
             (
+                crate::bindings::keyboard_gate_system,
                 advance_playback_system,
                 keyboard_playback_system,
                 sync_split_viewports_system,
@@ -311,6 +325,9 @@ fn run_inner(
             (
                 crate::picking::tag_pick_occluders_system,
                 crate::picking::pick_world_system,
+                // The camera before the selection keys, so a camera Escape
+                // (leaving free-fly, follow or chase) is not also a clear.
+                crate::camera_control::drive_main_camera_system,
                 crate::picking::keyboard_selection_system,
             )
                 .chain()
@@ -489,12 +506,10 @@ fn setup_world(
     let eye = orbit.eye_position();
     let focus = orbit.focus;
     let orbit_radius = orbit.radius;
-    commands.insert_resource(CameraHomePosition {
-        yaw: orbit.yaw,
-        pitch: orbit.pitch,
-        radius: orbit.radius,
-        focus: orbit.focus,
-    });
+    // Home for R, and the rest of the main camera's behaviour (P2.4b).
+    commands.insert_resource(crate::camera_control::CameraControl::new(
+        crate::camera_control::OrbitPose::of(&orbit),
+    ));
 
     // 0.19 split ambient light in two: `AmbientLight` is now a per-camera
     // component override, and `GlobalAmbientLight` is the scene-wide resource
@@ -798,73 +813,58 @@ fn advance_playback_system(time: Res<Time>, mut replay_state: ResMut<ReplayState
 fn keyboard_playback_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut replay_state: ResMut<ReplayState>,
-    contexts: Option<EguiContexts>,
+    gate: Res<crate::bindings::KeyboardGate>,
+    bindings: Res<crate::bindings::Bindings>,
     mut view_mode: ResMut<ViewMode>,
-    home: Res<CameraHomePosition>,
-    mut camera_query: Query<&mut OrbitCamera>,
 ) {
-    // Don't capture keys when egui wants keyboard input (e.g. text fields).
-    // `ctx_mut` is fallible in bevy_egui 0.42, and headless installs no egui at
-    // all; in either case there is no text field to steal the key, so fall
-    // through to playback. The whole param is optional because a missing plugin
-    // fails parameter validation outright, not just context lookup.
-    if let Some(mut contexts) = contexts {
-        if let Ok(ctx) = contexts.ctx_mut() {
-            if ctx.egui_wants_keyboard_input() {
-                return;
-            }
-        }
-    }
+    use crate::bindings::Action;
+    // Every key through the remappable bindings, none while a text field has
+    // the keyboard (P2.4b). The camera's keys, reset included, are
+    // `camera_control`'s.
+    let pressed = |action| bindings.just_pressed(&gate, &keys, action);
 
-    // R: reset camera to home position (works even with no replay loaded).
-    if keys.just_pressed(KeyCode::KeyR) {
-        for mut cam in &mut camera_query {
-            cam.yaw = home.yaw;
-            cam.pitch = home.pitch;
-            cam.radius = home.radius;
-            cam.focus = home.focus;
-        }
+    // View mode works with or without a replay; before P2.4b it sat after
+    // the early return below and did nothing in a scene without one.
+    if pressed(Action::CycleView) {
+        *view_mode = match *view_mode {
+            ViewMode::RealWorld => ViewMode::ScanMap,
+            ViewMode::ScanMap => ViewMode::Split,
+            ViewMode::Split => ViewMode::RealWorld,
+        };
     }
 
     if replay_state.frame_count() == 0 {
         return;
     }
 
-    if keys.just_pressed(KeyCode::Space) {
+    if pressed(Action::PlayPause) {
         replay_state.playing = !replay_state.playing;
     }
-    if keys.just_pressed(KeyCode::ArrowLeft) {
+    if pressed(Action::StepBack) {
         replay_state.playing = false;
         let prev = replay_state.frame_index.saturating_sub(1);
         replay_state.step_to(prev);
     }
-    if keys.just_pressed(KeyCode::ArrowRight) {
+    if pressed(Action::StepForward) {
         replay_state.playing = false;
         let next = replay_state.frame_index + 1;
         replay_state.step_to(next);
     }
-    if keys.just_pressed(KeyCode::Home) {
+    if pressed(Action::First) {
         replay_state.playing = false;
         replay_state.step_to(0);
     }
-    if keys.just_pressed(KeyCode::End) {
+    if pressed(Action::Last) {
         replay_state.playing = false;
         let last = replay_state.frame_count().saturating_sub(1);
         replay_state.step_to(last);
     }
     // Jump to the previous or next frame with events (P2.4a).
-    if keys.just_pressed(KeyCode::BracketLeft) {
+    if pressed(Action::PreviousEvent) {
         replay_state.jump_to_event(false);
     }
-    if keys.just_pressed(KeyCode::BracketRight) {
+    if pressed(Action::NextEvent) {
         replay_state.jump_to_event(true);
-    }
-    if keys.just_pressed(KeyCode::KeyM) {
-        *view_mode = match *view_mode {
-            ViewMode::RealWorld => ViewMode::ScanMap,
-            ViewMode::ScanMap => ViewMode::Split,
-            ViewMode::Split => ViewMode::RealWorld,
-        };
     }
 }
 
@@ -2460,6 +2460,28 @@ fn reframe_camera_for_scene(
 
 #[cfg(test)]
 mod tests {
+    /// View mode cycles with `M` in a scene with no replay: before P2.4b the
+    /// key sat after the "no replay" return and did nothing there.
+    #[test]
+    fn cycle_view_works_without_a_replay() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        app.insert_resource(crate::replay::ReplayState::default())
+            .insert_resource(crate::state::ViewMode::RealWorld)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::bindings::KeyboardGate>()
+            .init_resource::<crate::bindings::Bindings>()
+            .add_systems(Update, super::keyboard_playback_system);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyM);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<crate::state::ViewMode>(),
+            crate::state::ViewMode::ScanMap
+        );
+    }
+
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
