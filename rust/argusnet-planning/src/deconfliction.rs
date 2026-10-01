@@ -155,8 +155,14 @@ pub struct Proposal {
     pub velocity: Vec3,
 }
 
+/// `np.linalg.norm` of a 2-vector: `sqrt(x*x + y*y)`, **not** `hypot`.
+///
+/// `hypot` is the more careful function and it rounds differently: the
+/// reference's predicted separation came out one ulp apart from this port's
+/// on a real resolution (P4.9a.2). That value sizes the lateral push, so the
+/// difference is not cosmetic -- it can move a platform.
 fn norm2(v: [f64; 2]) -> f64 {
-    v[0].hypot(v[1])
+    (v[0] * v[0] + v[1] * v[1]).sqrt()
 }
 
 fn dot2(a: [f64; 2], b: [f64; 2]) -> f64 {

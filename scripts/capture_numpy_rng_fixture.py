@@ -134,13 +134,54 @@ def capture() -> dict:
             )
         uniform_cases.append({"name": case["name"], "seed": seed, "draws": draws})
 
+    # P4.9b.2: `integers` interleaved with 64-bit double draws, as the target
+    # behaviours and mission zones draw them. `integers` reads 32 bits at a
+    # time through PCG64's half-word buffer, which the double draws neither
+    # read nor clear, so the order of operations is the thing under test.
+    # The ranges include one that forces Lemire's rejection loop (2**31 + 1)
+    # and the exact 2**32 - 1 path.
+    #
+    # The doubles are drawn with `random()`, not `uniform()`: `next_double` is
+    # integer-exact on every platform, while `uniform`'s `low + (high - low)
+    # * u` is contracted to a fused multiply-add by some numpy builds (arm64,
+    # numpy 2.5) and not others. The `uniform` section above was recorded on a
+    # non-fusing build, which the Rust port reproduces; see `--sections`.
+    mixed_cases = []
+    operations = [
+        ("integers", 0, 2),
+        ("random", 0, 0),
+        ("integers", 3, 6),
+        ("integers", 4, 8),
+        ("random", 0, 0),
+        ("integers", 0, 7),
+        ("random", 0, 0),
+        ("integers", 0, 2**31 + 1),
+        ("integers", -5, 5),
+        ("integers", 0, 2**32),
+        ("random", 0, 0),
+        ("integers", 7, 8),
+        ("integers", 0, 1000003),
+    ]
+    for case in seeds():
+        generator = np.random.default_rng(case["seed"])
+        draws = []
+        for _ in range(4):
+            for kind, low, high in operations:
+                if kind == "integers":
+                    value = str(int(generator.integers(low, high)))
+                else:
+                    value = f(generator.random())
+                draws.append({"op": kind, "low": low, "high": high, "value": value})
+        mixed_cases.append({"name": case["name"], "seed": case["seed"], "draws": draws})
+
     return {
         "description": (
-            "numpy default_rng(seed).uniform(low, high) and PCG64 raw output. "
-            "Regenerate with scripts/capture_numpy_rng_fixture.py."
+            "numpy default_rng(seed).uniform(low, high), integers and random, and "
+            "PCG64 raw output. Regenerate with scripts/capture_numpy_rng_fixture.py."
         ),
         "raw": raw_cases,
         "uniform": uniform_cases,
+        "mixed": mixed_cases,
     }
 
 
@@ -204,6 +245,17 @@ def check_discriminating(document: dict) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--sections",
+        nargs="+",
+        choices=["raw", "uniform", "mixed"],
+        help=(
+            "Rewrite only these sections of an existing fixture. The committed "
+            "`uniform` section was recorded on a numpy build that does not fuse "
+            "`low + (high - low) * u`; regenerating it on one that does (arm64, "
+            "numpy 2.5) moves ~45%% of its values by one ulp."
+        ),
+    )
     args = parser.parse_args()
 
     document = capture()
@@ -219,6 +271,12 @@ def main() -> int:
         f"{sum(len(c['draws']) for c in document['uniform'])} uniform draws, "
         f"{sum(len(c['raw_u64']) for c in document['raw'])} raw outputs"
     )
+    if args.sections:
+        existing = json.loads(args.out.read_text())
+        for section in args.sections:
+            existing[section] = document[section]
+        existing["description"] = document["description"]
+        document = existing
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, separators=(",", ":"), sort_keys=True))
     print(f"wrote {args.out} ({args.out.stat().st_size / 1024:.0f} KB)")

@@ -1,0 +1,25 @@
+[package]
+name = "argusnet-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# `argusnet-rs`, not `argusnet`: during coexistence pip installs a Python
+# `argusnet` console script, and a Cargo binary of the same name would
+# overwrite it or be shadowed by it depending on PATH order. DELIVERY_PLAN P4.9.
+[[bin]]
+name = "argusnet-rs"
+path = "src/main.rs"
+
+[dependencies]
+argusnet-core = { path = "../argusnet-core" }
+argusnet-proto = { path = "../argusnet-proto" }
+argusnet-sim = { path = "../argusnet-sim" }
+prost.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# The viewer's own replay reader, to prove an argusnet-rs replay is one the
+# viewer can present (P4.9a.2).
+argusnet-replay = { path = "../argusnet-replay" }

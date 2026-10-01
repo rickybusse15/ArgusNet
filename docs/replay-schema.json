@@ -496,6 +496,29 @@
             "type": "string"
           },
           "description": "Node IDs that contributed to the most recent update."
+        },
+        "lifecycle_state": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "tentative",
+            "confirmed",
+            "coasting",
+            "deleted",
+            null
+          ],
+          "description": "Track lifecycle stage reported by the fusion engine."
+        },
+        "quality_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Fusion engine track quality score."
         }
       }
     },

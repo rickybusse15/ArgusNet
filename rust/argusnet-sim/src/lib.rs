@@ -1,21 +1,33 @@
 //! The Rust simulation runtime shell.
 
 pub mod battery;
+pub mod builder;
 pub mod clock;
 pub mod command;
 pub mod config;
+pub mod controller;
 pub mod deconflict;
 pub mod deterministic;
+pub mod follow_path;
 pub mod fusion;
 pub mod mapping;
 pub mod mission;
+pub mod mission_driver;
+pub mod motion;
+pub mod motion_world;
+pub mod observation_follow;
 pub mod observe;
 pub mod overrides;
 pub mod particles;
 pub mod replay;
+pub mod runtime_world;
 pub mod safety;
+pub mod scenario;
 pub mod simulation;
 pub mod snapshot;
 pub mod stage;
+pub mod trajectory;
 pub mod vio;
+pub mod waypoint_path;
+pub mod weather;
 pub mod world;

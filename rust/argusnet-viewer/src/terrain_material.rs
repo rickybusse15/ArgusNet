@@ -15,14 +15,14 @@
 //! gradient sky instead of ending on a hard line. The shader calls
 //! `main_pass_post_lighting_processing` for exactly that reason.
 //!
-//! # What is not here yet
+//! # Land cover and belief (P2.1)
 //!
-//! **Land-cover tint** needs `argusnet_world::land_cover::LandCoverLayer`
-//! sampled on the CPU into a texture, with nearest filtering because the class
-//! channel is categorical. **Belief** has no data to draw: `belief_cells` is in
-//! the replay schema and `mapping/belief.py` builds the objects, but nothing
-//! serialises them, so every replay carries an empty array. Both are follow-ups
-//! rather than half-implementations here.
+//! Three more textures, all read with `textureLoad`, so nothing categorical is
+//! ever filtered: the land-cover class raster
+//! ([`crate::land_cover_raster`]) and the two belief channels
+//! ([`crate::belief_render`]). [`crate::terrain_rasters`] owns them. The
+//! shader is only ever given those; it infers nothing from terrain colour,
+//! height or drone positions.
 
 use bevy::asset::embedded_asset;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
@@ -31,7 +31,9 @@ use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 use bevy::world_serialization::WorldAssetRoot;
 
+use crate::land_cover_raster::PALETTE_SIZE;
 use crate::schema::ScenePackage;
+use crate::terrain_rasters::TerrainRasters;
 
 /// The `semantic_kind` a style layer uses to declare itself terrain. Matching on
 /// this rather than on a layer id keeps the material attached to the *meaning*
@@ -80,7 +82,7 @@ const BAND_STRENGTH: f32 = 0.8;
 /// summary. Only affects how the ramp is spread, never whether it draws.
 const FALLBACK_ELEVATION_SPAN_M: f32 = 250.0;
 
-#[derive(Clone, Debug, ShaderType)]
+#[derive(Clone, Debug, PartialEq, ShaderType)]
 pub struct TerrainSettings {
     pub low_color: Vec4,
     pub high_color: Vec4,
@@ -94,12 +96,50 @@ pub struct TerrainSettings {
     pub slope_threshold_rad: f32,
     pub slope_softness_rad: f32,
     pub band_strength: f32,
+    /// `x_min`, `y_min`, cell size, tint strength.
+    pub land_cover_grid: Vec4,
+    /// Columns, rows, and 1 when a raster is bound.
+    pub land_cover_dims: UVec4,
+    /// Each class code's colour; alpha 0 draws no tint.
+    pub land_cover_palette: [Vec4; PALETTE_SIZE],
+    /// `x_min`, `y_min`, cell size, overlay strength.
+    pub belief_grid: Vec4,
+    /// Columns, rows, and the [`BeliefMode`] code.
+    pub belief_dims: UVec4,
+    /// Simulation time now, and the age past which a cell reads stale.
+    pub belief_time: Vec4,
+    pub belief_safe_color: Vec4,
+    pub belief_uncertain_color: Vec4,
+    pub belief_obstacle_color: Vec4,
+    pub belief_unknown_color: Vec4,
+    pub belief_outside_color: Vec4,
+}
+
+/// What the belief overlay draws, as the shader's `belief_dims.z` code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum BeliefMode {
+    /// The overlay is off.
+    Off = 0,
+    /// On, but there is no belief to draw: the explicit unavailable state.
+    Unavailable = 1,
+    /// On, over a bound snapshot.
+    Ready = 2,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
 pub struct TerrainExtension {
     #[uniform(100)]
     pub settings: TerrainSettings,
+    /// `Rg8Uint`: belief class, observed.
+    #[texture(101, sample_type = "u_int")]
+    pub belief_class: Handle<Image>,
+    /// `Rg32Float`: confidence, last observed seconds.
+    #[texture(102, sample_type = "float", filterable = false)]
+    pub belief_numeric: Handle<Image>,
+    /// `R8Uint`: land-cover class.
+    #[texture(103, sample_type = "u_int")]
+    pub land_cover: Handle<Image>,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -146,9 +186,28 @@ impl TerrainSettings {
             slope_threshold_rad: SLOPE_THRESHOLD_RAD,
             slope_softness_rad: SLOPE_SOFTNESS_RAD,
             band_strength: BAND_STRENGTH,
+            land_cover_grid: Vec4::ZERO,
+            land_cover_dims: UVec4::ZERO,
+            land_cover_palette: [Vec4::ZERO; PALETTE_SIZE],
+            belief_grid: Vec4::ZERO,
+            belief_dims: UVec4::ZERO,
+            belief_time: Vec4::ZERO,
+            belief_safe_color: BELIEF_SAFE.extend(1.0),
+            belief_uncertain_color: BELIEF_UNCERTAIN.extend(1.0),
+            belief_obstacle_color: BELIEF_OBSTACLE.extend(1.0),
+            belief_unknown_color: BELIEF_UNKNOWN.extend(1.0),
+            belief_outside_color: BELIEF_OUTSIDE.extend(1.0),
         }
     }
 }
+
+/// Belief class colours. Saturated and far apart in hue, so the overlay reads
+/// at a glance and the pixel probes can tell the classes apart after lighting.
+pub const BELIEF_SAFE: Vec3 = Vec3::new(0.10, 0.85, 0.30);
+pub const BELIEF_UNCERTAIN: Vec3 = Vec3::new(0.95, 0.70, 0.05);
+pub const BELIEF_OBSTACLE: Vec3 = Vec3::new(0.95, 0.10, 0.10);
+pub const BELIEF_UNKNOWN: Vec3 = Vec3::new(0.55, 0.20, 0.85);
+pub const BELIEF_OUTSIDE: Vec3 = Vec3::new(0.15, 0.15, 0.18);
 
 pub struct TerrainMaterialPlugin;
 
@@ -158,6 +217,16 @@ impl Plugin for TerrainMaterialPlugin {
         app.add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_systems(Update, apply_terrain_material_system);
     }
+}
+
+/// The elevation half of the settings, from the scene's terrain summary.
+pub fn scene_settings(scene_package: &ScenePackage) -> TerrainSettings {
+    let summary = scene_package.environment.terrain_summary.as_ref();
+    let min_elevation_m = summary.and_then(|s| s.min_height_m).unwrap_or(0.0);
+    let max_elevation_m = summary
+        .and_then(|s| s.max_height_m)
+        .unwrap_or(min_elevation_m + FALLBACK_ELEVATION_SPAN_M);
+    TerrainSettings::for_elevation_range(min_elevation_m, max_elevation_m)
 }
 
 /// Whether a layer's style declares it terrain.
@@ -187,13 +256,9 @@ fn apply_terrain_material_system(
     meshes: Query<&MeshMaterial3d<StandardMaterial>>,
     standard_materials: Res<Assets<StandardMaterial>>,
     mut terrain_materials: ResMut<Assets<TerrainMaterial>>,
+    rasters: Res<TerrainRasters>,
 ) {
-    let summary = scene_package.environment.terrain_summary.as_ref();
-    let min_elevation_m = summary.and_then(|s| s.min_height_m).unwrap_or(0.0);
-    let max_elevation_m = summary
-        .and_then(|s| s.max_height_m)
-        .unwrap_or(min_elevation_m + FALLBACK_ELEVATION_SPAN_M);
-    let settings = TerrainSettings::for_elevation_range(min_elevation_m, max_elevation_m);
+    let settings = rasters.apply_to(scene_settings(&scene_package));
 
     for (root, asset) in &roots {
         if !asset_server.is_loaded_with_dependencies(&asset.0) {
@@ -224,6 +289,9 @@ fn apply_terrain_material_system(
                 base,
                 extension: TerrainExtension {
                     settings: settings.clone(),
+                    belief_class: rasters.belief_class.clone(),
+                    belief_numeric: rasters.belief_numeric.clone(),
+                    land_cover: rasters.land_cover.clone(),
                 },
             });
             commands

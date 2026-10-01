@@ -225,6 +225,13 @@ untouched — tested with a tower parked *between* two converging drones.
 
 # Stage 4: the hard safety monitor
 
+> **Corrected in P4.9d.** This body was tested here but not assembled until
+> P4.9d. Assembling it, and comparing it with the reference tick for tick,
+> found three arguments that were not the reference's. It passed the tick's
+> timestamp as `dt_s`. It used a caution fraction of 0.85 where
+> `SafetyMonitor`'s default is 0.9. And it read one constant terrain height.
+> See [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md).
+
 Third stage body of P4.8c. §4 places it **after** deconfliction, and the
 reference is explicit about why it is opt-in:
 

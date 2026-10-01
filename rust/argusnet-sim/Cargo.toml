@@ -15,6 +15,11 @@ argusnet-mapping = { path = "../argusnet-mapping" }
 argusnet-planning = { path = "../argusnet-planning" }
 argusnet-sensing = { path = "../argusnet-sensing" }
 argusnet-types = { path = "../argusnet-types" }
+# P4.8d.2 prerequisite: `motion_world` adapts this crate's terrain and
+# obstacle queries to the narrow contracts in `motion`. Only that module
+# uses it; `motion` itself stays world-free so its fixture tests can drive a
+# recorded oracle.
+argusnet-world = { path = "../argusnet-world" }
 safety-engine = { path = "../safety-engine" }
 # Pinned deliberately: this crate's output values are a contract. See
 # `deterministic.rs` and the conformance fixtures that pin actual draws, which
@@ -26,9 +31,12 @@ safety-engine = { path = "../safety-engine" }
 # conformance fixture the moment CI moved to a Mac. A version bump here can
 # move the draws, so it is pinned and the fixture guards it.
 libm = "=0.2.16"
-rand_chacha = "=0.10.0"
+# `serde`: a checkpoint carries each sensor's bias-drift stream position.
+rand_chacha = { version = "=0.10.0", features = ["serde"] }
 rand_core = "=0.10.1"
 serde.workspace = true
+# `float_roundtrip` comes from the workspace dependency; see the root
+# Cargo.toml for why it cannot be enabled per crate.
 serde_json.workspace = true
 
 [dev-dependencies]

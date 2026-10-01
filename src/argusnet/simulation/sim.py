@@ -10,7 +10,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -1362,6 +1362,14 @@ def static_ground_point(
         position = np.array([x_m, y_m, ground_m + mast_agl_m], dtype=float)
         return position, zero.copy()
 
+    # Data, not behaviour: the scenario-bundle exporter reads how this closure
+    # was built, because a closure cannot otherwise be described to Rust.
+    trajectory.bundle_spec = {  # type: ignore[attr-defined]
+        "kind": "static_ground_point",
+        "x_m": float(x_m),
+        "y_m": float(y_m),
+        "mast_agl_m": float(mast_agl_m),
+    }
     return trajectory
 
 
@@ -1731,6 +1739,7 @@ def looped_waypoint_path(
     cumulative_lengths = np.cumsum(segment_lengths)
     path_length_m = float(cumulative_lengths[-1])
     phase_offset_m = (phase % math.tau) / math.tau * path_length_m
+    waypoint_speed_mps = float(speed_mps)
     speed_mps = max(float(speed_mps), 0.5)
 
     def trajectory(timestamp_s: float) -> tuple[np.ndarray, np.ndarray]:
@@ -1766,6 +1775,19 @@ def looped_waypoint_path(
             obstacle_layer=obstacle_layer,
         )
 
+    # Data, not behaviour: see `static_ground_point`. The *unfloored* speed is
+    # recorded, because the Rust port applies the 0.5 m/s floor itself.
+    trajectory.bundle_spec = {  # type: ignore[attr-defined]
+        "kind": "looped_waypoint_path",
+        "waypoints_xy_m": [[float(p[0]), float(p[1])] for p in points],
+        "speed_mps": waypoint_speed_mps,
+        "base_agl_m": float(base_agl_m),
+        "vertical_amplitude_m": float(vertical_amplitude),
+        "vertical_frequency_rad_s": float(vertical_frequency),
+        "phase": float(phase),
+        "min_agl_m": float(min_agl_m),
+        "avoid_obstacles": obstacle_layer is not None,
+    }
     return trajectory
 
 
@@ -4133,6 +4155,51 @@ def _generation_rejection(
     )
 
 
+def sensor_look_direction(velocity: np.ndarray, look_down_angle_deg: float) -> np.ndarray | None:
+    """Where a directional sensor on a moving platform looks: along its velocity,
+    tilted down, or nowhere below 0.5 m/s of horizontal speed.
+
+    Lifted verbatim out of `build_observations` so the look direction can be
+    compared against a port directly (P4.8e.2); the arithmetic is unchanged.
+    """
+    speed_xy = float(np.linalg.norm(velocity[:2]))
+    if speed_xy > 0.5:
+        look = velocity.copy()
+        look[2] = -np.tan(np.radians(look_down_angle_deg)) * speed_xy
+        return look / np.linalg.norm(look)
+    return None
+
+
+def cloud_detection_factor(weather: WeatherModel, observer_alt: float, target_alt: float) -> float:
+    """Detection-probability factor from cloud layers along one sight line.
+
+    Lifted verbatim out of `build_observations` (P4.8e.2), like
+    `sensor_look_direction`; the arithmetic is unchanged.
+    """
+    cloud_factor = 1.0
+    for cloud in weather.cloud_layers:
+        if cloud.obscures_los(observer_alt, target_alt):
+            # Full occlusion — detection impossible
+            cloud_factor = 0.0
+            break
+        # Partial coverage reduces detection probability
+        low_alt = min(observer_alt, target_alt)
+        high_alt = max(observer_alt, target_alt)
+        if low_alt < cloud.top_altitude_m and high_alt > cloud.base_altitude_m:
+            cloud_factor *= max(1.0 - cloud.coverage * 0.7, 0.05)
+    return cloud_factor
+
+
+def fov_angle_deg(line_of_sight: np.ndarray, range_m: float, sensor_dir: np.ndarray) -> float:
+    """Angle between the sight line and the look direction, in degrees.
+
+    Lifted verbatim out of `build_observations`; see `sensor_look_direction`.
+    """
+    los_unit = line_of_sight / range_m
+    cos_angle = float(np.dot(los_unit, sensor_dir))
+    return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
+
+
 def build_observations(
     rng: np.random.Generator,
     nodes: Sequence[SimNode],
@@ -4199,11 +4266,7 @@ def build_observations(
                 node_sensor_dir = node.sensor_direction_fn(timestamp_s)
             if node_sensor_dir is None:
                 _, vel = node.trajectory(timestamp_s)
-                speed_xy = float(np.linalg.norm(vel[:2]))
-                if speed_xy > 0.5:
-                    look = vel.copy()
-                    look[2] = -np.tan(np.radians(sensor_cfg.drone_look_down_angle_deg)) * speed_xy
-                    node_sensor_dir = look / np.linalg.norm(look)
+                node_sensor_dir = sensor_look_direction(vel, sensor_cfg.drone_look_down_angle_deg)
         for truth in truths:
             attempted_count += 1
             line_of_sight = truth.position - node_state.position
@@ -4233,9 +4296,7 @@ def build_observations(
             if node.fov_half_angle_deg < 179.0:
                 sensor_dir = node_sensor_dir
                 if sensor_dir is not None:
-                    los_unit = line_of_sight / range_m
-                    cos_angle = float(np.dot(los_unit, sensor_dir))
-                    angle_deg = float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
+                    angle_deg = fov_angle_deg(line_of_sight, range_m, sensor_dir)
                     if angle_deg > node.fov_half_angle_deg:
                         rejection_counts[REJECT_OUTSIDE_FOV] += 1
                         rejected_by_target[truth.target_id] += 1
@@ -4356,18 +4417,9 @@ def build_observations(
             # --- Cloud layer attenuation ---
             cloud_factor = 1.0
             if weather is not None and weather.cloud_layers:
-                observer_alt = float(node_state.position[2])
-                target_alt = float(truth.position[2])
-                for cloud in weather.cloud_layers:
-                    if cloud.obscures_los(observer_alt, target_alt):
-                        # Full occlusion — detection impossible
-                        cloud_factor = 0.0
-                        break
-                    # Partial coverage reduces detection probability
-                    low_alt = min(observer_alt, target_alt)
-                    high_alt = max(observer_alt, target_alt)
-                    if low_alt < cloud.top_altitude_m and high_alt > cloud.base_altitude_m:
-                        cloud_factor *= max(1.0 - cloud.coverage * 0.7, 0.05)
+                cloud_factor = cloud_detection_factor(
+                    weather, float(node_state.position[2]), float(truth.position[2])
+                )
             combined_pd = max(0.0, min(1.0, detection.p_d * sensor_pd * cloud_factor))
             if pair_rng.random() > combined_pd:
                 reason = (
@@ -4697,24 +4749,20 @@ def _cache_metric_total(cache_metrics: Mapping[str, object], names: set[str]) ->
     return total
 
 
-def _build_replay_metadata(
-    frames: Sequence[PlatformFrame],
-    scenario: ScenarioDefinition,
-    simulation_config: SimulationConfig,
-    tracker_config: TrackerConfig,
-    summary: dict[str, object],
-) -> dict[str, object]:
+def scenario_replay_metadata(scenario: ScenarioDefinition) -> dict[str, object]:
+    """The part of a replay's ``meta`` that describes the scenario, not the run.
+
+    Lifted verbatim out of ``_build_replay_metadata`` (P4.9a.2), so a scenario
+    bundle can carry it and ``argusnet-rs`` can write the same ``meta``
+    without rebuilding the viewer's terrain mesh. ``_build_replay_metadata``
+    reassembles the full ``meta`` in its original key order around the run's
+    own keys.
+    """
     environment = scenario.environment
     if environment is None:
         raise ValueError("ScenarioDefinition.environment must be populated before replay export.")
     terrain_metadata = environment.terrain.to_metadata()
-    requested_duration_s = (
-        simulation_config.requested_duration_s
-        if simulation_config.requested_duration_s is not None
-        else simulation_config.actual_duration_s
-    )
     return {
-        "schema_version": "2.0",
         "terrain": terrain_metadata,
         "occluding_objects": environment.obstacles.to_metadata(),
         "environment_id": environment.environment_id,
@@ -4723,10 +4771,6 @@ def _build_replay_metadata(
         "terrain_summary": environment.terrain.terrain_summary(),
         "land_cover": environment.land_cover.to_metadata(),
         "land_cover_legend": LandCoverClass.legend(),
-        "platform": {
-            "min_observations": tracker_config.min_observations,
-            "max_stale_steps": tracker_config.max_stale_steps,
-        },
         "scenario_options": {
             "map_preset": scenario.options.map_preset,
             "target_motion_preset": scenario.options.target_motion_preset,
@@ -4789,12 +4833,58 @@ def _build_replay_metadata(
             if scenario.enu_origin is not None
             else None
         ),
-        "requested_duration_s": float(requested_duration_s),
-        "actual_duration_s": float(simulation_config.actual_duration_s),
         "target_motion_assignments": dict(sorted(scenario.target_motion_assignments.items())),
         "drone_planner_modes": dict(sorted(scenario.drone_planner_modes.items())),
         "drone_target_assignments": dict(sorted(scenario.drone_target_assignments.items())),
         "drone_roles": dict(sorted(scenario.drone_roles.items())),
+    }
+
+
+# ``scenario_replay_metadata``'s keys, grouped by where ``meta`` interleaves
+# them with the run's own.
+_SCENARIO_META_BEFORE_PLATFORM = (
+    "terrain",
+    "occluding_objects",
+    "environment_id",
+    "crs_id",
+    "environment_bounds_m",
+    "terrain_summary",
+    "land_cover",
+    "land_cover_legend",
+)
+_SCENARIO_META_BEFORE_DURATIONS = ("scenario_options", "mission_profile", "zones", "enu_origin")
+_SCENARIO_META_AFTER_DURATIONS = (
+    "target_motion_assignments",
+    "drone_planner_modes",
+    "drone_target_assignments",
+    "drone_roles",
+)
+
+
+def _build_replay_metadata(
+    frames: Sequence[PlatformFrame],
+    scenario: ScenarioDefinition,
+    simulation_config: SimulationConfig,
+    tracker_config: TrackerConfig,
+    summary: dict[str, object],
+) -> dict[str, object]:
+    scenario_meta = scenario_replay_metadata(scenario)
+    requested_duration_s = (
+        simulation_config.requested_duration_s
+        if simulation_config.requested_duration_s is not None
+        else simulation_config.actual_duration_s
+    )
+    return {
+        "schema_version": "2.0",
+        **{key: scenario_meta[key] for key in _SCENARIO_META_BEFORE_PLATFORM},
+        "platform": {
+            "min_observations": tracker_config.min_observations,
+            "max_stale_steps": tracker_config.max_stale_steps,
+        },
+        **{key: scenario_meta[key] for key in _SCENARIO_META_BEFORE_DURATIONS},
+        "requested_duration_s": float(requested_duration_s),
+        "actual_duration_s": float(simulation_config.actual_duration_s),
+        **{key: scenario_meta[key] for key in _SCENARIO_META_AFTER_DURATIONS},
         "observation_generation": {
             "attempted_count": summary["generation_attempted_count"],
             "accepted_count": summary["generation_accepted_count"],
@@ -4824,6 +4914,97 @@ def _generate_poi_positions(
         z = 80.0  # inspection altitude AGL
         positions.append(np.array([x, y, z], dtype=float))
     return positions
+
+
+# metres above ground the drone hovers while dwelling
+POI_HOVER_AGL_M = 40.0
+
+
+# Auto-generate POIs spread across the map interior.
+# Each POI is placed at a valid drone-accessible altitude above the terrain
+# and rejected if it falls inside an obstacle at hover height.
+
+
+def make_poi_positions(
+    bounds: dict,
+    count: int,
+    seed: int,
+    terrain=None,
+    obstacles=None,
+) -> list[np.ndarray]:
+    rng2 = np.random.default_rng(seed + 999)
+    x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
+    y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
+    margin_x = (x_max - x_min) * 0.15
+    margin_y = (y_max - y_min) * 0.15
+    positions: list[np.ndarray] = []
+    for _ in range(count):
+        for _attempt in range(200):
+            x = float(rng2.uniform(x_min + margin_x, x_max - margin_x))
+            y = float(rng2.uniform(y_min + margin_y, y_max - margin_y))
+            terrain_h = float(terrain.height_at(x, y)) if terrain is not None else 0.0
+            z = terrain_h + POI_HOVER_AGL_M
+            # Reject if an obstacle blocks the hover position.
+            if obstacles is not None and obstacles.point_collides(x, y, z):
+                continue
+            positions.append(np.array([x, y, z], dtype=float))
+            break
+        else:
+            # Fallback: last sampled position even if slightly inside an obstacle.
+            positions.append(np.array([x, y, z], dtype=float))  # type: ignore[possibly-undefined]
+    return positions
+
+
+def build_run_inspection_pois(scenario: ScenarioDefinition, seed: int, poi_count: int) -> list:
+    """The inspection POIs `run_simulation` builds for a scan-map-inspect run.
+
+    Lifted verbatim out of `run_simulation` (P4.8e.3) so the scenario-bundle
+    exporter can carry exactly the POIs the reference would fly to.
+    """
+    if scenario.options.mission_profile_id and scenario.options.mission_mode == "scan_map_inspect":
+        from argusnet.mission.profiles import build_profile_inspection_pois
+
+        bounds = dict(scenario.map_bounds_m)
+        map_extent_m = min(
+            float(bounds["x_max_m"]) - float(bounds["x_min_m"]),
+            float(bounds["y_max_m"]) - float(bounds["y_min_m"]),
+        )
+        profile_pois = build_profile_inspection_pois(
+            scenario.options.mission_profile_id, map_extent_m=map_extent_m
+        )
+        _pois = [
+            replace(
+                poi,
+                position=vec3(
+                    float(poi.position[0]),
+                    float(poi.position[1]),
+                    float(
+                        scenario.terrain.height_at(float(poi.position[0]), float(poi.position[1]))
+                    )
+                    + POI_HOVER_AGL_M,
+                ),
+            )
+            for poi in profile_pois[:poi_count]
+        ]
+    else:
+        _poi_positions = make_poi_positions(
+            dict(scenario.map_bounds_m),
+            poi_count,
+            seed,
+            terrain=scenario.terrain,
+            obstacles=getattr(scenario.environment, "obstacles", None),
+        )
+        _pois = [
+            InspectionPOI(
+                poi_id=f"poi-{i:02d}",
+                name=f"Site {chr(65 + i % 26)}",
+                position=pos,
+                priority=poi_count - i,
+                required_dwell_s=15.0,
+            )
+            for i, pos in enumerate(_poi_positions)
+        ]
+    return _pois
 
 
 def run_simulation(
@@ -5090,83 +5271,7 @@ def run_simulation(
             ts + max(dist_m / max(speed_mps, 1.0e-9), 1.0e-3),
         )
 
-    # Auto-generate POIs spread across the map interior.
-    # Each POI is placed at a valid drone-accessible altitude above the terrain
-    # and rejected if it falls inside an obstacle at hover height.
-    _POI_HOVER_AGL_M = 40.0  # metres above ground the drone hovers while dwelling
-
-    def _make_poi_positions(
-        bounds: dict,
-        count: int,
-        seed: int,
-        terrain=None,
-        obstacles=None,
-    ) -> list[np.ndarray]:
-        rng2 = np.random.default_rng(seed + 999)
-        x_min, x_max = float(bounds["x_min_m"]), float(bounds["x_max_m"])
-        y_min, y_max = float(bounds["y_min_m"]), float(bounds["y_max_m"])
-        margin_x = (x_max - x_min) * 0.15
-        margin_y = (y_max - y_min) * 0.15
-        positions: list[np.ndarray] = []
-        for _ in range(count):
-            for _attempt in range(200):
-                x = float(rng2.uniform(x_min + margin_x, x_max - margin_x))
-                y = float(rng2.uniform(y_min + margin_y, y_max - margin_y))
-                terrain_h = float(terrain.height_at(x, y)) if terrain is not None else 0.0
-                z = terrain_h + _POI_HOVER_AGL_M
-                # Reject if an obstacle blocks the hover position.
-                if obstacles is not None and obstacles.point_collides(x, y, z):
-                    continue
-                positions.append(np.array([x, y, z], dtype=float))
-                break
-            else:
-                # Fallback: last sampled position even if slightly inside an obstacle.
-                positions.append(np.array([x, y, z], dtype=float))  # type: ignore[possibly-undefined]
-        return positions
-
-    if scenario.options.mission_profile_id and _mission_mode == "scan_map_inspect":
-        from argusnet.mission.profiles import build_profile_inspection_pois
-
-        bounds = dict(scenario.map_bounds_m)
-        map_extent_m = min(
-            float(bounds["x_max_m"]) - float(bounds["x_min_m"]),
-            float(bounds["y_max_m"]) - float(bounds["y_min_m"]),
-        )
-        profile_pois = build_profile_inspection_pois(
-            scenario.options.mission_profile_id, map_extent_m=map_extent_m
-        )
-        _pois = [
-            replace(
-                poi,
-                position=vec3(
-                    float(poi.position[0]),
-                    float(poi.position[1]),
-                    float(
-                        scenario.terrain.height_at(float(poi.position[0]), float(poi.position[1]))
-                    )
-                    + _POI_HOVER_AGL_M,
-                ),
-            )
-            for poi in profile_pois[:_poi_count_cfg]
-        ]
-    else:
-        _poi_positions = _make_poi_positions(
-            dict(scenario.map_bounds_m),
-            _poi_count_cfg,
-            simulation_config.seed,
-            terrain=scenario.terrain,
-            obstacles=getattr(scenario.environment, "obstacles", None),
-        )
-        _pois = [
-            InspectionPOI(
-                poi_id=f"poi-{i:02d}",
-                name=f"Site {chr(65 + i % 26)}",
-                position=pos,
-                priority=_poi_count_cfg - i,
-                required_dwell_s=15.0,
-            )
-            for i, pos in enumerate(_poi_positions)
-        ]
+    _pois = build_run_inspection_pois(scenario, simulation_config.seed, _poi_count_cfg)
     _poi_manager = POIManager(_pois)
 
     # Open streaming file if requested.
@@ -6404,7 +6509,26 @@ def simulate(
     mission_profile: str | None = None,
     mission_profile_overrides: Mapping[str, object] | None = None,
     progress: Callable[[int, int], None] | None = None,
-) -> SimulationResult:
+    export_bundle_path: str | None = None,
+    export_config_path: str | None = None,
+) -> SimulationResult | None:
+    if export_bundle_path is not None or export_config_path is not None:
+        # Run-time options argusnet-rs does not honour: refused by name rather
+        # than silently dropped from the exported run.
+        from argusnet.simulation.scenario_bundle import UnsupportedScenario
+
+        run_time_options = {
+            "--continuous": continuous,
+            "--realtime": realtime,
+            "--streaming": streaming,
+            "--compact": compact,
+            "--replay-subsample": replay_subsample != 1,
+        }
+        refused = [flag for flag, used in run_time_options.items() if used]
+        if refused:
+            raise UnsupportedScenario(
+                f"{', '.join(refused)}: argusnet-rs writes a full, unpaced replay"
+            )
     if continuous:
         simulation_config = SimulationConfig(steps=sys.maxsize, dt_s=dt, seed=seed)
         progress = None
@@ -6454,11 +6578,50 @@ def simulate(
             frontier_exploration=frontier_exploration,
             occlusion_aware_mapping=occlusion_aware_mapping,
         )
+    if export_config_path is not None:
+        # The versioned config these flags resolve to (P4.9's "adapters
+        # translate legacy CLI flags"): `argusnet-rs sim --config` builds the
+        # same scenario natively. Custom constants have no place in a config.
+        from argusnet.simulation.scenario_bundle import UnsupportedScenario
+
+        if constants is not _DEFAULT_CONSTANTS:
+            raise UnsupportedScenario("--config-file: a scenario config carries no constants")
+        document = {
+            "format": "argusnet.scenario-config",
+            "version": 1,
+            "seed": int(seed),
+            "dt_s": float(dt),
+            **(
+                {"steps": int(steps)}
+                if steps is not None
+                else {"duration_s": float(simulation_config.requested_duration_s)}
+            ),
+            "options": json.loads(json.dumps(asdict(scenario_options))),
+        }
+        path = Path(export_config_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, indent=2) + "\n")
+        print(f"Scenario config written to {path}; run it with: argusnet-rs sim --config {path}")
+        return None
     scenario = build_default_scenario(
         options=scenario_options,
         seed=seed,
         constants=constants,
     )
+    if export_bundle_path is not None:
+        # Describe this exact scenario -- built by the same code path, with the
+        # tracker config this command would run with -- for `argusnet-rs sim`,
+        # instead of running it here.
+        from argusnet.simulation.scenario_bundle import export_bundle, write_bundle
+
+        bundle = export_bundle(scenario, simulation_config, DEFAULT_SIMULATION_TRACKER_CONFIG)
+        path = write_bundle(export_bundle_path, bundle)
+        print(
+            f"Scenario bundle written to {path} "
+            f"({len(bundle['nodes'])} nodes, {simulation_config.steps} ticks); "
+            f"run it with: argusnet-rs sim --bundle {path}"
+        )
+        return None
     # Derive streaming JSONL path alongside the replay output.
     streaming_jsonl_path: Path | None = None
     if streaming and replay_path:
@@ -6780,6 +6943,27 @@ def add_cli_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Replay JSON output.",
     )
     parser.add_argument(
+        "--export-config",
+        dest="export_config",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Instead of running, write the argusnet.scenario-config these flags "
+            "resolve to (argusnet-rs sim --config PATH builds it natively)."
+        ),
+    )
+    parser.add_argument(
+        "--export-bundle",
+        dest="export_bundle",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Instead of running, write this scenario as a scenario bundle for the "
+            "Rust runtime (argusnet-rs sim --bundle PATH). Unsupported options are "
+            "refused by name."
+        ),
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         default=False,
@@ -6950,7 +7134,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_from_args(args: argparse.Namespace) -> SimulationResult:
+def run_from_args(args: argparse.Namespace) -> SimulationResult | None:
     try:
         constants = (
             _load_simulation_constants(args.config_file)
@@ -7086,6 +7270,8 @@ def run_from_args(args: argparse.Namespace) -> SimulationResult:
         mission_profile=getattr(args, "mission_profile", None),
         mission_profile_overrides=mission_profile_overrides,
         progress=build_progress_callback(quiet=getattr(args, "quiet", False)),
+        export_bundle_path=getattr(args, "export_bundle", None),
+        export_config_path=getattr(args, "export_config", None),
     )
 
 

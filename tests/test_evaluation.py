@@ -298,6 +298,43 @@ class TestLocalisationRMSE:
         assert per["t1"] == pytest.approx(1.0, abs=1e-6)
         assert per["t2"] == pytest.approx(1.0, abs=1e-6)
 
+    def test_a_track_first_seen_later_is_scored(self):
+        """Matching happens at each track's own first frame, not the replay's."""
+        truths = [
+            {"target_id": "tgt_a", "position": [0.0, 0.0, 0.0]},
+            {"target_id": "tgt_b", "position": [100.0, 0.0, 0.0]},
+        ]
+        frames = [
+            _make_frame(0.0, tracks=[_make_track("t1", [1.0, 0.0, 0.0])], truths=truths),
+            _make_frame(
+                1.0,
+                tracks=[
+                    _make_track("t1", [1.0, 0.0, 0.0]),
+                    _make_track("t2", [103.0, 0.0, 0.0]),
+                ],
+                truths=truths,
+            ),
+        ]
+        rmse, per = compute_localisation_rmse(frames)
+        assert per["t1"] == pytest.approx(1.0, abs=1e-6)
+        assert per["t2"] == pytest.approx(3.0, abs=1e-6)
+        assert rmse == pytest.approx(np.sqrt((1.0 + 1.0 + 9.0) / 3.0), abs=1e-6)
+
+    def test_a_track_named_for_a_target_is_scored_against_it(self):
+        """A track keyed by target ID keeps that target even when nearer another."""
+        frames = [
+            _make_frame(
+                0.0,
+                tracks=[_make_track("tgt_a", [90.0, 0.0, 0.0])],
+                truths=[
+                    {"target_id": "tgt_a", "position": [0.0, 0.0, 0.0]},
+                    {"target_id": "tgt_b", "position": [100.0, 0.0, 0.0]},
+                ],
+            ),
+        ]
+        rmse, per = compute_localisation_rmse(frames)
+        assert per["tgt_a"] == pytest.approx(90.0, abs=1e-6)
+
 
 # ===================================================================
 # compute_covariance_reduction

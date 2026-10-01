@@ -58,6 +58,20 @@ pub struct SceneManifestReplay {
 pub struct SceneManifestMetadata {
     pub environment: String,
     pub style: String,
+    /// Optional (P2.1): the land-cover classes the terrain material tints by.
+    #[serde(default)]
+    pub land_cover: Option<String>,
+}
+
+/// The scene's land cover, as the terrain material can use it.
+#[derive(Debug, Clone, Default)]
+pub enum LandCoverState {
+    /// The scene declares none: built without an environment. No tint.
+    #[default]
+    Absent,
+    Ready(std::sync::Arc<crate::land_cover_raster::LandCoverRaster>),
+    /// Declared and readable, but not something this viewer can draw.
+    Unavailable(String),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -113,6 +127,7 @@ pub struct ScenePackage {
     pub style: StyleDocument,
     pub environment: EnvironmentDocument,
     pub replay: Option<Value>,
+    pub land_cover: LandCoverState,
     style_lookup: HashMap<String, StyleLayer>,
 }
 
@@ -165,6 +180,21 @@ impl ScenePackage {
             None => None,
         };
 
+        // Like `replay.path`: a declared file that is missing or unreadable is
+        // a packaging mistake and fails the load. One that is readable but
+        // beyond what the viewer draws is reported, not fatal.
+        let land_cover = match manifest.metadata.land_cover.as_ref() {
+            Some(path) => {
+                let path = safe_manifest_path(&root, path, "metadata.land_cover")?;
+                let document: crate::land_cover_raster::LandCoverDocument = read_json(path)?;
+                match crate::land_cover_raster::LandCoverRaster::from_document(document) {
+                    Ok(raster) => LandCoverState::Ready(std::sync::Arc::new(raster)),
+                    Err(reason) => LandCoverState::Unavailable(reason),
+                }
+            }
+            None => LandCoverState::Absent,
+        };
+
         let style_lookup = style
             .layers
             .iter()
@@ -178,6 +208,7 @@ impl ScenePackage {
             style,
             environment,
             replay,
+            land_cover,
             style_lookup,
         })
     }

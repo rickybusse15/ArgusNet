@@ -1,0 +1,91 @@
+# Migration status: everything before P5.0
+
+**Status:** opened 2026-09-23. The live index of what is left before Phase 5
+(the in-process viewer runtime) can start. [DELIVERY_PLAN.md](DELIVERY_PLAN.md)
+holds the acceptance contracts; this file holds the order and the state. Each
+row links the slice doc that proves it. A row changes only when its slice's
+verification table does.
+
+States: **done** (merged), **local** (committed and locally verified but not pushed),
+**open**, **blocked** (with the reason).
+
+## Why P5.0 is not startable yet
+
+P5.0 needs P4.9, a Rust CLI running supported scenarios with no Python runtime,
+and P2.x, a viewer engine that presents the runtime's snapshots. At 2026-09-23
+`argusnet-rs sim --config` builds and runs every canonical scenario with no
+Python, mission profiles and the blocking safety monitor included (P4.9d). Six
+of the seven pass every declared envelope. One envelope,
+`sar_person_search`'s `covariance_reduction_mean`, fails for a reason in the
+metric's definition, which needs a decision; see
+[SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md).
+
+At 2026-09-25 the viewer track has P2.0 to P2.3 locally: the snapshot
+adapter, the terrain and belief material, persistent sensor, zone and trail
+geometry, and picking and selection. P2.4 to P2.6 (camera and time
+controls, the mission-control shell and quality tiers, graphics acceptance)
+are open, as are guardrails G0, G2 and G3. Nothing is pushed, so CI has run
+none of it.
+
+## Track A — runtime (critical path)
+
+| ID | Slice | State | Evidence |
+| --- | --- | --- | --- |
+| P4.1 | Command lifecycle and control checkpoints (#119) | done | `ec9c2f7` |
+| P4.8d.1–2b | Motion substrate, world adapter, trajectory wrappers, FollowPath | local | [MOTION_SUBSTRATE.md](MOTION_SUBSTRATE.md) |
+| P4.8d.3 | Controller stage; stage-state checkpoint contract | local | [CONTROLLER_STAGE.md](CONTROLLER_STAGE.md) |
+| P4.8e.1 | ScenarioBundle v1, runtime assembly (stages 1, 3, 6, 7), replay frames, Python exporter; target-tracking parity | local | [SCENARIO_BUNDLE.md](SCENARIO_BUNDLE.md) |
+| P4.8e.2 | Stage 6 senses as the reference does: nominal pose, tilted look direction, the world detection model (`p_d`, effective noise, dominant loss), sensing weather | local | [STAGE6_REFERENCE_SENSING.md](STAGE6_REFERENCE_SENSING.md) |
+| P4.8e.3 | Mission driver (POI assignment, redirects, dwell, egress); stages 2, 8 and 9 assembled; the default `scan_map_inspect` run end to end | local | [MISSION_DRIVER.md](MISSION_DRIVER.md) |
+| P4.8e.4 | Causal-state audit: every assembled stateful stage on the checkpoint contract; whole-run resume differential | local | [CAUSAL_STATE.md](CAUSAL_STATE.md) |
+| P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay, checkpoint/resume from the command line; `argusnet sim --export-bundle` adapter refuses what it cannot carry | local | [ARGUSNET_RS_CLI.md](ARGUSNET_RS_CLI.md) |
+| P4.9a.2 | Additive replay enrichment: every frame payload and the scenario `meta` a Python replay carries, viewer-readable; deconfliction `hypot` fix | local | [REPLAY_ENRICHMENT.md](REPLAY_ENRICHMENT.md) |
+| P4.9b.1 | Native builder, world half: `argusnet.scenario-config` → terrain, environment obstacles and patches, land cover → bundle `world` + world `presentation`; exact except heights (numpy `exp`, ≤1e-12 m) | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | local | [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
+| P4.9d | Stage 4 (hard safety monitor) assembled from bundles, three reference-argument defects fixed, checkpointed; `safety_blocking` and mission profiles through exporter and native builder; all 7 canonical scenarios scored, 6 within every envelope (`sar_person_search` fails `covariance_reduction_mean`, analysed, not widened) | local | [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) |
+
+## Track B — viewer engine
+
+| ID | Slice | State |
+| --- | --- | --- |
+| P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | local ([SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
+| P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | local ([TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
+| P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | local ([PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
+| P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | local ([PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
+| P2.4 | Free-fly, follow/chase, focus, bookmarks, time scrubbing | open (orbit camera exists) |
+| P2.5 | Mission-control shell, quality tiers | open |
+| P2.6 | Graphics acceptance across tiers | open |
+
+## Track C — guardrails
+
+| ID | Slice | State |
+| --- | --- | --- |
+| G0 | Semantic contract inventory and conversion | open (field parity done) |
+| G1 | Proto regeneration and no-diff check | done |
+| G2 | Renderer fixtures, CPU/GPU frame instrumentation baselines | open |
+| G3 | Scanner triage, artifact and provenance checks | open |
+
+## Decisions recorded here
+
+**Bundle first, native builder second (P4.8e.1 before P4.9b).** Porting every
+closure-built trajectory before Rust could run anything would delay the first
+end-to-end run by weeks and leave no way to diff a scenario as a whole. A
+versioned, data-only `ScenarioBundle` is the "documented preprocessed world
+bundle" P4.3 already names. Python exports it from a built scenario and Rust
+runs it. The Rust-native builder then has an exact parity target: it must
+produce the same bundle.
+
+**Target truth crosses as a sampled table in v1.** Every target trajectory in
+the reference is a pure function of time: randomness is drawn at construction
+or keyed on the timestamp. A table sampled at every time the tick asks for is
+therefore exact, whatever order it is read in. Porting the behaviours is
+P4.9b's work.
+
+**Observation parity is statistical, kinematics are exact.** Stage 6 draws from
+keyed ChaCha streams (ADR-006), not NumPy's, so accepted-observation sets
+differ by design. Anything not fed by an observation is compared bit for bit:
+stations, launch, lanes, truth-fed pursuit, coverage from positions. Anything
+downstream of one (engagement, fusion, localization) is compared against
+envelopes.

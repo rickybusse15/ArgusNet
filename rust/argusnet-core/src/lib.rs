@@ -16,7 +16,7 @@ pub type Vector6 = SVector<f64, 6>;
 /// exists to stop numerical blow-up during pathological long coasts.
 const MAX_COVARIANCE_TRACE: f64 = 1.0e12;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NodeHealthTracker {
     pub node_id: String,
     pub first_seen_s: f64,
@@ -342,7 +342,7 @@ pub struct TriangulatedEstimate {
 pub type Matrix7 = SMatrix<f64, 7, 7>;
 pub type Vector7 = SVector<f64, 7>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct KalmanTrack3D {
     pub(crate) timestamp_s: f64,
     pub(crate) state: Vector6,
@@ -453,7 +453,7 @@ impl KalmanTrack3D {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AdaptiveFilterConfig {
     pub cv_accel_std: f64,
     pub ct_accel_std: f64,
@@ -486,7 +486,7 @@ impl Default for AdaptiveFilterConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CoordinatedTurnTrack3D {
     timestamp_s: f64,
     state: Vector7,
@@ -630,7 +630,7 @@ impl CoordinatedTurnTrack3D {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct IMMTrack3D {
     pub(crate) cv_track: KalmanTrack3D,
     pub(crate) ct_track: CoordinatedTurnTrack3D,
@@ -784,7 +784,14 @@ impl IMMTrack3D {
             self.mode_probabilities[0] * cv_likelihood.max(1.0e-30),
             self.mode_probabilities[1] * ct_likelihood.max(1.0e-30),
         ];
-        let total = (posterior[0] + posterior[1]).max(1.0e-12);
+        // Normalise by the true total. `state()` blends the two filters by
+        // these probabilities and `predict` mixes by them, so they must sum
+        // to one. A floored denominator (both likelihoods underflowing on a
+        // large innovation) once left them near 1e-20, which collapsed the
+        // track to the origin for good. The likelihood floors keep the total
+        // above 5e-31 (`max` also discards a NaN), and when both floors bind
+        // they cancel: the prior stands, favouring neither model.
+        let total = posterior[0] + posterior[1];
         self.mode_probabilities = [posterior[0] / total, posterior[1] / total];
 
         self.innovation_history.push(nis_ct);
@@ -869,7 +876,7 @@ fn gaussian_likelihood(innovation: &Vector3<f64>, covariance: &Matrix3<f64>) -> 
         .unwrap_or(1.0e-30)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LifecycleState {
     Tentative,
     Confirmed,
@@ -888,7 +895,7 @@ impl LifecycleState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TrackLifecycleConfig {
     pub confirmation_m: u32,
     pub confirmation_n: u32,
@@ -897,7 +904,7 @@ pub struct TrackLifecycleConfig {
     pub min_quality_score: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ManagedTrack {
     pub(crate) track_id: String,
     pub(crate) filter_state: IMMTrack3D,
@@ -1066,17 +1073,23 @@ impl ManagedTrack {
     }
 }
 
+/// Serializable so a simulation checkpoint can carry every track's filter,
+/// lifecycle and health state (P4.8e.4). The latest frame is output and the
+/// dedup map is scratch, so neither is part of the state.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct TrackingEngine {
     config: TrackerConfig,
     min_intersection_angle_rad: f64,
     near_parallel_rejection_angle_rad: f64,
     nodes: HashMap<String, NodeState>,
     tracks: HashMap<String, ManagedTrack>,
+    #[serde(skip)]
     latest_frame: Option<std::sync::Arc<PlatformFrame>>,
     node_health: HashMap<String, NodeHealthTracker>,
     frame_timestamps: Vec<f64>,
     next_track_index: u64,
     /// Scratch HashMap reused across frames to avoid per-cluster allocation in deduplicate_cluster.
+    #[serde(skip)]
     dedup_scratch: HashMap<String, BearingObservation>,
 }
 
@@ -2288,6 +2301,37 @@ mod tests {
         assert!(trace.is_finite());
         assert!(trace <= MAX_COVARIANCE_TRACE);
         assert!(track.state.iter().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn imm_survives_an_innovation_both_models_reject() {
+        // Both likelihoods underflow on a kilometre-scale innovation against
+        // a tight track. The mode probabilities must still sum to one, and
+        // the blended state must stay with the filters, not collapse to the
+        // origin (the P4.9c search_acquisition tail).
+        let config = TrackerConfig::default();
+        let mut track = IMMTrack3D::initialize(0.0, vec3(300.0, -30.0, 170.0), 2.0, 1.0, &config);
+        for step in 1..=4 {
+            track.predict(step as f64 * 0.25);
+            track
+                .update_position(vec3(300.0, -30.0, 170.0), 1.0)
+                .expect("update");
+        }
+        track.predict(1.25);
+        track
+            .update_position(vec3(5_000.0, 4_000.0, 170.0), 1.0)
+            .expect("update");
+        let [p_cv, p_ct] = track.mode_probabilities;
+        assert!((p_cv + p_ct - 1.0).abs() < 1e-12, "{p_cv} + {p_ct}");
+        for _ in 0..3 {
+            track.predict(track.timestamp_s() + 0.25);
+        }
+        assert!(
+            track.position().norm() > 100.0,
+            "collapsed to {}",
+            track.position()
+        );
+        assert!(track.state().iter().all(|value| value.is_finite()));
     }
 
     #[test]

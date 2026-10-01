@@ -64,6 +64,25 @@
 //! `None`: the sentinel is what the reference sends, and
 //! `a_mobile_platform_with_no_battery_violates_its_energy_reserve` records what
 //! that costs.
+//!
+//! # What P4.9d corrected before assembling it
+//!
+//! Stage 4 was ported and tested in P4.8c but never assembled from a bundle,
+//! and three of its arguments were not the reference's:
+//!
+//! * **`dt_s`** was the tick's *timestamp*. The reference passes
+//!   `simulation_config.dt_s`, and the monitor derives acceleration from it.
+//! * **The caution fraction** was 0.85. The reference constructs
+//!   `SafetyMonitor(limits)`, whose default is **0.9**.
+//! * **Terrain** was one constant height. The reference samples
+//!   `scenario.terrain.height_at(x, y)` under each platform, after
+//!   deconfliction has moved it.
+//!
+//! The monitors' escalation records and the stored previous velocities are
+//! causal state, so the stage is on the checkpoint contract (P4.8e.4). And the
+//! tick's validations reach stage 7 as `safety_events`, as
+//! `_ingest_stream.ingest_frame(..., safety_events=_step_safety_events)` sends
+//! them, so the fused frame, and the replay, carry them.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -73,13 +92,15 @@ use safety_engine::simulation::{SimulationSafetyMonitor, State, Violation};
 use serde::{Deserialize, Serialize};
 
 use crate::battery::BatteryLink;
-use crate::simulation::{StageHandler, TickContext};
+use crate::fusion::FusionLink;
+use crate::observe::TerrainHeight;
+use crate::simulation::{decode_stage_state, StageHandler, StageStateError, TickContext};
 use crate::stage::{StageError, StageOutcome};
 
 /// `SimulationSafetyMonitor::new`'s reference arguments.
 pub const DEFAULT_ABORT_FRAMES: u32 = 3;
-/// The reference's caution fraction.
-pub const DEFAULT_CAUTION_FRACTION: f64 = 0.85;
+/// `SafetyMonitor.__init__`'s default, which the reference does not override.
+pub const DEFAULT_CAUTION_FRACTION: f64 = 0.9;
 /// `scenario.drone_roles.get(ns.node_id, "tracker")`.
 pub const DEFAULT_ROLE: &str = "tracker";
 
@@ -100,6 +121,28 @@ pub struct SafetyValidation {
     /// Whether the clamp actually moved the platform.
     pub clamped: bool,
     pub reason: String,
+}
+
+impl SafetyValidation {
+    /// `_safety_event_to_proto`: the form stage 7 receives and echoes.
+    pub fn to_event(&self) -> argusnet_types::SafetyEvent {
+        argusnet_types::SafetyEvent {
+            event_id: self.validation_id.clone(),
+            subject_id: self.subject_id.clone(),
+            timestamp_s: self.timestamp_s,
+            // `value.reason or ("nominal" if value.accepted else "abort")`;
+            // the monitor always gives a reason, its state.
+            state: if self.reason.is_empty() {
+                if self.accepted { "nominal" } else { "abort" }.to_string()
+            } else {
+                self.reason.clone()
+            },
+            violations: self.violations.clone(),
+            command_clamped: self.clamped,
+            blocked: !self.accepted,
+            reason: self.reason.clone(),
+        }
+    }
 }
 
 /// `validator="blocking_monitor"`, hardcoded in the reference.
@@ -130,14 +173,36 @@ struct Shared {
     abort_frames: u32,
     caution_fraction: f64,
     roles: BTreeMap<String, String>,
-    /// Flat terrain height. The reference samples real terrain; a constant is
-    /// what this stage can honestly offer until the world is wired in.
-    terrain_height_m: f64,
+    /// Sampled under each platform, post-deconfliction.
+    terrain: Box<dyn TerrainHeight>,
     monitors: BTreeMap<String, SimulationSafetyMonitor>,
     previous_velocities: BTreeMap<String, [f64; 3]>,
     battery: Option<BatteryLink>,
+    fusion: Option<FusionLink>,
     validations: Vec<SafetyValidation>,
 }
+
+/// One height everywhere, for rigs that have no terrain model.
+#[derive(Debug, Clone, Copy)]
+struct Level(f64);
+
+impl TerrainHeight for Level {
+    fn height_at(&self, _x_m: f64, _y_m: f64) -> f64 {
+        self.0
+    }
+}
+
+/// What survives a tick: each platform's escalation record and the velocity
+/// the monitor last allowed it.
+#[derive(Debug, Serialize, Deserialize)]
+struct SafetyCheckpoint {
+    /// `node_id -> (consecutive violating frames, state)`.
+    records: BTreeMap<String, (u32, String)>,
+    previous_velocities: BTreeMap<String, [f64; 3]>,
+}
+
+/// The states `SimulationSafetyMonitor::process` assigns.
+const MONITOR_STATES: [&str; 4] = ["nominal", "caution", "warning", "abort"];
 
 impl Default for Shared {
     fn default() -> Self {
@@ -147,10 +212,11 @@ impl Default for Shared {
             abort_frames: DEFAULT_ABORT_FRAMES,
             caution_fraction: DEFAULT_CAUTION_FRACTION,
             roles: BTreeMap::new(),
-            terrain_height_m: 0.0,
+            terrain: Box::new(Level(0.0)),
             monitors: BTreeMap::new(),
             previous_velocities: BTreeMap::new(),
             battery: None,
+            fusion: None,
             validations: Vec::new(),
         }
     }
@@ -175,8 +241,19 @@ impl SafetyLink {
         self.lock().roles.insert(drone_id.into(), role.into());
     }
 
+    /// A level floor at `terrain_height_m`, for rigs with no terrain model.
     pub fn set_terrain_height_m(&self, terrain_height_m: f64) {
-        self.lock().terrain_height_m = terrain_height_m;
+        self.lock().terrain = Box::new(Level(terrain_height_m));
+    }
+
+    /// The terrain the reference samples under each platform.
+    pub fn set_terrain(&self, terrain: Box<dyn TerrainHeight>) {
+        self.lock().terrain = terrain;
+    }
+
+    /// Hand each tick's validations to stage 7 as its `safety_events`.
+    pub fn feed_fusion(&self, fusion: FusionLink) {
+        self.lock().fusion = Some(fusion);
     }
 
     /// Read `energy_fraction` from stage 1's ledger.
@@ -270,10 +347,10 @@ impl StageHandler for SafetyStage {
             return Ok(StageOutcome::NoWork);
         }
 
-        let terrain_height_m = shared.terrain_height_m;
         let abort_frames = shared.abort_frames;
         let caution_fraction = shared.caution_fraction;
-        let dt_s = context.timestamp_s;
+        // `simulation_config.dt_s`: the tick interval, not its timestamp.
+        let dt_s = context.dt_s;
         let tick = context.tick;
         let mut clamped_any = false;
         let mut notes: Vec<String> = Vec::new();
@@ -307,6 +384,7 @@ impl StageHandler for SafetyStage {
             }
 
             let previous_velocity = shared.previous_velocities.get(node_id).copied();
+            let terrain_height_m = shared.terrain.height_at(position[0], position[1]);
             let state = State {
                 position: *position,
                 velocity: *velocity,
@@ -373,6 +451,15 @@ impl StageHandler for SafetyStage {
         }
 
         let reported = !shared.validations.is_empty();
+        if let Some(fusion) = &shared.fusion {
+            fusion.submit_safety_events(
+                shared
+                    .validations
+                    .iter()
+                    .map(SafetyValidation::to_event)
+                    .collect(),
+            );
+        }
         drop(shared);
         for note in notes {
             context.note(note);
@@ -383,6 +470,80 @@ impl StageHandler for SafetyStage {
         } else {
             StageOutcome::NoWork
         })
+    }
+
+    /// A fresh run of the same scenario: no escalation, no previous velocity.
+    fn reset(&mut self) {
+        self.link.clear();
+    }
+
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let shared = self.link.lock();
+        let state = SafetyCheckpoint {
+            records: shared
+                .monitors
+                .iter()
+                .filter_map(|(id, monitor)| {
+                    monitor
+                        .record(id)
+                        .map(|(count, state)| (id.clone(), (count, state.to_string())))
+                })
+                .collect(),
+            previous_velocities: shared.previous_velocities.clone(),
+        };
+        Some(serde_json::to_value(state).expect("safety checkpoint serialises"))
+    }
+
+    fn check_state(&self, state: &serde_json::Value) -> Result<(), StageStateError> {
+        let decoded: SafetyCheckpoint = decode_stage_state(state)?;
+        if let Some((id, (_, state))) = decoded
+            .records
+            .iter()
+            .find(|(_, (_, state))| !MONITOR_STATES.contains(&state.as_str()))
+        {
+            return Err(StageStateError::Malformed {
+                detail: format!(
+                    "safety monitor for {id} is in no state the monitor assigns: {state:?}"
+                ),
+            });
+        }
+        if let Some((id, _)) = decoded
+            .previous_velocities
+            .iter()
+            .find(|(_, velocity)| !velocity.iter().all(|v| v.is_finite()))
+        {
+            return Err(StageStateError::Malformed {
+                detail: format!("safety previous velocity for {id} is not finite"),
+            });
+        }
+        Ok(())
+    }
+
+    fn restore_state(&mut self, state: &serde_json::Value) -> Result<(), StageStateError> {
+        let decoded: SafetyCheckpoint = decode_stage_state(state)?;
+        let mut shared = self.link.lock();
+        let mut monitors = BTreeMap::new();
+        for (id, (count, state)) in decoded.records {
+            let role = shared
+                .roles
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_ROLE.to_string());
+            let mut monitor = SimulationSafetyMonitor::new(
+                limits_for_role(&role),
+                shared.abort_frames,
+                shared.caution_fraction,
+            )
+            .map_err(|detail| StageStateError::Malformed { detail })?;
+            monitor
+                .restore_record(&id, count, &state)
+                .map_err(|detail| StageStateError::Malformed { detail })?;
+            monitors.insert(id, monitor);
+        }
+        shared.monitors = monitors;
+        shared.previous_velocities = decoded.previous_velocities;
+        shared.validations.clear();
+        Ok(())
     }
 }
 
@@ -707,6 +868,93 @@ mod tests {
         assert!(
             !violations.iter().any(|v| v.contains("accel")),
             "holding the allowed speed is not an acceleration: {violations:?}"
+        );
+    }
+
+    /// The reference constructs `SafetyMonitor(limits)`, whose caution
+    /// fraction defaults to 0.9. Caution never reaches an event or a clamp,
+    /// only the monitor's state, so it is pinned there: a tracker at 31 m/s
+    /// is nominal at 0.9 (the threshold is 31.5) but would be caution at 0.85
+    /// (29.75).
+    #[test]
+    fn the_caution_fraction_is_the_references() {
+        let (mut sim, link) = rig(vec![node(
+            "drone-1",
+            true,
+            [0.0, 0.0, 100.0],
+            [31.0, 0.0, 0.0],
+        )]);
+        sim.step().unwrap();
+        assert_eq!(link.state_of("drone-1"), "nominal");
+
+        sim.world_mut().platform_mut("drone-1").unwrap().velocity.x = 32.0;
+        sim.step().unwrap();
+        assert_eq!(link.state_of("drone-1"), "caution");
+    }
+
+    /// A checkpoint names only states the monitor assigns, and finite
+    /// velocities.
+    #[test]
+    fn a_checkpoint_with_an_impossible_record_is_refused() {
+        let stage = SafetyStage::new();
+        let good = serde_json::json!({
+            "records": {"drone-1": [2, "warning"]},
+            "previous_velocities": {"drone-1": [1.0, 0.0, 0.0]},
+        });
+        stage.check_state(&good).expect("a real record");
+        let unknown_state = serde_json::json!({
+            "records": {"drone-1": [2, "panicking"]},
+            "previous_velocities": {},
+        });
+        assert!(stage.check_state(&unknown_state).is_err());
+        let infinite = serde_json::json!({
+            "records": {},
+            "previous_velocities": {"drone-1": [f64::MAX, 0.0, 0.0]},
+        });
+        stage.check_state(&infinite).expect("large but finite");
+        let mut shape = serde_json::to_value(SafetyCheckpoint {
+            records: BTreeMap::new(),
+            previous_velocities: BTreeMap::from([("drone-1".to_string(), [f64::NAN, 0.0, 0.0])]),
+        })
+        .unwrap();
+        // serde_json writes NaN as null, which is not a velocity at all.
+        assert!(stage.check_state(&shape).is_err());
+        shape["previous_velocities"]["drone-1"] = serde_json::json!([1.0, 2.0]);
+        assert!(stage.check_state(&shape).is_err());
+    }
+
+    /// Restored escalation carries on: two warnings before the checkpoint,
+    /// and the third violation after the restore aborts.
+    #[test]
+    fn a_restored_stage_escalates_from_where_it_was() {
+        let (mut sim, link) = rig(vec![node(
+            "drone-1",
+            true,
+            [0.0, 0.0, 100.0],
+            [500.0, 0.0, 0.0],
+        )]);
+        for _ in 0..2 {
+            sim.world_mut().platform_mut("drone-1").unwrap().velocity.x = 500.0;
+            sim.step().unwrap();
+        }
+        assert_eq!(link.state_of("drone-1"), "warning");
+        let saved = SafetyStage { link: link.clone() }
+            .checkpoint_state()
+            .unwrap();
+        assert_eq!(
+            saved["records"]["drone-1"],
+            serde_json::json!([2, "warning"])
+        );
+
+        let mut fresh = SafetyStage::new();
+        fresh.check_state(&saved).unwrap();
+        fresh.restore_state(&saved).unwrap();
+        let fresh_link = fresh.link();
+        assert_eq!(fresh_link.state_of("drone-1"), "warning");
+        assert_eq!(
+            fresh.checkpoint_state().unwrap(),
+            saved,
+            "the restore took everything back"
         );
     }
 

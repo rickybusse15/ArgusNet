@@ -80,7 +80,7 @@ const EPSILON_S: f64 = 1.0e-9;
 ///   interval alone, so a sample taken early reports the start position moving
 ///   at full speed. Nothing samples early today; it is reproduced because it is
 ///   what is written.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GotoHover {
     start: [f64; 3],
     target_xy: [f64; 2],
@@ -120,7 +120,11 @@ impl GotoHover {
         t_start: f64,
         speed_mps: f64,
     ) -> Self {
-        let dist_m = (target_xy[0] - start[0]).hypot(target_xy[1] - start[1]);
+        // `np.linalg.norm`: the plain square root of the sum of squares, not
+        // `hypot`, which rounds differently in the last bit (see
+        // `follow_path::norm`). Found by the P4.8e.3 full-run comparison.
+        let (dx, dy) = (target_xy[0] - start[0], target_xy[1] - start[1]);
+        let dist_m = (dx * dx + dy * dy).sqrt();
         let flight_s = (dist_m / speed_mps.max(EPSILON_S)).max(MIN_FLIGHT_TIME_S);
         Self::over(start, target_xy, target_z, t_start, t_start + flight_s)
     }
@@ -275,7 +279,56 @@ impl MissionOverrideStage {
     }
 }
 
+/// What stage 2 checkpoints. Ordered maps, so a checkpoint's text does not
+/// depend on hash order.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct OverrideCheckpoint {
+    frontier: std::collections::BTreeMap<String, GotoHover>,
+    poi: std::collections::BTreeMap<String, GotoHover>,
+    egress: std::collections::BTreeMap<String, GotoHover>,
+}
+
 impl StageHandler for MissionOverrideStage {
+    fn reset(&mut self) {
+        let mut shared = self.link.lock();
+        shared.frontier.clear();
+        shared.poi.clear();
+        shared.egress.clear();
+        shared.applied.clear();
+    }
+
+    /// The redirects in force: each is a flight already under way, and a
+    /// resumed run must finish it the same way.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let shared = self.link.lock();
+        let state = OverrideCheckpoint {
+            frontier: shared.frontier.clone().into_iter().collect(),
+            poi: shared.poi.clone().into_iter().collect(),
+            egress: shared.egress.clone().into_iter().collect(),
+        };
+        Some(serde_json::to_value(state).expect("override state serialises"))
+    }
+
+    fn check_state(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        crate::simulation::decode_stage_state::<OverrideCheckpoint>(state).map(|_| ())
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: OverrideCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let mut shared = self.link.lock();
+        shared.frontier = decoded.frontier.into_iter().collect();
+        shared.poi = decoded.poi.into_iter().collect();
+        shared.egress = decoded.egress.into_iter().collect();
+        shared.applied.clear();
+        Ok(())
+    }
+
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let mut shared = self.link.lock();
         shared.applied.clear();

@@ -1,17 +1,26 @@
 pub mod app;
+pub mod belief_render;
 pub mod glyphs;
 pub mod headless;
+pub mod land_cover_raster;
 #[cfg(feature = "live-stream")]
 pub mod live;
 pub mod marker_meshes;
 pub mod mission_zones;
 pub mod orbit_camera;
+pub mod picking;
+pub mod presentation;
 pub mod replay;
 pub mod schema;
+pub mod selection_outline;
+pub mod sensor_volumes;
 pub mod sky;
 pub mod state;
 pub mod terrain_material;
+pub mod terrain_rasters;
+pub mod trail_ribbons;
 pub mod ui;
+pub mod zone_walls;
 
 pub use app::run;
 #[cfg(feature = "live-stream")]

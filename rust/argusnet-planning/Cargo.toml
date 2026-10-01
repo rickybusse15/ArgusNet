@@ -9,9 +9,10 @@ name = "argusnet_planning"
 path = "src/lib.rs"
 
 [dependencies]
+# Checkpoint state (P4.8e.4) is serialized; see argusnet-sim.
+serde = { workspace = true }
 argusnet-types = { path = "../argusnet-types" }
 argusnet-world = { path = "../argusnet-world" }
 
 [dev-dependencies]
-serde = { workspace = true }
 serde_json = { workspace = true }

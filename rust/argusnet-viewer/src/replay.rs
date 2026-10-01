@@ -2,16 +2,20 @@
 //!
 //! The document types themselves live in `argusnet-replay`, which is free of
 //! Bevy so anything can read a replay without linking a renderer. What stays
-//! here is what is actually about *viewing* one: the frame cursor, the
-//! interpolation between frames, and the camera-facing markers built from them
-//! -- all of which speak Bevy's `Vec3` and one of which is a `Resource`.
+//! here is what is actually about *viewing* one: the frame cursor, its
+//! interpolation alpha and its epoch. The markers built from frames are
+//! [`crate::presentation`]'s.
 //!
 //! The DTOs are re-exported rather than referenced through their crate so the
 //! rest of the viewer, and its tests, keep importing `crate::replay::*` as
 //! before.
 
+use std::sync::Arc;
+
 use bevy::prelude::Resource;
 use bevy::prelude::Vec3;
+
+use crate::presentation::EntityKey;
 
 pub use argusnet_replay::*;
 
@@ -22,15 +26,25 @@ pub enum MarkerKind {
     Node,
 }
 
+/// One presented domain entity. Built by [`crate::presentation`].
 #[derive(Debug, Clone)]
 pub struct RuntimeMarker {
     pub kind: MarkerKind,
-    pub label: String,
+    /// Kind and interned id: the identity. `label` alone is not one, since a
+    /// track shares its target's id.
+    pub key: EntityKey,
+    /// Shared with the epoch's id table, so presenting a frame clones no
+    /// strings.
+    pub label: Arc<str>,
     pub position: Vec3,
     pub velocity: Vec3,
     /// For `Node` markers: whether this node is a mobile platform (drone).
     /// `None` for tracks and truths.
     pub is_mobile: Option<bool>,
+    /// For `Track` markers: the track's measurement std, which sets its
+    /// quality colour and size. Carried here so appearance needs no second
+    /// search of the frame.
+    pub measurement_std_m: Option<f32>,
 }
 
 #[derive(Debug, Clone, Resource)]
@@ -40,6 +54,8 @@ pub struct ReplayState {
     pub playback_speed: f32,
     pub frame_index: usize,
     pub accumulator_s: f32,
+    /// Which run the frames belong to. See [`Self::epoch`].
+    epoch: u64,
 }
 
 impl Default for ReplayState {
@@ -50,6 +66,7 @@ impl Default for ReplayState {
             playback_speed: 1.0,
             frame_index: 0,
             accumulator_s: 0.0,
+            epoch: 0,
         }
     }
 }
@@ -60,6 +77,53 @@ impl ReplayState {
             document,
             ..Self::default()
         }
+    }
+
+    /// Which run the frames belong to.
+    ///
+    /// Presented identities are valid only within an epoch. A new epoch
+    /// begins when the document is replaced by a different run (a reload), or
+    /// when a live stream reconnects to a different session. Pausing, seeking,
+    /// filtering and trimming live history do not begin one.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Replace the document with a different run's, from its first frame.
+    pub fn begin_epoch(&mut self, document: Option<ReplayDocument>) {
+        self.document = document;
+        self.frame_index = 0;
+        self.accumulator_s = 0.0;
+        self.epoch += 1;
+    }
+
+    /// Carry `previous`'s epoch forward, to one after it. For a state built
+    /// fresh to replace `previous` with another run.
+    pub fn succeed(&mut self, previous: &ReplayState) {
+        self.epoch = previous.epoch + 1;
+    }
+
+    /// Append a frame, as live streaming does. Same epoch.
+    pub fn push_frame(&mut self, frame: ReplayFrame) {
+        self.document
+            .get_or_insert_with(|| ReplayDocument {
+                meta: None,
+                summary: None,
+                frames: Vec::new(),
+            })
+            .frames
+            .push(frame);
+    }
+
+    /// Drop the oldest `count` frames, keeping the cursor on the same frame
+    /// where it survives. Same epoch.
+    pub fn drain_front(&mut self, count: usize) {
+        let Some(document) = self.document.as_mut() else {
+            return;
+        };
+        let count = count.min(document.frames.len());
+        document.frames.drain(..count);
+        self.frame_index = self.frame_index.saturating_sub(count);
     }
 
     /// Stale-step threshold for the loaded run.
@@ -138,128 +202,6 @@ impl ReplayState {
         (self.accumulator_s / frame_step).clamp(0.0, 1.0)
     }
 
-    /// Markers positioned between the current frame and the next.
-    ///
-    /// Replay frames arrive at the simulation's tick rate — a quarter second by
-    /// default — while the viewer renders far faster, so drawing frame contents
-    /// directly makes every platform jump on a tick boundary and freeze between
-    /// them. Blending toward the next frame's pose spreads that motion across
-    /// the frames actually rendered.
-    ///
-    /// An entity present now but absent from the next frame holds its current
-    /// pose rather than blending toward nothing, so a track that ends does not
-    /// slide to the origin on its way out.
-    pub fn interpolated_markers(&self) -> Vec<RuntimeMarker> {
-        let mut markers = self.current_markers();
-        let alpha = self.interpolation_alpha();
-        if alpha <= 0.0 {
-            return markers;
-        }
-        let Some(document) = self.document.as_ref() else {
-            return markers;
-        };
-        let Some(next_frame) = document.frames.get(self.frame_index + 1) else {
-            return markers;
-        };
-
-        let next = Self::frame_markers(next_frame);
-        for marker in markers.iter_mut() {
-            let Some(target) = next
-                .iter()
-                .find(|candidate| candidate.kind == marker.kind && candidate.label == marker.label)
-            else {
-                continue;
-            };
-            marker.position = marker.position.lerp(target.position, alpha);
-            marker.velocity = marker.velocity.lerp(target.velocity, alpha);
-        }
-        markers
-    }
-
-    pub fn current_markers(&self) -> Vec<RuntimeMarker> {
-        let Some(frame) = self.current_frame() else {
-            return Vec::new();
-        };
-        Self::frame_markers(frame)
-    }
-
-    /// Markers for one frame exactly as recorded, with no blending.
-    fn frame_markers(frame: &ReplayFrame) -> Vec<RuntimeMarker> {
-        let mut markers =
-            Vec::with_capacity(frame.tracks.len() + frame.truths.len() + frame.nodes.len());
-        for track in &frame.tracks {
-            markers.push(RuntimeMarker {
-                kind: MarkerKind::Track,
-                label: track.track_id.clone(),
-                position: Vec3::from_array(track.position),
-                velocity: Vec3::from_array(track.velocity),
-                is_mobile: None,
-            });
-        }
-        for truth in &frame.truths {
-            markers.push(RuntimeMarker {
-                kind: MarkerKind::Truth,
-                label: truth.target_id.clone(),
-                position: Vec3::from_array(truth.position),
-                velocity: Vec3::from_array(truth.velocity),
-                is_mobile: None,
-            });
-        }
-        for node in &frame.nodes {
-            markers.push(RuntimeMarker {
-                kind: MarkerKind::Node,
-                label: node.node_id.clone(),
-                position: Vec3::from_array(node.position),
-                velocity: Vec3::from_array(node.velocity),
-                is_mobile: Some(node.is_mobile),
-            });
-        }
-        markers
-    }
-
-    pub fn trail_points(&self, marker: &RuntimeMarker, max_samples: usize) -> Vec<Vec3> {
-        let Some(document) = self.document.as_ref() else {
-            return Vec::new();
-        };
-        let start = self
-            .frame_index
-            .saturating_sub(max_samples.saturating_sub(1));
-        let mut points = Vec::new();
-        for frame in &document.frames[start
-            ..=self
-                .frame_index
-                .min(document.frames.len().saturating_sub(1))]
-        {
-            match marker.kind {
-                MarkerKind::Track => {
-                    if let Some(track) = frame
-                        .tracks
-                        .iter()
-                        .find(|item| item.track_id == marker.label)
-                    {
-                        points.push(Vec3::from_array(track.position));
-                    }
-                }
-                MarkerKind::Truth => {
-                    if let Some(truth) = frame
-                        .truths
-                        .iter()
-                        .find(|item| item.target_id == marker.label)
-                    {
-                        points.push(Vec3::from_array(truth.position));
-                    }
-                }
-                MarkerKind::Node => {
-                    if let Some(node) = frame.nodes.iter().find(|item| item.node_id == marker.label)
-                    {
-                        points.push(Vec3::from_array(node.position));
-                    }
-                }
-            }
-        }
-        points
-    }
-
     pub fn frame_step_s(&self) -> f32 {
         let Some(document) = self.document.as_ref() else {
             return 0.25;
@@ -277,95 +219,6 @@ impl ReplayState {
         0.25
     }
 }
-#[cfg(test)]
-mod interpolation_tests {
-    use super::*;
-
-    /// Two frames a second apart, one track moving 100 m along +X.
-    fn moving_track_replay() -> ReplayState {
-        let document: ReplayDocument = serde_json::from_value(serde_json::json!({
-            "frames": [
-                {
-                    "timestamp_s": 0.0,
-                    "tracks": [{"track_id": "t1", "position": [0.0, 0.0, 0.0], "velocity": [100.0, 0.0, 0.0]}],
-                    "truths": [], "nodes": []
-                },
-                {
-                    "timestamp_s": 1.0,
-                    "tracks": [{"track_id": "t1", "position": [100.0, 0.0, 0.0], "velocity": [100.0, 0.0, 0.0]}],
-                    "truths": [], "nodes": []
-                }
-            ]
-        }))
-        .expect("fixture parses");
-        ReplayState::new(Some(document))
-    }
-
-    #[test]
-    fn a_seeked_frame_is_shown_exactly() {
-        let mut replay = moving_track_replay();
-        replay.step_to(0);
-        assert_eq!(replay.interpolation_alpha(), 0.0);
-        assert_eq!(replay.interpolated_markers()[0].position.x, 0.0);
-    }
-
-    #[test]
-    fn playback_blends_toward_the_next_frame() {
-        let mut replay = moving_track_replay();
-        replay.playing = true;
-        // Half a frame step in: halfway between the two recorded positions.
-        replay.advance(0.5);
-        assert!((replay.interpolation_alpha() - 0.5).abs() < 1e-6);
-        let x = replay.interpolated_markers()[0].position.x;
-        assert!((x - 50.0).abs() < 1e-3, "expected midpoint, got {x}");
-    }
-
-    #[test]
-    fn interpolation_never_overshoots_the_next_frame() {
-        let mut replay = moving_track_replay();
-        replay.playing = true;
-        // Far more than one frame step; alpha must saturate rather than run past
-        // the next frame's pose.
-        replay.accumulator_s = 10.0;
-        assert_eq!(replay.interpolation_alpha(), 1.0);
-        let x = replay.interpolated_markers()[0].position.x;
-        assert!(
-            (x - 100.0).abs() < 1e-3,
-            "expected next-frame pose, got {x}"
-        );
-    }
-
-    #[test]
-    fn an_entity_absent_from_the_next_frame_holds_its_pose() {
-        let document: ReplayDocument = serde_json::from_value(serde_json::json!({
-            "frames": [
-                {
-                    "timestamp_s": 0.0,
-                    "tracks": [{"track_id": "ending", "position": [10.0, 20.0, 30.0], "velocity": [0.0, 0.0, 0.0]}],
-                    "truths": [], "nodes": []
-                },
-                {"timestamp_s": 1.0, "tracks": [], "truths": [], "nodes": []}
-            ]
-        }))
-        .expect("fixture parses");
-        let mut replay = ReplayState::new(Some(document));
-        replay.playing = true;
-        replay.advance(0.5);
-        // Must not slide toward the origin on the way out.
-        let marker = &replay.interpolated_markers()[0];
-        assert_eq!(marker.position, Vec3::new(10.0, 20.0, 30.0));
-    }
-
-    #[test]
-    fn the_final_frame_has_nothing_to_blend_toward() {
-        let mut replay = moving_track_replay();
-        replay.step_to(1);
-        replay.accumulator_s = 0.5;
-        let x = replay.interpolated_markers()[0].position.x;
-        assert!((x - 100.0).abs() < 1e-3);
-    }
-}
-
 #[cfg(test)]
 mod replay_state_tests {
     use serde_json::json;
@@ -395,18 +248,52 @@ mod replay_state_tests {
         let document: ReplayDocument = serde_json::from_value(json!({
             "frames": [{
                 "timestamp_s": 0.0,
-                "tracks": [{"track_id": "t1", "position": [1.0, 2.0, 3.0], "velocity": [0.0, 0.0, 0.0]}],
+                "tracks": [{"track_id": "t1", "position": [1.0, 2.0, 3.0], "velocity": [0.0, 0.0, 0.0],
+                            "measurement_std_m": 12.5}],
                 "truths": [{"target_id": "truth-1", "position": [4.0, 5.0, 6.0], "velocity": [1.0, 0.0, 0.0]}],
                 "nodes": [{"node_id": "node-1", "position": [7.0, 8.0, 9.0], "velocity": [0.0, 1.0, 0.0], "is_mobile": true}]
             }]
         }))
         .unwrap();
         let replay = ReplayState::new(Some(document));
-        let markers = replay.current_markers();
+        let mut presented = crate::presentation::CurrentRuntimeMarkers::default();
+        presented.apply(&replay);
+        let markers = &presented.markers;
         assert_eq!(markers.len(), 3);
         assert_eq!(markers[0].kind, MarkerKind::Track);
+        assert_eq!(markers[0].measurement_std_m, Some(12.5));
         assert_eq!(markers[1].kind, MarkerKind::Truth);
         assert_eq!(markers[2].kind, MarkerKind::Node);
+        assert_eq!(markers[2].is_mobile, Some(true));
+    }
+
+    #[test]
+    fn only_a_different_run_begins_an_epoch() {
+        let document = || -> ReplayDocument {
+            serde_json::from_value(json!({"frames": [
+                {"timestamp_s": 0.0, "tracks": [], "truths": [], "nodes": []},
+                {"timestamp_s": 1.0, "tracks": [], "truths": [], "nodes": []}
+            ]}))
+            .unwrap()
+        };
+        let mut replay = ReplayState::new(Some(document()));
+        let epoch = replay.epoch();
+        replay.step_to(1);
+        replay.playing = true;
+        replay.advance(0.3);
+        replay.push_frame(document().frames.remove(0));
+        replay.drain_front(1);
+        assert_eq!(
+            replay.epoch(),
+            epoch,
+            "seeking, playing and live history keep the epoch"
+        );
+        replay.begin_epoch(Some(document()));
+        assert_eq!(replay.epoch(), epoch + 1);
+        assert_eq!(replay.frame_index, 0);
+        let mut next = ReplayState::new(Some(document()));
+        next.succeed(&replay);
+        assert_eq!(next.epoch(), epoch + 2);
     }
 
     #[test]

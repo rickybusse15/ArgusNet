@@ -84,7 +84,28 @@
 //! all — and the floor is what makes the two rasterizations of P4.6a diverge,
 //! since it breaks the integral `radius / resolution` the rest of the
 //! configuration maintains.
+//!
+//! # Zone inspection rides on the same footprint
+//!
+//! ```python
+//! for zone in scenario.mission_zones:
+//!     for ns in mobile_states:
+//!         inside = float(np.linalg.norm(node_xy - zcenter)) <= zone.radius_m
+//!         if inside:
+//!             zmap.mark_circular(center_xy=..., radius_m=_FOOTPRINT_RADIUS_M)
+//!         zcov = zmap.stats.coverage_fraction
+//!         # entered / violation / exited / coverage_updated
+//! ```
+//!
+//! Every mission zone has a coverage map of its own, over the whole map's
+//! bounds, marked only while a drone is inside the zone; and which drones are
+//! inside is remembered, so entry and exit are edges. Both are state a
+//! resumed run needs, so they are checkpointed with the rest of stage 8
+//! (P4.9a.2). The fraction an event reports is read **after that drone's
+//! mark and before the next drone's**, which is why the zone loop is the
+//! outer one.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use argusnet_localization::{GridLocalizer, LocalizationConfig, LocalizationEstimate, StepInput};
@@ -125,6 +146,55 @@ pub fn footprint_radius_m(nx: usize, ny: usize, mobile_count: usize, resolution_
     (r_cells as f64 * resolution_m).max(MIN_FOOTPRINT_RADIUS_M)
 }
 
+/// `ZONE_TYPE_EXCLUSION`: entering one is a violation, not an entry.
+pub const EXCLUSION_ZONE_TYPE: &str = "exclusion";
+
+/// A mission zone as stage 8's inspection tracking reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectionZone {
+    pub zone_id: String,
+    pub zone_type: String,
+    pub center_xy: [f64; 2],
+    pub radius_m: f64,
+}
+
+/// One zone event, as the reference's `InspectionEvent` records it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InspectionEvent {
+    pub zone_id: String,
+    pub node_id: String,
+    /// `"entered"`, `"violation"`, `"coverage_updated"` or `"exited"`.
+    pub event_type: String,
+    pub timestamp_s: f64,
+    pub zone_coverage_fraction: f64,
+}
+
+#[derive(Debug, Clone)]
+struct ZoneTrack {
+    zone: InspectionZone,
+    coverage: CoverageGrid,
+    /// `_node_zone_membership`, inverted: the drones inside this zone.
+    inside: BTreeSet<String>,
+}
+
+/// `TeamLocalization`: the fleet's estimates fused, under cooperative search.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TeamLocalization {
+    pub position: [f64; 3],
+    pub position_std_m: f64,
+    pub confidence: f64,
+    /// The drones tight enough to have been fused, in estimate order.
+    pub contributing_node_ids: Vec<String>,
+}
+
+/// One zone's share of a stage 8 checkpoint.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ZoneCheckpoint {
+    zone_id: String,
+    coverage: CoverageGrid,
+    inside: BTreeSet<String>,
+}
+
 /// A handle onto the mapping stage.
 #[derive(Debug, Clone)]
 pub struct MappingLink {
@@ -147,7 +217,21 @@ struct Shared {
     /// the previous tick.
     mission: Option<MissionLink>,
     estimates: Vec<LocalizationEstimate>,
+    /// `_loc_estimates`: the estimates of the last tick that localized. The
+    /// reference keeps reporting them after localization stops; `estimates`
+    /// does not, because the mission machine must not read stale ones.
+    last_estimates: Vec<LocalizationEstimate>,
     localizer_timed_out: bool,
+    /// `cooperative_search`: fuse the fleet's estimates after each update.
+    cooperative: bool,
+    /// `_team_loc_current`: the last fusion that produced an estimate.
+    team: Option<TeamLocalization>,
+    zones: Vec<ZoneTrack>,
+    /// This tick's zone events. Output, not state.
+    inspection_events: Vec<InspectionEvent>,
+    /// This tick's cells that went from unobserved to observed, `(i, j)`
+    /// ascending. Output, not state.
+    newly_covered: Vec<(usize, usize)>,
 }
 
 impl MappingLink {
@@ -196,6 +280,65 @@ impl MappingLink {
         self.lock().coverage.count_at(i, j)
     }
 
+    /// Track inspection of these zones, replacing any tracked before.
+    ///
+    /// Each zone's coverage map covers the stage's whole grid, as the
+    /// reference's does.
+    pub fn set_zones(&self, zones: Vec<InspectionZone>) -> Result<(), &'static str> {
+        let mut shared = self.lock();
+        let bounds = shared.bounds;
+        let tracks = zones
+            .into_iter()
+            .map(|zone| {
+                Ok(ZoneTrack {
+                    zone,
+                    coverage: CoverageGrid::new(bounds)?,
+                    inside: BTreeSet::new(),
+                })
+            })
+            .collect::<Result<Vec<_>, &'static str>>()?;
+        shared.zones = tracks;
+        Ok(())
+    }
+
+    /// This tick's zone events, zone by zone, drone by drone.
+    pub fn inspection_events(&self) -> Vec<InspectionEvent> {
+        self.lock().inspection_events.clone()
+    }
+
+    /// The centres of this tick's newly observed cells, in `np.where` order.
+    pub fn newly_covered_cells(&self) -> Vec<[f64; 2]> {
+        let shared = self.lock();
+        let bounds = shared.bounds;
+        shared
+            .newly_covered
+            .iter()
+            .map(|&(i, j)| {
+                // `GridBounds.ij_to_xy`.
+                [
+                    bounds.x_min_m + (i as f64 + 0.5) * bounds.resolution_m,
+                    bounds.y_min_m + (j as f64 + 0.5) * bounds.resolution_m,
+                ]
+            })
+            .collect()
+    }
+
+    /// Fuse the fleet's estimates after every localizing tick, as the
+    /// reference's cooperative search does.
+    pub fn set_cooperative_search(&self, cooperative: bool) {
+        self.lock().cooperative = cooperative;
+    }
+
+    /// The last team fusion, if cooperative search has produced one.
+    pub fn team_localization(&self) -> Option<TeamLocalization> {
+        self.lock().team.clone()
+    }
+
+    /// The estimates of the last tick that localized; see `last_estimates`.
+    pub fn last_estimates(&self) -> Vec<LocalizationEstimate> {
+        self.lock().last_estimates.clone()
+    }
+
     /// Turn on the localization half of stage 8.
     pub fn enable_localization(&self, config: LocalizationConfig) {
         self.lock().localizer = Some(GridLocalizer::new(config));
@@ -238,8 +381,31 @@ impl MappingLink {
             localizer.reset(None);
         }
         shared.estimates.clear();
+        shared.last_estimates.clear();
+        shared.team = None;
         shared.localizer_timed_out = false;
+        for track in &mut shared.zones {
+            track.coverage.reset();
+            track.inside.clear();
+        }
+        shared.inspection_events.clear();
+        shared.newly_covered.clear();
     }
+}
+
+/// What stage 8 checkpoints.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MappingCheckpoint {
+    coverage: CoverageGrid,
+    localizer: Option<GridLocalizer>,
+    estimates: Vec<LocalizationEstimate>,
+    localizer_timed_out: bool,
+    #[serde(default)]
+    last_estimates: Vec<LocalizationEstimate>,
+    #[serde(default)]
+    zones: Vec<ZoneCheckpoint>,
+    #[serde(default)]
+    team: Option<TeamLocalization>,
 }
 
 /// [`Stage::UpdateMappingAndLocalization`]'s coverage and belief half.
@@ -267,7 +433,13 @@ impl MappingStage {
                     localizer: None,
                     mission: None,
                     estimates: Vec::new(),
+                    last_estimates: Vec::new(),
                     localizer_timed_out: false,
+                    cooperative: false,
+                    team: None,
+                    zones: Vec::new(),
+                    inspection_events: Vec::new(),
+                    newly_covered: Vec::new(),
                 })),
             },
         })
@@ -296,8 +468,94 @@ impl MappingStage {
 }
 
 impl StageHandler for MappingStage {
+    fn reset(&mut self) {
+        self.link.clear();
+    }
+
+    /// Coverage counts (and their running aggregates), the localizer, its
+    /// last estimates and the timeout latch.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        let shared = self.link.lock();
+        let state = MappingCheckpoint {
+            coverage: shared.coverage.clone(),
+            localizer: shared.localizer.clone(),
+            estimates: shared.estimates.clone(),
+            localizer_timed_out: shared.localizer_timed_out,
+            last_estimates: shared.last_estimates.clone(),
+            zones: shared
+                .zones
+                .iter()
+                .map(|track| ZoneCheckpoint {
+                    zone_id: track.zone.zone_id.clone(),
+                    coverage: track.coverage.clone(),
+                    inside: track.inside.clone(),
+                })
+                .collect(),
+            team: shared.team.clone(),
+        };
+        Some(serde_json::to_value(state).expect("mapping state serialises"))
+    }
+
+    fn check_state(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let shared = self.link.lock();
+        let malformed = |detail: &str| crate::simulation::StageStateError::Malformed {
+            detail: detail.to_string(),
+        };
+        if decoded.coverage.bounds() != shared.coverage.bounds() {
+            return Err(malformed(
+                "coverage grid covers a different area or resolution",
+            ));
+        }
+        if decoded.localizer.is_some() != shared.localizer.is_some() {
+            return Err(malformed(
+                "localization is enabled in one run and not the other",
+            ));
+        }
+        let ids = |ids: &mut dyn Iterator<Item = &String>| ids.cloned().collect::<Vec<_>>();
+        if ids(&mut decoded.zones.iter().map(|zone| &zone.zone_id))
+            != ids(&mut shared.zones.iter().map(|track| &track.zone.zone_id))
+        {
+            return Err(malformed("the inspected zones differ"));
+        }
+        if decoded
+            .zones
+            .iter()
+            .any(|zone| zone.coverage.bounds() != shared.coverage.bounds())
+        {
+            return Err(malformed("a zone's coverage grid differs"));
+        }
+        Ok(())
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let mut shared = self.link.lock();
+        shared.coverage = decoded.coverage;
+        shared.localizer = decoded.localizer;
+        shared.estimates = decoded.estimates;
+        shared.localizer_timed_out = decoded.localizer_timed_out;
+        shared.last_estimates = decoded.last_estimates;
+        shared.team = decoded.team;
+        for (track, zone) in shared.zones.iter_mut().zip(decoded.zones) {
+            track.coverage = zone.coverage;
+            track.inside = zone.inside;
+        }
+        shared.inspection_events.clear();
+        shared.newly_covered.clear();
+        Ok(())
+    }
+
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let mut shared = self.link.lock();
+        shared.inspection_events.clear();
+        shared.newly_covered.clear();
 
         let positions: Vec<(String, [f64; 2])> = context
             .world
@@ -336,7 +594,67 @@ impl StageHandler for MappingStage {
             // a cell the lattice folds onto twice is incremented twice by the
             // reference's `np.add.at`.
             for (i, j) in &hits {
+                if shared.coverage.count_at(*i, *j) == 0 {
+                    shared.newly_covered.push((*i, *j));
+                }
                 shared.coverage.mark_cell(*i, *j);
+            }
+        }
+        // `np.where` over the (nx, ny) grid: ascending i, then j. Each cell is
+        // listed once already: it is recorded only while its count is zero,
+        // and its first mark ends that, whichever footprint (or repeated
+        // lattice hit) reaches it next.
+        shared.newly_covered.sort_unstable();
+
+        // --- zone inspection ------------------------------------------------
+        let timestamp_s = context.timestamp_s;
+        let Shared {
+            zones,
+            inspection_events,
+            ..
+        } = &mut *shared;
+        for track in zones.iter_mut() {
+            let [zx, zy] = track.zone.center_xy;
+            for (node_id, centre) in &positions {
+                // `np.linalg.norm` of a 2-vector: no `hypot`.
+                let (dx, dy) = (centre[0] - zx, centre[1] - zy);
+                let inside = (dx * dx + dy * dy).sqrt() <= track.zone.radius_m;
+                let was_inside = track.inside.contains(node_id);
+                if inside {
+                    let hits = rasterize_circle(&bounds, *centre, footprint_radius_m, sampling)
+                        .map_err(|e| {
+                            StageError::Invariant(format!(
+                                "zone {} footprint for {node_id}: {e}",
+                                track.zone.zone_id
+                            ))
+                        })?;
+                    for (i, j) in hits {
+                        track.coverage.mark_cell(i, j);
+                    }
+                }
+                let zone_coverage_fraction = track.coverage.stats().coverage_fraction;
+                let event_type = if inside && !was_inside {
+                    track.inside.insert(node_id.clone());
+                    if track.zone.zone_type == EXCLUSION_ZONE_TYPE {
+                        "violation"
+                    } else {
+                        "entered"
+                    }
+                } else if !inside && was_inside {
+                    track.inside.remove(node_id);
+                    "exited"
+                } else if inside {
+                    "coverage_updated"
+                } else {
+                    continue;
+                };
+                inspection_events.push(InspectionEvent {
+                    zone_id: track.zone.zone_id.clone(),
+                    node_id: node_id.clone(),
+                    event_type: event_type.to_string(),
+                    timestamp_s,
+                    zone_coverage_fraction,
+                });
             }
         }
 
@@ -430,6 +748,34 @@ impl StageHandler for MappingStage {
                     )
                     .map_err(|e| StageError::Invariant(format!("localizing {node_id}: {e}")))?;
                 shared.estimates.push(estimate);
+            }
+
+            shared.last_estimates = shared.estimates.clone();
+
+            // `if _coop_search_active and len(_loc_estimates) > 1`: fuse, and
+            // keep the previous team estimate when the fusion has nothing.
+            if shared.cooperative && shared.estimates.len() > 1 {
+                let localizer = shared.localizer.as_ref().expect("checked above");
+                let ids: Vec<&str> = shared
+                    .estimates
+                    .iter()
+                    .map(|estimate| estimate.platform_id.as_str())
+                    .collect();
+                if let Some(team) = localizer.fuse_estimates(&ids) {
+                    let half_radius_m = localizer.config().search_radius_m * 0.5;
+                    let contributing_node_ids = shared
+                        .estimates
+                        .iter()
+                        .filter(|estimate| estimate.position_std_m < half_radius_m)
+                        .map(|estimate| estimate.platform_id.clone())
+                        .collect();
+                    shared.team = Some(TeamLocalization {
+                        position: team.position_estimate,
+                        position_std_m: team.position_std_m,
+                        confidence: team.confidence,
+                        contributing_node_ids,
+                    });
+                }
             }
 
             // Latched by the mission machine, but read here because this is
@@ -915,6 +1261,7 @@ mod tests {
             1,
             "that tick still saw the PREVIOUS phase, which was Scanning"
         );
+        let last_localized = link.estimates();
 
         // The next tick reads Inspecting and stops.
         let mut after = MissionInputs::at(2.0);
@@ -923,6 +1270,10 @@ mod tests {
         mission_link.set_inputs(after);
         sim.step().unwrap();
         assert!(link.estimates().is_empty(), "Inspecting must not localize");
+        // The replay keeps reporting the last estimates, as `_loc_estimates`
+        // does; the mission machine's own read above stays empty.
+        assert_eq!(link.last_estimates(), last_localized);
+        assert!(!last_localized.is_empty());
     }
 
     /// `atan2(vy, vx)` above 0.1 m/s, and exactly **zero** below it — not the
@@ -1160,6 +1511,21 @@ mod tests {
             link.localizer_timed_out(),
             "running past the step budget must latch the timeout"
         );
+
+        // The latch is checkpoint state: nothing re-derives it after the
+        // localizing phase, so a resumed run must be handed it.
+        let checkpoint = sim.checkpoint().expect("not faulted");
+        let (mut fresh, fresh_link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        fresh_link.enable_localization(LocalizationConfig {
+            localization_timeout_steps: 3,
+            ..LocalizationConfig::default()
+        });
+        assert!(!fresh_link.localizer_timed_out());
+        fresh.restore(&checkpoint).expect("restore accepted");
+        assert!(
+            fresh_link.localizer_timed_out(),
+            "a restore dropped the localization-timeout latch"
+        );
     }
 
     /// The budget counts **localization steps, not ticks**.
@@ -1352,6 +1718,214 @@ mod tests {
             from_stage, expected,
             "the stage must key the stream on step_count() + 1, scale the \
              cloud by that same step, and score `nominal + offset`"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Zone inspection and the team readout (P4.9a.2)
+    // -----------------------------------------------------------------
+
+    fn zone(id: &str, zone_type: &str, x: f64, y: f64, radius_m: f64) -> InspectionZone {
+        InspectionZone {
+            zone_id: id.to_string(),
+            zone_type: zone_type.to_string(),
+            center_xy: [x, y],
+            radius_m,
+        }
+    }
+
+    fn place(sim: &mut Simulation, node_id: &str, x: f64, y: f64) {
+        let platform = sim.world_mut().platform_mut(node_id).unwrap();
+        platform.position.x = x;
+        platform.position.y = y;
+    }
+
+    fn events(link: &MappingLink) -> Vec<(String, String, String)> {
+        link.inspection_events()
+            .into_iter()
+            .map(|e| (e.zone_id, e.node_id, e.event_type))
+            .collect()
+    }
+
+    fn event(zone: &str, node: &str, kind: &str) -> (String, String, String) {
+        (zone.to_string(), node.to_string(), kind.to_string())
+    }
+
+    /// Entry and exit are edges; staying inside reports coverage; entering an
+    /// exclusion zone is a violation; the radius is inclusive.
+    #[test]
+    fn zone_events_are_edges_and_an_exclusion_entry_is_a_violation() {
+        let (mut sim, link) = rig(vec![
+            node("drone-1", true, 900.0, 900.0),
+            node("drone-2", true, 900.0, 100.0),
+        ]);
+        link.set_zones(vec![
+            zone("patrol", "patrol", 500.0, 500.0, 100.0),
+            zone("keep-out", EXCLUSION_ZONE_TYPE, 200.0, 200.0, 50.0),
+        ])
+        .unwrap();
+
+        sim.step().unwrap();
+        assert!(events(&link).is_empty(), "nobody is inside anything");
+
+        // Exactly on the radius: inside.
+        place(&mut sim, "drone-1", 600.0, 500.0);
+        sim.step().unwrap();
+        assert_eq!(events(&link), vec![event("patrol", "drone-1", "entered")]);
+
+        place(&mut sim, "drone-2", 200.0, 200.0);
+        sim.step().unwrap();
+        assert_eq!(
+            events(&link),
+            vec![
+                event("patrol", "drone-1", "coverage_updated"),
+                event("keep-out", "drone-2", "violation"),
+            ]
+        );
+
+        place(&mut sim, "drone-1", 900.0, 900.0);
+        place(&mut sim, "drone-2", 900.0, 100.0);
+        sim.step().unwrap();
+        assert_eq!(
+            events(&link),
+            vec![
+                event("patrol", "drone-1", "exited"),
+                event("keep-out", "drone-2", "exited"),
+            ]
+        );
+    }
+
+    /// An event reports its zone's coverage after THAT drone's footprint and
+    /// before the next drone's -- the zone loop is the outer one.
+    #[test]
+    fn a_zone_event_reads_coverage_between_drones() {
+        let (mut sim, link) = rig(vec![
+            node("drone-1", true, 450.0, 500.0),
+            node("drone-2", true, 550.0, 500.0),
+        ]);
+        link.set_zones(vec![zone("patrol", "patrol", 500.0, 500.0, 100.0)])
+            .unwrap();
+        sim.step().unwrap();
+        let fractions: Vec<f64> = link
+            .inspection_events()
+            .iter()
+            .map(|e| e.zone_coverage_fraction)
+            .collect();
+        let mut alone = CoverageGrid::new(bounds()).unwrap();
+        alone
+            .mark_circular(
+                [450.0, 500.0],
+                MIN_FOOTPRINT_RADIUS_M,
+                Sampling::WorldAnchored,
+            )
+            .unwrap();
+        assert_eq!(fractions.len(), 2);
+        assert_eq!(fractions[0], alone.stats().coverage_fraction);
+        assert!(
+            fractions[1] > fractions[0],
+            "the second drone's mark is counted"
+        );
+        // The zone map is separate from the stage's own grid only in what
+        // it marks: here both drones were inside, so they agree.
+        assert_eq!(fractions[1], link.coverage_fraction());
+    }
+
+    /// Cooperative search reports the fleet's fused estimate from the drones
+    /// tight enough to fuse, keeps it once localization stops, and reports
+    /// nothing without cooperative search.
+    #[test]
+    fn cooperative_search_reports_a_team_estimate_and_keeps_it() {
+        for cooperative in [false, true] {
+            let (mut sim, link) = localizing_rig(vec![
+                node("drone-1", true, 100.0, 100.0),
+                node("drone-2", true, 900.0, 900.0),
+            ]);
+            link.set_cooperative_search(cooperative);
+            let half_radius_m = LocalizationConfig::default().search_radius_m * 0.5;
+            let mut x = 100.0;
+            let mut y = 100.0;
+            let mut mixed_ticks = 0;
+            for _ in 0..200 {
+                place(&mut sim, "drone-1", x, y);
+                place(&mut sim, "drone-2", 1_000.0 - x, 1_000.0 - y);
+                sim.step().unwrap();
+                // Every tick that fuses, fuses exactly the tight drones.
+                let estimates = link.estimates();
+                let tight: Vec<String> = estimates
+                    .iter()
+                    .filter(|e| e.position_std_m < half_radius_m)
+                    .map(|e| e.platform_id.clone())
+                    .collect();
+                if cooperative && !tight.is_empty() {
+                    let team = link.team_localization().expect("a tight drone fuses");
+                    assert_eq!(team.contributing_node_ids, tight);
+                    if tight.len() < estimates.len() {
+                        mixed_ticks += 1;
+                    }
+                }
+                x += 100.0;
+                if x > 950.0 {
+                    x = 100.0;
+                    y += 100.0;
+                }
+                if y > 950.0 {
+                    y = 100.0;
+                }
+            }
+            let team = link.team_localization();
+            if !cooperative {
+                assert_eq!(team, None);
+                continue;
+            }
+            assert!(mixed_ticks > 0, "no tick fused some drones and not others");
+            let team = team.expect("two converged drones fuse");
+            let tight: Vec<String> = link
+                .estimates()
+                .iter()
+                .filter(|e| e.position_std_m < half_radius_m)
+                .map(|e| e.platform_id.clone())
+                .collect();
+            assert!(!tight.is_empty());
+            assert_eq!(team.contributing_node_ids, tight);
+            // Inverse-variance fusion is at least as tight as its best input.
+            let best = link
+                .estimates()
+                .iter()
+                .map(|e| e.position_std_m)
+                .fold(f64::INFINITY, f64::min);
+            assert!(team.position_std_m <= best);
+
+            // Survives a checkpoint, as the reference's `_team_loc_current`
+            // survives the rest of the run.
+            let checkpoint = sim.checkpoint().unwrap();
+            link.clear();
+            assert_eq!(link.team_localization(), None);
+            sim.restore(&checkpoint).unwrap();
+            assert_eq!(link.team_localization(), Some(team));
+        }
+    }
+
+    /// `np.where` order -- ascending `i`, then `j` -- across drones, each
+    /// cell once even where two footprints first reach it together; the
+    /// later drone here covers the lower `i`.
+    #[test]
+    fn newly_covered_cells_are_in_np_where_order_and_unique() {
+        let (mut sim, link) = rig(vec![
+            node("drone-1", true, 600.0, 500.0),
+            node("drone-2", true, 450.0, 500.0),
+        ]);
+        link.set_footprint_radius_m(150.0);
+        sim.step().unwrap();
+        let cells = link.newly_covered_cells();
+        let mut expected = cells.clone();
+        expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        expected.dedup();
+        assert_eq!(cells, expected);
+        assert_eq!(cells.len() as u64, link.stats().covered_cells);
+        sim.step().unwrap();
+        assert!(
+            link.newly_covered_cells().is_empty(),
+            "nothing new the second time"
         );
     }
 }

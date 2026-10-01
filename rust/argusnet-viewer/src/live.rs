@@ -21,7 +21,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
-use crate::replay::{frame_from_pb, ReplayDocument, ReplayFrame, ReplayState};
+use crate::replay::{frame_from_pb, ReplayFrame, ReplayState};
 
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
 const LIVE_CHANNEL_CAPACITY: usize = 256;
@@ -196,7 +196,9 @@ pub struct LiveStream {
     pub received_frame_count: u64,
     pub dropped_frame_count: u64,
     pub latest_sequence: u64,
-    receiver: Mutex<Receiver<ReplayFrame>>,
+    receiver: Mutex<Receiver<(String, ReplayFrame)>>,
+    /// The daemon session the held frames came from.
+    session: Option<String>,
     status: Arc<AtomicU8>,
     total_received: Arc<AtomicU64>,
     total_dropped: Arc<AtomicU64>,
@@ -216,7 +218,8 @@ impl LiveStream {
 pub fn connect(endpoint: String, tls: LiveTlsConfig) -> Result<LiveStream> {
     let url = resolve_endpoint_url(&endpoint, &tls)?;
     let tls_config = build_tls_config(&tls)?;
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<ReplayFrame>(LIVE_CHANNEL_CAPACITY);
+    let (sender, receiver) =
+        std::sync::mpsc::sync_channel::<(String, ReplayFrame)>(LIVE_CHANNEL_CAPACITY);
     let status = Arc::new(AtomicU8::new(LiveConnectionStatus::Connecting.as_u8()));
     let total_received = Arc::new(AtomicU64::new(0));
     let total_dropped = Arc::new(AtomicU64::new(0));
@@ -248,6 +251,7 @@ pub fn connect(endpoint: String, tls: LiveTlsConfig) -> Result<LiveStream> {
         dropped_frame_count: 0,
         latest_sequence: 0,
         receiver: Mutex::new(receiver),
+        session: None,
         status,
         total_received,
         total_dropped,
@@ -272,7 +276,7 @@ async fn connect_client(
 fn stream_worker(
     url: String,
     tls_config: Option<ClientTlsConfig>,
-    sender: SyncSender<ReplayFrame>,
+    sender: SyncSender<(String, ReplayFrame)>,
     status: Arc<AtomicU8>,
     total_received: Arc<AtomicU64>,
     total_dropped: Arc<AtomicU64>,
@@ -302,7 +306,7 @@ fn stream_worker(
                         latest_sequence.store(message.sequence, Ordering::Relaxed);
                         total_dropped.fetch_add(message.dropped_since_last, Ordering::Relaxed);
                         total_received.fetch_add(1, Ordering::Relaxed);
-                        match sender.try_send(frame_from_pb(frame)) {
+                        match sender.try_send((message.session_id, frame_from_pb(frame))) {
                             Ok(()) | Err(TrySendError::Full(_)) => {}
                             Err(TrySendError::Disconnected(_)) => return,
                         }
@@ -320,32 +324,55 @@ fn stream_worker(
 
 /// Drain pending live frames into the replay document each tick.
 ///
-/// When the user is at (or past) the previous tail — i.e. not reviewing
-/// history — the playhead follows the newest frame.
+/// When the user is at (or past) the previous tail -- i.e. not reviewing
+/// history -- the playhead follows the newest frame.
 pub fn ingest_live_frames_system(live: ResMut<LiveStream>, mut replay_state: ResMut<ReplayState>) {
-    let mut appended = 0_u64;
-    {
+    let live = live.into_inner();
+    let appended = {
         let receiver = live.receiver.lock().expect("live receiver poisoned");
-        while let Ok(frame) = receiver.try_recv() {
-            let document = replay_state.document.get_or_insert_with(|| ReplayDocument {
-                meta: None,
-                summary: None,
-                frames: Vec::new(),
-            });
-            document.frames.push(frame);
-            if document.frames.len() > LIVE_HISTORY_CAPACITY {
-                let excess = document.frames.len() - LIVE_HISTORY_CAPACITY;
-                document.frames.drain(..excess);
-                replay_state.frame_index = replay_state.frame_index.saturating_sub(excess);
-            }
-            appended += 1;
-        }
-    }
+        ingest(
+            &mut replay_state,
+            &mut live.session,
+            std::iter::from_fn(|| receiver.try_recv().ok()),
+        )
+    };
     if appended > 0 {
-        let live = live.into_inner();
         live.received_frame_count = live.total_received.load(Ordering::Relaxed);
         live.dropped_frame_count = live.total_dropped.load(Ordering::Relaxed);
         live.latest_sequence = live.latest_sequence_shared.load(Ordering::Relaxed);
+    }
+}
+
+/// Append `frames` to the replay, as `(session, frame)` pairs.
+///
+/// A frame from a different daemon session than the held history is a
+/// different run (P2.0): the history is dropped and a new presentation epoch
+/// begins, so nothing keyed to the old run (entities, selection,
+/// interpolation) survives into it. A reconnect to the *same* session keeps
+/// the epoch. Returns how many frames were appended.
+pub fn ingest(
+    replay_state: &mut ReplayState,
+    session: &mut Option<String>,
+    frames: impl Iterator<Item = (String, ReplayFrame)>,
+) -> u64 {
+    let mut appended = 0_u64;
+    for (frame_session, frame) in frames {
+        if session.as_deref() != Some(frame_session.as_str()) {
+            if session.is_some() {
+                replay_state.begin_epoch(None);
+            }
+            *session = Some(frame_session);
+        }
+        replay_state.push_frame(frame);
+        let excess = replay_state
+            .frame_count()
+            .saturating_sub(LIVE_HISTORY_CAPACITY);
+        if excess > 0 {
+            replay_state.drain_front(excess);
+        }
+        appended += 1;
+    }
+    if appended > 0 {
         let frame_count = replay_state.frame_count();
         let was_at_tail = frame_count as u64 <= appended
             || replay_state.frame_index + (appended as usize) + 1 >= frame_count;
@@ -353,6 +380,7 @@ pub fn ingest_live_frames_system(live: ResMut<LiveStream>, mut replay_state: Res
             replay_state.frame_index = frame_count.saturating_sub(1);
         }
     }
+    appended
 }
 
 pub fn live_status_ui_system(mut contexts: EguiContexts, live: Res<LiveStream>) {
@@ -389,6 +417,75 @@ pub fn live_status_ui_system(mut contexts: EguiContexts, live: Res<LiveStream>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn frame(t: f32) -> ReplayFrame {
+        serde_json::from_value(serde_json::json!({
+            "timestamp_s": t, "tracks": [], "truths": [],
+            "nodes": [{"node_id": "drone-a", "position": [t, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0], "is_mobile": true}]
+        }))
+        .expect("frame")
+    }
+
+    fn batch(session: &str, times: std::ops::Range<u32>) -> Vec<(String, ReplayFrame)> {
+        times
+            .map(|t| (session.to_string(), frame(t as f32)))
+            .collect()
+    }
+
+    /// Same session, reconnected: the same run, the same epoch. A different
+    /// session is a different run: its history replaces the old, in a new
+    /// epoch.
+    #[test]
+    fn only_a_new_session_begins_a_new_epoch() {
+        let mut replay = ReplayState::default();
+        let mut session = None;
+        assert_eq!(
+            ingest(
+                &mut replay,
+                &mut session,
+                batch("argusnetd-1", 0..5).into_iter()
+            ),
+            5
+        );
+        let epoch = replay.epoch();
+        ingest(
+            &mut replay,
+            &mut session,
+            batch("argusnetd-1", 5..8).into_iter(),
+        );
+        assert_eq!(replay.epoch(), epoch);
+        assert_eq!(replay.frame_count(), 8);
+
+        ingest(
+            &mut replay,
+            &mut session,
+            batch("argusnetd-2", 0..3).into_iter(),
+        );
+        assert_eq!(replay.epoch(), epoch + 1);
+        assert_eq!(replay.frame_count(), 3, "the old run's history is gone");
+        assert_eq!(replay.frame_index, 2, "following the tail");
+        assert_eq!(session.as_deref(), Some("argusnetd-2"));
+    }
+
+    /// Trimming history to capacity keeps the epoch, and keeps the playhead
+    /// on the frame it was on.
+    #[test]
+    fn trimming_history_keeps_the_epoch_and_the_frame() {
+        let mut replay = ReplayState::default();
+        let mut session = None;
+        let cap = LIVE_HISTORY_CAPACITY as u32;
+        ingest(&mut replay, &mut session, batch("s", 0..cap).into_iter());
+        replay.step_to(10);
+        let epoch = replay.epoch();
+        ingest(
+            &mut replay,
+            &mut session,
+            batch("s", cap..cap + 4).into_iter(),
+        );
+        assert_eq!(replay.epoch(), epoch);
+        assert_eq!(replay.frame_count(), LIVE_HISTORY_CAPACITY);
+        assert_eq!(replay.current_frame().unwrap().timestamp_s, 10.0);
+    }
 
     fn tls_with_ca() -> LiveTlsConfig {
         LiveTlsConfig {

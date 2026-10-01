@@ -1,5 +1,279 @@
 # Changelog
 
+## Unreleased — Picking and selection (P2.3)
+
+- Clicks pick by ray against the scene's meshes, not by an 18-pixel radius:
+  the nearest visible marker under the pointer, and nothing when terrain or
+  a building is in front of it. Sensor volumes, trails and zone walls never
+  take a pick. A drone is picked across its whole glyph, including the gaps
+  between its arms.
+- In split view only the main viewport picks; a pointer over the UI never
+  reaches the world.
+- The selected marker has an amber ring and the hovered one a blue ring,
+  hidden by terrain like the glyph itself.
+- Tab and Shift+Tab step through the shown markers, Escape clears, and the
+  inspector lists every shown entity by kind.
+- Fixed: a click on a paused frame showed empty details until the frame
+  moved.
+- Fixed: picks went through the ground. The committed terrain is wound
+  facing down (recorded in KNOWN_GAPS), so the picker now tests both faces
+  of terrain and buildings.
+- Trails are additive, like every other overlay, so their draw order can no
+  longer flip.
+
+## Unreleased — Sensor, zone and trail geometry (P2.2)
+
+- Fields of view are persistent meshes: the region stage 6 actually accepts,
+  a spherical sector along the runtime's own look (the look rule moved into
+  `argusnet_sensing::look`, shared by the sim and the viewer), or the range
+  sphere when the sensor does not gate. An unset range draws nothing,
+  instead of an invented 400 m. A volume that encloses the camera is hidden.
+- Radar ranges are rings draped on the terrain, built once per station.
+- Mission zones are extruded walls along each overlap group's contour,
+  taller for exclusion zones; focus changes restyle them without a rebuild.
+  The gizmo outline now draws only with the diagnostic glyphs.
+- Trails are ribbons sampled by simulation time and distance, bounded in
+  memory, restarted on teleports and removed with their entity. Playing to a
+  frame and seeking to it give the same trail. A new **Trails** toggle.
+- Fixed: a zone contour could come out as half a ring, when the circle's
+  padded edge fell on the marching-squares grid's last column.
+- Pixel probes check the volumes, walls and trails in real renders; CI's
+  viewer job runs them.
+
+## Unreleased — Belief and land cover on the terrain (P2.1)
+
+- The terrain material draws belief from `argusnet-mapping`'s tile patches
+  through one adapter (`BeliefRenderSnapshot`), whose classes and confidence
+  are `WorldBeliefQuery`'s, cell for cell. Categorical channels are never
+  filtered. Unknown cells are hatched and stale ones faded. With no belief
+  data the whole terrain is drawn as unavailable, and the overlay panel says
+  why. Changed tiles reach the GPU as tile writes; uploads are capped and
+  counted.
+- Scenes built from an environment carry `metadata/land_cover.json`
+  (additive), and the terrain is tinted by the runtime layer's class.
+- Pixel probes read real headless renders back against the CPU queries; CI's
+  viewer job runs them. They caught the belief mode written into the wrong
+  uniform lane.
+- Headless renders now exit non-zero when a shader fails to compile or a PNG
+  cannot be written, instead of saving a plausible image.
+
+## Unreleased — The viewer presents frames without rebuilding them (P2.0)
+
+- A snapshot adapter (`argusnet-viewer::presentation`) replaces the per-frame
+  marker rebuild. Entities have typed, interned keys; membership is rebuilt
+  only when the source frame changes, poses are re-blended in place, and a
+  paused frame does nothing. On a 240-entity replay, allocations per rendered
+  frame fell from 1,108 to about 5 playing, and from 1,210 to about 2 paused.
+- Marker entities persist, keyed and indexed, and are written only where
+  something changed. Presentation epochs (reload, or a live session change)
+  void keys, entities, selection and interpolation.
+- Fixed: selecting a truth resolved to the track that shares its label.
+- The viewer's `Update` runs in ordered `ViewerSet`s: Input, SnapshotApply,
+  Presentation, Picking, Overlays.
+
+## Unreleased — Blocking safety and mission profiles, with no Python (P4.9d)
+
+- Stage 4, the hard safety monitor, is assembled when a bundle says
+  `"safety_blocking": true`. Both bundle writers set that key only when the
+  option is on. Assembling it found three arguments that were not the
+  reference's: `dt_s` was the tick's timestamp, the caution fraction was 0.85
+  where `SafetyMonitor` defaults to 0.9, and the terrain was one constant.
+  The stage is now on the checkpoint contract, its validations reach fusion
+  as `safety_events`, and replays carry them.
+- Parity: an all-follow run and a whole scan mission under the hard floor
+  match the reference bit for bit on every tick, every safety event included.
+- The native builder builds mission profiles: the profile's zones and POIs,
+  exported from the reference on a unit map, the profile's scenario name, and
+  `meta.mission_profile`. It validates profiles as `ScenarioOptions` does.
+- All seven canonical scenarios are now scored. Six pass every envelope.
+  `sar_person_search` fails `covariance_reduction_mean`, which here measures a
+  single coasting track per seed at most; it is analysed and not widened.
+- Finding, kept for parity: after an abort, the reference monitor keeps
+  aborting, because it differences the next command against the zeroed
+  velocity it allowed.
+
+## Unreleased — Phase acceptance for the Rust CLI (P4.9c)
+
+- `scripts/run_phase_acceptance.py` runs the seven canonical scenarios on five
+  seeds. The reference is `argusnet sim`; Rust is `argusnet sim
+  --export-config` then a release `argusnet-rs sim --config`. It applies the
+  envelopes `docs/migration/PHASE_ACCEPTANCE.md` declared before the first
+  run. All five supported scenarios pass. The tick p95 is at most 0.21 ms,
+  startup at most 43 ms, and the tick loop 16–81x faster than the reference's.
+  The two mission profiles are refused (blocking safety; P4.9d).
+- **Fusion fix (`argusnet-core`, both runtimes):** the IMM filter normalised
+  its mode probabilities by `max(sum, 1e-12)`. When both likelihoods
+  underflowed, the probabilities fell to about 1e-20, and the track collapsed
+  to the origin for good. They are now divided by the true sum.
+- **Metric fix:** `compute_localisation_rmse` paired tracks with truths only
+  in the replay's first tracked frame, by distance. Later tracks went
+  unscored, and one passing another target was scored against it. Each track
+  is now paired at its own first appearance, and by target ID where the track
+  is named for one.
+- Direct fusion parity: `tests/test_direct_fusion_parity.py` replays the
+  daemon's recorded requests through a hidden `argusnet-rs fuse`. Every
+  response must be the same protobuf message.
+- `argusnet sim --export-config PATH` writes the versioned scenario config the
+  flags resolve to. `argusnet-rs sim` records `provenance` (runtime, version,
+  formats, input and resolved config) in the replay's meta, and writes
+  `--timing-json`.
+- Rust replay tracks now carry `lifecycle_state` and `quality_score`, as the
+  reference's do. Both are declared, optional, in `docs/replay-schema.json`.
+
+## Unreleased — Scenarios from configs, with no Python at all (P4.9b.2b)
+
+- `argusnet-rs build --config C --bundle B` writes the bundle `argusnet sim
+  --export-bundle` would, and `argusnet-rs sim --config C` builds and runs it
+  in process. The native builder ports the scenario half of
+  `build_default_scenario`: targets, ground stations, drones and their
+  controllers, sensors, mission zones, POIs and the mission section.
+- Structurally identical to Python's bundles (every key, string, integer and
+  length) and numerically within 1e-12 m, over the three committed bundles,
+  an 11-scenario preset matrix, and a Python-vs-Rust round trip through both
+  CLIs.
+- The builder's constant tables are exported from the reference
+  (`scripts/export_builder_tables.py`) and checked for drift.
+
+## Unreleased — numpy's `integers` and the target behaviours in Rust (P4.9b.2a)
+
+- `NumpyRng` reproduces `Generator.integers` (PCG64's `next_uint32` half-word
+  buffer and Lemire's bounded method) and `random()`, proven against 684
+  interleaved draws.
+- `builder::behaviors` ports `build_target_trajectory`'s eight presets,
+  bit for bit over 10,464 samples.
+- Recorded: numpy 2.5 on arm64 fuses `uniform`'s affine step into an FMA, so
+  the reference's `uniform` is platform-dependent in the last place.
+
+## Unreleased — The native builder builds the world (P4.9b.1)
+
+- `argusnet_sim::builder` reads an `argusnet.scenario-config` v1 document
+  (`ScenarioOptions` field for field, unknown options refused) and builds the
+  world Python's `build_default_scenario` builds: terrain, the environment's
+  obstacles and land-cover patches for every terrain and map preset, and the
+  land cover. It writes the bundle's `world` section and the world keys of
+  `presentation`.
+- Exact against the reference except for terrain heights and what derives
+  from them, which are within 1e-12 m (numpy's `exp`, P4.3), across a
+  27-case preset matrix, 600 random box and wall footprints, and the three
+  committed bundles.
+
+## Unreleased — `argusnet-rs` replays carry what the viewer shows (P4.9a.2)
+
+- Rust replay frames now carry generation rejections (with the reference's
+  detail text and sight-line points), mapping state, zone inspection events,
+  deconfliction events, localization state, target metadata and, under
+  `scan_map_inspect`, the full scan mission state (POIs with positions,
+  coordinator, newly scanned cells, egress progress, team localization).
+- Replay `meta` carries the scenario half of the reference's metadata
+  (terrain mesh, obstacles, land cover, zones, assignments), exported in the
+  bundle as `presentation` by the newly lifted `scenario_replay_metadata`,
+  plus the tracker thresholds, durations and generation totals.
+- Stage 8 runs in every mission mode and checkpoints per-zone coverage and
+  membership; stage 9 elects and checkpoints the coordinator.
+- Bundle v1 gains optional `coverage_bounds`, `targets[].behavior`,
+  `cooperative_search`, `requested_duration_s` and `presentation`.
+- CI builds `argusnet-rs` before pytest and sets `ARGUSNET_REQUIRE_RS`, so
+  the Rust round-trip tests fail rather than skip when the binary is missing.
+  Until now they were skipped in CI.
+- Fix: deconfliction measured predicted separation with `hypot`; it now uses
+  `np.linalg.norm`'s arithmetic, as the reference does. The value sizes the
+  lateral push.
+
+## Unreleased — `argusnet-rs`: the Rust simulation from a command line (P4.9a)
+
+- New crate `rust/argusnet-cli` builds the `argusnet-rs` binary. `argusnet-rs
+  sim --bundle B --replay R` runs a scenario bundle in the Rust tick and writes
+  its replay, with no Python at run time. `--checkpoint-at N --checkpoint C`
+  and `--resume C` checkpoint and resume from the command line. It prints
+  provenance and tick-time percentiles. Exit codes: 1 fault (no replay
+  written), 2 invalid input, 3 unsupported.
+- `argusnet sim ... --export-bundle PATH` writes the scenario those flags
+  describe as a bundle, with the command's own tracker config, instead of
+  running it. Options the Rust runtime cannot honour are refused by name,
+  including the run-time flags `--continuous`, `--realtime`, `--streaming`,
+  `--compact` and `--replay-subsample`.
+
+## Unreleased — Every assembled stage resumes exactly (P4.8e.4)
+
+- Stages 2 (overrides), 6 (bias walks), 7 (the tracking engine), 8 (coverage,
+  localizer) and 9 (mission driver) implement the checkpoint contract, each
+  validating the checkpoint against the run before anything is mutated.
+- A whole assembled run, checkpointed to JSON in any phase and restored into a
+  fresh process, matches the uninterrupted run bit for bit: kinematics, fused
+  tracks, observation bearings, phase and coverage.
+- `argusnet-core`'s engine and filter types, and the mapping, localization and
+  planning state types, are serde-serialisable (additive).
+
+## Unreleased — The default mission runs in the Rust tick (P4.8e.3)
+
+- `MissionDriverStage` (stage 9) turns the mission machine's phases into POI
+  rescoring, energy-aware assignment, redirects, handoffs, dwell and egress
+  routes, in the reference's in-tick order. The scenario bundle carries a
+  `mission` section, and `assemble` builds stages 2, 8 and 9 for
+  `scan_map_inspect`.
+- With the reference's localization replayed, a 400-tick default mission
+  matches `run_simulation` bit for bit on every node and tick, through
+  `complete`. Free-running, it is exact until localization diverges and then
+  completes the mission on its own.
+- Distances in the POI manager and redirects use `np.linalg.norm`'s arithmetic,
+  not `hypot`. At a searched boundary offset the reference credits a dwell that
+  `hypot` would deny.
+- Python: POI construction is lifted verbatim out of `run_simulation`
+  (`make_poi_positions`, `build_run_inspection_pois`); a before/after 400-tick
+  run is byte-identical.
+
+## Unreleased — Stage 6 senses as the reference does (P4.8e.2)
+
+- Observations originate at each node's nominal controller pose (before
+  overrides and deconfliction), and directional sensors look along the nominal
+  velocity tilted down 30° above 0.5 m/s of horizontal speed. Both match
+  `build_observations`.
+- The detection draw now includes the world detection model's `p_d` (path loss,
+  transmittance, weather visibility, land cover) and cloud layers, and bearing
+  noise uses the effective noise multiplier. Without them the Rust run accepted
+  ~60% more observations than the reference. The totals are now within
+  statistical noise of it.
+- Weather's sensing half is ported (`visibility_at_range`, `bearing_noise_scale`,
+  cloud layers) and carried in the scenario bundle.
+- Python: `sensor_look_direction`, `fov_angle_deg` and `cloud_detection_factor`
+  are lifted verbatim out of `build_observations`; recaptured references are
+  unchanged.
+
+## Unreleased — The Rust tick runs a Python-built scenario (P4.8e.1)
+
+- `argusnet.scenario-bundle/v1`: `argusnet.simulation.scenario_bundle.export_bundle`
+  describes a built target-tracking scenario as resolved data (world payloads
+  exactly as the native ABI takes them, controllers, sensors, truth tables).
+  Unsupported features are refused by name.
+- `argusnet-sim::scenario::assemble` builds a configured `Simulation` from a
+  bundle (stages 1, 3, 6 and 7 over one shared world) and runs it to a replay.
+  An all-follow scenario matches `run_simulation` bit for bit on every node
+  and tick, including 61 frames of deconfliction.
+- Deconfliction now clamps against real terrain (`RoleTable::with_terrain`),
+  not a constant floor. Motion weather (`WindModel`, flight-speed penalty) is
+  ported.
+- `serde_json/float_roundtrip` is enabled on the workspace dependency, so every
+  build parses floats identically, including `cargo build -p argusnet-native`.
+
+## Unreleased — The Rust tick moves the fleet (P4.8d.3)
+
+- Stage 1 (`SampleControllersAndBattery`) now samples platform controllers and
+  then accounts battery (`argusnet-sim::controller`). Ports
+  `looped_waypoint_path` (search lanes) and `ObservationTriggeredFollowController`
+  bit-exact against recorded Python fixtures; stage 6 feeds engagement to
+  stage 1 for the next tick.
+- `StageHandler` gains `reset`, `checkpoint_state`, `check_state` and
+  `restore_state`. Checkpoint format 3 adds `stage_states`; every handler's
+  state is validated before anything is mutated. `Simulation::reset` now resets
+  handlers. `BatteryStage` checkpoints its ledger, previous positions and
+  warning latch.
+- `argusnet-sim` enables `serde_json/float_roundtrip`. Without it a JSON
+  checkpoint could return an f64 one ULP off, and a resumed run diverged from
+  an uninterrupted one.
+- The follow controller's pursuit of true target state (the reference's
+  behaviour) is now an explicit `PursuitOracle` capability, noted in the stage
+  trace every tick it is read.
+
 ## Unreleased — Scheduled Rust System Documentation (2026-09-23)
 
 - Complete the architecture audit with world-generation manifests, track identity

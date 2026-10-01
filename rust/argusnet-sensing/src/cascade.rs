@@ -169,23 +169,51 @@ impl<F: FnMut() -> f64> Draws for F {
     }
 }
 
+/// Which gate decided a pair, in the order the cascade applies them.
+///
+/// Two gates reject with the same reason: a pair lost to the dropout draw and
+/// one lost to the detection draw with a non-transmittance loss are both
+/// `dropout`. The reference writes them different detail texts, so a caller
+/// that reports rejections needs the gate, not only the reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    Range,
+    FieldOfView,
+    /// The first draw.
+    Dropout,
+    Elevation,
+    LineOfSight,
+    /// The second draw.
+    Detection,
+    /// Every gate passed.
+    Accepted,
+}
+
 /// Run the cascade for one pair.
 ///
 /// Gates are applied in the reference's order. The dropout draw is taken at
 /// gate three even when a later deterministic gate would have rejected the
 /// pair anyway -- see the module docs for why that is load-bearing.
 pub fn evaluate_pair(input: &PairInput, draws: &mut impl Draws) -> Outcome {
+    evaluate_pair_traced(input, draws).0
+}
+
+/// [`evaluate_pair`], also naming the gate that decided.
+pub fn evaluate_pair_traced(input: &PairInput, draws: &mut impl Draws) -> (Outcome, Gate) {
     // 1. Range. The lower bound catches a target coincident with the node,
     //    where the line of sight has no direction to speak of.
     if input.range_m < 1e-6 || input.range_m > input.max_range_m {
-        return Outcome::Rejected(RejectReason::OutOfRange);
+        return (Outcome::Rejected(RejectReason::OutOfRange), Gate::Range);
     }
 
     // 2. Field of view, for directional sensors only.
     let mut fov_fraction = 0.0;
     if let Some(fov) = input.fov {
         if fov.angle_deg > fov.half_angle_deg {
-            return Outcome::Rejected(RejectReason::OutsideFov);
+            return (
+                Outcome::Rejected(RejectReason::OutsideFov),
+                Gate::FieldOfView,
+            );
         }
         // The reference floors the divisor at 1 degree, so a very narrow
         // sensor cannot produce a fraction far above one.
@@ -194,29 +222,35 @@ pub fn evaluate_pair(input: &PairInput, draws: &mut impl Draws) -> Outcome {
 
     // 3. Dropout -- the first draw, and strictly before the two gates below.
     if draws.next_uniform() < input.dropout_probability {
-        return Outcome::Rejected(RejectReason::Dropout);
+        return (Outcome::Rejected(RejectReason::Dropout), Gate::Dropout);
     }
 
     // 4. Elevation.
     if input.elevation_deg < input.required_elevation_deg {
-        return Outcome::Rejected(RejectReason::LowElevation);
+        return (
+            Outcome::Rejected(RejectReason::LowElevation),
+            Gate::Elevation,
+        );
     }
 
     // 5. Line of sight.
     if let Visibility::Blocked(blocker) = input.visibility {
-        return Outcome::Rejected(blocker.reason());
+        return (Outcome::Rejected(blocker.reason()), Gate::LineOfSight);
     }
 
     // 6. Probabilistic detection -- the second draw. Strictly greater-than, so
     //    a probability of exactly 1.0 always accepts and 0.0 always rejects.
     if draws.next_uniform() > input.combined_pd {
-        return Outcome::Rejected(match input.dominant_loss {
-            DominantLoss::Transmittance => RejectReason::VegetationOcclusion,
-            DominantLoss::Other => RejectReason::Dropout,
-        });
+        return (
+            Outcome::Rejected(match input.dominant_loss {
+                DominantLoss::Transmittance => RejectReason::VegetationOcclusion,
+                DominantLoss::Other => RejectReason::Dropout,
+            }),
+            Gate::Detection,
+        );
     }
 
-    Outcome::Accepted { fov_fraction }
+    (Outcome::Accepted { fov_fraction }, Gate::Accepted)
 }
 
 /// Generation-side tallies for one frame.

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::{Component, Entity, Resource, Vec3};
 
-use crate::replay::{FrameMetrics, MissionZone, RuntimeMarker, TerrainViewerMesh};
+use crate::replay::{FrameMetrics, MissionZone, TerrainViewerMesh};
 
 #[derive(Debug, Clone, Resource, Default)]
 pub struct LayerEntityIndex {
@@ -30,6 +30,13 @@ pub struct RuntimeOverlayVisibility {
     pub inspection_events: bool,
     pub launch_lines: bool,
     pub show_covariance_ellipsoids: bool,
+    /// The terrain material's belief overlay (P2.1). Off by default: with no
+    /// belief data it draws the explicit unavailable state over everything.
+    pub belief: bool,
+    /// The terrain material's land-cover tint, where the scene carries one.
+    pub land_cover_tint: bool,
+    /// Trail ribbons behind every presented entity (P2.2).
+    pub trails: bool,
 }
 
 impl Default for RuntimeOverlayVisibility {
@@ -48,6 +55,9 @@ impl Default for RuntimeOverlayVisibility {
             inspection_events: true,
             launch_lines: true,
             show_covariance_ellipsoids: false,
+            belief: false,
+            land_cover_tint: true,
+            trails: true,
         }
     }
 }
@@ -147,6 +157,9 @@ pub struct ViewerUiState {
     pub selected_timeline_frame: Option<usize>,
     pub focused_entity_label: Option<String>,
     pub map_layer_preset: MapLayerPreset,
+    /// A selection the inspector's entity list asks for, applied by
+    /// `picking::keyboard_selection_system` (the UI only reads the selection).
+    pub select_request: Option<crate::picking::SelectRequest>,
 }
 
 impl Default for ViewerUiState {
@@ -157,6 +170,7 @@ impl Default for ViewerUiState {
             selected_timeline_frame: None,
             focused_entity_label: None,
             map_layer_preset: MapLayerPreset::Operator,
+            select_request: None,
         }
     }
 }
@@ -178,10 +192,8 @@ pub enum ViewMode {
     Split,
 }
 
-#[derive(Debug, Clone, Resource, Default)]
-pub struct CurrentRuntimeMarkers {
-    pub markers: Vec<RuntimeMarker>,
-}
+/// The presented domain entities. Built by the snapshot adapter.
+pub use crate::presentation::CurrentRuntimeMarkers;
 
 #[derive(Debug, Clone, Resource, Default)]
 pub struct CurrentFrameMetrics {
@@ -196,6 +208,12 @@ pub struct SelectionState {
 /// One selected entity: what every kind has, plus the part that differs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Selection {
+    /// What is selected. Resolved by key, never by label: a track and its
+    /// target's truth share a label.
+    pub key: crate::presentation::EntityKey,
+    /// The presentation epoch `key` belongs to. A selection from another
+    /// epoch is void, since its key may name a different entity there.
+    pub epoch: u64,
     pub label: String,
     pub position: Vec3,
     pub velocity: Vec3,
@@ -552,8 +570,15 @@ mod tests {
 mod selection_tests {
     use super::*;
 
+    fn key(kind: crate::replay::MarkerKind, id: &str) -> crate::presentation::EntityKey {
+        let mut ids = crate::presentation::IdTable::default();
+        crate::presentation::EntityKey::new(kind, ids.intern(id))
+    }
+
     fn track_selection() -> Selection {
         Selection {
+            key: key(crate::replay::MarkerKind::Track, "t1"),
+            epoch: 0,
             label: "t1".into(),
             position: Vec3::ZERO,
             velocity: Vec3::ZERO,
@@ -576,6 +601,8 @@ mod selection_tests {
         // `contributing_nodes`, so a track's values survived into the next
         // selection. Replacing the whole variant makes that unrepresentable.
         state.selected = Some(Selection {
+            key: key(crate::replay::MarkerKind::Node, "drone-a"),
+            epoch: 0,
             label: "drone-a".into(),
             position: Vec3::ZERO,
             velocity: Vec3::ZERO,

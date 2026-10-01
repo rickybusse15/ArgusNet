@@ -12,8 +12,8 @@
 //! reasons alone, a port that ran those gates in the wrong order would pass.
 
 use argusnet_sensing::cascade::{
-    evaluate_pair, Blocker, DominantLoss, FovInput, GenerationTally, Outcome, PairInput,
-    RejectReason, Visibility,
+    evaluate_pair, evaluate_pair_traced, Blocker, DominantLoss, FovInput, Gate, GenerationTally,
+    Outcome, PairInput, RejectReason, Visibility,
 };
 use serde::Deserialize;
 
@@ -556,4 +556,107 @@ fn a_target_exactly_at_the_elevation_floor_passes() {
         evaluate_pair(&make(0.499_999), &mut draws),
         Outcome::Rejected(RejectReason::LowElevation)
     );
+}
+
+/// The traced cascade names the gate that decided, and agrees with the
+/// untraced one. The two `dropout` gates are the point: the first draw and the
+/// detection draw report the same reason, and only the gate tells a caller
+/// which detail text the reference wrote.
+#[test]
+fn the_traced_cascade_names_each_gate() {
+    let pass = PairInput {
+        range_m: 100.0,
+        max_range_m: 1000.0,
+        fov: Some(FovInput {
+            angle_deg: 10.0,
+            half_angle_deg: 30.0,
+        }),
+        dropout_probability: 0.1,
+        elevation_deg: 45.0,
+        required_elevation_deg: 0.5,
+        visibility: Visibility::Visible,
+        combined_pd: 0.9,
+        dominant_loss: DominantLoss::Other,
+    };
+    /// Name, input, the two draws, the gate that must decide, and its reason.
+    type Case = (
+        &'static str,
+        PairInput,
+        [f64; 2],
+        Gate,
+        Option<RejectReason>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "range",
+            PairInput {
+                range_m: 2000.0,
+                ..pass
+            },
+            [0.5, 0.5],
+            Gate::Range,
+            Some(RejectReason::OutOfRange),
+        ),
+        (
+            "fov",
+            PairInput {
+                fov: Some(FovInput {
+                    angle_deg: 40.0,
+                    half_angle_deg: 30.0,
+                }),
+                ..pass
+            },
+            [0.5, 0.5],
+            Gate::FieldOfView,
+            Some(RejectReason::OutsideFov),
+        ),
+        (
+            "first draw",
+            pass,
+            [0.05, 0.5],
+            Gate::Dropout,
+            Some(RejectReason::Dropout),
+        ),
+        (
+            "elevation",
+            PairInput {
+                elevation_deg: 0.1,
+                ..pass
+            },
+            [0.5, 0.5],
+            Gate::Elevation,
+            Some(RejectReason::LowElevation),
+        ),
+        (
+            "line of sight",
+            PairInput {
+                visibility: Visibility::Blocked(Blocker::Terrain),
+                ..pass
+            },
+            [0.5, 0.5],
+            Gate::LineOfSight,
+            Some(RejectReason::TerrainOcclusion),
+        ),
+        (
+            "second draw",
+            pass,
+            [0.5, 0.95],
+            Gate::Detection,
+            Some(RejectReason::Dropout),
+        ),
+        ("accepted", pass, [0.5, 0.5], Gate::Accepted, None),
+    ];
+    for (name, input, values, gate, reason) in cases {
+        let mut next = values.into_iter();
+        let mut traced_draws = || next.next().expect("at most two draws");
+        let (outcome, decided) = evaluate_pair_traced(&input, &mut traced_draws);
+        assert_eq!(decided, gate, "{name}");
+        match reason {
+            Some(reason) => assert_eq!(outcome, Outcome::Rejected(reason), "{name}"),
+            None => assert!(matches!(outcome, Outcome::Accepted { .. }), "{name}"),
+        }
+        let mut again = values.into_iter();
+        let mut plain_draws = || again.next().expect("at most two draws");
+        assert_eq!(evaluate_pair(&input, &mut plain_draws), outcome, "{name}");
+    }
 }

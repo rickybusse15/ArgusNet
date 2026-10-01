@@ -137,6 +137,27 @@ impl SimulationSafetyMonitor {
     pub fn clear(&mut self, id: &str) {
         self.records.remove(id);
     }
+    /// `id`'s consecutive violating frames and state, if it has been seen.
+    /// A checkpoint carries this: it is what escalates `warning` to `abort`.
+    pub fn record(&self, id: &str) -> Option<(u32, &str)> {
+        self.records
+            .get(id)
+            .map(|(count, state)| (*count, state.as_str()))
+    }
+    /// Put back what [`Self::record`] reported. Refuses a state `process`
+    /// never assigns, or a violation count on a state that has none.
+    pub fn restore_record(&mut self, id: &str, count: u32, state: &str) -> Result<(), String> {
+        let consistent = match state {
+            "nominal" | "caution" => count == 0,
+            "warning" | "abort" => count >= 1,
+            _ => return Err(format!("{id}: unknown safety state {state:?}")),
+        };
+        if !consistent {
+            return Err(format!("{id}: {count} violating frames in state {state:?}"));
+        }
+        self.records.insert(id.into(), (count, state.into()));
+        Ok(())
+    }
     pub fn process(&mut self, id: &str, s: &State) -> Decision {
         let violations = check(&self.limits, s);
         let l = &self.limits;
@@ -190,6 +211,28 @@ impl SimulationSafetyMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_restored_record_must_be_one_process_could_have_left() {
+        let mut m =
+            SimulationSafetyMonitor::new(DronePhysicalLimits::tracker_default(), 3, 0.9).unwrap();
+        m.restore_record("d", 0, "nominal").unwrap();
+        m.restore_record("d", 0, "caution").unwrap();
+        m.restore_record("d", 2, "warning").unwrap();
+        assert_eq!(m.record("d"), Some((2, "warning")));
+        m.restore_record("d", 5, "abort").unwrap();
+        // A violation count with no violation state, and the reverse.
+        assert!(m.restore_record("d", 1, "nominal").is_err());
+        assert!(m.restore_record("d", 1, "caution").is_err());
+        assert!(m.restore_record("d", 0, "warning").is_err());
+        assert!(m.restore_record("d", 0, "abort").is_err());
+        assert!(m.restore_record("d", 1, "panicking").is_err());
+        assert_eq!(
+            m.record("d"),
+            Some((5, "abort")),
+            "a refusal changes nothing"
+        );
+        assert_eq!(m.record("unseen"), None);
+    }
     fn state() -> State {
         State {
             position: [0.0, 0.0, 100.0],

@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[dev-dependencies]
+[dependencies]
+# Checkpoint state (P4.8e.4) is serialized; see argusnet-sim.
 serde = { workspace = true }
+
+[dev-dependencies]
 serde_json = { workspace = true }

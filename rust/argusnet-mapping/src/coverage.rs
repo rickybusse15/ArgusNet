@@ -49,7 +49,7 @@ pub struct CoverageStats {
 /// Counts are `u32` as Python's are `int32`, but saturating rather than
 /// wrapping: a cell observed 2^32 times is implausible, and silently wrapping
 /// to zero would turn a heavily covered cell into an uncovered one.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CoverageGrid {
     bounds: GridBounds,
     nx: usize,

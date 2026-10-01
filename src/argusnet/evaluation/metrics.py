@@ -240,9 +240,11 @@ def compute_localisation_rmse(
 ) -> tuple[float | None, dict[str, float]]:
     """Compute localisation RMSE (metres) per track and mission-wide.
 
-    Track-to-truth matching uses minimum Euclidean distance at the *first*
-    frame that contains both a track and at least one truth.  Once matched,
-    the same pairing is used for the entire replay.
+    Each track is matched to a truth once, in the first frame where it
+    appears alongside at least one truth, and keeps that pairing for the
+    rest of the replay. A track whose ID names a truth target (the fusion
+    service keys tracks by the observations' target ID) is paired with that
+    target; any other track with the nearest truth at that moment.
 
     Args:
         frames: List of replay frame dicts with ``tracks`` and ``truths`` lists.
@@ -255,16 +257,23 @@ def compute_localisation_rmse(
     if not frames:
         return None, {}
 
-    # Determine track-to-truth mapping at first frame with both
+    # Until P4.9c every track was matched in the first frame holding any
+    # track, and by distance alone: tracks confirmed later were never scored,
+    # and a track that happened to pass another target at that instant was
+    # scored against it for the whole run.
     track_to_truth: dict[str, str] = {}
     for frame in frames:
         tracks = _extract_tracks_from_frame(frame)
         truths = _extract_truths_from_frame(frame)
         if not tracks or not truths:
             continue
+        truth_ids = {truth.get("target_id", "") for truth in truths}
         for track in tracks:
             tid = track.get("track_id", "")
             if tid in track_to_truth:
+                continue
+            if tid in truth_ids:
+                track_to_truth[tid] = tid
                 continue
             tp = _track_position(track)
             best_dist = float("inf")
@@ -277,9 +286,6 @@ def compute_localisation_rmse(
                     best_target = truth.get("target_id", "")
             if best_target is not None:
                 track_to_truth[tid] = best_target
-        # We only need the first frame that has data
-        if track_to_truth:
-            break
 
     if not track_to_truth:
         return None, {}

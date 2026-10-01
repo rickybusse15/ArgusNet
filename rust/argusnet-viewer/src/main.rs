@@ -93,6 +93,7 @@ fn main() -> Result<()> {
                 height: args.height,
                 fps: args.fps,
                 view_mode: args.view_mode,
+                probe: None,
             },
         );
     }

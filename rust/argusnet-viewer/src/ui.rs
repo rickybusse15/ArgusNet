@@ -4,13 +4,13 @@ use egui_extras::{Column, TableBuilder};
 use egui_plot::{HLine, Line, Plot, PlotPoints, Points, Polygon, VLine};
 
 use crate::mission_zones::{zone_color_rgba, ProjectedZoneBadges};
-use crate::replay::{EgressProgress, MarkerKind, ReplayState, RuntimeMarker};
+use crate::replay::{EgressProgress, MarkerKind, ReplayState};
 use crate::schema::ScenePackage;
 use crate::state::{
-    CurrentFrameMetrics, LayerVisibilityState, LoadedMissionZones, MapLayerPreset,
-    MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility, SelectionDetails,
-    SelectionState, SimulationRunner, ViewMode, ViewerMode, ViewerUiState, ZoneFocus,
-    ZoneOverlapModel,
+    CurrentFrameMetrics, CurrentRuntimeMarkers, LayerVisibilityState, LoadedMissionZones,
+    MapLayerPreset, MissionOverlaySettings, ReconstructionCloud, RuntimeOverlayVisibility,
+    SelectionDetails, SelectionState, SimulationRunner, ViewMode, ViewerMode, ViewerUiState,
+    ZoneFocus, ZoneOverlapModel,
 };
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
@@ -65,7 +65,13 @@ pub fn viewer_ui_system(
     mut runtime_visibility: ResMut<RuntimeOverlayVisibility>,
     mut mission_overlay: ResMut<MissionOverlaySettings>,
     mut view_mode: ResMut<ViewMode>,
-    selection: Res<SelectionState>,
+    // Paired: the system is at Bevy's sixteen-parameter limit.
+    (selection, markers, rasters, belief): (
+        Res<SelectionState>,
+        Res<CurrentRuntimeMarkers>,
+        Res<crate::terrain_rasters::TerrainRasters>,
+        Res<crate::belief_render::BeliefLayer>,
+    ),
     frame_metrics: Res<CurrentFrameMetrics>,
     mission_zones: Res<LoadedMissionZones>,
     mut zone_overlap_model: ResMut<ZoneOverlapModel>,
@@ -83,6 +89,8 @@ pub fn viewer_ui_system(
     let context = context.clone();
     let supports_hot_swap = scene_package.is_synthetic_source();
     ui_state.focused_entity_label = selection.label().map(str::to_owned);
+    let raster_status =
+        terrain_raster_status(&rasters.report(), &belief, &scene_package.land_cover);
     configure_operator_style(&context);
 
     // egui 0.36 unified `TopBottomPanel`/`SidePanel` into `Panel`, which attaches
@@ -133,6 +141,8 @@ pub fn viewer_ui_system(
                             &mut runtime_visibility,
                             &mut mission_overlay,
                             &selection,
+                            &markers,
+                            &raster_status,
                             &mut layer_visibility,
                             &mut zone_overlap_model,
                             &mut ui_state,
@@ -342,6 +352,8 @@ fn drawer_mission_content(
     runtime_visibility: &mut RuntimeOverlayVisibility,
     mission_overlay: &mut MissionOverlaySettings,
     selection: &SelectionState,
+    markers: &CurrentRuntimeMarkers,
+    raster_status: &str,
     layer_visibility: &mut LayerVisibilityState,
     zone_overlap_model: &mut ZoneOverlapModel,
     ui_state: &mut ViewerUiState,
@@ -357,6 +369,7 @@ fn drawer_mission_content(
         ui,
         scene_package,
         replay_state,
+        markers,
         mission_zones,
         reconstruction,
     );
@@ -364,8 +377,9 @@ fn drawer_mission_content(
     section_safety_alerts(ui, replay_state, mission_zones);
     section_targets(ui, replay_state);
     section_selection(ui, selection, replay_state.max_stale_steps());
+    section_entity_list(ui, markers, runtime_visibility, selection, ui_state);
     ui.separator();
-    section_runtime_overlays(ui, runtime_visibility, mission_overlay);
+    section_runtime_overlays(ui, runtime_visibility, mission_overlay, Some(raster_status));
     ui.separator();
     section_layers(ui, scene_package, layer_visibility);
     ui.separator();
@@ -834,6 +848,7 @@ fn tab_mission_content(
     ui: &mut egui::Ui,
     scene_package: &ScenePackage,
     replay_state: &ReplayState,
+    markers: &CurrentRuntimeMarkers,
     mission_zones: &LoadedMissionZones,
     reconstruction: &ReconstructionCloud,
 ) {
@@ -1028,22 +1043,17 @@ fn tab_mission_content(
                     }
                 }
 
-                // Trails: last 16 positions per mobile node
-                for node in &frame.nodes {
-                    if !node.is_mobile {
+                // Trails: the last 16 frames' positions per mobile node, as the
+                // adapter keeps them.
+                for (index, marker) in markers.markers.iter().enumerate() {
+                    if marker.kind != MarkerKind::Node || marker.is_mobile != Some(true) {
                         continue;
                     }
-                    let marker = RuntimeMarker {
-                        kind: MarkerKind::Node,
-                        label: node.node_id.clone(),
-                        position: Vec3::ZERO,
-                        velocity: Vec3::ZERO,
-                        is_mobile: Some(true),
-                    };
-                    let trail_3d = replay_state.trail_points(&marker, 16);
-                    if trail_3d.len() >= 2 {
-                        let trail_xy: Vec<[f64; 2]> =
-                            trail_3d.iter().map(|p| [p.x as f64, p.y as f64]).collect();
+                    let trail_xy: Vec<[f64; 2]> = markers
+                        .trail(index, 16)
+                        .map(|p| [p.x as f64, p.y as f64])
+                        .collect();
+                    if trail_xy.len() >= 2 {
                         plot_ui.line(
                             Line::new("", PlotPoints::new(trail_xy))
                                 .color(egui::Color32::from_rgba_unmultiplied(180, 180, 80, 80))
@@ -1216,7 +1226,7 @@ fn tab_scene_content(
     section_layers(ui, scene_package, layer_visibility);
     ui.separator();
 
-    section_runtime_overlays(ui, runtime_visibility, mission_overlay);
+    section_runtime_overlays(ui, runtime_visibility, mission_overlay, None);
     ui.separator();
 
     section_mission_zones(ui, mission_zones, zone_overlap_model);
@@ -1952,13 +1962,71 @@ fn section_track_summary(
 }
 
 // ---------------------------------------------------------------------------
+// Section: Entity list (P2.3)
+// ---------------------------------------------------------------------------
+
+/// Every shown marker, by kind: the list path to a selection, equivalent to
+/// clicking one. Rows are keyed, so a track and a truth that share an id are
+/// two rows under two headings. The click becomes a request the picking
+/// stage applies; this panel only reads the selection.
+fn section_entity_list(
+    ui: &mut egui::Ui,
+    markers: &CurrentRuntimeMarkers,
+    runtime_visibility: &RuntimeOverlayVisibility,
+    selection: &SelectionState,
+    ui_state: &mut ViewerUiState,
+) {
+    let selected = selection.selected.as_ref().map(|s| s.key);
+    let shown: Vec<_> = markers
+        .markers
+        .iter()
+        .filter(|marker| crate::app::is_marker_visible(marker, runtime_visibility))
+        .collect();
+    egui::CollapsingHeader::new(format!("Entities ({} shown)", shown.len()))
+        .id_salt("entity_list")
+        .show(ui, |ui| {
+            if shown.is_empty() {
+                ui.label("Nothing shown: turn on tracks, truths or nodes.");
+                return;
+            }
+            ui.small("Tab / Shift+Tab step through these; Esc clears.");
+            egui::ScrollArea::vertical()
+                .max_height(180.0)
+                .id_salt("entity_list_scroll")
+                .show(ui, |ui| {
+                    for (kind, heading) in [
+                        (MarkerKind::Node, "Platforms"),
+                        (MarkerKind::Track, "Tracks"),
+                        (MarkerKind::Truth, "Truth (evaluation)"),
+                    ] {
+                        let rows: Vec<_> = shown.iter().filter(|m| m.kind == kind).collect();
+                        if rows.is_empty() {
+                            continue;
+                        }
+                        ui.label(egui::RichText::new(heading).strong());
+                        for marker in rows {
+                            let is_selected = selected == Some(marker.key);
+                            if ui.selectable_label(is_selected, &*marker.label).clicked() {
+                                ui_state.select_request =
+                                    Some(crate::picking::SelectRequest::Select(marker.key));
+                            }
+                        }
+                    }
+                });
+            if selected.is_some() && ui.button("Clear selection").clicked() {
+                ui_state.select_request = Some(crate::picking::SelectRequest::Clear);
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
 // Section: Selection Inspector
 // ---------------------------------------------------------------------------
 
 fn section_selection(ui: &mut egui::Ui, selection: &SelectionState, max_stale_steps: u32) {
     ui.heading("Selection");
     let Some(selected) = selection.selected.as_ref() else {
-        ui.label("Click a marker to inspect it.");
+        ui.label("Click a marker, press Tab, or pick one from the list.");
         return;
     };
 
@@ -2439,6 +2507,40 @@ fn section_layers(
     });
 }
 
+/// What the terrain rasters are doing, in words an operator can act on: why
+/// belief is unavailable, and whether any tile failed to upload.
+pub fn terrain_raster_status(
+    report: &crate::terrain_rasters::RasterReport,
+    belief: &crate::belief_render::BeliefLayer,
+    land_cover: &crate::schema::LandCoverState,
+) -> String {
+    let belief_text = match belief {
+        crate::belief_render::BeliefLayer::Unavailable(reason) => {
+            format!("Belief unavailable: {reason}.")
+        }
+        crate::belief_render::BeliefLayer::Ready(snapshot) => {
+            let (nx, ny) = snapshot.dimensions();
+            format!(
+                "Belief r{}, {nx} x {ny} cells; {} tile(s) uploaded, {} waiting, {} refused.",
+                snapshot.revision().0,
+                report.uploaded_tiles,
+                report.waiting_tiles,
+                report.refused_tiles
+            )
+        }
+    };
+    let land_cover_text = match land_cover {
+        crate::schema::LandCoverState::Absent => "No land cover in this scene.".to_string(),
+        crate::schema::LandCoverState::Ready(raster) => {
+            format!("Land cover {} x {} cells.", raster.cols, raster.rows)
+        }
+        crate::schema::LandCoverState::Unavailable(reason) => {
+            format!("Land cover unavailable: {reason}.")
+        }
+    };
+    format!("{belief_text} {land_cover_text}")
+}
+
 // ---------------------------------------------------------------------------
 // Section: Runtime Overlays
 // ---------------------------------------------------------------------------
@@ -2447,6 +2549,7 @@ fn section_runtime_overlays(
     ui: &mut egui::Ui,
     runtime_visibility: &mut RuntimeOverlayVisibility,
     mission_overlay: &mut MissionOverlaySettings,
+    raster_status: Option<&str>,
 ) {
     ui.collapsing("Runtime Overlays", |ui| {
         ui.checkbox(
@@ -2465,11 +2568,17 @@ fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.fov_cones, "FOV Cones");
         ui.checkbox(&mut runtime_visibility.radar_rings, "Radar Rings");
         ui.checkbox(&mut runtime_visibility.coverage_overlay, "Coverage Overlay");
+        ui.checkbox(&mut runtime_visibility.belief, "Belief (terrain)");
+        ui.checkbox(&mut runtime_visibility.land_cover_tint, "Land-cover tint");
+        if let Some(status) = raster_status {
+            ui.small(status);
+        }
         ui.checkbox(
             &mut runtime_visibility.inspection_events,
             "Inspection Events",
         );
         ui.checkbox(&mut runtime_visibility.launch_lines, "Launch Lines");
+        ui.checkbox(&mut runtime_visibility.trails, "Trails");
         ui.checkbox(
             &mut runtime_visibility.show_covariance_ellipsoids,
             "Covariance Ellipsoids",
@@ -2869,6 +2978,36 @@ fn combo_box(
 
 #[cfg(test)]
 mod tests {
+    /// The operator is told why belief is missing, not shown a blank.
+    #[test]
+    fn the_raster_status_says_why_belief_is_unavailable() {
+        use crate::belief_render::{BeliefLayer, BeliefRenderSnapshot, BeliefUnavailable};
+        use crate::terrain_material::BeliefMode;
+        use crate::terrain_rasters::RasterReport;
+        let report = RasterReport {
+            belief_mode: BeliefMode::Unavailable,
+            land_cover_bound: false,
+            uploaded_tiles: 3,
+            waiting_tiles: 1,
+            refused_tiles: 2,
+        };
+        let absent = crate::schema::LandCoverState::Absent;
+        let text = terrain_raster_status(&report, &BeliefLayer::default(), &absent);
+        assert!(text.contains("no belief data"), "{text}");
+        assert!(text.contains("No land cover"), "{text}");
+        let too_large = BeliefLayer::Unavailable(BeliefUnavailable::TooLarge { nx: 5000, ny: 3 });
+        assert!(terrain_raster_status(&report, &too_large, &absent).contains("5000 x 3"));
+        let ready = BeliefLayer::Ready(Box::new(
+            BeliefRenderSnapshot::from_store(&crate::belief_render::synthetic_belief_store())
+                .unwrap(),
+        ));
+        let text = terrain_raster_status(&report, &ready, &absent);
+        assert!(
+            text.contains("3 tile(s) uploaded, 1 waiting, 2 refused"),
+            "{text}"
+        );
+    }
+
     use super::*;
 
     #[test]

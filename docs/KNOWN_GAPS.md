@@ -51,6 +51,7 @@ Status labels:
 | Sensor noise model | **Implemented** | `src/argusnet/sensing/models/noise.py` |
 | Rust IMM fusion and association | **Implemented** | `rust/argusnet-core/src/lib.rs`, `association.rs` |
 | Labeled/GNN/JPDA association | **Implemented** | `rust/argusnet-core` |
+| Poorly conditioned two-ray triangulation | **Gap** | A cluster of two nearly parallel rays that still clears `min_intersection_angle_deg` (2.5°) can triangulate hundreds of metres off, and the fix is admitted with a small measurement std. P4.9c saw one such run-off at 3.6° (intercept_stress, seed 31415). The fix is tracker tuning: a larger minimum angle, or a range-aware measurement std. See `docs/migration/PHASE_ACCEPTANCE.md`. |
 | Python Kalman/triangulation utilities | **Partial** | `src/argusnet/mapping/fusion.py` and localization helpers are utility/reference paths, not runtime fusion authority. |
 | Clutter / false-alarm generation | **Partial** | Parameters exist; scenario-wide clutter generation remains limited. |
 | Formal observation-source interface | **Implemented** | `argusnet.sensing.observation_source.ObservationSource` is the versioned, injectable runtime boundary; the deterministic simulator generator remains available as `build_observations()`. |
@@ -96,6 +97,7 @@ Status labels:
 
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
+| Blocking safety monitor after an abort | **Reference behaviour, ported** | An abort zeroes the allowed velocity, which is stored as `previous_velocity`. The controller's next normal command then reads as an acceleration violation and aborts again: in the scan fixture every tick of both drones aborts. The clamp does not accumulate, so missions still complete. Whether the policy should difference against the commanded velocity after an abort is a policy decision (`docs/migration/SAFETY_AND_PROFILES.md`). |
 | 2D visibility-graph planner | **Implemented** | `src/argusnet/planning/planner_base.py` |
 | Route cache and obstacle expansion | **Implemented** | `PathPlanner2D`, `PlannerConfig` |
 | Frontier enclosed-gap gate | **Implemented** | `FrontierPlanner.find_gap_cells()` is wired into `scan_map_inspect`. |
@@ -113,13 +115,14 @@ Status labels:
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
 | Replay schema | **Implemented** | `docs/replay-schema.json`, `src/argusnet/evaluation/replay.py`. Enforced with `jsonschema` and guarded end-to-end by `tests/test_replay_contract.py` plus `replay.rs::contract_fixture_tests`. |
-| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py` |
+| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py`. `check_pass_fail`'s `track_continuity_mean` threshold fails every canonical scenario, including the target-free scan scenarios where continuity is 0 by construction (P4.9c). `covariance_reduction_mean` compares a track's first covariance with its covariance at its *last appearance*, which is usually mid-coast just before deletion, so it measures the coast. In `sar_person_search` at most one track per seed qualifies, and this is the one P4.9d envelope that fails (`docs/migration/SAFETY_AND_PROFILES.md`). Whether to measure at the last update, or require a minimum sample, is an open decision. |
 | Benchmark aggregation | **Implemented** | `src/argusnet/evaluation/benchmarks.py` |
 | Reports/export helpers | **Implemented** | `src/argusnet/evaluation/reports.py`, `export.py` |
 | Benchmark standards | **Implemented as documentation** | `docs/PERFORMANCE_AND_BENCHMARKING.md` |
 | CI benchmark markers and golden performance files | **Implemented** | Deterministic work-counter gate runs on every PR; timing comparison is opt-in (`ARGUSNET_RUN_PERF_TIMING`). Baseline profile in `docs/performance/baseline-profile-2026-09.md`. |
 | Viewer replay playback | **Implemented** | `rust/argusnet-viewer` |
 | Viewer live streaming | **Implemented** | Legacy `WatchFrames` plus operator-focused `WatchFramesV2`, reconnect, bounded queues/history, truth filtering, sequence/drop telemetry |
+| Scene GLB triangle winding | **Gap** | Every one of the committed `terrain-base.glb`'s 9,656 triangles is wound facing down while its normals face up; it draws correctly only because its material is double-sided. (`buildings.glb` agrees with its normals on all 432.) The viewer's picker casts occluders from both faces to match (P2.3, `docs/migration/PICKING_AND_SELECTION.md`). The writer (`src/argusnet/world/_glb.py` and its callers) should emit counter-clockwise front faces; single-sided culling, or any consumer that trusts the winding, would otherwise see through the ground. |
 | Viewer headless CI/render path | **Implemented smoke coverage** | CI renders through Bevy and checks a non-empty image. Fixed-image regression and steady-state frame-budget gates remain open. |
 
 ## Interface Boundaries That Need Formalization

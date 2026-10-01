@@ -1,0 +1,1106 @@
+{
+  "_reference": "src/argusnet/simulation/sim.py",
+  "_source": "scripts/capture_trajectory_fixture.py",
+  "apply_weather_adjustments": [
+    {
+      "adjusted_position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "12.0",
+        "-4.0",
+        "1.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": false,
+      "min_agl_m": "18.0",
+      "name": "no_weather_is_a_passthrough",
+      "penalty_oracle": [],
+      "position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "terrain_calls": [],
+      "terrain_oracle": [],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "1.0"
+      ],
+      "wind_oracle": [],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "97.06057964211405",
+        "46.51019718891302",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "5.971152",
+        "-1.990384",
+        "1.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "full_path",
+      "penalty_oracle": [
+        {
+          "altitude_m": "149.5",
+          "penalty": "0.497596"
+        }
+      ],
+      "position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "terrain_calls": [
+        [
+          "100.0",
+          "50.0"
+        ],
+        [
+          "97.06057964211405",
+          "46.51019718891302"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "50.5",
+          "x_m": "100.0",
+          "y_m": "50.0"
+        },
+        {
+          "height_m": "50.09035623081478",
+          "x_m": "97.06057964211405",
+          "y_m": "46.51019718891302"
+        }
+      ],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "1.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "149.5",
+          "time_s": "30.0",
+          "wind": [
+            "-8.398343879674165",
+            "-9.970865174534243",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "97.86113285660214",
+        "47.46064745399677",
+        "68.5"
+      ],
+      "adjusted_velocity": [
+        "7.220927999999999",
+        "-2.406976",
+        "0.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "below_floor_is_clamped_before_the_penalty",
+      "penalty_oracle": [
+        {
+          "altitude_m": "18.0",
+          "penalty": "0.601744"
+        }
+      ],
+      "position": [
+        "100.0",
+        "50.0",
+        "10.0"
+      ],
+      "terrain_calls": [
+        [
+          "100.0",
+          "50.0"
+        ],
+        [
+          "97.86113285660214",
+          "47.46064745399677"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "50.5",
+          "x_m": "100.0",
+          "y_m": "50.0"
+        },
+        {
+          "height_m": "50.20192300122801",
+          "x_m": "97.86113285660214",
+          "y_m": "47.46064745399677"
+        }
+      ],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "0.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "18.0",
+          "time_s": "30.0",
+          "wind": [
+            "-6.111048981136742",
+            "-7.255292988580663",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "96.75314285632203",
+        "46.14519537608618",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "5.491199999999999",
+        "-1.8303999999999996",
+        "1.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": true,
+      "has_terrain": false,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "without_terrain_altitude_is_absolute",
+      "penalty_oracle": [
+        {
+          "altitude_m": "200.0",
+          "penalty": "0.4575999999999999"
+        }
+      ],
+      "position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "terrain_calls": [],
+      "terrain_oracle": [],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "1.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "200.0",
+          "time_s": "30.0",
+          "wind": [
+            "-9.276734696222759",
+            "-11.013727496896644",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "577.3643637136195",
+        "276.87086234653793",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "6.4454016",
+        "-2.1484672000000002",
+        "0.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": false,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "without_bounds_drift_is_unclamped",
+      "penalty_oracle": [
+        {
+          "altitude_m": "99.6",
+          "penalty": "0.5371168000000001"
+        }
+      ],
+      "position": [
+        "580.0",
+        "280.0",
+        "200.0"
+      ],
+      "terrain_calls": [
+        [
+          "580.0",
+          "280.0"
+        ],
+        [
+          "577.3643637136195",
+          "276.87086234653793"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "100.03269221441647",
+          "x_m": "577.3643637136195",
+          "y_m": "276.87086234653793"
+        },
+        {
+          "height_m": "100.4",
+          "x_m": "580.0",
+          "y_m": "280.0"
+        }
+      ],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "0.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "99.6",
+          "time_s": "30.0",
+          "wind": [
+            "-7.530389389658823",
+            "-8.94039329560585",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "-399.0",
+        "-199.0",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "5.4807456",
+        "-1.8269152",
+        "0.0"
+      ],
+      "dt_s": "4.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "drift_past_the_low_edge_is_clamped",
+      "penalty_oracle": [
+        {
+          "altitude_m": "201.1",
+          "penalty": "0.4567288"
+        }
+      ],
+      "position": [
+        "-395.0",
+        "-190.0",
+        "200.0"
+      ],
+      "terrain_calls": [
+        [
+          "-395.0",
+          "-190.0"
+        ],
+        [
+          "-399.0",
+          "-199.0"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "-1.1000000000000014",
+          "x_m": "-395.0",
+          "y_m": "-190.0"
+        },
+        {
+          "height_m": "-1.8700000000000028",
+          "x_m": "-399.0",
+          "y_m": "-199.0"
+        }
+      ],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "0.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "201.1",
+          "time_s": "30.0",
+          "wind": [
+            "-9.295867961533718",
+            "-11.036443309858992",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "98.04038642807603",
+        "47.67346479260868",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "5.971152",
+        "-1.990384",
+        "1.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "gust_phase_moves_the_drift",
+      "penalty_oracle": [
+        {
+          "altitude_m": "149.5",
+          "penalty": "0.497596"
+        }
+      ],
+      "position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "terrain_calls": [
+        [
+          "100.0",
+          "50.0"
+        ],
+        [
+          "98.04038642807603",
+          "47.67346479260868"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "50.5",
+          "x_m": "100.0",
+          "y_m": "50.0"
+        },
+        {
+          "height_m": "50.22690415387652",
+          "x_m": "98.04038642807603",
+          "y_m": "47.67346479260868"
+        }
+      ],
+      "timestamp_s": "33.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "1.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "149.5",
+          "time_s": "33.0",
+          "wind": [
+            "-5.598895919782773",
+            "-6.64724344968949",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "88.24231856845617",
+        "36.04078875565206",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "5.971152",
+        "-1.990384",
+        "1.0"
+      ],
+      "dt_s": "4.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "longer_dt_drifts_further",
+      "penalty_oracle": [
+        {
+          "altitude_m": "149.5",
+          "penalty": "0.497596"
+        }
+      ],
+      "position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "terrain_calls": [
+        [
+          "100.0",
+          "50.0"
+        ],
+        [
+          "88.24231856845617",
+          "36.04078875565206"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "50.5",
+          "x_m": "100.0",
+          "y_m": "50.0"
+        },
+        {
+          "height_m": "48.8614249232591",
+          "x_m": "88.24231856845617",
+          "y_m": "36.04078875565206"
+        }
+      ],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "1.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "149.5",
+          "time_s": "30.0",
+          "wind": [
+            "-8.398343879674165",
+            "-9.970865174534243",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    },
+    {
+      "adjusted_position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "5.971152",
+        "-1.990384",
+        "1.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "wind_scale_zero_removes_the_drift",
+      "penalty_oracle": [
+        {
+          "altitude_m": "149.5",
+          "penalty": "0.497596"
+        }
+      ],
+      "position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "terrain_calls": [
+        [
+          "100.0",
+          "50.0"
+        ],
+        [
+          "100.0",
+          "50.0"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "50.5",
+          "x_m": "100.0",
+          "y_m": "50.0"
+        }
+      ],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "12.0",
+        "-4.0",
+        "1.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "149.5",
+          "time_s": "30.0",
+          "wind": [
+            "-8.398343879674165",
+            "-9.970865174534243",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.0"
+    },
+    {
+      "adjusted_position": [
+        "97.06057964211405",
+        "46.51019718891302",
+        "200.0"
+      ],
+      "adjusted_velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "dt_s": "1.0",
+      "has_bounds": true,
+      "has_terrain": true,
+      "has_weather": true,
+      "min_agl_m": "18.0",
+      "name": "still_platform_still_drifts",
+      "penalty_oracle": [
+        {
+          "altitude_m": "149.5",
+          "penalty": "0.497596"
+        }
+      ],
+      "position": [
+        "100.0",
+        "50.0",
+        "200.0"
+      ],
+      "terrain_calls": [
+        [
+          "100.0",
+          "50.0"
+        ],
+        [
+          "97.06057964211405",
+          "46.51019718891302"
+        ]
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "50.5",
+          "x_m": "100.0",
+          "y_m": "50.0"
+        },
+        {
+          "height_m": "50.09035623081478",
+          "x_m": "97.06057964211405",
+          "y_m": "46.51019718891302"
+        }
+      ],
+      "timestamp_s": "30.0",
+      "velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "149.5",
+          "time_s": "30.0",
+          "wind": [
+            "-8.398343879674165",
+            "-9.970865174534243",
+            "0.0"
+          ]
+        }
+      ],
+      "wind_scale": "0.35"
+    }
+  ],
+  "bounds": {
+    "x_max_m": "600.0",
+    "x_min_m": "-400.0",
+    "y_max_m": "300.0",
+    "y_min_m": "-200.0"
+  },
+  "launch_controller": [
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [],
+      "launch_at": null,
+      "launch_target_id": null,
+      "launched": false,
+      "name": "unlaunched_sits_at_the_station",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "sample_at": "40.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [],
+      "launch_at": "50.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "sampled_before_launch_time",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "sample_at": "20.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "at_launch_instant",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "sample_at": "20.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "0.0"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "quarter_through_climb",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "50.0",
+        "-25.0",
+        "47.9375"
+      ],
+      "sample_at": "22.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "32.34375"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "half_through_climb",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "50.0",
+        "-25.0",
+        "127.0"
+      ],
+      "sample_at": "24.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "43.125"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "three_quarters_through_climb",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "50.0",
+        "-25.0",
+        "206.0625"
+      ],
+      "sample_at": "26.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "0.0",
+        "0.0",
+        "32.34375"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [
+        "28.0"
+      ],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "exactly_at_climb_end_is_operational",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "328.0",
+        "92.0",
+        "260.0"
+      ],
+      "sample_at": "28.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "7.0",
+        "-3.0",
+        "0.5"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [
+        "60.0"
+      ],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "well_into_operation",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "360.0",
+        "60.0",
+        "260.0"
+      ],
+      "sample_at": "60.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "7.0",
+        "-3.0",
+        "0.5"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": false,
+      "inner_calls": [],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "relaunch_is_ignored",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "50.0",
+        "-25.0",
+        "127.0"
+      ],
+      "sample_at": "24.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": "25.0",
+      "velocity": [
+        "0.0",
+        "0.0",
+        "43.125"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "0.0",
+      "has_weather": false,
+      "inner_calls": [
+        "20.0"
+      ],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "zero_climb_duration_goes_straight_to_operation",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [],
+      "position": [
+        "320.0",
+        "100.0",
+        "260.0"
+      ],
+      "sample_at": "20.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [],
+      "trigger_twice_at": null,
+      "velocity": [
+        "7.0",
+        "-3.0",
+        "0.5"
+      ],
+      "wind_oracle": []
+    },
+    {
+      "climb_duration_s": "8.0",
+      "has_weather": true,
+      "inner_calls": [
+        "60.0"
+      ],
+      "launch_at": "20.0",
+      "launch_target_id": "t-1",
+      "launched": true,
+      "name": "operational_sample_is_weather_adjusted",
+      "operational_altitude_agl": "230.0",
+      "penalty_oracle": [
+        {
+          "altitude_m": "188.2",
+          "penalty": "0.46694559999999996"
+        }
+      ],
+      "position": [
+        "356.82497957062594",
+        "56.23048292839028",
+        "260.0"
+      ],
+      "sample_at": "60.0",
+      "station_position": [
+        "50.0",
+        "-25.0",
+        "12.0"
+      ],
+      "terrain_oracle": [
+        {
+          "height_m": "71.3575225120696",
+          "x_m": "356.82497957062594",
+          "y_m": "56.23048292839028"
+        },
+        {
+          "height_m": "71.8",
+          "x_m": "360.0",
+          "y_m": "60.0"
+        }
+      ],
+      "trigger_twice_at": null,
+      "velocity": [
+        "3.2686192",
+        "-1.4008368",
+        "0.5"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "188.2",
+          "time_s": "60.0",
+          "wind": [
+            "-9.071486941068807",
+            "-10.770048776027778",
+            "0.0"
+          ]
+        }
+      ]
+    }
+  ],
+  "weather_adjusted_trajectory": [
+    {
+      "dt_s": "1.0",
+      "inner_calls": [
+        "30.0"
+      ],
+      "name": "default_dt",
+      "penalty_oracle": [
+        {
+          "altitude_m": "189.1",
+          "penalty": "0.4662328"
+        }
+      ],
+      "position": [
+        "326.81950049919595",
+        "86.22397794558741",
+        "260.0"
+      ],
+      "reset_reached_inner": true,
+      "sample_at": "30.0",
+      "terrain_oracle": [
+        {
+          "height_m": "70.45675893721504",
+          "x_m": "326.81950049919595",
+          "y_m": "86.22397794558741"
+        },
+        {
+          "height_m": "70.9",
+          "x_m": "330.0",
+          "y_m": "90.0"
+        }
+      ],
+      "velocity": [
+        "3.2636296",
+        "-1.3986984",
+        "0.5"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "189.1",
+          "time_s": "30.0",
+          "wind": [
+            "-9.087141430868705",
+            "-10.788634441178818",
+            "0.0"
+          ]
+        }
+      ]
+    },
+    {
+      "dt_s": "0.25",
+      "inner_calls": [
+        "30.0"
+      ],
+      "name": "explicit_dt",
+      "penalty_oracle": [
+        {
+          "altitude_m": "189.1",
+          "penalty": "0.4662328"
+        }
+      ],
+      "position": [
+        "329.204875124799",
+        "89.05599448639686",
+        "260.0"
+      ],
+      "reset_reached_inner": true,
+      "sample_at": "30.0",
+      "terrain_oracle": [
+        {
+          "height_m": "70.78918973430376",
+          "x_m": "329.204875124799",
+          "y_m": "89.05599448639686"
+        },
+        {
+          "height_m": "70.9",
+          "x_m": "330.0",
+          "y_m": "90.0"
+        }
+      ],
+      "velocity": [
+        "3.2636296",
+        "-1.3986984",
+        "0.5"
+      ],
+      "wind_oracle": [
+        {
+          "altitude_m": "189.1",
+          "time_s": "30.0",
+          "wind": [
+            "-9.087141430868705",
+            "-10.788634441178818",
+            "0.0"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -30,7 +30,7 @@
 /// Cell `(i, j)` spans `[x_min + i*res, x_min + (i+1)*res)` in x and likewise in
 /// y; `i` is the x index and `j` the y index, matching the `(nx, ny)` array
 /// layout both Python maps use.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GridBounds {
     pub x_min_m: f64,
     pub x_max_m: f64,
