@@ -24,36 +24,38 @@ At 2026-09-25 the viewer track has P2.0 to P2.3 locally: the snapshot
 adapter, the terrain and belief material, persistent sensor, zone and trail
 geometry, and picking and selection. P2.4 to P2.6 (camera and time
 controls, the mission-control shell and quality tiers, graphics acceptance)
-are open, as are guardrails G0, G2 and G3. Nothing is pushed, so CI has run
-none of it.
+are open, as are guardrails G0, G2 and G3.
+
+At 2026-10-01 PR #122 has merged the whole stack through P2.3 into `main`,
+CI green. The remaining slices land one PR each, merged when CI is green.
 
 ## Track A — runtime (critical path)
 
 | ID | Slice | State | Evidence |
 | --- | --- | --- | --- |
 | P4.1 | Command lifecycle and control checkpoints (#119) | done | `ec9c2f7` |
-| P4.8d.1–2b | Motion substrate, world adapter, trajectory wrappers, FollowPath | local | [MOTION_SUBSTRATE.md](MOTION_SUBSTRATE.md) |
-| P4.8d.3 | Controller stage; stage-state checkpoint contract | local | [CONTROLLER_STAGE.md](CONTROLLER_STAGE.md) |
-| P4.8e.1 | ScenarioBundle v1, runtime assembly (stages 1, 3, 6, 7), replay frames, Python exporter; target-tracking parity | local | [SCENARIO_BUNDLE.md](SCENARIO_BUNDLE.md) |
-| P4.8e.2 | Stage 6 senses as the reference does: nominal pose, tilted look direction, the world detection model (`p_d`, effective noise, dominant loss), sensing weather | local | [STAGE6_REFERENCE_SENSING.md](STAGE6_REFERENCE_SENSING.md) |
-| P4.8e.3 | Mission driver (POI assignment, redirects, dwell, egress); stages 2, 8 and 9 assembled; the default `scan_map_inspect` run end to end | local | [MISSION_DRIVER.md](MISSION_DRIVER.md) |
-| P4.8e.4 | Causal-state audit: every assembled stateful stage on the checkpoint contract; whole-run resume differential | local | [CAUSAL_STATE.md](CAUSAL_STATE.md) |
-| P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay, checkpoint/resume from the command line; `argusnet sim --export-bundle` adapter refuses what it cannot carry | local | [ARGUSNET_RS_CLI.md](ARGUSNET_RS_CLI.md) |
-| P4.9a.2 | Additive replay enrichment: every frame payload and the scenario `meta` a Python replay carries, viewer-readable; deconfliction `hypot` fix | local | [REPLAY_ENRICHMENT.md](REPLAY_ENRICHMENT.md) |
-| P4.9b.1 | Native builder, world half: `argusnet.scenario-config` → terrain, environment obstacles and patches, land cover → bundle `world` + world `presentation`; exact except heights (numpy `exp`, ≤1e-12 m) | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | local | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | local | [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
-| P4.9d | Stage 4 (hard safety monitor) assembled from bundles, three reference-argument defects fixed, checkpointed; `safety_blocking` and mission profiles through exporter and native builder; all 7 canonical scenarios scored, 6 within every envelope (`sar_person_search` fails `covariance_reduction_mean`, analysed, not widened) | local | [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) |
+| P4.8d.1–2b | Motion substrate, world adapter, trajectory wrappers, FollowPath | done (#122) | [MOTION_SUBSTRATE.md](MOTION_SUBSTRATE.md) |
+| P4.8d.3 | Controller stage; stage-state checkpoint contract | done (#122) | [CONTROLLER_STAGE.md](CONTROLLER_STAGE.md) |
+| P4.8e.1 | ScenarioBundle v1, runtime assembly (stages 1, 3, 6, 7), replay frames, Python exporter; target-tracking parity | done (#122) | [SCENARIO_BUNDLE.md](SCENARIO_BUNDLE.md) |
+| P4.8e.2 | Stage 6 senses as the reference does: nominal pose, tilted look direction, the world detection model (`p_d`, effective noise, dominant loss), sensing weather | done (#122) | [STAGE6_REFERENCE_SENSING.md](STAGE6_REFERENCE_SENSING.md) |
+| P4.8e.3 | Mission driver (POI assignment, redirects, dwell, egress); stages 2, 8 and 9 assembled; the default `scan_map_inspect` run end to end | done (#122) | [MISSION_DRIVER.md](MISSION_DRIVER.md) |
+| P4.8e.4 | Causal-state audit: every assembled stateful stage on the checkpoint contract; whole-run resume differential | done (#122) | [CAUSAL_STATE.md](CAUSAL_STATE.md) |
+| P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay, checkpoint/resume from the command line; `argusnet sim --export-bundle` adapter refuses what it cannot carry | done (#122) | [ARGUSNET_RS_CLI.md](ARGUSNET_RS_CLI.md) |
+| P4.9a.2 | Additive replay enrichment: every frame payload and the scenario `meta` a Python replay carries, viewer-readable; deconfliction `hypot` fix | done (#122) | [REPLAY_ENRICHMENT.md](REPLAY_ENRICHMENT.md) |
+| P4.9b.1 | Native builder, world half: `argusnet.scenario-config` → terrain, environment obstacles and patches, land cover → bundle `world` + world `presentation`; exact except heights (numpy `exp`, ≤1e-12 m) | done (#122) | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | done (#122) | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | done (#122) | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | done (#122) | [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
+| P4.9d | Stage 4 (hard safety monitor) assembled from bundles, three reference-argument defects fixed, checkpointed; `safety_blocking` and mission profiles through exporter and native builder; all 7 canonical scenarios scored, 6 within every envelope (`sar_person_search` fails `covariance_reduction_mean`, analysed, not widened) | done (#122) | [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) |
 
 ## Track B — viewer engine
 
 | ID | Slice | State |
 | --- | --- | --- |
-| P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | local ([SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
-| P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | local ([TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
-| P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | local ([PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
-| P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | local ([PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
+| P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | done, #122 ([SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
+| P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | done, #122 ([TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
+| P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | done, #122 ([PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
+| P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | done, #122 ([PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
 | P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | local, `claude/p24a-time-controls` ([TIME_CONTROLS.md](TIME_CONTROLS.md)) |
 | P2.4b | Camera: damped free-fly, follow/chase, `F` focus, `1`-`9` bookmarks, remappable bindings | open (orbit camera exists) |
 | P2.5 | Mission-control shell, quality tiers | open |
