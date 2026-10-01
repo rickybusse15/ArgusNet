@@ -21,6 +21,12 @@
 # the rustup and cargo binaries themselves were simply gone from the machine.
 # No workflow change can fix that, which is why the failure path below prints
 # enough to tell the two cases apart instead of just retrying.
+#
+# CAUSE FOUND 2026-10-01: our own workflow was deleting it. rust-cache's save
+# step (main only, on a cache miss) removes every regular file that was in
+# $CARGO_HOME/bin at restore, and `rustup` is the only regular file there. Every
+# rust-cache step now sets `cache-bin: "false"` (see ci.yml). Keep this
+# fallback for machines that lose rustup some other way.
 
 if ! command -v rustup >/dev/null 2>&1; then
   for _argusnet_candidate in \

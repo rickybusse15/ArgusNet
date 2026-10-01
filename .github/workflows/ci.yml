@@ -138,10 +138,23 @@ jobs:
           # Sourced, not run: a child process cannot change this step's PATH.
           # See the script for why a self-hosted runner needs it at all.
           source scripts/ci-rust-path.sh
+      # cache-bin "false" on every rust-cache step: with the default ("true"),
+      # the post step of a cache-saving run (main) calls cleanBin(), which
+      # DELETES every regular file that was in $CARGO_HOME/bin when the cache
+      # was restored (rust-cache v2.9.2 src/cleanup.ts + config.ts
+      # getCargoBins). On a self-hosted runner $CARGO_HOME is the machine
+      # owner's ~/.cargo, and `rustup` is the one regular file there -- every
+      # other entry is a symlink to it. So each cache-missing main run deleted
+      # rustup and left the whole proxy farm dangling: the "vanishing
+      # ~/.cargo/bin" recorded in ci-rust-path.sh since 2026-09-11, and why
+      # cargo-audit was "rebuilt on every run". The bin directory holds tools,
+      # not build state; there is nothing in it worth caching.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: fast
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # See the note on the first rust-cache step: never touch ~/.cargo/bin.
+          cache-bin: "false"
       # --exclude rather than naming crates, so a new workspace member is
       # covered here by default instead of silently going untested.
       - name: Test everything except the viewer
@@ -172,6 +185,8 @@ jobs:
         with:
           key: viewer
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # See the note on the first rust-cache step: never touch ~/.cargo/bin.
+          cache-bin: "false"
       - name: Test the viewer
         run: cargo test -p argusnet-viewer
       # Only the viewer binary, not `--workspace`: the old single job built the
@@ -262,6 +277,8 @@ jobs:
         with:
           key: lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # See the note on the first rust-cache step: never touch ~/.cargo/bin.
+          cache-bin: "false"
       # --all-targets so tests, benches and examples are linted too. Without
       # it clippy only sees lib and bin targets, and lint drift accumulates
       # unnoticed in exactly the code nobody re-reads.
