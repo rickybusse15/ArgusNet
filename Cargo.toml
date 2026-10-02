@@ -57,7 +57,7 @@ bevy_egui = "0.42.0"
 # function from sim.py's FNV-1 walk despite sharing the name _stable_seed.
 # Hand-rolling a hash for one call site is the kind of thing that is wrong in a
 # way no test catches, so this takes the RustCrypto implementation.
-blake2 = "0.10"
+blake2 = "0.11"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 criterion = { version = "0.5", features = ["html_reports"] }
