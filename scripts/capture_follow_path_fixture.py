@@ -52,6 +52,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from fixture_platform import captured_on  # noqa: E402
+
 from argusnet.core.types import MissionZone  # noqa: E402
 from argusnet.simulation.sim import FollowPathController  # noqa: E402
 from argusnet.world.visibility import VisibilityResult  # noqa: E402
@@ -927,6 +929,7 @@ def capture() -> dict:
     check_coverage(cases)
     return {
         "_source": "scripts/capture_follow_path_fixture.py",
+        "_captured_on": captured_on(),
         "_reference": "src/argusnet/simulation/sim.py",
         "bounds": {k: exact(v) for k, v in BOUNDS.items()},
         "target_trajectory": "position = [200 + 6t, 100 + 2t, 140], velocity = [6, 2, 0]",

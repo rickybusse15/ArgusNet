@@ -48,6 +48,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from fixture_platform import captured_on  # noqa: E402
+
 from argusnet.simulation.scenario_bundle import (  # noqa: E402
     export_bundle,
     motion_weather_document,
@@ -356,6 +358,7 @@ def capture(out_dir: Path, name: str, options: ScenarioOptions) -> None:
         )
     reference = {
         "_source": "scripts/capture_scenario_bundle_fixture.py",
+        "_captured_on": captured_on(),
         "los": capture_los(scenario),
         "seed": config.seed,
         "steps": config.steps,

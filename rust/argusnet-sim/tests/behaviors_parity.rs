@@ -1,20 +1,26 @@
-//! Target behaviours against `build_target_trajectory` (P4.9b.2), bit for bit.
+//! Target behaviours against `build_target_trajectory` (P4.9b.2).
 //!
 //! `scripts/capture_behaviors_fixture.py` samples every preset over three
 //! bounds, four seeds each, at times that cross every internal boundary. The
-//! capture computes `uniform` unfused (see its docstring), so nothing here is
-//! platform-dependent and every value is compared exactly.
+//! capture computes `uniform` unfused (see its docstring), so the draws are
+//! platform-independent. The trajectories still call libm `sin`/`cos` and
+//! numpy's `norm`, so values are bit for bit on the capture platform and
+//! within a few ULPs elsewhere (`common::parity`).
+
+mod common;
 
 use argusnet_sim::builder::behaviors::{build_target_behavior, Bounds};
+use common::parity::parity_of;
 use serde_json::Value;
 
 #[test]
-fn every_preset_matches_the_reference_bit_for_bit() {
+fn every_preset_matches_the_reference() {
     let path = format!(
         "{}/../../tests/fixtures/behaviors.json",
         env!("CARGO_MANIFEST_DIR")
     );
     let fixture: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let parity = parity_of(&fixture);
     let terrain = |x: f64, y: f64| 40.0 + 0.05 * x - 0.03 * y;
     let mut compared = 0usize;
     let mut presets = std::collections::BTreeSet::new();
@@ -47,9 +53,8 @@ fn every_preset_matches_the_reference_bit_for_bit() {
             let (position, velocity) = behavior.sample(v[0], &terrain);
             let got = [position, velocity].concat();
             for (k, (g, w)) in got.iter().zip(&v[1..]).enumerate() {
-                assert_eq!(
-                    g.to_bits(),
-                    w.to_bits(),
+                assert!(
+                    parity.same(*g, *w),
                     "{preset} seed {seed} bounds {b} t={}: component {k} is {g}, reference {w}",
                     v[0]
                 );
