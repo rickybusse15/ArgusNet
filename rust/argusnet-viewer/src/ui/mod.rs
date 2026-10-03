@@ -16,6 +16,7 @@ use crate::state::{
 mod commands;
 mod inspectors;
 mod layout;
+mod platform;
 mod shell;
 mod source;
 mod timeline;
@@ -27,6 +28,7 @@ pub use inspectors::terrain_raster_status;
 use inspectors::*;
 pub use layout::ShellLayout;
 use layout::*;
+use platform::*;
 use shell::*;
 pub use source::{SourceContext, SourceInputs};
 use timeline::*;
@@ -406,6 +408,39 @@ mod tests {
                 assert!(outer(&regions, Region::StatusLine).is_some());
             }
         }
+    }
+
+    /// The platform inspector draws, full and reduced, and the reduced one
+    /// is shorter.
+    #[test]
+    fn the_platform_inspector_draws_full_and_essential() {
+        use super::*;
+        let frame: crate::replay::ReplayFrame = serde_json::from_value(serde_json::json!({
+            "timestamp_s": 1.0,
+            "nodes": [{"node_id": "drone-1", "position": [0.0, 0.0, 10.0],
+                       "velocity": [1.0, 0.0, 0.0], "is_mobile": true}]
+        }))
+        .unwrap();
+        let sections = inspect_platform(&frame, "drone-1").unwrap();
+        let context = egui::Context::default();
+        // The type roles use the bundled faces, as the app installs them.
+        crate::theme::install(&context);
+        let mut heights = Vec::new();
+        for essential in [false, true] {
+            let mut height = 0.0;
+            for _ in 0..2 {
+                context
+                    .run_ui(egui::RawInput::default(), |ui| {
+                        let response =
+                            ui.scope(|ui| platform_inspector(ui, "drone-1", &sections, essential));
+                        height = response.response.rect.height();
+                    })
+                    .textures_delta
+                    .clear();
+            }
+            heights.push(height);
+        }
+        assert!(heights[1] < heights[0], "essential is shorter: {heights:?}");
     }
 
     /// The operator is told why belief is missing, not shown a blank.

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Platform inspector (C3.1)
+
+- Selecting a platform shows its state in eleven ordered sections: identity,
+  actual and commanded state, task, localization, dynamics, battery, link,
+  sensors, safety and onboard executive. Anything the replay does not carry
+  says so and why, instead of showing zero. Legacy estimator outputs are
+  marked as such.
+
 ## Unreleased — Shell fit and finish
 
 - The timeline holds the play, step and speed controls, and fits its region;
