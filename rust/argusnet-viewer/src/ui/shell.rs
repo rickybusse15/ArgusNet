@@ -233,6 +233,19 @@ pub(super) fn mission_rail(
         });
     ui.separator();
     section_safety_alerts(ui, replay_state, mission_zones);
+    // This frame's safety events, each opening the event inspector (§7.4).
+    if let Some(document) = &replay_state.document {
+        let events = safety_events_in(document, replay_state.epoch(), replay_state.frame_index);
+        if !events.is_empty() {
+            ui.strong(format!("Safety events ({})", events.len()));
+            for (reference, label) in events {
+                let open = ui_state.inspected_event.as_ref() == Some(&reference);
+                if ui.selectable_label(open, label).clicked() {
+                    ui_state.inspected_event = Some(reference);
+                }
+            }
+        }
+    }
 }
 
 /// §7.2's platform sections; with `essential`, only §4.4 rule 3's.
@@ -267,17 +280,86 @@ pub(super) fn platform_inspector(
     }
 }
 
+/// §7.4's safety-event inspector: the decision and what it rested on, the
+/// subject to select, and the committed snapshots either side.
+fn event_inspector(
+    ui: &mut egui::Ui,
+    inspection: &EventInspection,
+    replay_state: &mut ReplayState,
+    markers: &CurrentRuntimeMarkers,
+    ui_state: &mut ViewerUiState,
+) {
+    ui.label(crate::theme::TypeRole::WorkspaceTitle.text(&inspection.title));
+    for row in &inspection.rows {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(row.label);
+            ui.label(
+                egui::RichText::new(row.value.display(String::clone))
+                    .color(row.value.status().color()),
+            );
+        });
+    }
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        for (label, target) in [
+            ("Preceding snapshot", inspection.preceding),
+            ("Following snapshot", inspection.following),
+        ] {
+            let response = ui.add_enabled(target.is_some(), egui::Button::new(label));
+            if response.clicked() {
+                if let Some(frame) = target {
+                    replay_state.playing = false;
+                    replay_state.step_to(frame);
+                }
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        // The subject by its typed key, as picking would select it.
+        let subject = markers.key_of(MarkerKind::Node, &inspection.subject);
+        if ui
+            .add_enabled(
+                subject.is_some(),
+                egui::Button::new(format!("Select {}", inspection.subject)),
+            )
+            .on_hover_text("Select the platform; F then focuses the camera on it.")
+            .on_disabled_hover_text("The platform is not in this frame.")
+            .clicked()
+        {
+            ui_state.select_request = subject.map(crate::picking::SelectRequest::Select);
+        }
+        if ui.button("Close (Esc)").clicked() {
+            ui_state.inspected_event = None;
+        }
+    });
+}
+
 /// The selection inspector (§4.3). With `essential`, only the selection
 /// itself: the entity list is the first thing a narrow window gives up.
 pub(super) fn selection_inspector(
     ui: &mut egui::Ui,
-    replay_state: &ReplayState,
+    replay_state: &mut ReplayState,
     selection: &SelectionState,
     markers: &CurrentRuntimeMarkers,
     runtime_visibility: &RuntimeOverlayVisibility,
     ui_state: &mut ViewerUiState,
     essential: bool,
 ) {
+    if let Some(reference) = ui_state.inspected_event.clone() {
+        let inspection = replay_state
+            .document
+            .as_ref()
+            .and_then(|document| inspect_safety_event(document, replay_state.epoch(), &reference));
+        match inspection {
+            Some(inspection) => {
+                event_inspector(ui, &inspection, replay_state, markers, ui_state);
+                return;
+            }
+            // The run changed under it: say so once, then let it go.
+            None => ui_state.inspected_event = None,
+        }
+    }
     let platform = selection.selected.as_ref().and_then(|selected| {
         matches!(selected.key, crate::presentation::EntityKey::Platform(_))
             .then(|| replay_state.current_frame())

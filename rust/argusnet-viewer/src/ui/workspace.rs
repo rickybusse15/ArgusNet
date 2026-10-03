@@ -156,6 +156,26 @@ pub fn shell_keyboard_system(
     }
 }
 
+/// Escape closes an open event inspector, unless the camera already used it.
+/// Runs between the camera and the selection keys: one Escape leaves one
+/// transient mode -- the camera's, then the inspector -- before it ever
+/// clears the selection (VIEWER_UI §12).
+pub fn close_event_on_escape_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    gate: Res<crate::bindings::KeyboardGate>,
+    bindings: Res<crate::bindings::Bindings>,
+    mut escape: ResMut<crate::camera_control::EscapeUsed>,
+    mut ui_state: ResMut<ViewerUiState>,
+) {
+    if escape.0 || ui_state.inspected_event.is_none() {
+        return;
+    }
+    if bindings.just_pressed(&gate, &keys, crate::bindings::Action::Escape) {
+        ui_state.inspected_event = None;
+        escape.0 = true;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +321,79 @@ mod tests {
                 "{why}"
             );
         }
+    }
+
+    /// One Escape, one transient mode: the event inspector closes and the
+    /// selection keys see the Escape as used; an Escape the camera already
+    /// used leaves the inspector open.
+    #[test]
+    fn escape_closes_the_event_inspector_before_the_selection() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::bindings::KeyboardGate>()
+            .insert_resource(crate::bindings::Bindings::default())
+            .init_resource::<crate::camera_control::EscapeUsed>()
+            .init_resource::<ViewerUiState>()
+            .add_systems(Update, close_event_on_escape_system);
+        let open = || {
+            Some(crate::ui::EventRef {
+                epoch: 0,
+                frame_index: 1,
+                event_id: "se-1".into(),
+            })
+        };
+        let press_escape = |app: &mut App, camera_used: bool| {
+            app.world_mut()
+                .resource_mut::<crate::camera_control::EscapeUsed>()
+                .0 = camera_used;
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::Escape);
+            app.update();
+        };
+        app.world_mut()
+            .resource_mut::<ViewerUiState>()
+            .inspected_event = open();
+        press_escape(&mut app, true);
+        assert!(
+            app.world()
+                .resource::<ViewerUiState>()
+                .inspected_event
+                .is_some(),
+            "the camera's Escape is not also the inspector's"
+        );
+        press_escape(&mut app, false);
+        assert!(app
+            .world()
+            .resource::<ViewerUiState>()
+            .inspected_event
+            .is_none());
+        assert!(
+            app.world()
+                .resource::<crate::camera_control::EscapeUsed>()
+                .0,
+            "and the selection keeps this Escape's selection"
+        );
+    }
+
+    /// Off the canvas is the UI's: the picker must not see a click on the
+    /// rail or the inspector (seen in the real window: it cleared the
+    /// selection).
+    #[test]
+    fn only_the_canvas_belongs_to_the_world() {
+        let mut ui = ViewerUiState::default();
+        assert!(ui.on_canvas([5.0, 5.0]), "no shell laid out: all world");
+        ui.canvas_rect = Some([194.0, 92.0, 1188.0, 800.0]);
+        assert!(ui.on_canvas([600.0, 400.0]));
+        for off in [
+            [40.0, 359.0],
+            [1260.0, 412.0],
+            [600.0, 30.0],
+            [600.0, 850.0],
+        ] {
+            assert!(!ui.on_canvas(off), "{off:?} is the shell's");
+        }
+        assert_eq!(ui.canvas_origin(), [194.0, 92.0]);
     }
 
     #[test]

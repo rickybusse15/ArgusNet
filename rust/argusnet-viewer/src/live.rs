@@ -401,8 +401,8 @@ pub fn live_status_ui_system(
     egui::Area::new(egui::Id::new("argusnet_live_status"))
         // Top-left of the world canvas, below the phase HUD.
         .fixed_pos(egui::pos2(
-            ui_state.canvas_origin[0] + 12.0,
-            ui_state.canvas_origin[1] + 44.0,
+            ui_state.canvas_origin()[0] + 12.0,
+            ui_state.canvas_origin()[1] + 44.0,
         ))
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {

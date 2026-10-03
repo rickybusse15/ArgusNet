@@ -20,7 +20,7 @@ pub struct Row {
 }
 
 impl Row {
-    fn new(label: &'static str, value: Field<String>) -> Self {
+    pub(super) fn new(label: &'static str, value: Field<String>) -> Self {
         Self {
             label,
             value,
@@ -36,7 +36,7 @@ impl Row {
         }
     }
 
-    fn unavailable(label: &'static str, why: &'static str) -> Self {
+    pub(super) fn unavailable(label: &'static str, why: &'static str) -> Self {
         Self::new(label, Field::Unavailable(why))
     }
 }

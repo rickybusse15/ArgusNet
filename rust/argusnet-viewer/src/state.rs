@@ -252,14 +252,38 @@ pub struct ViewerUiState {
     /// A selection the inspector's entity list asks for, applied by
     /// `picking::keyboard_selection_system` (the UI only reads the selection).
     pub select_request: Option<crate::picking::SelectRequest>,
-    /// The world canvas's top-left corner in logical pixels, as the shell
-    /// last laid it out: where canvas overlays (the phase HUD, the live
-    /// badge) anchor so that no rail or inspector covers them.
-    pub canvas_origin: [f32; 2],
+    /// The world canvas in logical pixels, `[min_x, min_y, max_x, max_y]`, as
+    /// the shell last laid it out; `None` before the first layout (and in
+    /// headless runs, which have no shell). Canvas overlays (the phase HUD,
+    /// the live badge) anchor to it, and the picker treats a pointer outside
+    /// it as over the UI.
+    pub canvas_rect: Option<[f32; 4]>,
     /// The primary workspace (§4.1). Independent of the projection and the
     /// layer preset: three distinct controls, none touching the selection.
     pub workspace: Workspace,
     pub projection: Projection,
+    /// The safety event the inspector shows, when one is open (C3.3). It
+    /// takes the inspector over from the selection until closed; the
+    /// selection itself is untouched.
+    pub inspected_event: Option<crate::ui::EventRef>,
+}
+
+impl ViewerUiState {
+    /// The canvas's top-left corner, or the window's before any layout.
+    pub fn canvas_origin(&self) -> [f32; 2] {
+        self.canvas_rect.map_or([0.0, 0.0], |[x, y, _, _]| [x, y])
+    }
+
+    /// Whether a window position is on the world canvas. With no shell
+    /// laid out, everything is.
+    pub fn on_canvas(&self, position: [f32; 2]) -> bool {
+        self.canvas_rect.is_none_or(|[min_x, min_y, max_x, max_y]| {
+            position[0] >= min_x
+                && position[0] < max_x
+                && position[1] >= min_y
+                && position[1] < max_y
+        })
+    }
 }
 
 impl Default for ViewerUiState {
@@ -273,9 +297,10 @@ impl Default for ViewerUiState {
             focused_entity_label: None,
             map_layer_preset: MapLayerPreset::Operator,
             select_request: None,
-            canvas_origin: [0.0, 0.0],
+            canvas_rect: None,
             workspace: Workspace::Operate,
             projection: Projection::Perspective,
+            inspected_event: None,
         }
     }
 }

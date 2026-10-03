@@ -268,21 +268,32 @@ pub fn pointer_from_window_system(
     windows: Query<&Window, With<PrimaryWindow>>,
     buttons: Res<ButtonInput<MouseButton>>,
     contexts: Option<EguiContexts>,
+    ui_state: Option<Res<ViewerUiState>>,
     mut pointer: ResMut<PointerInput>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
-    let over_ui = contexts
-        .and_then(|mut contexts| {
-            contexts
-                .ctx_mut()
-                .ok()
-                .map(|ctx| ctx.is_pointer_over_egui() || ctx.egui_wants_pointer_input())
-        })
-        .unwrap_or(false);
+    let position = window.cursor_position();
+    // egui reports its own areas and popups. The shell's panels are drawn on
+    // its root `Ui`, on the background layer, which egui does not count as
+    // "over egui": without the canvas test a click on the rail or inspector
+    // also reached the world, and on empty terrain cleared the selection.
+    let off_canvas = match (&ui_state, position) {
+        (Some(ui_state), Some(position)) => !ui_state.on_canvas([position.x, position.y]),
+        _ => false,
+    };
+    let over_ui = off_canvas
+        || contexts
+            .and_then(|mut contexts| {
+                contexts
+                    .ctx_mut()
+                    .ok()
+                    .map(|ctx| ctx.is_pointer_over_egui() || ctx.egui_wants_pointer_input())
+            })
+            .unwrap_or(false);
     let next = PointerInput {
-        position: window.cursor_position(),
+        position,
         over_ui,
         pressed: buttons.just_pressed(MouseButton::Left),
     };

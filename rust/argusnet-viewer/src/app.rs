@@ -332,6 +332,7 @@ fn run_inner(
                 // The camera before the selection keys, so a camera Escape
                 // (leaving free-fly, follow or chase) is not also a clear.
                 crate::camera_control::drive_main_camera_system,
+                crate::ui::close_event_on_escape_system,
                 crate::picking::keyboard_selection_system,
             )
                 .chain()
