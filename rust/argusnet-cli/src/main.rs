@@ -100,6 +100,11 @@ struct SimArgs {
     /// the ticks from the resume point on.
     #[arg(long)]
     resume: Option<PathBuf>,
+    /// Reset the run after this many ticks, then run it to completion (A2.1).
+    /// The replay holds only the run after the reset, so it must equal a
+    /// straight run's byte for byte.
+    #[arg(long, conflicts_with = "resume")]
+    reset_at: Option<u64>,
     /// Print nothing but errors.
     #[arg(long)]
     quiet: bool,
@@ -338,7 +343,16 @@ fn sim(args: SimArgs) -> ExitCode {
     }
 
     let mut tick_ms: Vec<f64> = Vec::new();
+    let mut reset_pending = args.reset_at;
     loop {
+        if reset_pending == Some(run.sim.tick()) {
+            reset_pending = None;
+            run.reset();
+            tick_ms.clear();
+            if !args.quiet {
+                println!("reset; running again from tick 0");
+            }
+        }
         if let (Some(at), Some(path)) = (args.checkpoint_at, &args.checkpoint) {
             if run.sim.tick() == at {
                 let written = run

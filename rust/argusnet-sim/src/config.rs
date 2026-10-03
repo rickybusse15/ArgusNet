@@ -147,18 +147,26 @@ impl ValidatedConfig {
     /// not a trust boundary; if it becomes one, this needs to be a real digest
     /// and this comment is the place that says so.
     pub fn content_hash(&self) -> u64 {
-        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-        const PRIME: u64 = 0x0000_0100_0000_01b3;
-        let rendered = format!(
-            "seed={};dt_s={:?};steps={:?};run_id={}",
-            self.config.seed, self.config.dt_s, self.config.steps, self.config.run_id
-        );
-        let mut hash = OFFSET_BASIS;
-        for byte in rendered.as_bytes() {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(PRIME);
-        }
-        hash
+        fnv1a(
+            format!(
+                "seed={};dt_s={:?};steps={:?};run_id={}",
+                self.config.seed, self.config.dt_s, self.config.steps, self.config.run_id
+            )
+            .as_bytes(),
+        )
     }
+}
+
+/// 64-bit FNV-1a: the checkpoint header's accidental-mismatch hash. See
+/// [`ValidatedConfig::content_hash`] for why it is not a digest.
+pub fn fnv1a(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET_BASIS;
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(PRIME);
+    }
+    hash
 }
 
 #[cfg(test)]

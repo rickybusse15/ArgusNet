@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Reset equals fresh, restore equals uninterrupted (A2)
+
+- `argusnet-rs sim --reset-at K` resets the run after K ticks and runs it
+  again; the replay is byte-identical to a straight run.
+- Checkpoints are format 4: the header carries the scenario's content hash,
+  and a checkpoint from a different scenario is refused before anything
+  changes. Format-3 checkpoints are refused with a version error. Replays
+  record `checkpoint_format: 4` in their provenance.
+- `scripts/replay_hashes.py --lifecycle` checks reset and resume on every
+  canonical scenario.
+- A production run is built with `Simulation::production`, which refuses a
+  missing required stage by name (A1.3).
+
 ## Unreleased — Visual tokens and the bundled face (P2.5a)
 
 - The viewer's UI uses one palette, spacing scale and set of type roles from
