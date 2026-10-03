@@ -52,7 +52,7 @@ use crate::state::RuntimeOverlayVisibility;
 
 pub const SAMPLE_INTERVAL_S: f32 = 0.5;
 pub const SAMPLE_DISTANCE_M: f32 = 25.0;
-pub const TELEPORT_SPEED_MPS: f32 = 200.0;
+pub const TELEPORT_SPEED_MPS: f32 = crate::presentation::TELEPORT_SPEED_MPS;
 pub const HORIZON_S: f32 = 60.0;
 pub const MAX_SAMPLES_PER_TRAIL: usize = 240;
 pub const SAMPLE_BUDGET: usize = 20_000;

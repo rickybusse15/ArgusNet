@@ -514,22 +514,34 @@ fn drawer_scenario_content(
     section_keyboard_shortcuts(ui);
 }
 
+/// The single source-time control surface (P2.4a). Scrubbing is over source
+/// time, not frame number, so an irregular replay scrubs as recorded.
 fn section_operator_timeline(
     ui: &mut egui::Ui,
     replay_state: &mut ReplayState,
     ui_state: &mut ViewerUiState,
 ) {
-    let has_replay = replay_state.frame_count() > 0;
-    if !has_replay {
+    let Some((first_s, last_s)) = replay_state.time_range() else {
         ui.label("No replay packaged with this scene.");
         return;
-    }
+    };
 
     let total_frames = replay_state.frame_count();
-    let current_frame = replay_state.frame_index;
+    let now_s = replay_state.time_s();
     ui.horizontal(|ui| {
-        ui.strong("Timeline");
-        ui.label(format!("frame {} / {}", current_frame + 1, total_frames));
+        ui.strong(if replay_state.live {
+            "Live history (read-only)"
+        } else {
+            "Replay"
+        });
+        ui.label(format!(
+            "t {:.2} s of {:.2}–{:.2} s · frame {} / {}",
+            now_s,
+            first_s,
+            last_s,
+            replay_state.frame_index + 1,
+            total_frames
+        ));
         ui.separator();
         ui.label(format!("speed {:.2}x", replay_state.playback_speed));
         ui.add(
@@ -538,36 +550,79 @@ fn section_operator_timeline(
                 .step_by(0.25)
                 .clamping(egui::SliderClamping::Always),
         );
+        if !replay_state.live {
+            ui.checkbox(&mut replay_state.looping, "Loop");
+        }
     });
 
-    let mut frame_value = current_frame as u32;
-    let max_frame = total_frames.saturating_sub(1) as u32;
+    let mut time_value = now_s;
     if ui
-        .add(
-            egui::Slider::new(&mut frame_value, 0..=max_frame)
-                .text("Frame")
+        .add_enabled(
+            last_s > first_s,
+            egui::Slider::new(&mut time_value, first_s..=last_s)
+                .text("s")
                 .clamping(egui::SliderClamping::Always),
         )
         .changed()
     {
         replay_state.playing = false;
-        replay_state.step_to(frame_value as usize);
-        ui_state.selected_timeline_frame = Some(frame_value as usize);
+        replay_state.seek_time(time_value);
+        ui_state.selected_timeline_frame = Some(replay_state.frame_index);
     }
+
+    // What cannot be seen, said as such: trimmed live history and recording
+    // gaps. Seeking reviews recorded frames; it never rewinds a runtime.
+    let gaps = replay_state.gaps();
+    ui.horizontal_wrapped(|ui| {
+        if let Some(trimmed) = replay_state.trimmed_before_s() {
+            ui.colored_label(
+                egui::Color32::from_rgb(210, 160, 90),
+                format!("History before {trimmed:.1} s was trimmed"),
+            );
+        }
+        if !gaps.is_empty() {
+            let missing: f32 = gaps.iter().map(|(a, b)| b - a).sum();
+            ui.colored_label(
+                egui::Color32::from_rgb(210, 160, 90),
+                format!(
+                    "{} recording gap(s), {missing:.1} s unavailable",
+                    gaps.len()
+                ),
+            );
+        }
+        ui.weak(if replay_state.live {
+            "Reviewing live history never pauses or rewinds the runtime."
+        } else {
+            "Seeking a replay is local; it changes no runtime."
+        });
+    });
 
     if let Some(document) = &replay_state.document {
         let event_points: PlotPoints = document
             .frames
             .iter()
-            .enumerate()
-            .map(|(i, frame)| [i as f64, frame_event_count(frame) as f64])
+            .map(|frame| {
+                [
+                    f64::from(frame.timestamp_s),
+                    crate::replay::frame_event_count(frame) as f64,
+                ]
+            })
             .collect();
         let obs_points: PlotPoints = document
             .frames
             .iter()
-            .enumerate()
-            .map(|(i, frame)| [i as f64, frame.metrics.observation_count as f64])
+            .map(|frame| {
+                [
+                    f64::from(frame.timestamp_s),
+                    frame.metrics.observation_count as f64,
+                ]
+            })
             .collect();
+        let peak = document
+            .frames
+            .iter()
+            .map(|frame| frame.metrics.observation_count as f64)
+            .fold(1.0, f64::max);
         let phase_transitions = phase_transitions(document);
         Plot::new("operator_timeline_plot")
             .height(56.0)
@@ -577,6 +632,21 @@ fn section_operator_timeline(
             .show_axes([false, true])
             .label_formatter(|_| None)
             .show(ui, |plot_ui| {
+                for (from, to) in &gaps {
+                    let (from, to) = (f64::from(*from), f64::from(*to));
+                    plot_ui.polygon(
+                        Polygon::new(
+                            "",
+                            PlotPoints::from(vec![
+                                [from, 0.0],
+                                [to, 0.0],
+                                [to, peak],
+                                [from, peak],
+                            ]),
+                        )
+                        .fill_color(egui::Color32::from_rgba_unmultiplied(210, 160, 90, 40)),
+                    );
+                }
                 plot_ui.line(
                     Line::new("", obs_points)
                         .color(egui::Color32::from_rgb(95, 150, 220))
@@ -587,15 +657,15 @@ fn section_operator_timeline(
                         .color(egui::Color32::from_rgb(245, 180, 70))
                         .width(1.5_f32),
                 );
-                for (frame_idx, phase) in &phase_transitions {
+                for (time_s, phase) in &phase_transitions {
                     plot_ui.vline(
-                        VLine::new("", *frame_idx as f64)
+                        VLine::new("", f64::from(*time_s))
                             .color(phase_vline_color(phase.as_str()))
                             .width(2.0_f32),
                     );
                 }
                 plot_ui.vline(
-                    VLine::new("", replay_state.frame_index as f64)
+                    VLine::new("", f64::from(now_s))
                         .color(egui::Color32::WHITE)
                         .width(2.0_f32),
                 );
@@ -608,78 +678,41 @@ fn jump_to_event_controls(
     replay_state: &mut ReplayState,
     ui_state: &mut ViewerUiState,
 ) {
-    let event_frames = event_frame_indices(replay_state);
-    if event_frames.is_empty() {
+    let events = replay_state.event_times();
+    if events.is_empty() {
         ui.label("No frame events in this replay.");
         return;
     }
 
     ui.horizontal(|ui| {
-        if ui.button("Previous Event").clicked() {
-            if let Some(frame_idx) = event_frames
-                .iter()
-                .rev()
-                .copied()
-                .find(|idx| *idx < replay_state.frame_index)
-                .or_else(|| event_frames.last().copied())
-            {
-                replay_state.playing = false;
-                replay_state.step_to(frame_idx);
-                ui_state.selected_timeline_frame = Some(frame_idx);
-            }
+        if ui.button("Previous Event").on_hover_text("[").clicked()
+            && replay_state.jump_to_event(false)
+        {
+            ui_state.selected_timeline_frame = Some(replay_state.frame_index);
         }
-        if ui.button("Next Event").clicked() {
-            if let Some(frame_idx) = event_frames
-                .iter()
-                .copied()
-                .find(|idx| *idx > replay_state.frame_index)
-                .or_else(|| event_frames.first().copied())
-            {
-                replay_state.playing = false;
-                replay_state.step_to(frame_idx);
-                ui_state.selected_timeline_frame = Some(frame_idx);
-            }
+        if ui.button("Next Event").on_hover_text("]").clicked() && replay_state.jump_to_event(true)
+        {
+            ui_state.selected_timeline_frame = Some(replay_state.frame_index);
         }
-        ui.label(format!("{} event frames", event_frames.len()));
+        ui.label(format!("{} event frames", events.len()));
     });
 }
 
-fn event_frame_indices(replay_state: &ReplayState) -> Vec<usize> {
-    replay_state
-        .document
-        .as_ref()
-        .map(|document| {
-            document
-                .frames
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, frame)| (frame_event_count(frame) > 0).then_some(idx))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn phase_transitions(document: &crate::replay::ReplayDocument) -> Vec<(usize, String)> {
+/// Where the scan mission's phase changes, by source time.
+fn phase_transitions(document: &crate::replay::ReplayDocument) -> Vec<(f32, String)> {
     let mut transitions = Vec::new();
     let mut last_phase = String::new();
     for (idx, frame) in document.frames.iter().enumerate() {
         if let Some(mission) = &frame.scan_mission_state {
             if mission.phase != last_phase {
                 if idx > 0 {
-                    transitions.push((idx, mission.phase.clone()));
+                    transitions.push((frame.timestamp_s, mission.phase.clone()));
                 }
                 last_phase = mission.phase.clone();
             }
         }
     }
     transitions
-}
-
-fn frame_event_count(frame: &crate::replay::ReplayFrame) -> usize {
-    frame.generation_rejections.len()
-        + frame.rejected_observations.len()
-        + frame.deconfliction_events.len()
-        + frame.inspection_events.len()
 }
 
 fn diagnostic_node_table(ui: &mut egui::Ui, replay_state: &ReplayState) {
@@ -2708,12 +2741,15 @@ fn section_keyboard_shortcuts(ui: &mut egui::Ui) {
         ui.label("Right       Next frame");
         ui.label("Home        First frame");
         ui.label("End         Last frame");
+        ui.label("[ / ]       Previous / next event");
         ui.label("M           Cycle view mode");
         ui.label("R           Reset camera");
         ui.label("Right-drag  Orbit camera");
         ui.label("Mid-drag    Pan camera");
         ui.label("Scroll      Zoom");
         ui.label("Left-click  Select marker");
+        ui.label("Tab         Next marker (Shift: previous)");
+        ui.label("Esc         Clear selection");
     });
 }
 

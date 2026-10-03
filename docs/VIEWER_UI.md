@@ -774,6 +774,7 @@ Default bindings retained or added:
 | Space | Play/pause replay or submit pause/resume to simulation |
 | Left / Right | Previous/next committed replay state |
 | Home / End | First/latest available state |
+| `[` / `]` | Previous/next event |
 | `F` | Focus selected entity |
 | `1`-`9` | Recall camera bookmark |
 | Right drag | Orbit |

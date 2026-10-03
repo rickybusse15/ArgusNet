@@ -18,6 +18,18 @@
   for bit there and allow 2 ULPs elsewhere, recorded oracles included
   (`docs/migration/PARITY_PORTABILITY.md`).
 
+## Unreleased — Time controls over source time (P2.4a)
+
+- Replays play and scrub by source time, not frame count. A recording with
+  unevenly spaced frames now plays at the rate it was recorded, and blends
+  between frames by the true fraction of each step.
+- Nothing is interpolated across a recording gap or a teleport; the frame
+  before is shown as recorded.
+- The timeline scrubs in seconds on a time axis. It shades recording gaps,
+  says when live history was trimmed, and labels live history as read-only.
+- Loop playback, and `[` / `]` to jump to the previous or next event
+  (safety events now count as events).
+
 ## Unreleased — Picking and selection (P2.3)
 
 - Clicks pick by ray against the scene's meshes, not by an 18-pixel radius:
