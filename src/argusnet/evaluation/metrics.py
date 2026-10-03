@@ -71,6 +71,8 @@ class EvaluationReport:
     localisation_rmse_m: float | None = None
     localisation_rmse_per_track: dict[str, float] = field(default_factory=dict)
     covariance_reduction_mean: float | None = None
+    # Tracks behind covariance_reduction_mean; 0 when it is None.
+    covariance_reduction_tracks: int = 0
 
     # Reliability
     false_handoff_rate: float = 0.0
@@ -324,26 +326,31 @@ def compute_localisation_rmse(
     return mission_rmse, per_track
 
 
-def compute_covariance_reduction(frames: list[dict]) -> float | None:
-    """Compute mean covariance reduction fraction across tracks.
+COVARIANCE_REDUCTION_MIN_UPDATES = 5
+"""A track contributes to covariance reduction only after this many updates."""
+
+
+def compute_covariance_reductions(frames: list[dict]) -> list[float]:
+    """Per-track covariance reduction fractions, one per qualifying track.
 
     Reduction is ``(trace(P_initial) - trace(P_final)) / trace(P_initial)``
     where ``P`` is the 3×3 position block (first 9 elements of the flattened
-    covariance array).  Only tracks that received ``>= 5`` updates are included.
+    covariance array). ``P_initial`` is the covariance at the track's first
+    appearance. ``P_final`` is the covariance at the track's **last update**,
+    the last frame in which its ``update_count`` rose, not its last
+    appearance: a track coasting towards deletion keeps appearing with a
+    growing covariance, and that coast measures the deletion policy rather
+    than the filter. Only tracks that received at least
+    ``COVARIANCE_REDUCTION_MIN_UPDATES`` updates are included.
 
     Args:
         frames: List of replay frame dicts.
 
     Returns:
-        Mean covariance reduction fraction, or ``None`` when no eligible tracks
-        exist.
+        One reduction fraction per qualifying track, in first-appearance order.
     """
-    if not frames:
-        return None
-
-    # Collect first and last covariance + update_count per track
     track_first_cov: dict[str, np.ndarray] = {}
-    track_last_cov: dict[str, np.ndarray] = {}
+    track_last_update_cov: dict[str, np.ndarray] = {}
     track_update_count: dict[str, int] = {}
 
     for frame in frames:
@@ -358,24 +365,32 @@ def compute_covariance_reduction(frames: list[dict]) -> float | None:
             uc = int(track.get("update_count", 0))
             if tid not in track_first_cov:
                 track_first_cov[tid] = cov_arr
-            track_last_cov[tid] = cov_arr
-            track_update_count[tid] = uc
+                track_last_update_cov[tid] = cov_arr
+                track_update_count[tid] = uc
+            elif uc > track_update_count[tid]:
+                track_last_update_cov[tid] = cov_arr
+                track_update_count[tid] = uc
 
     reductions: list[float] = []
     for tid in track_first_cov:
-        if track_update_count.get(tid, 0) < 5:
+        if track_update_count.get(tid, 0) < COVARIANCE_REDUCTION_MIN_UPDATES:
             continue
         p_init = track_first_cov[tid][:9].reshape(3, 3)
-        p_final = track_last_cov[tid][:9].reshape(3, 3)
+        p_final = track_last_update_cov[tid][:9].reshape(3, 3)
         tr_init = float(np.trace(p_init))
         tr_final = float(np.trace(p_final))
         if tr_init <= 0.0:
             continue
         reductions.append((tr_init - tr_final) / tr_init)
+    return reductions
 
+
+def compute_covariance_reduction(frames: list[dict]) -> float | None:
+    """Mean of :func:`compute_covariance_reductions`, or ``None`` with no
+    qualifying track."""
+    reductions = compute_covariance_reductions(frames)
     if not reductions:
         return None
-
     return float(np.mean(reductions))
 
 
@@ -433,7 +448,8 @@ def evaluate_replay(
     ttr_mean, ttr_p95 = compute_time_to_reacquire(frames)
     cont_mean, cont_per_target = compute_track_continuity(frames, target_ids)
     loc_rmse, loc_per_track = compute_localisation_rmse(frames)
-    cov_reduction = compute_covariance_reduction(frames)
+    cov_reductions = compute_covariance_reductions(frames)
+    cov_reduction = float(np.mean(cov_reductions)) if cov_reductions else None
 
     # -----------------------------------------------------------------------
     # Reliability metrics — sourced from replay metadata where available
@@ -494,6 +510,7 @@ def evaluate_replay(
         localisation_rmse_m=loc_rmse,
         localisation_rmse_per_track=loc_per_track,
         covariance_reduction_mean=cov_reduction,
+        covariance_reduction_tracks=len(cov_reductions),
         # Reliability
         false_handoff_rate=false_handoff_rate,
         infeasible_path_rejection_count=infeasible_count,
@@ -719,6 +736,7 @@ def report_to_dict(report: EvaluationReport) -> dict:
             if report.covariance_reduction_mean is not None
             else None
         ),
+        "covariance_reduction_tracks": int(report.covariance_reduction_tracks),
         "false_handoff_rate": float(report.false_handoff_rate),
         "infeasible_path_rejection_count": int(report.infeasible_path_rejection_count),
         "safety_override_count": int(report.safety_override_count),
@@ -784,6 +802,7 @@ def report_from_dict(d: dict) -> EvaluationReport:
             if d.get("covariance_reduction_mean") is not None
             else None
         ),
+        covariance_reduction_tracks=int(d.get("covariance_reduction_tracks", 0)),
         false_handoff_rate=float(d.get("false_handoff_rate", 0.0)),
         infeasible_path_rejection_count=int(d.get("infeasible_path_rejection_count", 0)),
         safety_override_count=int(d.get("safety_override_count", 0)),

@@ -65,6 +65,12 @@ STATISTICAL = {
     "energy_reserve_min": (None, 0.02),
 }
 VERDICT_AGREEMENT_MIN = 4
+# `covariance_reduction_mean` is a mean over tracks. A side's mean over the
+# seeds is scored only when that many tracks qualified across all its seeds:
+# below it, one track decides the number (decision D-1, SAFETY_AND_PROFILES.md).
+# Neither side reaching it makes the check unavailable, not passed; only one
+# side reaching it is a divergence and fails.
+MIN_QUALIFYING_TRACKS = {"covariance_reduction_mean": ("covariance_reduction_tracks", 5)}
 TICK_P95_MAX_MS = 5.0
 STARTUP_MAX_MS = 2000.0
 SPEEDUP_MIN = 5.0
@@ -165,11 +171,20 @@ def mean_of(runs: list[dict], side: str, metric: str) -> float | None:
     return statistics.fmean(values) if values else None
 
 
+def tracks_of(runs: list[dict], side: str, count_key: str) -> int:
+    return sum(int(r[side].get(count_key) or 0) for r in runs)
+
+
 def judge(name: str, runs: list[dict]) -> dict:
     checks: list[dict] = []
 
     def check(kind: str, what: str, ok: bool, detail: str) -> None:
         checks.append({"kind": kind, "check": what, "passed": bool(ok), "detail": detail})
+
+    def unavailable(kind: str, what: str, detail: str) -> None:
+        # Neither passed nor failed: there is nothing to compare. Kept out of
+        # the verdict and listed beside it, never counted as a pass.
+        checks.append({"kind": kind, "check": what, "passed": None, "detail": detail})
 
     for run in runs:
         ref, rust = run["reference_identity"], run["rust_identity"]
@@ -191,13 +206,22 @@ def judge(name: str, runs: list[dict]) -> dict:
     for metric, (relative, absolute) in STATISTICAL.items():
         ref_mean = mean_of(runs, "reference", metric)
         rust_mean = mean_of(runs, "rust", metric)
+        if metric in MIN_QUALIFYING_TRACKS:
+            count_key, minimum = MIN_QUALIFYING_TRACKS[metric]
+            ref_tracks = tracks_of(runs, "reference", count_key)
+            rust_tracks = tracks_of(runs, "rust", count_key)
+            counts = f"{ref_tracks} / {rust_tracks} qualifying tracks, {minimum} needed"
+            if ref_tracks < minimum and rust_tracks < minimum:
+                unavailable("statistical", metric, f"{counts}; {ref_mean} / {rust_mean}")
+                continue
+            if ref_tracks < minimum or rust_tracks < minimum:
+                check("statistical", metric, False, counts)
+                continue
+        if ref_mean is None and rust_mean is None:
+            unavailable("statistical", metric, "neither side reports it")
+            continue
         if ref_mean is None or rust_mean is None:
-            check(
-                "statistical",
-                metric,
-                ref_mean is None and rust_mean is None,
-                f"{ref_mean} / {rust_mean}",
-            )
+            check("statistical", metric, False, f"{ref_mean} / {rust_mean}")
             continue
         allowed = absolute if relative is None else max(relative * abs(ref_mean), absolute)
         delta = abs(rust_mean - ref_mean)
@@ -242,7 +266,12 @@ def judge(name: str, runs: list[dict]) -> dict:
         speedup is not None and speedup >= SPEEDUP_MIN,
         f"{speedup:.1f}x >= {SPEEDUP_MIN}x" if speedup else "no reference wall clock",
     )
-    return {"scenario": name, "passed": all(c["passed"] for c in checks), "checks": checks}
+    return {
+        "scenario": name,
+        "passed": all(c["passed"] is not False for c in checks),
+        "unavailable": [c["check"] for c in checks if c["passed"] is None],
+        "checks": checks,
+    }
 
 
 def main() -> int:
@@ -279,7 +308,9 @@ def main() -> int:
             verdict["runs"] = runs
             results.append(verdict)
             print(f"  {'PASS' if verdict['passed'] else 'FAIL'}")
-            for failed in [c for c in verdict["checks"] if not c["passed"]]:
+            if verdict["unavailable"]:
+                print(f"    unavailable: {', '.join(verdict['unavailable'])}")
+            for failed in [c for c in verdict["checks"] if c["passed"] is False]:
                 print(f"    {failed['check']}: {failed['detail']}")
     document = {
         "_source": "scripts/run_phase_acceptance.py",

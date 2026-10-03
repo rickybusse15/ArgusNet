@@ -1,6 +1,6 @@
 # P4.8d.3: the controller stage — the Rust tick moves the fleet
 
-**Status:** delivered 2026-09-22, locally verified only (not pushed). Package ID
+**Status:** delivered 2026-09-22, locally verified, then merged 2026-10-01 in #122 (`badb1e1`). Package ID
 `P4.8d.3`. Built on PR #119 (`codex/runtime-command-checkpoints`, the P4.1
 command/checkpoint repair) plus the P4.8d.1–2b motion stack
 (`claude/p48d-controllers`), which it carries as four cherry-picked commits.

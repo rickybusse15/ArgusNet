@@ -144,8 +144,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # --exclude rather than naming crates, so a new workspace member is
       # covered here by default instead of silently going untested.
+      # --no-fail-fast, so one failing test binary does not hide the rest.
       - name: Test everything except the viewer
-        run: cargo test --workspace --exclude argusnet-viewer
+        run: cargo test --workspace --exclude argusnet-viewer --no-fail-fast
 
   rust-viewer:
     name: rust-viewer (Bevy + headless render)

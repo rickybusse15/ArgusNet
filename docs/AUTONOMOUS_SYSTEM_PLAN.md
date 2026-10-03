@@ -384,6 +384,12 @@ are merged, as are P4.8a–c mission state, TickWorld and stage bodies. S0 remai
 open until complete mission composition, checkpoint/replay and CLI/worker gates
 pass. The [delivery plan](migration/DELIVERY_PLAN.md) tracks this distinction.
 
+At `0b1032c` (2026-10-03), P4.8d–P4.9d are merged (#122): Rust owns a complete
+scenario run through `argusnet-rs` with no Python, six of seven canonical
+scenarios within every envelope. S0 is still open on the production
+constructor, owned subsystem state, reset/restore equality, the durable
+journal and multi-seed qualification.
+
 ## 10. Immediate execution queue
 
 1. Integrate the merged P4.3g Rust landscape builders into the complete scenario

@@ -1,6 +1,6 @@
 # P4.8e.1: scenario bundle v1 and runtime assembly
 
-**Status:** delivered 2026-09-23, locally verified only (not pushed). Package ID
+**Status:** delivered 2026-09-23, locally verified, then merged 2026-10-01 in #122 (`badb1e1`). Package ID
 `P4.8e.1`. See [STATUS.md](STATUS.md) for where it sits in the pre-P5.0 queue.
 
 Every tick stage had a Rust body, and stage 1 moved the fleet (P4.8d.3). But

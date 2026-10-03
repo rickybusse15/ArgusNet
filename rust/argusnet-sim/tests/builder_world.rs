@@ -13,8 +13,11 @@
 //! [`HEIGHT_TOLERANCE_M`]: numpy's `exp` differs from the platform's on ~5% of
 //! inputs (P4.3), which no port can close short of reimplementing numpy.
 
+mod common;
+
 use argusnet_sim::builder::environment::{box_footprint, wall_footprint};
 use argusnet_sim::builder::{build_world, ScenarioOptions};
+use common::parity::parity_of;
 use serde_json::Value;
 
 /// P4.3's own ceiling for the `exp` divergence, which it measured at 5.7e-14 m.
@@ -231,30 +234,22 @@ fn the_small_alpine_bundles_world_and_presentation_are_rebuilt() {
 /// Footprints over 300 random boxes and 300 random walls, from the
 /// reference's own `OrientedBox` and `WallSegment`: numpy's fused matmul,
 /// `np.linalg.norm` and the offset's association, bit for bit, far beyond the
-/// handful of hand-placed preset obstacles.
+/// handful of hand-placed preset obstacles. Bit for bit on the capture
+/// platform; off it the trig and `norm` may round differently.
 #[test]
 fn box_and_wall_footprints_match_the_references_arithmetic() {
     let fixture: Value = serde_json::from_str(&read("scenario_world.json")).unwrap();
+    let parity = parity_of(&fixture);
     let geometry = &fixture["geometry"];
-    let points = |value: &Value| -> Vec<[u64; 2]> {
+    let points = |value: &Value| -> Vec<f64> {
         value
             .as_array()
             .unwrap()
             .iter()
-            .map(|p| {
-                [
-                    p[0].as_f64().unwrap().to_bits(),
-                    p[1].as_f64().unwrap().to_bits(),
-                ]
-            })
+            .flat_map(|p| [p[0].as_f64().unwrap(), p[1].as_f64().unwrap()])
             .collect()
     };
-    let bits = |footprint: Vec<[f64; 2]>| -> Vec<[u64; 2]> {
-        footprint
-            .into_iter()
-            .map(|[x, y]| [x.to_bits(), y.to_bits()])
-            .collect()
-    };
+    let flat = |footprint: Vec<[f64; 2]>| -> Vec<f64> { footprint.concat() };
     let boxes = geometry["boxes"].as_array().unwrap();
     let walls = geometry["walls"].as_array().unwrap();
     assert_eq!((boxes.len(), walls.len()), (300, 300));
@@ -265,10 +260,11 @@ fn box_and_wall_footprints_match_the_references_arithmetic() {
             .iter()
             .map(|v| v.as_f64().unwrap())
             .collect();
-        assert_eq!(
-            bits(box_footprint(a[0], a[1], a[2], a[3], a[4])),
-            points(&case["footprint"]),
-            "box {index}"
+        let got = flat(box_footprint(a[0], a[1], a[2], a[3], a[4]));
+        let want = points(&case["footprint"]);
+        assert!(
+            parity.same_all(&got, &want),
+            "box {index}: {got:?} against {want:?}"
         );
     }
     for (index, case) in walls.iter().enumerate() {
@@ -278,10 +274,11 @@ fn box_and_wall_footprints_match_the_references_arithmetic() {
             .iter()
             .map(|v| v.as_f64().unwrap())
             .collect();
-        assert_eq!(
-            bits(wall_footprint([a[0], a[1]], [a[2], a[3]], a[4])),
-            points(&case["footprint"]),
-            "wall {index}"
+        let got = flat(wall_footprint([a[0], a[1]], [a[2], a[3]], a[4]));
+        let want = points(&case["footprint"]);
+        assert!(
+            parity.same_all(&got, &want),
+            "wall {index}: {got:?} against {want:?}"
         );
     }
 }

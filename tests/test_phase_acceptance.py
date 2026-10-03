@@ -22,6 +22,7 @@ METRICS = {
     "track_continuity_mean": 0.5,
     "time_to_reacquire_mean_s": 1.0,
     "covariance_reduction_mean": 0.8,
+    "covariance_reduction_tracks": 2,
     "mission_completion_rate": 1.0,
     "energy_reserve_min": 0.8,
 }
@@ -85,6 +86,65 @@ def test_absolute_only_envelopes_ignore_the_reference_scale():
 def test_a_metric_one_side_lacks_fails():
     runs = [_run(seed, rust={"localisation_rmse_m": None}) for seed in range(5)]
     assert not _check(acceptance.judge("s", runs), "localisation_rmse_m")["passed"]
+
+
+def test_a_metric_neither_side_reports_is_unavailable_not_passed():
+    runs = [_run(seed, rust={"localisation_rmse_m": None}) for seed in range(5)]
+    for run in runs:
+        run["reference"]["localisation_rmse_m"] = None
+    verdict = acceptance.judge("s", runs)
+    assert _check(verdict, "localisation_rmse_m")["passed"] is None
+    assert verdict["unavailable"] == ["localisation_rmse_m"]
+    assert verdict["passed"]
+
+
+def _covariance_runs(reference_tracks, rust_tracks, rust_value=0.8):
+    runs = []
+    for seed, (ref_n, rust_n) in enumerate(zip(reference_tracks, rust_tracks, strict=True)):
+        entry = _run(
+            seed,
+            rust={
+                "covariance_reduction_tracks": rust_n,
+                "covariance_reduction_mean": rust_value if rust_n else None,
+            },
+        )
+        entry["reference"]["covariance_reduction_tracks"] = ref_n
+        entry["reference"]["covariance_reduction_mean"] = 0.8 if ref_n else None
+        runs.append(entry)
+    return runs
+
+
+def test_covariance_reduction_from_too_few_tracks_is_unavailable():
+    # The sar_person_search shape: one track on one seed against one on three.
+    runs = _covariance_runs([0, 1, 0, 0, 0], [0, 1, 1, 0, 1], rust_value=-1.0)
+    verdict = acceptance.judge("s", runs)
+    found = _check(verdict, "covariance_reduction_mean")
+    assert found["passed"] is None
+    assert "1 / 3 qualifying tracks, 5 needed" in found["detail"]
+    assert verdict["passed"]
+    assert verdict["unavailable"] == ["covariance_reduction_mean"]
+
+
+@pytest.mark.parametrize(
+    ("reference_tracks", "rust_tracks", "passes"),
+    [
+        ([1, 1, 1, 1, 1], [1, 1, 1, 1, 1], True),  # exactly the minimum on both sides
+        ([1, 1, 1, 1, 1], [1, 1, 1, 1, 0], False),  # one side reaches it: a divergence
+        ([1, 1, 1, 1, 0], [1, 1, 1, 1, 1], False),
+    ],
+)
+def test_covariance_reduction_needs_the_minimum_on_both_sides(
+    reference_tracks, rust_tracks, passes
+):
+    verdict = acceptance.judge("s", _covariance_runs(reference_tracks, rust_tracks))
+    assert _check(verdict, "covariance_reduction_mean")["passed"] is passes
+
+
+def test_covariance_reduction_with_enough_tracks_keeps_its_envelope():
+    good = _covariance_runs([2] * 5, [2] * 5, rust_value=0.9)
+    bad = _covariance_runs([2] * 5, [2] * 5, rust_value=0.901)
+    assert _check(acceptance.judge("s", good), "covariance_reduction_mean")["passed"]
+    assert not _check(acceptance.judge("s", bad), "covariance_reduction_mean")["passed"]
 
 
 def test_verdicts_must_agree_on_four_of_five_seeds():
