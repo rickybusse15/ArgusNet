@@ -85,7 +85,6 @@
 //! them, so the fused frame, and the replay, carry them.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use safety_engine::limits::DronePhysicalLimits;
 use safety_engine::simulation::{SimulationSafetyMonitor, State, Violation};
@@ -161,14 +160,10 @@ pub fn limits_for_role(role: &str) -> DronePhysicalLimits {
     }
 }
 
-/// A handle onto the safety stage.
-#[derive(Debug, Clone, Default)]
-pub struct SafetyLink {
-    inner: Arc<Mutex<Shared>>,
-}
-
+/// The monitors, their configuration and the last run's validations, owned
+/// by the stage.
 #[derive(Debug)]
-struct Shared {
+struct SafetyState {
     enabled: bool,
     abort_frames: u32,
     caution_fraction: f64,
@@ -204,7 +199,7 @@ struct SafetyCheckpoint {
 /// The states `SimulationSafetyMonitor::process` assigns.
 const MONITOR_STATES: [&str; 4] = ["nominal", "caution", "warning", "abort"];
 
-impl Default for Shared {
+impl Default for SafetyState {
     fn default() -> Self {
         Self {
             // Opt-in, exactly as `scenario.options.safety_blocking` is.
@@ -222,79 +217,12 @@ impl Default for Shared {
     }
 }
 
-impl SafetyLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// `scenario.options.safety_blocking`. Off by default, so a run that does
-    /// not ask for the hard floor does not get one.
-    pub fn set_enabled(&self, enabled: bool) {
-        self.lock().enabled = enabled;
-    }
-
-    pub fn is_enabled(&self) -> bool {
-        self.lock().enabled
-    }
-
-    pub fn set_role(&self, drone_id: impl Into<String>, role: impl Into<String>) {
-        self.lock().roles.insert(drone_id.into(), role.into());
-    }
-
-    /// A level floor at `terrain_height_m`, for rigs with no terrain model.
-    pub fn set_terrain_height_m(&self, terrain_height_m: f64) {
-        self.lock().terrain = Box::new(Level(terrain_height_m));
-    }
-
-    /// The terrain the reference samples under each platform.
-    pub fn set_terrain(&self, terrain: Box<dyn TerrainHeight>) {
-        self.lock().terrain = terrain;
-    }
-
-    /// Hand each tick's validations to stage 7 as its `safety_events`.
-    pub fn feed_fusion(&self, fusion: FusionLink) {
-        self.lock().fusion = Some(fusion);
-    }
-
-    /// Read `energy_fraction` from stage 1's ledger.
-    ///
-    /// Without this the monitor is handed `None` and the energy checks do not
-    /// fire at all — which is *not* what the reference does, so a production
-    /// wiring should always supply it.
-    pub fn use_battery(&self, battery: BatteryLink) {
-        self.lock().battery = Some(battery);
-    }
-
-    /// The safety state the monitor last assigned, or `"nominal"`.
-    pub fn state_of(&self, drone_id: &str) -> String {
-        self.lock()
-            .monitors
-            .get(drone_id)
-            .map(|monitor| monitor.state(drone_id).to_string())
-            .unwrap_or_else(|| "nominal".to_string())
-    }
-
-    /// Take the validations the last run produced, leaving none behind.
-    pub fn take_validations(&self) -> Vec<SafetyValidation> {
-        std::mem::take(&mut self.lock().validations)
-    }
-
-    /// Drop every monitor, so a reset does not carry the previous epoch's
-    /// escalation counts into a fresh run.
-    pub fn clear(&self) {
-        let mut shared = self.lock();
-        shared.monitors.clear();
-        shared.previous_velocities.clear();
-        shared.validations.clear();
-    }
-}
-
 /// [`Stage::SafetyMonitor`] as a [`StageHandler`].
 ///
 /// [`Stage::SafetyMonitor`]: crate::stage::Stage::SafetyMonitor
 #[derive(Debug, Default)]
 pub struct SafetyStage {
-    link: SafetyLink,
+    state: SafetyState,
 }
 
 impl SafetyStage {
@@ -302,15 +230,71 @@ impl SafetyStage {
         Self::default()
     }
 
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> SafetyLink {
-        self.link.clone()
+    /// `scenario.options.safety_blocking`. Off by default, so a run that does
+    /// not ask for the hard floor does not get one.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.state.enabled = enabled;
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.state.enabled
+    }
+
+    pub fn set_role(&mut self, drone_id: impl Into<String>, role: impl Into<String>) {
+        self.state.roles.insert(drone_id.into(), role.into());
+    }
+
+    /// A level floor at `terrain_height_m`, for rigs with no terrain model.
+    pub fn set_terrain_height_m(&mut self, terrain_height_m: f64) {
+        self.state.terrain = Box::new(Level(terrain_height_m));
+    }
+
+    /// The terrain the reference samples under each platform.
+    pub fn set_terrain(&mut self, terrain: Box<dyn TerrainHeight>) {
+        self.state.terrain = terrain;
+    }
+
+    /// Hand each tick's validations to stage 7 as its `safety_events`.
+    pub fn feed_fusion(&mut self, fusion: FusionLink) {
+        self.state.fusion = Some(fusion);
+    }
+
+    /// Read `energy_fraction` from stage 1's ledger.
+    ///
+    /// Without this the monitor is handed `None` and the energy checks do not
+    /// fire at all — which is *not* what the reference does, so a production
+    /// wiring should always supply it.
+    pub fn use_battery(&mut self, battery: BatteryLink) {
+        self.state.battery = Some(battery);
+    }
+
+    /// The safety state the monitor last assigned, or `"nominal"`.
+    pub fn state_of(&self, drone_id: &str) -> String {
+        self.state
+            .monitors
+            .get(drone_id)
+            .map(|monitor| monitor.state(drone_id).to_string())
+            .unwrap_or_else(|| "nominal".to_string())
+    }
+
+    /// Take the validations the last run produced, leaving none behind.
+    pub fn take_validations(&mut self) -> Vec<SafetyValidation> {
+        std::mem::take(&mut self.state.validations)
+    }
+
+    /// Drop every monitor, so a reset does not carry the previous epoch's
+    /// escalation counts into a fresh run.
+    pub fn clear(&mut self) {
+        let shared = &mut self.state;
+        shared.monitors.clear();
+        shared.previous_velocities.clear();
+        shared.validations.clear();
     }
 }
 
 impl StageHandler for SafetyStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.validations.clear();
 
         if !shared.enabled {
@@ -460,7 +444,6 @@ impl StageHandler for SafetyStage {
                     .collect(),
             );
         }
-        drop(shared);
         for note in notes {
             context.note(note);
         }
@@ -474,11 +457,11 @@ impl StageHandler for SafetyStage {
 
     /// A fresh run of the same scenario: no escalation, no previous velocity.
     fn reset(&mut self) {
-        self.link.clear();
+        self.clear();
     }
 
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
-        let shared = self.link.lock();
+        let shared = &self.state;
         let state = SafetyCheckpoint {
             records: shared
                 .monitors
@@ -521,7 +504,7 @@ impl StageHandler for SafetyStage {
 
     fn restore_state(&mut self, state: &serde_json::Value) -> Result<(), StageStateError> {
         let decoded: SafetyCheckpoint = decode_stage_state(state)?;
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         let mut monitors = BTreeMap::new();
         for (id, (count, state)) in decoded.records {
             let role = shared
@@ -578,15 +561,20 @@ mod tests {
     }
 
     /// Enabled by default in the rig, since almost every test wants the floor.
-    fn rig(platforms: Vec<NodeState>) -> (Simulation, SafetyLink) {
+    fn rig(platforms: Vec<NodeState>) -> Simulation {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
-        let stage = SafetyStage::new();
-        let link = stage.link();
-        link.set_enabled(true);
+        let mut stage = SafetyStage::new();
+        stage.set_enabled(true);
         sim.set_stage_handler(Stage::SafetyMonitor, Box::new(stage))
             .expect("stage 4 is not a transaction boundary");
-        (sim, link)
+        sim
+    }
+
+    /// The installed stage, reached through the session that owns it.
+    fn safety(sim: &mut Simulation) -> &mut SafetyStage {
+        sim.stage_mut::<SafetyStage>(Stage::SafetyMonitor)
+            .expect("stage 4 is a SafetyStage")
     }
 
     fn outcome(sim: &Simulation) -> StageOutcome {
@@ -616,15 +604,14 @@ mod tests {
             Vec::new(),
         );
         let stage = SafetyStage::new();
-        let link = stage.link();
-        assert!(!link.is_enabled(), "off unless asked for");
+        assert!(!stage.is_enabled(), "off unless asked for");
         sim.set_stage_handler(Stage::SafetyMonitor, Box::new(stage))
             .unwrap();
 
         sim.step().unwrap();
 
         assert!(matches!(outcome(&sim), StageOutcome::Skipped { .. }));
-        assert!(link.take_validations().is_empty());
+        assert!(safety(&mut sim).take_validations().is_empty());
         let platform = sim.world().platform("drone-1").unwrap();
         assert_eq!(platform.position.z, -500.0, "nothing was clamped");
         assert_eq!(platform.velocity.x, 900.0);
@@ -636,13 +623,13 @@ mod tests {
 
     #[test]
     fn a_platform_below_the_terrain_floor_is_lifted_to_the_minimum_agl() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, -50.0],
             [1.0, 0.0, 0.0],
         )]);
-        link.set_terrain_height_m(0.0);
+        safety(&mut sim).set_terrain_height_m(0.0);
 
         sim.step().unwrap();
 
@@ -652,7 +639,7 @@ mod tests {
             platform.position.z, limits.min_agl_m,
             "clamped up to terrain + min_agl"
         );
-        let validations = link.take_validations();
+        let validations = safety(&mut sim).take_validations();
         assert_eq!(validations.len(), 1);
         assert!(validations[0].clamped);
         assert!(validations[0].violations.iter().any(|v| v == "min_agl"));
@@ -662,7 +649,7 @@ mod tests {
     /// an abort zeroes the velocity.
     #[test]
     fn a_minimum_agl_violation_aborts_on_the_first_frame() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, -50.0],
@@ -670,7 +657,7 @@ mod tests {
         )]);
         sim.step().unwrap();
 
-        let validations = link.take_validations();
+        let validations = safety(&mut sim).take_validations();
         assert_eq!(validations[0].reason, "abort");
         assert!(
             !validations[0].accepted,
@@ -684,7 +671,7 @@ mod tests {
 
     #[test]
     fn an_overspeed_platform_is_scaled_back_to_its_limit() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -700,14 +687,14 @@ mod tests {
             platform.velocity.x,
             limits.max_speed_mps
         );
-        assert!(link.take_validations()[0].clamped);
+        assert!(safety(&mut sim).take_validations()[0].clamped);
     }
 
     /// A platform well inside every limit is untouched, and the stage says it
     /// had nothing to do.
     #[test]
     fn a_compliant_platform_is_untouched() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -718,13 +705,13 @@ mod tests {
         let platform = sim.world().platform("drone-1").unwrap();
         assert_eq!(platform.position.z, 100.0);
         assert_eq!(platform.velocity.x, 5.0);
-        assert!(link.take_validations().is_empty());
+        assert!(safety(&mut sim).take_validations().is_empty());
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
     #[test]
     fn a_fixed_node_is_never_clamped() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "tower",
             false,
             [0.0, 0.0, -900.0],
@@ -735,7 +722,7 @@ mod tests {
         let tower = sim.world().platform("tower").unwrap();
         assert_eq!(tower.position.z, -900.0);
         assert_eq!(tower.velocity.x, 800.0);
-        assert!(link.take_validations().is_empty());
+        assert!(safety(&mut sim).take_validations().is_empty());
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
@@ -786,13 +773,13 @@ mod tests {
         let speed = (tracker_limit + interceptor_limit) / 2.0;
 
         let speed_after = |role: &str| {
-            let (mut sim, link) = rig(vec![node(
+            let mut sim = rig(vec![node(
                 "drone-1",
                 true,
                 [0.0, 0.0, 100.0],
                 [speed, 0.0, 0.0],
             )]);
-            link.set_role("drone-1", role);
+            safety(&mut sim).set_role("drone-1", role);
             sim.step().unwrap();
             sim.world().platform("drone-1").unwrap().velocity.x
         };
@@ -817,7 +804,7 @@ mod tests {
     #[test]
     fn repeated_violations_escalate_from_warning_to_abort() {
         // Overspeed violates without tripping the immediate-abort min_agl path.
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -829,7 +816,12 @@ mod tests {
             // Re-command the illegal speed each tick; the clamp undid it.
             sim.world_mut().platform_mut("drone-1").unwrap().velocity.x = 500.0;
             sim.step().unwrap();
-            states.extend(link.take_validations().into_iter().map(|v| v.reason));
+            states.extend(
+                safety(&mut sim)
+                    .take_validations()
+                    .into_iter()
+                    .map(|v| v.reason),
+            );
         }
 
         assert_eq!(states.first().map(String::as_str), Some("warning"));
@@ -845,7 +837,7 @@ mod tests {
     /// difference.
     #[test]
     fn the_previous_velocity_is_the_clamped_one() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -860,7 +852,7 @@ mod tests {
         // against the stored *proposal* it would look like a huge deceleration.
         sim.world_mut().platform_mut("drone-1").unwrap().velocity.x = clamped;
         sim.step().unwrap();
-        let violations: Vec<String> = link
+        let violations: Vec<String> = safety(&mut sim)
             .take_validations()
             .into_iter()
             .flat_map(|v| v.violations)
@@ -878,18 +870,18 @@ mod tests {
     /// (29.75).
     #[test]
     fn the_caution_fraction_is_the_references() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
             [31.0, 0.0, 0.0],
         )]);
         sim.step().unwrap();
-        assert_eq!(link.state_of("drone-1"), "nominal");
+        assert_eq!(safety(&mut sim).state_of("drone-1"), "nominal");
 
         sim.world_mut().platform_mut("drone-1").unwrap().velocity.x = 32.0;
         sim.step().unwrap();
-        assert_eq!(link.state_of("drone-1"), "caution");
+        assert_eq!(safety(&mut sim).state_of("drone-1"), "caution");
     }
 
     /// A checkpoint names only states the monitor assigns, and finite
@@ -927,7 +919,7 @@ mod tests {
     /// and the third violation after the restore aborts.
     #[test]
     fn a_restored_stage_escalates_from_where_it_was() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -937,10 +929,8 @@ mod tests {
             sim.world_mut().platform_mut("drone-1").unwrap().velocity.x = 500.0;
             sim.step().unwrap();
         }
-        assert_eq!(link.state_of("drone-1"), "warning");
-        let saved = SafetyStage { link: link.clone() }
-            .checkpoint_state()
-            .unwrap();
+        assert_eq!(safety(&mut sim).state_of("drone-1"), "warning");
+        let saved = safety(&mut sim).checkpoint_state().unwrap();
         assert_eq!(
             saved["records"]["drone-1"],
             serde_json::json!([2, "warning"])
@@ -949,8 +939,7 @@ mod tests {
         let mut fresh = SafetyStage::new();
         fresh.check_state(&saved).unwrap();
         fresh.restore_state(&saved).unwrap();
-        let fresh_link = fresh.link();
-        assert_eq!(fresh_link.state_of("drone-1"), "warning");
+        assert_eq!(fresh.state_of("drone-1"), "warning");
         assert_eq!(
             fresh.checkpoint_state().unwrap(),
             saved,
@@ -960,7 +949,7 @@ mod tests {
 
     #[test]
     fn clearing_drops_the_escalation_counts() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -970,12 +959,12 @@ mod tests {
             sim.world_mut().platform_mut("drone-1").unwrap().velocity.x = 500.0;
             sim.step().unwrap();
         }
-        let _ = link.take_validations();
-        assert_eq!(link.state_of("drone-1"), "abort");
+        let _ = safety(&mut sim).take_validations();
+        assert_eq!(safety(&mut sim).state_of("drone-1"), "abort");
 
-        link.clear();
+        safety(&mut sim).clear();
         assert_eq!(
-            link.state_of("drone-1"),
+            safety(&mut sim).state_of("drone-1"),
             "nominal",
             "a fresh epoch must not inherit the previous one's escalation"
         );
@@ -990,7 +979,7 @@ mod tests {
     /// itself at zero distance.
     #[test]
     fn a_lone_platform_does_not_conflict_with_itself() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -998,20 +987,20 @@ mod tests {
         )]);
         sim.step().unwrap();
         assert!(
-            link.take_validations().is_empty(),
+            safety(&mut sim).take_validations().is_empty(),
             "a single drone has no peers to be too close to"
         );
     }
 
     #[test]
     fn two_platforms_on_top_of_each_other_violate_separation() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-a", true, [0.0, 0.0, 100.0], [1.0, 0.0, 0.0]),
             node("drone-b", true, [0.5, 0.0, 100.0], [1.0, 0.0, 0.0]),
         ]);
         sim.step().unwrap();
 
-        let validations = link.take_validations();
+        let validations = safety(&mut sim).take_validations();
         assert_eq!(validations.len(), 2, "both report it");
         assert!(validations
             .iter()
@@ -1026,7 +1015,7 @@ mod tests {
     /// for every mobile node at start-up. Recorded rather than papered over.
     #[test]
     fn a_mobile_platform_with_no_battery_violates_its_energy_reserve() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -1038,11 +1027,11 @@ mod tests {
             battery.fraction("drone-1"),
             crate::battery::NOT_APPLICABLE_FRACTION
         );
-        link.use_battery(battery);
+        safety(&mut sim).use_battery(battery);
 
         sim.step().unwrap();
 
-        let validations = link.take_validations();
+        let validations = safety(&mut sim).take_validations();
         assert_eq!(validations.len(), 1);
         assert!(
             validations[0]
@@ -1057,7 +1046,7 @@ mod tests {
     /// With a real battery registered, the same platform is clean.
     #[test]
     fn a_registered_full_battery_raises_no_energy_violation() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, 100.0],
@@ -1065,23 +1054,23 @@ mod tests {
         )]);
         let battery = BatteryLink::default();
         battery.register("drone-1", None);
-        link.use_battery(battery);
+        safety(&mut sim).use_battery(battery);
 
         sim.step().unwrap();
-        assert!(link.take_validations().is_empty());
+        assert!(safety(&mut sim).take_validations().is_empty());
     }
 
     #[test]
     fn validations_are_taken_once() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, -50.0],
             [1.0, 0.0, 0.0],
         )]);
         sim.step().unwrap();
-        assert_eq!(link.take_validations().len(), 1);
-        assert!(link.take_validations().is_empty());
+        assert_eq!(safety(&mut sim).take_validations().len(), 1);
+        assert!(safety(&mut sim).take_validations().is_empty());
     }
 
     /// Validations are **pushed**, and nothing reassigns the list, so the
@@ -1090,7 +1079,7 @@ mod tests {
     /// validations, not a growing backlog dated to earlier ones.
     #[test]
     fn validations_do_not_accumulate_across_ticks() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, -50.0],
@@ -1103,7 +1092,7 @@ mod tests {
         sim.step().unwrap();
 
         assert_eq!(
-            link.take_validations().len(),
+            safety(&mut sim).take_validations().len(),
             1,
             "each tick replaces the last tick's validations rather than adding to them"
         );
@@ -1112,7 +1101,7 @@ mod tests {
     /// And a tick that returns early leaves none behind either.
     #[test]
     fn a_disabled_tick_does_not_replay_the_last_ticks_validations() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, -50.0],
@@ -1120,21 +1109,21 @@ mod tests {
         )]);
         sim.step().unwrap();
         // Deliberately do NOT take them.
-        link.set_enabled(false);
+        safety(&mut sim).set_enabled(false);
         sim.step().unwrap();
-        assert!(link.take_validations().is_empty());
+        assert!(safety(&mut sim).take_validations().is_empty());
     }
 
     #[test]
     fn the_validation_id_carries_the_tick_and_the_subject() {
-        let (mut sim, link) = rig(vec![node(
+        let mut sim = rig(vec![node(
             "drone-1",
             true,
             [0.0, 0.0, -50.0],
             [1.0, 0.0, 0.0],
         )]);
         sim.step().unwrap();
-        let validations = link.take_validations();
+        let validations = safety(&mut sim).take_validations();
         assert_eq!(validations[0].validation_id, "safety-0-drone-1");
         assert_eq!(validations[0].subject_id, "drone-1");
         assert_eq!(validations[0].validator, VALIDATOR_NAME);

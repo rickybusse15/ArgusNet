@@ -926,7 +926,10 @@ fn a_blocking_safety_run_matches_on_every_tick() {
     let bundle = bundle_of("tt_safety");
     assert!(bundle.safety_blocking);
     let mut run = assemble(&bundle).expect("bundle assembles");
-    assert!(run.safety.is_some(), "stage 4 is assembled when asked for");
+    assert!(
+        run.safety().is_some(),
+        "stage 4 is assembled when asked for"
+    );
     let (mut events, mut warnings, mut clamped) = (0, 0, 0);
     for (i, frame) in frames.iter().enumerate() {
         let snapshot = run.step().expect("tick runs");
@@ -1035,7 +1038,7 @@ fn safety_events_reach_the_replay_and_an_unblocked_run_has_no_stage_four() {
 
     // Without it, the placeholder holds the slot: no monitor, no events.
     let mut unblocked = assemble(&bundle_of("tt_follow")).expect("assembles");
-    assert!(unblocked.safety.is_none());
+    assert!(unblocked.safety().is_none());
     unblocked.step().expect("tick runs");
     let record = unblocked
         .sim
