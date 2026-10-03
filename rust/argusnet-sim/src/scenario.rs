@@ -62,7 +62,7 @@ use crate::replay::{
     ReplayWriter,
 };
 use crate::runtime_world::{SharedObstacles, SharedTerrain, SharedVisibility};
-use crate::safety::{SafetyLink, SafetyStage};
+use crate::safety::SafetyStage;
 use crate::simulation::{Simulation, TickError};
 use crate::snapshot::RuntimeSnapshot;
 use crate::stage::Stage;
@@ -664,8 +664,6 @@ pub struct AssembledRun {
     pub battery: BatteryLink,
     pub observe: ObserveLink,
     pub fusion: FusionLink,
-    /// `safety_blocking` runs only.
-    pub safety: Option<SafetyLink>,
     /// Scan-map-inspect runs only.
     pub mission: Option<MissionLink>,
     pub mapping: Option<MappingLink>,
@@ -973,22 +971,18 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
 
     // Stage 4: the hard floor under deconfliction, only when asked for. Not
     // installed otherwise, so a run without it is the run it always was.
-    let safety_link = if bundle.safety_blocking {
-        let safety = SafetyStage::new();
-        let link = safety.link();
-        link.set_enabled(true);
+    if bundle.safety_blocking {
+        let mut safety = SafetyStage::new();
+        safety.set_enabled(true);
         for (drone_id, role) in &bundle.drone_roles {
-            link.set_role(drone_id.clone(), role.clone());
+            safety.set_role(drone_id.clone(), role.clone());
         }
-        link.set_terrain(Box::new(world.terrain.clone()));
-        link.use_battery(battery_link.clone());
-        link.feed_fusion(fusion_link.clone());
+        safety.set_terrain(Box::new(world.terrain.clone()));
+        safety.use_battery(battery_link.clone());
+        safety.feed_fusion(fusion_link.clone());
         sim.set_stage_handler(Stage::SafetyMonitor, Box::new(safety))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
-        Some(link)
-    } else {
-        None
-    };
+    }
     let observe = ObserveStage::new();
     let observe_link = observe.link();
     for node in &bundle.nodes {
@@ -1138,7 +1132,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         battery: battery_link,
         observe: observe_link,
         fusion: fusion_link,
-        safety: safety_link,
         truth,
         replay,
         dt_s: bundle.dt_s,
@@ -1326,6 +1319,11 @@ impl fmt::Display for RunError {
 impl std::error::Error for RunError {}
 
 impl AssembledRun {
+    /// Stage 4, when the bundle asked for `safety_blocking`.
+    pub fn safety(&self) -> Option<&SafetyStage> {
+        self.sim.stage::<SafetyStage>(Stage::SafetyMonitor)
+    }
+
     /// Stage 3, as assembled. Every assembled run installs it.
     pub fn deconflict(&self) -> &DeconflictStage {
         self.sim
