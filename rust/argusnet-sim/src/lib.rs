@@ -23,6 +23,7 @@ pub mod replay;
 pub mod runtime_world;
 pub mod safety;
 pub mod scenario;
+pub mod scheduler;
 pub mod simulation;
 pub mod snapshot;
 pub mod stage;
