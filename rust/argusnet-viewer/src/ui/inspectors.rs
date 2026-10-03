@@ -827,10 +827,44 @@ pub(super) fn section_safety_alerts(
     replay_state: &ReplayState,
     mission_zones: &LoadedMissionZones,
 ) {
-    let Some(frame) = replay_state.current_frame() else {
+    let Some(alerts) = collect_alerts(replay_state, mission_zones) else {
         return;
     };
 
+    let alert_count = alerts.len();
+    let header_text = if alert_count > 0 {
+        format!("Alerts ({alert_count})")
+    } else {
+        "Alerts".to_string()
+    };
+
+    ui.collapsing(header_text, |ui| {
+        if alerts.is_empty() {
+            ui.colored_label(egui::Color32::GREEN, "No active alerts.");
+        } else {
+            for (level, message) in &alerts {
+                let (icon, color) = match level {
+                    AlertLevel::Error => ("ERROR", egui::Color32::RED),
+                    AlertLevel::Warning => ("WARN", egui::Color32::YELLOW),
+                };
+                ui.horizontal(|ui| {
+                    ui.colored_label(color, icon);
+                    ui.label(message);
+                });
+            }
+        }
+    });
+    ui.separator();
+}
+
+/// The current frame's alerts, most severe level per message; `None` with no
+/// frame. Shared by the alerts section and the status line, which shows the
+/// count whatever the window size (VIEWER_UI §4.4 rule 5).
+pub(super) fn collect_alerts(
+    replay_state: &ReplayState,
+    mission_zones: &LoadedMissionZones,
+) -> Option<Vec<(AlertLevel, String)>> {
+    let frame = replay_state.current_frame()?;
     let mut alerts: Vec<(AlertLevel, String)> = Vec::new();
 
     if mission_zones.terrain_mesh.is_none() {
@@ -916,31 +950,7 @@ pub(super) fn section_safety_alerts(
             ));
         }
     }
-
-    let alert_count = alerts.len();
-    let header_text = if alert_count > 0 {
-        format!("Alerts ({alert_count})")
-    } else {
-        "Alerts".to_string()
-    };
-
-    ui.collapsing(header_text, |ui| {
-        if alerts.is_empty() {
-            ui.colored_label(egui::Color32::GREEN, "No active alerts.");
-        } else {
-            for (level, message) in &alerts {
-                let (icon, color) = match level {
-                    AlertLevel::Error => ("ERROR", egui::Color32::RED),
-                    AlertLevel::Warning => ("WARN", egui::Color32::YELLOW),
-                };
-                ui.horizontal(|ui| {
-                    ui.colored_label(color, icon);
-                    ui.label(message);
-                });
-            }
-        }
-    });
-    ui.separator();
+    Some(alerts)
 }
 
 pub(super) fn section_targets(ui: &mut egui::Ui, replay_state: &ReplayState) {
@@ -980,7 +990,7 @@ pub(super) fn section_targets(ui: &mut egui::Ui, replay_state: &ReplayState) {
     });
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AlertLevel {
     Warning,
     Error,

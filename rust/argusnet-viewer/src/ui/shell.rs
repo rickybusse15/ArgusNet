@@ -1,56 +1,22 @@
-//! The shell: header and status bar, drawers, tabs and HUD overlays (VIEWER_UI §11.3).
+//! The shell: header, status line, mission rail, selection inspector, drawers,
+//! tabs and HUD overlays (VIEWER_UI §4.3, §11.3).
 
 use super::*;
 
-pub(super) fn top_status_bar(
+/// The application header (VIEWER_UI §4.3): identity, workspace and view
+/// controls, playback.
+pub(super) fn header_bar(
     ui: &mut egui::Ui,
     scene_package: &ScenePackage,
     replay_state: &mut ReplayState,
     view_mode: &mut ViewMode,
     ui_state: &mut ViewerUiState,
-    camera: &crate::camera_control::CameraControl,
-    prefs: &crate::prefs::ViewerPrefs,
 ) {
-    ui.horizontal(|ui| {
+    ui.horizontal_centered(|ui| {
         ui.strong("ArgusNet");
         ui.label(&scene_package.manifest.scene_id);
         ui.separator();
-
-        if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
-            status_chip(ui, phase, color);
-            ui.label(detail);
-        } else {
-            status_chip(ui, "NO REPLAY", egui::Color32::GRAY);
-        }
-
-        ui.separator();
         playback_buttons(ui, replay_state);
-
-        if replay_state.frame_count() > 0 {
-            let cur_s = replay_state.current_timestamp_s();
-            let total_s = replay_state
-                .document
-                .as_ref()
-                .and_then(|doc| doc.frames.last())
-                .map(|frame| frame.timestamp_s)
-                .unwrap_or(0.0);
-            ui.monospace(format_time_range(cur_s, total_s));
-        }
-
-        // The camera's mode, and what it last had to say (P2.4b): a lost
-        // follow is reported here, not silently dropped.
-        ui.separator();
-        ui.label(format!("Camera: {}", camera.mode_label()));
-        if let Some(notice) = camera.notice() {
-            ui.colored_label(egui::Color32::from_rgb(230, 190, 110), notice);
-        }
-        if !prefs.problems.is_empty() {
-            ui.colored_label(
-                egui::Color32::from_rgb(230, 120, 100),
-                "Preferences problem",
-            )
-            .on_hover_text(prefs.problems.join("\n"));
-        }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let drawer_label = if ui_state.drawer_open {
@@ -86,6 +52,139 @@ pub(super) fn top_status_bar(
             }
         });
     });
+}
+
+/// The status and freshness line: mission phase, time, alert counts, the
+/// camera, and anything the layout had to give up. Alert counts live here so
+/// that no window size hides a critical alert (§4.4 rule 5).
+pub(super) fn status_line(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    alerts: Option<&[(AlertLevel, String)]>,
+    camera: &crate::camera_control::CameraControl,
+    prefs: &crate::prefs::ViewerPrefs,
+    layout: &ShellLayout,
+) {
+    ui.horizontal_centered(|ui| {
+        if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
+            status_chip(ui, phase, color);
+            ui.label(detail);
+        } else {
+            status_chip(ui, "NO REPLAY", egui::Color32::GRAY);
+        }
+
+        if replay_state.frame_count() > 0 {
+            let cur_s = replay_state.current_timestamp_s();
+            let total_s = replay_state
+                .document
+                .as_ref()
+                .and_then(|doc| doc.frames.last())
+                .map(|frame| frame.timestamp_s)
+                .unwrap_or(0.0);
+            ui.separator();
+            ui.monospace(format_time_range(cur_s, total_s));
+        }
+
+        if let Some(alerts) = alerts {
+            let errors = alerts
+                .iter()
+                .filter(|(level, _)| *level == AlertLevel::Error)
+                .count();
+            let warnings = alerts.len() - errors;
+            ui.separator();
+            if errors > 0 {
+                status_chip(ui, &format!("{errors} CRITICAL"), egui::Color32::RED);
+            }
+            if warnings > 0 {
+                status_chip(ui, &format!("{warnings} WARN"), egui::Color32::YELLOW);
+            }
+            if errors == 0 && warnings == 0 {
+                ui.label("No alerts");
+            }
+        }
+
+        // The camera's mode, and what it last had to say (P2.4b): a lost
+        // follow is reported here, not silently dropped.
+        ui.separator();
+        ui.label(format!("Camera: {}", camera.mode_label()));
+        if let Some(notice) = camera.notice() {
+            ui.colored_label(egui::Color32::from_rgb(230, 190, 110), notice);
+        }
+        if !prefs.problems.is_empty() {
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 120, 100),
+                "Preferences problem",
+            )
+            .on_hover_text(prefs.problems.join("\n"));
+        }
+        if layout.compact {
+            ui.separator();
+            ui.colored_label(egui::Color32::from_rgb(230, 190, 110), "COMPACT")
+                .on_hover_text(
+                    "The window is below the supported operational size: monitoring only.",
+                );
+        } else if layout.drawer_suppressed {
+            ui.separator();
+            ui.label("Panel hidden: window too narrow");
+        }
+    });
+}
+
+/// The mission rail (§4.3): task phase, fleet index, alerts. Compact and
+/// index-like.
+pub(super) fn mission_rail(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    mission_zones: &LoadedMissionZones,
+) {
+    ui.strong("Mission");
+    if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
+        status_chip(ui, phase, color);
+        ui.small(detail);
+    } else {
+        ui.small("No replay loaded.");
+    }
+    ui.separator();
+    ui.strong("Fleet");
+    match replay_state.current_frame() {
+        Some(frame) if !frame.nodes.is_empty() => {
+            egui::Grid::new("mission_rail_fleet")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    for node in &frame.nodes {
+                        ui.small(&node.node_id);
+                        ui.colored_label(
+                            health_color_egui(node.health),
+                            format!("{:.0}%", node.health * 100.0),
+                        );
+                        ui.end_row();
+                    }
+                });
+        }
+        _ => {
+            ui.small("No platforms in this frame.");
+        }
+    }
+    ui.separator();
+    section_safety_alerts(ui, replay_state, mission_zones);
+}
+
+/// The selection inspector (§4.3). With `essential`, only the selection
+/// itself: the entity list is the first thing a narrow window gives up.
+pub(super) fn selection_inspector(
+    ui: &mut egui::Ui,
+    replay_state: &ReplayState,
+    selection: &SelectionState,
+    markers: &CurrentRuntimeMarkers,
+    runtime_visibility: &RuntimeOverlayVisibility,
+    ui_state: &mut ViewerUiState,
+    essential: bool,
+) {
+    section_selection(ui, selection, replay_state.max_stale_steps());
+    if !essential {
+        ui.separator();
+        section_entity_list(ui, markers, runtime_visibility, selection, ui_state);
+    }
 }
 
 pub(super) fn mode_button(
@@ -189,7 +288,6 @@ pub(super) fn drawer_mission_content(
     view_mode: &mut ViewMode,
     runtime_visibility: &mut RuntimeOverlayVisibility,
     mission_overlay: &mut MissionOverlaySettings,
-    selection: &SelectionState,
     markers: &CurrentRuntimeMarkers,
     raster_status: &str,
     layer_visibility: &mut LayerVisibilityState,
@@ -212,10 +310,7 @@ pub(super) fn drawer_mission_content(
         reconstruction,
     );
     ui.separator();
-    section_safety_alerts(ui, replay_state, mission_zones);
     section_targets(ui, replay_state);
-    section_selection(ui, selection, replay_state.max_stale_steps());
-    section_entity_list(ui, markers, runtime_visibility, selection, ui_state);
     ui.separator();
     section_runtime_overlays(ui, runtime_visibility, mission_overlay, Some(raster_status));
     ui.separator();
@@ -851,7 +946,11 @@ pub(super) fn draw_zone_badges(context: &egui::Context, projected_badges: &Proje
 // Mission Phase HUD
 // ---------------------------------------------------------------------------
 
-pub(super) fn draw_mission_phase_hud(context: &egui::Context, replay_state: &ReplayState) {
+pub(super) fn draw_mission_phase_hud(
+    context: &egui::Context,
+    replay_state: &ReplayState,
+    canvas_origin: egui::Pos2,
+) {
     let Some(frame) = replay_state.current_frame() else {
         return;
     };
@@ -891,9 +990,9 @@ pub(super) fn draw_mission_phase_hud(context: &egui::Context, replay_state: &Rep
         other => (other.to_ascii_uppercase(), egui::Color32::GRAY),
     };
 
-    // Position below the operator status strip.
+    // On the canvas, clear of the shell's regions.
     egui::Area::new(egui::Id::new("phase_hud"))
-        .fixed_pos(egui::pos2(12.0, TOP_STATUS_HEIGHT + 8.0))
+        .fixed_pos(canvas_origin + egui::vec2(12.0, 8.0))
         .order(egui::Order::Foreground)
         .show(context, |ui| {
             let galley = ui.painter().layout_no_wrap(
