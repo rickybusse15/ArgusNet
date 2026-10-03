@@ -6,7 +6,7 @@ use argusnet_proto::pb::{
 use serde_json::{json, Value};
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -296,7 +296,7 @@ async fn grpc_daemon_matches_golden_fixture_and_streaming() {
         serde_json::from_str(&fs::read_to_string(fixture_path()).expect("fixture"))
             .expect("parse fixture");
     let tracker_config = &fixture["tracker_config"];
-    let config_path = repo_root().join("target/runtime-parity-config.yaml");
+    let config_path = Path::new(env!("CARGO_TARGET_TMPDIR")).join("runtime-parity-config.yaml");
     fs::write(
         &config_path,
         format!(
@@ -421,7 +421,10 @@ async fn grpc_daemon_matches_golden_fixture_and_streaming() {
 }
 
 fn minimal_config_path(tag: &str) -> PathBuf {
-    let path = repo_root().join(format!("target/test-minimal-config-{tag}.yaml"));
+    // Cargo's per-test scratch directory: exists whatever CARGO_TARGET_DIR
+    // is, unlike `<repo>/target`.
+    let path =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("test-minimal-config-{tag}.yaml"));
     fs::write(
         &path,
         "min_observations: 2\nmax_stale_steps: 8\nretain_history: false\n\
