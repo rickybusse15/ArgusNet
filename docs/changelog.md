@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Operate shell layout (C2.1)
+
+- The viewer is laid out as the operate shell: a header, a status line with
+  the mission phase, time and alert counts, a mission rail (phase, fleet,
+  alerts) on the left, the selection inspector on the right and the timeline
+  below, leaving the world as the dominant region. In narrow windows the rail
+  folds away first, then the tool panel, then the inspector's secondary
+  fields; alert counts never disappear.
+- The Mission / Replay / Diagnostics / Scenario panel now opens on demand
+  (the mode buttons or Show Panel) instead of at start-up.
+
 ## Unreleased — Viewer UI split by responsibility (C2.0)
 
 - The viewer's single 3 100-line UI file is now shell, timeline, inspector,

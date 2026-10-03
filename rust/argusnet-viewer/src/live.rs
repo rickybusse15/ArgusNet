@@ -384,7 +384,11 @@ pub fn ingest(
     appended
 }
 
-pub fn live_status_ui_system(mut contexts: EguiContexts, live: Res<LiveStream>) {
+pub fn live_status_ui_system(
+    mut contexts: EguiContexts,
+    live: Res<LiveStream>,
+    ui_state: Res<crate::state::ViewerUiState>,
+) {
     let color = match live.status() {
         LiveConnectionStatus::Connected => egui::Color32::from_rgb(70, 210, 120),
         LiveConnectionStatus::Connecting => egui::Color32::YELLOW,
@@ -395,7 +399,11 @@ pub fn live_status_ui_system(mut contexts: EguiContexts, live: Res<LiveStream>) 
         return;
     };
     egui::Area::new(egui::Id::new("argusnet_live_status"))
-        .anchor(egui::Align2::LEFT_TOP, [12.0, 58.0])
+        // Top-left of the world canvas, below the phase HUD.
+        .fixed_pos(egui::pos2(
+            ui_state.canvas_origin[0] + 12.0,
+            ui_state.canvas_origin[1] + 44.0,
+        ))
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {

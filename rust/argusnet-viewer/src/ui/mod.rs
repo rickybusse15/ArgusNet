@@ -15,6 +15,7 @@ use crate::state::{
 
 mod commands;
 mod inspectors;
+mod layout;
 mod shell;
 mod timeline;
 mod widgets;
@@ -22,6 +23,8 @@ mod widgets;
 use commands::*;
 pub use inspectors::terrain_raster_status;
 use inspectors::*;
+pub use layout::ShellLayout;
+use layout::*;
 use shell::*;
 use timeline::*;
 use widgets::*;
@@ -65,10 +68,6 @@ const DRONE_MODES: &[&str] = &["inspect", "search", "mixed"];
 /// Node health fraction below which a node is flagged in the alert panel.
 /// Health is computed in `argusnet_grpc.py` as `1.0 - dropout_probability * 0.5`.
 const HEALTH_ALERT_THRESHOLD: f32 = 0.3;
-
-const TOP_STATUS_HEIGHT: f32 = 52.0;
-const BOTTOM_TIMELINE_HEIGHT: f32 = 126.0;
-const DRAWER_WIDTH: f32 = 390.0;
 
 /// Read-only resources the UI shows, grouped: the system is at Bevy's
 /// sixteen-parameter limit.
@@ -131,80 +130,239 @@ pub fn viewer_ui_system(
     );
     let root = &mut root;
 
-    egui::Panel::top("operator_status_bar")
-        .exact_size(TOP_STATUS_HEIGHT)
-        .show(root, |ui| {
-            top_status_bar(
+    let viewport = context.viewport_rect();
+    let layout =
+        ShellLayout::for_viewport(viewport.width(), viewport.height(), ui_state.drawer_open);
+    let alerts = collect_alerts(&replay_state, &mission_zones);
+    let canvas = show_shell(root, &layout, |region, ui| match region {
+        Region::Header => header_bar(
+            ui,
+            &scene_package,
+            &mut replay_state,
+            &mut view_mode,
+            &mut ui_state,
+        ),
+        Region::StatusLine => status_line(
+            ui,
+            &replay_state,
+            alerts.as_deref(),
+            &camera,
+            &prefs,
+            &layout,
+        ),
+        Region::Timeline => section_operator_timeline(ui, &mut replay_state, &mut ui_state),
+        Region::Rail => mission_rail(ui, &replay_state, &mission_zones),
+        Region::Drawer => match ui_state.mode {
+            ViewerMode::Mission => drawer_mission_content(
                 ui,
                 &scene_package,
-                &mut replay_state,
+                &replay_state,
+                &mission_zones,
+                &reconstruction,
                 &mut view_mode,
+                &mut runtime_visibility,
+                &mut mission_overlay,
+                &markers,
+                &raster_status,
+                &mut layer_visibility,
+                &mut zone_overlap_model,
                 &mut ui_state,
-                &camera,
-                &prefs,
-            );
-        });
+            ),
+            ViewerMode::Replay => drawer_replay_content(ui, &mut replay_state, &mut ui_state),
+            ViewerMode::Diagnostics => drawer_diagnostics_content(
+                ui,
+                &replay_state,
+                &frame_metrics,
+                &mission_zones,
+                &diagnostics,
+            ),
+            ViewerMode::Scenario => drawer_scenario_content(
+                ui,
+                &scene_package,
+                &replay_state,
+                &mission_zones,
+                &mut zone_overlap_model,
+                supports_hot_swap,
+                &mut sim_runner,
+            ),
+        },
+        Region::Inspector => selection_inspector(
+            ui,
+            &replay_state,
+            &selection,
+            &markers,
+            &runtime_visibility,
+            &mut ui_state,
+            layout.inspector_essential,
+        ),
+    });
 
-    egui::Panel::bottom("operator_timeline")
-        .exact_size(BOTTOM_TIMELINE_HEIGHT)
-        .show(root, |ui| {
-            section_operator_timeline(ui, &mut replay_state, &mut ui_state);
-        });
-
-    if ui_state.drawer_open {
-        egui::Panel::right("operator_drawer")
-            .resizable(true)
-            .default_size(DRAWER_WIDTH)
-            .size_range(320.0..=540.0)
-            .show(root, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| match ui_state.mode {
-                        ViewerMode::Mission => drawer_mission_content(
-                            ui,
-                            &scene_package,
-                            &replay_state,
-                            &mission_zones,
-                            &reconstruction,
-                            &mut view_mode,
-                            &mut runtime_visibility,
-                            &mut mission_overlay,
-                            &selection,
-                            &markers,
-                            &raster_status,
-                            &mut layer_visibility,
-                            &mut zone_overlap_model,
-                            &mut ui_state,
-                        ),
-                        ViewerMode::Replay => {
-                            drawer_replay_content(ui, &mut replay_state, &mut ui_state)
-                        }
-                        ViewerMode::Diagnostics => drawer_diagnostics_content(
-                            ui,
-                            &replay_state,
-                            &frame_metrics,
-                            &mission_zones,
-                            &diagnostics,
-                        ),
-                        ViewerMode::Scenario => drawer_scenario_content(
-                            ui,
-                            &scene_package,
-                            &replay_state,
-                            &mission_zones,
-                            &mut zone_overlap_model,
-                            supports_hot_swap,
-                            &mut sim_runner,
-                        ),
-                    });
-            });
-    }
-
+    ui_state.canvas_origin = [canvas.min.x, canvas.min.y];
     draw_zone_badges(&context, &projected_badges);
-    draw_mission_phase_hud(&context, &replay_state);
+    draw_mission_phase_hud(&context, &replay_state, canvas.min);
+}
+
+/// A region of the operate shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Region {
+    Header,
+    StatusLine,
+    Timeline,
+    Rail,
+    Drawer,
+    Inspector,
+}
+
+/// Lay the shell's regions out in `root` as `layout` says, drawing each with
+/// `draw`, and return what is left: the world canvas. Flat, opaque regions
+/// separated by hairlines (VIEWER_UI §4.3, §5.4). Panel order is nesting
+/// order, outermost first: the header, status line and timeline span the
+/// window; the rail, drawer and inspector sit between them.
+fn show_shell(
+    root: &mut egui::Ui,
+    layout: &ShellLayout,
+    mut draw: impl FnMut(Region, &mut egui::Ui),
+) -> egui::Rect {
+    let frame = |ui: &egui::Ui| {
+        egui::Frame::NONE
+            .fill(ui.visuals().panel_fill)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+    };
+    egui::Panel::top("operator_header")
+        .exact_size(HEADER_HEIGHT)
+        .resizable(false)
+        .frame(frame(root))
+        .show(root, |ui| draw(Region::Header, ui));
+    egui::Panel::top("operator_status_line")
+        .exact_size(STATUS_LINE_HEIGHT)
+        .resizable(false)
+        .frame(frame(root))
+        .show(root, |ui| draw(Region::StatusLine, ui));
+    egui::Panel::bottom("operator_timeline")
+        .exact_size(TIMELINE_HEIGHT)
+        .resizable(false)
+        .frame(frame(root))
+        .show(root, |ui| draw(Region::Timeline, ui));
+    let scrolled =
+        |region: Region, ui: &mut egui::Ui, draw: &mut dyn FnMut(Region, &mut egui::Ui)| {
+            egui::ScrollArea::vertical()
+                .id_salt(region)
+                .auto_shrink([false; 2])
+                .show(ui, |ui| draw(region, ui));
+        };
+    if let Some(width) = layout.rail {
+        egui::Panel::left("operator_mission_rail")
+            .exact_size(width)
+            .resizable(false)
+            .frame(frame(root))
+            .show(root, |ui| scrolled(Region::Rail, ui, &mut draw));
+    }
+    if let Some(width) = layout.drawer {
+        egui::Panel::right("operator_drawer")
+            .exact_size(width)
+            .resizable(false)
+            .frame(frame(root))
+            .show(root, |ui| scrolled(Region::Drawer, ui, &mut draw));
+    }
+    egui::Panel::right("operator_inspector")
+        .exact_size(layout.inspector)
+        .resizable(false)
+        .frame(frame(root))
+        .show(root, |ui| scrolled(Region::Inspector, ui, &mut draw));
+    root.available_rect_before_wrap()
 }
 
 #[cfg(test)]
 mod tests {
+    /// The shell's real panels, laid out in a real egui context at the
+    /// reference viewport and at reduced widths (C2.1).
+    fn lay_out(
+        width: f32,
+        height: f32,
+        drawer_open: bool,
+    ) -> (ShellLayout, Vec<(Region, egui::Rect)>, egui::Rect) {
+        use super::*;
+        let context = egui::Context::default();
+        let layout = ShellLayout::for_viewport(width, height, drawer_open);
+        let mut regions = Vec::new();
+        let mut canvas = egui::Rect::NOTHING;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, height),
+            )),
+            ..Default::default()
+        };
+        // Two passes: egui settles panel sizes on the second.
+        for _ in 0..2 {
+            regions.clear();
+            // No renderer takes the font atlas uploads, so they are
+            // discarded explicitly (egui asserts none are dropped unseen).
+            context
+                .run_ui(input.clone(), |ui| {
+                    canvas = show_shell(ui, &layout, |region, ui| {
+                        regions.push((region, ui.max_rect()));
+                    });
+                })
+                .textures_delta
+                .clear();
+        }
+        (layout, regions, canvas)
+    }
+
+    fn outer(regions: &[(super::Region, egui::Rect)], region: super::Region) -> Option<egui::Rect> {
+        regions
+            .iter()
+            .find(|(r, _)| *r == region)
+            .map(|(_, rect)| *rect)
+    }
+
+    #[test]
+    fn the_shell_lays_out_at_the_reference_viewport() {
+        use super::*;
+        let (_, regions, canvas) = lay_out(1440.0, 900.0, false);
+        // The canvas is exactly what the reference proportions leave.
+        assert_eq!(canvas.min, egui::pos2(194.0, 92.0), "{canvas:?}");
+        assert_eq!(canvas.size(), egui::vec2(994.0, 708.0), "{canvas:?}");
+        for region in [
+            Region::Header,
+            Region::StatusLine,
+            Region::Timeline,
+            Region::Rail,
+            Region::Inspector,
+        ] {
+            assert!(outer(&regions, region).is_some(), "{region:?} drawn");
+        }
+        assert!(
+            outer(&regions, Region::Drawer).is_none(),
+            "the drawer starts closed"
+        );
+        let header = outer(&regions, Region::Header).unwrap();
+        let timeline = outer(&regions, Region::Timeline).unwrap();
+        assert!(header.min.y < 8.0 && timeline.max.y > 892.0);
+        let rail = outer(&regions, Region::Rail).unwrap();
+        let inspector = outer(&regions, Region::Inspector).unwrap();
+        assert!(rail.max.x <= canvas.min.x && inspector.min.x >= canvas.max.x);
+    }
+
+    #[test]
+    fn a_narrow_shell_collapses_the_rail_but_keeps_status_timeline_and_inspector() {
+        use super::*;
+        let (layout, regions, canvas) = lay_out(1000.0, 900.0, false);
+        assert_eq!(layout.rail, None);
+        assert!(outer(&regions, Region::Rail).is_none());
+        for region in [
+            Region::Header,
+            Region::StatusLine,
+            Region::Timeline,
+            Region::Inspector,
+        ] {
+            assert!(outer(&regions, region).is_some(), "{region:?} kept");
+        }
+        assert_eq!(canvas.min.x, 0.0);
+        assert_eq!(canvas.width(), 748.0);
+    }
+
     /// The operator is told why belief is missing, not shown a blank.
     #[test]
     fn the_raster_status_says_why_belief_is_unavailable() {
