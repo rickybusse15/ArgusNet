@@ -71,6 +71,6 @@ reference palette; §13 is a requirement.
 ## Not done here
 
 - The panels still use their own colours (54 `Color32::from_rgb` literals in
-  `ui.rs`). P2.5b's shell rebuild moves them onto the tokens, and adds the
-  test that `ui.rs` defines no colours of its own.
+  `ui/`). P2.5b's shell rebuild moves them onto the tokens, and adds the
+  test that `ui/` defines no colours of its own.
 - Reduced motion and UI scale are P2.5g.

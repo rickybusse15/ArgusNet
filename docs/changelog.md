@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Viewer UI split by responsibility (C2.0)
+
+- The viewer's single 3 100-line UI file is now shell, timeline, inspector,
+  command and widget modules. Nothing on screen changes.
+
 ## Unreleased — Fusion, mapping, mission and publication as lanes (B2.3)
 
 - `argusnet-rs sim --executor lanes` runs fusion, mapping, mission and
