@@ -27,6 +27,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::clock::Clock;
 use crate::command::{
@@ -38,6 +39,7 @@ use crate::snapshot::{
     CheckpointHeader, RestoreError, RuntimeSnapshot, SimulationCheckpoint, SnapshotHeader,
 };
 use crate::stage::{Stage, StageError, StageOutcome, StageRecord, StageTrace};
+use crate::timing::StageTimings;
 use crate::world::TickWorld;
 
 use argusnet_types::{NodeState, TrackState, TruthState};
@@ -261,6 +263,9 @@ pub struct Simulation {
     truth: Vec<TruthState>,
     belief_revision: u64,
     journal_cursor: u64,
+    /// Per-stage wall time, when a caller asked for it. Never causal: it is
+    /// not in the trace, the replay or a checkpoint.
+    stage_timings: Option<StageTimings>,
 }
 
 impl fmt::Debug for Simulation {
@@ -300,7 +305,31 @@ impl Simulation {
             journal_cursor: 0,
             world: TickWorld::default(),
             truth: Vec::new(),
+            stage_timings: None,
         })
+    }
+
+    /// Start recording each stage's wall time (P4.10-pre). Off by default:
+    /// it keeps one sample per stage per tick, which suits a batch run and
+    /// not an unbounded interactive one. Reset and restore keep the samples;
+    /// they describe the machine, not the run.
+    pub fn enable_stage_timing(&mut self) {
+        self.stage_timings.get_or_insert_with(StageTimings::default);
+    }
+
+    /// The recorded wall times, if [`Self::enable_stage_timing`] was called.
+    pub fn stage_timings(&self) -> Option<&StageTimings> {
+        self.stage_timings.as_ref()
+    }
+
+    fn time_stage(&mut self, stage: Stage, started: Option<Instant>) {
+        if let (Some(timings), Some(started)) = (self.stage_timings.as_mut(), started) {
+            timings.record(stage, started.elapsed());
+        }
+    }
+
+    fn timer(&self) -> Option<Instant> {
+        self.stage_timings.is_some().then(Instant::now)
     }
 
     /// Trace records retained by default.
@@ -593,7 +622,10 @@ impl Simulation {
         // un-pause it.
         {
             let mut notes = Vec::new();
-            match self.run_apply_commands(tick, &mut notes) {
+            let started = self.timer();
+            let applied = self.run_apply_commands(tick, &mut notes);
+            self.time_stage(Stage::ApplyCommands, started);
+            match applied {
                 Ok(outcome) => self.trace.record(StageRecord {
                     tick,
                     order: Stage::ApplyCommands.order(),
@@ -628,7 +660,7 @@ impl Simulation {
         // the rest of this tick would be operating on a clock that no longer
         // matches `tick`. Stop here and let the caller step the fresh run.
         if self.epoch != epoch {
-            return Ok(self.commit_current());
+            return Ok(self.commit_timed());
         }
 
         if let RunState::Faulted { at_tick, stage } = &self.state {
@@ -656,8 +688,14 @@ impl Simulation {
 
         for stage in Stage::PIPELINE.into_iter().skip(1) {
             let mut notes = Vec::new();
+            let started = if stage == Stage::CommitSnapshot {
+                None
+            } else {
+                self.timer()
+            };
             let outcome = match stage {
                 Stage::ApplyCommands => unreachable!("stage 0 ran before the pause check"),
+                // Timed where the work is, in `commit_timed`.
                 Stage::CommitSnapshot => Ok(StageOutcome::Ran),
                 _ => {
                     let mut context = TickContext {
@@ -677,6 +715,9 @@ impl Simulation {
                     }
                 }
             };
+            if stage != Stage::CommitSnapshot {
+                self.time_stage(stage, started);
+            }
 
             match outcome {
                 Ok(outcome) => self.trace.record(StageRecord {
@@ -709,7 +750,15 @@ impl Simulation {
 
         // Commit. Only now does the tick advance and a revision become visible.
         self.clock.advance();
-        Ok(self.commit_current())
+        Ok(self.commit_timed())
+    }
+
+    /// [`Self::commit_current`], timed as stage 10: the freeze is its work.
+    fn commit_timed(&mut self) -> Arc<RuntimeSnapshot> {
+        let started = self.timer();
+        let snapshot = self.commit_current();
+        self.time_stage(Stage::CommitSnapshot, started);
+        snapshot
     }
 
     /// Freeze a snapshot at the current clock position and publish it.

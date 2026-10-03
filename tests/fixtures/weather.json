@@ -1,5 +1,6 @@
 {
   "_source": "scripts/capture_weather_fixture.py",
+ "_captured_on": "macos-aarch64",
   "cases": [
     {
       "bearing_noise_scale": "1.0",

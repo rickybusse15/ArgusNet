@@ -7,6 +7,10 @@
 //! two runs first disagree about an engagement, and after that exact for the
 //! platforms no observation can reach -- stations, and each truth-fed follow
 //! drone until deconfliction first couples it to one that diverged.
+//! "Exact" is bit for bit on the platform the fixture was captured on, and
+//! within a few ULPs elsewhere (`common::parity`).
+
+mod common;
 
 use std::collections::BTreeMap;
 
@@ -17,6 +21,7 @@ use argusnet_sim::scenario::{
     FOLLOW_LOS_CLEARANCE_M,
 };
 use argusnet_sim::stage::{Stage, StageOutcome};
+use common::parity::{parity_of, Parity};
 use serde_json::Value;
 
 fn read(name: &str) -> String {
@@ -63,6 +68,18 @@ type Kinematics = ([u64; 3], [u64; 3], [u64; 2]);
 
 fn bits(v: [f64; 3]) -> [u64; 3] {
     v.map(f64::to_bits)
+}
+
+/// Bit for bit on the capture platform, within the parity bound elsewhere.
+fn same_kinematics(parity: Parity, a: Kinematics, b: Kinematics) -> bool {
+    let flat = |k: Kinematics| -> Vec<f64> {
+        k.0.iter()
+            .chain(&k.1)
+            .chain(&k.2)
+            .map(|v| f64::from_bits(*v))
+            .collect()
+    };
+    parity.same_all(&flat(a), &flat(b))
 }
 
 struct RustRun {
@@ -208,6 +225,7 @@ fn the_bundle_parses_and_refuses_what_it_does_not_know() {
 #[test]
 fn a_python_scenario_runs_in_the_rust_tick_and_matches_where_it_must() {
     let reference = reference();
+    let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle();
     let search_drones: Vec<String> = frames[0]["engaged"]
@@ -291,9 +309,8 @@ fn a_python_scenario_runs_in_the_rust_tick_and_matches_where_it_must() {
         for id in comparable {
             let expected = reference_kinematics(frame, &id);
             let actual = rust.frames[i][&id];
-            assert_eq!(
-                actual,
-                expected,
+            assert!(
+                same_kinematics(parity, actual, expected),
                 "{id} at tick {i} (engagement divergence at {divergence}): rust {:?} python {:?}",
                 (
                     actual.0.map(f64::from_bits),
@@ -365,6 +382,7 @@ fn the_whole_run_produces_a_replay() {
 #[test]
 fn an_all_follow_scenario_matches_on_every_tick() {
     let reference = reference_of("tt_follow");
+    let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle_of("tt_follow");
     let rust = run_rust("tt_follow", frames.len(), &[]);
@@ -386,9 +404,8 @@ fn an_all_follow_scenario_matches_on_every_tick() {
         for node in &bundle.nodes {
             let expected = reference_kinematics(frame, &node.node_id);
             let actual = rust.frames[i][&node.node_id];
-            assert_eq!(
-                actual,
-                expected,
+            assert!(
+                same_kinematics(parity, actual, expected),
                 "{} at tick {i}: rust {:?} python {:?}",
                 node.node_id,
                 (
@@ -646,6 +663,7 @@ fn a_scan_map_inspect_run_matches_until_localization_decides() {
     use argusnet_sim::mission::MissionPhase;
 
     let reference = reference_of("scan");
+    let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle_of("scan");
     let mut run = assemble(&bundle).expect("scan bundle assembles");
@@ -686,9 +704,8 @@ fn a_scan_map_inspect_run_matches_until_localization_decides() {
                     platform.battery_fraction.unwrap_or(-1.0).to_bits(),
                 ],
             );
-            assert_eq!(
-                actual,
-                expected,
+            assert!(
+                same_kinematics(parity, actual, expected),
                 "{} at tick {i} ({rust_phase}): rust {:?} python {:?}",
                 platform.node_id,
                 (actual.0.map(f64::from_bits), actual.1.map(f64::from_bits)),
@@ -732,6 +749,7 @@ fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
     use argusnet_sim::mission_driver::RecordedLocalization;
 
     let reference = reference_of("scan");
+    let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle_of("scan");
     let mut run = assemble(&bundle).expect("scan bundle assembles");
@@ -797,9 +815,8 @@ fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
                     platform.battery_fraction.unwrap_or(-1.0).to_bits(),
                 ],
             );
-            assert_eq!(
-                actual,
-                expected,
+            assert!(
+                same_kinematics(parity, actual, expected),
                 "{} at tick {i} ({phase}): rust {:?} python {:?}",
                 platform.node_id,
                 (actual.0.map(f64::from_bits), actual.1.map(f64::from_bits)),
@@ -904,6 +921,7 @@ fn snapshot_kinematics(platform: &argusnet_types::NodeState) -> Kinematics {
 #[test]
 fn a_blocking_safety_run_matches_on_every_tick() {
     let reference = reference_of("tt_safety");
+    let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle_of("tt_safety");
     assert!(bundle.safety_blocking);
@@ -915,9 +933,8 @@ fn a_blocking_safety_run_matches_on_every_tick() {
         for platform in &snapshot.platforms {
             let expected = reference_kinematics(frame, &platform.node_id);
             let actual = snapshot_kinematics(platform);
-            assert_eq!(
-                actual,
-                expected,
+            assert!(
+                same_kinematics(parity, actual, expected),
                 "{} at tick {i}: rust {:?} python {:?}",
                 platform.node_id,
                 (actual.0.map(f64::from_bits), actual.1.map(f64::from_bits)),
@@ -946,6 +963,7 @@ fn a_blocking_safety_scan_run_matches_throughout() {
     use argusnet_sim::mission_driver::RecordedLocalization;
 
     let reference = reference_of("scan_safety");
+    let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let mut run = assemble(&bundle_of("scan_safety")).expect("assembles");
     let mission = run.mission.clone().expect("mission");
@@ -975,9 +993,12 @@ fn a_blocking_safety_scan_run_matches_throughout() {
             "phase at tick {i}"
         );
         for platform in &snapshot.platforms {
-            assert_eq!(
-                snapshot_kinematics(platform),
-                reference_kinematics(frame, &platform.node_id),
+            assert!(
+                same_kinematics(
+                    parity,
+                    snapshot_kinematics(platform),
+                    reference_kinematics(frame, &platform.node_id),
+                ),
                 "{} at tick {i}",
                 platform.node_id
             );

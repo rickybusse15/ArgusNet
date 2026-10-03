@@ -1,6 +1,6 @@
 # P4.8e.4: every stage on the checkpoint contract
 
-**Status:** delivered 2026-09-23, locally verified only (not pushed). Package ID
+**Status:** delivered 2026-09-23, locally verified, then merged 2026-10-01 in #122 (`badb1e1`). Package ID
 `P4.8e.4`. See [STATUS.md](STATUS.md).
 
 P4.8d.3 gave `StageHandler` its state contract (`reset`, `checkpoint_state`,

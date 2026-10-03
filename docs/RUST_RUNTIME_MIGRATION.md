@@ -9,6 +9,17 @@ control-state checkpoints exist locally in this baseline. Complete production
 composition, subsystem reset/restore, full causal checkpoints and viewer-worker
 acceptance remain open. No scheduler or aircraft qualification is claimed.
 
+**Update 2026-10-03 (`main` at `0b1032c`).** P4.8d to P4.9d and viewer P2.0 to
+P2.3 are merged (#122, `badb1e1`): the controller stage, world-backed stage 1,
+the scenario bundle and native builder, the mission driver, the causal-state
+audit of every assembled stateful stage, and an `argusnet-rs` CLI that builds
+and runs all seven canonical scenarios with no Python (six within every
+declared envelope; see [migration status](migration/STATUS.md)). Still open: a
+production constructor that rejects missing stages, owned subsystem state in
+place of the `Arc<Mutex<Shared>>` stage links, reset equal to fresh and full
+restore, a durable event journal, multi-seed qualification and the viewer
+worker. No scheduler or aircraft qualification is claimed.
+
 The [Rust-only runtime target](RUST_RUNTIME_ARCHITECTURE.md) now specifies
 independent sensor/task deadlines, one session owner, timestamped measurements,
 bounded workers and separate virtual/live time. P4.10a–f adds this after P4.9;

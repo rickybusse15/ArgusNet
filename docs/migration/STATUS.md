@@ -7,7 +7,8 @@ row links the slice doc that proves it. A row changes only when its slice's
 verification table does.
 
 States: **done** (merged), **local** (committed and locally verified but not pushed),
-**open**, **blocked** (with the reason).
+**open**, **blocked** (with the reason). **done** rows cite the merging PR and
+its merge commit on `main`.
 
 ## Why P5.0 is not startable yet
 
@@ -26,38 +27,63 @@ geometry, and picking and selection. P2.4 to P2.6 (camera and time
 controls, the mission-control shell and quality tiers, graphics acceptance)
 are open, as are guardrails G0, G2 and G3.
 
-At 2026-10-01 PR #122 has merged the whole stack through P2.3 into `main`,
-CI green. The remaining slices land one PR each, merged when CI is green.
+At 2026-10-03 everything above that was *local* is merged: P4.8d.1 through
+P4.9d and P2.0 to P2.3 reached `main` together in #122 (merge `badb1e1`).
+P2.4a is merged (#128); P2.4b is open as #129. The `sar_person_search` covariance
+metric was redefined (D-1, #137) and now passes; on Linux the scenario fails
+its RMSE envelope by 0.11 m instead, a platform effect of the reference, so
+whether acceptance fixes a reference platform or stores the reference is the
+open decision ([PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md#after-d-1-the-covariance-metric-redefined-2026-10-03)).
+
+## Baseline run (Wave 0.2)
+
+`main` at `0b1032c`, 2026-10-03, in a Linux container (x86_64, glibc 2.39,
+4 cores, Python 3.11, cargo 1.98), through `scripts/ci-local.sh`. GitHub CI
+could not run: the self-hosted runner had taken no job since 2026-10-01.
+A skip is not a pass.
+
+| Job | Result | Detail |
+| --- | --- | --- |
+| python | fail → fixed | 1040 passed, 17 skipped, 1 failed: `test_run_simulation_has_no_stdout_side_effects`, because the daemon auto-build printed to stdout on a cold machine. Fixed in #139 |
+| rust-fast | fail → fixed | With `--no-fail-fast`: 9 parity tests in 6 suites failed by 1 ULP of libm rounding against fixtures captured on macOS aarch64. Fixed in #138 ([PARITY_PORTABILITY.md](PARITY_PORTABILITY.md)). Without the flag cargo reported only the first; #139 adds it. 5 `argusnet-server` tests also failed when `<repo>/target` was absent (fixed in #139) |
+| rust-lint | pass | `cargo fmt --check`, `clippy --workspace --all-targets -D warnings` |
+| rust-viewer | pass | viewer tests, binary, headless render (10,596 colours, 259 green pixels) |
+| GPU probes | pass | `belief_probes`, `geometry_probes`, `picking_probes` with `ARGUSNET_GPU_TESTS=1` on lavapipe: shader correctness, not frame rate |
+| packaging | pass | wheel, clean venv, installed-package contract |
+| security | **skipped** | pip-audit, bandit and cargo-audit not installed in the container |
+| phase acceptance | 6/7 | see [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md#after-d-1-the-covariance-metric-redefined-2026-10-03) (run with D-1, #137) |
 
 ## Track A — runtime (critical path)
 
 | ID | Slice | State | Evidence |
 | --- | --- | --- | --- |
 | P4.1 | Command lifecycle and control checkpoints (#119) | done | `ec9c2f7` |
-| P4.8d.1–2b | Motion substrate, world adapter, trajectory wrappers, FollowPath | done (#122) | [MOTION_SUBSTRATE.md](MOTION_SUBSTRATE.md) |
-| P4.8d.3 | Controller stage; stage-state checkpoint contract | done (#122) | [CONTROLLER_STAGE.md](CONTROLLER_STAGE.md) |
-| P4.8e.1 | ScenarioBundle v1, runtime assembly (stages 1, 3, 6, 7), replay frames, Python exporter; target-tracking parity | done (#122) | [SCENARIO_BUNDLE.md](SCENARIO_BUNDLE.md) |
-| P4.8e.2 | Stage 6 senses as the reference does: nominal pose, tilted look direction, the world detection model (`p_d`, effective noise, dominant loss), sensing weather | done (#122) | [STAGE6_REFERENCE_SENSING.md](STAGE6_REFERENCE_SENSING.md) |
-| P4.8e.3 | Mission driver (POI assignment, redirects, dwell, egress); stages 2, 8 and 9 assembled; the default `scan_map_inspect` run end to end | done (#122) | [MISSION_DRIVER.md](MISSION_DRIVER.md) |
-| P4.8e.4 | Causal-state audit: every assembled stateful stage on the checkpoint contract; whole-run resume differential | done (#122) | [CAUSAL_STATE.md](CAUSAL_STATE.md) |
-| P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay, checkpoint/resume from the command line; `argusnet sim --export-bundle` adapter refuses what it cannot carry | done (#122) | [ARGUSNET_RS_CLI.md](ARGUSNET_RS_CLI.md) |
-| P4.9a.2 | Additive replay enrichment: every frame payload and the scenario `meta` a Python replay carries, viewer-readable; deconfliction `hypot` fix | done (#122) | [REPLAY_ENRICHMENT.md](REPLAY_ENRICHMENT.md) |
-| P4.9b.1 | Native builder, world half: `argusnet.scenario-config` → terrain, environment obstacles and patches, land cover → bundle `world` + world `presentation`; exact except heights (numpy `exp`, ≤1e-12 m) | done (#122) | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | done (#122) | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | done (#122) | [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
-| P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | done (#122) | [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
-| P4.9d | Stage 4 (hard safety monitor) assembled from bundles, three reference-argument defects fixed, checkpointed; `safety_blocking` and mission profiles through exporter and native builder; all 7 canonical scenarios scored, 6 within every envelope (`sar_person_search` fails `covariance_reduction_mean`, analysed, not widened) | done (#122) | [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) |
+| P4.8d.1–2b | Motion substrate, world adapter, trajectory wrappers, FollowPath | done | #122 (`badb1e1`); [MOTION_SUBSTRATE.md](MOTION_SUBSTRATE.md) |
+| P4.8d.3 | Controller stage; stage-state checkpoint contract | done | #122 (`badb1e1`); [CONTROLLER_STAGE.md](CONTROLLER_STAGE.md) |
+| P4.8d.4 | World-backed stage 1 and a Python-vs-Rust stage-1 scenario parity run | done inside P4.8e.1 (#122): stage 1 runs on the owned `runtime_world`; `an_all_follow_scenario_matches_on_every_tick` (7 nodes × 80 ticks bit-exact) and `a_python_scenario_runs_in_the_rust_tick_and_matches_where_it_must` in `rust/argusnet-sim/tests/scenario_bundle.rs` | [SCENARIO_BUNDLE.md](SCENARIO_BUNDLE.md) |
+| P4.8e.1 | ScenarioBundle v1, runtime assembly (stages 1, 3, 6, 7), replay frames, Python exporter; target-tracking parity | done | #122 (`badb1e1`); [SCENARIO_BUNDLE.md](SCENARIO_BUNDLE.md) |
+| P4.8e.2 | Stage 6 senses as the reference does: nominal pose, tilted look direction, the world detection model (`p_d`, effective noise, dominant loss), sensing weather | done | #122 (`badb1e1`); [STAGE6_REFERENCE_SENSING.md](STAGE6_REFERENCE_SENSING.md) |
+| P4.8e.3 | Mission driver (POI assignment, redirects, dwell, egress); stages 2, 8 and 9 assembled; the default `scan_map_inspect` run end to end | done | #122 (`badb1e1`); [MISSION_DRIVER.md](MISSION_DRIVER.md) |
+| P4.8e.4 | Causal-state audit: every assembled stateful stage on the checkpoint contract; whole-run resume differential | done | #122 (`badb1e1`); [CAUSAL_STATE.md](CAUSAL_STATE.md) |
+| P4.9a | `argusnet-rs` CLI runs a bundle and writes a replay, checkpoint/resume from the command line; `argusnet sim --export-bundle` adapter refuses what it cannot carry | done | #122 (`badb1e1`); [ARGUSNET_RS_CLI.md](ARGUSNET_RS_CLI.md) |
+| P4.9a.2 | Additive replay enrichment: every frame payload and the scenario `meta` a Python replay carries, viewer-readable; deconfliction `hypot` fix | done | #122 (`badb1e1`); [REPLAY_ENRICHMENT.md](REPLAY_ENRICHMENT.md) |
+| P4.9b.1 | Native builder, world half: `argusnet.scenario-config` → terrain, environment obstacles and patches, land cover → bundle `world` + world `presentation`; exact except heights (numpy `exp`, ≤1e-12 m) | done | #122 (`badb1e1`); [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2a | numpy `integers` (PCG64 half-word buffer, Lemire) and the eight target behaviours, bit for bit | done | #122 (`badb1e1`); [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | done | #122 (`badb1e1`); [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
+| P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | done | #122 (`badb1e1`); [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
+| P4.9d | Stage 4 (hard safety monitor) assembled from bundles, three reference-argument defects fixed, checkpointed; `safety_blocking` and mission profiles through exporter and native builder; all 7 canonical scenarios scored, 6 within every envelope (`sar_person_search` fails `covariance_reduction_mean`, analysed, not widened) | done | #122 (`badb1e1`); [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) |
+| P4.10-pre | Per-stage wall time in the Rust tick (`--stage-timing`), profile script, first Rust profile of the canonical scenarios | done: timers #136 (`3a0ca89`); profile [rust-tick-profile-2026-10-03.md](../performance/rust-tick-profile-2026-10-03.md). Work counters and allocation counts open | [rust-tick-profile-2026-10-03.md](../performance/rust-tick-profile-2026-10-03.md) |
 
 ## Track B — viewer engine
 
 | ID | Slice | State |
 | --- | --- | --- |
-| P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | done, #122 ([SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
-| P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | done, #122 ([TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
-| P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | done, #122 ([PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
-| P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | done, #122 ([PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
-| P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | local, `claude/p24a-time-controls` ([TIME_CONTROLS.md](TIME_CONTROLS.md)) |
-| P2.4b | Camera: damped free-fly, follow/chase, `F` focus, `1`-`9` bookmarks, remappable bindings | open (orbit camera exists) |
+| P2.0 | Snapshot → ECS adapter, ordered SystemSets, persistent presentation state: typed interned keys, epochs, allocations per frame 1,108 → ~5 | done (#122, `badb1e1`; [SNAPSHOT_ADAPTER.md](SNAPSHOT_ADAPTER.md)) |
+| P2.1 | Terrain/belief WGSL material, `BeliefRenderSnapshot`, land-cover tint, tile uploads, GPU pixel probes; headless renders fail on shader errors | done (#122, `badb1e1`; [TERRAIN_BELIEF_MATERIAL.md](TERRAIN_BELIEF_MATERIAL.md)) |
+| P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | done (#122, `badb1e1`; [PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
+| P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | done (#122, `badb1e1`; [PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
+| P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | done (#128; [TIME_CONTROLS.md](TIME_CONTROLS.md)) |
+| P2.4b | Camera: free-fly, follow/chase, focus, bookmarks | open (#129) |
 | P2.5 | Mission-control shell, quality tiers | open |
 | P2.6 | Graphics acceptance across tiers | open |
 
