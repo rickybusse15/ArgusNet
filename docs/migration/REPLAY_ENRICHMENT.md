@@ -1,6 +1,6 @@
 # P4.9a.2: an `argusnet-rs` replay carries what the viewer shows
 
-**Status:** delivered 2026-09-23, locally verified only (not pushed). Package ID
+**Status:** delivered 2026-09-23, locally verified, then merged 2026-10-01 in #122 (`badb1e1`). Package ID
 `P4.9a.2`. See [STATUS.md](STATUS.md).
 
 Before this slice, P4.9a's `argusnet-rs` wrote a replay the schema accepted

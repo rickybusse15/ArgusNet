@@ -23,6 +23,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from fixture_platform import captured_on  # noqa: E402
+
 from argusnet.simulation.scenario_bundle import motion_weather_document  # noqa: E402
 from argusnet.simulation.sim import cloud_detection_factor  # noqa: E402
 from argusnet.world.weather import (  # noqa: E402
@@ -147,7 +149,11 @@ def capture() -> dict:
     assert any(v not in ("0.0", "1.0") for v in clouds), "no partial cloud penalty recorded"
     humid = [c["bearing_noise_scale"] for c in cases]
     assert any(v != "1.0" for v in humid), "bearing noise scale never left 1"
-    return {"_source": "scripts/capture_weather_fixture.py", "cases": cases}
+    return {
+        "_source": "scripts/capture_weather_fixture.py",
+        "_captured_on": captured_on(),
+        "cases": cases,
+    }
 
 
 def main() -> int:

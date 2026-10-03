@@ -1,6 +1,6 @@
 # P2.2: sensor, zone and trail geometry
 
-**Status:** local, 2026-09-24. See [STATUS.md](STATUS.md).
+**Status:** local 2026-09-24; merged 2026-10-01 in #122 (`badb1e1`). See [STATUS.md](STATUS.md).
 
 DELIVERY_PLAN P2.2: *"Keep the existing hologram material, but move sensor FOV
 into cone/frustum meshes, mission zones into extruded boundary/volume geometry

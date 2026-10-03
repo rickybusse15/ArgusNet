@@ -41,6 +41,9 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from fixture_platform import captured_on  # noqa: E402
+
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from capture_follow_path_fixture import (  # noqa: E402
@@ -353,6 +356,7 @@ def check_coverage(fixture: dict) -> None:
 def capture() -> dict:
     fixture = {
         "_source": "scripts/capture_controller_fixture.py",
+        "_captured_on": captured_on(),
         "_reference": "src/argusnet/simulation/sim.py",
         "looped_waypoint_path": capture_waypoint_cases(),
         "observation_triggered_follow": capture_observation_cases(),

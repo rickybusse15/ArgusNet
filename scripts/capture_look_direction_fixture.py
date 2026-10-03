@@ -25,6 +25,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from fixture_platform import captured_on  # noqa: E402
+
 from argusnet.core.config import SimulationConstants  # noqa: E402
 from argusnet.simulation.sim import fov_angle_deg, sensor_look_direction  # noqa: E402
 
@@ -89,6 +91,7 @@ def capture() -> dict:
     assert none_count >= 5 * len(TILTS), "the speed gate never closed"
     return {
         "_source": "scripts/capture_look_direction_fixture.py",
+        "_captured_on": captured_on(),
         # The tilt every directional sensor gets by default.
         "reference_look_down_angle_deg": exact(
             SimulationConstants().sensor.drone_look_down_angle_deg

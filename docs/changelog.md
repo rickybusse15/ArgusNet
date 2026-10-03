@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — Per-stage timing for the Rust tick (P4.10-pre)
+
+- `argusnet-rs sim --stage-timing` prints each stage's p50/p95/p99 and share
+  of tick time; `--timing-json` carries the same per stage, plus replay
+  write time. Off by default; the replay is byte-identical with it on.
+- `scripts/profile_rust_tick.py` profiles the canonical scenarios. The first
+  profile (`docs/performance/rust-tick-profile-2026-10-03.md`) puts
+  observation generation at 79 % of the tracking scenarios' tick and
+  mission transitions at 46 % of `persistent_long`'s.
+
+## Unreleased — Parity tests off their capture platform
+
+- The Rust parity suites passed only where their fixtures were captured
+  (macOS aarch64). On Linux, nine tests in six suites failed by one ULP of
+  libm rounding. Fixtures now record `_captured_on`; comparisons stay bit
+  for bit there and allow 2 ULPs elsewhere, recorded oracles included
+  (`docs/migration/PARITY_PORTABILITY.md`).
+
 ## Unreleased — Picking and selection (P2.3)
 
 - Clicks pick by ray against the scene's meshes, not by an 18-pixel radius:

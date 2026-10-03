@@ -1,6 +1,6 @@
 # P2.1: the terrain and belief material
 
-**Status:** local, 2026-09-24. See [STATUS.md](STATUS.md).
+**Status:** local 2026-09-24; merged 2026-10-01 in #122 (`badb1e1`). See [STATUS.md](STATUS.md).
 
 DELIVERY_PLAN P2.1: *"Author an embedded WGSL material using Z-up
 elevation/slope bands, anti-aliased contours and land-cover tint. Supply a
