@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Truth isolation (A3.4)
+
+- A stage that may not read truth is no longer lent the stages that may
+  (VIO and observation generation), whose state is derived from truth.
+- New tests hold the measurements fixed, change where the targets really
+  are, and require everything downstream to stay bit-identical.
+
 ## Unreleased — Reset equals fresh, restore equals uninterrupted (A2)
 
 - `argusnet-rs sim --reset-at K` resets the run after K ticks and runs it

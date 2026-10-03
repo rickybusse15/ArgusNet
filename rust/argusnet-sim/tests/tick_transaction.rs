@@ -1169,3 +1169,75 @@ fn a_handoff_is_refused_until_both_of_its_stages_are_installed() {
     sim.connect(Handoff::EngagementToControllers)
         .expect("both stages installed");
 }
+
+/// Reports whether its lent views reach stage 6's handler.
+#[derive(Debug, Default)]
+struct ObserveViewer;
+
+impl StageHandler for ObserveViewer {
+    fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        let sees = context
+            .stages
+            .get::<argusnet_sim::observe::ObserveStage>(Stage::GenerateObservations)
+            .is_some();
+        context.note(format!("sees stage 6: {sees}"));
+        Ok(StageOutcome::Ran)
+    }
+}
+
+fn notes_of(sim: &Simulation, stage: Stage) -> Vec<String> {
+    sim.trace()
+        .records()
+        .iter()
+        .filter(|record| record.stage == stage)
+        .flat_map(|record| record.notes.clone())
+        .collect()
+}
+
+/// A3.4: the lent views do not carry truth past the capability. Stage 6's
+/// state is truth-derived (each pair's true range), so a stage that may not
+/// read truth is not lent it; a stage that may read truth is.
+#[test]
+fn a_stage_without_the_truth_capability_is_not_lent_a_truth_reading_stage() {
+    let mut sim = simulation();
+    sim.set_stage_handler(
+        Stage::GenerateObservations,
+        Box::new(argusnet_sim::observe::ObserveStage::new()),
+    )
+    .expect("not a boundary");
+    for stage in [
+        Stage::Deconflict,
+        Stage::UpdateVioAndPose,
+        Stage::UpdateFusion,
+    ] {
+        sim.set_stage_handler(stage, Box::new(ObserveViewer))
+            .expect("not a boundary");
+    }
+    sim.step().expect("tick runs");
+    assert_eq!(
+        notes_of(&sim, Stage::Deconflict),
+        vec!["sees stage 6: false"]
+    );
+    assert_eq!(
+        notes_of(&sim, Stage::UpdateFusion),
+        vec!["sees stage 6: false"]
+    );
+    assert_eq!(
+        notes_of(&sim, Stage::UpdateVioAndPose),
+        vec!["sees stage 6: true"],
+        "stage 5 may read truth, so it may read stage 6"
+    );
+}
+
+/// A3.4: exactly two stages hold the truth capability.
+#[test]
+fn only_vio_and_observations_may_read_truth() {
+    let readers: Vec<Stage> = Stage::PIPELINE
+        .into_iter()
+        .filter(|stage| stage.may_read_truth())
+        .collect();
+    assert_eq!(
+        readers,
+        vec![Stage::UpdateVioAndPose, Stage::GenerateObservations]
+    );
+}
