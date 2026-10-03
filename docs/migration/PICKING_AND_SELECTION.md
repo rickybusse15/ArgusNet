@@ -1,6 +1,6 @@
 # P2.3: picking, hover and focus identity
 
-**Status:** local, 2026-09-25. See [STATUS.md](STATUS.md).
+**Status:** local 2026-09-25; merged 2026-10-01 in #122 (`badb1e1`). See [STATUS.md](STATUS.md).
 
 DELIVERY_PLAN P2.3: *"Replace the 18-pixel proximity picker with mesh
 raycasting filtered to visible, selectable entities in the active viewport.

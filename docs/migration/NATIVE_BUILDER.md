@@ -1,6 +1,6 @@
 # P4.9b: the Rust-native scenario builder
 
-**Status:** delivered 2026-09-23, locally verified only (not pushed), in three
+**Status:** delivered 2026-09-23, locally verified, then merged 2026-10-01 in #122 (`badb1e1`), in three
 parts: P4.9b.1 (the world half), P4.9b.2a (numpy's `integers` and the target
 behaviours) and P4.9b.2b (the scenario half, whole bundles, and
 `argusnet-rs build` / `sim --config`). See [STATUS.md](STATUS.md).
