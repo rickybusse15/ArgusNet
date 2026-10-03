@@ -2,7 +2,7 @@
 
 This plan covers every open migration phase. Product roadmap numbering in
 [ROADMAP.md](../ROADMAP.md) is independent. The baseline table is updated from
-integrated checkout `ba163ac`; package descriptions remain target acceptance
+`main` at `0b1032c` (2026-10-03); package descriptions remain target acceptance
 contracts. An implemented library does not imply a shipping runtime consumer.
 
 [Architecture and protocols](ARCHITECTURE_AND_PROTOCOLS.md) is the cross-cutting
@@ -30,9 +30,9 @@ P/F/S identifiers are unchanged. Hardware qualification follows
 | --- | --- | --- |
 | 0 | Profile, work counters, replay/schema foundations, TLS guards, pins, proto regeneration and field-parity CI | Semantic contract inventory, frame-time budget and scanner triage |
 | 1 | Bevy 0.19, shared dependencies/features, real headless renderer and CI smoke | Ongoing compatibility maintenance; no migration redo |
-| 2 | Interpolation, typed selection, stage gating, HDR/bloom/fog/sky, persistent typed mesh markers and holographic shader | Full ECS snapshot path, terrain/belief material, sensor/zone/trail geometry, picking, camera/time/UI, visual regression and frame budget |
+| 2 | Interpolation, typed selection, stage gating, HDR/bloom/fog/sky, persistent typed mesh markers and holographic shader; P2.0–P2.3 (#122): ECS snapshot path, terrain/belief material, sensor/zone/trail geometry, occlusion-aware picking | Camera/time controls (P2.4, open as #128/#129), shell/UI, visual regression and frame budget |
 | 3 | Rust world/safety authority, native bridge, shared viewer sampling; P4.3g procedural landscape builders now merged | Integrate world boot/LOD and preprocessed imported-world consumers |
-| 4 | Shared types/replay, domain ports, P4.3g landscapes, P4.6d belief revisions, P4.8a mission state, P4.8b TickWorld, P4.8c stage bodies/direct fusion and (locally verified) P4.8d.3 controller stage | Correct commands and complete checkpoints; world-backed stage 1 and scenario builder, remaining stage-state audit, replay writer and Rust CLI qualification |
+| 4 | Shared types/replay, domain ports, P4.3g landscapes, P4.6d belief revisions, P4.8a mission state, P4.8b TickWorld, P4.8c stage bodies/direct fusion; P4.8d–P4.9d (#122): controller stage, world-backed stage 1, scenario bundle and native builder, mission driver, causal-state audit of assembled stages, `argusnet-rs` CLI with six of seven canonical scenarios within every envelope | Production constructor and owned subsystem state; reset/restore equality and complete checkpoints; durable journal; a fixed or stored acceptance reference (D-1 metric decided in #137); multi-seed and held-out qualification |
 | 5 | No in-process viewer simulation yet | Worker/snapshots/commands, world boot/LOD, live world protocol, rewind and removal of Python boot dependencies |
 | 6 | No broad Python reduction yet | Caller-driven deletions, analysis packaging, entry-point ownership and documentation |
 

@@ -1,5 +1,6 @@
 {
   "_source": "scripts/capture_look_direction_fixture.py",
+ "_captured_on": "macos-aarch64",
   "angles": [
     {
       "angle_deg": "0.0",

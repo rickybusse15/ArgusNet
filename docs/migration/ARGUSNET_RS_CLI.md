@@ -1,6 +1,6 @@
 # P4.9a: `argusnet-rs`, the Rust simulation from a command line
 
-**Status:** delivered 2026-09-23, locally verified only (not pushed). Package ID
+**Status:** delivered 2026-09-23, locally verified, then merged 2026-10-01 in #122 (`badb1e1`). Package ID
 `P4.9a`. See [STATUS.md](STATUS.md).
 
 Before this slice, the Rust tick ran only inside tests. `argusnet-rs` is the

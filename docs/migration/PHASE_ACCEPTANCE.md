@@ -63,6 +63,14 @@ sides report it:
 | `mission_completion_rate` | ≤ 0.20 |
 | `energy_reserve_min` | ≤ 0.02 |
 
+**Amended by D-1 (2026-10-03).** `covariance_reduction_mean` measures each
+track at its last update, not its last appearance, and is scored only when
+each side has at least five qualifying tracks across its seeds. Neither side
+reaching five makes the check *unavailable*; only one side reaching it fails.
+A statistical metric neither side reports is *unavailable*, never a pass, and
+unavailable checks are listed beside each verdict. The envelope values are
+unchanged.
+
 **Verdict.** `check_pass_fail` gives the same pass or fail on at least four of
 the five seeds.
 
@@ -224,3 +232,31 @@ against 0.10 allowed). That metric is decided by at most one track per seed,
 reported on one reference seed against three Rust seeds, and it measures the
 coast before a track's deletion. The analysis is in that doc. The envelope is
 not widened; the metric's definition is an open decision.
+
+## After D-1: the covariance metric redefined (2026-10-03)
+
+Rerun of all seven scenarios with the D-1 metric and judge, on
+linux-x86_64 (glibc 2.39, 4 cores, shared with builds). The report is
+[`p49c-acceptance-linux-x86_64.json`](../performance/p49c-acceptance-linux-x86_64.json).
+The macOS report above, `p49c-acceptance.json`, is kept as the record of the
+old definition; this container cannot rerun it on that platform.
+
+| Scenario | Verdict | Notes |
+| --- | --- | --- |
+| baseline_coverage, persistent_long, planner_adversarial, industrial_asset_survey | pass | RMSE, reacquisition and covariance **unavailable**: no targets, so neither side reports them (previously counted as passes) |
+| intercept_stress | pass | covariance 0.893 / 0.905 over 20 / 20 tracks |
+| search_acquisition | pass | covariance 0.834 / 0.864 over 15 / 15 tracks |
+| sar_person_search | **fail**: `localisation_rmse_m` | covariance now **passes**: 0.544 / 0.495 over 5 / 5 tracks, \|Δ\| 0.049. RMSE: reference 44.72 m, Rust 33.42 m, \|Δ\| 11.29 against 11.18 allowed |
+
+Every exact check and every performance gate passes (worst tick p95
+0.344 ms, startup 149 ms, speed-up 116x, under build load).
+
+**The RMSE failure is platform-dependent, and not widened.** On macOS the
+same envelope passed (reference 39.4 m, Rust 33.0 m). The Rust side barely
+moves between platforms; the Python reference moves 5 m, because its draws
+are not platform-independent (numpy's `uniform` is fused on some builds; see
+`scripts/capture_behaviors_fixture.py`) and stage 6 draws differ by design
+(ADR-006). So an envelope judged against a reference recomputed on each
+platform can flip with the platform. Whether acceptance should fix one
+reference platform, or score Rust against a stored reference, is a decision,
+recorded in [KNOWN_GAPS.md](../KNOWN_GAPS.md).

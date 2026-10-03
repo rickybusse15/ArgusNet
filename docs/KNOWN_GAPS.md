@@ -4,7 +4,7 @@
 
 | Capability | Status | Remaining evidence |
 | --- | --- | --- |
-| Rust stage composition, direct fusion and replay writer | Partial | Libraries/stages exist; complete production mission and CLI acceptance remain |
+| Rust stage composition, direct fusion and replay writer | Partial | 2026-10-03: `argusnet-rs` builds and runs all seven canonical scenarios with no Python, six within every envelope (#122). Remaining: production constructor rejecting missing stages, owned subsystem state, whether acceptance fixes a reference platform or stores the reference (the covariance metric is decided, D-1 #137), multi-seed and held-out qualification |
 | Command recovery and format-2 control checkpoints | Implemented in reviewed `ec9c2f7` | Not full causal checkpointing or proof of remote release |
 | Subsystem-wide reset/restore | Partial | Reconstruct filters/controllers/sensors/mission; match a fresh or uninterrupted run |
 | Independent/rational task and sensor rates | Planned P4.10 | Stable event order, physical sampling support and actual elapsed-time updates |
@@ -115,7 +115,7 @@ Status labels:
 | Capability | Status | Current Location / Gap |
 |------------|--------|------------------------|
 | Replay schema | **Implemented** | `docs/replay-schema.json`, `src/argusnet/evaluation/replay.py`. Enforced with `jsonschema` and guarded end-to-end by `tests/test_replay_contract.py` plus `replay.rs::contract_fixture_tests`. |
-| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py`. `check_pass_fail`'s `track_continuity_mean` threshold fails every canonical scenario, including the target-free scan scenarios where continuity is 0 by construction (P4.9c). `covariance_reduction_mean` compares a track's first covariance with its covariance at its *last appearance*, which is usually mid-coast just before deletion, so it measures the coast. In `sar_person_search` at most one track per seed qualifies, and this is the one P4.9d envelope that fails (`docs/migration/SAFETY_AND_PROFILES.md`). Whether to measure at the last update, or require a minimum sample, is an open decision. |
+| Evaluation report metrics | **Implemented** | `src/argusnet/evaluation/metrics.py`. `check_pass_fail`'s `track_continuity_mean` threshold fails every canonical scenario, including the target-free scan scenarios where continuity is 0 by construction (P4.9c). `covariance_reduction_mean` now uses each track's covariance at its last update and is scored in acceptance only with at least five qualifying tracks a side (D-1, 2026-10-03); `sar_person_search` passes it. Open: the reference's draws are platform-dependent, so acceptance against a reference recomputed per platform can flip an envelope: on Linux `sar_person_search` fails `localisation_rmse_m` by 0.11 m, which it passes on macOS (`docs/migration/PHASE_ACCEPTANCE.md`). Fix a reference platform, or store the reference, is a decision. |
 | Benchmark aggregation | **Implemented** | `src/argusnet/evaluation/benchmarks.py` |
 | Reports/export helpers | **Implemented** | `src/argusnet/evaluation/reports.py`, `export.py` |
 | Benchmark standards | **Implemented as documentation** | `docs/PERFORMANCE_AND_BENCHMARKING.md` |

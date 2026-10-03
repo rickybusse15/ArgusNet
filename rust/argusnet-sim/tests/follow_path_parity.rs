@@ -19,6 +19,11 @@
 //! behaviour is unreachable in one call — acceleration limiting needs a
 //! previous velocity, the orbit blend a previous position — so each case
 //! replays a whole sequence through one controller and checks every sample.
+//!
+//! Bit for bit on the platform the fixture was captured on; elsewhere within
+//! `common::parity::MAX_ULPS`, lookups included.
+
+mod common;
 
 use std::collections::HashMap;
 
@@ -26,6 +31,7 @@ use argusnet_sim::follow_path::{
     FollowPathConfig, FollowPathContext, FollowPathController, MissionZone, VisibilitySampler,
 };
 use argusnet_sim::motion::{BoundsXy, ObstacleSampler, TerrainSampler};
+use common::parity::{parity_of, Parity, ReplayTable};
 use serde_json::Value;
 
 /// The fixture's two target trajectories, boxed so a case can pick one.
@@ -60,61 +66,42 @@ fn vec3(value: &Value) -> [f64; 3] {
     [num(&items[0]), num(&items[1]), num(&items[2])]
 }
 
-/// Python's `repr(float(x))`, so lookups agree with the recording by
-/// construction rather than by a rounding policy of this file's own.
-fn key(value: f64) -> String {
-    let mut text = format!("{value:?}");
-    if let Some(index) = text.find('e') {
-        let (mantissa, exponent) = text.split_at(index);
-        let exponent = &exponent[1..];
-        let (sign, digits) = match exponent.strip_prefix('-') {
-            Some(rest) => ("-", rest),
-            None => ("+", exponent),
-        };
-        text = format!("{mantissa}e{sign}{digits:0>2}");
-    }
-    text
+/// Python's `repr`-stringified floats parse back to the same double.
+fn nums(entry: &Value, fields: &[&str]) -> Vec<f64> {
+    fields.iter().map(|field| num(&entry[*field])).collect()
 }
 
+/// An absent optional argument (the reference's default `delta_m`).
+const DEFAULT: f64 = f64::NAN;
+
 struct ReplayTerrain {
-    heights: HashMap<(String, String), f64>,
-    gradients: HashMap<(String, String, String), [f64; 2]>,
-    clamps: HashMap<(String, String, String, String), f64>,
+    heights: ReplayTable<f64>,
+    gradients: ReplayTable<[f64; 2]>,
+    clamps: ReplayTable<f64>,
 }
 
 impl ReplayTerrain {
-    fn from_case(case: &Value) -> Self {
+    fn from_case(case: &Value, parity: Parity) -> Self {
         let oracle = &case["terrain_oracle"];
-        let mut heights = HashMap::new();
+        let mut heights = ReplayTable::new(parity);
         for entry in oracle["heights"].as_array().expect("heights") {
-            heights.insert(
-                (
-                    entry["x_m"].as_str().unwrap().to_string(),
-                    entry["y_m"].as_str().unwrap().to_string(),
-                ),
-                num(&entry["height_m"]),
-            );
+            heights.insert(nums(entry, &["x_m", "y_m"]), num(&entry["height_m"]));
         }
-        let mut gradients = HashMap::new();
+        let mut gradients = ReplayTable::new(parity);
         for entry in oracle["gradients"].as_array().expect("gradients") {
+            let delta = match entry["delta_m"].as_str().unwrap() {
+                "default" => DEFAULT,
+                _ => num(&entry["delta_m"]),
+            };
             gradients.insert(
-                (
-                    entry["x_m"].as_str().unwrap().to_string(),
-                    entry["y_m"].as_str().unwrap().to_string(),
-                    entry["delta_m"].as_str().unwrap().to_string(),
-                ),
+                vec![num(&entry["x_m"]), num(&entry["y_m"]), delta],
                 vec2(&entry["gradient"]),
             );
         }
-        let mut clamps = HashMap::new();
+        let mut clamps = ReplayTable::new(parity);
         for entry in oracle["clamps"].as_array().expect("clamps") {
             clamps.insert(
-                (
-                    entry["x_m"].as_str().unwrap().to_string(),
-                    entry["y_m"].as_str().unwrap().to_string(),
-                    entry["z_m"].as_str().unwrap().to_string(),
-                    entry["min_agl_m"].as_str().unwrap().to_string(),
-                ),
+                nums(entry, &["x_m", "y_m", "z_m", "min_agl_m"]),
                 num(&entry["clamped_z_m"]),
             );
         }
@@ -130,22 +117,21 @@ impl TerrainSampler for ReplayTerrain {
     fn height_at(&self, x_m: f64, y_m: f64) -> f64 {
         *self
             .heights
-            .get(&(key(x_m), key(y_m)))
+            .get(&[x_m, y_m])
             .unwrap_or_else(|| panic!("height_at({x_m}, {y_m}) was never recorded"))
     }
 
     fn gradient_at(&self, x_m: f64, y_m: f64, delta_m: Option<f64>) -> [f64; 2] {
-        let delta_key = delta_m.map_or_else(|| "default".to_string(), key);
         *self
             .gradients
-            .get(&(key(x_m), key(y_m), delta_key.clone()))
-            .unwrap_or_else(|| panic!("gradient_at({x_m}, {y_m}, {delta_key}) was never recorded"))
+            .get(&[x_m, y_m, delta_m.unwrap_or(DEFAULT)])
+            .unwrap_or_else(|| panic!("gradient_at({x_m}, {y_m}, {delta_m:?}) was never recorded"))
     }
 
     fn clamp_altitude(&self, x_m: f64, y_m: f64, z_m: f64, min_agl_m: f64) -> f64 {
         *self
             .clamps
-            .get(&(key(x_m), key(y_m), key(z_m), key(min_agl_m)))
+            .get(&[x_m, y_m, z_m, min_agl_m])
             .unwrap_or_else(|| {
                 panic!("clamp_altitude({x_m}, {y_m}, {z_m}, {min_agl_m}) was never recorded")
             })
@@ -153,34 +139,26 @@ impl TerrainSampler for ReplayTerrain {
 }
 
 struct ReplayObstacles {
-    probes: HashMap<(String, String, String), bool>,
-    pushes: HashMap<(String, String, String), [f64; 2]>,
+    probes: ReplayTable<bool>,
+    pushes: ReplayTable<[f64; 2]>,
 }
 
 impl ReplayObstacles {
-    fn from_case(case: &Value) -> Self {
-        let mut probes = HashMap::new();
+    fn from_case(case: &Value, parity: Parity) -> Self {
+        let mut probes = ReplayTable::new(parity);
         for entry in case["obstacle_oracle"].as_array().expect("obstacle_oracle") {
             probes.insert(
-                (
-                    entry["x_m"].as_str().unwrap().to_string(),
-                    entry["y_m"].as_str().unwrap().to_string(),
-                    entry["z_m"].as_str().unwrap().to_string(),
-                ),
+                nums(entry, &["x_m", "y_m", "z_m"]),
                 entry["collides"].as_bool().expect("collides"),
             );
         }
-        let mut pushes = HashMap::new();
+        let mut pushes = ReplayTable::new(parity);
         for entry in case["obstacle_push_oracle"]
             .as_array()
             .expect("obstacle_push_oracle")
         {
             pushes.insert(
-                (
-                    entry["x_m"].as_str().unwrap().to_string(),
-                    entry["y_m"].as_str().unwrap().to_string(),
-                    entry["margin_m"].as_str().unwrap().to_string(),
-                ),
+                nums(entry, &["x_m", "y_m", "margin_m"]),
                 vec2(&entry["pushed_xy"]),
             );
         }
@@ -192,7 +170,7 @@ impl ObstacleSampler for ReplayObstacles {
     fn push_clear(&self, point_m: [f64; 3], margin_m: f64) -> Option<[f64; 2]> {
         let collides = *self
             .probes
-            .get(&(key(point_m[0]), key(point_m[1]), key(point_m[2])))
+            .get(&point_m)
             .unwrap_or_else(|| panic!("point_collides{point_m:?} was never recorded"));
         if !collides {
             return None;
@@ -200,7 +178,7 @@ impl ObstacleSampler for ReplayObstacles {
         Some(
             *self
                 .pushes
-                .get(&(key(point_m[0]), key(point_m[1]), key(margin_m)))
+                .get(&[point_m[0], point_m[1], margin_m])
                 .unwrap_or_else(|| {
                     panic!("push_outside_xy({point_m:?}, {margin_m}) was never recorded")
                 }),
@@ -208,41 +186,26 @@ impl ObstacleSampler for ReplayObstacles {
     }
 
     fn collides(&self, point_m: [f64; 3]) -> bool {
-        *self
-            .probes
-            .get(&(key(point_m[0]), key(point_m[1]), key(point_m[2])))
-            .unwrap_or_else(|| {
-                panic!(
-                    "point_collides{point_m:?} was never recorded -- the port probed a candidate \
-                     the reference did not"
-                )
-            })
+        *self.probes.get(&point_m).unwrap_or_else(|| {
+            panic!(
+                "point_collides{point_m:?} was never recorded -- the port probed a candidate \
+                 the reference did not"
+            )
+        })
     }
 }
 
 struct ReplayVisibility {
-    results: HashMap<(String, String), bool>,
+    results: ReplayTable<bool>,
 }
 
 impl ReplayVisibility {
-    fn from_case(case: &Value) -> Self {
-        let mut results = HashMap::new();
+    fn from_case(case: &Value, parity: Parity) -> Self {
+        let mut results = ReplayTable::new(parity);
         for entry in case["los_oracle"].as_array().expect("los_oracle") {
-            let observer = entry["observer"]
-                .as_array()
-                .expect("observer")
-                .iter()
-                .map(|v| v.as_str().unwrap().to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            let target = entry["target"]
-                .as_array()
-                .expect("target")
-                .iter()
-                .map(|v| v.as_str().unwrap().to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            results.insert((observer, target), entry["visible"].as_bool().expect("v"));
+            let mut key = vec3(&entry["observer"]).to_vec();
+            key.extend(vec3(&entry["target"]));
+            results.insert(key, entry["visible"].as_bool().expect("v"));
         }
         Self { results }
     }
@@ -250,25 +213,13 @@ impl ReplayVisibility {
 
 impl VisibilitySampler for ReplayVisibility {
     fn is_visible(&self, observer_m: [f64; 3], target_m: [f64; 3]) -> bool {
-        let observer = observer_m
-            .iter()
-            .map(|v| key(*v))
-            .collect::<Vec<_>>()
-            .join(",");
-        let target = target_m
-            .iter()
-            .map(|v| key(*v))
-            .collect::<Vec<_>>()
-            .join(",");
-        *self
-            .results
-            .get(&(observer.clone(), target.clone()))
-            .unwrap_or_else(|| {
-                panic!(
-                    "los({observer} -> {target}) was never recorded -- the port asked about a \
-                     candidate position the reference never evaluated"
-                )
-            })
+        let query = [observer_m, target_m].concat();
+        *self.results.get(&query).unwrap_or_else(|| {
+            panic!(
+                "los({observer_m:?} -> {target_m:?}) was never recorded -- the port asked about \
+                 a candidate position the reference never evaluated"
+            )
+        })
     }
 }
 
@@ -336,6 +287,7 @@ fn follow_path_matches_the_reference() {
         y_max_m: num(&raw["y_max_m"]),
     };
 
+    let parity = parity_of(&fixture);
     let cases = fixture["cases"].as_array().expect("cases");
     assert!(!cases.is_empty(), "the fixture recorded no cases");
 
@@ -346,9 +298,9 @@ fn follow_path_matches_the_reference() {
             "{name}: the fixture recorded a planner, which this test cannot replay yet"
         );
 
-        let terrain = ReplayTerrain::from_case(case);
-        let obstacles = ReplayObstacles::from_case(case);
-        let visibility = ReplayVisibility::from_case(case);
+        let terrain = ReplayTerrain::from_case(case, parity);
+        let obstacles = ReplayObstacles::from_case(case, parity);
+        let visibility = ReplayVisibility::from_case(case, parity);
         let zones: Vec<MissionZone> = case["zones"]
             .as_array()
             .expect("zones")
@@ -392,15 +344,17 @@ fn follow_path_matches_the_reference() {
         {
             let timestamp_s = num(&sample["timestamp_s"]);
             let (position, velocity) = controller.sample(timestamp_s, target.as_mut(), &context);
-            assert_eq!(
-                position,
-                vec3(&sample["position"]),
-                "{name}: position at sample {index} (t = {timestamp_s})"
+            let (want_position, want_velocity) =
+                (vec3(&sample["position"]), vec3(&sample["velocity"]));
+            assert!(
+                parity.same_all(&position, &want_position),
+                "{name}: position at sample {index} (t = {timestamp_s}): \
+                 {position:?} against {want_position:?}"
             );
-            assert_eq!(
-                velocity,
-                vec3(&sample["velocity"]),
-                "{name}: velocity at sample {index} (t = {timestamp_s})"
+            assert!(
+                parity.same_all(&velocity, &want_velocity),
+                "{name}: velocity at sample {index} (t = {timestamp_s}): \
+                 {velocity:?} against {want_velocity:?}"
             );
         }
     }

@@ -1,6 +1,6 @@
 # P4.9d: blocking safety and mission profiles, native
 
-**Status:** local, 2026-09-23. See [STATUS.md](STATUS.md).
+**Status:** local 2026-09-23; merged 2026-10-01 in #122 (`badb1e1`). See [STATUS.md](STATUS.md).
 
 P4.9c's acceptance run refused two of the seven canonical scenarios,
 `sar_person_search` and `industrial_asset_survey`. Both are mission profiles,
@@ -132,6 +132,13 @@ such as the covariance at the last update rather than the last appearance, or
 a minimum number of qualifying tracks, is a change to the benchmark's
 definition. That is a decision, not a fix, and it is recorded in
 [KNOWN_GAPS.md](../KNOWN_GAPS.md).
+
+**Decided (D-1, 2026-10-03):** measure at the last update, and score only
+with at least five qualifying tracks a side. On the rerun
+([PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md#after-d-1-the-covariance-metric-redefined-2026-10-03))
+`sar_person_search` passes `covariance_reduction_mean` (0.544 / 0.495). That
+run, on Linux, fails the scenario's RMSE envelope by 0.11 m instead, for a
+platform reason described there.
 
 ### Gate
 
