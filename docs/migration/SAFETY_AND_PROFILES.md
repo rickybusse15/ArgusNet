@@ -133,6 +133,13 @@ a minimum number of qualifying tracks, is a change to the benchmark's
 definition. That is a decision, not a fix, and it is recorded in
 [KNOWN_GAPS.md](../KNOWN_GAPS.md).
 
+**Decided (D-1, 2026-10-03):** measure at the last update, and score only
+with at least five qualifying tracks a side. On the rerun
+([PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md#after-d-1-the-covariance-metric-redefined-2026-10-03))
+`sar_person_search` passes `covariance_reduction_mean` (0.544 / 0.495). That
+run, on Linux, fails the scenario's RMSE envelope by 0.11 m instead, for a
+platform reason described there.
+
 ### Gate
 
 | Check | Result |
