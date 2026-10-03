@@ -92,15 +92,24 @@ pub struct TickContext<'a> {
 /// The running stage's own handler is not among them: it is taken out of the
 /// map for its run, which is what makes lending the rest sound. Stages run one
 /// at a time, so nothing can write what a view reads while it reads it.
+///
+/// Nor, for a stage [`Stage::may_read_truth`] does not admit, are the stages it
+/// does admit: their state is derived from truth (stage 6 keeps each pair's
+/// true range), so lending it would hand truth to a stage the capability
+/// withholds it from (A3.4).
 #[derive(Clone, Copy)]
 pub struct StageViews<'a> {
     handlers: &'a BTreeMap<Stage, Box<dyn StageHandler>>,
+    truth_visible: bool,
 }
 
 impl<'a> StageViews<'a> {
     /// The installed handler for `stage`, if it is a `T` and is not the stage
     /// asking.
     pub fn get<T: StageHandler>(self, stage: Stage) -> Option<&'a T> {
+        if stage.may_read_truth() && !self.truth_visible {
+            return None;
+        }
         let handler: &dyn std::any::Any = self.handlers.get(&stage)?.as_ref();
         handler.downcast_ref::<T>()
     }
@@ -1031,6 +1040,7 @@ impl Simulation {
                         truth: stage.may_read_truth().then_some(self.truth.as_slice()),
                         stages: StageViews {
                             handlers: &self.handlers,
+                            truth_visible: stage.may_read_truth(),
                         },
                         notes: &mut notes,
                     };
