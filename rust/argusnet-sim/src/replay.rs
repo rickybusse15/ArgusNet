@@ -546,6 +546,11 @@ impl ReplayWriter {
         }
     }
 
+    /// The last frame pushed.
+    pub fn last_frame(&self) -> Option<&ReplayFrame> {
+        self.frames.last()
+    }
+
     /// Drop every frame pushed so far, keeping `meta`: a reset run starts its
     /// replay again.
     pub fn clear_frames(&mut self) {

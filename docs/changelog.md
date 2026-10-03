@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Crash-recoverable runs (A4)
+
+- `argusnet-rs sim --run-dir DIR` records a run so that it survives a crash:
+  its configuration, a durable journal of every tick, checkpoints and a
+  completion marker. `--recover DIR` finishes a crashed run, and its journal
+  then matches an uninterrupted run's exactly.
+
 ## Unreleased — Truth isolation (A3.4)
 
 - A stage that may not read truth is no longer lent the stages that may

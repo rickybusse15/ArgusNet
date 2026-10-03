@@ -55,6 +55,30 @@ checkpoint is `SimulationCheckpoint` format 3, and restore checks every stage's
 state against the run before changing anything (P4.8e.4). A checkpoint of a
 different scenario is refused with exit 2, and the run is left untouched.
 
+## Crash-recoverable runs (A4)
+
+`argusnet-rs sim --bundle B --run-dir D [--checkpoint-every N]` records the
+run in a new directory `D`:
+
+| File | What |
+| --- | --- |
+| `run.json` | The immutable run configuration: the bundle exactly as run, its FNV-1a, the runtime and checkpoint versions. Written once, atomically |
+| `journal.jsonl` | One line per committed tick, flushed to stable storage before the run advances: the tick's deconfliction, safety and inspection events and the scan mission's state. Each line carries a checksum and the run's identity (`argusnet_sim::journal`) |
+| `checkpoint.json` | The latest checkpoint, replaced atomically every `N` ticks; its header's `journal_cursor` is how much of the journal it covers |
+| `complete.json` | Written last. Without it the run is incomplete |
+
+`argusnet-rs sim --recover D` finishes a crashed run: it restores the latest
+checkpoint, cuts the journal back to that checkpoint's cursor (dropping a
+torn last write and any later ticks) and runs to completion. The journal is
+then byte-identical to an uninterrupted run's. The replay holds only the ticks
+after the checkpoint and records `meta.recovery.recovered_from_tick`, so a
+crash never turns an incomplete artifact into a complete one. Recovery refuses,
+with exit 2, a damaged `run.json` ("incomplete run artifact"), a journal damaged
+inside what the checkpoint covers (corrupt, not torn), and a checkpoint from
+another scenario. A journal write that fails stops the run at the last durable
+tick (exit 1); nothing is dropped. A run directory is never reused. Recording
+does not change the replay's bytes.
+
 ## The adapter: `argusnet sim --export-bundle PATH`
 
 `--export-bundle` is a flag on the existing Python command, not a new command.

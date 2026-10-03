@@ -95,11 +95,16 @@ One owner, explicit data flow, the same timing.
    typed slot on the tick's world (`observations`, `safety_events`), and a
    later stage reads it. The stage order makes the dependency visible and
    checkable, which is what P4.10's phase barriers need (ADR-010).
+   *Superseded by §2a for 4→7 and 6→7:* those edges were implemented as
+   session handoffs, not `TickWorld` slots.
 4. **Next-tick backward data is a typed inbox owned by the consumer.**
    Engagement observations (6→1) and override commands (9→2) are queued into
    the consumer's inbox and applied when the consumer runs, which is the next
    tick, exactly as now. Stage 9's phase reaches stages 2 and 8 the same way:
-   committed state of the previous tick, read-only.
+   committed state of the previous tick, read-only. *Superseded by §2a:*
+   6→1 and 9→2 are session handoffs applied straight after the producer
+   (6→1's engagement is visible at once); stage 9's phase is read through
+   the lent views.
 5. **Observers read a `SessionView`.** After a commit,
    `Simulation::view()` lends read-only access to each subsystem's published
    state (`frame()`, `stats()`, `phase()`). Draining events becomes a session

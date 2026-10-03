@@ -266,6 +266,7 @@ dependencies = [
  "argusnet-sim",
  "clap",
  "prost",
+ "serde",
  "serde_json",
 ]
 

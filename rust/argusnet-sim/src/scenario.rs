@@ -1410,6 +1410,26 @@ impl AssembledRun {
         self.report.totals = GenerationTotals::default();
     }
 
+    /// The last tick's evidence and decisions, for the durable journal (A4):
+    /// its deconfliction, safety and inspection events and the scan mission's
+    /// state, as the replay frame carries them. `null` before any tick.
+    pub fn journal_body(&self) -> serde_json::Value {
+        let Some(frame) = self.replay.last_frame() else {
+            return serde_json::Value::Null;
+        };
+        serde_json::json!({
+            "deconfliction": frame.deconfliction_events,
+            "safety": frame.safety_events,
+            "inspection": frame.inspection_events,
+            "scan_mission": frame.scan_mission_state,
+        })
+    }
+
+    /// The legacy timestep.
+    pub fn dt_s(&self) -> f64 {
+        self.dt_s
+    }
+
     /// The timestamp the next tick will run at.
     pub fn next_timestamp_s(&self) -> f64 {
         self.sim.tick() as f64 * self.dt_s
