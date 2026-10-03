@@ -6,6 +6,7 @@ import queue
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import weakref
@@ -642,7 +643,12 @@ class TrackingService:
         debug_binary = repo_root / "target" / "debug" / "argusnetd"
         if not debug_binary.exists():
             cargo = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
-            print("Building argusnetd (this may take a minute on first run)...")
+            # stderr, like cargo's own progress: a library call must not write
+            # to stdout (test_run_simulation_has_no_stdout_side_effects).
+            print(
+                "Building argusnetd (this may take a minute on first run)...",
+                file=sys.stderr,
+            )
             subprocess.run(
                 [
                     cargo,
