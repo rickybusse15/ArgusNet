@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 from argusnet.evaluation.metrics import EvaluationReport, evaluate_replay
+from argusnet.evaluation.outcome import mission_outcome
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,9 @@ class SystemScorecard:
     performance: dict[str, Any] = field(default_factory=dict)
     reliability: dict[str, Any] = field(default_factory=dict)
     data_health: dict[str, Any] = field(default_factory=dict)
+    # F1: how the run ended and why (argusnet.evaluation.outcome). Additive:
+    # empty when built from a report alone, which has no frames to cite.
+    outcome: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -28,6 +33,7 @@ class SystemScorecard:
             "performance": dict(self.performance),
             "reliability": dict(self.reliability),
             "data_health": dict(self.data_health),
+            "outcome": dict(self.outcome),
         }
 
 
@@ -88,4 +94,7 @@ def scorecard_from_replay(
         difficulty=difficulty,
         seed=int(seed if seed is not None else meta.get("seed", 0)),
     )
-    return scorecard_from_report(report)
+    return dataclasses.replace(
+        scorecard_from_report(report),
+        outcome=mission_outcome(replay_doc, mission_type=mission_type),
+    )

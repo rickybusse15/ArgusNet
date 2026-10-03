@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Mission outcomes with reasons (F1)
+
+- Scorecards now say how a run ended -- completed, aborted, incomplete, or
+  objectives unmet -- and why, with each reason citing the ticks, safety
+  events and POIs behind it. Metrics a replay cannot support are marked
+  unavailable instead of reading as zero.
+
 ## Unreleased — Crash-recoverable runs (A4)
 
 - `argusnet-rs sim --run-dir DIR` records a run so that it survives a crash:
