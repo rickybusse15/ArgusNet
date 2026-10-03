@@ -72,6 +72,7 @@ A skip is not a pass.
 | P4.9b.2b | Native builder, scenario half: stations, targets, drones and controllers, sensors, zones, POIs, weather; whole bundles; `argusnet-rs build` and `sim --config` | done | #122 (`badb1e1`); [NATIVE_BUILDER.md](NATIVE_BUILDER.md) |
 | P4.9c | Phase acceptance: 5/5 supported canonical scenarios within the declared envelopes, release timing gates, direct fusion parity; fixed an IMM mode-probability collapse (`argusnet-core`) and the RMSE metric's track pairing | done | #122 (`badb1e1`); [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md) |
 | P4.9d | Stage 4 (hard safety monitor) assembled from bundles, three reference-argument defects fixed, checkpointed; `safety_blocking` and mission profiles through exporter and native builder; all 7 canonical scenarios scored, 6 within every envelope (`sar_person_search` fails `covariance_reduction_mean`, analysed, not widened) | done | #122 (`badb1e1`); [SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md) |
+| P4.10-pre | Per-stage wall time in the Rust tick (`--stage-timing`), profile script, first Rust profile of the canonical scenarios | done: timers #136 (`3a0ca89`); profile [rust-tick-profile-2026-10-03.md](../performance/rust-tick-profile-2026-10-03.md). Work counters and allocation counts open | [rust-tick-profile-2026-10-03.md](../performance/rust-tick-profile-2026-10-03.md) |
 
 ## Track B — viewer engine
 
