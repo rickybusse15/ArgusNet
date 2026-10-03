@@ -119,6 +119,11 @@ pub fn viewer_ui_system(
         return;
     };
     let context = context.clone();
+    // The theme's faces bind a pass after they are installed; the shell's
+    // type roles need them, so the first frame draws nothing.
+    if !crate::theme::fonts_ready(&context) {
+        return;
+    }
     let supports_hot_swap = scene_package.is_synthetic_source();
     ui_state.focused_entity_label = selection.label().map(str::to_owned);
     let raster_status =
