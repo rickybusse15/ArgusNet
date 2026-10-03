@@ -241,6 +241,18 @@ pub fn install(context: &egui::Context) {
     context.all_styles_mut(apply_visuals);
 }
 
+/// Whether the bundled faces are bound yet. Fonts set during a pass take
+/// effect at the start of the next, and drawing a type role whose family is
+/// not bound panics; the UI waits for this before drawing.
+pub fn fonts_ready(context: &egui::Context) -> bool {
+    context.fonts(|fonts| {
+        fonts
+            .definitions()
+            .families
+            .contains_key(&FontFamily::Name(MEDIUM.into()))
+    })
+}
+
 /// Installs the theme on the first frame that has an egui context.
 pub fn install_theme_system(
     mut contexts: bevy_egui::EguiContexts,
@@ -474,6 +486,38 @@ mod tests {
         assert_eq!(stale.current(), None, "stale is not current");
         assert_eq!(stale.display(|v| format!("{v:.1} m")), "12.0 m (3.2 s old)");
         assert_eq!(Field::Value(4.0).display(|v| format!("{v:.1}")), "4.0");
+    }
+
+    /// The UI's guard: the faces are not bound in the pass that installs
+    /// them, and are in the next.
+    #[test]
+    fn fonts_are_ready_only_from_the_pass_after_install() {
+        let context = egui::Context::default();
+        let mut during = None;
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                install(ui.ctx());
+                during = Some(fonts_ready(ui.ctx()));
+            })
+            .textures_delta
+            .clear();
+        assert_eq!(during, Some(false), "drawing a type role here would panic");
+        let mut after = None;
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                after = Some(fonts_ready(ui.ctx()));
+                // And drawing every role now works.
+                for role in [
+                    TypeRole::Utility,
+                    TypeRole::SectionTitle,
+                    TypeRole::ObjectIdentity,
+                ] {
+                    ui.label(role.text("ready"));
+                }
+            })
+            .textures_delta
+            .clear();
+        assert_eq!(after, Some(true));
     }
 
     /// The bundled faces parse, Arimo is the primary proportional face, its
