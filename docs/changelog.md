@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Parity tests off their capture platform
+
+- The Rust parity suites passed only where their fixtures were captured
+  (macOS aarch64). On Linux, nine tests in six suites failed by one ULP of
+  libm rounding. Fixtures now record `_captured_on`; comparisons stay bit
+  for bit there and allow 2 ULPs elsewhere, recorded oracles included
+  (`docs/migration/PARITY_PORTABILITY.md`).
+
 ## Unreleased — Picking and selection (P2.3)
 
 - Clicks pick by ray against the scene's meshes, not by an 18-pixel radius:

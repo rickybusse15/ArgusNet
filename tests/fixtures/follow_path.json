@@ -1,6 +1,7 @@
 {
   "_reference": "src/argusnet/simulation/sim.py",
   "_source": "scripts/capture_follow_path_fixture.py",
+ "_captured_on": "macos-aarch64",
   "bounds": {
     "x_max_m": "2000.0",
     "x_min_m": "-2000.0",
