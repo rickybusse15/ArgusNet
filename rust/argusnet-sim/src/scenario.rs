@@ -1412,7 +1412,8 @@ impl AssembledRun {
 
     /// The last tick's evidence and decisions, for the durable journal (A4):
     /// its deconfliction, safety and inspection events and the scan mission's
-    /// state, as the replay frame carries them. `null` before any tick.
+    /// state, as the replay frame carries them, and stage 9's typed decision
+    /// records (F3; `null` without a mission driver). `null` before any tick.
     pub fn journal_body(&self) -> serde_json::Value {
         let Some(frame) = self.replay.last_frame() else {
             return serde_json::Value::Null;
@@ -1422,6 +1423,7 @@ impl AssembledRun {
             "safety": frame.safety_events,
             "inspection": frame.inspection_events,
             "scan_mission": frame.scan_mission_state,
+            "decisions": self.driver().map(MissionDriverStage::decisions),
         })
     }
 

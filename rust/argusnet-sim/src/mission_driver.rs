@@ -177,6 +177,41 @@ impl LocalizationReplay {
     }
 }
 
+/// Whether a decision took effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionStatus {
+    /// Applied to stage 9's own state this run.
+    Applied,
+    /// A command queued for stage 2, which flies it from the next tick
+    /// (`Handoff::OverridesFromMission`).
+    QueuedForNextTick,
+    /// Attempted and refused.
+    Rejected,
+}
+
+/// A typed record of one mission decision (F3): what was chosen, from what,
+/// why, on which inputs, and what it commands. Written to the durable journal
+/// (A4), independent of display frames; never part of a replay or a
+/// checkpoint, and rebuilt every run.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Decision {
+    pub kind: &'static str,
+    pub status: DecisionStatus,
+    /// The platform the decision is about, if one.
+    pub subject: Option<String>,
+    pub selected: Option<String>,
+    /// What was chosen among, in the order considered.
+    pub candidates: Vec<String>,
+    /// A stable reason code.
+    pub reason: &'static str,
+    pub detail: String,
+    /// The inputs the decision was made on.
+    pub inputs: serde_json::Value,
+    /// The command it produced, if any.
+    pub command: Option<&'static str>,
+}
+
 /// What stage 9 checkpoints.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct DriverCheckpoint {
@@ -227,6 +262,8 @@ pub fn elect_coordinator(
 /// Stage 9: the mission machine and the work its phases do.
 pub struct MissionDriverStage {
     machine: MissionStage,
+    /// This run's decisions (F3).
+    decisions: Vec<Decision>,
     /// Writes into stage 2's tables, queued this run and drained by
     /// [`Handoff::OverridesFromMission`] straight after it.
     ///
@@ -270,6 +307,7 @@ impl MissionDriverStage {
         Self {
             machine,
             override_commands: Vec::new(),
+            decisions: Vec::new(),
             pois: PoiManager::new(pois.clone()),
             initial_pois: pois,
             homes,
@@ -280,6 +318,11 @@ impl MissionDriverStage {
             replay: LocalizationReplay::default(),
             report: DriverReport::default(),
         }
+    }
+
+    /// The last run's decisions, in the order made.
+    pub fn decisions(&self) -> &[Decision] {
+        &self.decisions
     }
 
     /// Take the override writes the last run queued, in order.
@@ -341,6 +384,15 @@ impl MissionDriverStage {
         &mut self.machine
     }
 
+    fn pending_poi_ids(&self) -> Vec<String> {
+        self.pois
+            .statuses()
+            .into_iter()
+            .filter(|s| s.state == PoiState::Pending)
+            .map(|s| s.poi_id)
+            .collect()
+    }
+
     fn inspect(
         &mut self,
         timestamp_s: f64,
@@ -354,6 +406,20 @@ impl MissionDriverStage {
             self.pois
                 .rescore_from_map(|xy| Some(coverage_in_region(mapping, xy, radius)));
             self.rescored = true;
+            self.decisions.push(Decision {
+                kind: "poi_rescore",
+                status: DecisionStatus::Applied,
+                subject: None,
+                selected: None,
+                candidates: self.pending_poi_ids(),
+                reason: "coverage_density",
+                detail: format!(
+                    "pending POIs reprioritised by mapped coverage within {radius} m: sparse \
+                     areas rank higher"
+                ),
+                inputs: serde_json::json!({ "rescore_radius_m": radius }),
+                command: None,
+            });
         }
 
         let capacity_wh = battery.model().capacity_wh;
@@ -364,6 +430,7 @@ impl MissionDriverStage {
         };
         let mut unassigned: Vec<String> = Vec::new();
         for (id, position) in mobile {
+            let pending = self.pending_poi_ids();
             let remaining_wh = battery.remaining_wh(id).unwrap_or(capacity_wh);
             let context = PoiAssignmentContext::new(id, *position, remaining_wh, capacity_wh);
             let assigned = self.pois.assign_energy_aware(&context).is_some();
@@ -389,6 +456,24 @@ impl MissionDriverStage {
                             self.config.redirect_speed_mps,
                         ),
                     ));
+                    self.decisions.push(Decision {
+                        kind: "poi_assignment",
+                        status: DecisionStatus::QueuedForNextTick,
+                        subject: Some(id.clone()),
+                        selected: Some(active.clone()),
+                        candidates: pending,
+                        reason: "energy_aware_priority",
+                        detail: format!(
+                            "{id} takes {active}: the highest-priority pending POI it can \
+                             reach within its usable energy"
+                        ),
+                        inputs: serde_json::json!({
+                            "position_m": position,
+                            "remaining_wh": remaining_wh,
+                            "capacity_wh": capacity_wh,
+                        }),
+                        command: Some("set_poi"),
+                    });
                 }
             }
             // Handoff: a low drone with a POI passes it to the first fresh,
@@ -396,12 +481,43 @@ impl MissionDriverStage {
             if fraction_of(id) < self.config.handoff_low_fraction
                 && self.pois.assignment_for(id).is_some()
             {
+                let considered: Vec<String> = mobile
+                    .iter()
+                    .map(|(other, _)| other.clone())
+                    .filter(|other| other != id)
+                    .collect();
                 for (other, _) in mobile {
                     if other != id
                         && fraction_of(other) > self.config.handoff_fresh_fraction
                         && self.pois.assignment_for(other).is_none()
                     {
-                        self.pois.trigger_handoff(id, other);
+                        let poi = self.pois.assignment_for(id).map(str::to_string);
+                        let handed = self.pois.trigger_handoff(id, other);
+                        self.decisions.push(Decision {
+                            kind: "poi_handoff",
+                            status: if handed {
+                                DecisionStatus::Applied
+                            } else {
+                                DecisionStatus::Rejected
+                            },
+                            subject: Some(id.clone()),
+                            selected: Some(other.clone()),
+                            candidates: considered,
+                            reason: "low_battery",
+                            detail: format!(
+                                "{id} below {} of capacity hands {} to {other}, the first \
+                                 free drone above {}",
+                                self.config.handoff_low_fraction,
+                                poi.as_deref().unwrap_or("its POI"),
+                                self.config.handoff_fresh_fraction
+                            ),
+                            inputs: serde_json::json!({
+                                "from_fraction": fraction_of(id),
+                                "to_fraction": fraction_of(other),
+                                "poi": poi,
+                            }),
+                            command: None,
+                        });
                         break;
                     }
                 }
@@ -417,7 +533,24 @@ impl MissionDriverStage {
             .map(|s| s.poi_id)
             .collect();
         if pending.len() == 1 && unassigned.len() > 1 {
-            self.pois.request_team_assign(&pending[0], &unassigned[1]);
+            let teamed = self.pois.request_team_assign(&pending[0], &unassigned[1]);
+            self.decisions.push(Decision {
+                kind: "team_assignment",
+                status: if teamed {
+                    DecisionStatus::Applied
+                } else {
+                    DecisionStatus::Rejected
+                },
+                subject: Some(unassigned[1].clone()),
+                selected: Some(pending[0].clone()),
+                candidates: unassigned.clone(),
+                reason: "one_pending_poi_several_free_drones",
+                detail: "the reference asks to team on a pending POI, which it only grants \
+                         for an active one"
+                    .to_string(),
+                inputs: serde_json::json!({ "free_drones": unassigned.len() }),
+                command: None,
+            });
         }
         for done in self.pois.check_completions(timestamp_s) {
             let finished: Vec<String> = self
@@ -430,6 +563,17 @@ impl MissionDriverStage {
                 self.redirected.remove(&drone);
                 self.override_commands
                     .push(OverrideCommand::ClearPoi(drone.clone()));
+                self.decisions.push(Decision {
+                    kind: "poi_complete",
+                    status: DecisionStatus::QueuedForNextTick,
+                    subject: Some(drone.clone()),
+                    selected: Some(done.clone()),
+                    candidates: Vec::new(),
+                    reason: "dwell_satisfied",
+                    detail: format!("{done} inspected; {drone}'s redirect is released"),
+                    inputs: serde_json::json!({ "timestamp_s": timestamp_s }),
+                    command: Some("clear_poi"),
+                });
             }
         }
     }
@@ -444,6 +588,7 @@ impl StageHandler for MissionDriverStage {
         // Whatever a run that no handoff drained left behind is dropped, so a
         // driver installed without stage 2 does not grow without bound.
         self.override_commands.clear();
+        self.decisions.clear();
         let empty = BatteryStage::new();
         let battery = stage_one_battery(context.stages).unwrap_or(&empty);
         // Stage 8's map as it left it this tick, through the lent views.
@@ -470,7 +615,33 @@ impl StageHandler for MissionDriverStage {
         // fleet. The reference reads the batteries as stage 1 left them.
         if self.coordinator.is_none() && phase == MissionPhase::Scanning && !mobile.is_empty() {
             let ids: Vec<String> = mobile.iter().map(|(id, _)| id.clone()).collect();
-            self.coordinator = elect_coordinator(&ids, battery, battery.model().capacity_wh);
+            let capacity_wh = battery.model().capacity_wh;
+            self.coordinator = elect_coordinator(&ids, battery, capacity_wh);
+            let fractions = serde_json::Value::Object(
+                ids.iter()
+                    .map(|id| {
+                        (
+                            id.clone(),
+                            serde_json::json!(battery
+                                .remaining_wh(id)
+                                .map(|wh| wh / capacity_wh.max(1.0))),
+                        )
+                    })
+                    .collect(),
+            );
+            self.decisions.push(Decision {
+                kind: "coordinator_election",
+                status: DecisionStatus::Applied,
+                subject: None,
+                selected: self.coordinator.clone(),
+                candidates: ids,
+                reason: "highest_battery_fraction",
+                detail: "the fullest battery, first in fleet order on a tie; off the ledger \
+                         counts as full"
+                    .to_string(),
+                inputs: serde_json::json!({ "battery_fractions": fractions }),
+                command: None,
+            });
         }
 
         if phase == MissionPhase::Inspecting {
@@ -506,6 +677,15 @@ impl StageHandler for MissionDriverStage {
         let gap_cell_fraction = (phase == MissionPhase::Scanning
             && coverage_fraction >= self.machine.config().scan_coverage_threshold)
             .then(|| gap_cell_fraction(mapping));
+        let all_pois_complete = self.pois.all_complete();
+        let gate_inputs = serde_json::json!({
+            "coverage_fraction": coverage_fraction,
+            "gap_cell_fraction": gap_cell_fraction,
+            "mobile_count": mobile.len(),
+            "localization_confidences": &localization_confidences,
+            "localizer_timed_out": localizer_timed_out,
+            "all_pois_complete": all_pois_complete,
+        });
         self.machine.set_inputs(MissionInputs {
             timestamp_s,
             coverage_fraction,
@@ -513,7 +693,7 @@ impl StageHandler for MissionDriverStage {
             mobile_count: mobile.len(),
             localization_confidences,
             localizer_timed_out,
-            all_pois_complete: self.pois.all_complete(),
+            all_pois_complete,
             home_distances_m,
         });
         let outcome = self.machine.run(context)?;
@@ -541,13 +721,66 @@ impl StageHandler for MissionDriverStage {
                         }
                     }
                     context.note("egress routes set");
+                    self.decisions.push(Decision {
+                        kind: "egress",
+                        status: DecisionStatus::QueuedForNextTick,
+                        subject: None,
+                        selected: None,
+                        candidates: mobile
+                            .iter()
+                            .filter(|(id, _)| self.homes.contains_key(id))
+                            .map(|(id, _)| id.clone())
+                            .collect(),
+                        reason: "mission_requested_egress",
+                        detail: "every POI redirect released; each drone with a station is \
+                                 routed home"
+                            .to_string(),
+                        inputs: gate_inputs.clone(),
+                        command: Some("set_egress"),
+                    });
                 }
                 MissionEvent::EgressRoutesCleared { .. } => {
-                    self.override_commands.push(OverrideCommand::ClearAllEgress)
+                    self.override_commands.push(OverrideCommand::ClearAllEgress);
+                    self.decisions.push(Decision {
+                        kind: "egress_cleared",
+                        status: DecisionStatus::QueuedForNextTick,
+                        subject: None,
+                        selected: None,
+                        candidates: Vec::new(),
+                        reason: "egress_complete",
+                        detail: "every recall dropped at once".to_string(),
+                        inputs: gate_inputs.clone(),
+                        command: Some("clear_all_egress"),
+                    });
                 }
-                MissionEvent::PhaseChanged { .. }
-                | MissionEvent::RescorePois { .. }
-                | MissionEvent::LocalizationTimedOut { .. } => {}
+                MissionEvent::PhaseChanged { from, to, .. } => {
+                    self.decisions.push(Decision {
+                        kind: "phase_change",
+                        status: DecisionStatus::Applied,
+                        subject: None,
+                        selected: Some(to.to_string()),
+                        candidates: Vec::new(),
+                        reason: "mission_gate",
+                        detail: format!("{from} -> {to}"),
+                        inputs: gate_inputs.clone(),
+                        command: None,
+                    });
+                }
+                MissionEvent::LocalizationTimedOut { .. } => {
+                    self.decisions.push(Decision {
+                        kind: "localization_timeout",
+                        status: DecisionStatus::Applied,
+                        subject: None,
+                        selected: None,
+                        candidates: Vec::new(),
+                        reason: "localizer_timed_out",
+                        detail: "the localizer gave up; the mission continues without it"
+                            .to_string(),
+                        inputs: gate_inputs.clone(),
+                        command: None,
+                    });
+                }
+                MissionEvent::RescorePois { .. } => {}
             }
         }
         self.publish_report();
@@ -595,6 +828,7 @@ impl StageHandler for MissionDriverStage {
         self.rescored = decoded.rescored;
         self.coordinator = decoded.coordinator;
         self.override_commands.clear();
+        self.decisions.clear();
         self.publish_report();
         Ok(())
     }
@@ -606,6 +840,7 @@ impl StageHandler for MissionDriverStage {
         self.rescored = false;
         self.coordinator = None;
         self.override_commands.clear();
+        self.decisions.clear();
         self.publish_report();
     }
 }
