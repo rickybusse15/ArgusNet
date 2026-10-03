@@ -29,7 +29,7 @@ are open, as are guardrails G0, G2 and G3.
 
 At 2026-10-03 everything above that was *local* is merged: P4.8d.1 through
 P4.9d and P2.0 to P2.3 reached `main` together in #122 (merge `badb1e1`).
-P2.4a is merged (#128); P2.4b is open as #129. The `sar_person_search` covariance
+P2.4a and P2.4b are merged (#128, #129). The `sar_person_search` covariance
 metric was redefined (D-1, #137) and now passes; on Linux the scenario fails
 its RMSE envelope by 0.11 m instead, a platform effect of the reference, so
 whether acceptance fixes a reference platform or stores the reference is the
@@ -83,7 +83,7 @@ A skip is not a pass.
 | P2.2 | Sensor volumes gated by the runtime's look, draped radar rings, extruded zone walls, path-independent trail ribbons; no volume encloses the camera; GPU probes | done (#122, `badb1e1`; [PRESENTATION_GEOMETRY.md](PRESENTATION_GEOMETRY.md)) |
 | P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | done (#122, `badb1e1`; [PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
 | P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | done (#128; [TIME_CONTROLS.md](TIME_CONTROLS.md)) |
-| P2.4b | Camera: free-fly, follow/chase, focus, bookmarks | open (#129) |
+| P2.4b | Camera: damped free-fly, follow/chase with loss to the last known position, `F` focus, `1`-`9` bookmarks as per-scene preferences, one remappable binding table gated on typing; 0 allocations a frame | done (#129; [CAMERA_CONTROLS.md](CAMERA_CONTROLS.md)) |
 | P2.5 | Mission-control shell, quality tiers | open |
 | P2.6 | Graphics acceptance across tiers | open |
 

@@ -387,9 +387,12 @@ pub fn pick_world_system(
 }
 
 /// Tab / Shift+Tab / Escape, and the inspector list's requests.
+#[allow(clippy::too_many_arguments)]
 pub fn keyboard_selection_system(
     keys: Res<ButtonInput<KeyCode>>,
-    contexts: Option<EguiContexts>,
+    gate: Res<crate::bindings::KeyboardGate>,
+    bindings: Res<crate::bindings::Bindings>,
+    escape: Res<crate::camera_control::EscapeUsed>,
     markers: Res<CurrentRuntimeMarkers>,
     visibility: Res<RuntimeOverlayVisibility>,
     mut ui_state: ResMut<ViewerUiState>,
@@ -401,20 +404,12 @@ pub fn keyboard_selection_system(
             SelectRequest::Clear => select_key(&mut selection, &markers, None),
         }
     }
-    let typing = contexts
-        .and_then(|mut contexts| {
-            contexts
-                .ctx_mut()
-                .ok()
-                .map(|ctx| ctx.egui_wants_keyboard_input())
-        })
-        .unwrap_or(false);
-    if typing {
-        return;
-    }
-    if keys.just_pressed(KeyCode::Escape) {
+    use crate::bindings::Action;
+    // Escape clears the selection only when the camera did not use it to
+    // leave a transient mode (VIEWER_UI §12's order).
+    if bindings.just_pressed(&gate, &keys, Action::Escape) && !escape.0 {
         select_key(&mut selection, &markers, None);
-    } else if keys.just_pressed(KeyCode::Tab) {
+    } else if bindings.just_pressed(&gate, &keys, Action::NextSelection) {
         let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let current = selection.selected.as_ref().map(|s| s.key);
         let next = cycle_selection(&markers, &visibility, current, !back);
@@ -801,6 +796,9 @@ mod tests {
             .init_resource::<PickLog>()
             .init_resource::<ViewerUiState>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::bindings::Bindings>()
+            .init_resource::<crate::bindings::KeyboardGate>()
+            .init_resource::<crate::camera_control::EscapeUsed>()
             .add_systems(
                 Update,
                 (pick_world_system, keyboard_selection_system).chain(),
@@ -924,6 +922,20 @@ mod tests {
         assert_eq!(selected(&app), Some(order[1]));
         press(&mut app, KeyCode::Tab, true);
         assert_eq!(selected(&app), Some(order[0]));
+        // An Escape the camera used (leaving free-fly, follow or chase)
+        // keeps the selection; the next one clears it.
+        app.world_mut()
+            .resource_mut::<crate::camera_control::EscapeUsed>()
+            .0 = true;
+        press(&mut app, KeyCode::Escape, false);
+        assert_eq!(
+            selected(&app),
+            Some(order[0]),
+            "the camera's Escape cleared the selection"
+        );
+        app.world_mut()
+            .resource_mut::<crate::camera_control::EscapeUsed>()
+            .0 = false;
         press(&mut app, KeyCode::Escape, false);
         assert_eq!(selected(&app), None);
         let truth = key(&markers, MarkerKind::Truth, "x");
