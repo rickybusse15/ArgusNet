@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Safety-event inspector (C3.3)
+
+- The mission rail lists each frame's safety events. Opening one shows its
+  decision, the constraints it violated, what it changed and when, with
+  buttons for the snapshot before and after and for selecting the platform.
+  Esc closes it.
+- Clicking in the side panels no longer reaches the 3D world behind them,
+  so it no longer clears the selection.
+
 ## Unreleased — Fleet index; Tab works every time (C3.2)
 
 - The mission rail's fleet is a numbered list: click a platform to select it,

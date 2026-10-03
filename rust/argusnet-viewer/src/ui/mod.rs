@@ -14,6 +14,7 @@ use crate::state::{
 };
 
 mod commands;
+mod event;
 mod inspectors;
 mod layout;
 mod platform;
@@ -24,6 +25,8 @@ mod widgets;
 mod workspace;
 
 use commands::*;
+pub use event::EventRef;
+use event::*;
 pub use inspectors::terrain_raster_status;
 use inspectors::*;
 pub use layout::ShellLayout;
@@ -35,7 +38,9 @@ use timeline::*;
 use widgets::*;
 pub use widgets::{covariance_diagonal, health_color};
 use workspace::*;
-pub use workspace::{apply_shell_command, shell_keyboard_system, ShellCommand};
+pub use workspace::{
+    apply_shell_command, close_event_on_escape_system, shell_keyboard_system, ShellCommand,
+};
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
 
@@ -226,7 +231,7 @@ pub fn viewer_ui_system(
         },
         Region::Inspector => selection_inspector(
             ui,
-            &replay_state,
+            &mut replay_state,
             &selection,
             &markers,
             &runtime_visibility,
@@ -235,7 +240,7 @@ pub fn viewer_ui_system(
         ),
     });
 
-    ui_state.canvas_origin = [canvas.min.x, canvas.min.y];
+    ui_state.canvas_rect = Some([canvas.min.x, canvas.min.y, canvas.max.x, canvas.max.y]);
     draw_zone_badges(&context, &projected_badges);
     draw_mission_phase_hud(&context, &replay_state, canvas.min);
 }
