@@ -46,7 +46,7 @@ fn bits(values: &[f64]) -> Vec<u64> {
 
 fn step(run: &mut AssembledRun) -> Frame {
     let snapshot = run.step().expect("tick runs");
-    let frame = run.fusion.frame().expect("stage 7 ran");
+    let frame = run.fusion().frame().expect("stage 7 ran");
     let mut tracks: Vec<(String, Vec<u64>)> = frame
         .tracks
         .iter()

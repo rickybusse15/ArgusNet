@@ -47,7 +47,7 @@ use crate::controller::{
 };
 use crate::deconflict::{DeconflictStage, RoleTable};
 use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
-use crate::fusion::{FusionLink, FusionStage};
+use crate::fusion::FusionStage;
 use crate::mapping::{InspectionZone, MappingLink, MappingStage};
 use crate::mission::{MissionConfig, MissionLink};
 use crate::mission_driver::{DriverReportLink, MissionDriverConfig, MissionDriverStage};
@@ -661,7 +661,6 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
 pub struct AssembledRun {
     pub sim: Simulation,
     pub battery: BatteryLink,
-    pub fusion: FusionLink,
     /// Scan-map-inspect runs only.
     pub mission: Option<MissionLink>,
     pub mapping: Option<MappingLink>,
@@ -964,7 +963,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
 
     // Stages 6 and 7: observations over the real world, fused in process.
     let fusion = FusionStage::new(bundle.tracker.clone()).map_err(BundleError::Invalid)?;
-    let fusion_link = fusion.link();
 
     // Stage 4: the hard floor under deconfliction, only when asked for. Not
     // installed otherwise, so a run without it is the run it always was.
@@ -976,7 +974,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         }
         safety.set_terrain(Box::new(world.terrain.clone()));
         safety.use_battery(battery_link.clone());
-        safety.feed_fusion(fusion_link.clone());
         sim.set_stage_handler(Stage::SafetyMonitor, Box::new(safety))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
@@ -990,7 +987,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
             .with_weather(bundle.weather.clone().map(Arc::new)),
     ));
     observe.set_terrain(Box::new(world.terrain.clone()));
-    observe.feed_fusion(fusion_link.clone());
     // The reference senses from each node's nominal controller pose, not
     // from where overrides and deconfliction moved it (P4.8e.2).
     observe.sense_from_controllers();
@@ -1000,6 +996,12 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+    sim.connect(Handoff::ObservationsToFusion)
+        .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+    if bundle.safety_blocking {
+        sim.connect(Handoff::SafetyEventsToFusion)
+            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+    }
 
     // Stage 8: coverage and zone inspection, which every mission mode keeps
     // (P4.9a.2). A pre-P4.9a.2 bundle names the grid only in its mission
@@ -1126,7 +1128,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         mapping: mapping_link,
         sim,
         battery: battery_link,
-        fusion: fusion_link,
         truth,
         replay,
         dt_s: bundle.dt_s,
@@ -1326,6 +1327,13 @@ impl AssembledRun {
         self.sim.stage::<SafetyStage>(Stage::SafetyMonitor)
     }
 
+    /// Stage 7, as assembled. Every assembled run installs it.
+    pub fn fusion(&self) -> &FusionStage {
+        self.sim
+            .stage::<FusionStage>(Stage::UpdateFusion)
+            .expect("assembly installs a FusionStage")
+    }
+
     /// Stage 6, as assembled. Every assembled run installs it.
     pub fn observe(&self) -> &ObserveStage {
         self.sim
@@ -1354,7 +1362,7 @@ impl AssembledRun {
         // Stage 7 runs on every tick, barren ones included (the track
         // lifecycle ages on ticks passing), so a missing frame is a broken
         // invariant, not an empty tick.
-        let frame = self.fusion.frame().ok_or_else(|| {
+        let frame = self.fusion().frame().ok_or_else(|| {
             RunError::Invariant(format!("stage 7 produced no frame at t={timestamp_s}"))
         })?;
         let mut replay_frame = ReplayWriter::frame(

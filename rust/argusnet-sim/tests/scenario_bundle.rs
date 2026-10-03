@@ -137,7 +137,7 @@ fn run_rust(case: &str, steps: usize, search_drones: &[String]) -> RustRun {
                 })
                 .collect(),
         );
-        let frame = run.fusion.frame().expect("stage 7 ran");
+        let frame = run.fusion().frame().expect("stage 7 ran");
         out.accepted.push(frame.observations.len());
         out.tracks.push(frame.tracks.len());
         let mut draw_free: Vec<[String; 3]> = run
@@ -502,7 +502,7 @@ fn the_assembly_wires_every_capability() {
         assert_eq!(spec.max_range_m, node.sensor.max_range_m);
     }
     assert_eq!(
-        run.fusion.config().data_association_mode,
+        run.fusion().config().data_association_mode,
         AssociationMode::Labeled
     );
     assert_eq!(run.battery.model(), reference_battery_model());
@@ -881,7 +881,7 @@ fn the_scan_assembly_wires_the_mission_as_the_bundle_describes() {
 /// This tick's safety events as the replay writes them, and as the reference
 /// did.
 fn safety_events(run: &argusnet_sim::scenario::AssembledRun) -> Value {
-    let frame = run.fusion.frame().expect("stage 7 ran");
+    let frame = run.fusion().frame().expect("stage 7 ran");
     serde_json::to_value(
         frame
             .safety_events
@@ -1056,7 +1056,7 @@ fn safety_events_reach_the_replay_and_an_unblocked_run_has_no_stage_four() {
         .clone();
     assert_eq!(record.outcome, StageOutcome::NoWork);
     assert!(record.notes.is_empty());
-    assert!(unblocked.fusion.frame().unwrap().safety_events.is_empty());
+    assert!(unblocked.fusion().frame().unwrap().safety_events.is_empty());
 }
 
 /// Stage 4 reads energy from stage 1's ledger, as the reference passes
@@ -1068,7 +1068,7 @@ fn the_assembled_safety_monitor_reads_the_battery_ledger() {
     let drone = "drone-north";
     assert!(run.battery.set_remaining_wh(drone, 0.5));
     run.step().expect("tick runs");
-    let frame = run.fusion.frame().expect("stage 7 ran");
+    let frame = run.fusion().frame().expect("stage 7 ran");
     let event = frame
         .safety_events
         .iter()
