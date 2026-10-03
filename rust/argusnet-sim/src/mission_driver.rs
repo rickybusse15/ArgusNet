@@ -153,7 +153,7 @@ pub struct RecordedLocalization {
     pub timed_out: bool,
 }
 
-/// A handle for replaying recorded localization into the mission machine.
+/// Recorded localization, replayed into the mission machine.
 ///
 /// Localization is the one input to the mission that no parity test can match
 /// bit for bit: the Rust localizer draws from ADR-006 streams, not NumPy's. A
@@ -163,36 +163,17 @@ pub struct RecordedLocalization {
 /// whole run. A replay seam, not a production path: an empty replay (the
 /// default) reads stage 8 as normal.
 #[derive(Debug, Clone, Default)]
-pub struct LocalizationReplay {
-    inner: std::sync::Arc<std::sync::Mutex<Vec<RecordedLocalization>>>,
+struct LocalizationReplay {
+    ticks: Vec<RecordedLocalization>,
 }
 
 impl LocalizationReplay {
-    /// Replace stage 8's localization with `ticks`, indexed by tick number.
-    pub fn load(&self, ticks: Vec<RecordedLocalization>) {
-        *self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = ticks;
-    }
-
     fn at(&self, tick: u64) -> Option<RecordedLocalization> {
-        let ticks = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if ticks.is_empty() {
-            return None;
-        }
-        ticks.get(tick as usize).cloned()
+        self.ticks.get(tick as usize).cloned()
     }
 
     fn is_loaded(&self) -> bool {
-        !self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
+        !self.ticks.is_empty()
     }
 }
 
@@ -218,28 +199,6 @@ pub struct DriverReport {
     pub total_count: usize,
     /// `_shared_state.coordinator_id`.
     pub coordinator_drone_id: Option<String>,
-}
-
-/// A handle on the driver's [`DriverReport`].
-#[derive(Debug, Clone, Default)]
-pub struct DriverReportLink {
-    inner: std::sync::Arc<std::sync::Mutex<DriverReport>>,
-}
-
-impl DriverReportLink {
-    pub fn report(&self) -> DriverReport {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
-    fn set(&self, report: DriverReport) {
-        *self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = report;
-    }
 }
 
 /// `CoordinationManager.elect_coordinator`: the highest battery fraction,
@@ -286,7 +245,8 @@ pub struct MissionDriverStage {
     coordinator: Option<String>,
     config: MissionDriverConfig,
     replay: LocalizationReplay,
-    report: DriverReportLink,
+    /// Refreshed at the end of every run, and on reset and restore.
+    report: DriverReport,
 }
 
 impl std::fmt::Debug for MissionDriverStage {
@@ -318,7 +278,7 @@ impl MissionDriverStage {
             coordinator: None,
             config,
             replay: LocalizationReplay::default(),
-            report: DriverReportLink::default(),
+            report: DriverReport::default(),
         }
     }
 
@@ -327,12 +287,12 @@ impl MissionDriverStage {
         std::mem::take(&mut self.override_commands)
     }
 
-    /// The handle a replay writer reads stage 9's report through.
-    pub fn report_link(&self) -> DriverReportLink {
-        self.report.clone()
+    /// What the last run reported, for the replay writer.
+    pub fn report(&self) -> &DriverReport {
+        &self.report
     }
 
-    fn publish_report(&self) {
+    fn publish_report(&mut self) {
         let position_of = |poi_id: &str| {
             self.initial_pois
                 .iter()
@@ -340,7 +300,7 @@ impl MissionDriverStage {
                 .map(|poi| poi.position)
                 .expect("a status is for one of the manager's POIs")
         };
-        self.report.set(DriverReport {
+        self.report = DriverReport {
             pois: self
                 .pois
                 .statuses()
@@ -353,12 +313,13 @@ impl MissionDriverStage {
             completed_count: self.pois.completed_count(),
             total_count: self.pois.total_count(),
             coordinator_drone_id: self.coordinator.clone(),
-        });
+        };
     }
 
-    /// The localization replay seam. See [`LocalizationReplay`].
-    pub fn localization_replay(&self) -> LocalizationReplay {
-        self.replay.clone()
+    /// Replace stage 8's localization with `ticks`, indexed by tick number.
+    /// See [`LocalizationReplay`].
+    pub fn load_localization_replay(&mut self, ticks: Vec<RecordedLocalization>) {
+        self.replay = LocalizationReplay { ticks };
     }
 
     pub fn config(&self) -> &MissionDriverConfig {
@@ -690,7 +651,7 @@ mod tests {
         };
         let mut mapping = crate::mapping::MappingStage::new(bounds).expect("bounds");
         mapping.set_footprint_radius_m(40.0);
-        let stage = MissionDriverStage::new(
+        let mut stage = MissionDriverStage::new(
             MissionDriverConfig {
                 mission: MissionConfig {
                     scan_coverage_threshold: 0.3,
@@ -701,13 +662,18 @@ mod tests {
             Vec::new(),
             BTreeMap::new(),
         );
-        stage.localization_replay().load(replay);
+        stage.load_localization_replay(replay);
         mapping.follow_mission_phase();
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
             .expect("stage 8");
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
             .expect("stage 9");
         sim
+    }
+
+    fn installed_driver(sim: &crate::simulation::Simulation) -> &MissionDriverStage {
+        sim.stage(crate::stage::Stage::EvaluateMissionTransitions)
+            .expect("stage 9 is a driver")
     }
 
     /// Stage 9's machine, reached through the session that owns it.
@@ -935,7 +901,6 @@ mod tests {
             .expect("stage 1");
         let stage =
             MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), BTreeMap::new());
-        let report = stage.report_link();
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
             .expect("stage 8");
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
@@ -943,7 +908,10 @@ mod tests {
 
         sim.step().expect("tick 0");
         assert_eq!(
-            report.report().coordinator_drone_id.as_deref(),
+            installed_driver(&sim)
+                .report()
+                .coordinator_drone_id
+                .as_deref(),
             Some("drone-1")
         );
         assert!(BatteryStage::of_mut(&mut sim)
@@ -952,7 +920,10 @@ mod tests {
         sim.step().expect("tick 1");
         assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
         assert_eq!(
-            report.report().coordinator_drone_id.as_deref(),
+            installed_driver(&sim)
+                .report()
+                .coordinator_drone_id
+                .as_deref(),
             Some("drone-1"),
             "re-elected"
         );

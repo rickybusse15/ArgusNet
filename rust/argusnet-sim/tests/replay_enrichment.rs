@@ -54,9 +54,9 @@ fn num(value: &Value) -> f64 {
 fn run(case: &str) -> (ScenarioBundle, Value, ReplayDocument) {
     let bundle = bundle_of(case);
     let reference = reference_of(case);
-    let run = assemble(&bundle).expect("bundle assembles");
-    if let Some(seam) = &run.localization_replay {
-        seam.load(
+    let mut run = assemble(&bundle).expect("bundle assembles");
+    if run.driver().is_some() {
+        run.load_localization_replay(
             reference["frames"]
                 .as_array()
                 .unwrap()
