@@ -93,7 +93,7 @@ A skip is not a pass.
 | P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | done (#128; [TIME_CONTROLS.md](TIME_CONTROLS.md)) |
 | P2.4b | Camera: damped free-fly, follow/chase with loss to the last known position, `F` focus, `1`-`9` bookmarks as per-scene preferences, one remappable binding table gated on typing; 0 allocations a frame | done (#129; [CAMERA_CONTROLS.md](CAMERA_CONTROLS.md)) |
 | P2.5a | Visual tokens (palette, spacing, type roles), bundled Arimo (OFL, D-2), status vocabulary, `Field<T>`; zero-radius flat visuals | done in this PR ([VIEWER_TOKENS.md](VIEWER_TOKENS.md)) |
-| P2.5b–g | Shell, inspectors, timeline, projections, presets and tiers, failure states | open |
+| P2.5b–g | Shell, inspectors, timeline, projections, presets and tiers, failure states | C2.0 done: `argusnet-viewer/src/ui.rs` (3 129 lines) split into `ui/{shell,timeline,inspectors,commands,widgets}.rs` plus `ui/mod.rs` (the system and its resources), a pure move: viewer tests, headless render smoke and the belief/geometry/picking probes green. C2.1–C2.3 (layout, source indicator, workspaces) open; P2.5c–g open |
 | P2.6 | Graphics acceptance across tiers | open |
 
 ## Track C — guardrails

@@ -58,7 +58,7 @@ search. Playing advances the cursor by render time times the speed.
   records the first retained time, and the cursor keeps its source time
   where that time survives, or moves to the first retained frame.
 
-## The timeline (`ui.rs`)
+## The timeline (`ui/timeline.rs`, `ui/shell.rs`)
 
 The bottom timeline is the single source-time control:
 
