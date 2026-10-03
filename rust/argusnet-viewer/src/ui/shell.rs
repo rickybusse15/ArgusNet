@@ -203,6 +203,38 @@ pub(super) fn mission_rail(
     section_safety_alerts(ui, replay_state, mission_zones);
 }
 
+/// §7.2's platform sections; with `essential`, only §4.4 rule 3's.
+pub(super) fn platform_inspector(
+    ui: &mut egui::Ui,
+    label: &str,
+    sections: &[Section],
+    essential: bool,
+) {
+    ui.label(crate::theme::TypeRole::ObjectIdentity.text(label));
+    for section in sections
+        .iter()
+        .filter(|section| section.essential || !essential)
+    {
+        ui.add_space(4.0);
+        ui.label(crate::theme::TypeRole::SectionTitle.text(section.title));
+        // Label then value, wrapping inside the inspector's width: a long
+        // unavailable reason flows onto the next line instead of clipping.
+        for row in &section.rows {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if row.legacy {
+                    ui.label(format!("{} (legacy)", row.label))
+                        .on_hover_text("A legacy estimator output: not physical integrity.");
+                } else {
+                    ui.label(row.label);
+                }
+                let text = row.value.display(String::clone);
+                ui.label(egui::RichText::new(text).color(row.value.status().color()));
+            });
+        }
+    }
+}
+
 /// The selection inspector (§4.3). With `essential`, only the selection
 /// itself: the entity list is the first thing a narrow window gives up.
 pub(super) fn selection_inspector(
@@ -214,7 +246,17 @@ pub(super) fn selection_inspector(
     ui_state: &mut ViewerUiState,
     essential: bool,
 ) {
-    section_selection(ui, selection, replay_state.max_stale_steps());
+    let platform = selection.selected.as_ref().and_then(|selected| {
+        matches!(selected.key, crate::presentation::EntityKey::Platform(_))
+            .then(|| replay_state.current_frame())
+            .flatten()
+            .and_then(|frame| inspect_platform(frame, &selected.label))
+            .map(|sections| (selected.label.clone(), sections))
+    });
+    match platform {
+        Some((label, sections)) => platform_inspector(ui, &label, &sections, essential),
+        None => section_selection(ui, selection, replay_state.max_stale_steps()),
+    }
     if !essential {
         ui.separator();
         section_entity_list(ui, markers, runtime_visibility, selection, ui_state);
