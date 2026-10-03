@@ -32,6 +32,24 @@ P4.9d and P2.0 to P2.3 reached `main` together in #122 (merge `badb1e1`).
 P2.4a and P2.4b are open as #128 and #129. The `sar_person_search` decision is
 still open.
 
+## Baseline run (Wave 0.2)
+
+`main` at `0b1032c`, 2026-10-03, in a Linux container (x86_64, glibc 2.39,
+4 cores, Python 3.11, cargo 1.98), through `scripts/ci-local.sh`. GitHub CI
+could not run: the self-hosted runner had taken no job since 2026-10-01.
+A skip is not a pass.
+
+| Job | Result | Detail |
+| --- | --- | --- |
+| python | fail → fixed | 1040 passed, 17 skipped, 1 failed: `test_run_simulation_has_no_stdout_side_effects`, because the daemon auto-build printed to stdout on a cold machine. Fixed in #139 |
+| rust-fast | fail → fixed | With `--no-fail-fast`: 9 parity tests in 6 suites failed by 1 ULP of libm rounding against fixtures captured on macOS aarch64. Fixed in #138 ([PARITY_PORTABILITY.md](PARITY_PORTABILITY.md)). Without the flag cargo reported only the first; #139 adds it. 5 `argusnet-server` tests also failed when `<repo>/target` was absent (fixed in #139) |
+| rust-lint | pass | `cargo fmt --check`, `clippy --workspace --all-targets -D warnings` |
+| rust-viewer | pass | viewer tests, binary, headless render (10,596 colours, 259 green pixels) |
+| GPU probes | pass | `belief_probes`, `geometry_probes`, `picking_probes` with `ARGUSNET_GPU_TESTS=1` on lavapipe: shader correctness, not frame rate |
+| packaging | pass | wheel, clean venv, installed-package contract |
+| security | **skipped** | pip-audit, bandit and cargo-audit not installed in the container |
+| phase acceptance | 6/7 | see [PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md#after-d-1-the-covariance-metric-redefined-2026-10-03) (run with D-1, #137) |
+
 ## Track A — runtime (critical path)
 
 | ID | Slice | State | Evidence |
