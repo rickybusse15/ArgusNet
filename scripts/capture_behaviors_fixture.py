@@ -36,6 +36,8 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from fixture_platform import captured_on  # noqa: E402
+
 from argusnet.simulation import behaviors  # noqa: E402
 
 
@@ -126,7 +128,10 @@ def main() -> int:
         if not math.isclose(sample[3], case["altitude_m"], abs_tol=15.5)
     )
     assert evasive_dips > 50, f"the evasive windows barely fired ({evasive_dips})"
-    args.out.write_text(json.dumps({"_source": Path(__file__).name, "cases": cases}) + "\n")
+    args.out.write_text(
+        json.dumps({"_source": Path(__file__).name, "_captured_on": captured_on(), "cases": cases})
+        + "\n"
+    )
     print(f"{len(cases)} cases, {len(TIMES)} times each, {evasive_dips} evasive dip samples")
     return 0
 

@@ -13,6 +13,7 @@ from argusnet.evaluation.metrics import (
     EvaluationReport,
     check_pass_fail,
     compute_covariance_reduction,
+    compute_covariance_reductions,
     compute_localisation_rmse,
     compute_time_to_reacquire,
     compute_track_continuity,
@@ -396,6 +397,55 @@ class TestCovarianceReduction:
         result = compute_covariance_reduction(frames)
         assert result == pytest.approx(0.0)
 
+    def test_final_covariance_is_at_the_last_update_not_the_last_appearance(self):
+        """A coast after the last update grows P; it must not count."""
+        frames = [
+            _make_frame(
+                0.0,
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(10.0), update_count=1)
+                ],
+            ),
+            _make_frame(
+                1.0,
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(4.0), update_count=6)
+                ],
+            ),
+            _make_frame(
+                2.0,
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(30.0), update_count=6)
+                ],
+            ),
+        ]
+        assert compute_covariance_reduction(frames) == pytest.approx(0.6)
+        assert compute_covariance_reductions(frames) == [pytest.approx(0.6)]
+
+    def test_one_value_per_qualifying_track(self):
+        frames = [
+            _make_frame(
+                0.0,
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(10.0), update_count=1),
+                    _make_track("t2", [0, 0, 0], covariance=_identity_cov(10.0), update_count=1),
+                    _make_track("t3", [0, 0, 0], covariance=_identity_cov(10.0), update_count=1),
+                ],
+            ),
+            _make_frame(
+                1.0,
+                tracks=[
+                    _make_track("t1", [0, 0, 0], covariance=_identity_cov(5.0), update_count=5),
+                    _make_track("t2", [0, 0, 0], covariance=_identity_cov(2.0), update_count=9),
+                    _make_track("t3", [0, 0, 0], covariance=_identity_cov(1.0), update_count=4),
+                ],
+            ),
+        ]
+        assert compute_covariance_reductions(frames) == [
+            pytest.approx(0.5),
+            pytest.approx(0.8),
+        ]
+
     def test_covariance_too_small_ignored(self):
         """Covariance with fewer than 9 elements is skipped."""
         frames = [
@@ -433,6 +483,7 @@ class TestEvaluateReplay:
         # Covariance reduction should be positive (scale decreases)
         assert report.covariance_reduction_mean is not None
         assert report.covariance_reduction_mean > 0.0
+        assert report.covariance_reduction_tracks >= 1
 
     def test_reliability_metrics(self):
         replay = _build_good_replay()
@@ -463,6 +514,7 @@ class TestEvaluateReplay:
         assert report.track_continuity_mean == 0.0
         assert report.localisation_rmse_m is None
         assert report.covariance_reduction_mean is None
+        assert report.covariance_reduction_tracks == 0
 
     def test_generated_at_utc_populated(self):
         replay = _build_good_replay()
@@ -637,6 +689,7 @@ class TestSerialisation:
             localisation_rmse_m=6.3,
             localisation_rmse_per_track={"t1": 5.0, "t2": 7.6},
             covariance_reduction_mean=0.65,
+            covariance_reduction_tracks=4,
             false_handoff_rate=0.02,
             infeasible_path_rejection_count=1,
             safety_override_count=0,
@@ -664,6 +717,7 @@ class TestSerialisation:
         assert restored.energy_reserve_per_drone == original.energy_reserve_per_drone
         assert restored.passed == original.passed
         assert restored.tags == original.tags
+        assert restored.covariance_reduction_tracks == 4
         assert restored.generated_at_utc == original.generated_at_utc
 
     def test_roundtrip_none_optionals(self):

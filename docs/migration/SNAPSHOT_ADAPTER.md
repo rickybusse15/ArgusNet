@@ -1,6 +1,6 @@
 # P2.0: the snapshot adapter and persistent presentation state
 
-**Status:** local, 2026-09-23. See [STATUS.md](STATUS.md).
+**Status:** local 2026-09-23; merged 2026-10-01 in #122 (`badb1e1`). See [STATUS.md](STATUS.md).
 
 DELIVERY_PLAN P2.0: *"Replace per-frame `CurrentRuntimeMarkers`
 reconstruction/string cloning with a single snapshot-to-ECS adapter. Keep typed

@@ -1,6 +1,6 @@
 # P4.8e.3: the mission driver — the default run in the Rust tick
 
-**Status:** delivered 2026-09-23, locally verified only (not pushed). Package ID
+**Status:** delivered 2026-09-23, locally verified, then merged 2026-10-01 in #122 (`badb1e1`). Package ID
 `P4.8e.3`. See [STATUS.md](STATUS.md).
 
 `scan_map_inspect` is the default mission mode, the one `argusnet sim` runs:

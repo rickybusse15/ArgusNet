@@ -124,8 +124,11 @@ job_python() {
 job_rust_fast() {
   # --exclude rather than naming crates, matching CI: a new workspace member is
   # covered by default instead of silently going untested.
+  # --no-fail-fast: without it cargo stops at the first failing test binary
+  # and every crate after it goes unreported -- a red run that hides most of
+  # what is red.
   step "cargo test --workspace --exclude argusnet-viewer" \
-    cargo test --workspace --exclude argusnet-viewer
+    cargo test --workspace --exclude argusnet-viewer --no-fail-fast
 }
 
 job_rust_lint() {

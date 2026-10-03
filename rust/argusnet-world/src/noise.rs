@@ -46,8 +46,8 @@
 //! also not a rounding artifact that might drift: the output is stable with
 //! AVX2 and AVX-512 dispatch disabled.
 
-use blake2::digest::{Update, VariableOutput};
-use blake2::Blake2bVar;
+use blake2::digest::consts::U8;
+use blake2::{Blake2b, Digest};
 
 /// Derive a terrain seed the way `procedural.py::_stable_seed` does.
 ///
@@ -58,12 +58,9 @@ use blake2::Blake2bVar;
 /// the module docs: same name in the reference, different function.
 pub fn stable_seed(parts: &[&str]) -> i64 {
     let payload = parts.join("|");
-    let mut hasher = Blake2bVar::new(8).expect("8 is a valid blake2b digest size");
-    hasher.update(payload.as_bytes());
-    let mut digest = [0u8; 8];
-    hasher
-        .finalize_variable(&mut digest)
-        .expect("digest buffer is exactly 8 bytes");
+    // An 8-byte BLAKE2b: the output length is in the parameter block, so this
+    // is Python's `blake2b(digest_size=8)`, not a truncated 64-byte digest.
+    let digest: [u8; 8] = Blake2b::<U8>::digest(payload.as_bytes()).into();
     (u64::from_le_bytes(digest) & 0x7FFF_FFFF) as i64
 }
 
@@ -291,6 +288,23 @@ mod tests {
         assert_ne!(stable_seed(&["a", "b"]), stable_seed(&["b", "a"]));
         // The join is on `|`, so these are different payloads.
         assert_ne!(stable_seed(&["a|b"]), stable_seed(&["a", "b", ""]));
+    }
+
+    #[test]
+    fn the_seed_equals_pythons_blake2b_digest_size_8() {
+        // `int.from_bytes(hashlib.blake2b("|".join(parts).encode(),
+        // digest_size=8).digest(), "little") & 0x7FFFFFFF`, the body of
+        // `procedural.py::_stable_seed`. Pins the hash itself, so a change of
+        // blake2 crate or construction cannot pass unnoticed.
+        for (parts, expected) in [
+            (&["argusnet", "7"][..], 194_503_747),
+            (&["a", "b"][..], 11_693_754),
+            (&[""][..], 1_470_146_276),
+            (&["terrain", "alpine", "12345"][..], 1_708_050_576),
+            (&["\u{e9}", "\u{fc}"][..], 1_077_898_098),
+        ] {
+            assert_eq!(stable_seed(parts), expected, "{parts:?}");
+        }
     }
 
     #[test]

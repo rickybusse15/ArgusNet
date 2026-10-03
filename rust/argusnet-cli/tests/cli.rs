@@ -406,3 +406,73 @@ fn a_config_run_records_its_resolved_config_and_timing() {
     assert_eq!(timing["build"], build);
     assert!(!document.meta.scenario.contains_key("performance"));
 }
+
+/// `--stage-timing` (P4.10-pre) reports every stage's wall time and changes
+/// nothing a run produces: the replay is byte-identical with it on.
+#[test]
+fn stage_timing_reports_every_stage_and_leaves_the_replay_unchanged() {
+    let run = |name: &str, timed: bool| {
+        let replay = scratch(&format!("{name}_replay.json"));
+        let timing = scratch(&format!("{name}_timing.json"));
+        let mut command = binary();
+        command
+            .args(["sim", "--bundle"])
+            .arg(fixture("scenario_bundle_tt.json"))
+            .arg("--replay")
+            .arg(&replay)
+            .arg("--timing-json")
+            .arg(&timing);
+        if timed {
+            command.arg("--stage-timing");
+        } else {
+            command.arg("--quiet");
+        }
+        let output = command.output().expect("runs");
+        assert!(output.status.success(), "exit {}", output.status);
+        let timing: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&timing).unwrap()).unwrap();
+        (
+            std::fs::read(&replay).unwrap(),
+            timing,
+            String::from_utf8(output.stdout).unwrap(),
+        )
+    };
+    let (plain, plain_timing, _) = run("untimed", false);
+    let (timed, timing, stdout) = run("timed", true);
+    assert!(plain == timed, "stage timing changed the replay bytes");
+    assert!(plain_timing.get("stages").is_none(), "off unless asked for");
+
+    let ticks = timing["ticks"].as_u64().unwrap();
+    let stages = timing["stages"].as_object().expect("a stages block");
+    assert_eq!(stages.len(), 11, "every stage: {:?}", stages.keys());
+    for (name, summary) in stages {
+        // Stage 0 also runs on the call that finds the run complete: commands
+        // are admitted before the completion check (see `Simulation::step`).
+        let expected = if name == "apply_commands" {
+            ticks + 1
+        } else {
+            ticks
+        };
+        assert_eq!(
+            summary["count"].as_u64(),
+            Some(expected),
+            "{name} once a tick"
+        );
+        let ms = |key: &str| summary[key].as_f64().unwrap();
+        assert!(ms("p50_ms") <= ms("p95_ms") && ms("p95_ms") <= ms("p99_ms"));
+        assert!(ms("p99_ms") <= ms("max_ms") && ms("total_ms") >= 0.0);
+        assert!(stdout.contains(name.as_str()), "{name} in the table");
+    }
+    assert!(timing["replay_write_ms"].as_f64().unwrap() > 0.0);
+    // The stages run inside the ticks they are part of.
+    let stage_total: f64 = stages
+        .iter()
+        .filter(|(name, _)| name.as_str() != "apply_commands")
+        .map(|(_, s)| s["total_ms"].as_f64().unwrap())
+        .sum();
+    let tick_total = timing["tick_ms"]["mean"].as_f64().unwrap() * ticks as f64;
+    assert!(
+        stage_total <= tick_total * 1.001,
+        "{stage_total} > {tick_total}"
+    );
+}
