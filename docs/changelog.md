@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Cheaper mission transitions (P4.10c)
+
+- Stage 9 searched the whole coverage grid for enclosed gaps on every tick,
+  locking the mapping state once per cell. It now searches only on the
+  scanning gate, where the reference does and the only place the result is
+  read: `persistent_long`'s tick drops 41 % (0.516 → 0.304 ms), with
+  byte-identical replays.
+
 ## Unreleased — Per-stage timing for the Rust tick (P4.10-pre)
 
 - `argusnet-rs sim --stage-timing` prints each stage's p50/p95/p99 and share
