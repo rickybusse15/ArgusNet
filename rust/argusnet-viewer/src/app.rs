@@ -293,6 +293,7 @@ fn run_inner(
                 crate::bindings::keyboard_gate_system,
                 advance_playback_system,
                 keyboard_playback_system,
+                crate::ui::shell_keyboard_system,
                 sync_split_viewports_system,
                 crate::picking::pointer_from_window_system,
             )

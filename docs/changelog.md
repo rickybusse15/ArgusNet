@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Workspaces, projections and presets (C2.3)
+
+- The header has three separate controls: the workspace (Operate, Plan,
+  Review), the projection (Perspective now; Top-down and Section later) and
+  the layer preset (Operational, Reconstruction, Safety). Each has a key: O,
+  V and P. None of them changes what is selected.
+- Plan and Review say what they are waiting for instead of showing
+  placeholder data.
+- The Mission / Replay / Diagnostics / Scenario panels moved into a Tools
+  menu; T opens and closes the panel.
+
 ## Unreleased — Source indicator (C2.2)
 
 - The header always says what the window is showing: `REPLAY`, `LIVE` or
