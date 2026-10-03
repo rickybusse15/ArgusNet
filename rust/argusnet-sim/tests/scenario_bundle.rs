@@ -759,23 +759,20 @@ fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle_of("scan");
     let mut run = assemble(&bundle).expect("scan bundle assembles");
-    run.localization_replay
-        .as_ref()
-        .expect("a scan run has the seam")
-        .load(
-            frames
-                .iter()
-                .map(|f| RecordedLocalization {
-                    confidences: f["mission"]["confidences"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(num)
-                        .collect(),
-                    timed_out: f["mission"]["localization_timed_out"].as_bool().unwrap(),
-                })
-                .collect(),
-        );
+    assert!(run.load_localization_replay(
+        frames
+            .iter()
+            .map(|f| RecordedLocalization {
+                confidences: f["mission"]["confidences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(num)
+                    .collect(),
+                timed_out: f["mission"]["localization_timed_out"].as_bool().unwrap(),
+            })
+            .collect(),
+    ));
 
     let mut phases = Vec::new();
     for (i, frame) in frames.iter().enumerate() {
@@ -979,23 +976,20 @@ fn a_blocking_safety_scan_run_matches_throughout() {
     let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let mut run = assemble(&bundle_of("scan_safety")).expect("assembles");
-    run.localization_replay
-        .as_ref()
-        .expect("a scan run has the seam")
-        .load(
-            frames
-                .iter()
-                .map(|f| RecordedLocalization {
-                    confidences: f["mission"]["confidences"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(num)
-                        .collect(),
-                    timed_out: f["mission"]["localization_timed_out"].as_bool().unwrap(),
-                })
-                .collect(),
-        );
+    assert!(run.load_localization_replay(
+        frames
+            .iter()
+            .map(|f| RecordedLocalization {
+                confidences: f["mission"]["confidences"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(num)
+                    .collect(),
+                timed_out: f["mission"]["localization_timed_out"].as_bool().unwrap(),
+            })
+            .collect(),
+    ));
     let mut violations: BTreeMap<String, usize> = BTreeMap::new();
     for (i, frame) in frames.iter().enumerate() {
         let snapshot = run.step().expect("tick runs");

@@ -50,7 +50,7 @@ use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
 use crate::fusion::FusionStage;
 use crate::mapping::{InspectionZone, MappingStage};
 use crate::mission::{MissionConfig, MissionStage};
-use crate::mission_driver::{DriverReportLink, MissionDriverConfig, MissionDriverStage};
+use crate::mission_driver::{MissionDriverConfig, MissionDriverStage, RecordedLocalization};
 use crate::motion::BoundsXy;
 use crate::observation_follow::ObservationTriggeredFollow;
 use crate::observe::{ObserveStage, SensorBand, SensorSpec};
@@ -660,16 +660,12 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
 /// A bundle, assembled into a running simulation.
 pub struct AssembledRun {
     pub sim: Simulation,
-    /// Scan-map-inspect runs only.
     /// The mission driver's configuration and POIs, as constructed.
+    /// Scan-map-inspect runs only.
     pub mission_setup: Option<(MissionDriverConfig, Vec<InspectionPoi>)>,
-    /// The mission driver's replay seam; see `LocalizationReplay`.
-    pub localization_replay: Option<crate::mission_driver::LocalizationReplay>,
     truth: Arc<TruthTable>,
     replay: ReplayWriter,
     dt_s: f64,
-    /// Stage 9's POI and coordinator report, scan-map-inspect runs only.
-    driver_report: Option<DriverReportLink>,
     report: FrameReport,
 }
 
@@ -1038,9 +1034,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     }
 
     // Stages 2 and 9: the scan/map/localize/inspect/egress mission.
-    let mut localization_replay = None;
     let mut mission_setup = None;
-    let mut driver_report = None;
     let mut homes_for_egress = BTreeMap::new();
     if let Some(mission) = &bundle.mission {
         let mapping_handle = mapping_stage
@@ -1086,8 +1080,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                 .collect(),
             homes,
         );
-        localization_replay = Some(driver.localization_replay());
-        driver_report = Some(driver.report_link());
         // Read back off the constructed driver, so a caller (and the wiring
         // test) sees what the stage was actually given.
         mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));
@@ -1113,13 +1105,11 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     replay.extend_meta(run_meta(bundle));
 
     Ok(AssembledRun {
-        localization_replay,
         mission_setup,
         sim,
         truth,
         replay,
         dt_s: bundle.dt_s,
-        driver_report,
         report: FrameReport {
             terrain: Some(world.terrain.clone()),
             scan_coverage_threshold: bundle
@@ -1325,6 +1315,28 @@ impl AssembledRun {
         BatteryStage::of_mut(&mut self.sim).expect("assembly chains a BatteryStage into stage 1")
     }
 
+    /// Stage 9's mission driver, for scan-map-inspect runs.
+    pub fn driver(&self) -> Option<&MissionDriverStage> {
+        self.sim
+            .stage::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+    }
+
+    /// Replace stage 8's localization with recorded ticks, for parity runs
+    /// (the driver's replay seam). Returns `false` for a run with no mission
+    /// driver, which has nothing to replay into.
+    pub fn load_localization_replay(&mut self, ticks: Vec<RecordedLocalization>) -> bool {
+        match self
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+        {
+            Some(driver) => {
+                driver.load_localization_replay(ticks);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Stage 9's mission machine, for scan-map-inspect runs.
     pub fn mission(&self) -> Option<&MissionStage> {
         MissionStage::of(&self.sim)
@@ -1487,11 +1499,11 @@ impl AssembledRun {
             })
             .collect();
 
-        let (Some(mission), Some(driver)) = (self.mission(), &self.driver_report) else {
+        let (Some(mission), Some(driver)) = (self.mission(), self.driver()) else {
             return;
         };
         let state = mission.state();
-        let report = driver.report();
+        let report = driver.report().clone();
         let terrain = self.report.terrain.as_ref();
         let newly_scanned_cells = mapping
             .newly_covered_cells()

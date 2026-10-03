@@ -172,6 +172,9 @@ lends the same-tick reads. Each slice was proven behaviour-neutral by
 pre-A1.2 record). Two `Arc<Mutex>` handles remain in `mission_driver.rs` and
 were never in the inventory: `LocalizationReplay` (a recorded input that
 assembly loads) and `DriverReportLink` (an observer the replay writer reads).
-They are observer and input seams rather than stage-to-stage edges, but the
-A1 exit grep above still finds them, so **A1's exit is not met** until they
-move behind the `SessionView` (§2.5) or into stage-owned state.
+They were observer and input seams rather than stage-to-stage edges. **Both
+are now stage-owned** (A1 exit): the replay is loaded with
+`AssembledRun::load_localization_replay` / `MissionDriverStage::
+load_localization_replay`, and the report is read with
+`MissionDriverStage::report()` through `AssembledRun::driver()`. The exit grep
+finds only a counter inside a deconflict unit test.
