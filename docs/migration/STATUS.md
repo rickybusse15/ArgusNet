@@ -29,8 +29,11 @@ are open, as are guardrails G0, G2 and G3.
 
 At 2026-10-03 everything above that was *local* is merged: P4.8d.1 through
 P4.9d and P2.0 to P2.3 reached `main` together in #122 (merge `badb1e1`).
-P2.4a and P2.4b are open as #128 and #129. The `sar_person_search` decision is
-still open.
+P2.4a and P2.4b are open as #128 and #129. The `sar_person_search` covariance
+metric was redefined (D-1, #137) and now passes; on Linux the scenario fails
+its RMSE envelope by 0.11 m instead, a platform effect of the reference, so
+whether acceptance fixes a reference platform or stores the reference is the
+open decision ([PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md#after-d-1-the-covariance-metric-redefined-2026-10-03)).
 
 ## Baseline run (Wave 0.2)
 
