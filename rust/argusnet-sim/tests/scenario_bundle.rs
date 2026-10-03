@@ -507,10 +507,10 @@ fn the_assembly_wires_every_capability() {
     assert!(summary.has_map_bounds && !summary.has_planner);
 
     assert!(
-        run.deconflict.has_terrain(),
+        run.deconflict().has_terrain(),
         "deconfliction clamps against a constant"
     );
-    let roles = run.deconflict.roles();
+    let roles = run.deconflict().roles();
     for (drone, role) in &bundle.drone_roles {
         assert_eq!(&roles.role_of(drone), role);
     }

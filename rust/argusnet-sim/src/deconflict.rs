@@ -49,8 +49,6 @@
 //! yielded to — and the write-back leaves anything absent from the resolved
 //! map untouched.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-
 use argusnet_planning::deconfliction::{
     resolve_step, DeconflictionConfig, DeconflictionEvent, ExclusionZone, FlightCorridor, Proposal,
 };
@@ -173,14 +171,11 @@ impl ConflictResolver for PlanningResolver {
     }
 }
 
-/// A handle onto the deconfliction stage.
-#[derive(Debug, Clone, Default)]
-pub struct DeconflictLink {
-    inner: Arc<Mutex<Shared>>,
-}
-
+/// What the deconfliction stage is configured with, and what its last run
+/// reported. Owned by the stage: callers outside the tick reach it through
+/// [`Simulation::stage`](crate::simulation::Simulation::stage).
 #[derive(Debug, Default)]
-struct Shared {
+struct State {
     config: DeconflictionConfig,
     roles: RoleTable,
     zones: Vec<ExclusionZone>,
@@ -188,52 +183,12 @@ struct Shared {
     events: Vec<DeconflictionEvent>,
 }
 
-impl DeconflictLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    pub fn set_config(&self, config: DeconflictionConfig) {
-        self.lock().config = config;
-    }
-
-    pub fn config(&self) -> DeconflictionConfig {
-        self.lock().config
-    }
-
-    /// The roles and terrain floor installed now.
-    pub fn roles(&self) -> RoleTable {
-        self.lock().roles.clone()
-    }
-
-    pub fn has_terrain(&self) -> bool {
-        self.lock().roles.terrain.is_some()
-    }
-
-    pub fn set_roles(&self, roles: RoleTable) {
-        self.lock().roles = roles;
-    }
-
-    pub fn set_zones(&self, zones: Vec<ExclusionZone>) {
-        self.lock().zones = zones;
-    }
-
-    pub fn set_corridors(&self, corridors: Vec<FlightCorridor>) {
-        self.lock().corridors = corridors;
-    }
-
-    /// Take the events the last run produced, leaving none behind.
-    pub fn take_events(&self) -> Vec<DeconflictionEvent> {
-        std::mem::take(&mut self.lock().events)
-    }
-}
-
 /// [`Stage::Deconflict`] as a [`StageHandler`].
 ///
 /// [`Stage::Deconflict`]: crate::stage::Stage::Deconflict
 #[derive(Debug)]
 pub struct DeconflictStage {
-    link: DeconflictLink,
+    state: State,
     resolver: Box<dyn ConflictResolver>,
 }
 
@@ -250,20 +205,61 @@ impl DeconflictStage {
 
     pub fn with_resolver(resolver: Box<dyn ConflictResolver>) -> Self {
         Self {
-            link: DeconflictLink::default(),
+            state: State::default(),
             resolver,
         }
     }
 
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> DeconflictLink {
-        self.link.clone()
+    pub fn with_config(mut self, config: DeconflictionConfig) -> Self {
+        self.state.config = config;
+        self
+    }
+
+    pub fn with_roles(mut self, roles: RoleTable) -> Self {
+        self.state.roles = roles;
+        self
+    }
+
+    pub fn with_zones(mut self, zones: Vec<ExclusionZone>) -> Self {
+        self.state.zones = zones;
+        self
+    }
+
+    pub fn with_corridors(mut self, corridors: Vec<FlightCorridor>) -> Self {
+        self.state.corridors = corridors;
+        self
+    }
+
+    pub fn set_config(&mut self, config: DeconflictionConfig) {
+        self.state.config = config;
+    }
+
+    pub fn set_roles(&mut self, roles: RoleTable) {
+        self.state.roles = roles;
+    }
+
+    pub fn config(&self) -> DeconflictionConfig {
+        self.state.config
+    }
+
+    /// The roles and terrain floor installed now.
+    pub fn roles(&self) -> &RoleTable {
+        &self.state.roles
+    }
+
+    pub fn has_terrain(&self) -> bool {
+        self.state.roles.terrain.is_some()
+    }
+
+    /// Take the events the last run produced, leaving none behind.
+    pub fn take_events(&mut self) -> Vec<DeconflictionEvent> {
+        std::mem::take(&mut self.state.events)
     }
 }
 
 impl StageHandler for DeconflictStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.events.clear();
 
         if !shared.config.enabled {
@@ -302,7 +298,7 @@ impl StageHandler for DeconflictStage {
         }
 
         let (resolved, events) = {
-            let Shared {
+            let State {
                 config,
                 roles,
                 zones,
@@ -365,6 +361,7 @@ mod tests {
     use crate::stage::Stage;
     use argusnet_planning::deconfliction::Resolution;
     use argusnet_types::{NodeState, Vector3};
+    use std::sync::{Arc, Mutex};
 
     fn simulation() -> Simulation {
         Simulation::new(SimulationConfig {
@@ -388,17 +385,22 @@ mod tests {
         }
     }
 
-    fn rig(platforms: Vec<NodeState>) -> (Simulation, DeconflictLink) {
+    fn rig(platforms: Vec<NodeState>) -> Simulation {
         rig_with(platforms, DeconflictStage::new())
     }
 
-    fn rig_with(platforms: Vec<NodeState>, stage: DeconflictStage) -> (Simulation, DeconflictLink) {
+    fn rig_with(platforms: Vec<NodeState>, stage: DeconflictStage) -> Simulation {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
-        let link = stage.link();
         sim.set_stage_handler(Stage::Deconflict, Box::new(stage))
             .expect("stage 3 is not a transaction boundary");
-        (sim, link)
+        sim
+    }
+
+    /// The installed stage, reached through the session that owns it.
+    fn decon(sim: &mut Simulation) -> &mut DeconflictStage {
+        sim.stage_mut::<DeconflictStage>(Stage::Deconflict)
+            .expect("stage 3 is a DeconflictStage")
     }
 
     fn outcome(sim: &Simulation) -> StageOutcome {
@@ -476,7 +478,7 @@ mod tests {
     /// what "the tracker and replay see the resolved positions" requires.
     #[test]
     fn two_converging_drones_are_moved_apart_in_the_world() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
             node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
         ]);
@@ -484,7 +486,7 @@ mod tests {
 
         sim.step().expect("no stage fails");
 
-        let events = link.take_events();
+        let events = decon(&mut sim).take_events();
         assert!(!events.is_empty(), "10 m apart and closing must conflict");
         assert_eq!(outcome(&sim), StageOutcome::Ran);
 
@@ -495,7 +497,7 @@ mod tests {
     /// Two platforms far apart are left alone, and the stage says so.
     #[test]
     fn well_separated_drones_are_left_alone() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-a", true, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
             node("drone-b", true, [5_000.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
         ]);
@@ -503,7 +505,7 @@ mod tests {
 
         sim.step().unwrap();
 
-        assert!(link.take_events().is_empty());
+        assert!(decon(&mut sim).take_events().is_empty());
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
         let after: Vec<_> = sim.world().platforms().iter().map(|p| p.position).collect();
         assert_eq!(before, after);
@@ -516,20 +518,20 @@ mod tests {
     /// Fewer than two mobile platforms is not a call at all.
     #[test]
     fn a_single_drone_is_never_deconflicted() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-a", true, [0.0, 0.0, 60.0], [1.0, 0.0, 0.0]),
             // Right on top of the drone, and fixed -- so it cannot conflict.
             node("tower", false, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
         ]);
         sim.step().unwrap();
-        assert!(link.take_events().is_empty());
+        assert!(decon(&mut sim).take_events().is_empty());
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
     /// A fixed node in the middle of a conflict is neither moved nor consulted.
     #[test]
     fn a_fixed_node_is_never_moved_by_a_resolution() {
-        let (mut sim, link) = rig_with(
+        let mut sim = rig_with(
             vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
                 node("tower", false, [1.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
@@ -541,7 +543,7 @@ mod tests {
 
         sim.step().unwrap();
 
-        assert!(!link.take_events().is_empty());
+        assert!(!decon(&mut sim).take_events().is_empty());
         assert_eq!(
             sim.world().platform("tower").unwrap().position,
             tower_before,
@@ -567,7 +569,7 @@ mod tests {
     /// has its adjustment discarded, and this is the only way to reach it.
     #[test]
     fn an_adjustment_without_an_event_is_discarded() {
-        let (mut sim, link) = rig_with(
+        let mut sim = rig_with(
             vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
                 node("drone-b", true, [5_000.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
@@ -578,7 +580,7 @@ mod tests {
 
         sim.step().unwrap();
 
-        assert!(link.take_events().is_empty());
+        assert!(decon(&mut sim).take_events().is_empty());
         let after: Vec<_> = sim.world().platforms().iter().map(|p| p.position).collect();
         assert_eq!(
             before, after,
@@ -593,11 +595,11 @@ mod tests {
 
     #[test]
     fn a_disabled_layer_is_skipped_not_quiet() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
             node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
         ]);
-        link.set_config(DeconflictionConfig {
+        decon(&mut sim).set_config(DeconflictionConfig {
             enabled: false,
             ..DeconflictionConfig::default()
         });
@@ -606,7 +608,7 @@ mod tests {
         sim.step().unwrap();
 
         assert!(matches!(outcome(&sim), StageOutcome::Skipped { .. }));
-        assert!(link.take_events().is_empty());
+        assert!(decon(&mut sim).take_events().is_empty());
         let after: Vec<_> = sim.world().platforms().iter().map(|p| p.position).collect();
         assert_eq!(before, after);
     }
@@ -615,16 +617,16 @@ mod tests {
     #[test]
     fn the_minimum_separation_decides_what_conflicts() {
         let conflicts_at = |min_separation_m: f64| {
-            let (mut sim, link) = rig(vec![
+            let mut sim = rig(vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
                 node("drone-b", true, [40.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
             ]);
-            link.set_config(DeconflictionConfig {
+            decon(&mut sim).set_config(DeconflictionConfig {
                 min_separation_m,
                 ..DeconflictionConfig::default()
             });
             sim.step().unwrap();
-            !link.take_events().is_empty()
+            !decon(&mut sim).take_events().is_empty()
         };
         assert!(!conflicts_at(16.0), "40 m apart clears a 16 m minimum");
         assert!(conflicts_at(100.0), "40 m apart breaches a 100 m minimum");
@@ -659,7 +661,7 @@ mod tests {
             }
         }
 
-        let (mut sim, _link) = rig_with(
+        let mut sim = rig_with(
             vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
                 node("drone-b", true, [1.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
@@ -674,7 +676,7 @@ mod tests {
 
     #[test]
     fn events_are_taken_once_and_cleared_between_ticks() {
-        let (mut sim, link) = rig_with(
+        let mut sim = rig_with(
             vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
                 node("drone-b", true, [1.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
@@ -682,14 +684,17 @@ mod tests {
             DeconflictStage::with_resolver(Box::new(AlwaysYield)),
         );
         sim.step().unwrap();
-        assert_eq!(link.take_events().len(), 1);
-        assert!(link.take_events().is_empty(), "a second take returns none");
+        assert_eq!(decon(&mut sim).take_events().len(), 1);
+        assert!(
+            decon(&mut sim).take_events().is_empty(),
+            "a second take returns none"
+        );
 
         // An untaken event does not survive into the next tick.
         sim.step().unwrap();
         sim.step().unwrap();
         assert_eq!(
-            link.take_events().len(),
+            decon(&mut sim).take_events().len(),
             1,
             "each tick's events replace the last tick's rather than accruing"
         );
@@ -729,7 +734,7 @@ mod tests {
             }
         }
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let (mut sim, _link) = rig_with(
+        let mut sim = rig_with(
             vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [1.0, 0.0, 0.0]),
                 node("tower", false, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
@@ -752,13 +757,13 @@ mod tests {
     #[test]
     fn role_priority_decides_who_yields() {
         let yielded_by = |roles: RoleTable| {
-            let (mut sim, link) = rig(vec![
+            let mut sim = rig(vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
                 node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
             ]);
-            link.set_roles(roles);
+            decon(&mut sim).set_roles(roles);
             sim.step().unwrap();
-            let events = link.take_events();
+            let events = decon(&mut sim).take_events();
             assert!(!events.is_empty(), "the pair must conflict");
             events[0].yielding_drone_id.clone()
         };
@@ -788,7 +793,7 @@ mod tests {
     /// leave a stale list behind.
     #[test]
     fn a_tick_that_returns_early_does_not_replay_the_last_ticks_events() {
-        let (mut sim, link) = rig_with(
+        let mut sim = rig_with(
             vec![
                 node("drone-a", true, [0.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
                 node("drone-b", true, [1.0, 0.0, 60.0], [0.0, 0.0, 0.0]),
@@ -799,14 +804,14 @@ mod tests {
         // Deliberately do NOT take them.
 
         // Now make the next tick return early, before the resolver runs.
-        link.set_config(DeconflictionConfig {
+        decon(&mut sim).set_config(DeconflictionConfig {
             enabled: false,
             ..DeconflictionConfig::default()
         });
         sim.step().unwrap();
 
         assert!(
-            link.take_events().is_empty(),
+            decon(&mut sim).take_events().is_empty(),
             "an early return must leave no events, not the previous tick's"
         );
     }
