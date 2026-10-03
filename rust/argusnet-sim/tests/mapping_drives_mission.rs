@@ -83,7 +83,7 @@ fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
         inputs.mobile_count = 1;
         // Converged, so the gate that trips is the coverage one.
         inputs.localization_confidences = vec![0.99];
-        inputs.gap_cell_fraction = 0.0;
+        inputs.gap_cell_fraction = Some(0.0);
         inputs.coverage_fraction = mapping_link.coverage_fraction();
         mission_link.set_inputs(inputs);
 

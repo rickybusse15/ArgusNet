@@ -280,6 +280,21 @@ impl MappingLink {
         self.lock().coverage.count_at(i, j)
     }
 
+    /// Every cell's count, `i`-major (`counts[i * ny + j]`), read under one
+    /// lock. A whole-grid reader calling [`Self::coverage_count_at`] per cell
+    /// takes the lock `nx * ny` times.
+    pub fn coverage_counts(&self) -> Vec<u32> {
+        let shared = self.lock();
+        let (nx, ny) = shared.coverage.dimensions();
+        let mut counts = Vec::with_capacity(nx * ny);
+        for i in 0..nx {
+            for j in 0..ny {
+                counts.push(shared.coverage.count_at(i, j));
+            }
+        }
+        counts
+    }
+
     /// Track inspection of these zones, replacing any tracked before.
     ///
     /// Each zone's coverage map covers the stage's whole grid, as the
@@ -1252,7 +1267,7 @@ mod tests {
         done.mobile_count = 1;
         done.localization_confidences = vec![0.99];
         done.coverage_fraction = 0.99;
-        done.gap_cell_fraction = 0.0;
+        done.gap_cell_fraction = Some(0.0);
         mission_link.set_inputs(done);
         sim.step().unwrap();
         assert_eq!(mission_link.phase(), MissionPhase::Inspecting);
@@ -1601,7 +1616,7 @@ mod tests {
         inputs.mobile_count = 1;
         inputs.localization_confidences = vec![0.10];
         inputs.coverage_fraction = 0.99;
-        inputs.gap_cell_fraction = 0.0;
+        inputs.gap_cell_fraction = Some(0.0);
         mission_link.set_inputs(inputs);
         sim.step().unwrap();
         assert_eq!(mission_link.phase(), MissionPhase::Localizing);
