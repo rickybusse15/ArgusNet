@@ -32,7 +32,7 @@
 //!
 //! **`AlwaysVisible` is not a stand-in for the real thing.** A run using it
 //! generates observations through terrain, and
-//! [`ObserveLink::visibility_is_modelled`] reports whether an oracle was
+//! [`ObserveStage::visibility_is_modelled`] reports whether an oracle was
 //! installed so a caller cannot mistake one for the other.
 //!
 //! # The per-pair stream is opened *after* the draw-free gates
@@ -67,7 +67,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use argusnet_sensing::cascade::{
     evaluate_pair_traced, Blocker, DominantLoss, FovInput, Gate, GenerationTally, Outcome,
@@ -389,7 +388,7 @@ pub struct Detection {
 ///
 /// A run using this generates observations **through terrain**. It is the right
 /// default for a slice that does not own line of sight, and
-/// [`ObserveLink::visibility_is_modelled`] is how a caller tells the two apart.
+/// [`ObserveStage::visibility_is_modelled`] is how a caller tells the two apart.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AlwaysVisible;
 
@@ -421,8 +420,9 @@ struct SensorState {
     rng: DeterministicRng,
 }
 
+/// The sensor table, its feeds and the last batch, owned by the stage.
 #[derive(Debug)]
-struct Shared {
+struct ObserveState {
     sensors: BTreeMap<String, SensorSpec>,
     drifts: BTreeMap<String, SensorState>,
     terrain: Box<dyn TerrainHeight>,
@@ -436,122 +436,6 @@ struct Shared {
     rejections: Vec<ObservationRejection>,
     fusion: Option<FusionLink>,
     controllers: Option<ControllerLink>,
-}
-
-/// A handle on the sensor table and the last batch.
-#[derive(Debug, Clone)]
-pub struct ObserveLink {
-    inner: Arc<Mutex<Shared>>,
-}
-
-impl ObserveLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Give `node_id` a sensor. A platform with no spec generates nothing.
-    ///
-    /// Installing also opens the sensor's own bias stream, keyed on the node id
-    /// so two sensors never share a walk. Re-installing resets the walk, which
-    /// matches `SensorModel::reset`.
-    pub fn install_sensor(&self, node_id: &str, spec: SensorSpec) {
-        let mut shared = self.lock();
-        shared.sensors.insert(node_id.to_string(), spec);
-        shared
-            .drifts
-            .insert(node_id.to_string(), SensorState::fresh(node_id, &spec));
-    }
-
-    pub fn remove_sensor(&self, node_id: &str) {
-        let mut shared = self.lock();
-        shared.sensors.remove(node_id);
-        shared.drifts.remove(node_id);
-    }
-
-    /// Install the terrain sampler the altitude ramp needs. Without one, AGL is
-    /// measured from the datum.
-    pub fn set_terrain(&self, terrain: Box<dyn TerrainHeight>) {
-        self.lock().terrain = terrain;
-    }
-
-    /// The accumulated bearing bias for `node_id`, radians.
-    pub fn bias_rad(&self, node_id: &str) -> Option<f64> {
-        self.lock()
-            .drifts
-            .get(node_id)
-            .map(|state| state.drift.current_bias_rad())
-    }
-
-    pub fn sensor(&self, node_id: &str) -> Option<SensorSpec> {
-        self.lock().sensors.get(node_id).copied()
-    }
-
-    pub fn set_visibility_oracle(&self, oracle: Box<dyn VisibilityOracle>) {
-        let mut shared = self.lock();
-        shared.oracle = oracle;
-        shared.oracle_installed = true;
-    }
-
-    /// Whether line of sight is actually being modelled, or whether the stage
-    /// is running on [`AlwaysVisible`] and generating observations through
-    /// terrain.
-    pub fn visibility_is_modelled(&self) -> bool {
-        self.lock().oracle_installed
-    }
-
-    /// Ask the installed oracle about one sight line, exactly as stage 6
-    /// would. A diagnostic, and how a caller confirms what an assembled run
-    /// is actually sensing through.
-    pub fn probe(
-        &self,
-        from: [f64; 3],
-        to: [f64; 3],
-        max_range_m: f64,
-    ) -> (SightLine, Option<Detection>) {
-        self.lock()
-            .oracle
-            .sight_and_detection(from, to, max_range_m)
-    }
-
-    /// Sense from `source`'s poses rather than from `TickWorld`. See
-    /// [`SensorPoseSource`].
-    pub fn set_pose_source(&self, source: Box<dyn SensorPoseSource>) {
-        self.lock().pose_source = Some(source);
-    }
-
-    /// Hand each tick's batch straight to stage 7.
-    pub fn feed_fusion(&self, fusion: FusionLink) {
-        self.lock().fusion = Some(fusion);
-    }
-
-    /// Hand each tick's accepted-observation counts to the controller stage.
-    ///
-    /// This is the reference's `controller.update_from_frame(frame, batch)`
-    /// loop. It runs after fusion there and inside stage 6 here; the
-    /// difference is unobservable, because the only reader of the engagement
-    /// it sets is the *next* tick's stage 1.
-    pub fn feed_controllers(&self, controllers: ControllerLink) {
-        self.lock().controllers = Some(controllers);
-    }
-
-    pub fn observations(&self) -> Vec<BearingObservation> {
-        self.lock().observations.clone()
-    }
-
-    pub fn tally(&self) -> GenerationTally {
-        self.lock().tally.clone()
-    }
-
-    /// Every pair considered on the last run, in `(node, target)` order.
-    pub fn records(&self) -> Vec<PairRecord> {
-        self.lock().records.clone()
-    }
-
-    /// The last run's generation rejections: `ObservationBatch.
-    /// generation_rejections`, in `(node, target)` order.
-    pub fn generation_rejections(&self) -> Vec<ObservationRejection> {
-        self.lock().rejections.clone()
-    }
 }
 
 impl SensorState {
@@ -571,7 +455,7 @@ impl SensorState {
 /// [`Stage::GenerateObservations`]: crate::stage::Stage::GenerateObservations
 #[derive(Debug)]
 pub struct ObserveStage {
-    link: ObserveLink,
+    state: ObserveState,
 }
 
 impl Default for ObserveStage {
@@ -583,28 +467,123 @@ impl Default for ObserveStage {
 impl ObserveStage {
     pub fn new() -> Self {
         Self {
-            link: ObserveLink {
-                inner: Arc::new(Mutex::new(Shared {
-                    sensors: BTreeMap::new(),
-                    drifts: BTreeMap::new(),
-                    terrain: Box::new(FlatDatum),
-                    oracle: Box::new(AlwaysVisible),
-                    oracle_installed: false,
-                    pose_source: None,
-                    observations: Vec::new(),
-                    tally: GenerationTally::default(),
-                    records: Vec::new(),
-                    rejections: Vec::new(),
-                    fusion: None,
-                    controllers: None,
-                })),
+            state: ObserveState {
+                sensors: BTreeMap::new(),
+                drifts: BTreeMap::new(),
+                terrain: Box::new(FlatDatum),
+                oracle: Box::new(AlwaysVisible),
+                oracle_installed: false,
+                pose_source: None,
+                observations: Vec::new(),
+                tally: GenerationTally::default(),
+                records: Vec::new(),
+                rejections: Vec::new(),
+                fusion: None,
+                controllers: None,
             },
         }
     }
 
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> ObserveLink {
-        self.link.clone()
+    /// Give `node_id` a sensor. A platform with no spec generates nothing.
+    ///
+    /// Installing also opens the sensor's own bias stream, keyed on the node id
+    /// so two sensors never share a walk. Re-installing resets the walk, which
+    /// matches `SensorModel::reset`.
+    pub fn install_sensor(&mut self, node_id: &str, spec: SensorSpec) {
+        let shared = &mut self.state;
+        shared.sensors.insert(node_id.to_string(), spec);
+        shared
+            .drifts
+            .insert(node_id.to_string(), SensorState::fresh(node_id, &spec));
+    }
+
+    pub fn remove_sensor(&mut self, node_id: &str) {
+        let shared = &mut self.state;
+        shared.sensors.remove(node_id);
+        shared.drifts.remove(node_id);
+    }
+
+    /// Install the terrain sampler the altitude ramp needs. Without one, AGL is
+    /// measured from the datum.
+    pub fn set_terrain(&mut self, terrain: Box<dyn TerrainHeight>) {
+        self.state.terrain = terrain;
+    }
+
+    /// The accumulated bearing bias for `node_id`, radians.
+    pub fn bias_rad(&self, node_id: &str) -> Option<f64> {
+        self.state
+            .drifts
+            .get(node_id)
+            .map(|state| state.drift.current_bias_rad())
+    }
+
+    pub fn sensor(&self, node_id: &str) -> Option<SensorSpec> {
+        self.state.sensors.get(node_id).copied()
+    }
+
+    pub fn set_visibility_oracle(&mut self, oracle: Box<dyn VisibilityOracle>) {
+        let shared = &mut self.state;
+        shared.oracle = oracle;
+        shared.oracle_installed = true;
+    }
+
+    /// Whether line of sight is actually being modelled, or whether the stage
+    /// is running on [`AlwaysVisible`] and generating observations through
+    /// terrain.
+    pub fn visibility_is_modelled(&self) -> bool {
+        self.state.oracle_installed
+    }
+
+    /// Ask the installed oracle about one sight line, exactly as stage 6
+    /// would. A diagnostic, and how a caller confirms what an assembled run
+    /// is actually sensing through.
+    pub fn probe(
+        &self,
+        from: [f64; 3],
+        to: [f64; 3],
+        max_range_m: f64,
+    ) -> (SightLine, Option<Detection>) {
+        self.state.oracle.sight_and_detection(from, to, max_range_m)
+    }
+
+    /// Sense from `source`'s poses rather than from `TickWorld`. See
+    /// [`SensorPoseSource`].
+    pub fn set_pose_source(&mut self, source: Box<dyn SensorPoseSource>) {
+        self.state.pose_source = Some(source);
+    }
+
+    /// Hand each tick's batch straight to stage 7.
+    pub fn feed_fusion(&mut self, fusion: FusionLink) {
+        self.state.fusion = Some(fusion);
+    }
+
+    /// Hand each tick's accepted-observation counts to the controller stage.
+    ///
+    /// This is the reference's `controller.update_from_frame(frame, batch)`
+    /// loop. It runs after fusion there and inside stage 6 here; the
+    /// difference is unobservable, because the only reader of the engagement
+    /// it sets is the *next* tick's stage 1.
+    pub fn feed_controllers(&mut self, controllers: ControllerLink) {
+        self.state.controllers = Some(controllers);
+    }
+
+    pub fn observations(&self) -> Vec<BearingObservation> {
+        self.state.observations.clone()
+    }
+
+    pub fn tally(&self) -> GenerationTally {
+        self.state.tally.clone()
+    }
+
+    /// Every pair considered on the last run, in `(node, target)` order.
+    pub fn records(&self) -> Vec<PairRecord> {
+        self.state.records.clone()
+    }
+
+    /// The last run's generation rejections: `ObservationBatch.
+    /// generation_rejections`, in `(node, target)` order.
+    pub fn generation_rejections(&self) -> Vec<ObservationRejection> {
+        self.state.rejections.clone()
     }
 }
 
@@ -774,7 +753,7 @@ fn bearing_perturbation(noise_std_rad: f64, rng: &mut DeterministicRng) -> Vecto
 impl StageHandler for ObserveStage {
     /// Every sensor's walk back to zero, streams re-seeded: installation state.
     fn reset(&mut self) {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         let fresh: BTreeMap<String, SensorState> = shared
             .sensors
             .iter()
@@ -790,7 +769,7 @@ impl StageHandler for ObserveStage {
     /// The bias walks, and where each walk's stream has got to. The sensor
     /// table, oracle and feeds are configuration, rebuilt by assembly.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
-        let shared = self.link.lock();
+        let shared = &self.state;
         Some(serde_json::to_value(&shared.drifts).expect("drift state serialises"))
     }
 
@@ -799,7 +778,7 @@ impl StageHandler for ObserveStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let drifts: BTreeMap<String, SensorState> = crate::simulation::decode_stage_state(state)?;
-        let shared = self.link.lock();
+        let shared = &self.state;
         if !drifts.keys().eq(shared.sensors.keys()) {
             return Err(crate::simulation::StageStateError::Malformed {
                 detail: "bias walks name a different sensor table from this run's".into(),
@@ -813,7 +792,7 @@ impl StageHandler for ObserveStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let drifts: BTreeMap<String, SensorState> = crate::simulation::decode_stage_state(state)?;
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.drifts = drifts;
         shared.observations.clear();
         shared.records.clear();
@@ -823,7 +802,7 @@ impl StageHandler for ObserveStage {
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.observations.clear();
         shared.records.clear();
         shared.rejections.clear();
@@ -1159,8 +1138,7 @@ impl StageHandler for ObserveStage {
             .controllers
             .clone()
             .map(|link| (link, shared.tally.accepted_by_node_target.clone()));
-        drop(shared);
-        // Outside this stage's lock: the controller link takes its own.
+        // The controller link takes its own lock.
         if let Some((controllers, accepted)) = engagement_feed {
             for node_id in controllers.observe(&accepted) {
                 context.note(format!(
@@ -1232,15 +1210,25 @@ mod tests {
         }
     }
 
-    fn rig(platforms: Vec<NodeState>, truths: Vec<TruthState>) -> (Simulation, ObserveLink) {
+    fn rig(platforms: Vec<NodeState>, truths: Vec<TruthState>) -> Simulation {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
         sim.set_truth(truths);
-        let stage = ObserveStage::new();
-        let link = stage.link();
-        sim.set_stage_handler(Stage::GenerateObservations, Box::new(stage))
+        sim.set_stage_handler(Stage::GenerateObservations, Box::new(ObserveStage::new()))
             .expect("stage 6 is not a transaction boundary");
-        (sim, link)
+        sim
+    }
+
+    /// The installed stage, read-only.
+    fn observed(sim: &Simulation) -> &ObserveStage {
+        sim.stage::<ObserveStage>(Stage::GenerateObservations)
+            .expect("stage 6 is an ObserveStage")
+    }
+
+    /// The installed stage, reached through the session that owns it.
+    fn obs(sim: &mut Simulation) -> &mut ObserveStage {
+        sim.stage_mut::<ObserveStage>(Stage::GenerateObservations)
+            .expect("stage 6 is an ObserveStage")
     }
 
     fn outcome(sim: &Simulation) -> StageOutcome {
@@ -1254,8 +1242,9 @@ mod tests {
             .clone()
     }
 
-    fn reason(link: &ObserveLink, node_id: &str, target_id: &str) -> Option<RejectReason> {
-        link.records()
+    fn reason(stage: &ObserveStage, node_id: &str, target_id: &str) -> Option<RejectReason> {
+        stage
+            .records()
             .into_iter()
             .find(|r| r.node_id == node_id && r.target_id == target_id)
             .and_then(|r| match r.outcome {
@@ -1272,7 +1261,7 @@ mod tests {
     /// an observation whose origin is the sensor's own position.
     #[test]
     fn every_sensor_is_paired_with_every_target() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![
                 sensor_node("s0", 0.0, 0.0, false),
                 sensor_node("s1", 100.0, 0.0, false),
@@ -1282,15 +1271,15 @@ mod tests {
                 target("t1", 60.0, 10.0, 20.0),
             ],
         );
-        link.install_sensor("s0", permissive());
-        link.install_sensor("s1", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s1", permissive());
 
         sim.step().expect("tick runs");
 
         assert_eq!(outcome(&sim), StageOutcome::Ran);
-        assert_eq!(link.records().len(), 4);
-        assert_eq!(link.tally().attempted, 4);
-        let observations = link.observations();
+        assert_eq!(obs(&mut sim).records().len(), 4);
+        assert_eq!(obs(&mut sim).tally().attempted, 4);
+        let observations = obs(&mut sim).observations();
         assert_eq!(observations.len(), 4);
         for observation in &observations {
             let expected = if observation.node_id == "s0" {
@@ -1306,54 +1295,53 @@ mod tests {
     /// not an observer.
     #[test]
     fn a_platform_without_a_sensor_generates_nothing() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![
                 sensor_node("eyes", 0.0, 0.0, false),
                 sensor_node("blind", 10.0, 0.0, false),
             ],
             vec![target("t0", 50.0, 50.0, 30.0)],
         );
-        link.install_sensor("eyes", permissive());
+        obs(&mut sim).install_sensor("eyes", permissive());
 
         sim.step().expect("tick runs");
 
-        assert_eq!(link.records().len(), 1);
-        assert_eq!(link.observations().len(), 1);
-        assert_eq!(link.observations()[0].node_id, "eyes");
+        assert_eq!(obs(&mut sim).records().len(), 1);
+        assert_eq!(obs(&mut sim).observations().len(), 1);
+        assert_eq!(obs(&mut sim).observations()[0].node_id, "eyes");
     }
 
     /// A sensor installed for a platform that is not in the world is skipped
     /// rather than invented a position for.
     #[test]
     fn a_sensor_for_an_absent_platform_is_skipped() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("present", 0.0, 0.0, false)],
             vec![target("t0", 50.0, 50.0, 30.0)],
         );
-        link.install_sensor("present", permissive());
-        link.install_sensor("ghost", permissive());
+        obs(&mut sim).install_sensor("present", permissive());
+        obs(&mut sim).install_sensor("ghost", permissive());
 
         sim.step().expect("tick runs");
 
         assert_eq!(outcome(&sim), StageOutcome::Ran);
-        assert_eq!(link.records().len(), 1);
-        assert_eq!(link.tally().attempted, 1);
+        assert_eq!(obs(&mut sim).records().len(), 1);
+        assert_eq!(obs(&mut sim).tally().attempted, 1);
     }
 
     #[test]
     fn with_no_sensors_or_no_targets_there_is_no_work() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 50.0, 50.0, 30.0)],
         );
         sim.step().expect("tick runs");
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
 
-        let (mut empty, empty_link) = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
-        empty_link.install_sensor("s0", permissive());
+        let mut empty = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
+        obs(&mut empty).install_sensor("s0", permissive());
         empty.step().expect("tick runs");
         assert_eq!(outcome(&empty), StageOutcome::NoWork);
-        let _ = link;
     }
 
     // -----------------------------------------------------------------
@@ -1365,14 +1353,14 @@ mod tests {
     /// tested, not the cascade's arithmetic, which P4.5b already pinned.
     #[test]
     fn a_target_past_the_sensors_range_is_rejected() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![
                 target("near", 100.0, 0.0, 0.0),
                 target("far", 5_000.0, 0.0, 0.0),
             ],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 max_range_m: 1_000.0,
@@ -1382,8 +1370,11 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        assert_eq!(reason(&link, "s0", "far"), Some(RejectReason::OutOfRange));
-        assert_eq!(reason(&link, "s0", "near"), None);
+        assert_eq!(
+            reason(obs(&mut sim), "s0", "far"),
+            Some(RejectReason::OutOfRange)
+        );
+        assert_eq!(reason(obs(&mut sim), "s0", "near"), None);
     }
 
     /// Elevation is `asin(dz / slant_range)` in degrees — the angle above the
@@ -1403,14 +1394,14 @@ mod tests {
     /// NaN case because `NaN < 60.0` is false, so it accepts by default.
     #[test]
     fn elevation_is_the_angle_above_horizontal_not_the_height_or_the_horizontal_ratio() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![
                 target("shallow", 100.0, 0.0, 100.0),
                 target("steep", 10.0, 0.0, 20.0),
             ],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 required_elevation_deg: 60.0,
@@ -1422,11 +1413,11 @@ mod tests {
 
         // 45 degrees, below the gate.
         assert_eq!(
-            reason(&link, "s0", "shallow"),
+            reason(obs(&mut sim), "s0", "shallow"),
             Some(RejectReason::LowElevation)
         );
         // 63.4 degrees, above it.
-        assert_eq!(reason(&link, "s0", "steep"), None);
+        assert_eq!(reason(obs(&mut sim), "s0", "steep"), None);
     }
 
     /// A directional sensor gates on the angle between its look direction — its
@@ -1435,14 +1426,14 @@ mod tests {
     fn a_directional_sensor_gates_on_the_angle_to_its_heading() {
         let mut platform = sensor_node("s0", 0.0, 0.0, true);
         platform.velocity = Vector3::new(10.0, 0.0, 0.0);
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![platform],
             vec![
                 target("ahead", 100.0, 0.0, 0.0),
                 target("behind", -100.0, 0.0, 0.0),
             ],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 fov_half_angle_deg: Some(45.0),
@@ -1452,9 +1443,9 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        assert_eq!(reason(&link, "s0", "ahead"), None);
+        assert_eq!(reason(obs(&mut sim), "s0", "ahead"), None);
         assert_eq!(
-            reason(&link, "s0", "behind"),
+            reason(obs(&mut sim), "s0", "behind"),
             Some(RejectReason::OutsideFov)
         );
     }
@@ -1465,11 +1456,11 @@ mod tests {
     /// see nothing at all.
     #[test]
     fn a_stationary_directional_sensor_skips_the_fov_gate_rather_than_rejecting() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, true)],
             vec![target("behind", -100.0, 0.0, 0.0)],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 fov_half_angle_deg: Some(1.0),
@@ -1479,8 +1470,8 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        assert_eq!(reason(&link, "s0", "behind"), None);
-        assert_eq!(link.observations().len(), 1);
+        assert_eq!(reason(obs(&mut sim), "s0", "behind"), None);
+        assert_eq!(obs(&mut sim).observations().len(), 1);
     }
 
     /// An oracle that reports a fixed detection result, so what stage 6 does
@@ -1516,15 +1507,15 @@ mod tests {
         }
     }
 
-    fn one_pair_with(oracle: Detection) -> ObserveLink {
-        let (mut sim, link) = rig(
+    fn one_pair_with(oracle: Detection) -> Simulation {
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
-        link.set_visibility_oracle(Box::new(FixedDetection(oracle)));
+        obs(&mut sim).install_sensor("s0", permissive());
+        obs(&mut sim).set_visibility_oracle(Box::new(FixedDetection(oracle)));
         sim.step().expect("tick runs");
-        link
+        sim
     }
 
     /// The world's `p_d` multiplies into the draw: zero can never be accepted.
@@ -1532,27 +1523,33 @@ mod tests {
     /// anything else as a dropout -- the reference's naming.
     #[test]
     fn the_world_detection_probability_gates_the_draw_and_names_the_loss() {
-        let link = one_pair_with(detection(0.0, 1.0, false, 1.0));
-        assert_eq!(reason(&link, "s0", "t0"), Some(RejectReason::Dropout));
-        let link = one_pair_with(detection(0.0, 1.0, true, 1.0));
+        let mut sim = one_pair_with(detection(0.0, 1.0, false, 1.0));
         assert_eq!(
-            reason(&link, "s0", "t0"),
+            reason(obs(&mut sim), "s0", "t0"),
+            Some(RejectReason::Dropout)
+        );
+        let mut sim = one_pair_with(detection(0.0, 1.0, true, 1.0));
+        assert_eq!(
+            reason(obs(&mut sim), "s0", "t0"),
             Some(RejectReason::VegetationOcclusion)
         );
         // A full cloud block is a zero factor, whatever p_d says.
-        let link = one_pair_with(detection(1.0, 1.0, false, 0.0));
-        assert_eq!(reason(&link, "s0", "t0"), Some(RejectReason::Dropout));
+        let mut sim = one_pair_with(detection(1.0, 1.0, false, 0.0));
+        assert_eq!(
+            reason(obs(&mut sim), "s0", "t0"),
+            Some(RejectReason::Dropout)
+        );
         // Certain detection is accepted.
-        let link = one_pair_with(detection(1.0, 1.0, false, 1.0));
-        assert_eq!(reason(&link, "s0", "t0"), None);
+        let mut sim = one_pair_with(detection(1.0, 1.0, false, 1.0));
+        assert_eq!(reason(obs(&mut sim), "s0", "t0"), None);
     }
 
     /// The bearing noise scales by the world's effective noise multiplier, not
     /// by the sight line's raw one (which the fixed oracle reports as 1).
     #[test]
     fn the_effective_noise_multiplier_scales_the_bearing_noise() {
-        let plain = one_pair_with(detection(1.0, 1.0, false, 1.0)).observations();
-        let noisy = one_pair_with(detection(1.0, 2.5, false, 1.0)).observations();
+        let plain = obs(&mut one_pair_with(detection(1.0, 1.0, false, 1.0))).observations();
+        let noisy = obs(&mut one_pair_with(detection(1.0, 2.5, false, 1.0))).observations();
         let (plain, noisy) = (&plain[0], &noisy[0]);
         assert_eq!(noisy.bearing_std_rad, plain.bearing_std_rad * 2.5);
     }
@@ -1560,11 +1557,11 @@ mod tests {
     /// Dropout is a probability, and the draw comes from the pair's own stream.
     #[test]
     fn a_certain_dropout_rejects_every_pair() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 dropout_probability: 1.0,
@@ -1574,9 +1571,12 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        assert_eq!(reason(&link, "s0", "t0"), Some(RejectReason::Dropout));
-        assert!(link.observations().is_empty());
-        assert_eq!(link.tally().rejected(), 1);
+        assert_eq!(
+            reason(obs(&mut sim), "s0", "t0"),
+            Some(RejectReason::Dropout)
+        );
+        assert!(obs(&mut sim).observations().is_empty());
+        assert_eq!(obs(&mut sim).tally().rejected(), 1);
     }
 
     // -----------------------------------------------------------------
@@ -1595,38 +1595,38 @@ mod tests {
     /// The oracle's verdict reaches the cascade.
     #[test]
     fn an_installed_oracle_can_block_every_pair() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
-        link.set_visibility_oracle(Box::new(NeverVisible));
+        obs(&mut sim).install_sensor("s0", permissive());
+        obs(&mut sim).set_visibility_oracle(Box::new(NeverVisible));
 
         sim.step().expect("tick runs");
 
         // `Blocker::reason` is private, so this names the reason the terrain
         // blocker maps to rather than asking the blocker for it.
         assert_eq!(
-            reason(&link, "s0", "t0"),
+            reason(obs(&mut sim), "s0", "t0"),
             Some(RejectReason::TerrainOcclusion)
         );
-        assert!(link.observations().is_empty());
+        assert!(obs(&mut sim).observations().is_empty());
     }
 
-    /// The default oracle sees through terrain, and the link says so. A caller
+    /// The default oracle sees through terrain, and the stage says so. A caller
     /// that mistook a default run for a line-of-sight-modelled one would be
     /// reading acceptance rates that mean something else entirely.
     #[test]
     fn the_default_oracle_is_reported_as_not_modelling_visibility() {
-        let (_sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
 
-        assert!(!link.visibility_is_modelled());
+        assert!(!obs(&mut sim).visibility_is_modelled());
 
-        link.set_visibility_oracle(Box::new(NeverVisible));
-        assert!(link.visibility_is_modelled());
+        obs(&mut sim).set_visibility_oracle(Box::new(NeverVisible));
+        assert!(obs(&mut sim).visibility_is_modelled());
     }
 
     // -----------------------------------------------------------------
@@ -1639,19 +1639,19 @@ mod tests {
     /// looking at the same target from the same place still draw differently.
     #[test]
     fn two_sensors_in_the_same_place_draw_different_noise() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![
                 sensor_node("a", 0.0, 0.0, false),
                 sensor_node("b", 0.0, 0.0, false),
             ],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("a", permissive());
-        link.install_sensor("b", permissive());
+        obs(&mut sim).install_sensor("a", permissive());
+        obs(&mut sim).install_sensor("b", permissive());
 
         sim.step().expect("tick runs");
 
-        let observations = link.observations();
+        let observations = obs(&mut sim).observations();
         assert_eq!(observations.len(), 2);
         assert_ne!(observations[0].direction, observations[1].direction);
     }
@@ -1660,16 +1660,16 @@ mod tests {
     /// millisecond key is part of the seed.
     #[test]
     fn the_same_pair_draws_differently_on_successive_ticks() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
 
         sim.step().expect("tick runs");
-        let first = link.observations()[0].direction;
+        let first = obs(&mut sim).observations()[0].direction;
         sim.step().expect("tick runs");
-        let second = link.observations()[0].direction;
+        let second = obs(&mut sim).observations()[0].direction;
 
         assert_ne!(first, second);
     }
@@ -1680,15 +1680,15 @@ mod tests {
     fn a_run_is_reproducible() {
         let mut runs = Vec::new();
         for _ in 0..2 {
-            let (mut sim, link) = rig(
+            let mut sim = rig(
                 vec![sensor_node("s0", 0.0, 0.0, false)],
                 vec![target("t0", 100.0, 50.0, 25.0)],
             );
-            link.install_sensor("s0", permissive());
+            obs(&mut sim).install_sensor("s0", permissive());
             for _ in 0..4 {
                 sim.step().expect("tick runs");
             }
-            runs.push(link.observations());
+            runs.push(obs(&mut sim).observations());
         }
 
         assert_eq!(runs[0].len(), 1);
@@ -1719,15 +1719,15 @@ mod tests {
     /// fusion look perfect while measuring nothing.
     #[test]
     fn the_published_direction_is_perturbed_not_the_exact_sight_line() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
 
         sim.step().expect("tick runs");
 
-        let observation = &link.observations()[0];
+        let observation = &obs(&mut sim).observations()[0];
         let exact = Vector3::new(1.0, 0.0, 0.0);
         assert_ne!(observation.direction, exact);
         // …but close to it, and a unit vector.
@@ -1740,7 +1740,7 @@ mod tests {
     /// arbitrarily precise.
     #[test]
     fn the_published_noise_grows_with_range_and_holds_its_floor() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![
                 target("close", 1.0, 0.0, 0.0),
@@ -1748,12 +1748,13 @@ mod tests {
                 target("far", 8_000.0, 0.0, 0.0),
             ],
         );
-        link.install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
 
         sim.step().expect("tick runs");
 
         let by_target = |id: &str| {
-            link.observations()
+            observed(&sim)
+                .observations()
                 .into_iter()
                 .find(|o| o.target_id == id)
                 .expect("accepted")
@@ -1769,14 +1770,14 @@ mod tests {
     /// Confidence falls across the sensor's range and is floored.
     #[test]
     fn confidence_falls_with_range_and_holds_its_floor() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![
                 target("close", 10.0, 0.0, 0.0),
                 target("edge", 990.0, 0.0, 0.0),
             ],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 max_range_m: 1_000.0,
@@ -1787,7 +1788,8 @@ mod tests {
         sim.step().expect("tick runs");
 
         let by_target = |id: &str| {
-            link.observations()
+            observed(&sim)
+                .observations()
                 .into_iter()
                 .find(|o| o.target_id == id)
                 .expect("accepted")
@@ -1808,7 +1810,7 @@ mod tests {
     /// is unchanged by adding the ramps.
     #[test]
     fn every_quality_modifier_is_neutral_for_a_plain_ground_sensor() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 500.0, 0.0, 0.0)],
         );
@@ -1816,11 +1818,11 @@ mod tests {
             max_range_m: 1_000.0,
             ..permissive()
         };
-        link.install_sensor("s0", spec);
+        obs(&mut sim).install_sensor("s0", spec);
 
         sim.step().expect("tick runs");
 
-        let observation = &link.observations()[0];
+        let observation = &obs(&mut sim).observations()[0];
         let range_m = 500.0;
         assert_eq!(
             observation.bearing_std_rad,
@@ -1853,13 +1855,12 @@ mod tests {
         );
         sim.set_truth(vec![target("t0", 200.0, 300.0, 100.0)]);
 
-        let observe = ObserveStage::new();
-        let observe_link = observe.link();
+        let mut observe = ObserveStage::new();
         let fusion = FusionStage::new(argusnet_core::TrackerConfig::default()).expect("valid");
         let fusion_link = fusion.link();
-        observe_link.feed_fusion(fusion_link.clone());
-        observe_link.install_sensor("s0", permissive());
-        observe_link.install_sensor("s1", permissive());
+        observe.feed_fusion(fusion_link.clone());
+        observe.install_sensor("s0", permissive());
+        observe.install_sensor("s1", permissive());
 
         sim.set_stage_handler(Stage::GenerateObservations, Box::new(observe))
             .expect("stage 6 is not a transaction boundary");
@@ -1891,8 +1892,8 @@ mod tests {
     fn a_moving_omnidirectional_sensor_still_has_no_fov_gate() {
         let mut platform = sensor_node("s0", 0.0, 0.0, true);
         platform.velocity = Vector3::new(10.0, 0.0, 0.0);
-        let (mut sim, link) = rig(vec![platform], vec![target("behind", -100.0, 0.0, 0.0)]);
-        link.install_sensor(
+        let mut sim = rig(vec![platform], vec![target("behind", -100.0, 0.0, 0.0)]);
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 fov_half_angle_deg: None,
@@ -1902,8 +1903,8 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        assert_eq!(reason(&link, "s0", "behind"), None);
-        assert_eq!(link.observations().len(), 1);
+        assert_eq!(reason(obs(&mut sim), "s0", "behind"), None);
+        assert_eq!(obs(&mut sim).observations().len(), 1);
     }
 
     /// Two targets in the *same place*, seen by one sensor. The geometry is
@@ -1912,15 +1913,15 @@ mod tests {
     /// streams are for.
     #[test]
     fn two_targets_in_the_same_place_draw_different_noise() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0), target("t1", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
 
         sim.step().expect("tick runs");
 
-        let observations = link.observations();
+        let observations = obs(&mut sim).observations();
         assert_eq!(observations.len(), 2);
         assert_ne!(observations[0].direction, observations[1].direction);
     }
@@ -1947,16 +1948,16 @@ mod tests {
     /// exactly 1.0 and dropping the factor changes nothing.
     #[test]
     fn confidence_carries_the_detection_probability() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 300.0, 0.0, 0.0)],
         );
         let spec = short_sighted();
-        link.install_sensor("s0", spec);
+        obs(&mut sim).install_sensor("s0", spec);
 
         sim.step().expect("tick runs");
 
-        let observed = link.observations();
+        let observed = obs(&mut sim).observations();
         // The pair may be rejected by the detection draw; run until one is
         // accepted so the assertion is about confidence, not about luck.
         let mut confidence = observed.first().map(|o| o.confidence);
@@ -1965,7 +1966,7 @@ mod tests {
                 break;
             }
             sim.step().expect("tick runs");
-            confidence = link.observations().first().map(|o| o.confidence);
+            confidence = obs(&mut sim).observations().first().map(|o| o.confidence);
         }
         let confidence = confidence.expect("some tick accepted the pair");
 
@@ -1985,12 +1986,12 @@ mod tests {
     /// other test in this file reaches the floor at all.
     #[test]
     fn the_confidence_floor_binds_for_a_distant_hard_to_detect_target() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 1_900.0, 0.0, 0.0)],
         );
         let spec = short_sighted();
-        link.install_sensor("s0", spec);
+        obs(&mut sim).install_sensor("s0", spec);
 
         let range_m = 1_900.0;
         let pd = argusnet_sensing::detection_probability(range_m, &spec.error, 1.0);
@@ -2003,7 +2004,7 @@ mod tests {
         let mut confidence = None;
         for _ in 0..400 {
             sim.step().expect("tick runs");
-            if let Some(observation) = link.observations().first() {
+            if let Some(observation) = obs(&mut sim).observations().first() {
                 confidence = Some(observation.confidence);
                 break;
             }
@@ -2017,20 +2018,20 @@ mod tests {
     /// make the acceptance rate drift upward over a run for no reason.
     #[test]
     fn the_tally_counts_this_tick_only() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0), target("t1", 120.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
 
         sim.step().expect("tick runs");
-        assert_eq!(link.tally().attempted, 2);
-        assert_eq!(link.records().len(), 2);
+        assert_eq!(obs(&mut sim).tally().attempted, 2);
+        assert_eq!(obs(&mut sim).records().len(), 2);
 
         sim.step().expect("tick runs");
-        assert_eq!(link.tally().attempted, 2);
-        assert_eq!(link.records().len(), 2);
-        assert_eq!(link.observations().len(), 2);
+        assert_eq!(obs(&mut sim).tally().attempted, 2);
+        assert_eq!(obs(&mut sim).records().len(), 2);
+        assert_eq!(obs(&mut sim).observations().len(), 2);
     }
 
     // -----------------------------------------------------------------
@@ -2129,7 +2130,7 @@ mod tests {
     fn a_target_near_the_fov_edge_is_noisier_and_less_confident() {
         let mut platform = sensor_node("s0", 0.0, 0.0, true);
         platform.velocity = Vector3::new(10.0, 0.0, 0.0);
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![platform],
             // Dead ahead, and 40 degrees off-axis inside a 45 degree cone --
             // at the SAME range, so range cannot explain the difference.
@@ -2145,7 +2146,7 @@ mod tests {
                 ),
             ],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 fov_half_angle_deg: Some(45.0),
@@ -2161,7 +2162,8 @@ mod tests {
         sim.step().expect("tick runs");
 
         let by_target = |id: &str| {
-            link.observations()
+            observed(&sim)
+                .observations()
                 .into_iter()
                 .find(|o| o.target_id == id)
                 .unwrap_or_else(|| panic!("{id} was rejected"))
@@ -2221,11 +2223,11 @@ mod tests {
         let noise_at = |ground_m: f64| {
             let mut platform = sensor_node("s0", 0.0, 0.0, true);
             platform.position = Vector3::new(0.0, 0.0, 300.0);
-            let (mut sim, link) = rig(vec![platform], vec![target("t0", 500.0, 0.0, 300.0)]);
-            link.install_sensor("s0", permissive());
-            link.set_terrain(Box::new(Plateau(ground_m)));
+            let mut sim = rig(vec![platform], vec![target("t0", 500.0, 0.0, 300.0)]);
+            obs(&mut sim).install_sensor("s0", permissive());
+            obs(&mut sim).set_terrain(Box::new(Plateau(ground_m)));
             sim.step().expect("tick runs");
-            link.observations()[0].bearing_std_rad
+            obs(&mut sim).observations()[0].bearing_std_rad
         };
 
         let over_flat = noise_at(0.0);
@@ -2243,10 +2245,10 @@ mod tests {
         let high = |mobile: bool| {
             let mut platform = sensor_node("s0", 0.0, 0.0, mobile);
             platform.position = Vector3::new(0.0, 0.0, 600.0);
-            let (mut sim, link) = rig(vec![platform], vec![target("t0", 500.0, 0.0, 600.0)]);
-            link.install_sensor("s0", permissive());
+            let mut sim = rig(vec![platform], vec![target("t0", 500.0, 0.0, 600.0)]);
+            obs(&mut sim).install_sensor("s0", permissive());
             sim.step().expect("tick runs");
-            link.observations()[0].bearing_std_rad
+            obs(&mut sim).observations()[0].bearing_std_rad
         };
 
         assert!(high(true) > high(false));
@@ -2272,18 +2274,18 @@ mod tests {
             }
         }
 
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 500.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
-        link.set_visibility_oracle(Box::new(Hazy(2.5)));
+        obs(&mut sim).install_sensor("s0", permissive());
+        obs(&mut sim).set_visibility_oracle(Box::new(Hazy(2.5)));
 
         sim.step().expect("tick runs");
 
-        let observation = &link.observations()[0];
+        let observation = &obs(&mut sim).observations()[0];
         assert_eq!(
-            link.observations().len(),
+            obs(&mut sim).observations().len(),
             1,
             "the pair was blocked, not hazed"
         );
@@ -2312,23 +2314,23 @@ mod tests {
             },
             ..permissive()
         };
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", drifting);
+        obs(&mut sim).install_sensor("s0", drifting);
 
         // The first step records the clock without drifting -- there is no
         // previous time to measure an interval against.
         sim.step().expect("tick runs");
-        assert_eq!(link.bias_rad("s0"), Some(0.0));
+        assert_eq!(obs(&mut sim).bias_rad("s0"), Some(0.0));
 
         sim.step().expect("tick runs");
-        let after_two = link.bias_rad("s0").expect("tracked");
+        let after_two = obs(&mut sim).bias_rad("s0").expect("tracked");
         assert_ne!(after_two, 0.0);
 
         sim.step().expect("tick runs");
-        let after_three = link.bias_rad("s0").expect("tracked");
+        let after_three = obs(&mut sim).bias_rad("s0").expect("tracked");
         assert_ne!(after_three, after_two);
     }
 
@@ -2336,17 +2338,17 @@ mod tests {
     /// whatever the noise produced.
     #[test]
     fn a_drift_free_sensor_stays_at_zero_bias() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
 
         for _ in 0..5 {
             sim.step().expect("tick runs");
         }
 
-        assert_eq!(link.bias_rad("s0"), Some(0.0));
+        assert_eq!(obs(&mut sim).bias_rad("s0"), Some(0.0));
     }
 
     /// Two sensors drift independently: the walk is keyed on the node id, so a
@@ -2361,21 +2363,21 @@ mod tests {
             },
             ..permissive()
         };
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![
                 sensor_node("a", 0.0, 0.0, false),
                 sensor_node("b", 10.0, 0.0, false),
             ],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("a", drifting);
-        link.install_sensor("b", drifting);
+        obs(&mut sim).install_sensor("a", drifting);
+        obs(&mut sim).install_sensor("b", drifting);
 
         for _ in 0..4 {
             sim.step().expect("tick runs");
         }
 
-        assert_ne!(link.bias_rad("a"), link.bias_rad("b"));
+        assert_ne!(obs(&mut sim).bias_rad("a"), obs(&mut sim).bias_rad("b"));
     }
 
     /// The bias rotation's axis is **deterministic**, not random — despite the
@@ -2420,11 +2422,11 @@ mod tests {
     /// direction.
     #[test]
     fn a_thermal_sensor_publishes_a_second_noisier_observation() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 500.0, 0.0, 0.0)],
         );
-        link.install_sensor(
+        obs(&mut sim).install_sensor(
             "s0",
             SensorSpec {
                 band: SensorBand::Thermal,
@@ -2434,7 +2436,7 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        let observations = link.observations();
+        let observations = obs(&mut sim).observations();
         assert_eq!(observations.len(), 2);
         let primary = &observations[0];
         let thermal = &observations[1];
@@ -2450,7 +2452,7 @@ mod tests {
         // Separately drawn, not a copy.
         assert_ne!(thermal.direction, primary.direction);
         // One accepted *pair*, two observations -- the tally counts pairs.
-        assert_eq!(link.tally().attempted, 1);
+        assert_eq!(obs(&mut sim).tally().attempted, 1);
     }
 
     /// The four names the reference treats as thermal, and the fact that
@@ -2479,11 +2481,11 @@ mod tests {
     #[test]
     fn an_optical_sensor_publishes_one_observation_and_consumes_the_same_draws() {
         let direction_for = |band: SensorBand| {
-            let (mut sim, link) = rig(
+            let mut sim = rig(
                 vec![sensor_node("s0", 0.0, 0.0, false)],
                 vec![target("t0", 500.0, 0.0, 0.0)],
             );
-            link.install_sensor(
+            obs(&mut sim).install_sensor(
                 "s0",
                 SensorSpec {
                     band,
@@ -2491,7 +2493,10 @@ mod tests {
                 },
             );
             sim.step().expect("tick runs");
-            (link.observations().len(), link.observations()[0].direction)
+            (
+                obs(&mut sim).observations().len(),
+                obs(&mut sim).observations()[0].direction,
+            )
         };
 
         let (optical_count, optical_direction) = direction_for(SensorBand::Optical);
@@ -2512,10 +2517,10 @@ mod tests {
         let confidence_at = |altitude_m: f64| {
             let mut platform = sensor_node("s0", 0.0, 0.0, true);
             platform.position = Vector3::new(0.0, 0.0, altitude_m);
-            let (mut sim, link) = rig(vec![platform], vec![target("t0", 500.0, 0.0, altitude_m)]);
-            link.install_sensor("s0", permissive());
+            let mut sim = rig(vec![platform], vec![target("t0", 500.0, 0.0, altitude_m)]);
+            obs(&mut sim).install_sensor("s0", permissive());
             sim.step().expect("tick runs");
-            link.observations()[0].confidence
+            obs(&mut sim).observations()[0].confidence
         };
 
         // Same slant range at both altitudes, so only the ramp differs.
@@ -2537,11 +2542,11 @@ mod tests {
     #[test]
     fn the_accumulated_bias_reaches_the_published_direction() {
         let direction_after = |drift_rate: f64| {
-            let (mut sim, link) = rig(
+            let mut sim = rig(
                 vec![sensor_node("s0", 0.0, 0.0, false)],
                 vec![target("t0", 100.0, 0.0, 0.0)],
             );
-            link.install_sensor(
+            obs(&mut sim).install_sensor(
                 "s0",
                 SensorSpec {
                     error: SensorErrorConfig {
@@ -2556,8 +2561,8 @@ mod tests {
                 sim.step().expect("tick runs");
             }
             (
-                link.observations()[0].direction,
-                link.bias_rad("s0").unwrap(),
+                obs(&mut sim).observations()[0].direction,
+                obs(&mut sim).bias_rad("s0").unwrap(),
             )
         };
 
@@ -2673,14 +2678,14 @@ mod tests {
     fn clutter_is_off_by_default() {
         assert_eq!(SensorSpec::default().false_alarm_rate_per_scan, 0.0);
 
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", permissive());
+        obs(&mut sim).install_sensor("s0", permissive());
         for _ in 0..20 {
             sim.step().expect("tick runs");
-            assert!(link
+            assert!(obs(&mut sim)
                 .observations()
                 .iter()
                 .all(|o| o.target_id != CLUTTER_TARGET_ID));
@@ -2691,16 +2696,16 @@ mod tests {
     /// originating at the sensor and carrying the clutter noise figure.
     #[test]
     fn a_high_false_alarm_rate_produces_tagged_clutter_returns() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 7.0, 8.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", cluttered(5.0));
+        obs(&mut sim).install_sensor("s0", cluttered(5.0));
 
         let mut seen = 0;
         for _ in 0..10 {
             sim.step().expect("tick runs");
-            for alarm in link
+            for alarm in obs(&mut sim)
                 .observations()
                 .iter()
                 .filter(|o| o.target_id == CLUTTER_TARGET_ID)
@@ -2721,16 +2726,16 @@ mod tests {
     /// long-range real return.
     #[test]
     fn clutter_confidence_is_capped_below_the_real_floor() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![sensor_node("s0", 0.0, 0.0, false)],
             vec![target("t0", 100.0, 0.0, 0.0)],
         );
-        link.install_sensor("s0", cluttered(5.0));
+        obs(&mut sim).install_sensor("s0", cluttered(5.0));
 
         let mut seen = 0;
         for _ in 0..10 {
             sim.step().expect("tick runs");
-            for alarm in link
+            for alarm in obs(&mut sim)
                 .observations()
                 .iter()
                 .filter(|o| o.target_id == CLUTTER_TARGET_ID)
@@ -2753,17 +2758,21 @@ mod tests {
     /// targets" would silently drop them, which is what an earlier draft did.
     #[test]
     fn clutter_is_emitted_in_a_world_with_no_targets() {
-        let (mut sim, link) = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
-        link.install_sensor("s0", cluttered(5.0));
+        let mut sim = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
+        obs(&mut sim).install_sensor("s0", cluttered(5.0));
 
         let mut seen = 0;
         for _ in 0..10 {
             sim.step().expect("tick runs");
-            seen += link.observations().len();
+            seen += obs(&mut sim).observations().len();
         }
 
         assert!(seen > 0, "no clutter without targets");
-        assert_eq!(link.tally().attempted, 0, "there were no pairs to attempt");
+        assert_eq!(
+            obs(&mut sim).tally().attempted,
+            0,
+            "there were no pairs to attempt"
+        );
     }
 
     /// Clutter has its **own** stream, keyed `(node_id, "clutter", tick)`, so
@@ -2772,13 +2781,14 @@ mod tests {
     #[test]
     fn the_clutter_stream_is_independent_of_the_targets_in_view() {
         let clutter_from = |targets: Vec<TruthState>| {
-            let (mut sim, link) = rig(vec![sensor_node("s0", 0.0, 0.0, false)], targets);
-            link.install_sensor("s0", cluttered(3.0));
+            let mut sim = rig(vec![sensor_node("s0", 0.0, 0.0, false)], targets);
+            obs(&mut sim).install_sensor("s0", cluttered(3.0));
             let mut all = Vec::new();
             for _ in 0..6 {
                 sim.step().expect("tick runs");
                 all.extend(
-                    link.observations()
+                    obs(&mut sim)
+                        .observations()
                         .into_iter()
                         .filter(|o| o.target_id == CLUTTER_TARGET_ID)
                         .map(|o| o.direction.iter().map(|v| v.to_bits()).collect::<Vec<_>>()),
@@ -2801,21 +2811,21 @@ mod tests {
     /// Two sensors draw their clutter independently.
     #[test]
     fn two_sensors_draw_clutter_independently() {
-        let (mut sim, link) = rig(
+        let mut sim = rig(
             vec![
                 sensor_node("a", 0.0, 0.0, false),
                 sensor_node("b", 0.0, 0.0, false),
             ],
             Vec::new(),
         );
-        link.install_sensor("a", cluttered(4.0));
-        link.install_sensor("b", cluttered(4.0));
+        obs(&mut sim).install_sensor("a", cluttered(4.0));
+        obs(&mut sim).install_sensor("b", cluttered(4.0));
 
         let mut a = Vec::new();
         let mut b = Vec::new();
         for _ in 0..8 {
             sim.step().expect("tick runs");
-            for alarm in link.observations() {
+            for alarm in obs(&mut sim).observations() {
                 if alarm.node_id == "a" {
                     a.push(alarm.direction);
                 } else {
@@ -2887,8 +2897,8 @@ mod tests {
     fn the_clutter_stream_draws_exactly_what_the_contract_specifies() {
         const SEED: u32 = 11;
         let spec = cluttered(3.0);
-        let (mut sim, link) = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
-        link.install_sensor("s0", spec);
+        let mut sim = rig(vec![sensor_node("s0", 0.0, 0.0, false)], Vec::new());
+        obs(&mut sim).install_sensor("s0", spec);
 
         sim.step().expect("tick runs");
 
@@ -2923,7 +2933,7 @@ mod tests {
             expected.push((noisy / noisy_norm, confidence));
         }
 
-        let published: Vec<_> = link
+        let published: Vec<_> = obs(&mut sim)
             .observations()
             .into_iter()
             .filter(|o| o.target_id == CLUTTER_TARGET_ID)

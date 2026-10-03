@@ -301,9 +301,8 @@ impl Rig {
         sim.set_stage_handler(Stage::SampleControllersAndBattery, Box::new(stage))
             .expect("stage 1 is not a transaction boundary");
 
-        let observe = ObserveStage::new();
-        let observe_link = observe.link();
-        observe_link.install_sensor(
+        let mut observe = ObserveStage::new();
+        observe.install_sensor(
             "drone-search",
             SensorSpec {
                 max_range_m: 400.0,
@@ -315,7 +314,7 @@ impl Rig {
                 ..SensorSpec::default()
             },
         );
-        observe_link.feed_controllers(controllers.clone());
+        observe.feed_controllers(controllers.clone());
         sim.set_stage_handler(Stage::GenerateObservations, Box::new(observe))
             .expect("stage 6 is not a transaction boundary");
 

@@ -53,7 +53,7 @@ use crate::mission::{MissionConfig, MissionLink};
 use crate::mission_driver::{DriverReportLink, MissionDriverConfig, MissionDriverStage};
 use crate::motion::BoundsXy;
 use crate::observation_follow::ObservationTriggeredFollow;
-use crate::observe::{ObserveLink, ObserveStage, SensorBand, SensorSpec};
+use crate::observe::{ObserveStage, SensorBand, SensorSpec};
 use crate::overrides::MissionOverrideStage;
 use crate::replay::{
     ReplayDeconflictionEvent, ReplayDocument, ReplayEgressProgress, ReplayFrame,
@@ -662,7 +662,6 @@ pub struct AssembledRun {
     pub sim: Simulation,
     pub controllers: ControllerLink,
     pub battery: BatteryLink,
-    pub observe: ObserveLink,
     pub fusion: FusionLink,
     /// Scan-map-inspect runs only.
     pub mission: Option<MissionLink>,
@@ -983,22 +982,21 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         sim.set_stage_handler(Stage::SafetyMonitor, Box::new(safety))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
-    let observe = ObserveStage::new();
-    let observe_link = observe.link();
+    let mut observe = ObserveStage::new();
     for node in &bundle.nodes {
-        observe_link.install_sensor(&node.node_id, node.sensor.spec());
+        observe.install_sensor(&node.node_id, node.sensor.spec());
     }
-    observe_link.set_visibility_oracle(Box::new(
+    observe.set_visibility_oracle(Box::new(
         world
             .visibility
             .with_weather(bundle.weather.clone().map(Arc::new)),
     ));
-    observe_link.set_terrain(Box::new(world.terrain.clone()));
-    observe_link.feed_fusion(fusion_link.clone());
-    observe_link.feed_controllers(controllers.clone());
+    observe.set_terrain(Box::new(world.terrain.clone()));
+    observe.feed_fusion(fusion_link.clone());
+    observe.feed_controllers(controllers.clone());
     // The reference senses from each node's nominal controller pose, not
     // from where overrides and deconfliction moved it (P4.8e.2).
-    observe_link.set_pose_source(Box::new(controllers.clone()));
+    observe.set_pose_source(Box::new(controllers.clone()));
     sim.set_stage_handler(Stage::GenerateObservations, Box::new(observe))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))
@@ -1130,7 +1128,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         sim,
         controllers,
         battery: battery_link,
-        observe: observe_link,
         fusion: fusion_link,
         truth,
         replay,
@@ -1324,6 +1321,13 @@ impl AssembledRun {
         self.sim.stage::<SafetyStage>(Stage::SafetyMonitor)
     }
 
+    /// Stage 6, as assembled. Every assembled run installs it.
+    pub fn observe(&self) -> &ObserveStage {
+        self.sim
+            .stage::<ObserveStage>(Stage::GenerateObservations)
+            .expect("assembly installs an ObserveStage")
+    }
+
     /// Stage 3, as assembled. Every assembled run installs it.
     pub fn deconflict(&self) -> &DeconflictStage {
         self.sim
@@ -1356,7 +1360,7 @@ impl AssembledRun {
             &frame.tracks,
             &truths,
             &frame.metrics,
-            &self.observe.generation_rejections(),
+            &self.observe().generation_rejections(),
         );
         replay_frame.safety_events = frame
             .safety_events
@@ -1377,7 +1381,7 @@ impl AssembledRun {
         platforms: &[argusnet_types::NodeState],
         truths: &[argusnet_types::TruthState],
     ) {
-        let tally = self.observe.tally();
+        let tally = self.observe().tally();
         self.report.totals.add(&tally);
 
         frame.deconfliction_events = self
@@ -1398,7 +1402,7 @@ impl AssembledRun {
         frame.localization_state = localization_state(
             &frame.tracks,
             &self
-                .observe
+                .observe()
                 .observations()
                 .iter()
                 .map(|observation| observation.confidence)

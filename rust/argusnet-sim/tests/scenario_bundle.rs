@@ -136,7 +136,7 @@ fn run_rust(case: &str, steps: usize, search_drones: &[String]) -> RustRun {
         out.accepted.push(frame.observations.len());
         out.tracks.push(frame.tracks.len());
         let mut draw_free: Vec<[String; 3]> = run
-            .observe
+            .observe()
             .records()
             .into_iter()
             .filter_map(|record| match record.outcome {
@@ -151,7 +151,7 @@ fn run_rust(case: &str, steps: usize, search_drones: &[String]) -> RustRun {
             })
             .collect();
         draw_free.sort();
-        for record in run.observe.records() {
+        for record in run.observe().records() {
             if let Outcome::Rejected(reason) = record.outcome {
                 *out.rejections
                     .entry(reason.as_str().to_string())
@@ -475,12 +475,12 @@ fn the_assembly_wires_every_capability() {
     let mut run = assemble(&bundle).expect("assembles");
 
     assert!(
-        run.observe.visibility_is_modelled(),
+        run.observe().visibility_is_modelled(),
         "stage 6 is running on AlwaysVisible"
     );
     for node in &bundle.nodes {
         let spec = run
-            .observe
+            .observe()
             .sensor(&node.node_id)
             .expect("every node has a sensor");
         if node.is_mobile {
@@ -527,7 +527,7 @@ fn the_assembly_wires_every_capability() {
     assert!(!scenario_weather.is_empty());
     for d in scenario_weather {
         let (_, detection) =
-            run.observe
+            run.observe()
                 .probe(vec3(&d["from"]), vec3(&d["to"]), num(&d["max_range_m"]));
         let detection = detection.expect("stage 6 has a world detection model");
         assert_eq!(detection.p_d.to_bits(), num(&d["p_d"]).to_bits(), "{d}");
