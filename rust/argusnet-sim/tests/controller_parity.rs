@@ -6,6 +6,8 @@
 //! call log, because what it does is *choose* -- which half to sample, when to
 //! seed, and from what -- and a log is the only place those choices show.
 
+mod common;
+
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -13,6 +15,7 @@ use std::rc::Rc;
 use argusnet_sim::motion::{ObstacleSampler, TerrainSampler};
 use argusnet_sim::observation_follow::{ObservationTriggeredFollow, Seedable};
 use argusnet_sim::waypoint_path::{LoopedWaypointPath, WaypointPathConfig};
+use common::parity::parity_of;
 use serde_json::{json, Value};
 
 fn fixture() -> Value {
@@ -402,6 +405,8 @@ fn the_look_direction_matches_the_reference() {
         num(&fixture["reference_look_down_angle_deg"]),
         "the default tilt is not the reference's drone_look_down_angle_deg"
     );
+    // Off the capture platform the look's trig may round differently.
+    let parity = parity_of(&fixture);
     let mut gated = 0;
     for case in fixture["directions"].as_array().expect("directions") {
         let velocity = vec3(&case["velocity"]);
@@ -418,7 +423,10 @@ fn the_look_direction_matches_the_reference() {
             Some(_) => {
                 let expected = vec3(&case["look"]);
                 let actual = actual.unwrap_or_else(|| panic!("{velocity:?} lost its look"));
-                assert_eq!(bits(&actual), bits(&expected), "{velocity:?} at {tilt} deg");
+                assert!(
+                    parity.same_all(&actual, &expected),
+                    "{velocity:?} at {tilt} deg: {actual:?} against {expected:?}"
+                );
             }
         }
     }
@@ -431,6 +439,9 @@ fn the_look_direction_matches_the_reference() {
             num(&case["range_m"]),
             vec3(&case["look"]),
         );
-        assert_eq!(angle.to_bits(), num(&case["angle_deg"]).to_bits(), "{case}");
+        assert!(
+            parity.same(angle, num(&case["angle_deg"])),
+            "{case}: {angle}"
+        );
     }
 }
