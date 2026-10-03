@@ -16,13 +16,18 @@ pub(super) fn section_operator_timeline(
 
     let total_frames = replay_state.frame_count();
     let now_s = replay_state.time_s();
+    let gaps = replay_state.gaps();
+    // Row 1: the time controls (the timeline is the one place they live),
+    // where the cursor is, and what cannot be seen.
     ui.horizontal(|ui| {
+        playback_buttons(ui, replay_state);
+        ui.separator();
         ui.strong(if replay_state.live {
             "Live history (read-only)"
         } else {
             "Replay"
         });
-        ui.label(format!(
+        ui.monospace(format!(
             "t {:.2} s of {:.2}–{:.2} s · frame {} / {}",
             now_s,
             first_s,
@@ -41,28 +46,10 @@ pub(super) fn section_operator_timeline(
         if !replay_state.live {
             ui.checkbox(&mut replay_state.looping, "Loop");
         }
-    });
-
-    let mut time_value = now_s;
-    if ui
-        .add_enabled(
-            last_s > first_s,
-            egui::Slider::new(&mut time_value, first_s..=last_s)
-                .text("s")
-                .clamping(egui::SliderClamping::Always),
-        )
-        .changed()
-    {
-        replay_state.playing = false;
-        replay_state.seek_time(time_value);
-        ui_state.selected_timeline_frame = Some(replay_state.frame_index);
-    }
-
-    // What cannot be seen, said as such: trimmed live history and recording
-    // gaps. Seeking reviews recorded frames; it never rewinds a runtime.
-    let gaps = replay_state.gaps();
-    ui.horizontal_wrapped(|ui| {
+        // What cannot be seen, said as such: trimmed live history and
+        // recording gaps.
         if let Some(trimmed) = replay_state.trimmed_before_s() {
+            ui.separator();
             ui.colored_label(
                 egui::Color32::from_rgb(210, 160, 90),
                 format!("History before {trimmed:.1} s was trimmed"),
@@ -70,6 +57,7 @@ pub(super) fn section_operator_timeline(
         }
         if !gaps.is_empty() {
             let missing: f32 = gaps.iter().map(|(a, b)| b - a).sum();
+            ui.separator();
             ui.colored_label(
                 egui::Color32::from_rgb(210, 160, 90),
                 format!(
@@ -78,12 +66,30 @@ pub(super) fn section_operator_timeline(
                 ),
             );
         }
-        ui.weak(if replay_state.live {
-            "Reviewing live history never pauses or rewinds the runtime."
-        } else {
-            "Seeking a replay is local; it changes no runtime."
-        });
     });
+
+    // Row 2: the scrubber, full width. Seeking reviews recorded frames; it
+    // never rewinds a runtime.
+    let mut time_value = now_s;
+    let scrub = ui.scope(|ui| {
+        ui.spacing_mut().slider_width = (ui.available_width() - 60.0).max(80.0);
+        ui.add_enabled(
+            last_s > first_s,
+            egui::Slider::new(&mut time_value, first_s..=last_s)
+                .text("s")
+                .clamping(egui::SliderClamping::Always),
+        )
+    });
+    let scrub = scrub.inner.on_hover_text(if replay_state.live {
+        "Reviewing live history never pauses or rewinds the runtime."
+    } else {
+        "Seeking a replay is local; it changes no runtime."
+    });
+    if scrub.changed() {
+        replay_state.playing = false;
+        replay_state.seek_time(time_value);
+        ui_state.selected_timeline_frame = Some(replay_state.frame_index);
+    }
 
     if let Some(document) = &replay_state.document {
         let event_points: PlotPoints = document
@@ -112,8 +118,9 @@ pub(super) fn section_operator_timeline(
             .map(|frame| frame.metrics.observation_count as f64)
             .fold(1.0, f64::max);
         let phase_transitions = phase_transitions(document);
+        // Row 3: what happened over time, in whatever height is left.
         Plot::new("operator_timeline_plot")
-            .height(56.0)
+            .height(ui.available_height().max(16.0))
             .allow_zoom(false)
             .allow_drag(false)
             .allow_scroll(false)

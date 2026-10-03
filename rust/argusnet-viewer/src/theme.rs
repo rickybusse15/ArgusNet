@@ -202,6 +202,8 @@ pub fn apply_visuals(style: &mut egui::Style) {
     visuals.selection.bg_fill = ACCENT.linear_multiply(0.35);
     visuals.selection.stroke = Stroke::new(RULE_WIDTH, ACCENT);
     visuals.text_cursor.stroke = Stroke::new(RULE_WIDTH, ACCENT);
+    // A slider shows how far along it is, in the selection's accent.
+    visuals.slider_trailing_fill = true;
 
     let widgets = &mut visuals.widgets;
     // idle: muted label, quiet rule; hover: one contrast step brighter;
@@ -219,7 +221,11 @@ pub fn apply_visuals(style: &mut egui::Style) {
         (&mut widgets.open, CHROME, RULE_STRONG, TEXT_PRIMARY),
     ];
     for (state, fill, rule, text) in states {
-        state.bg_fill = fill;
+        // `weak_bg_fill` is a button's face: flat, the chrome. `bg_fill` is
+        // what a control draws its track and box in -- a slider's rail, a
+        // checkbox -- and must stand off the chrome or the rail vanishes and
+        // a slider reads as a lone square. The rule colour does that.
+        state.bg_fill = rule;
         state.weak_bg_fill = fill;
         state.bg_stroke = Stroke::new(RULE_WIDTH, rule);
         state.fg_stroke = Stroke::new(RULE_WIDTH, text);
