@@ -301,6 +301,7 @@ Promote [PARALLEL_TICK_PLAN.md](PARALLEL_TICK_PLAN.md) §4–§8 into an ADR
 extending ADR-009: phase barriers, ordered merge, revisioned background jobs,
 three rate mechanisms (static/data-triggered/load-adaptive, the last excluded
 from deterministic simulation).
+Drafted as [ADR-010](../adr/010-parallel-execution-model.md) (*proposed*).
 **Exit:** ADR merged as *proposed*; B3+ cite it.
 
 ---

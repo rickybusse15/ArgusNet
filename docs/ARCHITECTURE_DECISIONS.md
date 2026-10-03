@@ -4,6 +4,10 @@
 
 [ADR-009](adr/009-independently-scheduled-runtime.md) adopts independently
 scheduled Rust execution, retaining ADR-007's stage order for port compatibility.
+[ADR-010](adr/010-parallel-execution-model.md) (proposed) adds the parallel
+execution rules for `scheduled_v1`: phase barriers with ordered merge, one
+serial-equivalent executor, keyed randomness, revisioned background jobs and
+no load-adaptive rates in deterministic simulation.
 See [the target architecture](RUST_RUNTIME_ARCHITECTURE.md) and
 [hardware boundaries](HARDWARE_INTEGRATION.md). Earlier decisions below retain
 their historical context; references to a gRPC response mean the external path,
