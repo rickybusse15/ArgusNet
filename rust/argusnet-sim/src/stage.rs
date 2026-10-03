@@ -53,6 +53,21 @@ pub enum Stage {
 }
 
 impl Stage {
+    /// The stages every production run needs, whatever its mode (A1.3):
+    /// controllers and battery, deconfliction, observations and fusion.
+    ///
+    /// Stage 5 (VIO) is **not** among them: production assembly does not
+    /// install it, and requiring it would refuse every production run
+    /// (SESSION_OWNERSHIP.md finding 2). Mission-mode runs add 2, 8 and 9,
+    /// and `safety_blocking` runs add 4, through
+    /// [`crate::simulation::ProductionBuilder::require`].
+    pub const PRODUCTION_CORE: [Stage; 4] = [
+        Stage::SampleControllersAndBattery,
+        Stage::Deconflict,
+        Stage::GenerateObservations,
+        Stage::UpdateFusion,
+    ];
+
     /// The causal order. Iterating this is the only sanctioned way to run a
     /// tick, so the order cannot drift by editing a call sequence.
     pub const PIPELINE: [Stage; 11] = [

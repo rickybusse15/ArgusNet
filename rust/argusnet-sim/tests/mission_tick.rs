@@ -14,7 +14,7 @@ use argusnet_sim::simulation::{Simulation, TickError};
 use argusnet_sim::stage::{Stage, StageOutcome};
 
 fn simulation() -> Simulation {
-    Simulation::new(SimulationConfig {
+    Simulation::bare(SimulationConfig {
         seed: 7,
         dt_s: 0.5,
         steps: Some(64),

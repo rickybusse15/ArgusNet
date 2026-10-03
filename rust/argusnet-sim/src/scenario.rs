@@ -813,7 +813,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     let world = build_world(&bundle.world)?;
     let truth = Arc::new(TruthTable::new(&bundle.targets)?);
 
-    let mut sim = Simulation::new(SimulationConfig {
+    let mut sim = Simulation::production(SimulationConfig {
         seed: bundle.seed,
         dt_s: bundle.dt_s,
         steps: Some(bundle.steps),
@@ -931,7 +931,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         map_bounds_m: Some(bounds_xy(bundle.map_bounds_m)),
         pursuit: Some(Box::new(TablePursuit(Arc::clone(&truth)))),
     });
-    sim.set_stage_handler(Stage::SampleControllersAndBattery, Box::new(stage_one))
+    sim.install(Stage::SampleControllersAndBattery, Box::new(stage_one))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
 
     // Stage 3: deconfliction over the real terrain, exclusion zones only.
@@ -951,7 +951,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
             })
             .collect(),
     );
-    sim.set_stage_handler(Stage::Deconflict, Box::new(deconflict))
+    sim.install(Stage::Deconflict, Box::new(deconflict))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
 
     // Stages 6 and 7: observations over the real world, fused in process.
@@ -967,7 +967,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         }
         safety.set_terrain(Box::new(world.terrain.clone()));
         safety.read_stage_one_battery();
-        sim.set_stage_handler(Stage::SafetyMonitor, Box::new(safety))
+        sim.install(Stage::SafetyMonitor, Box::new(safety))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
     let mut observe = ObserveStage::new();
@@ -983,11 +983,11 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     // The reference senses from each node's nominal controller pose, not
     // from where overrides and deconfliction moved it (P4.8e.2).
     observe.sense_from_controllers();
-    sim.set_stage_handler(Stage::GenerateObservations, Box::new(observe))
+    sim.install(Stage::GenerateObservations, Box::new(observe))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     sim.connect(Handoff::EngagementToControllers)
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
-    sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))
+    sim.install(Stage::UpdateFusion, Box::new(fusion))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     sim.connect(Handoff::ObservationsToFusion)
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
@@ -1085,15 +1085,15 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));
         mapping_handle.follow_mission_phase();
         overrides.follow_mission_phase();
-        sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(overrides))
+        sim.install(Stage::ApplyMissionOverrides, Box::new(overrides))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
-        sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(driver))
+        sim.install(Stage::EvaluateMissionTransitions, Box::new(driver))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
         sim.connect(Handoff::OverridesFromMission)
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
     if let Some(mapping) = mapping_stage {
-        sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
+        sim.install(Stage::UpdateMappingAndLocalization, Box::new(mapping))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
 
@@ -1103,6 +1103,19 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         u64::from(bundle.seed),
     );
     replay.extend_meta(run_meta(bundle));
+
+    // A1.3: refuse a run whose required stages are not all installed.
+    if bundle.mission.is_some() {
+        sim.require(Stage::ApplyMissionOverrides)
+            .require(Stage::UpdateMappingAndLocalization)
+            .require(Stage::EvaluateMissionTransitions);
+    }
+    if bundle.safety_blocking {
+        sim.require(Stage::SafetyMonitor);
+    }
+    let sim = sim
+        .build()
+        .map_err(|error| BundleError::Invalid(error.to_string()))?;
 
     Ok(AssembledRun {
         mission_setup,

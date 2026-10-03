@@ -57,7 +57,7 @@ fn coverage_fraction(sim: &Simulation) -> f64 {
 
 #[test]
 fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
-    let mut sim = Simulation::new(SimulationConfig {
+    let mut sim = Simulation::bare(SimulationConfig {
         seed: 21,
         dt_s: 1.0,
         steps: Some(4_000),
@@ -134,7 +134,7 @@ fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
 /// the wrong reason.
 #[test]
 fn a_stationary_drone_never_trips_the_gate() {
-    let mut sim = Simulation::new(SimulationConfig {
+    let mut sim = Simulation::bare(SimulationConfig {
         seed: 22,
         dt_s: 1.0,
         steps: Some(500),

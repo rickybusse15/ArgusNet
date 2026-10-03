@@ -112,6 +112,97 @@ impl fmt::Debug for StageViews<'_> {
     }
 }
 
+/// Why a [`ProductionBuilder`] would not build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildError {
+    /// A stage the run requires has no handler: it would run as
+    /// [`UnportedStage`] and silently do nothing.
+    MissingStage { stage: Stage },
+    /// Installing a handler or connecting a handoff was refused.
+    Stage(StageError),
+}
+
+impl fmt::Display for BuildError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BuildError::MissingStage { stage } => write!(
+                formatter,
+                "production run is missing required stage {stage}: it would run unported"
+            ),
+            BuildError::Stage(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for BuildError {}
+
+impl From<StageError> for BuildError {
+    fn from(error: StageError) -> Self {
+        BuildError::Stage(error)
+    }
+}
+
+/// A production [`Simulation`] under construction (A1.3).
+///
+/// Starts out requiring [`Stage::PRODUCTION_CORE`]; a run that needs more
+/// (the mission stages, the safety floor) says so with [`Self::require`].
+/// [`Self::build`] refuses any required stage left unported, naming it.
+#[derive(Debug)]
+pub struct ProductionBuilder {
+    sim: Simulation,
+    required: std::collections::BTreeSet<Stage>,
+}
+
+impl ProductionBuilder {
+    /// Require `stage` as well as the core.
+    pub fn require(&mut self, stage: Stage) -> &mut Self {
+        self.required.insert(stage);
+        self
+    }
+
+    /// The stages [`Self::build`] will insist on.
+    pub fn required(&self) -> impl Iterator<Item = Stage> + '_ {
+        self.required.iter().copied()
+    }
+
+    /// [`Simulation::set_stage_handler`].
+    pub fn install(
+        &mut self,
+        stage: Stage,
+        handler: Box<dyn StageHandler>,
+    ) -> Result<&mut Self, BuildError> {
+        self.sim.set_stage_handler(stage, handler)?;
+        Ok(self)
+    }
+
+    /// [`Simulation::connect`].
+    pub fn connect(&mut self, handoff: Handoff) -> Result<&mut Self, BuildError> {
+        self.sim.connect(handoff)?;
+        Ok(self)
+    }
+
+    /// [`Simulation::load_world`].
+    pub fn load_world(&mut self, platforms: Vec<NodeState>, tracks: Vec<TrackState>) {
+        self.sim.load_world(platforms, tracks);
+    }
+
+    /// The run, if every required stage is installed with a real handler;
+    /// otherwise the first missing one in pipeline order. An explicitly
+    /// installed [`UnportedStage`] counts as missing.
+    pub fn build(self) -> Result<Simulation, BuildError> {
+        let ported = |stage: &Stage| {
+            self.sim.handlers.get(stage).is_some_and(|handler| {
+                let handler: &dyn std::any::Any = handler.as_ref();
+                !handler.is::<UnportedStage>()
+            })
+        };
+        if let Some(stage) = self.required.iter().find(|stage| !ported(stage)) {
+            return Err(BuildError::MissingStage { stage: *stage });
+        }
+        Ok(self.sim)
+    }
+}
+
 /// A typed write from one stage into another, applied by [`Simulation`]
 /// between stages (SESSION_OWNERSHIP.md §2a).
 ///
@@ -364,8 +455,23 @@ impl fmt::Debug for Simulation {
 }
 
 impl Simulation {
-    /// Build a run, validating the configuration before anything is allocated.
-    pub fn new(config: SimulationConfig) -> Result<Self, ConfigError> {
+    /// A production run: a [`ProductionBuilder`] that refuses to build until
+    /// every stage the run requires is installed (A1.3). The CLI, and later
+    /// the viewer worker, construct runs only this way.
+    pub fn production(config: SimulationConfig) -> Result<ProductionBuilder, ConfigError> {
+        Ok(ProductionBuilder {
+            sim: Self::bare(config)?,
+            required: Stage::PRODUCTION_CORE.into_iter().collect(),
+        })
+    }
+
+    /// A run with every stage unported, validating the configuration before
+    /// anything is allocated.
+    ///
+    /// **For tests and benches.** Nothing checks that the stages a real run
+    /// needs are installed, so a production path must use
+    /// [`Self::production`] instead.
+    pub fn bare(config: SimulationConfig) -> Result<Self, ConfigError> {
         let config = ValidatedConfig::new(config)?;
         let clock = Clock::new(config.timestep());
         Ok(Self {

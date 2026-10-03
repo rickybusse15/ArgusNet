@@ -393,7 +393,7 @@ mod tests {
     }
 
     fn simulation() -> Simulation {
-        Simulation::new(SimulationConfig {
+        Simulation::bare(SimulationConfig {
             seed: 11,
             dt_s: 1.0,
             steps: Some(2_000),
@@ -803,7 +803,7 @@ mod tests {
         // velocity gains 4 m/s, so the correct synthetic acceleration is
         // 2 m/s^2 and an undivided one would be 4.
         fn climbing(dt_s: f64) -> Simulation {
-            let mut sim = Simulation::new(SimulationConfig {
+            let mut sim = Simulation::bare(SimulationConfig {
                 seed: 11,
                 dt_s,
                 steps: Some(100),

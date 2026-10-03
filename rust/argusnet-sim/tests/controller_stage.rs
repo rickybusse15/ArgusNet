@@ -237,7 +237,7 @@ impl Rig {
     }
 
     fn build(options: Options) -> Self {
-        let mut sim = Simulation::new(SimulationConfig {
+        let mut sim = Simulation::bare(SimulationConfig {
             seed: 21,
             dt_s: DT_S,
             steps: Some(STEPS),
@@ -599,7 +599,7 @@ fn a_checkpoint_naming_an_absent_stage_is_refused() {
     source.step();
     let checkpoint = source.sim.checkpoint().expect("not faulted");
 
-    let mut bare = Simulation::new(SimulationConfig {
+    let mut bare = Simulation::bare(SimulationConfig {
         seed: 21,
         dt_s: DT_S,
         steps: Some(STEPS),
@@ -637,7 +637,7 @@ fn a_checkpoint_for_a_reordered_fleet_is_refused() {
 #[test]
 fn a_checkpoint_without_stage_state_resets_the_stage() {
     let (reference, _) = uninterrupted();
-    let bare = Simulation::new(SimulationConfig {
+    let bare = Simulation::bare(SimulationConfig {
         seed: 21,
         dt_s: DT_S,
         steps: Some(STEPS),

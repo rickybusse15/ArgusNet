@@ -622,7 +622,7 @@ mod tests {
         use crate::stage::Stage;
         use argusnet_types::{NodeState, Vector3};
 
-        let mut sim = crate::simulation::Simulation::new(SimulationConfig {
+        let mut sim = crate::simulation::Simulation::bare(SimulationConfig {
             seed: 3,
             dt_s: 1.0,
             steps: Some(500),
@@ -866,7 +866,7 @@ mod tests {
         use crate::stage::Stage;
         use argusnet_types::{NodeState, Vector3};
 
-        let mut sim = crate::simulation::Simulation::new(SimulationConfig {
+        let mut sim = crate::simulation::Simulation::bare(SimulationConfig {
             seed: 3,
             dt_s: 1.0,
             steps: Some(10),
