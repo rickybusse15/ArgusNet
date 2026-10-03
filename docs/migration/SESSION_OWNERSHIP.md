@@ -131,7 +131,7 @@ Two ways to keep the timing exact without a shared handle:
 
 Recommendation: (1) for the writes (6→1, 9→2, 4→7, 6→7), (2) for the
 same-tick reads (poses, battery fractions, mapping results, mission phase).
-This is the decision to settle before slice 5.
+**Decided 2026-10-03 (maintainer): adopt the recommendation**, (1) for writes and (2) for same-tick reads. Slices 5–10 follow it.
 
 ## 3. Slices, in order
 
