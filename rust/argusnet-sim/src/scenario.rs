@@ -39,7 +39,7 @@ use argusnet_world::tiled::{Tile, TiledTerrain};
 use argusnet_world::visibility::VisibilityProfile;
 use serde::Deserialize;
 
-use crate::battery::{BatteryLink, BatteryStage};
+use crate::battery::BatteryStage;
 use crate::config::SimulationConfig;
 use crate::controller::{
     ControllerEnvironment, ControllerStage, LaunchProfile, Operational, PlatformController,
@@ -660,7 +660,6 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
 /// A bundle, assembled into a running simulation.
 pub struct AssembledRun {
     pub sim: Simulation,
-    pub battery: BatteryLink,
     /// Scan-map-inspect runs only.
     pub mission: Option<MissionLink>,
     pub mapping: Option<MappingLink>,
@@ -849,10 +848,9 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     );
 
     // Stage 1: controllers, then battery.
-    let battery = BatteryStage::new();
-    let battery_link = battery.link();
-    battery_link.set_model(reference_battery_model());
-    let mut stage_one = ControllerStage::new().with_battery(battery);
+    let mut battery = BatteryStage::new();
+    battery.set_model(reference_battery_model());
+    let mut stage_one = ControllerStage::new();
     let mut follow_zones: Option<Vec<ZoneDocument>> = None;
     for node in &bundle.nodes {
         let controller = match &node.controller {
@@ -894,7 +892,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                     }
                 }
                 if node.is_mobile {
-                    battery_link.register(node.node_id.clone(), Some(*station_position_m));
+                    battery.register(node.node_id.clone(), Some(*station_position_m));
                 }
                 PlatformController::Launched {
                     controller: LaunchController::new(
@@ -917,10 +915,11 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     // Every mobile node is on the ledger, launched or not -- the reference
     // registers `if node.is_mobile`, with no home unless it has a station.
     for node in bundle.nodes.iter().filter(|node| node.is_mobile) {
-        if battery_link.remaining_wh(&node.node_id).is_none() {
-            battery_link.register(node.node_id.clone(), None);
+        if battery.remaining_wh(&node.node_id).is_none() {
+            battery.register(node.node_id.clone(), None);
         }
     }
+    let mut stage_one = stage_one.with_battery(battery);
     stage_one.set_environment(ControllerEnvironment {
         terrain: Box::new(world.terrain.clone()),
         obstacles: Some(Box::new(world.obstacles.clone())),
@@ -973,7 +972,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
             safety.set_role(drone_id.clone(), role.clone());
         }
         safety.set_terrain(Box::new(world.terrain.clone()));
-        safety.use_battery(battery_link.clone());
+        safety.read_stage_one_battery();
         sim.set_stage_handler(Stage::SafetyMonitor, Box::new(safety))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
@@ -1093,7 +1092,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
             homes,
             mapping_handle.clone(),
             override_link.clone(),
-            battery_link.clone(),
         );
         let link = driver.mission_link();
         localization_replay = Some(driver.localization_replay());
@@ -1127,7 +1125,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         mission: mission_link,
         mapping: mapping_link,
         sim,
-        battery: battery_link,
         truth,
         replay,
         dt_s: bundle.dt_s,
@@ -1325,6 +1322,16 @@ impl AssembledRun {
     /// Stage 4, when the bundle asked for `safety_blocking`.
     pub fn safety(&self) -> Option<&SafetyStage> {
         self.sim.stage::<SafetyStage>(Stage::SafetyMonitor)
+    }
+
+    /// Stage 1's battery ledger, as assembled. Every assembled run chains one.
+    pub fn battery(&self) -> &BatteryStage {
+        BatteryStage::of(&self.sim).expect("assembly chains a BatteryStage into stage 1")
+    }
+
+    /// [`Self::battery`], mutably: for a test or driver that seeds charge.
+    pub fn battery_mut(&mut self) -> &mut BatteryStage {
+        BatteryStage::of_mut(&mut self.sim).expect("assembly chains a BatteryStage into stage 1")
     }
 
     /// Stage 7, as assembled. Every assembled run installs it.

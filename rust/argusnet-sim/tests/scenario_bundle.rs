@@ -505,7 +505,7 @@ fn the_assembly_wires_every_capability() {
         run.fusion().config().data_association_mode,
         AssociationMode::Labeled
     );
-    assert_eq!(run.battery.model(), reference_battery_model());
+    assert_eq!(run.battery().model(), reference_battery_model());
 
     let summary = run.controllers().environment_summary().expect("installed");
     assert!(summary.has_obstacles && summary.has_weather && summary.has_pursuit);
@@ -1066,7 +1066,7 @@ fn safety_events_reach_the_replay_and_an_unblocked_run_has_no_stage_four() {
 fn the_assembled_safety_monitor_reads_the_battery_ledger() {
     let mut run = assemble(&bundle_of("tt_safety")).expect("assembles");
     let drone = "drone-north";
-    assert!(run.battery.set_remaining_wh(drone, 0.5));
+    assert!(run.battery_mut().set_remaining_wh(drone, 0.5));
     run.step().expect("tick runs");
     let frame = run.fusion().frame().expect("stage 7 ran");
     let event = frame

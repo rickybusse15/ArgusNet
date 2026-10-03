@@ -17,7 +17,7 @@
 //! shortcut calls `observe` directly.
 
 use argusnet_sensing::SensorErrorConfig;
-use argusnet_sim::battery::{BatteryLink, BatteryStage};
+use argusnet_sim::battery::BatteryStage;
 use argusnet_sim::config::SimulationConfig;
 use argusnet_sim::controller::{
     ControllerEnvironment, ControllerStage, LaunchProfile, Operational, PlatformController,
@@ -227,7 +227,6 @@ const WRONG_HISTORY: Options = Options {
 struct Rig {
     options: Options,
     sim: Simulation,
-    battery: BatteryLink,
 }
 
 impl Rig {
@@ -247,10 +246,9 @@ impl Rig {
         .expect("config is valid");
         sim.load_world(fleet(), Vec::new());
 
-        let battery = BatteryStage::new();
-        let battery_link = battery.link();
-        battery_link.register("drone-search", Some(station(0.0, -400.0)));
-        battery_link.register("drone-follow", Some(station(0.0, -400.0)));
+        let mut battery = BatteryStage::new();
+        battery.register("drone-search", Some(station(0.0, -400.0)));
+        battery.register("drone-follow", Some(station(0.0, -400.0)));
 
         let mut stage = ControllerStage::new().with_battery(battery);
         stage.set_environment(ControllerEnvironment {
@@ -317,17 +315,17 @@ impl Rig {
         sim.connect(Handoff::EngagementToControllers)
             .expect("stages 1 and 6 are installed");
 
-        Self {
-            options,
-            sim,
-            battery: battery_link,
-        }
+        Self { options, sim }
     }
 
     fn controllers(&self) -> &ControllerStage {
         self.sim
             .stage(Stage::SampleControllersAndBattery)
             .expect("stage 1 is installed")
+    }
+
+    fn battery(&self) -> &BatteryStage {
+        BatteryStage::of(&self.sim).expect("stage 1 chains a battery")
     }
 
     fn controllers_mut(&mut self) -> &mut ControllerStage {
@@ -556,8 +554,8 @@ fn a_reset_run_is_a_fresh_run() {
         );
     }
     assert_eq!(
-        rig.battery.has_warned("drone-search"),
-        Rig::new().battery.has_warned("drone-search")
+        rig.battery().has_warned("drone-search"),
+        Rig::new().battery().has_warned("drone-search")
     );
 }
 

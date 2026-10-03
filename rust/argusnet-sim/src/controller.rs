@@ -591,6 +591,15 @@ impl ControllerStage {
         self
     }
 
+    /// The battery stage chained after the controllers, if any.
+    pub fn battery(&self) -> Option<&BatteryStage> {
+        self.battery.as_ref()
+    }
+
+    pub fn battery_mut(&mut self) -> Option<&mut BatteryStage> {
+        self.battery.as_mut()
+    }
+
     fn sample_all(&mut self, context: &mut TickContext<'_>) -> Result<bool, StageError> {
         let State {
             controllers,
