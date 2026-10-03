@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Fleet index; Tab works every time (C3.2)
+
+- The mission rail's fleet is a numbered list: click a platform to select it,
+  as if picked in the world.
+- Tab steps through entities every time it is pressed. Before, the second
+  Tab moved focus onto a header button instead, and Space then pressed that
+  button.
+
 ## Unreleased — Platform inspector (C3.1)
 
 - Selecting a platform shows its state in eleven ordered sections: identity,

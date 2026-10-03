@@ -159,11 +159,28 @@ pub(super) fn status_line(
 
 /// The mission rail (§4.3): task phase, fleet index, alerts. Compact and
 /// index-like.
+/// The platforms, as typed keys, in the order the markers give them: the
+/// identity world picking and Tab resolve to, never a label.
+pub(super) fn fleet_index(
+    markers: &CurrentRuntimeMarkers,
+) -> Vec<(crate::presentation::EntityKey, std::sync::Arc<str>)> {
+    markers
+        .markers
+        .iter()
+        .filter(|marker| marker.kind == MarkerKind::Node)
+        .map(|marker| (marker.key, marker.label.clone()))
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn mission_rail(
     ui: &mut egui::Ui,
     workspace: crate::state::Workspace,
     replay_state: &ReplayState,
     mission_zones: &LoadedMissionZones,
+    markers: &CurrentRuntimeMarkers,
+    selection: &SelectionState,
+    ui_state: &mut ViewerUiState,
 ) {
     // Plan and Review say what they wait for rather than show mock data.
     if workspace_unavailable(ui, workspace) {
@@ -180,25 +197,40 @@ pub(super) fn mission_rail(
     }
     ui.separator();
     ui.strong("Fleet");
-    match replay_state.current_frame() {
-        Some(frame) if !frame.nodes.is_empty() => {
-            egui::Grid::new("mission_rail_fleet")
-                .num_columns(2)
-                .show(ui, |ui| {
-                    for node in &frame.nodes {
-                        ui.small(&node.node_id);
-                        ui.colored_label(
-                            health_color_egui(node.health),
-                            format!("{:.0}%", node.health * 100.0),
-                        );
-                        ui.end_row();
-                    }
-                });
-        }
-        _ => {
-            ui.small("No platforms in this frame.");
-        }
+    let fleet = fleet_index(markers);
+    if fleet.is_empty() {
+        ui.small("No platforms in this frame.");
     }
+    let selected = selection.selected.as_ref().map(|selected| selected.key);
+    let frame = replay_state.current_frame();
+    egui::Grid::new("mission_rail_fleet")
+        .num_columns(2)
+        .show(ui, |ui| {
+            for (index, (key, label)) in fleet.iter().enumerate() {
+                // The indexed list is picking's keyboard and pointer twin:
+                // the same typed key, through the same request.
+                if ui
+                    .selectable_label(selected == Some(*key), format!("{} {label}", index + 1))
+                    .on_hover_text("Select (Tab steps through every shown entity)")
+                    .clicked()
+                {
+                    ui_state.select_request = Some(crate::picking::SelectRequest::Select(*key));
+                }
+                match frame.and_then(|frame| {
+                    frame
+                        .nodes
+                        .iter()
+                        .find(|node| node.node_id.as_str() == &**label)
+                }) {
+                    Some(node) => ui.colored_label(
+                        health_color_egui(node.health),
+                        format!("{:.0}%", node.health * 100.0),
+                    ),
+                    None => ui.label(crate::theme::Status::Unavailable.rich_text()),
+                };
+                ui.end_row();
+            }
+        });
     ui.separator();
     section_safety_alerts(ui, replay_state, mission_zones);
 }
