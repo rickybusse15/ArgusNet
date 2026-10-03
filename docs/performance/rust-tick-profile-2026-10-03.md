@@ -2,8 +2,8 @@
 
 The first per-stage profile of the Rust tick, the measurement the P4.10
 scheduler and parallel work are to be chosen from
-([AGENT_EXECUTION_PLAN.md](../migration/AGENT_EXECUTION_PLAN.md) §5 B0,
-[PARALLEL_TICK_PLAN.md](../migration/PARALLEL_TICK_PLAN.md) §9). It replaces the
+([DELIVERY_PLAN.md](../migration/DELIVERY_PLAN.md) P4.10; the agent execution
+and parallel tick plans proposed in #134 call it P4.10-pre). It replaces the
 Python-era profile (localizer 40 %, VIO 13 %) as the basis for those
 decisions; that profile described a different runtime.
 
