@@ -44,9 +44,21 @@ use crate::replay::{MarkerKind, ReplayFrame, ReplayState, RuntimeMarker};
 /// How many recorded frames a trail spans.
 pub const TRAIL_MAX_FRAMES: usize = 32;
 
+/// A step faster than this is a teleport, not motion: nothing is
+/// interpolated across it, and a trail restarts at it.
+pub const TELEPORT_SPEED_MPS: f32 = 200.0;
+
 /// An interned id, valid within one epoch's [`IdTable`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IdIndex(u32);
+
+impl IdIndex {
+    /// An index for tests that need a key without an id table.
+    #[cfg(test)]
+    pub fn for_tests(n: usize) -> Self {
+        Self(n as u32)
+    }
+}
 
 /// Which domain entity a marker presents: its kind, and its interned id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Component)]
@@ -313,17 +325,25 @@ impl CurrentRuntimeMarkers {
         }
 
         self.next.resize(self.markers.len(), None);
-        if let Some(next_frame) = replay
-            .document
-            .as_ref()
-            .and_then(|document| document.frames.get(frame_index + 1))
-        {
+        // Only a step that may be interpolated at all: not the last frame,
+        // not across a recording gap (P2.4a).
+        let next_frame = replay.blend_step_s().and_then(|step| {
+            let document = replay.document.as_ref()?;
+            Some((document.frames.get(frame_index + 1)?, step))
+        });
+        if let Some((next_frame, step)) = next_frame {
             for (kind, id, position, velocity, _, _) in frame_entities(next_frame) {
                 let Some(id) = self.ids.get(id) else {
                     continue;
                 };
                 if let Some(&index) = self.index.get(&EntityKey::new(kind, id)) {
-                    self.next[index].get_or_insert((position, velocity));
+                    // A teleport holds its recorded pose rather than sliding
+                    // through everything between.
+                    let teleport =
+                        position.distance(self.recorded[index].0) > TELEPORT_SPEED_MPS * step;
+                    if !teleport {
+                        self.next[index].get_or_insert((position, velocity));
+                    }
                 }
             }
         }
@@ -454,11 +474,61 @@ mod tests {
         assert!((x - 50.0).abs() < 1e-3, "expected the midpoint, got {x}");
     }
 
+    /// An entity that jumps faster than a teleport holds its recorded pose
+    /// instead of sliding through everything between; one that moves
+    /// normally in the same frames still blends.
+    #[test]
+    fn a_teleport_is_not_interpolated() {
+        let mut replay = ReplayState::new(Some(document(serde_json::json!([
+            {"timestamp_s": 0.0, "truths": [], "nodes": [], "tracks": [
+                {"track_id": "jump", "position": [0.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]},
+                {"track_id": "walk", "position": [0.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+            {"timestamp_s": 1.0, "truths": [], "nodes": [], "tracks": [
+                {"track_id": "jump", "position": [5000.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]},
+                {"track_id": "walk", "position": [10.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+        ]))));
+        replay.seek_time(0.5);
+        let markers = presented(&replay);
+        assert_eq!(markers.markers[0].position.x, 0.0, "the teleport slid");
+        assert!((markers.markers[1].position.x - 5.0).abs() < 1e-4);
+
+        // A teleport is a speed: 50 m in 0.1 s is 500 m/s, though 50 m is
+        // short.
+        let mut replay = ReplayState::new(Some(document(serde_json::json!([
+            {"timestamp_s": 0.0, "truths": [], "nodes": [], "tracks": [
+                {"track_id": "hop", "position": [0.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+            {"timestamp_s": 0.1, "truths": [], "nodes": [], "tracks": [
+                {"track_id": "hop", "position": [50.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+        ]))));
+        replay.seek_time(0.05);
+        assert_eq!(
+            presented(&replay).markers[0].position.x,
+            0.0,
+            "a 500 m/s hop slid"
+        );
+    }
+
+    /// Nothing blends across a recording gap: the frame before it is shown
+    /// as recorded all the way across.
+    #[test]
+    fn a_recording_gap_is_not_interpolated() {
+        let mut replay = ReplayState::new(Some(document(serde_json::json!([
+            {"timestamp_s": 0.0, "truths": [], "nodes": [], "tracks": [{"track_id": "t", "position": [0.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+            {"timestamp_s": 1.0, "truths": [], "nodes": [], "tracks": [{"track_id": "t", "position": [1.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+            {"timestamp_s": 2.0, "truths": [], "nodes": [], "tracks": [{"track_id": "t", "position": [2.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+            {"timestamp_s": 60.0, "truths": [], "nodes": [], "tracks": [{"track_id": "t", "position": [60.0, 0.0, 0.0], "velocity": [0.0, 0.0, 0.0]}]},
+        ]))));
+        replay.seek_time(30.0);
+        assert_eq!(presented(&replay).markers[0].position.x, 2.0);
+        replay.seek_time(1.5);
+        assert!((presented(&replay).markers[0].position.x - 1.5).abs() < 1e-5);
+    }
+
     #[test]
     fn interpolation_never_overshoots_the_next_frame() {
         let mut replay = moving_track();
         replay.playing = true;
-        replay.accumulator_s = 10.0;
+        replay.seek_time(1e6);
         assert_eq!(presented(&replay).markers[0].position.x, 100.0);
     }
 

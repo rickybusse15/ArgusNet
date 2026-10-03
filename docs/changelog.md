@@ -18,6 +18,32 @@
   for bit there and allow 2 ULPs elsewhere, recorded oracles included
   (`docs/migration/PARITY_PORTABILITY.md`).
 
+## Unreleased — Camera controls and bindings (P2.4b)
+
+- `F` focuses the selection, `L` follows it and `C` chases it, and `G` flies
+  freely (`W A S D`, `E`/`Q`, `Shift`, right-drag to look, scroll for speed).
+  Transitions are damped, on render time. Losing a followed entity holds its
+  last known position and says so.
+- `1`-`9` recall camera bookmarks and `Ctrl`/`Cmd`+digit saves them, per
+  scene, in `~/.config/argusnet/viewer.json` (or `$ARGUSNET_VIEWER_PREFS`).
+- Every key is remappable in that file. No binding fires while a text field
+  has the keyboard, and `Esc` leaves a camera mode before it clears the
+  selection.
+- The top bar shows the camera's mode and notices.
+- Fixed: `M` did nothing in a scene without a replay.
+
+## Unreleased — Time controls over source time (P2.4a)
+
+- Replays play and scrub by source time, not frame count. A recording with
+  unevenly spaced frames now plays at the rate it was recorded, and blends
+  between frames by the true fraction of each step.
+- Nothing is interpolated across a recording gap or a teleport; the frame
+  before is shown as recorded.
+- The timeline scrubs in seconds on a time axis. It shades recording gaps,
+  says when live history was trimmed, and labels live history as read-only.
+- Loop playback, and `[` / `]` to jump to the previous or next event
+  (safety events now count as events).
+
 ## Unreleased — Picking and selection (P2.3)
 
 - Clicks pick by ray against the scene's meshes, not by an 18-pixel radius:

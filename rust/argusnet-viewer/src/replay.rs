@@ -47,13 +47,44 @@ pub struct RuntimeMarker {
     pub measurement_std_m: Option<f32>,
 }
 
+/// A timestamp step longer than this many nominal steps is a recording gap:
+/// nothing is interpolated across it, and the timeline shows it as
+/// unavailable.
+pub const GAP_STEPS: f32 = 3.0;
+
+/// How many intervals the nominal step is the median of.
+pub const STEP_SAMPLES: usize = 31;
+
+/// Playback over source time (P2.4a).
+///
+/// The cursor is a **source time**, not a frame count: playing advances it by
+/// render time times the speed, and the frame shown is the last one recorded
+/// at or before it. So a replay with irregular timestamps plays at the rate
+/// it was recorded, and the blend toward the next frame is the true fraction
+/// of the step between their timestamps. Before P2.4a playback counted frames
+/// at a fixed step (`meta.dt_s`, or the first interval), which played an
+/// irregular replay at the wrong speed and blended with the wrong fraction.
+///
+/// Nothing is interpolated across a recording gap (see [`GAP_STEPS`]); the
+/// presentation adapter also holds an entity that teleports. `frame_index`
+/// stays public for readers; move the cursor with [`Self::step_to`] or
+/// [`Self::seek_time`].
 #[derive(Debug, Clone, Resource)]
 pub struct ReplayState {
     pub document: Option<ReplayDocument>,
     pub playing: bool,
     pub playback_speed: f32,
+    /// The frame at or before the cursor.
     pub frame_index: usize,
-    pub accumulator_s: f32,
+    /// Wrap to the start at the end instead of stopping. Not for live history.
+    pub looping: bool,
+    /// The frames are a live stream's history: read-only, and trimmed from
+    /// the front as it grows. Seeking reviews it; it never rewinds a runtime.
+    pub live: bool,
+    /// The cursor, in source seconds.
+    time_s: f32,
+    /// Live history dropped before this source time.
+    trimmed_before_s: Option<f32>,
     /// Which run the frames belong to. See [`Self::epoch`].
     epoch: u64,
 }
@@ -65,18 +96,33 @@ impl Default for ReplayState {
             playing: false,
             playback_speed: 1.0,
             frame_index: 0,
-            accumulator_s: 0.0,
+            looping: false,
+            live: false,
+            time_s: 0.0,
+            trimmed_before_s: None,
             epoch: 0,
         }
     }
 }
 
+/// A frame's events, as the timeline counts them: rejections, deconfliction,
+/// inspection and safety events.
+pub fn frame_event_count(frame: &ReplayFrame) -> usize {
+    frame.generation_rejections.len()
+        + frame.rejected_observations.len()
+        + frame.deconfliction_events.len()
+        + frame.inspection_events.len()
+        + frame.safety_events.len()
+}
+
 impl ReplayState {
     pub fn new(document: Option<ReplayDocument>) -> Self {
-        Self {
+        let mut state = Self {
             document,
             ..Self::default()
-        }
+        };
+        state.step_to(0);
+        state
     }
 
     /// Which run the frames belong to.
@@ -92,9 +138,9 @@ impl ReplayState {
     /// Replace the document with a different run's, from its first frame.
     pub fn begin_epoch(&mut self, document: Option<ReplayDocument>) {
         self.document = document;
-        self.frame_index = 0;
-        self.accumulator_s = 0.0;
+        self.trimmed_before_s = None;
         self.epoch += 1;
+        self.step_to(0);
     }
 
     /// Carry `previous`'s epoch forward, to one after it. For a state built
@@ -105,6 +151,7 @@ impl ReplayState {
 
     /// Append a frame, as live streaming does. Same epoch.
     pub fn push_frame(&mut self, frame: ReplayFrame) {
+        let first = self.document.as_ref().is_none_or(|d| d.frames.is_empty());
         self.document
             .get_or_insert_with(|| ReplayDocument {
                 meta: None,
@@ -113,17 +160,32 @@ impl ReplayState {
             })
             .frames
             .push(frame);
+        if first {
+            self.step_to(0);
+        }
     }
 
     /// Drop the oldest `count` frames, keeping the cursor on the same frame
-    /// where it survives. Same epoch.
+    /// where it survives. Same epoch. What was dropped is reported as
+    /// unavailable history.
     pub fn drain_front(&mut self, count: usize) {
+        let time = self.time_s();
         let Some(document) = self.document.as_mut() else {
             return;
         };
         let count = count.min(document.frames.len());
+        if count == 0 {
+            return;
+        }
         document.frames.drain(..count);
+        self.trimmed_before_s = document.frames.first().map(|f| f.timestamp_s);
         self.frame_index = self.frame_index.saturating_sub(count);
+        // The cursor keeps its time where that time survives.
+        match self.time_range() {
+            Some((first, _)) if time < first => self.step_to(0),
+            Some(_) => self.time_s = time,
+            None => {}
+        }
     }
 
     /// Stale-step threshold for the loaded run.
@@ -158,50 +220,114 @@ impl ReplayState {
             .unwrap_or(0.0)
     }
 
+    fn timestamp(&self, index: usize) -> Option<f32> {
+        self.document
+            .as_ref()?
+            .frames
+            .get(index)
+            .map(|frame| frame.timestamp_s)
+    }
+
+    /// The first and last recorded times.
+    pub fn time_range(&self) -> Option<(f32, f32)> {
+        let frames = &self.document.as_ref()?.frames;
+        Some((frames.first()?.timestamp_s, frames.last()?.timestamp_s))
+    }
+
+    /// The cursor, in source seconds. Always within the current frame's step:
+    /// if `frame_index` was set directly, the cursor is that frame's time.
+    pub fn time_s(&self) -> f32 {
+        let Some(at) = self.timestamp(self.frame_index) else {
+            return 0.0;
+        };
+        let next = self.timestamp(self.frame_index + 1);
+        let within = self.time_s >= at && next.is_none_or(|next| self.time_s < next);
+        if within {
+            self.time_s
+        } else {
+            at
+        }
+    }
+
+    /// The last frame recorded at or before `time_s` (the first frame for a
+    /// time before it). Timestamps are non-decreasing.
+    pub fn frame_at(&self, time_s: f32) -> usize {
+        let Some(document) = self.document.as_ref() else {
+            return 0;
+        };
+        document
+            .frames
+            .partition_point(|frame| frame.timestamp_s <= time_s)
+            .saturating_sub(1)
+    }
+
+    /// Move the cursor to `time_s`, clamped to the recorded range.
+    pub fn seek_time(&mut self, time_s: f32) {
+        let Some((first, last)) = self.time_range() else {
+            self.frame_index = 0;
+            self.time_s = 0.0;
+            return;
+        };
+        let time_s = if time_s.is_finite() {
+            time_s.clamp(first, last)
+        } else {
+            first
+        };
+        self.frame_index = self.frame_at(time_s);
+        self.time_s = time_s;
+    }
+
+    /// Move the cursor to a frame, exactly as recorded.
     pub fn step_to(&mut self, frame_index: usize) {
         let frame_count = self.frame_count();
         self.frame_index = frame_index.min(frame_count.saturating_sub(1));
-        self.accumulator_s = 0.0;
+        self.time_s = self.timestamp(self.frame_index).unwrap_or(0.0);
     }
 
+    /// Play forward by `delta_s` of render time, times the speed.
     pub fn advance(&mut self, delta_s: f32) {
         if !self.playing || self.frame_count() <= 1 {
             return;
         }
-
-        self.accumulator_s += delta_s.max(0.0) * self.playback_speed.max(0.1);
-        let frame_step = self.frame_step_s();
-        while self.accumulator_s >= frame_step {
-            self.accumulator_s -= frame_step;
-            if self.frame_index + 1 >= self.frame_count() {
-                self.frame_index = self.frame_count().saturating_sub(1);
+        let Some((first, last)) = self.time_range() else {
+            return;
+        };
+        let mut time = self.time_s() + delta_s.max(0.0) * self.playback_speed.max(0.1);
+        if time >= last {
+            if self.looping && !self.live && last > first {
+                time = first + (time - last) % (last - first);
+            } else {
+                time = last;
                 self.playing = false;
-                self.accumulator_s = 0.0;
-                break;
-            }
-            self.frame_index += 1;
-            if self.frame_index + 1 >= self.frame_count() {
-                self.playing = false;
-                self.accumulator_s = 0.0;
-                break;
             }
         }
+        self.seek_time(time);
     }
 
-    /// How far playback has advanced into the current frame, in `0.0..=1.0`.
-    ///
-    /// `advance` already tracks this as `accumulator_s`; expressing it as a
-    /// fraction of the frame step turns it into the blend factor between the
-    /// current frame and the next. Seeking zeroes the accumulator, so a paused
-    /// or scrubbed timeline reports 0 and shows the frame exactly as recorded.
+    /// How far the cursor is into the current frame's step, in `0.0..=1.0`:
+    /// the blend toward the next frame. 0 on the last frame, and across a
+    /// recording gap, which is not interpolated.
     pub fn interpolation_alpha(&self) -> f32 {
-        let frame_step = self.frame_step_s();
-        if frame_step <= 0.0 {
+        let Some(step) = self.blend_step_s() else {
             return 0.0;
-        }
-        (self.accumulator_s / frame_step).clamp(0.0, 1.0)
+        };
+        let at = self.timestamp(self.frame_index).unwrap_or(0.0);
+        ((self.time_s() - at) / step).clamp(0.0, 1.0)
     }
 
+    /// The length of the step from the current frame to the next, when it
+    /// may be interpolated across: positive, and not a recording gap.
+    pub fn blend_step_s(&self) -> Option<f32> {
+        let at = self.timestamp(self.frame_index)?;
+        let next = self.timestamp(self.frame_index + 1)?;
+        let step = next - at;
+        (step > 0.0 && step <= GAP_STEPS * self.frame_step_s()).then_some(step)
+    }
+
+    /// The nominal step: the recorded `meta.dt_s`, else the median of up to
+    /// [`STEP_SAMPLES`] positive intervals spread evenly over the recording.
+    /// Sampled on the stack: this runs every presented frame, and a paused
+    /// frame allocates nothing (P2.0's budget).
     pub fn frame_step_s(&self) -> f32 {
         let Some(document) = self.document.as_ref() else {
             return 0.25;
@@ -211,12 +337,86 @@ impl ReplayState {
                 return value.max(0.01) as f32;
             }
         }
-        if document.frames.len() >= 2 {
-            return (document.frames[1].timestamp_s - document.frames[0].timestamp_s)
-                .abs()
-                .max(0.01);
+        let frames = &document.frames;
+        let intervals = frames.len().saturating_sub(1);
+        let stride = intervals.div_ceil(STEP_SAMPLES).max(1);
+        let mut samples = [0.0_f32; STEP_SAMPLES];
+        let mut n = 0;
+        for i in (0..intervals).step_by(stride) {
+            let step = frames[i + 1].timestamp_s - frames[i].timestamp_s;
+            if step > 0.0 && n < STEP_SAMPLES {
+                samples[n] = step;
+                n += 1;
+            }
         }
-        0.25
+        if n == 0 {
+            return 0.25;
+        }
+        let samples = &mut samples[..n];
+        samples.sort_by(f32::total_cmp);
+        samples[n / 2].max(0.01)
+    }
+
+    /// Recording gaps: steps longer than [`GAP_STEPS`] nominal steps, as
+    /// `(from, to)` source times. Seeking into one shows the frame before it.
+    pub fn gaps(&self) -> Vec<(f32, f32)> {
+        let Some(document) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let limit = GAP_STEPS * self.frame_step_s();
+        document
+            .frames
+            .windows(2)
+            .map(|pair| (pair[0].timestamp_s, pair[1].timestamp_s))
+            .filter(|(from, to)| to - from > limit)
+            .collect()
+    }
+
+    /// Live history dropped before this source time, if any was.
+    pub fn trimmed_before_s(&self) -> Option<f32> {
+        self.trimmed_before_s
+    }
+
+    /// Source times of the frames that carry events, in order.
+    pub fn event_times(&self) -> Vec<f32> {
+        self.document
+            .as_ref()
+            .map(|document| {
+                document
+                    .frames
+                    .iter()
+                    .filter(|frame| frame_event_count(frame) > 0)
+                    .map(|frame| frame.timestamp_s)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Jump to the next event frame after the current frame (or the previous
+    /// one before it), wrapping. Pauses. Returns whether there was one.
+    pub fn jump_to_event(&mut self, forward: bool) -> bool {
+        let events = self.event_times();
+        let now = self.current_timestamp_s();
+        let target = if forward {
+            events
+                .iter()
+                .copied()
+                .find(|t| *t > now)
+                .or(events.first().copied())
+        } else {
+            events
+                .iter()
+                .rev()
+                .copied()
+                .find(|t| *t < now)
+                .or(events.last().copied())
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        self.playing = false;
+        self.seek_time(target);
+        true
     }
 }
 #[cfg(test)]
@@ -241,6 +441,150 @@ mod replay_state_tests {
         replay.advance(1.1);
         assert_eq!(replay.frame_index, 2);
         assert!(!replay.playing);
+    }
+
+    /// Frames at the given times, no `meta.dt_s`, and a safety event on the
+    /// frames listed in `events`.
+    fn timed(times: &[f32], events: &[usize]) -> ReplayState {
+        let frames: Vec<_> = times
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let safety = if events.contains(&i) {
+                    json!([{"event_id": format!("e{i}"), "subject_id": "d", "timestamp_s": t, "state": "caution",
+                            "violations": [], "command_clamped": false, "blocked": false, "reason": ""}])
+                } else {
+                    json!([])
+                };
+                json!({"timestamp_s": t, "tracks": [], "truths": [], "nodes": [], "safety_events": safety})
+            })
+            .collect();
+        ReplayState::new(Some(
+            serde_json::from_value(json!({ "frames": frames })).unwrap(),
+        ))
+    }
+
+    /// Playback runs on source time: one second of play at 1x is one second
+    /// of the recording, however irregular its frames. Counting frames at a
+    /// fixed step (the first interval, 0.1 s) would have run ten frames on.
+    #[test]
+    fn irregular_timestamps_play_at_the_recorded_rate() {
+        let mut replay = timed(&[0.0, 0.1, 0.5, 0.9, 1.3, 1.7], &[]);
+        replay.playing = true;
+        replay.advance(1.0);
+        assert_eq!(replay.frame_index, 3, "the frame at or before t = 1.0");
+        assert!((replay.time_s() - 1.0).abs() < 1e-6);
+        // The blend is the true fraction of this step: (1.0 - 0.9) / 0.4.
+        assert!((replay.interpolation_alpha() - 0.25).abs() < 1e-5);
+
+        // Inside a step shorter than the nominal one (0.5 s), the fraction
+        // is of that step: halfway through 1.0 -> 1.1 is 0.5, not 0.1.
+        let mut replay = timed(&[0.0, 0.5, 1.0, 1.1, 1.6, 2.1], &[]);
+        assert_eq!(replay.frame_step_s(), 0.5);
+        replay.seek_time(1.05);
+        assert_eq!(replay.frame_index, 2);
+        assert!(
+            (replay.interpolation_alpha() - 0.5).abs() < 1e-4,
+            "{}",
+            replay.interpolation_alpha()
+        );
+    }
+
+    /// A step longer than GAP_STEPS nominal steps is a recording gap: it is
+    /// reported, and nothing is blended across it.
+    #[test]
+    fn recording_gaps_are_reported_and_not_blended() {
+        let mut replay = timed(&[0.0, 0.5, 1.0, 5.0, 5.5], &[]);
+        assert_eq!(replay.frame_step_s(), 0.5, "the median step");
+        assert_eq!(replay.gaps(), vec![(1.0, 5.0)]);
+        replay.seek_time(3.0);
+        assert_eq!(replay.frame_index, 2, "inside the gap: the frame before it");
+        assert_eq!(replay.interpolation_alpha(), 0.0);
+        assert_eq!(replay.blend_step_s(), None);
+        replay.seek_time(0.25);
+        assert!((replay.interpolation_alpha() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn seeking_clamps_to_the_recording_and_step_is_exact() {
+        let mut replay = timed(&[2.0, 3.0, 4.0], &[]);
+        replay.seek_time(-10.0);
+        assert_eq!((replay.frame_index, replay.time_s()), (0, 2.0));
+        replay.seek_time(99.0);
+        assert_eq!((replay.frame_index, replay.time_s()), (2, 4.0));
+        replay.seek_time(f32::NAN);
+        assert_eq!(replay.frame_index, 0);
+        replay.step_to(1);
+        assert_eq!(replay.time_s(), 3.0);
+        assert_eq!(
+            replay.interpolation_alpha(),
+            0.0,
+            "a stepped frame is shown as recorded"
+        );
+        // A cursor out of step with a directly written frame index follows the index.
+        replay.frame_index = 2;
+        assert_eq!(replay.time_s(), 4.0);
+    }
+
+    #[test]
+    fn loop_wraps_and_live_history_never_loops() {
+        let mut replay = timed(&[0.0, 1.0, 2.0], &[]);
+        replay.looping = true;
+        replay.playing = true;
+        replay.step_to(2);
+        replay.advance(0.5);
+        assert!(replay.playing, "a loop keeps playing");
+        assert!(
+            (replay.time_s() - 0.5).abs() < 1e-6,
+            "wrapped to {}",
+            replay.time_s()
+        );
+        replay.looping = false;
+        replay.advance(5.0);
+        assert!(!replay.playing);
+        assert_eq!(replay.time_s(), 2.0);
+        replay.looping = true;
+        replay.live = true;
+        replay.playing = true;
+        replay.advance(5.0);
+        assert!(!replay.playing, "live history stops at its tail");
+    }
+
+    /// Trimming live history keeps the cursor's time where it survives and
+    /// reports what was dropped.
+    #[test]
+    fn trimmed_history_is_reported_and_the_cursor_keeps_its_time() {
+        let mut replay = timed(&[0.0, 1.0, 2.0, 3.0], &[]);
+        replay.seek_time(2.5);
+        replay.drain_front(1);
+        assert_eq!(replay.trimmed_before_s(), Some(1.0));
+        assert!((replay.time_s() - 2.5).abs() < 1e-6);
+        assert_eq!(replay.frame_index, 1);
+        replay.drain_front(2);
+        assert_eq!(replay.trimmed_before_s(), Some(3.0));
+        assert_eq!(
+            replay.time_s(),
+            3.0,
+            "a cursor in dropped history moves to the first frame kept"
+        );
+    }
+
+    #[test]
+    fn jump_to_event_steps_between_event_frames_and_wraps() {
+        let mut replay = timed(&[0.0, 1.0, 2.0, 3.0, 4.0], &[1, 3]);
+        assert_eq!(replay.event_times(), vec![1.0, 3.0], "safety events count");
+        replay.playing = true;
+        assert!(replay.jump_to_event(true));
+        assert!(!replay.playing, "a jump pauses");
+        assert_eq!(replay.time_s(), 1.0);
+        assert!(replay.jump_to_event(true));
+        assert_eq!(replay.time_s(), 3.0);
+        assert!(replay.jump_to_event(true));
+        assert_eq!(replay.time_s(), 1.0, "wraps to the first");
+        assert!(replay.jump_to_event(false));
+        assert_eq!(replay.time_s(), 3.0, "wraps to the last");
+        let mut quiet = timed(&[0.0, 1.0], &[]);
+        assert!(!quiet.jump_to_event(true));
     }
 
     #[test]
