@@ -1052,8 +1052,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
             .expect("a mission names its coverage grid, so stage 8 exists");
         mapping_handle.enable_localization(mission.localization);
 
-        let overrides = MissionOverrideStage::new();
-        let override_link = overrides.link();
+        let mut overrides = MissionOverrideStage::new();
 
         // `_drone_home_positions`: every launched drone's station.
         let homes: BTreeMap<String, [f64; 3]> = bundle
@@ -1091,7 +1090,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                 .collect(),
             homes,
             mapping_handle.clone(),
-            override_link.clone(),
         );
         let link = driver.mission_link();
         localization_replay = Some(driver.localization_replay());
@@ -1100,10 +1098,12 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         // test) sees what the stage was actually given.
         mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));
         mapping_handle.watch_mission(link.clone());
-        override_link.watch_mission(link.clone());
+        overrides.watch_mission(link.clone());
         sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(overrides))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(driver))
+            .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+        sim.connect(Handoff::OverridesFromMission)
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
         mission_link = Some(link);
     }

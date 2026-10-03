@@ -42,7 +42,6 @@
 //! POI and egress are ungated in the reference, and are ungated here.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use argusnet_types::Vector3;
 
@@ -184,7 +183,7 @@ impl OverrideSource {
 }
 
 #[derive(Debug, Default)]
-struct Shared {
+struct State {
     frontier: HashMap<String, GotoHover>,
     poi: HashMap<String, GotoHover>,
     egress: HashMap<String, GotoHover>,
@@ -194,15 +193,31 @@ struct Shared {
     applied: HashMap<String, OverrideSource>,
 }
 
-/// A handle on the three override tables, held before the stage is installed.
-#[derive(Debug, Clone, Default)]
-pub struct OverrideLink {
-    inner: Arc<Mutex<Shared>>,
+/// A write into stage 2's tables, queued by stage 9 and applied by the
+/// session straight after it ([`Handoff::OverridesFromMission`]). Applied in
+/// the order queued, which is the order stage 9 used to write them.
+///
+/// [`Handoff::OverridesFromMission`]: crate::simulation::Handoff::OverridesFromMission
+#[derive(Debug, Clone, PartialEq)]
+pub enum OverrideCommand {
+    SetPoi(String, GotoHover),
+    ClearPoi(String),
+    SetEgress(String, GotoHover),
+    /// `_egress_trajectories.clear()`.
+    ClearAllEgress,
 }
 
-impl OverrideLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+/// [`Stage::ApplyMissionOverrides`] as a [`StageHandler`].
+///
+/// [`Stage::ApplyMissionOverrides`]: crate::stage::Stage::ApplyMissionOverrides
+#[derive(Debug, Default)]
+pub struct MissionOverrideStage {
+    state: State,
+}
+
+impl MissionOverrideStage {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Gate the frontier table on this machine's phase.
@@ -211,71 +226,64 @@ impl OverrideLink {
     /// machine has no phase to gate on, and the reference always has one. A
     /// test pins that, so a future run that acquires phases without acquiring a
     /// link fails rather than silently flying its drones through egress.
-    pub fn watch_mission(&self, mission: MissionLink) {
-        self.lock().mission = Some(mission);
+    pub fn watch_mission(&mut self, mission: MissionLink) {
+        self.state.mission = Some(mission);
     }
 
-    pub fn set_frontier(&self, node_id: &str, trajectory: GotoHover) {
-        self.lock().frontier.insert(node_id.to_string(), trajectory);
+    pub fn set_frontier(&mut self, node_id: &str, trajectory: GotoHover) {
+        self.state.frontier.insert(node_id.to_string(), trajectory);
     }
 
-    pub fn clear_frontier(&self, node_id: &str) {
-        self.lock().frontier.remove(node_id);
+    pub fn clear_frontier(&mut self, node_id: &str) {
+        self.state.frontier.remove(node_id);
     }
 
-    pub fn set_poi(&self, node_id: &str, trajectory: GotoHover) {
-        self.lock().poi.insert(node_id.to_string(), trajectory);
+    pub fn set_poi(&mut self, node_id: &str, trajectory: GotoHover) {
+        self.state.poi.insert(node_id.to_string(), trajectory);
     }
 
-    pub fn clear_poi(&self, node_id: &str) {
-        self.lock().poi.remove(node_id);
+    pub fn clear_poi(&mut self, node_id: &str) {
+        self.state.poi.remove(node_id);
     }
 
-    pub fn set_egress(&self, node_id: &str, trajectory: GotoHover) {
-        self.lock().egress.insert(node_id.to_string(), trajectory);
+    pub fn set_egress(&mut self, node_id: &str, trajectory: GotoHover) {
+        self.state.egress.insert(node_id.to_string(), trajectory);
     }
 
-    pub fn clear_egress(&self, node_id: &str) {
-        self.lock().egress.remove(node_id);
+    pub fn clear_egress(&mut self, node_id: &str) {
+        self.state.egress.remove(node_id);
     }
 
     /// `_egress_trajectories.clear()` — the reference drops every recall at
     /// once when the egress phase ends, rather than one platform at a time.
-    pub fn clear_all_egress(&self) {
-        self.lock().egress.clear();
+    pub fn clear_all_egress(&mut self) {
+        self.state.egress.clear();
+    }
+
+    /// Apply one queued [`OverrideCommand`].
+    pub fn apply(&mut self, command: OverrideCommand) {
+        match command {
+            OverrideCommand::SetPoi(node_id, trajectory) => self.set_poi(&node_id, trajectory),
+            OverrideCommand::ClearPoi(node_id) => self.clear_poi(&node_id),
+            OverrideCommand::SetEgress(node_id, trajectory) => {
+                self.set_egress(&node_id, trajectory)
+            }
+            OverrideCommand::ClearAllEgress => self.clear_all_egress(),
+        }
     }
 
     pub fn frontier_target(&self, node_id: &str) -> Option<[f64; 3]> {
-        self.lock().frontier.get(node_id).map(GotoHover::target)
+        self.state.frontier.get(node_id).map(GotoHover::target)
     }
 
     /// Which table flew `node_id` on the last run, or `None` if nothing did.
     pub fn applied_source(&self, node_id: &str) -> Option<OverrideSource> {
-        self.lock().applied.get(node_id).copied()
+        self.state.applied.get(node_id).copied()
     }
 
     /// How many platforms the last run overrode.
     pub fn applied_count(&self) -> usize {
-        self.lock().applied.len()
-    }
-}
-
-/// [`Stage::ApplyMissionOverrides`] as a [`StageHandler`].
-///
-/// [`Stage::ApplyMissionOverrides`]: crate::stage::Stage::ApplyMissionOverrides
-#[derive(Debug, Default)]
-pub struct MissionOverrideStage {
-    link: OverrideLink,
-}
-
-impl MissionOverrideStage {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> OverrideLink {
-        self.link.clone()
+        self.state.applied.len()
     }
 }
 
@@ -290,7 +298,7 @@ struct OverrideCheckpoint {
 
 impl StageHandler for MissionOverrideStage {
     fn reset(&mut self) {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.frontier.clear();
         shared.poi.clear();
         shared.egress.clear();
@@ -300,7 +308,7 @@ impl StageHandler for MissionOverrideStage {
     /// The redirects in force: each is a flight already under way, and a
     /// resumed run must finish it the same way.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
-        let shared = self.link.lock();
+        let shared = &self.state;
         let state = OverrideCheckpoint {
             frontier: shared.frontier.clone().into_iter().collect(),
             poi: shared.poi.clone().into_iter().collect(),
@@ -321,7 +329,7 @@ impl StageHandler for MissionOverrideStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let decoded: OverrideCheckpoint = crate::simulation::decode_stage_state(state)?;
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.frontier = decoded.frontier.into_iter().collect();
         shared.poi = decoded.poi.into_iter().collect();
         shared.egress = decoded.egress.into_iter().collect();
@@ -330,7 +338,7 @@ impl StageHandler for MissionOverrideStage {
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.applied.clear();
 
         // The reference reads `_scan_phase` here, before stage 9 has advanced
@@ -393,7 +401,6 @@ impl StageHandler for MissionOverrideStage {
         }
 
         let count = shared.applied.len();
-        drop(shared);
         context.note(format!("overrode {count} platform(s)"));
         Ok(StageOutcome::Ran)
     }
@@ -430,14 +437,26 @@ mod tests {
         }
     }
 
-    fn rig(platforms: Vec<NodeState>) -> (Simulation, OverrideLink) {
+    fn rig(platforms: Vec<NodeState>) -> Simulation {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
-        let stage = MissionOverrideStage::new();
-        let link = stage.link();
-        sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(stage))
-            .expect("stage 2 is not a transaction boundary");
-        (sim, link)
+        sim.set_stage_handler(
+            Stage::ApplyMissionOverrides,
+            Box::new(MissionOverrideStage::new()),
+        )
+        .expect("stage 2 is not a transaction boundary");
+        sim
+    }
+
+    /// The installed stage, reached through the session that owns it.
+    fn ov(sim: &mut Simulation) -> &mut MissionOverrideStage {
+        sim.stage_mut(Stage::ApplyMissionOverrides)
+            .expect("stage 2 is installed")
+    }
+
+    fn overridden(sim: &Simulation) -> &MissionOverrideStage {
+        sim.stage(Stage::ApplyMissionOverrides)
+            .expect("stage 2 is installed")
     }
 
     fn outcome(sim: &Simulation) -> StageOutcome {
@@ -582,26 +601,26 @@ mod tests {
     /// tables is flown by egress, not by POI.
     #[test]
     fn egress_beats_poi_beats_frontier() {
-        let (mut sim, link) = rig(vec![node("all-three", 0.0, 0.0), node("two", 0.0, 0.0)]);
+        let mut sim = rig(vec![node("all-three", 0.0, 0.0), node("two", 0.0, 0.0)]);
         // Each trajectory has already arrived at a distinct place, so the
         // resulting position names the winner without ambiguity.
-        link.set_frontier(
+        ov(&mut sim).set_frontier(
             "all-three",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
-        link.set_poi(
+        ov(&mut sim).set_poi(
             "all-three",
             GotoHover::over([0.0, 0.0, 0.0], [200.0, 0.0], 20.0, 0.0, 0.0),
         );
-        link.set_egress(
+        ov(&mut sim).set_egress(
             "all-three",
             GotoHover::over([0.0, 0.0, 0.0], [300.0, 0.0], 30.0, 0.0, 0.0),
         );
-        link.set_frontier(
+        ov(&mut sim).set_frontier(
             "two",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
-        link.set_poi(
+        ov(&mut sim).set_poi(
             "two",
             GotoHover::over([0.0, 0.0, 0.0], [200.0, 0.0], 20.0, 0.0, 0.0),
         );
@@ -610,11 +629,14 @@ mod tests {
 
         assert_eq!(position_of(&sim, "all-three").x, 300.0);
         assert_eq!(
-            link.applied_source("all-three"),
+            overridden(&sim).applied_source("all-three"),
             Some(OverrideSource::Egress)
         );
         assert_eq!(position_of(&sim, "two").x, 200.0);
-        assert_eq!(link.applied_source("two"), Some(OverrideSource::Poi));
+        assert_eq!(
+            overridden(&sim).applied_source("two"),
+            Some(OverrideSource::Poi)
+        );
     }
 
     /// An override replaces both position and velocity. Writing only the
@@ -622,8 +644,8 @@ mod tests {
     /// while flying the trajectory's path.
     #[test]
     fn an_override_replaces_the_velocity_too() {
-        let (mut sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.set_poi(
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        ov(&mut sim).set_poi(
             "d0",
             GotoHover::over([0.0, 0.0, 80.0], [100.0, 0.0], 80.0, 0.0, 10.0),
         );
@@ -638,8 +660,8 @@ mod tests {
     /// zeroed. The stage overrides; it does not own the platform.
     #[test]
     fn a_platform_in_no_table_is_left_alone() {
-        let (mut sim, link) = rig(vec![node("flown", 0.0, 0.0), node("untouched", 5.0, 6.0)]);
-        link.set_poi(
+        let mut sim = rig(vec![node("flown", 0.0, 0.0), node("untouched", 5.0, 6.0)]);
+        ov(&mut sim).set_poi(
             "flown",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
@@ -648,8 +670,8 @@ mod tests {
 
         assert_eq!(position_of(&sim, "untouched"), Vector3::new(5.0, 6.0, 80.0));
         assert_eq!(velocity_of(&sim, "untouched"), Vector3::new(1.0, 2.0, 3.0));
-        assert_eq!(link.applied_source("untouched"), None);
-        assert_eq!(link.applied_count(), 1);
+        assert_eq!(overridden(&sim).applied_source("untouched"), None);
+        assert_eq!(overridden(&sim).applied_count(), 1);
     }
 
     /// The reference looks the trajectory up per platform in `node_states`, so
@@ -657,12 +679,12 @@ mod tests {
     /// It is not an error, and it must not stop the platforms that are.
     #[test]
     fn an_entry_for_an_absent_platform_is_ignored_rather_than_failing() {
-        let (mut sim, link) = rig(vec![node("present", 0.0, 0.0)]);
-        link.set_poi(
+        let mut sim = rig(vec![node("present", 0.0, 0.0)]);
+        ov(&mut sim).set_poi(
             "ghost",
             GotoHover::over([0.0, 0.0, 0.0], [999.0, 0.0], 10.0, 0.0, 0.0),
         );
-        link.set_poi(
+        ov(&mut sim).set_poi(
             "present",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
@@ -671,7 +693,7 @@ mod tests {
 
         assert_eq!(outcome(&sim), StageOutcome::Ran);
         assert_eq!(position_of(&sim, "present").x, 100.0);
-        assert_eq!(link.applied_count(), 1);
+        assert_eq!(overridden(&sim).applied_count(), 1);
     }
 
     // -----------------------------------------------------------------
@@ -680,7 +702,7 @@ mod tests {
 
     #[test]
     fn three_empty_tables_are_no_work() {
-        let (mut sim, _link) = rig(vec![node("d0", 0.0, 0.0)]);
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
 
         sim.step().expect("tick runs");
 
@@ -692,8 +714,8 @@ mod tests {
     /// to consider.
     #[test]
     fn tables_that_reach_no_platform_are_no_work_too() {
-        let (mut sim, link) = rig(vec![node("present", 0.0, 0.0)]);
-        link.set_poi(
+        let mut sim = rig(vec![node("present", 0.0, 0.0)]);
+        ov(&mut sim).set_poi(
             "ghost",
             GotoHover::over([0.0, 0.0, 0.0], [999.0, 0.0], 10.0, 0.0, 0.0),
         );
@@ -708,12 +730,12 @@ mod tests {
     /// lower-precedence table still names it.
     #[test]
     fn clearing_every_egress_route_falls_back_to_the_poi_table() {
-        let (mut sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.set_poi(
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        ov(&mut sim).set_poi(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [200.0, 0.0], 20.0, 0.0, 0.0),
         );
-        link.set_egress(
+        ov(&mut sim).set_egress(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [300.0, 0.0], 30.0, 0.0, 0.0),
         );
@@ -721,11 +743,14 @@ mod tests {
         sim.step().expect("tick runs");
         assert_eq!(position_of(&sim, "d0").x, 300.0);
 
-        link.clear_all_egress();
+        ov(&mut sim).clear_all_egress();
         sim.step().expect("tick runs");
 
         assert_eq!(position_of(&sim, "d0").x, 200.0);
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Poi));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Poi)
+        );
     }
 
     /// Each clearer touches its own table and no other. Three tables behind
@@ -733,28 +758,37 @@ mod tests {
     /// reaches into the wrong `HashMap`, and nothing else here would notice.
     #[test]
     fn each_clearer_touches_only_its_own_table() {
-        let (mut sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
         let frontier = GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0);
         let poi = GotoHover::over([0.0, 0.0, 0.0], [200.0, 0.0], 20.0, 0.0, 0.0);
         let egress = GotoHover::over([0.0, 0.0, 0.0], [300.0, 0.0], 30.0, 0.0, 0.0);
-        link.set_frontier("d0", frontier);
-        link.set_poi("d0", poi);
-        link.set_egress("d0", egress);
+        ov(&mut sim).set_frontier("d0", frontier);
+        ov(&mut sim).set_poi("d0", poi);
+        ov(&mut sim).set_egress("d0", egress);
 
-        link.clear_egress("d0");
+        ov(&mut sim).clear_egress("d0");
         sim.step().expect("tick runs");
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Poi));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Poi)
+        );
 
-        link.clear_poi("d0");
+        ov(&mut sim).clear_poi("d0");
         sim.step().expect("tick runs");
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Frontier));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Frontier)
+        );
         // The frontier entry survived both clears.
-        assert_eq!(link.frontier_target("d0"), Some([100.0, 0.0, 10.0]));
+        assert_eq!(
+            overridden(&sim).frontier_target("d0"),
+            Some([100.0, 0.0, 10.0])
+        );
 
-        link.clear_frontier("d0");
+        ov(&mut sim).clear_frontier("d0");
         sim.step().expect("tick runs");
-        assert_eq!(link.applied_source("d0"), None);
-        assert_eq!(link.frontier_target("d0"), None);
+        assert_eq!(overridden(&sim).applied_source("d0"), None);
+        assert_eq!(overridden(&sim).frontier_target("d0"), None);
     }
 
     // -----------------------------------------------------------------
@@ -763,21 +797,20 @@ mod tests {
 
     /// Drives the mission machine through stage 9 so the phase stage 2 reads is
     /// one the machine actually committed, not one a test poked in.
-    fn rig_with_mission(platforms: Vec<NodeState>) -> (Simulation, OverrideLink, MissionLink) {
+    fn rig_with_mission(platforms: Vec<NodeState>) -> (Simulation, MissionLink) {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
 
-        let overrides = MissionOverrideStage::new();
-        let override_link = overrides.link();
+        let mut overrides = MissionOverrideStage::new();
         let mission = MissionStage::new(Default::default());
         let mission_link = mission.link();
-        override_link.watch_mission(mission_link.clone());
+        overrides.watch_mission(mission_link.clone());
 
         sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(overrides))
             .expect("stage 2 is not a transaction boundary");
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
             .expect("stage 9 is not a transaction boundary");
-        (sim, override_link, mission_link)
+        (sim, mission_link)
     }
 
     /// The mission stage rejects a tick it was given no inputs for, and rejects
@@ -814,8 +847,8 @@ mod tests {
 
     #[test]
     fn the_frontier_override_is_dropped_once_the_mission_leaves_localizing() {
-        let (mut sim, link, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
-        link.set_frontier(
+        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        ov(&mut sim).set_frontier(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
@@ -823,17 +856,23 @@ mod tests {
         // Tick 1: still scanning, so the frontier override flies the drone.
         step_with(&mut sim, &mission, scanning_inputs());
         assert_eq!(mission.phase(), MissionPhase::Scanning);
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Frontier));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Frontier)
+        );
 
         // Tick 2: stage 2 still sees `scanning` -- stage 9 has not run yet this
         // tick -- and only then does the machine move to `inspecting`.
         step_with(&mut sim, &mission, converged_inputs());
         assert_eq!(mission.phase(), MissionPhase::Inspecting);
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Frontier));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Frontier)
+        );
 
         // Tick 3 is the first one stage 2 sees `inspecting` on.
         step_with(&mut sim, &mission, converged_inputs());
-        assert_eq!(link.applied_source("d0"), None);
+        assert_eq!(overridden(&sim).applied_source("d0"), None);
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
@@ -841,8 +880,8 @@ mod tests {
     /// through every phase, because the reference's POI block has no gate.
     #[test]
     fn the_gate_is_on_the_frontier_table_only() {
-        let (mut sim, link, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
-        link.set_poi(
+        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        ov(&mut sim).set_poi(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [200.0, 0.0], 20.0, 0.0, 0.0),
         );
@@ -851,7 +890,10 @@ mod tests {
         step_with(&mut sim, &mission, converged_inputs());
 
         assert_eq!(mission.phase(), MissionPhase::Inspecting);
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Poi));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Poi)
+        );
     }
 
     /// `localizing` is inside the gate. The reference says why in its own
@@ -859,8 +901,8 @@ mod tests {
     /// lawnmower trajectory mid-localization.
     #[test]
     fn the_localizing_phase_keeps_the_frontier_override() {
-        let (mut sim, link, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
-        link.set_frontier(
+        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        ov(&mut sim).set_frontier(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
@@ -879,7 +921,10 @@ mod tests {
 
         step_with(&mut sim, &mission, unconverged);
 
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Frontier));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Frontier)
+        );
     }
 
     /// An unwatched link leaves the gate open, because a run with no mission
@@ -888,15 +933,18 @@ mod tests {
     /// egress.
     #[test]
     fn an_unwatched_link_leaves_the_frontier_gate_open() {
-        let (mut sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.set_frontier(
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        ov(&mut sim).set_frontier(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
 
         sim.step().expect("tick runs");
 
-        assert_eq!(link.applied_source("d0"), Some(OverrideSource::Frontier));
+        assert_eq!(
+            overridden(&sim).applied_source("d0"),
+            Some(OverrideSource::Frontier)
+        );
     }
 
     /// The gate suppresses the frontier pass; it does not empty the table. The
@@ -904,16 +952,19 @@ mod tests {
     /// is what makes the gate a gate rather than a delete.
     #[test]
     fn a_gated_frontier_trajectory_survives_to_fly_again() {
-        let (mut sim, link, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
         let trajectory = GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0);
-        link.set_frontier("d0", trajectory);
+        ov(&mut sim).set_frontier("d0", trajectory);
 
         step_with(&mut sim, &mission, converged_inputs());
         step_with(&mut sim, &mission, converged_inputs());
         step_with(&mut sim, &mission, converged_inputs());
         assert_eq!(mission.phase(), MissionPhase::Inspecting);
-        assert_eq!(link.applied_source("d0"), None);
+        assert_eq!(overridden(&sim).applied_source("d0"), None);
         // Suppressed, not discarded.
-        assert_eq!(link.frontier_target("d0"), Some([100.0, 0.0, 10.0]));
+        assert_eq!(
+            overridden(&sim).frontier_target("d0"),
+            Some([100.0, 0.0, 10.0])
+        );
     }
 }
