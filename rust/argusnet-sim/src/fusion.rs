@@ -65,7 +65,7 @@
 //! node states, that test fails and this decision needs revisiting.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use argusnet_core::{TrackerConfig, TrackingEngine};
 use argusnet_types::{BearingObservation, PlatformFrame, SafetyEvent, TargetMetadata};
@@ -80,7 +80,7 @@ struct Inbox {
     safety_events: Vec<SafetyEvent>,
 }
 
-struct Shared {
+struct State {
     engine: TrackingEngine,
     /// What stage 6 produced, and what stages 4 and 10 raised. Taken on the
     /// next run, so a tick that produces nothing fuses nothing rather than
@@ -92,10 +92,10 @@ struct Shared {
 /// `TrackingEngine` is not `Debug`, and `StageHandler` requires it. Written by
 /// hand rather than derived upstream: the engine's interior is the tracker's
 /// business, and what a stage trace wants from it is how much is in flight.
-impl fmt::Debug for Shared {
+impl fmt::Debug for State {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("Shared")
+            .debug_struct("FusionState")
             .field("pending_observations", &self.inbox.observations.len())
             .field("pending_safety_events", &self.inbox.safety_events.len())
             .field(
@@ -106,48 +106,12 @@ impl fmt::Debug for Shared {
     }
 }
 
-/// A handle on the tracker, held before the stage is installed.
-#[derive(Debug, Clone)]
-pub struct FusionLink {
-    inner: Arc<Mutex<Shared>>,
-}
-
-impl FusionLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The observation batch for the next tick. Stage 6 fills this; until it
-    /// lands, a caller or a test does.
-    pub fn submit_observations(&self, observations: Vec<BearingObservation>) {
-        self.lock().inbox.observations = observations;
-    }
-
-    pub fn submit_target_metadata(&self, metadata: Vec<TargetMetadata>) {
-        self.lock().inbox.target_metadata = metadata;
-    }
-
-    /// Safety and deconfliction events raised earlier in this tick.
-    pub fn submit_safety_events(&self, events: Vec<SafetyEvent>) {
-        self.lock().inbox.safety_events = events;
-    }
-
-    /// The frame the last run produced.
-    pub fn frame(&self) -> Option<Arc<PlatformFrame>> {
-        self.lock().frame.clone()
-    }
-
-    pub fn config(&self) -> TrackerConfig {
-        self.lock().engine.config().clone()
-    }
-}
-
 /// [`Stage::UpdateFusion`] as a [`StageHandler`].
 ///
 /// [`Stage::UpdateFusion`]: crate::stage::Stage::UpdateFusion
 #[derive(Debug)]
 pub struct FusionStage {
-    link: FusionLink,
+    state: State,
 }
 
 impl FusionStage {
@@ -156,26 +120,49 @@ impl FusionStage {
     pub fn new(config: TrackerConfig) -> Result<Self, String> {
         let engine = TrackingEngine::new(config)?;
         Ok(Self {
-            link: FusionLink {
-                inner: Arc::new(Mutex::new(Shared {
-                    engine,
-                    inbox: Inbox::default(),
-                    frame: None,
-                })),
+            state: State {
+                engine,
+                inbox: Inbox::default(),
+                frame: None,
             },
         })
     }
 
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> FusionLink {
-        self.link.clone()
+    /// The observation batch for the next run. Stage 6 fills it through
+    /// [`Handoff::ObservationsToFusion`]; without stage 6, a caller or a test
+    /// does.
+    ///
+    /// [`Handoff::ObservationsToFusion`]: crate::simulation::Handoff::ObservationsToFusion
+    pub fn submit_observations(&mut self, observations: Vec<BearingObservation>) {
+        self.state.inbox.observations = observations;
+    }
+
+    pub fn submit_target_metadata(&mut self, metadata: Vec<TargetMetadata>) {
+        self.state.inbox.target_metadata = metadata;
+    }
+
+    /// Safety and deconfliction events raised earlier in this tick. Stage 4
+    /// fills it through [`Handoff::SafetyEventsToFusion`].
+    ///
+    /// [`Handoff::SafetyEventsToFusion`]: crate::simulation::Handoff::SafetyEventsToFusion
+    pub fn submit_safety_events(&mut self, events: Vec<SafetyEvent>) {
+        self.state.inbox.safety_events = events;
+    }
+
+    /// The frame the last run produced.
+    pub fn frame(&self) -> Option<Arc<PlatformFrame>> {
+        self.state.frame.clone()
+    }
+
+    pub fn config(&self) -> &TrackerConfig {
+        self.state.engine.config()
     }
 }
 
 impl StageHandler for FusionStage {
     /// A new engine with the same configuration: no tracks, no health.
     fn reset(&mut self) {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         let config = shared.engine.config().clone();
         shared.engine = TrackingEngine::new(config).expect("the config was valid at construction");
         shared.inbox = Inbox::default();
@@ -184,8 +171,7 @@ impl StageHandler for FusionStage {
 
     /// Every track's filters, lifecycle and history, and each node's health.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
-        let shared = self.link.lock();
-        Some(serde_json::to_value(&shared.engine).expect("engine state serialises"))
+        Some(serde_json::to_value(&self.state.engine).expect("engine state serialises"))
     }
 
     fn check_state(
@@ -193,7 +179,7 @@ impl StageHandler for FusionStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let engine: TrackingEngine = crate::simulation::decode_stage_state(state)?;
-        if engine.config() != self.link.lock().engine.config() {
+        if engine.config() != self.state.engine.config() {
             return Err(crate::simulation::StageStateError::Malformed {
                 detail: "the checkpoint's tracker was configured differently from this run's"
                     .into(),
@@ -207,7 +193,7 @@ impl StageHandler for FusionStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let engine: TrackingEngine = crate::simulation::decode_stage_state(state)?;
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.engine = engine;
         shared.inbox = Inbox::default();
         shared.frame = None;
@@ -215,7 +201,7 @@ impl StageHandler for FusionStage {
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
 
         // Taken, not copied: an inbox left full would re-fuse the same batch on
         // the next tick, which is exactly the shape of bug a stale-input guard
@@ -244,7 +230,6 @@ impl StageHandler for FusionStage {
         let observation_count = frame.observations.len();
         let rejection_count = frame.rejected_observations.len();
         shared.frame = Some(frame);
-        drop(shared);
 
         context.note(format!(
             "fused {observation_count} observation(s) into {track_count} track(s), \
@@ -315,17 +300,26 @@ mod tests {
         ]
     }
 
-    fn rig() -> (Simulation, FusionLink) {
+    fn rig() -> Simulation {
         let mut sim = simulation();
         sim.load_world(
             vec![sensor("s0", 0.0, 0.0), sensor("s1", 400.0, 0.0)],
             Vec::new(),
         );
         let stage = FusionStage::new(TrackerConfig::default()).expect("config is valid");
-        let link = stage.link();
         sim.set_stage_handler(Stage::UpdateFusion, Box::new(stage))
             .expect("stage 7 is not a transaction boundary");
-        (sim, link)
+        sim
+    }
+
+    fn fusion(sim: &mut Simulation) -> &mut FusionStage {
+        sim.stage_mut(Stage::UpdateFusion)
+            .expect("stage 7 is installed")
+    }
+
+    fn fused(sim: &Simulation) -> &FusionStage {
+        sim.stage(Stage::UpdateFusion)
+            .expect("stage 7 is installed")
     }
 
     fn outcome(sim: &Simulation) -> StageOutcome {
@@ -340,9 +334,10 @@ mod tests {
     }
 
     /// Step `count` ticks, feeding a fresh crossing pair each time.
-    fn fly(sim: &mut Simulation, link: &FusionLink, count: usize) {
+    fn fly(sim: &mut Simulation, count: usize) {
         for _ in 0..count {
-            link.submit_observations(crossing_pair(sim.tick() as f64));
+            let timestamp_s = sim.tick() as f64;
+            fusion(sim).submit_observations(crossing_pair(timestamp_s));
             sim.step().expect("tick runs");
         }
     }
@@ -433,9 +428,9 @@ mod tests {
     /// into the tick's world rather than staying inside the tracker.
     #[test]
     fn crossing_bearings_produce_a_track_in_the_world() {
-        let (mut sim, link) = rig();
+        let mut sim = rig();
 
-        fly(&mut sim, &link, 4);
+        fly(&mut sim, 4);
 
         assert_eq!(outcome(&sim), StageOutcome::Ran);
         let tracks = sim.world().tracks();
@@ -458,14 +453,14 @@ mod tests {
     /// twice and treat the second as fresh evidence.
     #[test]
     fn the_observation_batch_is_consumed_rather_than_reused() {
-        let (mut sim, link) = rig();
-        link.submit_observations(crossing_pair(0.0));
+        let mut sim = rig();
+        fusion(&mut sim).submit_observations(crossing_pair(0.0));
         sim.step().expect("tick runs");
 
         // No new batch for this tick.
         sim.step().expect("tick runs");
 
-        let frame = link.frame().expect("a frame was produced");
+        let frame = fused(&sim).frame().expect("a frame was produced");
         assert_eq!(frame.observations.len(), 0);
         assert_eq!(frame.timestamp_s, 1.0);
     }
@@ -476,12 +471,12 @@ mod tests {
     /// tick would keep a stale track alive forever.
     #[test]
     fn a_tick_with_no_observations_still_runs_the_tracker() {
-        let (mut sim, link) = rig();
+        let mut sim = rig();
 
         sim.step().expect("tick runs");
 
         assert_eq!(outcome(&sim), StageOutcome::Ran);
-        let frame = link.frame().expect("a frame was produced");
+        let frame = fused(&sim).frame().expect("a frame was produced");
         assert_eq!(frame.observations.len(), 0);
         assert_eq!(frame.timestamp_s, 0.0);
     }
@@ -491,8 +486,8 @@ mod tests {
     /// observing rather than asserting from the tracker's docs.
     #[test]
     fn an_unobserved_track_ages_out_over_barren_ticks() {
-        let (mut sim, link) = rig();
-        fly(&mut sim, &link, 4);
+        let mut sim = rig();
+        fly(&mut sim, 4);
         assert_eq!(sim.world().tracks().len(), 1);
 
         // `max_stale_steps` defaults to 8; go well past it with nothing to see.
@@ -505,7 +500,7 @@ mod tests {
             "the track survived 40 barren ticks: {:?}",
             sim.world().tracks()
         );
-        assert!(link.frame().is_some());
+        assert!(fused(&sim).frame().is_some());
     }
 
     /// Only the tracks come back into the world — and the reason the node
@@ -520,13 +515,13 @@ mod tests {
     /// decision to skip the write-back has to be made again on new evidence.
     #[test]
     fn the_frame_round_trips_the_worlds_platforms() {
-        let (mut sim, link) = rig();
+        let mut sim = rig();
         sim.world_mut().platform_mut("s0").unwrap().health = 0.25;
         sim.world_mut().platform_mut("s0").unwrap().position = Vector3::new(7.0, 8.0, 9.0);
 
-        fly(&mut sim, &link, 2);
+        fly(&mut sim, 2);
 
-        let frame = link.frame().expect("a frame was produced");
+        let frame = fused(&sim).frame().expect("a frame was produced");
         let world = sim.world().platforms().to_vec();
         assert_eq!(frame.nodes.len(), world.len());
         for platform in &world {
@@ -568,8 +563,8 @@ mod tests {
     /// replay. Nothing else in this file would notice if it were dropped.
     #[test]
     fn target_metadata_rides_along_and_is_consumed() {
-        let (mut sim, link) = rig();
-        link.submit_target_metadata(vec![TargetMetadata {
+        let mut sim = rig();
+        fusion(&mut sim).submit_target_metadata(vec![TargetMetadata {
             target_id: "t0".to_string(),
             operator_label: "Target Zero".to_string(),
             target_type: "simulated_mobile".to_string(),
@@ -584,12 +579,16 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        let frame = link.frame().expect("a frame was produced");
+        let frame = fused(&sim).frame().expect("a frame was produced");
         assert_eq!(frame.target_metadata.len(), 1);
         assert_eq!(frame.target_metadata[0].operator_label, "Target Zero");
 
         sim.step().expect("tick runs");
-        assert!(link.frame().expect("a frame").target_metadata.is_empty());
+        assert!(fused(&sim)
+            .frame()
+            .expect("a frame")
+            .target_metadata
+            .is_empty());
     }
 
     /// Each submission *replaces* the pending batch rather than appending to
@@ -599,13 +598,13 @@ mod tests {
     /// falsely confident.
     #[test]
     fn submitting_twice_before_a_tick_replaces_rather_than_accumulates() {
-        let (mut sim, link) = rig();
+        let mut sim = rig();
 
-        link.submit_observations(crossing_pair(0.0));
-        link.submit_observations(crossing_pair(0.0));
+        fusion(&mut sim).submit_observations(crossing_pair(0.0));
+        fusion(&mut sim).submit_observations(crossing_pair(0.0));
         sim.step().expect("tick runs");
 
-        let frame = link.frame().expect("a frame was produced");
+        let frame = fused(&sim).frame().expect("a frame was produced");
         assert_eq!(
             frame.observations.len() + frame.rejected_observations.len(),
             2,
@@ -617,8 +616,8 @@ mod tests {
     /// the frame, which is how they reach the replay.
     #[test]
     fn safety_events_ride_along_on_the_frame() {
-        let (mut sim, link) = rig();
-        link.submit_safety_events(vec![SafetyEvent {
+        let mut sim = rig();
+        fusion(&mut sim).submit_safety_events(vec![SafetyEvent {
             event_id: "e0".to_string(),
             subject_id: "s0".to_string(),
             timestamp_s: 0.0,
@@ -631,13 +630,17 @@ mod tests {
 
         sim.step().expect("tick runs");
 
-        let frame = link.frame().expect("a frame was produced");
+        let frame = fused(&sim).frame().expect("a frame was produced");
         assert_eq!(frame.safety_events.len(), 1);
         assert_eq!(frame.safety_events[0].event_id, "e0");
 
         // And they are consumed, not repeated.
         sim.step().expect("tick runs");
-        assert!(link.frame().expect("a frame").safety_events.is_empty());
+        assert!(fused(&sim)
+            .frame()
+            .expect("a frame")
+            .safety_events
+            .is_empty());
     }
 
     /// An invalid tracker config is refused when the stage is built, not
@@ -658,8 +661,8 @@ mod tests {
     fn a_run_is_reproducible() {
         let mut runs = Vec::new();
         for _ in 0..2 {
-            let (mut sim, link) = rig();
-            fly(&mut sim, &link, 6);
+            let mut sim = rig();
+            fly(&mut sim, 6);
             runs.push(sim.world().tracks().to_vec());
         }
 

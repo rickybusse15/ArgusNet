@@ -36,7 +36,9 @@ use crate::command::{
 };
 use crate::config::{ConfigError, SimulationConfig, ValidatedConfig};
 use crate::controller::ControllerStage;
+use crate::fusion::FusionStage;
 use crate::observe::ObserveStage;
+use crate::safety::SafetyStage;
 use crate::snapshot::{
     CheckpointHeader, RestoreError, RuntimeSnapshot, SimulationCheckpoint, SnapshotHeader,
 };
@@ -119,13 +121,20 @@ pub enum Handoff {
     /// search-then-follow controllers. Engagement is visible as soon as stage 6
     /// has run; the motion it causes starts with the next tick's stage 1.
     EngagementToControllers,
+    /// 6→7: stage 6's observation batch is what stage 7 fuses this tick.
+    ObservationsToFusion,
+    /// 4→7: stage 4's validations are stage 7's `safety_events` this tick.
+    SafetyEventsToFusion,
 }
 
 impl Handoff {
     /// The stage whose successful run the handoff follows.
     pub fn after(self) -> Stage {
         match self {
-            Handoff::EngagementToControllers => Stage::GenerateObservations,
+            Handoff::EngagementToControllers | Handoff::ObservationsToFusion => {
+                Stage::GenerateObservations
+            }
+            Handoff::SafetyEventsToFusion => Stage::SafetyMonitor,
         }
     }
 }
@@ -416,13 +425,20 @@ impl Simulation {
     /// Connect a [`Handoff`]. Both of its stages must already be installed,
     /// as the types it moves data between. Connecting one twice is a no-op.
     pub fn connect(&mut self, handoff: Handoff) -> Result<(), StageError> {
+        let observe = self
+            .stage::<ObserveStage>(Stage::GenerateObservations)
+            .is_some();
+        let fusion = self.stage::<FusionStage>(Stage::UpdateFusion).is_some();
         let installed = match handoff {
             Handoff::EngagementToControllers => {
-                self.stage::<ObserveStage>(Stage::GenerateObservations)
-                    .is_some()
+                observe
                     && self
                         .stage::<ControllerStage>(Stage::SampleControllersAndBattery)
                         .is_some()
+            }
+            Handoff::ObservationsToFusion => observe && fusion,
+            Handoff::SafetyEventsToFusion => {
+                fusion && self.stage::<SafetyStage>(Stage::SafetyMonitor).is_some()
             }
         };
         if !installed {
@@ -459,6 +475,28 @@ impl Simulation {
                                 "controller {node_id} engaged; follows from next tick"
                             ));
                         }
+                    }
+                }
+                Handoff::ObservationsToFusion => {
+                    let Some(observations) = self
+                        .stage::<ObserveStage>(Stage::GenerateObservations)
+                        .map(ObserveStage::observations)
+                    else {
+                        continue;
+                    };
+                    if let Some(fusion) = self.stage_mut::<FusionStage>(Stage::UpdateFusion) {
+                        fusion.submit_observations(observations);
+                    }
+                }
+                Handoff::SafetyEventsToFusion => {
+                    let Some(events) = self
+                        .stage::<SafetyStage>(Stage::SafetyMonitor)
+                        .map(SafetyStage::safety_events)
+                    else {
+                        continue;
+                    };
+                    if let Some(fusion) = self.stage_mut::<FusionStage>(Stage::UpdateFusion) {
+                        fusion.submit_safety_events(events);
                     }
                 }
             }

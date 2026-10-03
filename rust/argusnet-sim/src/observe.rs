@@ -79,7 +79,6 @@ use argusnet_types::{BearingObservation, ObservationRejection, Vector3};
 
 use crate::controller::ControllerStage;
 use crate::deterministic::{DeterministicRng, SeedPart};
-use crate::fusion::FusionLink;
 use crate::observation_follow::AcceptedByNodeTarget;
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{Stage, StageError, StageOutcome};
@@ -435,7 +434,6 @@ struct ObserveState {
     records: Vec<PairRecord>,
     /// The last run's generation rejections, as the reference writes them.
     rejections: Vec<ObservationRejection>,
-    fusion: Option<FusionLink>,
 }
 
 /// Where stage 6 takes each sensor's pose from.
@@ -498,7 +496,6 @@ impl ObserveStage {
                 tally: GenerationTally::default(),
                 records: Vec::new(),
                 rejections: Vec::new(),
-                fusion: None,
             },
         }
     }
@@ -576,11 +573,6 @@ impl ObserveStage {
     /// (P4.8e.2). A platform stage 1 did not sample senses from the world.
     pub fn sense_from_controllers(&mut self) {
         self.state.pose_source = PoseSource::Controllers;
-    }
-
-    /// Hand each tick's batch straight to stage 7.
-    pub fn feed_fusion(&mut self, fusion: FusionLink) {
-        self.state.fusion = Some(fusion);
     }
 
     pub fn observations(&self) -> Vec<BearingObservation> {
@@ -1164,9 +1156,6 @@ impl StageHandler for ObserveStage {
 
         let accepted = shared.observations.len();
         let attempted = shared.tally.attempted;
-        if let Some(fusion) = shared.fusion.clone() {
-            fusion.submit_observations(shared.observations.clone());
-        }
         context.note(format!("generated {accepted} of {attempted} attempted"));
         Ok(StageOutcome::Ran)
     }
@@ -1876,8 +1865,6 @@ mod tests {
 
         let mut observe = ObserveStage::new();
         let fusion = FusionStage::new(argusnet_core::TrackerConfig::default()).expect("valid");
-        let fusion_link = fusion.link();
-        observe.feed_fusion(fusion_link.clone());
         observe.install_sensor("s0", permissive());
         observe.install_sensor("s1", permissive());
 
@@ -1885,12 +1872,17 @@ mod tests {
             .expect("stage 6 is not a transaction boundary");
         sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))
             .expect("stage 7 is not a transaction boundary");
+        sim.connect(crate::simulation::Handoff::ObservationsToFusion)
+            .expect("stages 6 and 7 are installed");
 
         for _ in 0..5 {
             sim.step().expect("tick runs");
         }
 
-        let frame = fusion_link.frame().expect("a frame was produced");
+        let frame = sim
+            .stage::<FusionStage>(Stage::UpdateFusion)
+            .and_then(FusionStage::frame)
+            .expect("a frame was produced");
         assert!(
             frame.observations.len() + frame.rejected_observations.len() > 0,
             "stage 7 saw nothing"

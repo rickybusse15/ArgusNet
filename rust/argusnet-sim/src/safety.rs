@@ -91,7 +91,6 @@ use safety_engine::simulation::{SimulationSafetyMonitor, State, Violation};
 use serde::{Deserialize, Serialize};
 
 use crate::battery::BatteryLink;
-use crate::fusion::FusionLink;
 use crate::observe::TerrainHeight;
 use crate::simulation::{decode_stage_state, StageHandler, StageStateError, TickContext};
 use crate::stage::{StageError, StageOutcome};
@@ -173,7 +172,6 @@ struct SafetyState {
     monitors: BTreeMap<String, SimulationSafetyMonitor>,
     previous_velocities: BTreeMap<String, [f64; 3]>,
     battery: Option<BatteryLink>,
-    fusion: Option<FusionLink>,
     validations: Vec<SafetyValidation>,
 }
 
@@ -211,7 +209,6 @@ impl Default for SafetyState {
             monitors: BTreeMap::new(),
             previous_velocities: BTreeMap::new(),
             battery: None,
-            fusion: None,
             validations: Vec::new(),
         }
     }
@@ -254,11 +251,6 @@ impl SafetyStage {
         self.state.terrain = terrain;
     }
 
-    /// Hand each tick's validations to stage 7 as its `safety_events`.
-    pub fn feed_fusion(&mut self, fusion: FusionLink) {
-        self.state.fusion = Some(fusion);
-    }
-
     /// Read `energy_fraction` from stage 1's ledger.
     ///
     /// Without this the monitor is handed `None` and the energy checks do not
@@ -275,6 +267,18 @@ impl SafetyStage {
             .get(drone_id)
             .map(|monitor| monitor.state(drone_id).to_string())
             .unwrap_or_else(|| "nominal".to_string())
+    }
+
+    /// The last run's validations as stage 7's `safety_events`, which
+    /// [`Handoff::SafetyEventsToFusion`] hands it.
+    ///
+    /// [`Handoff::SafetyEventsToFusion`]: crate::simulation::Handoff::SafetyEventsToFusion
+    pub fn safety_events(&self) -> Vec<argusnet_types::SafetyEvent> {
+        self.state
+            .validations
+            .iter()
+            .map(SafetyValidation::to_event)
+            .collect()
     }
 
     /// Take the validations the last run produced, leaving none behind.
@@ -435,15 +439,6 @@ impl StageHandler for SafetyStage {
         }
 
         let reported = !shared.validations.is_empty();
-        if let Some(fusion) = &shared.fusion {
-            fusion.submit_safety_events(
-                shared
-                    .validations
-                    .iter()
-                    .map(SafetyValidation::to_event)
-                    .collect(),
-            );
-        }
         for note in notes {
             context.note(note);
         }
