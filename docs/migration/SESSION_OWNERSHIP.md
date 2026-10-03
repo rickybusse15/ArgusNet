@@ -151,7 +151,7 @@ it.
 | 7 | `BatteryLink` | Read by 4 and 9 (same tick); observers drain events. **Done** with §2a's lent views: `battery::stage_one_battery(context.stages)` finds stage 1's ledger (chained into `ControllerStage`, or a bare `BatteryStage`). Safety reads it after `read_stage_one_battery()`, and the mission driver reads it every run; a stage 1 with no ledger reads as an empty one, as an unseeded link did. `BatteryStage` owns its ledger; `BatteryStage::of`/`of_mut` and `AssembledRun::battery()`/`battery_mut()` reach it between ticks. The mission driver tests that used a detached ledger now install it as stage 1 or pass it to `inspect` |
 | 8 | `OverrideLink` | Receives 9→2. **Done** as a §2a handoff: stage 9 queues `OverrideCommand`s (set/clear POI, set egress, clear all egress) in the order it used to write them, and `Handoff::OverridesFromMission` applies them to stage 2 straight after every stage 9 run, whatever it reported, since stage 9 writes on `NoWork` runs too. Nothing reads the tables between stage 9 and the next stage 2, so the effect is unchanged. The driver drops an undrained queue at the start of each run, on reset and on restore. `MissionOverrideStage` owns its tables. It still watches the mission phase through `MissionLink` until slice 10 |
 | 9 | `MappingLink` | Read by 9; reads mission phase. **Done** with §2a's lent views: stage 9 reads stage 8's map through `TickContext::stages` (coverage, gap fraction, confidences, timeout), and refuses to run without stage 8 installed, which assembly guarantees. `MappingStage` owns its grids and localizer; `AssembledRun::mapping()`. Clippy now sees through what the lock hid, so the two `expect("checked above")` calls on the localizer became one `if let`. Stage 8 still watches the mission phase through `MissionLink` until slice 10 |
-| 10 | `MissionLink` | The hub (finding 1): last, once every reader takes it as input |
+| 10 | `MissionLink` | The hub (finding 1): last, once every reader takes it as input. **Done.** `MissionStage` owns its machine, pending inputs and events; the driver holds it directly (`MissionDriverStage::machine`/`machine_mut`). Stages 2 and 8 opt in with `follow_mission_phase()` and read stage 9's phase through the lent views (`mission::stage_nine_phase`). They run before stage 9, so they still see the previous tick's committed phase. `MissionStage::of`/`of_mut` and `AssembledRun::mission()` reach the machine between ticks |
 
 This differs from the stage-order sequence in the agent execution plan's
 A1.2: that order put the hub (mission) last but the receivers of backward
@@ -162,3 +162,16 @@ Exit for A1 as a whole: no `Arc<Mutex<…>>` shared between a stage and anything
 outside it (`grep -rn 'Arc<Mutex' rust/argusnet-sim/src` finds none in stage
 modules); trace and replay hashes unchanged across the canonical scenarios;
 stage checkpoints byte-identical.
+
+
+**A1.2 complete (2026-10-03).** None of the ten links remains: every stage owns
+its state, `Simulation::stage`/`stage_mut` reach it between ticks, four
+`Handoff`s carry the writes (6→1, 6→7, 4→7, 9→2), and `TickContext::stages`
+lends the same-tick reads. Each slice was proven behaviour-neutral by
+`scripts/replay_hashes.py` (14/14 canonical replays byte-identical to the
+pre-A1.2 record). Two `Arc<Mutex>` handles remain in `mission_driver.rs` and
+were never in the inventory: `LocalizationReplay` (a recorded input that
+assembly loads) and `DriverReportLink` (an observer the replay writer reads).
+They are observer and input seams rather than stage-to-stage edges, but the
+A1 exit grep above still finds them, so **A1's exit is not met** until they
+move behind the `SessionView` (§2.5) or into stage-owned state.

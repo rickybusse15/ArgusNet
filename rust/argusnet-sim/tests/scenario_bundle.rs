@@ -672,7 +672,6 @@ fn a_scan_map_inspect_run_matches_until_localization_decides() {
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle_of("scan");
     let mut run = assemble(&bundle).expect("scan bundle assembles");
-    let mission = run.mission.clone().expect("a scan run has a mission");
 
     let phase_name = |phase: MissionPhase| phase.to_string();
     let mut divergence = None;
@@ -680,7 +679,7 @@ fn a_scan_map_inspect_run_matches_until_localization_decides() {
     let mut phases_seen = std::collections::BTreeSet::new();
     for (i, frame) in frames.iter().enumerate() {
         let snapshot = run.step().expect("tick runs");
-        let rust_phase = phase_name(mission.phase());
+        let rust_phase = phase_name(run.mission().expect("a scan run has a mission").phase());
         phases_seen.insert(rust_phase.clone());
         let python_phase = frame["mission"]["phase"].as_str().unwrap().to_string();
         if divergence.is_none() && rust_phase != python_phase {
@@ -760,7 +759,6 @@ fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
     let frames = reference["frames"].as_array().expect("frames");
     let bundle = bundle_of("scan");
     let mut run = assemble(&bundle).expect("scan bundle assembles");
-    let mission = run.mission.clone().expect("mission");
     run.localization_replay
         .as_ref()
         .expect("a scan run has the seam")
@@ -782,14 +780,17 @@ fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
     let mut phases = Vec::new();
     for (i, frame) in frames.iter().enumerate() {
         let snapshot = run.step().expect("tick runs");
-        let phase = mission.phase().to_string();
+        let phase = run.mission().expect("mission").phase().to_string();
         assert_eq!(
             phase,
             frame["mission"]["phase"].as_str().unwrap(),
             "phase at tick {i}"
         );
         assert_eq!(
-            mission.state().localization_timed_out(),
+            run.mission()
+                .expect("mission")
+                .state()
+                .localization_timed_out(),
             frame["mission"]["localization_timed_out"]
                 .as_bool()
                 .unwrap(),
@@ -978,7 +979,6 @@ fn a_blocking_safety_scan_run_matches_throughout() {
     let parity = parity_of(&reference);
     let frames = reference["frames"].as_array().expect("frames");
     let mut run = assemble(&bundle_of("scan_safety")).expect("assembles");
-    let mission = run.mission.clone().expect("mission");
     run.localization_replay
         .as_ref()
         .expect("a scan run has the seam")
@@ -1000,7 +1000,7 @@ fn a_blocking_safety_scan_run_matches_throughout() {
     for (i, frame) in frames.iter().enumerate() {
         let snapshot = run.step().expect("tick runs");
         assert_eq!(
-            mission.phase().to_string(),
+            run.mission().expect("mission").phase().to_string(),
             frame["mission"]["phase"].as_str().unwrap(),
             "phase at tick {i}"
         );
@@ -1025,7 +1025,10 @@ fn a_blocking_safety_scan_run_matches_throughout() {
             }
         }
     }
-    assert_eq!(mission.phase().to_string(), "complete");
+    assert_eq!(
+        run.mission().expect("mission").phase().to_string(),
+        "complete"
+    );
     // `max_descent_rate` only the tracker envelope reaches here.
     assert!(violations.len() >= 6, "{violations:?}");
 }

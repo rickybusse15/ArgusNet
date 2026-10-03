@@ -69,10 +69,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-
-use crate::simulation::{StageHandler, TickContext};
-use crate::stage::{StageError, StageOutcome};
+use crate::mission_driver::MissionDriverStage;
+use crate::simulation::{Simulation, StageHandler, StageViews, TickContext};
+use crate::stage::{Stage, StageError, StageOutcome};
 
 /// `scenario.options.scan_coverage_threshold` default.
 pub const DEFAULT_SCAN_COVERAGE_THRESHOLD: f64 = 0.70;
@@ -412,77 +411,6 @@ impl MissionState {
 // Stage 9
 // ---------------------------------------------------------------------------
 
-/// A handle onto the mission stage, held by whoever drives the tick.
-///
-/// [`Simulation::set_stage_handler`] takes ownership of a boxed
-/// [`StageHandler`], so once the stage is installed the caller cannot reach it
-/// again. The tick still needs to push this tick's inputs in and pull this
-/// tick's events out, and a shared handle is how: the stage owns nothing the
-/// caller needs and the caller owns nothing the stage needs.
-///
-/// Cloning it clones the handle, not the state.
-///
-/// [`Simulation::set_stage_handler`]: crate::simulation::Simulation::set_stage_handler
-#[derive(Debug, Clone, Default)]
-pub struct MissionLink {
-    inner: Arc<Mutex<Shared>>,
-}
-
-#[derive(Debug, Default)]
-struct Shared {
-    state: MissionState,
-    pending: Option<MissionInputs>,
-    events: Vec<MissionEvent>,
-}
-
-impl MissionLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        // A poisoned lock means something panicked mid-tick. The data behind
-        // it is plain values with no invariant a panic could have broken
-        // halfway, and refusing to read the mission phase because of an
-        // unrelated panic elsewhere would turn one failure into two.
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Supply this tick's inputs. Must happen before the tick reaches stage 9,
-    /// and the inputs must carry this tick's timestamp.
-    pub fn set_inputs(&self, inputs: MissionInputs) {
-        self.lock().pending = Some(inputs);
-    }
-
-    /// Take the events the last run produced, leaving none behind.
-    ///
-    /// P4.8 says to "consume typed events once"; a taking accessor is how that
-    /// is enforced rather than asked for.
-    pub fn take_events(&self) -> Vec<MissionEvent> {
-        std::mem::take(&mut self.lock().events)
-    }
-
-    pub fn state(&self) -> MissionState {
-        self.lock().state
-    }
-
-    /// Take a checkpoint's machine state back. Nothing pending survives.
-    pub fn restore_state(&self, state: MissionState) {
-        let mut shared = self.lock();
-        shared.state = state;
-        shared.pending = None;
-        shared.events.clear();
-    }
-
-    /// Back to a fresh run's state: `Scanning`, no latches, nothing pending.
-    pub fn reset(&self) {
-        let mut shared = self.lock();
-        shared.state = MissionState::default();
-        shared.pending = None;
-        shared.events.clear();
-    }
-
-    pub fn phase(&self) -> MissionPhase {
-        self.lock().state.phase()
-    }
-}
-
 /// [`Stage::EvaluateMissionTransitions`] as a [`StageHandler`].
 ///
 /// The machine above is deliberately pure, so this is the only place it meets
@@ -495,7 +423,22 @@ impl MissionLink {
 pub struct MissionStage {
     config: MissionConfig,
     enabled: bool,
-    link: MissionLink,
+    state: MissionState,
+    pending: Option<MissionInputs>,
+    events: Vec<MissionEvent>,
+}
+
+/// Stage 9's committed mission phase, read through the views lent to an
+/// earlier stage (SESSION_OWNERSHIP.md §2a): the machine inside a
+/// [`MissionDriverStage`], or a bare [`MissionStage`] installed as stage 9.
+/// Stages 2 and 8 run before stage 9, so this is the phase committed at the
+/// end of the previous tick. `None` if stage 9 is neither.
+pub fn stage_nine_phase(stages: StageViews<'_>) -> Option<MissionPhase> {
+    stages
+        .get::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+        .map(MissionDriverStage::machine)
+        .or_else(|| stages.get::<MissionStage>(Stage::EvaluateMissionTransitions))
+        .map(MissionStage::phase)
 }
 
 impl MissionStage {
@@ -504,7 +447,9 @@ impl MissionStage {
         Self {
             config,
             enabled: true,
-            link: MissionLink::default(),
+            state: MissionState::default(),
+            pending: None,
+            events: Vec::new(),
         }
     }
 
@@ -521,9 +466,62 @@ impl MissionStage {
         }
     }
 
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> MissionLink {
-        self.link.clone()
+    /// The machine installed as stage 9, between ticks: inside a
+    /// [`MissionDriverStage`], or bare.
+    pub fn of(sim: &Simulation) -> Option<&MissionStage> {
+        if let Some(driver) = sim.stage::<MissionDriverStage>(Stage::EvaluateMissionTransitions) {
+            return Some(driver.machine());
+        }
+        sim.stage::<MissionStage>(Stage::EvaluateMissionTransitions)
+    }
+
+    /// [`Self::of`], mutably: for pushing a bare machine its inputs.
+    pub fn of_mut(sim: &mut Simulation) -> Option<&mut MissionStage> {
+        if sim
+            .stage::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+            .is_some()
+        {
+            return sim
+                .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+                .map(MissionDriverStage::machine_mut);
+        }
+        sim.stage_mut::<MissionStage>(Stage::EvaluateMissionTransitions)
+    }
+
+    /// Supply this tick's inputs. Must happen before the tick reaches stage 9,
+    /// and the inputs must carry this tick's timestamp.
+    pub fn set_inputs(&mut self, inputs: MissionInputs) {
+        self.pending = Some(inputs);
+    }
+
+    /// Take the events the last run produced, leaving none behind.
+    ///
+    /// P4.8 says to "consume typed events once"; a taking accessor is how that
+    /// is enforced rather than asked for.
+    pub fn take_events(&mut self) -> Vec<MissionEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    pub fn state(&self) -> MissionState {
+        self.state
+    }
+
+    /// Take a checkpoint's machine state back. Nothing pending survives.
+    pub fn restore_machine(&mut self, state: MissionState) {
+        self.state = state;
+        self.pending = None;
+        self.events.clear();
+    }
+
+    /// Back to a fresh run's state: `Scanning`, no latches, nothing pending.
+    pub fn reset_machine(&mut self) {
+        self.state = MissionState::default();
+        self.pending = None;
+        self.events.clear();
+    }
+
+    pub fn phase(&self) -> MissionPhase {
+        self.state.phase()
     }
 
     pub fn config(&self) -> &MissionConfig {
@@ -537,14 +535,13 @@ impl MissionStage {
 
 impl StageHandler for MissionStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
-        shared.events.clear();
+        self.events.clear();
         if !self.enabled {
             return Ok(StageOutcome::Skipped {
                 reason: "mission machine disabled for this run".to_string(),
             });
         }
-        let Some(inputs) = shared.pending.take() else {
+        let Some(inputs) = self.pending.take() else {
             // Reporting NoWork here would let a run whose stage 8 was never
             // wired up look like a mission that simply had nothing to do.
             return Err(StageError::Invariant(
@@ -560,7 +557,7 @@ impl StageHandler for MissionStage {
             )));
         }
 
-        let events = shared.state.advance(&self.config, &inputs);
+        let events = self.state.advance(&self.config, &inputs);
         for event in &events {
             match event {
                 MissionEvent::PhaseChanged { from, to, at_s } => {
@@ -583,7 +580,7 @@ impl StageHandler for MissionStage {
         } else {
             StageOutcome::Ran
         };
-        shared.events = events;
+        self.events = events;
         Ok(outcome)
     }
 }

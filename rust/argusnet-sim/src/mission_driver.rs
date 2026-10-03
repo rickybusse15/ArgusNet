@@ -40,9 +40,7 @@ use argusnet_planning::poi::{
 
 use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingStage;
-use crate::mission::{
-    MissionConfig, MissionEvent, MissionInputs, MissionLink, MissionPhase, MissionStage,
-};
+use crate::mission::{MissionConfig, MissionEvent, MissionInputs, MissionPhase, MissionStage};
 use crate::overrides::{GotoHover, OverrideCommand};
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{Stage, StageError, StageOutcome};
@@ -270,7 +268,6 @@ pub fn elect_coordinator(
 /// Stage 9: the mission machine and the work its phases do.
 pub struct MissionDriverStage {
     machine: MissionStage,
-    mission: MissionLink,
     /// Writes into stage 2's tables, queued this run and drained by
     /// [`Handoff::OverridesFromMission`] straight after it.
     ///
@@ -296,7 +293,7 @@ impl std::fmt::Debug for MissionDriverStage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("MissionDriverStage")
-            .field("phase", &self.mission.phase())
+            .field("phase", &self.machine.phase())
             .field("pois", &self.pois.total_count())
             .field("rescored", &self.rescored)
             .finish()
@@ -310,10 +307,8 @@ impl MissionDriverStage {
         homes: BTreeMap<String, [f64; 3]>,
     ) -> Self {
         let machine = MissionStage::new(config.mission);
-        let mission = machine.link();
         Self {
             machine,
-            mission,
             override_commands: Vec::new(),
             pois: PoiManager::new(pois.clone()),
             initial_pois: pois,
@@ -375,9 +370,14 @@ impl MissionDriverStage {
         &self.initial_pois
     }
 
-    /// The machine's handle: stage 2 and stage 8 watch it.
-    pub fn mission_link(&self) -> MissionLink {
-        self.mission.clone()
+    /// The mission machine this stage drives. Stages 2 and 8 read its phase
+    /// through the views lent to them ([`crate::mission::stage_nine_phase`]).
+    pub fn machine(&self) -> &MissionStage {
+        &self.machine
+    }
+
+    pub fn machine_mut(&mut self) -> &mut MissionStage {
+        &mut self.machine
     }
 
     fn inspect(
@@ -492,7 +492,7 @@ impl StageHandler for MissionDriverStage {
             .ok_or_else(|| {
                 StageError::Invariant("stage 9 needs stage 8's map installed".to_string())
             })?;
-        let phase = self.mission.phase();
+        let phase = self.machine.phase();
         // `mobile_states`: flown positions, fleet order.
         let mobile: Vec<(String, [f64; 3])> = context
             .world
@@ -545,7 +545,7 @@ impl StageHandler for MissionDriverStage {
         let gap_cell_fraction = (phase == MissionPhase::Scanning
             && coverage_fraction >= self.machine.config().scan_coverage_threshold)
             .then(|| gap_cell_fraction(mapping));
-        self.mission.set_inputs(MissionInputs {
+        self.machine.set_inputs(MissionInputs {
             timestamp_s,
             coverage_fraction,
             gap_cell_fraction,
@@ -557,7 +557,7 @@ impl StageHandler for MissionDriverStage {
         });
         let outcome = self.machine.run(context)?;
 
-        for event in self.mission.take_events() {
+        for event in self.machine.take_events() {
             match event {
                 MissionEvent::EgressRoutesRequested { at_s } => {
                     for (id, _) in &mobile {
@@ -598,7 +598,7 @@ impl StageHandler for MissionDriverStage {
     /// rebuilt by assembly -- and checked against, below.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
         let state = DriverCheckpoint {
-            machine: self.mission.state(),
+            machine: self.machine.state(),
             pois: self.pois.clone(),
             redirected: self.redirected.clone(),
             rescored: self.rescored,
@@ -628,7 +628,7 @@ impl StageHandler for MissionDriverStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let decoded: DriverCheckpoint = crate::simulation::decode_stage_state(state)?;
-        self.mission.restore_state(decoded.machine);
+        self.machine.restore_machine(decoded.machine);
         self.pois = decoded.pois;
         self.redirected = decoded.redirected;
         self.rescored = decoded.rescored;
@@ -639,7 +639,7 @@ impl StageHandler for MissionDriverStage {
     }
 
     fn reset(&mut self) {
-        self.mission.reset();
+        self.machine.reset_machine();
         self.pois = PoiManager::new(self.initial_pois.clone());
         self.redirected.clear();
         self.rescored = false;
@@ -656,7 +656,7 @@ mod tests {
 
     /// A one-drone run with stage 8 and this driver installed, and
     /// localization replayed so only the gate under test decides the phase.
-    fn gate_rig(replay: Vec<RecordedLocalization>) -> (crate::simulation::Simulation, MissionLink) {
+    fn gate_rig(replay: Vec<RecordedLocalization>) -> crate::simulation::Simulation {
         use crate::config::SimulationConfig;
         use crate::stage::Stage;
         use argusnet_types::{NodeState, Vector3};
@@ -702,13 +702,17 @@ mod tests {
             BTreeMap::new(),
         );
         stage.localization_replay().load(replay);
-        let mission = stage.mission_link();
-        mapping.watch_mission(mission.clone());
+        mapping.follow_mission_phase();
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
             .expect("stage 8");
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
             .expect("stage 9");
-        (sim, mission)
+        sim
+    }
+
+    /// Stage 9's machine, reached through the session that owns it.
+    fn machine(sim: &crate::simulation::Simulation) -> &MissionStage {
+        MissionStage::of(sim).expect("stage 9 drives a mission")
     }
 
     fn converged(ticks: usize) -> Vec<RecordedLocalization> {
@@ -745,14 +749,14 @@ mod tests {
             (225.0, 275.0),
             (275.0, 275.0),
         ];
-        let (mut sim, mission) = gate_rig(converged(ring.len() + hole.len()));
+        let mut sim = gate_rig(converged(ring.len() + hole.len()));
         for (x, y) in &ring {
             let drone = sim.world_mut().platform_mut("drone-1").expect("drone");
             drone.position.x = *x;
             drone.position.y = *y;
             sim.step().expect("tick");
             assert_eq!(
-                mission.phase(),
+                machine(&sim).phase(),
                 MissionPhase::Scanning,
                 "left Scanning with the hole still open, at ({x}, {y})"
             );
@@ -771,7 +775,11 @@ mod tests {
             drone.position.x = *x;
             drone.position.y = *y;
             sim.step().expect("tick");
-            assert_eq!(mission.phase(), phase, "after flying hole cell ({x}, {y})");
+            assert_eq!(
+                machine(&sim).phase(),
+                phase,
+                "after flying hole cell ({x}, {y})"
+            );
         }
     }
 
@@ -780,12 +788,12 @@ mod tests {
     fn a_replayed_localization_timeout_latches() {
         let mut replay = converged(3);
         replay[1].timed_out = true;
-        let (mut sim, mission) = gate_rig(replay);
+        let mut sim = gate_rig(replay);
         sim.step().expect("tick 0");
-        assert!(!mission.state().localization_timed_out());
+        assert!(!machine(&sim).state().localization_timed_out());
         sim.step().expect("tick 1");
         assert!(
-            mission.state().localization_timed_out(),
+            machine(&sim).state().localization_timed_out(),
             "the timeout did not latch"
         );
     }
@@ -928,7 +936,6 @@ mod tests {
         let stage =
             MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), BTreeMap::new());
         let report = stage.report_link();
-        let mission = stage.mission_link();
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
             .expect("stage 8");
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
@@ -943,7 +950,7 @@ mod tests {
             .expect("stage 1 is a battery")
             .set_remaining_wh("drone-1", 10.0));
         sim.step().expect("tick 1");
-        assert_eq!(mission.phase(), MissionPhase::Scanning);
+        assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
         assert_eq!(
             report.report().coordinator_drone_id.as_deref(),
             Some("drone-1"),
