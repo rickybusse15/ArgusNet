@@ -1003,19 +1003,23 @@ are not current priorities.
 ## 14. Decision register (human-owned)
 
 The agent prepares an ADR stub with options and a recommendation for each; it
-does not decide.
+does not decide. **2026-10-03:** the maintainer asked the agent to proceed on
+its recommendation where a question arises; decisions taken that way are marked
+*decided on recommendation* and remain open to reversal.
 
 | ID | Decision | Needed by | Options | Recommendation |
 | --- | --- | --- | --- | --- |
-| D-1 | `sar_person_search` `covariance_reduction_mean`: the envelope fails because of the metric's definition | A3.1 | (a) redefine the metric to measure what the scenario intends; (b) replace with a different metric; (c) treat as a real behavior defect and fix | Read `SAFETY_AND_PROFILES.md` analysis; prefer (a) or (b) with a rebaseline commit. Do **not** widen the tolerance |
-| D-2 | Typeface and licence (spec names Helvetica / Neue Haas Grotesk, both commercial) | C1 | Licence the named face; or bundle an open metric-compatible face (candidates to evaluate and licence-check: Arimo/Liberation Sans/Nimbus-class) | Open, metric-compatible default now; swap if a licence is bought. Verify each licence before bundling |
+| D-1 | `sar_person_search` `covariance_reduction_mean`: the envelope fails because of the metric's definition | A3.1 | (a) redefine the metric to measure what the scenario intends; (b) replace with a different metric; (c) treat as a real behavior defect and fix | Read `SAFETY_AND_PROFILES.md` analysis; prefer (a) or (b) with a rebaseline commit. Do **not** widen the tolerance. **Decided (maintainer): (a)**, covariance at last update with ≥5 qualifying tracks (#137) |
+| D-2 | Typeface and licence (spec names Helvetica / Neue Haas Grotesk, both commercial) | C1 | Licence the named face; or bundle an open metric-compatible face (candidates to evaluate and licence-check: Arimo/Liberation Sans/Nimbus-class) | Open, metric-compatible default now; swap if a licence is bought. Verify each licence before bundling. **Decided (maintainer): Arimo, OFL 1.1** (#142) |
 | D-3 | Hover energy: the reference charges nothing for hovering (documented in `TICK_STAGES.md`) | F5 | Keep as legacy profile and add a physical-profile hover term; or change globally | New versioned physical profile; leave legacy untouched |
 | D-4 | First supported autopilot / vehicle class and hardware profile | WS-H beyond §11 | — | Not for the agent to choose |
 | D-5 | Named reference hardware for frame budgets and baseline-image approval | C8, D6 | — | Human supplies; record in artifacts |
 | D-6 | Promote `scheduled_v1` to default | B7 | Promote / keep opt-in another release | Only after B7 evidence; keep rollback profile |
 | D-7 | Volumetric belief encoding and chunk format | S2 | Sparse voxel / octree / other | ADR with a cost comparison on a named workload |
-| D-8 | Merge strategy and who merges | all | — | Humans merge; agents prepare stacked PRs |
+| D-8 | Merge strategy and who merges | all | — | Humans merge; agents prepare stacked PRs. **Decided (maintainer): the agent merges any PR green on local CI**, with the evidence posted on the PR first, while GitHub runners are unavailable |
 | D-9 | macOS runner availability for cross-platform determinism | A3.3 | Add runner / scheduled external job / defer | Escalate; do not mark the gate passed without it |
+| D-10 | Acceptance reference: the Python reference's draws are platform-dependent, so a reference recomputed per machine flips `sar_person_search`'s RMSE envelope by platform | A3.1 | Fix one reference platform; or record the reference once and score Rust against the record | **Decided on recommendation: stored** (`docs/performance/p49c-reference.json`, tagged with its platform and the reference code's hash; `--reference live --record-reference` re-records) |
+| D-11 | Stage 5 (VIO) in the production constructor: production does not assemble it | A1.3 | Require it and assemble VIO; install a declared-absent handler; or leave it out of the required set | **Decided on recommendation: not required** (`Stage::PRODUCTION_CORE`); a run that assembles VIO requires it explicitly |
 
 ---
 

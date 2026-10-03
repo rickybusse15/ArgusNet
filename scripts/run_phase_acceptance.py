@@ -14,9 +14,17 @@ agreement, and the performance gates. The report goes to
 `docs/performance/p49c-acceptance.json`; the exit status is non-zero if any
 envelope fails.
 
+The reference is **stored** by default (decision 2026-10-03, PHASE_ACCEPTANCE.md):
+the Python reference's draws are not platform-independent, so a reference
+recomputed on each machine can flip an envelope with the platform. Rust is
+scored against `docs/performance/p49c-reference.json`, recorded once and tagged
+with the platform it was recorded on. `--reference live` recomputes it here
+instead; `--record-reference` (with live) rewrites the stored one.
+
 Usage:
     cargo build --release -p argusnet-cli
     python3 scripts/run_phase_acceptance.py [--scenarios a,b] [--seeds 7,42] [--duration-s 20]
+    python3 scripts/run_phase_acceptance.py --reference live --record-reference
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import hashlib
 import io
 import json
 import platform
@@ -49,6 +58,7 @@ from argusnet.simulation import sim  # noqa: E402
 
 RELEASE_BINARY = REPO_ROOT / "target" / "release" / "argusnet-rs"
 REPORT = REPO_ROOT / "docs" / "performance" / "p49c-acceptance.json"
+STORED_REFERENCE = REPO_ROOT / "docs" / "performance" / "p49c-reference.json"
 
 # Flags that shape the output, not the scenario; dropped from the Rust side.
 OUTPUT_ONLY_FLAGS = {"--streaming": 0, "--max-frames-in-memory": 1}
@@ -109,14 +119,43 @@ def report_dict(report) -> dict:
     }
 
 
-def run_seed(config, seed: int, work: Path, duration_s: float | None) -> dict:
-    if duration_s is not None:
-        config = dataclasses.replace(config, duration_s=duration_s)
+def reference_code_hash() -> str:
+    """SHA-256 over the Python package's tracked sources: what the reference is
+    computed by. A stored reference recorded under a different hash may be
+    stale, and the report says so."""
+    files = subprocess.run(
+        ["git", "ls-files", "src/argusnet"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    digest = hashlib.sha256()
+    for name in sorted(f for f in files if f.endswith(".py")):
+        digest.update(name.encode())
+        digest.update((REPO_ROOT / name).read_bytes())
+    return digest.hexdigest()
+
+
+def live_reference(config, seed: int, work: Path) -> dict:
+    """Run the Python reference and keep what scoring reads from it."""
     reference_dir = work / "reference"
     started = time.perf_counter()
     reference = run_config_with_sim(config, seed, reference_dir)
     reference_elapsed = time.perf_counter() - started
     reference_replay = load_replay_document(str(reference_dir / "replay.json"))
+    return {
+        "reference": report_dict(reference),
+        "reference_identity": identity(reference_replay),
+        "reference_wall_s": reference.wall_clock_s,
+        "reference_process_s": reference_elapsed,
+    }
+
+
+def run_seed(config, seed: int, work: Path, duration_s: float | None, stored: dict | None) -> dict:
+    if duration_s is not None:
+        config = dataclasses.replace(config, duration_s=duration_s)
+    reference = stored if stored is not None else live_reference(config, seed, work)
 
     exported = work / "config.json"
     with contextlib.redirect_stdout(io.StringIO()):
@@ -156,12 +195,9 @@ def run_seed(config, seed: int, work: Path, duration_s: float | None) -> dict:
     timing = json.loads(timing_path.read_text())
     return {
         "seed": seed,
-        "reference": report_dict(reference),
+        **reference,
         "rust": report_dict(rust),
-        "reference_identity": identity(reference_replay),
         "rust_identity": identity(rust_replay),
-        "reference_wall_s": reference.wall_clock_s,
-        "reference_process_s": reference_elapsed,
         "rust_timing": timing,
     }
 
@@ -280,7 +316,38 @@ def main() -> int:
     parser.add_argument("--seeds", default="", help="comma-separated seeds (default: canonical)")
     parser.add_argument("--duration-s", type=float, default=None, help="override durations")
     parser.add_argument("--out", type=Path, default=REPORT)
+    parser.add_argument(
+        "--reference",
+        choices=("stored", "live"),
+        default="stored",
+        help="score against the stored reference (default) or recompute it here",
+    )
+    parser.add_argument("--reference-file", type=Path, default=STORED_REFERENCE)
+    parser.add_argument(
+        "--record-reference",
+        action="store_true",
+        help="with --reference live: write what was computed to --reference-file",
+    )
     args = parser.parse_args()
+    if args.record_reference and args.reference != "live":
+        parser.error("--record-reference needs --reference live")
+    if args.reference == "stored" and args.duration_s is not None:
+        parser.error("the stored reference is for full durations; use --reference live")
+    store = None
+    stale = False
+    if args.reference == "stored":
+        store = json.loads(args.reference_file.read_text())
+        stale = store["reference_code_sha256"] != reference_code_hash()
+        print(
+            f"stored reference: {args.reference_file.name}, recorded on "
+            f"{store['captured_on']} at {store['source_commit']}"
+        )
+        if stale:
+            print(
+                "WARNING: src/argusnet changed since the reference was recorded; "
+                "rerun with --reference live --record-reference if it changed behaviour"
+            )
+    recorded: dict[str, dict] = {}
     if not RELEASE_BINARY.exists():
         print(f"{RELEASE_BINARY} missing: cargo build --release -p argusnet-cli")
         return 2
@@ -296,7 +363,26 @@ def main() -> int:
                 work = Path(scratch) / config.name / str(seed)
                 work.mkdir(parents=True)
                 print(f"{config.name} seed {seed} ...", flush=True)
-                runs.append(run_seed(config, seed, work, args.duration_s))
+                stored = None
+                if store is not None:
+                    stored = store["runs"].get(f"{config.name}/{seed}")
+                    if stored is None:
+                        raise SystemExit(
+                            f"no stored reference for {config.name}/{seed}: record it with "
+                            "--reference live --record-reference"
+                        )
+                run = run_seed(config, seed, work, args.duration_s, stored)
+                if args.record_reference and "unsupported" not in run:
+                    recorded[f"{config.name}/{seed}"] = {
+                        key: run[key]
+                        for key in (
+                            "reference",
+                            "reference_identity",
+                            "reference_wall_s",
+                            "reference_process_s",
+                        )
+                    }
+                runs.append(run)
             unsupported = [r for r in runs if "unsupported" in r]
             if unsupported:
                 results.append(
@@ -317,8 +403,52 @@ def main() -> int:
         "machine": {"platform": platform.platform(), "python": platform.python_version()},
         "seeds": seeds,
         "duration_override_s": args.duration_s,
+        "reference": (
+            {
+                "mode": "stored",
+                "file": str(args.reference_file.relative_to(REPO_ROOT)),
+                "captured_on": store["captured_on"],
+                "source_commit": store["source_commit"],
+                "possibly_stale": stale,
+            }
+            if store is not None
+            else {"mode": "live", "captured_on": platform.platform()}
+        ),
         "results": results,
     }
+    if args.record_reference:
+        # Merged into what is stored, so recording a subset keeps the rest.
+        # Every run in the file must then come from the same platform and code.
+        previous = (
+            json.loads(args.reference_file.read_text())
+            if args.reference_file.exists()
+            else {"runs": {}}
+        )
+        if previous["runs"] and (
+            previous.get("captured_on") != platform.platform()
+            or previous.get("reference_code_sha256") != reference_code_hash()
+        ):
+            previous = {"runs": {}}
+            print("stored reference was from another platform or code: replaced, not merged")
+        args.reference_file.write_text(
+            json.dumps(
+                {
+                    "_source": "run_phase_acceptance.py --reference live --record-reference",
+                    "captured_on": platform.platform(),
+                    "source_commit": subprocess.run(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        cwd=REPO_ROOT,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    ).stdout.strip(),
+                    "reference_code_sha256": reference_code_hash(),
+                    "runs": {**previous["runs"], **recorded},
+                },
+                indent=1,
+            )
+            + "\n"
+        )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=1) + "\n")
     scored = [r for r in results if "passed" in r]

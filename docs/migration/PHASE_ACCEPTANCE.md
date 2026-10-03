@@ -260,3 +260,30 @@ are not platform-independent (numpy's `uniform` is fused on some builds; see
 platform can flip with the platform. Whether acceptance should fix one
 reference platform, or score Rust against a stored reference, is a decision,
 recorded in [KNOWN_GAPS.md](../KNOWN_GAPS.md).
+
+## The stored reference (D-10, 2026-10-03)
+
+Acceptance now scores Rust against a **stored** reference by default:
+[`p49c-reference.json`](../performance/p49c-reference.json), recorded once on
+linux-x86_64 (seeded from the D-1 rerun above, whose reference code is
+unchanged since but for a log line moved to stderr), tagged with its platform,
+source commit and a SHA-256 of `src/argusnet`'s sources. A run whose
+`src/argusnet` differs says the reference may be stale.
+`--reference live` recomputes it on the machine at hand, and
+`--reference live --record-reference` re-records it. The speed-up gate then
+compares Rust's wall clock here with the reference's wall clock on the
+recording machine; the report names that machine.
+
+The stored-mode rerun ([`p49c-acceptance-stored.json`](../performance/p49c-acceptance-stored.json))
+matches the live one: 6/7 pass, and every Rust number is unchanged, which also
+confirms A1/A2 changed no behaviour. `sar_person_search` still fails
+`localisation_rmse_m` (reference 44.72 m, Rust 33.42 m, |Δ| 11.29 against
+11.18 allowed).
+
+**That failure is inside five-seed noise, and the envelope is not widened.**
+Per-seed RMSE, reference: 26.8, 47.4, 80.3, 28.5, 40.6 m (sd 21.7); Rust: 16.9,
+42.1, 39.4, 27.1, 41.6 m (sd 11.1). The standard error of the difference of
+means is 10.9 m, so |Δ| is about one standard error, carried by one reference
+seed. Five seeds cannot tell this apart from parity; A3.2's ≥30 predetermined
+seeds with a held-out set can, and decide it.
+
