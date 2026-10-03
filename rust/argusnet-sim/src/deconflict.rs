@@ -49,8 +49,6 @@
 //! yielded to — and the write-back leaves anything absent from the resolved
 //! map untouched.
 
-use std::sync::Arc;
-
 use argusnet_planning::deconfliction::{
     resolve_step, DeconflictionConfig, DeconflictionEvent, ExclusionZone, FlightCorridor, Proposal,
 };
@@ -363,6 +361,7 @@ mod tests {
     use crate::stage::Stage;
     use argusnet_planning::deconfliction::Resolution;
     use argusnet_types::{NodeState, Vector3};
+    use std::sync::{Arc, Mutex};
 
     fn simulation() -> Simulation {
         Simulation::new(SimulationConfig {
