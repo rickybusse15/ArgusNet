@@ -7,6 +7,7 @@ use super::*;
 /// controls, playback.
 pub(super) fn header_bar(
     ui: &mut egui::Ui,
+    source: SourceContext,
     scene_package: &ScenePackage,
     replay_state: &mut ReplayState,
     view_mode: &mut ViewMode,
@@ -14,6 +15,11 @@ pub(super) fn header_bar(
 ) {
     ui.horizontal_centered(|ui| {
         ui.strong("ArgusNet");
+        // The source indicator (§3): first after identity, in the one region
+        // no window size or drawer state removes.
+        ui.label(source.rich_text())
+            .on_hover_text(source.explanation());
+        ui.separator();
         ui.label(&scene_package.manifest.scene_id);
         ui.separator();
         playback_buttons(ui, replay_state);

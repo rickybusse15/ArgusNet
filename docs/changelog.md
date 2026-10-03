@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Source indicator (C2.2)
+
+- The header always says what the window is showing: `REPLAY`, `LIVE` or
+  `LIVE / HISTORY`, or `EVALUATION / TRUTH ENABLED` when ground truth is on.
+  Hover it for what that source permits.
+
 ## Unreleased — Operate shell layout (C2.1)
 
 - The viewer is laid out as the operate shell: a header, a status line with

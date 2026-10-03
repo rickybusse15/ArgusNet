@@ -17,6 +17,7 @@ mod commands;
 mod inspectors;
 mod layout;
 mod shell;
+mod source;
 mod timeline;
 mod widgets;
 
@@ -26,6 +27,7 @@ use inspectors::*;
 pub use layout::ShellLayout;
 use layout::*;
 use shell::*;
+pub use source::{SourceContext, SourceInputs};
 use timeline::*;
 use widgets::*;
 pub use widgets::{covariance_diagonal, health_color};
@@ -134,9 +136,21 @@ pub fn viewer_ui_system(
     let layout =
         ShellLayout::for_viewport(viewport.width(), viewport.height(), ui_state.drawer_open);
     let alerts = collect_alerts(&replay_state, &mission_zones);
+    let frame_count = replay_state.frame_count();
+    let source = SourceInputs {
+        has_frames: frame_count > 0,
+        live: replay_state.live,
+        at_newest: frame_count > 0 && replay_state.frame_index + 1 >= frame_count,
+        // The in-process worker and SIL/HIL adapters arrive with D1.
+        sim: None,
+        in_loop: None,
+        truth_shown: runtime_visibility.truths,
+    }
+    .context();
     let canvas = show_shell(root, &layout, |region, ui| match region {
         Region::Header => header_bar(
             ui,
+            source,
             &scene_package,
             &mut replay_state,
             &mut view_mode,
@@ -361,6 +375,26 @@ mod tests {
         }
         assert_eq!(canvas.min.x, 0.0);
         assert_eq!(canvas.width(), 748.0);
+    }
+
+    /// The source indicator lives in the header, and no width or drawer
+    /// state removes the header (VIEWER_UI §3, C2.2).
+    #[test]
+    fn the_source_indicator_region_survives_every_width_and_drawer_state() {
+        use super::*;
+        for width in [1920.0, 1440.0, 1100.0, 1000.0, 780.0, 600.0, 320.0] {
+            for drawer_open in [false, true] {
+                let (_, regions, _) = lay_out(width, 900.0, drawer_open);
+                let header = outer(&regions, Region::Header)
+                    .unwrap_or_else(|| panic!("no header at {width} (drawer {drawer_open})"));
+                // Inner rect: the window less the 8 px margin each side.
+                assert!(
+                    header.width() >= width - 17.0,
+                    "the header spans the window"
+                );
+                assert!(outer(&regions, Region::StatusLine).is_some());
+            }
+        }
     }
 
     /// The operator is told why belief is missing, not shown a blank.
