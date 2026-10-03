@@ -30,12 +30,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import dataclasses
 import hashlib
 import io
 import json
 import platform
+import shutil
 import statistics
 import subprocess
 import sys
@@ -81,6 +83,28 @@ VERDICT_AGREEMENT_MIN = 4
 # Neither side reaching it makes the check unavailable, not passed; only one
 # side reaching it is a divergence and fails.
 MIN_QUALIFYING_TRACKS = {"covariance_reduction_mean": ("covariance_reduction_tracks", 5)}
+# A3.2 (VERIFICATION_AND_ROLLOUT.md §3): predetermined seeds, fixed before any
+# run, disjoint from each other and from CANONICAL_SEEDS. Generated once with
+# `random.Random("argusnet-qualification-v1")` / `("argusnet-held-out-v1")`
+# drawing from [1, 2**31) and written out here so they cannot drift. The
+# qualification set is for development; the held-out set is for the final
+# acceptance only.
+QUALIFICATION_SEEDS = (
+    32915690, 1674524103, 601119249, 1647490371, 2033135903, 1916710324,
+    1239985052, 260710038, 1738979661, 1648872673, 43158106, 1939013240,
+    682774893, 1991921566, 1967598872, 1139327419, 488645183, 711683052,
+    988686892, 1821185308, 117545894, 1834967309, 1785792828, 265142813,
+    998440526, 856529794, 248187854, 1449380299, 1925468213, 419724673,
+)  # fmt: skip
+HELD_OUT_SEEDS = (
+    1247680579, 312432243, 1886478947, 1664495409, 1639383676,
+    1544757366, 1206485469, 1146316589, 2040669012, 1734468567,
+)  # fmt: skip
+SEED_SETS = {
+    "canonical": tuple(CANONICAL_SEEDS),
+    "qualification": QUALIFICATION_SEEDS,
+    "held-out": HELD_OUT_SEEDS,
+}
 TICK_P95_MAX_MS = 5.0
 STARTUP_MAX_MS = 2000.0
 SPEEDUP_MIN = 5.0
@@ -155,6 +179,14 @@ def live_reference(config, seed: int, work: Path) -> dict:
 def run_seed(config, seed: int, work: Path, duration_s: float | None, stored: dict | None) -> dict:
     if duration_s is not None:
         config = dataclasses.replace(config, duration_s=duration_s)
+    try:
+        return _run_seed(config, seed, work, stored)
+    finally:
+        # Replays are large; thousands of runs would fill the disk.
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _run_seed(config, seed: int, work: Path, stored: dict | None) -> dict:
     reference = stored if stored is not None else live_reference(config, seed, work)
 
     exported = work / "config.json"
@@ -202,6 +234,24 @@ def run_seed(config, seed: int, work: Path, duration_s: float | None, stored: di
     }
 
 
+def spread(runs: list[dict], metric: str) -> dict:
+    """Variance estimates for one metric: per side n, mean and sample sd, and
+    the standard error of the difference of means (A3.2)."""
+    out: dict = {}
+    variances = []
+    for side in ("reference", "rust"):
+        values = [r[side][metric] for r in runs if r[side].get(metric) is not None]
+        sd = statistics.stdev(values) if len(values) > 1 else None
+        out[side] = {
+            "n": len(values),
+            "mean": statistics.fmean(values) if values else None,
+            "sd": sd,
+        }
+        variances.append(sd * sd / len(values) if sd is not None else None)
+    out["se_diff"] = (variances[0] + variances[1]) ** 0.5 if None not in variances else None
+    return out
+
+
 def mean_of(runs: list[dict], side: str, metric: str) -> float | None:
     values = [r[side][metric] for r in runs if r[side].get(metric) is not None]
     return statistics.fmean(values) if values else None
@@ -213,6 +263,7 @@ def tracks_of(runs: list[dict], side: str, count_key: str) -> int:
 
 def judge(name: str, runs: list[dict]) -> dict:
     checks: list[dict] = []
+    statistics_by_metric = {metric: spread(runs, metric) for metric in STATISTICAL}
 
     def check(kind: str, what: str, ok: bool, detail: str) -> None:
         checks.append({"kind": kind, "check": what, "passed": bool(ok), "detail": detail})
@@ -307,13 +358,26 @@ def judge(name: str, runs: list[dict]) -> dict:
         "passed": all(c["passed"] is not False for c in checks),
         "unavailable": [c["check"] for c in checks if c["passed"] is None],
         "checks": checks,
+        "statistics": statistics_by_metric,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenarios", default="", help="comma-separated names (default: all)")
-    parser.add_argument("--seeds", default="", help="comma-separated seeds (default: canonical)")
+    parser.add_argument("--seeds", default="", help="comma-separated seeds (overrides --seed-set)")
+    parser.add_argument(
+        "--seed-set",
+        choices=tuple(SEED_SETS),
+        default="canonical",
+        help="the predetermined seeds to run (A3.2); --seeds overrides",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="runs in parallel; timing gates are only meaningful at 1",
+    )
     parser.add_argument("--duration-s", type=float, default=None, help="override durations")
     parser.add_argument("--out", type=Path, default=REPORT)
     parser.add_argument(
@@ -352,28 +416,53 @@ def main() -> int:
         print(f"{RELEASE_BINARY} missing: cargo build --release -p argusnet-cli")
         return 2
     wanted = {s for s in args.scenarios.split(",") if s}
-    seeds = [int(s) for s in args.seeds.split(",") if s] or list(CANONICAL_SEEDS)
-    results = []
+    seeds = [int(s) for s in args.seeds.split(",") if s] or list(SEED_SETS[args.seed_set])
+    configs = [c for c in CANONICAL_SCENARIOS if not wanted or c.name in wanted]
+    tasks = []
+    for config in configs:
+        for seed in seeds:
+            stored = None
+            if store is not None:
+                stored = store["runs"].get(f"{config.name}/{seed}")
+                if stored is None:
+                    raise SystemExit(
+                        f"no stored reference for {config.name}/{seed}: record it with "
+                        "--reference live --record-reference"
+                    )
+            tasks.append((config, seed, stored))
+    if args.jobs > 1:
+        print(f"{args.jobs} jobs: the timing gates below are measured under load")
+    outcomes: dict[tuple[str, int], dict] = {}
     with tempfile.TemporaryDirectory() as scratch:
-        for config in CANONICAL_SCENARIOS:
-            if wanted and config.name not in wanted:
-                continue
-            runs = []
-            for seed in seeds:
-                work = Path(scratch) / config.name / str(seed)
-                work.mkdir(parents=True)
-                print(f"{config.name} seed {seed} ...", flush=True)
-                stored = None
-                if store is not None:
-                    stored = store["runs"].get(f"{config.name}/{seed}")
-                    if stored is None:
-                        raise SystemExit(
-                            f"no stored reference for {config.name}/{seed}: record it with "
-                            "--reference live --record-reference"
-                        )
-                run = run_seed(config, seed, work, args.duration_s, stored)
-                if args.record_reference and "unsupported" not in run:
-                    recorded[f"{config.name}/{seed}"] = {
+
+        def submit(pool, config, seed, stored):
+            work = Path(scratch) / config.name / str(seed)
+            work.mkdir(parents=True)
+            return pool.submit(run_seed, config, seed, work, args.duration_s, stored)
+
+        executor = (
+            concurrent.futures.ProcessPoolExecutor(max_workers=args.jobs)
+            if args.jobs > 1
+            else concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        )
+        with executor as pool:
+            futures = {submit(pool, c, seed, st): (c.name, seed) for c, seed, st in tasks}
+            for future in concurrent.futures.as_completed(futures):
+                name, seed = futures[future]
+                try:
+                    run = future.result()
+                except Exception as error:  # noqa: BLE001 - recorded, not dropped
+                    run = {"seed": seed, "error": f"{type(error).__name__}: {error}"}
+                outcomes[(name, seed)] = run
+                print(f"{name} seed {seed}: {'error' if 'error' in run else 'done'}", flush=True)
+
+    results = []
+    for config in configs:
+        runs = [outcomes[(config.name, seed)] for seed in seeds]
+        if args.record_reference:
+            for run in runs:
+                if "unsupported" not in run and "error" not in run:
+                    recorded[f"{config.name}/{run['seed']}"] = {
                         key: run[key]
                         for key in (
                             "reference",
@@ -382,26 +471,32 @@ def main() -> int:
                             "reference_process_s",
                         )
                     }
-                runs.append(run)
-            unsupported = [r for r in runs if "unsupported" in r]
-            if unsupported:
-                results.append(
-                    {"scenario": config.name, "unsupported": unsupported[0]["unsupported"]}
-                )
-                print(f"  unsupported: {unsupported[0]['unsupported']}")
-                continue
-            verdict = judge(config.name, runs)
-            verdict["runs"] = runs
-            results.append(verdict)
-            print(f"  {'PASS' if verdict['passed'] else 'FAIL'}")
-            if verdict["unavailable"]:
-                print(f"    unavailable: {', '.join(verdict['unavailable'])}")
-            for failed in [c for c in verdict["checks"] if c["passed"] is False]:
-                print(f"    {failed['check']}: {failed['detail']}")
+        unsupported = [r for r in runs if "unsupported" in r]
+        if unsupported:
+            results.append({"scenario": config.name, "unsupported": unsupported[0]["unsupported"]})
+            print(f"{config.name}: unsupported: {unsupported[0]['unsupported']}")
+            continue
+        errors = [r for r in runs if "error" in r]
+        if errors:
+            # A failed run fails the scenario and is listed; it is never dropped
+            # to let the rest pass.
+            results.append({"scenario": config.name, "passed": False, "errors": errors})
+            print(f"{config.name}: FAIL, {len(errors)} run(s) errored")
+            continue
+        verdict = judge(config.name, runs)
+        verdict["runs"] = runs
+        results.append(verdict)
+        print(f"{config.name}: {'PASS' if verdict['passed'] else 'FAIL'}")
+        if verdict["unavailable"]:
+            print(f"    unavailable: {', '.join(verdict['unavailable'])}")
+        for failed in [c for c in verdict["checks"] if c["passed"] is False]:
+            print(f"    {failed['check']}: {failed['detail']}")
     document = {
         "_source": "scripts/run_phase_acceptance.py",
         "machine": {"platform": platform.platform(), "python": platform.python_version()},
+        "seed_set": None if args.seeds else args.seed_set,
         "seeds": seeds,
+        "jobs": args.jobs,
         "duration_override_s": args.duration_s,
         "reference": (
             {
