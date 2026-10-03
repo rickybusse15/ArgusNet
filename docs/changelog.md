@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Why the mission did what it did (F3)
+
+- The mission driver records each decision it makes -- coordinator, POI
+  assignments and handoffs, completions, egress, phase changes -- with what
+  it chose from, why, on which inputs, and the command it issued. Recorded
+  runs (`--run-dir`) journal them every tick.
+
 ## Unreleased — Mission outcomes with reasons (F1)
 
 - Scorecards now say how a run ended -- completed, aborted, incomplete, or
