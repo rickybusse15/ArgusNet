@@ -45,7 +45,7 @@ use crate::controller::{
     ControllerEnvironment, ControllerLink, ControllerStage, LaunchProfile, Operational,
     PlatformController, PursuitOracle,
 };
-use crate::deconflict::{DeconflictLink, DeconflictStage, RoleTable};
+use crate::deconflict::{DeconflictStage, RoleTable};
 use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
 use crate::fusion::{FusionLink, FusionStage};
 use crate::mapping::{InspectionZone, MappingLink, MappingStage};
@@ -664,7 +664,6 @@ pub struct AssembledRun {
     pub battery: BatteryLink,
     pub observe: ObserveLink,
     pub fusion: FusionLink,
-    pub deconflict: DeconflictLink,
     /// `safety_blocking` runs only.
     pub safety: Option<SafetyLink>,
     /// Scan-map-inspect runs only.
@@ -949,14 +948,11 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
 
     // Stage 3: deconfliction over the real terrain, exclusion zones only.
-    let deconflict = DeconflictStage::new();
-    let deconflict_link = deconflict.link();
     let mut roles = RoleTable::new().with_terrain(Arc::new(world.terrain.clone()));
     for (drone_id, role) in &bundle.drone_roles {
         roles = roles.with_role(drone_id.clone(), role.clone());
     }
-    deconflict_link.set_roles(roles);
-    deconflict_link.set_zones(
+    let deconflict = DeconflictStage::new().with_roles(roles).with_zones(
         bundle
             .mission_zones
             .iter()
@@ -1142,7 +1138,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         battery: battery_link,
         observe: observe_link,
         fusion: fusion_link,
-        deconflict: deconflict_link,
         safety: safety_link,
         truth,
         replay,
@@ -1331,6 +1326,13 @@ impl fmt::Display for RunError {
 impl std::error::Error for RunError {}
 
 impl AssembledRun {
+    /// Stage 3, as assembled. Every assembled run installs it.
+    pub fn deconflict(&self) -> &DeconflictStage {
+        self.sim
+            .stage::<DeconflictStage>(Stage::Deconflict)
+            .expect("assembly installs a DeconflictStage")
+    }
+
     /// The timestamp the next tick will run at.
     pub fn next_timestamp_s(&self) -> f64 {
         self.sim.tick() as f64 * self.dt_s
@@ -1381,8 +1383,10 @@ impl AssembledRun {
         self.report.totals.add(&tally);
 
         frame.deconfliction_events = self
-            .deconflict
-            .take_events()
+            .sim
+            .stage_mut::<DeconflictStage>(Stage::Deconflict)
+            .map(DeconflictStage::take_events)
+            .unwrap_or_default()
             .into_iter()
             .map(|event| ReplayDeconflictionEvent {
                 yielding_drone_id: event.yielding_drone_id,

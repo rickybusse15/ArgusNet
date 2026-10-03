@@ -96,7 +96,7 @@ impl TickContext<'_> {
 /// than hard-coding a call sequence means adding one cannot accidentally
 /// reorder the others — the order lives in [`Stage::PIPELINE`] and nowhere
 /// else.
-pub trait StageHandler: fmt::Debug + Send {
+pub trait StageHandler: std::any::Any + fmt::Debug + Send {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError>;
 
     /// Return to the state a freshly constructed handler would have.
@@ -384,6 +384,23 @@ impl Simulation {
 
     pub fn trace(&self) -> &StageTrace {
         &self.trace
+    }
+
+    /// The installed handler for `stage`, if it is a `T`.
+    ///
+    /// How a caller outside the tick reads a stage's state: through the
+    /// session that owns it, rather than through a handle cloned out of the
+    /// stage (SESSION_OWNERSHIP.md §2).
+    pub fn stage<T: StageHandler>(&self, stage: Stage) -> Option<&T> {
+        let handler: &dyn std::any::Any = self.handlers.get(&stage)?.as_ref();
+        handler.downcast_ref::<T>()
+    }
+
+    /// [`Self::stage`], mutably: for configuration between ticks and for
+    /// draining what a stage reported.
+    pub fn stage_mut<T: StageHandler>(&mut self, stage: Stage) -> Option<&mut T> {
+        let handler: &mut dyn std::any::Any = self.handlers.get_mut(&stage)?.as_mut();
+        handler.downcast_mut::<T>()
     }
 
     /// The last committed snapshot, if any tick has committed.
