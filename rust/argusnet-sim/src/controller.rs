@@ -47,7 +47,6 @@
 
 use std::cell::Cell;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use argusnet_types::Vector3;
 use serde::{Deserialize, Serialize};
@@ -290,7 +289,7 @@ fn controller_accepts(controller: &PlatformController, state: &ControllerState) 
 }
 
 #[derive(Default)]
-struct Shared {
+struct State {
     controllers: Vec<(String, PlatformController)>,
     environment: Option<ControllerEnvironment>,
     /// This tick's controller output per platform, keyed by the sample
@@ -311,55 +310,27 @@ pub struct EnvironmentSummary {
     pub has_map_bounds: bool,
 }
 
-/// A handle onto stage 1, kept by the run driver and by stage 6.
-#[derive(Clone, Default)]
-pub struct ControllerLink {
-    inner: Arc<Mutex<Shared>>,
-}
-
-impl fmt::Debug for ControllerLink {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let shared = self.lock();
-        formatter
-            .debug_struct("ControllerLink")
-            .field(
-                "controllers",
-                &shared
-                    .controllers
-                    .iter()
-                    .map(|(id, _)| id)
-                    .collect::<Vec<_>>(),
-            )
-            .field("has_environment", &shared.environment.is_some())
-            .finish()
-    }
-}
-
-impl ControllerLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
+impl ControllerStage {
     /// Give `node_id` a controller. Installation order is sampling order.
     /// Re-installing an id replaces it in place, keeping its position.
-    pub fn install(&self, node_id: impl Into<String>, mut controller: PlatformController) {
+    pub fn install(&mut self, node_id: impl Into<String>, mut controller: PlatformController) {
         controller.arm();
         let node_id = node_id.into();
-        let mut shared = self.lock();
+        let shared = &mut self.state;
         match shared.controllers.iter_mut().find(|(id, _)| *id == node_id) {
             Some((_, slot)) => *slot = controller,
             None => shared.controllers.push((node_id, controller)),
         }
     }
 
-    pub fn set_environment(&self, environment: ControllerEnvironment) {
-        self.lock().environment = Some(environment);
+    pub fn set_environment(&mut self, environment: ControllerEnvironment) {
+        self.state.environment = Some(environment);
     }
 
     /// Launch a parked platform. Ignored for one already launched, as in the
     /// reference.
-    pub fn trigger_launch(&self, node_id: &str, timestamp_s: f64, target_id: &str) -> bool {
-        let mut shared = self.lock();
+    pub fn trigger_launch(&mut self, node_id: &str, timestamp_s: f64, target_id: &str) -> bool {
+        let shared = &mut self.state;
         match shared.controllers.iter_mut().find(|(id, _)| id == node_id) {
             Some((_, PlatformController::Launched { controller, .. })) => {
                 controller.trigger_launch(timestamp_s, target_id);
@@ -371,8 +342,8 @@ impl ControllerLink {
 
     /// Feed one tick's accepted-observation counts to every search-then-follow
     /// controller. Returns the ids that engaged on this call.
-    pub fn observe(&self, accepted: &AcceptedByNodeTarget) -> Vec<String> {
-        let mut shared = self.lock();
+    pub fn observe(&mut self, accepted: &AcceptedByNodeTarget) -> Vec<String> {
+        let shared = &mut self.state;
         let mut engaged = Vec::new();
         for (node_id, controller) in shared.controllers.iter_mut() {
             let operational = match controller {
@@ -392,7 +363,7 @@ impl ControllerLink {
     /// What the controllers have been lent, for diagnostics and wiring tests.
     /// `None` before an environment is installed.
     pub fn environment_summary(&self) -> Option<EnvironmentSummary> {
-        let shared = self.lock();
+        let shared = &self.state;
         shared.environment.as_ref().map(|env| EnvironmentSummary {
             has_obstacles: env.obstacles.is_some(),
             has_planner: env.planner.is_some(),
@@ -405,7 +376,7 @@ impl ControllerLink {
 
     /// Whether `node_id`'s search-then-follow controller is following.
     pub fn is_engaged(&self, node_id: &str) -> Option<bool> {
-        let shared = self.lock();
+        let shared = &self.state;
         let (_, controller) = shared.controllers.iter().find(|(id, _)| id == node_id)?;
         let operational = match controller {
             PlatformController::Free(operational) => operational,
@@ -562,26 +533,13 @@ fn guard_nominal(
     );
 }
 
-impl ControllerLink {
+impl ControllerStage {
     /// This tick's nominal pose for `node_id`, if it was sampled at exactly
     /// `timestamp_s`. A request for any other time is refused rather than
     /// answered with a stale pose.
     pub fn nominal_pose(&self, node_id: &str, timestamp_s: f64) -> Option<([f64; 3], [f64; 3])> {
-        let shared = self.lock();
-        let (bits, position, velocity) = shared.nominal.get(node_id)?;
+        let (bits, position, velocity) = self.state.nominal.get(node_id)?;
         (*bits == timestamp_s.to_bits()).then_some((*position, *velocity))
-    }
-}
-
-impl crate::observe::SensorPoseSource for ControllerLink {
-    fn pose(&self, node_id: &str, timestamp_s: f64) -> Option<([f64; 3], [f64; 3])> {
-        self.nominal_pose(node_id, timestamp_s)
-    }
-}
-
-impl crate::vio::NominalTrajectory for ControllerLink {
-    fn sample(&self, node_id: &str, timestamp_s: f64) -> Option<([f64; 3], [f64; 3])> {
-        self.nominal_pose(node_id, timestamp_s)
     }
 }
 
@@ -589,7 +547,7 @@ impl crate::vio::NominalTrajectory for ControllerLink {
 ///
 /// [`Stage::SampleControllersAndBattery`]: crate::stage::Stage::SampleControllersAndBattery
 pub struct ControllerStage {
-    link: ControllerLink,
+    state: State,
     battery: Option<BatteryStage>,
 }
 
@@ -597,7 +555,16 @@ impl fmt::Debug for ControllerStage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ControllerStage")
-            .field("link", &self.link)
+            .field(
+                "controllers",
+                &self
+                    .state
+                    .controllers
+                    .iter()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>(),
+            )
+            .field("has_environment", &self.state.environment.is_some())
             .field("battery", &self.battery)
             .finish()
     }
@@ -612,7 +579,7 @@ impl Default for ControllerStage {
 impl ControllerStage {
     pub fn new() -> Self {
         Self {
-            link: ControllerLink::default(),
+            state: State::default(),
             battery: None,
         }
     }
@@ -624,17 +591,12 @@ impl ControllerStage {
         self
     }
 
-    pub fn link(&self) -> ControllerLink {
-        self.link.clone()
-    }
-
     fn sample_all(&mut self, context: &mut TickContext<'_>) -> Result<bool, StageError> {
-        let mut guard = self.link.lock();
-        let Shared {
+        let State {
             controllers,
             environment,
             nominal,
-        } = &mut *guard;
+        } = &mut self.state;
         nominal.clear();
         if controllers.is_empty() {
             return Ok(false);
@@ -658,7 +620,6 @@ impl ControllerStage {
             platform.timestamp_s = timestamp_s;
         }
         let reads = log.pursuit_reads.get();
-        drop(guard);
         if reads > 0 {
             context.note(format!(
                 "legacy pursuit read {reads} true target states (truth-fed follow controllers)"
@@ -683,12 +644,11 @@ impl StageHandler for ControllerStage {
     }
 
     fn reset(&mut self) {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.nominal.clear();
         for (_, controller) in shared.controllers.iter_mut() {
             controller.reset_to_constructed();
         }
-        drop(shared);
         if let Some(battery) = self.battery.as_mut() {
             battery.reset();
         }
@@ -697,8 +657,7 @@ impl StageHandler for ControllerStage {
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
         let state = StageOneState {
             controllers: self
-                .link
-                .lock()
+                .state
                 .controllers
                 .iter()
                 .map(|(id, controller)| (id.clone(), controller_state(controller)))
@@ -714,7 +673,7 @@ impl StageHandler for ControllerStage {
     fn check_state(&self, state: &serde_json::Value) -> Result<(), StageStateError> {
         let decoded: StageOneState = decode_stage_state(state)?;
         {
-            let shared = self.link.lock();
+            let shared = &self.state;
             if decoded.controllers.len() != shared.controllers.len() {
                 return Err(StageStateError::Malformed {
                     detail: format!(
@@ -751,7 +710,7 @@ impl StageHandler for ControllerStage {
     fn restore_state(&mut self, state: &serde_json::Value) -> Result<(), StageStateError> {
         let decoded: StageOneState = decode_stage_state(state)?;
         {
-            let mut shared = self.link.lock();
+            let shared = &mut self.state;
             for ((_, saved), (_, controller)) in decoded
                 .controllers
                 .into_iter()
