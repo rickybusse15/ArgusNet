@@ -85,7 +85,8 @@ A skip is not a pass.
 | P2.3 | Occlusion-aware mesh ray picking with drone pick proxies, viewport- and UI-aware; hover and selection rings with no through-terrain draw; Tab/Esc and an entity list; GPU click probes. Found and fixed: the terrain's inverted winding let picks through; blended trails made transparent order flip | done (#122, `badb1e1`; [PICKING_AND_SELECTION.md](PICKING_AND_SELECTION.md)) |
 | P2.4a | Time: a source-time cursor (irregular timestamps play and blend as recorded), gaps and teleports not interpolated, loop, jump-to-event (`[` `]`), trimmed live history and gaps shown as unavailable | done (#128; [TIME_CONTROLS.md](TIME_CONTROLS.md)) |
 | P2.4b | Camera: damped free-fly, follow/chase with loss to the last known position, `F` focus, `1`-`9` bookmarks as per-scene preferences, one remappable binding table gated on typing; 0 allocations a frame | done (#129; [CAMERA_CONTROLS.md](CAMERA_CONTROLS.md)) |
-| P2.5 | Mission-control shell, quality tiers | open |
+| P2.5a | Visual tokens (palette, spacing, type roles), bundled Arimo (OFL, D-2), status vocabulary, `Field<T>`; zero-radius flat visuals | done in this PR ([VIEWER_TOKENS.md](VIEWER_TOKENS.md)) |
+| P2.5b–g | Shell, inspectors, timeline, projections, presets and tiers, failure states | open |
 | P2.6 | Graphics acceptance across tiers | open |
 
 ## Track C — guardrails

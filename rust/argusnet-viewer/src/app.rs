@@ -270,7 +270,10 @@ fn run_inner(
         // bevy_egui 0.42 replaced `EguiSet::BeginPass` inside `Update` with a
         // dedicated schedule that runs between egui's begin/end pass, so UI
         // systems must be registered there rather than ordered within `Update`.
-        .add_systems(EguiPrimaryContextPass, viewer_ui_system);
+        .add_systems(
+            EguiPrimaryContextPass,
+            (crate::theme::install_theme_system, viewer_ui_system).chain(),
+        );
     }
 
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())

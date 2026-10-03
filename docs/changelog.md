@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Visual tokens and the bundled face (P2.5a)
+
+- The viewer's UI uses one palette, spacing scale and set of type roles from
+  the specification. Corners are square, rules are 1 px, panels are flat, and
+  selection and focus use the amber accent.
+- The UI font is Arimo (SIL Open Font License 1.1), bundled in the binary:
+  metric-compatible with Helvetica, with tabular digits.
+- Muted text is `#767F83`, not the reference `#687175`, so that all UI text
+  meets WCAG AA contrast.
+
 ## Unreleased — Cheaper mission transitions (P4.10c)
 
 - Stage 9 searched the whole coverage grid for enclosed gaps on every tick,

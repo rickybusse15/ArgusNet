@@ -43,3 +43,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 argusnet-proto = { path = "../argusnet-proto", optional = true }
 tokio = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Reads the bundled font's character map in theme.rs' tests; already in the
+# tree through egui.
+ttf-parser = "0.25"

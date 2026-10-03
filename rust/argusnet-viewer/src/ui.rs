@@ -105,7 +105,6 @@ pub fn viewer_ui_system(
     ui_state.focused_entity_label = selection.label().map(str::to_owned);
     let raster_status =
         terrain_raster_status(&rasters.report(), &belief, &scene_package.land_cover);
-    configure_operator_style(&context);
 
     // egui 0.36 unified `TopBottomPanel`/`SidePanel` into `Panel`, which attaches
     // to a `Ui` rather than to the `Context`. The shell therefore opens one
@@ -188,18 +187,6 @@ pub fn viewer_ui_system(
 
     draw_zone_badges(&context, &projected_badges);
     draw_mission_phase_hud(&context, &replay_state);
-}
-
-fn configure_operator_style(context: &egui::Context) {
-    // egui 0.36 keeps a `Style` per theme and dropped `Context::set_style`, so
-    // mutate every theme in place instead of replacing one global style.
-    context.all_styles_mut(|style| {
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(9.0, 4.0);
-        style.visuals.widgets.active.corner_radius = 4.into();
-        style.visuals.widgets.hovered.corner_radius = 4.into();
-        style.visuals.widgets.inactive.corner_radius = 4.into();
-    });
 }
 
 fn top_status_bar(
