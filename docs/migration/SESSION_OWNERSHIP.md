@@ -104,6 +104,35 @@ One owner, explicit data flow, the same timing.
 6. **Checkpoints do not change.** Each stage's `checkpoint_state` payload stays
    byte-identical, so existing checkpoints still load.
 
+## 2a. Amendment after slices 1–4 (2026-10-03)
+
+Sizing slice 5 showed two edges that §2's mechanisms do not cover as written:
+
+- **6→1 is not purely next-tick.** Stage 6 calls `ControllerLink::observe`
+  *during* stage 6. The engagement it sets is visible at once: to
+  `is_engaged` after the tick, to stage 6's trace note, and to the
+  per-tick engagement comparison in `tests/scenario_bundle.rs`. Only its
+  effect on motion waits for stage 1 of the next tick. A next-tick inbox
+  (§2.4) would move the state change by a tick and break parity.
+- **Stage 6 reads stage 1's controllers in the same tick.** `ControllerLink`
+  is the observer's `SensorPoseSource` and VIO's `NominalTrajectory`, so
+  stage 6 samples controller poses mid-tick.
+
+Two ways to keep the timing exact without a shared handle:
+
+1. **Session-mediated handoff.** After a stage runs, `Simulation` applies
+   its typed output to the consumer stage it owns
+   (`controllers.observe(&observe.accepted())`), between stages and in a
+   fixed order. Timing is identical; the edge becomes explicit in
+   `Simulation::step` rather than hidden in a link.
+2. **Lent views in `TickContext`.** Stage 6 receives `&ControllerStage` (the
+   pose source) as a borrowed view for its run. This needs a split borrow
+   of the handler map, which is safe because stages run one at a time.
+
+Recommendation: (1) for the writes (6→1, 9→2, 4→7, 6→7), (2) for the
+same-tick reads (poses, battery fractions, mapping results, mission phase).
+This is the decision to settle before slice 5.
+
 ## 3. Slices, in order
 
 One link per PR, each with the stage's existing tests unchanged, plus a
