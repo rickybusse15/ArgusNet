@@ -381,15 +381,65 @@ pub fn keyboard_gate_system(contexts: Option<EguiContexts>, mut gate: ResMut<Key
             contexts
                 .ctx_mut()
                 .ok()
-                .map(|ctx| ctx.egui_wants_keyboard_input())
+                .map(|ctx| text_field_has_keyboard(ctx))
         })
         .unwrap_or(false);
     gate.set_if_neq(KeyboardGate { typing });
 }
 
+/// Whether a text field has the keyboard; any other widget's keyboard focus
+/// is released. egui's own Tab navigation would otherwise park focus on a
+/// button: `egui_wants_keyboard_input` then reads true, the viewer's keys --
+/// Tab to step the selection, Space to play -- stop working, and Space
+/// presses the focused button instead. Tab belongs to the viewer.
+pub fn text_field_has_keyboard(ctx: &bevy_egui::egui::Context) -> bool {
+    if ctx.text_edit_focused() {
+        return true;
+    }
+    if let Some(id) = ctx.memory(|memory| memory.focused()) {
+        ctx.memory_mut(|memory| memory.surrender_focus(id));
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A focused button does not take the keyboard from the viewer; a focused
+    /// text field does.
+    #[test]
+    fn only_a_text_field_holds_the_keyboard() {
+        use bevy_egui::egui;
+        let ctx = egui::Context::default();
+        let mut value = String::new();
+        // `focus`: 0 nothing, 1 the button, 2 the text field.
+        let mut frame = |ctx: &egui::Context, focus: u8| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                let button = ui.button("Play");
+                let text = ui.text_edit_singleline(&mut value);
+                match focus {
+                    1 => button.request_focus(),
+                    2 => text.request_focus(),
+                    _ => {}
+                }
+            })
+            .textures_delta
+            .clear();
+        };
+        frame(&ctx, 1);
+        frame(&ctx, 0);
+        assert!(ctx.egui_wants_keyboard_input(), "egui would gate the keys");
+        assert!(!text_field_has_keyboard(&ctx), "a button does not");
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            None,
+            "and is unfocused"
+        );
+        frame(&ctx, 2);
+        frame(&ctx, 0);
+        assert!(text_field_has_keyboard(&ctx), "a text field does");
+    }
 
     #[test]
     fn an_action_set_holds_exactly_what_was_inserted() {

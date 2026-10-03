@@ -179,7 +179,18 @@ pub fn viewer_ui_system(
             &layout,
         ),
         Region::Timeline => section_operator_timeline(ui, &mut replay_state, &mut ui_state),
-        Region::Rail => mission_rail(ui, ui_state.workspace, &replay_state, &mission_zones),
+        Region::Rail => {
+            let workspace = ui_state.workspace;
+            mission_rail(
+                ui,
+                workspace,
+                &replay_state,
+                &mission_zones,
+                &markers,
+                &selection,
+                &mut ui_state,
+            )
+        }
         Region::Drawer => match ui_state.mode {
             ViewerMode::Mission => drawer_mission_content(
                 ui,
@@ -441,6 +452,42 @@ mod tests {
             heights.push(height);
         }
         assert!(heights[1] < heights[0], "essential is shorter: {heights:?}");
+    }
+
+    /// The fleet index lists platforms by the typed key picking resolves
+    /// to; a track sharing a platform's label is not in it (C3).
+    #[test]
+    fn the_fleet_index_is_typed_like_picking() {
+        use super::*;
+        use crate::presentation::EntityKey;
+        let document: crate::replay::ReplayDocument = serde_json::from_value(serde_json::json!({
+            "frames": [{
+                "timestamp_s": 0.0,
+                "tracks": [{"track_id": "drone-1", "position": [0.0, 0.0, 50.0],
+                            "velocity": [0.0, 0.0, 0.0]}],
+                "nodes": [
+                    {"node_id": "drone-1", "position": [0.0, 0.0, 80.0],
+                     "velocity": [0.0, 0.0, 0.0], "is_mobile": true},
+                    {"node_id": "ground-1", "position": [5.0, 0.0, 1.0],
+                     "velocity": [0.0, 0.0, 0.0], "is_mobile": false}
+                ]
+            }]
+        }))
+        .unwrap();
+        let mut markers = CurrentRuntimeMarkers::default();
+        markers.apply(&ReplayState::new(Some(document)));
+        let fleet = fleet_index(&markers);
+        let labels: Vec<&str> = fleet.iter().map(|(_, label)| &**label).collect();
+        assert_eq!(labels, ["drone-1", "ground-1"]);
+        for (key, label) in &fleet {
+            assert_eq!(Some(*key), markers.key_of(MarkerKind::Node, label));
+            assert!(matches!(key, EntityKey::Platform(_)));
+        }
+        let track = markers.key_of(MarkerKind::Track, "drone-1").unwrap();
+        assert!(
+            fleet.iter().all(|(key, _)| *key != track),
+            "same label, different kind"
+        );
     }
 
     /// The operator is told why belief is missing, not shown a blank.
