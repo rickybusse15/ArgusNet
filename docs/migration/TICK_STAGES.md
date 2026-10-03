@@ -664,7 +664,7 @@ The third was not read off the source. A first attempt asserted that the seed
 *avoided a startup spike*; it failed, and running the reference with the seed and
 with zeros produced identical output at every tick. The test now records the
 finding instead of asserting a false property. The seeding is still reproduced —
-`VioLink::track` mirrors the reference's signature, and initialising the filter
+`VioStage::track` (formerly `VioLink::track`) mirrors the reference's signature, and initialising the filter
 at a non-zero timestamp would make it observable again.
 
 ## Two orderings that are easy to get wrong

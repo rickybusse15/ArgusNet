@@ -114,7 +114,7 @@ it.
 | # | Link | Why here |
 | --- | --- | --- |
 | 1 | `DeconflictLink` | Assembly and observers only: no stage-to-stage edge. Establishes the pattern and the hash harness. **Done:** `Simulation::stage`/`stage_mut` (typed access to an installed handler), builders for assembly, `take_events` through the session; `scripts/replay_hashes.py` shows 14/14 canonical replays byte-identical |
-| 2 | `VioLink` | No production user (finding 2) |
+| 2 | `VioLink` | No production user (finding 2). **Done:** `VioStage` owns its filters; tests reach it through `Simulation::stage_mut` |
 | 3 | `SafetyLink` | One forward edge (→ fusion) and one same-tick read (battery) |
 | 4 | `ObserveLink` | Forward edge (→ fusion) and the backward 6→1 inbox |
 | 5 | `ControllerLink` | Receives 6→1; assembly only otherwise |

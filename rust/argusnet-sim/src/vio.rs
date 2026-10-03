@@ -44,7 +44,7 @@
 //!   with the seed and with zeros gives identical output at every tick.
 //!
 //! The first two are not reproduced. The third is, because
-//! [`VioLink::track`] mirrors the reference's signature and a future change
+//! [`VioStage::track`] mirrors the reference's signature and a future change
 //! could make the value observable again.
 //!
 //! # What the synthetic features actually do
@@ -59,7 +59,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use argusnet_localization::vio::{
     FeatureStore, FlowConfig, FrameTime, UpdateOutcome, VisualFeature,
@@ -128,8 +127,9 @@ struct Backend {
     previous_velocity: [f64; 3],
 }
 
+/// The per-platform filters and the last run's results, owned by the stage.
 #[derive(Debug, Default)]
-struct Shared {
+struct State {
     backends: BTreeMap<String, Backend>,
     nominal: Option<Box<dyn NominalTrajectory>>,
     flow: FlowConfig,
@@ -140,29 +140,31 @@ struct Shared {
     dropped: Vec<String>,
 }
 
-/// A handle on the per-platform filters, held before the stage is installed.
-#[derive(Debug, Clone, Default)]
-pub struct VioLink {
-    inner: Arc<Mutex<Shared>>,
+/// [`Stage::UpdateVioAndPose`] as a [`StageHandler`].
+///
+/// [`Stage::UpdateVioAndPose`]: crate::stage::Stage::UpdateVioAndPose
+#[derive(Debug, Default)]
+pub struct VioStage {
+    state: State,
 }
 
-impl VioLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+impl VioStage {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Install the source of undisturbed platform paths.
-    pub fn set_nominal(&self, nominal: Box<dyn NominalTrajectory>) {
-        self.lock().nominal = Some(nominal);
+    pub fn set_nominal(&mut self, nominal: Box<dyn NominalTrajectory>) {
+        self.state.nominal = Some(nominal);
     }
 
     /// Start a filter for `node_id`, matching the reference's setup loop:
     /// `initialize(node.trajectory(0.0)[0], timestamp_s=0.0)`, with the
     /// previous velocity seeded from that same sample rather than from zeros.
-    pub fn track(&self, node_id: &str, position: [f64; 3], velocity: [f64; 3]) {
+    pub fn track(&mut self, node_id: &str, position: [f64; 3], velocity: [f64; 3]) {
         let mut predictor = VioPredictor::new(VioNoise::default());
         predictor.initialize(position, 0.0);
-        self.lock().backends.insert(
+        self.state.backends.insert(
             node_id.to_string(),
             Backend {
                 predictor,
@@ -173,30 +175,30 @@ impl VioLink {
     }
 
     pub fn is_tracked(&self, node_id: &str) -> bool {
-        self.lock().backends.contains_key(node_id)
+        self.state.backends.contains_key(node_id)
     }
 
     /// `replay_metadata["vio_tracked_nodes"] = sorted(_vio_backends.keys())`.
     pub fn tracked_nodes(&self) -> Vec<String> {
-        self.lock().backends.keys().cloned().collect()
+        self.state.backends.keys().cloned().collect()
     }
 
-    pub fn set_flow_config(&self, flow: FlowConfig) {
-        self.lock().flow = flow;
+    pub fn set_flow_config(&mut self, flow: FlowConfig) {
+        self.state.flow = flow;
     }
 
     /// `scenario.use_vio_position`.
-    pub fn set_use_vio_position(&self, enabled: bool) {
-        self.lock().use_vio_position = enabled;
+    pub fn set_use_vio_position(&mut self, enabled: bool) {
+        self.state.use_vio_position = enabled;
     }
 
     pub fn estimate(&self, node_id: &str) -> Option<VioEstimate> {
-        self.lock().estimates.get(node_id).copied()
+        self.state.estimates.get(node_id).copied()
     }
 
     /// This tick's estimates, in platform-id order.
     pub fn estimates(&self) -> Vec<(String, VioEstimate)> {
-        self.lock()
+        self.state
             .estimates
             .iter()
             .map(|(id, estimate)| (id.clone(), *estimate))
@@ -205,32 +207,13 @@ impl VioLink {
 
     /// Platforms whose frame the last run dropped as out-of-order.
     pub fn dropped(&self) -> Vec<String> {
-        self.lock().dropped.clone()
-    }
-}
-
-/// [`Stage::UpdateVioAndPose`] as a [`StageHandler`].
-///
-/// [`Stage::UpdateVioAndPose`]: crate::stage::Stage::UpdateVioAndPose
-#[derive(Debug, Default)]
-pub struct VioStage {
-    link: VioLink,
-}
-
-impl VioStage {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> VioLink {
-        self.link.clone()
+        self.state.dropped.clone()
     }
 }
 
 impl StageHandler for VioStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.estimates.clear();
         shared.dropped.clear();
 
@@ -348,7 +331,6 @@ impl StageHandler for VioStage {
 
         let estimated = shared.estimates.len();
         let dropped = shared.dropped.len();
-        drop(shared);
         context.note(format!(
             "vio estimated {estimated}, dropped {dropped}, substituted {substituted}"
         ));
@@ -432,14 +414,18 @@ mod tests {
         }
     }
 
-    fn rig(platforms: Vec<NodeState>) -> (Simulation, VioLink) {
+    fn rig(platforms: Vec<NodeState>) -> Simulation {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
-        let stage = VioStage::new();
-        let link = stage.link();
-        sim.set_stage_handler(Stage::UpdateVioAndPose, Box::new(stage))
+        sim.set_stage_handler(Stage::UpdateVioAndPose, Box::new(VioStage::new()))
             .expect("stage 5 is not a transaction boundary");
-        (sim, link)
+        sim
+    }
+
+    /// The installed stage, reached through the session that owns it.
+    fn vio(sim: &mut Simulation) -> &mut VioStage {
+        sim.stage_mut::<VioStage>(Stage::UpdateVioAndPose)
+            .expect("stage 5 is a VioStage")
     }
 
     fn outcome(sim: &Simulation) -> StageOutcome {
@@ -454,15 +440,15 @@ mod tests {
     }
 
     /// A rig with one drone flying east at 10 m/s from the origin.
-    fn eastbound() -> (Simulation, VioLink) {
-        let (sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.set_nominal(Box::new(Straight {
+    fn eastbound() -> Simulation {
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        vio(&mut sim).set_nominal(Box::new(Straight {
             start: [0.0, 0.0, 80.0],
             velocity: [10.0, 0.0, 0.0],
             prescribes: vec!["d0".to_string()],
         }));
-        link.track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
-        (sim, link)
+        vio(&mut sim).track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
+        sim
     }
 
     // -----------------------------------------------------------------
@@ -517,20 +503,24 @@ mod tests {
     #[test]
     fn the_filter_integrates_the_nominal_path_not_the_world_position() {
         let undisturbed = {
-            let (mut sim, link) = eastbound();
+            let mut sim = eastbound();
             for _ in 0..5 {
                 sim.step().expect("tick runs");
             }
-            link.estimate("d0").expect("an estimate was published")
+            vio(&mut sim)
+                .estimate("d0")
+                .expect("an estimate was published")
         };
 
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
         for _ in 0..5 {
             sim.world_mut().platform_mut("d0").unwrap().position =
                 Vector3::new(1_000.0, 999.0, 7.0);
             sim.step().expect("tick runs");
         }
-        let displaced = link.estimate("d0").expect("an estimate was published");
+        let displaced = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
 
         assert_eq!(
             displaced.position.map(f64::to_bits),
@@ -546,13 +536,13 @@ mod tests {
     /// world instead. The fallback would be a different estimator.
     #[test]
     fn without_a_nominal_source_the_stage_is_skipped() {
-        let (mut sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        vio(&mut sim).track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
 
         sim.step().expect("tick runs");
 
         assert!(matches!(outcome(&sim), StageOutcome::Skipped { .. }));
-        assert_eq!(link.estimate("d0"), None);
+        assert_eq!(vio(&mut sim).estimate("d0"), None);
     }
 
     /// A tracked platform the source does not prescribe is skipped rather than
@@ -560,28 +550,28 @@ mod tests {
     /// nothing to reproduce and the safe reading is the right one.
     #[test]
     fn a_tracked_platform_the_source_does_not_prescribe_is_skipped() {
-        let (mut sim, link) = rig(vec![node("known", 0.0, 0.0), node("stranger", 5.0, 5.0)]);
-        link.set_nominal(Box::new(Straight {
+        let mut sim = rig(vec![node("known", 0.0, 0.0), node("stranger", 5.0, 5.0)]);
+        vio(&mut sim).set_nominal(Box::new(Straight {
             start: [0.0, 0.0, 80.0],
             velocity: [10.0, 0.0, 0.0],
             prescribes: vec!["known".to_string()],
         }));
-        link.track("known", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
-        link.track("stranger", [5.0, 5.0, 80.0], [0.0, 0.0, 0.0]);
+        vio(&mut sim).track("known", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
+        vio(&mut sim).track("stranger", [5.0, 5.0, 80.0], [0.0, 0.0, 0.0]);
 
         sim.step().expect("tick runs");
 
         assert_eq!(outcome(&sim), StageOutcome::Ran);
-        assert!(link.estimate("known").is_some());
-        assert_eq!(link.estimate("stranger"), None);
+        assert!(vio(&mut sim).estimate("known").is_some());
+        assert_eq!(vio(&mut sim).estimate("stranger"), None);
         // Still tracked -- skipped for this tick, not dropped from the run.
-        assert!(link.is_tracked("stranger"));
+        assert!(vio(&mut sim).is_tracked("stranger"));
     }
 
     #[test]
     fn with_no_tracked_platforms_there_is_no_work() {
-        let (mut sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.set_nominal(Box::new(Straight {
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        vio(&mut sim).set_nominal(Box::new(Straight {
             start: [0.0, 0.0, 80.0],
             velocity: [10.0, 0.0, 0.0],
             prescribes: vec!["d0".to_string()],
@@ -597,12 +587,12 @@ mod tests {
     /// the trace is comparable run to run.
     #[test]
     fn tracked_nodes_come_back_in_id_order() {
-        let (_sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.track("zulu", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
-        link.track("alpha", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
-        link.track("mike", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        vio(&mut sim).track("zulu", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+        vio(&mut sim).track("alpha", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+        vio(&mut sim).track("mike", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
 
-        assert_eq!(link.tracked_nodes(), vec!["alpha", "mike", "zulu"]);
+        assert_eq!(vio(&mut sim).tracked_nodes(), vec!["alpha", "mike", "zulu"]);
     }
 
     // -----------------------------------------------------------------
@@ -616,12 +606,14 @@ mod tests {
     /// plausible, so only the estimate itself separates them.
     #[test]
     fn the_frame_interval_is_measured_before_prediction_advances_the_clock() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
 
         for _ in 0..6 {
             sim.step().expect("tick runs");
         }
-        let estimate = link.estimate("d0").expect("an estimate was published");
+        let estimate = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
 
         // The flow update says "you did not move", which drags the velocity
         // down from the 10 m/s the IMU integrated. With dt_total zeroed the
@@ -646,18 +638,20 @@ mod tests {
     ///
     /// The case is reachable, and the way it is reachable is worth knowing:
     /// `Simulation::reset` rewinds the clock and clears the world, but the
-    /// stage's filters live behind the link and keep the clock they reached. So
+    /// stage's filters live in the stage and keep the clock they reached. So
     /// a reset run drops every VIO frame until the sim clock catches back up.
     /// Whoever wires reset has to re-`track` on the new epoch; this test is
     /// where that requirement is written down.
     #[test]
     fn a_reset_leaves_the_filters_ahead_of_the_clock_and_every_frame_is_dropped() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
         for _ in 0..4 {
             sim.step().expect("tick runs");
         }
-        assert!(link.dropped().is_empty());
-        let before_reset = link.estimate("d0").expect("an estimate was published");
+        assert!(vio(&mut sim).dropped().is_empty());
+        let before_reset = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
 
         sim.reset();
         sim.load_world(vec![node("d0", 0.0, 0.0)], Vec::new());
@@ -665,16 +659,18 @@ mod tests {
         // The filter is at t = 4; the run restarts at t = 0.
         for _ in 0..3 {
             sim.step().expect("tick runs");
-            assert_eq!(link.dropped(), vec!["d0".to_string()]);
-            assert_eq!(link.estimate("d0"), None);
+            assert_eq!(vio(&mut sim).dropped(), vec!["d0".to_string()]);
+            assert_eq!(vio(&mut sim).estimate("d0"), None);
         }
         assert_eq!(outcome(&sim), StageOutcome::Ran);
 
         // Re-tracking on the new epoch is what fixes it.
-        link.track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
+        vio(&mut sim).track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
         sim.step().expect("tick runs");
-        assert!(link.dropped().is_empty());
-        let after = link.estimate("d0").expect("an estimate was published");
+        assert!(vio(&mut sim).dropped().is_empty());
+        let after = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
         assert_ne!(after.position, before_reset.position);
     }
 
@@ -687,15 +683,17 @@ mod tests {
     /// which is the part a careless port adds "for consistency".
     #[test]
     fn the_pose_select_substitutes_position_but_never_velocity() {
-        let (mut sim, link) = eastbound();
-        link.set_use_vio_position(true);
+        let mut sim = eastbound();
+        vio(&mut sim).set_use_vio_position(true);
 
         sim.world_mut().platform_mut("d0").unwrap().velocity = Vector3::new(3.0, 4.0, 5.0);
         for _ in 0..4 {
             sim.step().expect("tick runs");
         }
 
-        let estimate = link.estimate("d0").expect("an estimate was published");
+        let estimate = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
         let platform = sim.world().platform("d0").expect("still there");
         assert_eq!(platform.position.x, estimate.position[0]);
         assert_eq!(platform.position.y, estimate.position[1]);
@@ -709,12 +707,12 @@ mod tests {
     /// the position the earlier stages left.
     #[test]
     fn the_pose_select_is_off_by_default_and_the_estimate_still_publishes() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
 
         sim.world_mut().platform_mut("d0").unwrap().position = Vector3::new(42.0, 43.0, 44.0);
         sim.step().expect("tick runs");
 
-        assert!(link.estimate("d0").is_some());
+        assert!(vio(&mut sim).estimate("d0").is_some());
         assert_eq!(
             sim.world().platform("d0").unwrap().position,
             Vector3::new(42.0, 43.0, 44.0)
@@ -741,27 +739,29 @@ mod tests {
     /// the setup loop is a **third dead store**, beside `_vio_prev_positions`
     /// and the `np.zeros(3)` default.
     ///
-    /// It is reproduced anyway: [`VioLink::track`] takes the velocity because
+    /// It is reproduced anyway: [`VioStage::track`] takes the velocity because
     /// the reference passes it, and a future change — initialising the filter
     /// at a non-zero timestamp, say — would make it observable again. This test
     /// is what would notice.
     #[test]
     fn the_previous_velocity_seed_is_unobservable_through_this_stage() {
-        let (mut sim, seeded) = eastbound();
+        let mut sim = eastbound();
 
-        let (mut other, from_zero_link) = rig(vec![node("d0", 0.0, 0.0)]);
-        from_zero_link.set_nominal(Box::new(Straight {
+        let mut other = rig(vec![node("d0", 0.0, 0.0)]);
+        vio(&mut other).set_nominal(Box::new(Straight {
             start: [0.0, 0.0, 80.0],
             velocity: [10.0, 0.0, 0.0],
             prescribes: vec!["d0".to_string()],
         }));
-        from_zero_link.track("d0", [0.0, 0.0, 80.0], [0.0, 0.0, 0.0]);
+        vio(&mut other).track("d0", [0.0, 0.0, 80.0], [0.0, 0.0, 0.0]);
 
         for _ in 0..4 {
             sim.step().expect("tick runs");
             other.step().expect("tick runs");
-            let a = seeded.estimate("d0").expect("an estimate was published");
-            let b = from_zero_link
+            let a = vio(&mut sim)
+                .estimate("d0")
+                .expect("an estimate was published");
+            let b = vio(&mut other)
                 .estimate("d0")
                 .expect("an estimate was published");
             assert_eq!(a.position.map(f64::to_bits), b.position.map(f64::to_bits));
@@ -776,10 +776,12 @@ mod tests {
     /// exactly — every run starts with one tick that does nothing.
     #[test]
     fn the_first_tick_is_a_no_op_because_the_filter_is_initialised_at_zero() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
 
         sim.step().expect("tick runs");
-        let first = link.estimate("d0").expect("an estimate was published");
+        let first = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
 
         assert_eq!(first.position, [0.0, 0.0, 80.0]);
         assert_eq!(first.velocity, [0.0, 0.0, 0.0]);
@@ -800,7 +802,7 @@ mod tests {
         // A path climbing at 2 m/s^2, run at a two-second tick. Per tick the
         // velocity gains 4 m/s, so the correct synthetic acceleration is
         // 2 m/s^2 and an undivided one would be 4.
-        fn climbing(dt_s: f64) -> (Simulation, VioLink) {
+        fn climbing(dt_s: f64) -> Simulation {
             let mut sim = Simulation::new(SimulationConfig {
                 seed: 11,
                 dt_s,
@@ -809,24 +811,24 @@ mod tests {
             })
             .expect("config is valid");
             sim.load_world(vec![node("d0", 0.0, 0.0)], Vec::new());
-            let stage = VioStage::new();
-            let link = stage.link();
-            sim.set_stage_handler(Stage::UpdateVioAndPose, Box::new(stage))
+            sim.set_stage_handler(Stage::UpdateVioAndPose, Box::new(VioStage::new()))
                 .expect("stage 5 is not a transaction boundary");
-            link.set_nominal(Box::new(Accelerating {
+            vio(&mut sim).set_nominal(Box::new(Accelerating {
                 start: [0.0, 0.0, 80.0],
                 acceleration_z: 2.0,
             }));
-            link.track("d0", [0.0, 0.0, 80.0], [0.0, 0.0, 0.0]);
-            (sim, link)
+            vio(&mut sim).track("d0", [0.0, 0.0, 80.0], [0.0, 0.0, 0.0]);
+            sim
         }
 
-        let (mut sim, link) = climbing(2.0);
+        let mut sim = climbing(2.0);
         // Tick 1 is the initialisation no-op; tick 2 is the first that
         // integrates, over an interval of 2 s.
         sim.step().expect("tick runs");
         sim.step().expect("tick runs");
-        let estimate = link.estimate("d0").expect("an estimate was published");
+        let estimate = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
 
         // vz = (synth_accel - g) * dt. With the division: (2 - 9.80665) * 2.
         // Without it: (4 - 9.80665) * 2 = -11.61, a different number entirely.
@@ -872,7 +874,7 @@ mod tests {
     /// trace — not just the estimator underneath it.
     #[test]
     fn the_stage_matches_the_reference_value_for_value() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
 
         // (position_z, velocity_z, covariance_pos_trace) per tick, from Python.
         let reference: [(f64, f64, f64); 6] = [
@@ -891,7 +893,9 @@ mod tests {
         let mut worst = 0.0_f64;
         for (tick, (position_z, velocity_z, trace)) in reference.into_iter().enumerate() {
             sim.step().expect("tick runs");
-            let estimate = link.estimate("d0").expect("an estimate was published");
+            let estimate = vio(&mut sim)
+                .estimate("d0")
+                .expect("an estimate was published");
 
             // x and y never move: the synthetic IMU reports no horizontal
             // acceleration and the constant features report no flow.
@@ -949,16 +953,16 @@ mod tests {
     /// state the tracker sees.
     #[test]
     fn a_level_flight_makes_the_estimate_free_fall_because_the_imu_is_kinematic() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
 
         let mut altitudes = Vec::new();
         for _ in 0..6 {
             sim.step().expect("tick runs");
-            altitudes.push(link.estimate("d0").expect("published").position[2]);
+            altitudes.push(vio(&mut sim).estimate("d0").expect("published").position[2]);
         }
 
         // Each tick loses another 9.80665 m/s of vertical velocity.
-        let velocity_z = link.estimate("d0").expect("published").velocity[2];
+        let velocity_z = vio(&mut sim).estimate("d0").expect("published").velocity[2];
         assert!(
             (velocity_z - -5.0 * 9.806_65).abs() < 1.0e-9,
             "vz = {velocity_z}"
@@ -984,10 +988,12 @@ mod tests {
     /// one of the others.
     #[test]
     fn the_published_trace_is_the_position_block() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
 
         sim.step().expect("tick runs");
-        let estimate = link.estimate("d0").expect("an estimate was published");
+        let estimate = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
 
         assert!(
             estimate.covariance_pos_trace > 1.0,
@@ -1002,10 +1008,12 @@ mod tests {
     /// measurement from the feature count.
     #[test]
     fn the_first_frame_reports_no_information_rather_than_confidence() {
-        let (mut sim, link) = eastbound();
+        let mut sim = eastbound();
 
         sim.step().expect("tick runs");
-        let first = link.estimate("d0").expect("an estimate was published");
+        let first = vio(&mut sim)
+            .estimate("d0")
+            .expect("an estimate was published");
 
         assert_eq!(
             first.outcome,
@@ -1021,25 +1029,25 @@ mod tests {
     /// current.
     #[test]
     fn estimates_do_not_survive_a_tick_that_produced_none() {
-        let (mut sim, link) = rig(vec![node("d0", 0.0, 0.0)]);
-        link.set_nominal(Box::new(Straight {
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        vio(&mut sim).set_nominal(Box::new(Straight {
             start: [0.0, 0.0, 80.0],
             velocity: [10.0, 0.0, 0.0],
             prescribes: vec!["d0".to_string()],
         }));
-        link.track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
+        vio(&mut sim).track("d0", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
         sim.step().expect("tick runs");
-        assert!(link.estimate("d0").is_some());
+        assert!(vio(&mut sim).estimate("d0").is_some());
 
         // A source that prescribes nothing at all.
-        link.set_nominal(Box::new(Straight {
+        vio(&mut sim).set_nominal(Box::new(Straight {
             start: [0.0, 0.0, 80.0],
             velocity: [10.0, 0.0, 0.0],
             prescribes: Vec::new(),
         }));
         sim.step().expect("tick runs");
 
-        assert_eq!(link.estimate("d0"), None);
+        assert_eq!(vio(&mut sim).estimate("d0"), None);
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
@@ -1051,11 +1059,15 @@ mod tests {
     fn a_run_is_reproducible() {
         let mut runs = Vec::new();
         for _ in 0..2 {
-            let (mut sim, link) = eastbound();
+            let mut sim = eastbound();
             for _ in 0..8 {
                 sim.step().expect("tick runs");
             }
-            runs.push(link.estimate("d0").expect("an estimate was published"));
+            runs.push(
+                vio(&mut sim)
+                    .estimate("d0")
+                    .expect("an estimate was published"),
+            );
         }
 
         assert_eq!(
@@ -1079,15 +1091,15 @@ mod tests {
     /// comparing against Python, which is the whole point of the trace.
     #[test]
     fn platforms_are_visited_in_id_order_not_insertion_order() {
-        let (mut sim, link) = rig(vec![node("charlie", 0.0, 0.0), node("alpha", 1.0, 1.0)]);
-        link.set_nominal(Box::new(Straight {
+        let mut sim = rig(vec![node("charlie", 0.0, 0.0), node("alpha", 1.0, 1.0)]);
+        vio(&mut sim).set_nominal(Box::new(Straight {
             start: [0.0, 0.0, 80.0],
             velocity: [10.0, 0.0, 0.0],
             prescribes: vec!["charlie".to_string(), "alpha".to_string()],
         }));
         // Tracked in reverse of id order on purpose.
-        link.track("charlie", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
-        link.track("alpha", [1.0, 1.0, 80.0], [10.0, 0.0, 0.0]);
+        vio(&mut sim).track("charlie", [0.0, 0.0, 80.0], [10.0, 0.0, 0.0]);
+        vio(&mut sim).track("alpha", [1.0, 1.0, 80.0], [10.0, 0.0, 0.0]);
 
         for _ in 0..3 {
             sim.step().expect("tick runs");
@@ -1102,7 +1114,7 @@ mod tests {
         // Both filters are now ahead of the rewound clock, so both drop -- and
         // the list is in id order, not the order they were tracked in.
         assert_eq!(
-            link.dropped(),
+            vio(&mut sim).dropped(),
             vec!["alpha".to_string(), "charlie".to_string()]
         );
     }
