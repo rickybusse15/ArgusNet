@@ -546,6 +546,12 @@ impl ReplayWriter {
         }
     }
 
+    /// Drop every frame pushed so far, keeping `meta`: a reset run starts its
+    /// replay again.
+    pub fn clear_frames(&mut self) {
+        self.frames.clear();
+    }
+
     /// Add keys to `meta`. A key the writer computes itself (`frame_count`,
     /// `node_ids` and the rest of [`ReplayMeta`]'s fields) is not
     /// overridable: it is dropped here rather than emitted twice.

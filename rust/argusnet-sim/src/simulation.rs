@@ -181,6 +181,14 @@ impl ProductionBuilder {
         Ok(self)
     }
 
+    /// Bind the run to the scenario it is assembled from: checkpoints carry
+    /// this hash, and restore refuses one taken from another scenario before
+    /// changing anything (A2.2).
+    pub fn scenario_hash(&mut self, hash: u64) -> &mut Self {
+        self.sim.scenario_hash = hash;
+        self
+    }
+
     /// [`Simulation::load_world`].
     pub fn load_world(&mut self, platforms: Vec<NodeState>, tracks: Vec<TrackState>) {
         self.sim.load_world(platforms, tracks);
@@ -438,6 +446,8 @@ pub struct Simulation {
     stage_timings: Option<StageTimings>,
     /// The connected handoffs, in the order they apply.
     handoffs: Vec<Handoff>,
+    /// What [`ProductionBuilder::scenario_hash`] recorded; `0` for a bare run.
+    scenario_hash: u64,
 }
 
 impl fmt::Debug for Simulation {
@@ -494,6 +504,7 @@ impl Simulation {
             truth: Vec::new(),
             stage_timings: None,
             handoffs: Vec::new(),
+            scenario_hash: 0,
         })
     }
 
@@ -1251,6 +1262,7 @@ impl Simulation {
                 epoch: self.epoch,
                 tick: self.clock.tick(),
                 config_hash: self.config.content_hash(),
+                scenario_hash: self.scenario_hash,
                 world_content_hash: self.world_revision,
                 belief_revision: self.belief_revision,
                 journal_cursor: self.journal_cursor,
@@ -1280,7 +1292,11 @@ impl Simulation {
     /// refused restore leaves the run exactly as it was — including a faulted
     /// run, which stays faulted rather than being half-recovered.
     pub fn restore(&mut self, checkpoint: &SimulationCheckpoint) -> Result<(), RestoreError> {
-        checkpoint.verify(self.config.run_id(), self.config.content_hash())?;
+        checkpoint.verify(
+            self.config.run_id(),
+            self.config.content_hash(),
+            self.scenario_hash,
+        )?;
 
         if checkpoint.seed != self.config.seed() {
             return Err(RestoreError::InvalidState {

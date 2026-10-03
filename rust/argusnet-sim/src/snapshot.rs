@@ -105,6 +105,13 @@ pub struct CheckpointHeader {
     pub epoch: u64,
     pub tick: u64,
     pub config_hash: u64,
+    /// Content hash of the resolved scenario the run was assembled from:
+    /// world, fleet, targets, mission and tracker (format 4). A checkpoint
+    /// restores only into a run assembled from the same scenario. `0` for a
+    /// bare run, which has no scenario.
+    pub scenario_hash: u64,
+    /// The world's revision counter, not a content hash despite the name;
+    /// [`Self::scenario_hash`] is what binds a checkpoint to its world.
     pub world_content_hash: u64,
     pub belief_revision: u64,
     pub journal_cursor: u64,
@@ -112,8 +119,10 @@ pub struct CheckpointHeader {
 
 /// The current versions this build writes and accepts.
 impl CheckpointHeader {
-    /// Format 3 adds per-stage handler state (`stage_states`).
-    pub const FORMAT_VERSION: u32 = 3;
+    /// Format 3 added per-stage handler state (`stage_states`); format 4 adds
+    /// `scenario_hash`. A format-3 checkpoint is refused with a versioned
+    /// error rather than restored without a scenario check.
+    pub const FORMAT_VERSION: u32 = 4;
     /// Version 2 changes command-boundary recovery and single-step semantics.
     /// Old checkpoints must not silently resume under a different control contract.
     pub const RUNTIME_ALGORITHM_VERSION: u32 = 2;
@@ -144,6 +153,11 @@ pub enum RestoreError {
         expected: u32,
     },
     ConfigHash {
+        found: u64,
+        expected: u64,
+    },
+    /// The checkpoint was taken in a run assembled from a different scenario.
+    ScenarioHash {
         found: u64,
         expected: u64,
     },
@@ -183,6 +197,11 @@ impl std::fmt::Display for RestoreError {
             RestoreError::ConfigHash { found, expected } => write!(
                 formatter,
                 "checkpoint was taken under config hash {found:#x}; this run is {expected:#x}"
+            ),
+            RestoreError::ScenarioHash { found, expected } => write!(
+                formatter,
+                "checkpoint was taken in a run of scenario {found:#x}; this run was assembled \
+                 from scenario {expected:#x}"
             ),
             RestoreError::UnknownStageState { stage } => write!(
                 formatter,
@@ -235,7 +254,12 @@ pub struct SimulationCheckpoint {
 
 impl SimulationCheckpoint {
     /// Check every compatibility field before any state is touched.
-    pub fn verify(&self, run_id: &str, config_hash: u64) -> Result<(), RestoreError> {
+    pub fn verify(
+        &self,
+        run_id: &str,
+        config_hash: u64,
+        scenario_hash: u64,
+    ) -> Result<(), RestoreError> {
         if self.header.format_version != CheckpointHeader::FORMAT_VERSION {
             return Err(RestoreError::FormatVersion {
                 found: self.header.format_version,
@@ -264,6 +288,12 @@ impl SimulationCheckpoint {
             return Err(RestoreError::ConfigHash {
                 found: self.header.config_hash,
                 expected: config_hash,
+            });
+        }
+        if self.header.scenario_hash != scenario_hash {
+            return Err(RestoreError::ScenarioHash {
+                found: self.header.scenario_hash,
+                expected: scenario_hash,
             });
         }
         let invalid = |detail: &str| RestoreError::InvalidState {
@@ -390,6 +420,7 @@ mod tests {
             epoch: 0,
             tick: 12,
             config_hash: 0xabc,
+            scenario_hash: 0x5ce,
             world_content_hash: 0xdef,
             belief_revision: 3,
             journal_cursor: 9,
@@ -412,7 +443,7 @@ mod tests {
 
     #[test]
     fn a_matching_checkpoint_verifies() {
-        assert_eq!(checkpoint().verify("scan", 0xabc), Ok(()));
+        assert_eq!(checkpoint().verify("scan", 0xabc, 0x5ce), Ok(()));
     }
 
     #[test]
@@ -455,10 +486,21 @@ mod tests {
             ),
             (checkpoint(), "other-run", 0xabc),
             (checkpoint(), "scan", 0x999),
+            (
+                SimulationCheckpoint {
+                    header: CheckpointHeader {
+                        scenario_hash: 0x999,
+                        ..header()
+                    },
+                    ..checkpoint()
+                },
+                "scan",
+                0xabc,
+            ),
         ];
         for (candidate, run_id, config_hash) in cases {
             assert!(
-                candidate.verify(run_id, config_hash).is_err(),
+                candidate.verify(run_id, config_hash, 0x5ce).is_err(),
                 "verify accepted an incompatible checkpoint: {:?}",
                 candidate.header
             );
@@ -475,7 +517,7 @@ mod tests {
             ..checkpoint()
         };
         let message = mismatched
-            .verify("scan", 0xabc)
+            .verify("scan", 0xabc, 0x5ce)
             .expect_err("mismatch")
             .to_string();
         assert!(message.contains("42"), "{message}");

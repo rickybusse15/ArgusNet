@@ -236,7 +236,7 @@ fn a_blocking_safety_run_resumes_exactly() {
 /// A reset run is a fresh run, for a whole assembled scenario.
 #[test]
 fn a_reset_assembled_run_is_a_fresh_run() {
-    for case in ["tt", "tt_safety"] {
+    for case in ["tt", "tt_safety", "scan"] {
         reset_is_fresh(case);
     }
 }
@@ -247,11 +247,8 @@ fn reset_is_fresh(case: &str) {
     for _ in 0..30 {
         step(&mut run);
     }
-    run.sim.reset();
-    // `reset` clears the world; the driver reloads it, as assembly did.
-    let fresh = assemble(&bundle(case)).expect("assembles");
-    run.sim
-        .load_world(fresh.sim.world().platforms().to_vec(), Vec::new());
+    // A2.1: the run resets itself, reloading the fleet as assembly did.
+    run.reset();
     for expected in &reference {
         let actual = step(&mut run);
         assert_eq!(
@@ -353,6 +350,96 @@ fn a_checkpoint_for_a_different_scenario_is_refused_stage_by_stage() {
             target.sim.checkpoint().expect("not faulted"),
             before,
             "{what}: a refused restore changed the run"
+        );
+    }
+}
+
+/// A2.2: a checkpoint is bound to the scenario it was taken in. The header
+/// carries the bundle's content hash; it is the same for two assemblies of
+/// one bundle, and a run assembled from a different scenario -- same run id,
+/// seed, step and length, so the config hash alone cannot tell them apart --
+/// refuses it before changing anything.
+#[test]
+fn a_checkpoint_from_a_different_scenario_is_refused_before_anything_changes() {
+    let original = bundle("tt");
+    let mut source = assemble(&original).expect("assembles");
+    for _ in 0..20 {
+        step(&mut source);
+    }
+    let checkpoint = source.sim.checkpoint().expect("not faulted");
+    assert_ne!(
+        checkpoint.header.scenario_hash, 0,
+        "an assembled run has a scenario"
+    );
+    assert_eq!(
+        checkpoint.header.scenario_hash,
+        assemble(&original)
+            .expect("assembles")
+            .sim
+            .checkpoint()
+            .expect("not faulted")
+            .header
+            .scenario_hash,
+        "one bundle, one hash"
+    );
+
+    let mut other = original.clone();
+    other.nodes[0].health *= 0.5;
+    let mut target = assemble(&other).expect("assembles");
+    for _ in 0..7 {
+        step(&mut target);
+    }
+    let before = target.sim.checkpoint().expect("not faulted");
+    let refusal = target
+        .sim
+        .restore(&checkpoint)
+        .expect_err("another scenario");
+    assert!(
+        matches!(refusal, RestoreError::ScenarioHash { .. }),
+        "refused for the wrong reason: {refusal}"
+    );
+    assert_eq!(
+        target.sim.checkpoint().expect("not faulted"),
+        before,
+        "a refused restore changed the run"
+    );
+}
+
+/// A2.2: damaged checkpoint text fails cleanly -- a parse error or a refusal,
+/// never a panic -- and leaves the run it was offered to untouched.
+#[test]
+fn truncated_or_corrupt_checkpoint_text_fails_cleanly() {
+    let case = "scan";
+    let mut source = assemble(&bundle(case)).expect("assembles");
+    for _ in 0..40 {
+        step(&mut source);
+    }
+    let text = serde_json::to_string(&source.sim.checkpoint().expect("not faulted"))
+        .expect("checkpoint serialises");
+
+    let mut target = assemble(&bundle(case)).expect("assembles");
+    for _ in 0..5 {
+        step(&mut target);
+    }
+    let before = target.sim.checkpoint().expect("not faulted");
+
+    let mut damaged: Vec<String> = (1..16)
+        .map(|part| text[..text.len() * part / 16].to_string())
+        .collect();
+    // Same length, wrong content: a digit in the header changed.
+    damaged.push(text.replacen("\"tick\":40", "\"tick\":41", 1));
+    damaged.push(text.replacen("\"seed\":", "\"seed\":1", 1));
+    for candidate in &damaged {
+        if let Ok(checkpoint) = serde_json::from_str::<SimulationCheckpoint>(candidate) {
+            assert!(
+                target.sim.restore(&checkpoint).is_err(),
+                "damaged checkpoint restored"
+            );
+        }
+        assert_eq!(
+            target.sim.checkpoint().expect("not faulted"),
+            before,
+            "a damaged checkpoint changed the run"
         );
     }
 }

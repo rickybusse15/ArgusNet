@@ -98,6 +98,18 @@ pub const OMNIDIRECTIONAL_FOV_DEG: f64 = 179.0;
 // The document
 // ---------------------------------------------------------------------------
 
+impl ScenarioBundle {
+    /// What a checkpoint binds to (A2.2): FNV-1a over the bundle's `Debug`
+    /// rendering, which covers the world, fleet, targets, mission, tracker
+    /// and options. Every collection in the bundle is ordered (`Vec`,
+    /// `BTreeMap`) and floats render round-trip, so the rendering is a
+    /// deterministic function of the content. Detects accidental mismatch;
+    /// not a digest (see [`crate::config::ValidatedConfig::content_hash`]).
+    pub fn content_hash(&self) -> u64 {
+        crate::config::fnv1a(format!("{self:?}").as_bytes())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScenarioBundle {
     pub format: String,
@@ -667,6 +679,9 @@ pub struct AssembledRun {
     replay: ReplayWriter,
     dt_s: f64,
     report: FrameReport,
+    /// The fleet as assembly loaded it, before any tick: what
+    /// [`AssembledRun::reset`] reloads.
+    initial_platforms: Vec<NodeState>,
 }
 
 /// What the replay frames need beyond the stages' own handles.
@@ -821,25 +836,23 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     })
     .map_err(|error| BundleError::Invalid(format!("config: {error:?}")))?;
 
-    sim.load_world(
-        bundle
-            .nodes
-            .iter()
-            .map(|node| NodeState {
-                node_id: node.node_id.clone(),
-                position: Vector3::new(0.0, 0.0, 0.0),
-                velocity: Vector3::new(0.0, 0.0, 0.0),
-                is_mobile: node.is_mobile,
-                timestamp_s: 0.0,
-                health: node.health,
-                sensor_type: node.sensor.sensor_type.clone(),
-                fov_half_angle_deg: Some(node.sensor.fov_half_angle_deg),
-                max_range_m: Some(node.sensor.max_range_m),
-                ..Default::default()
-            })
-            .collect(),
-        Vec::new(),
-    );
+    let initial_platforms: Vec<NodeState> = bundle
+        .nodes
+        .iter()
+        .map(|node| NodeState {
+            node_id: node.node_id.clone(),
+            position: Vector3::new(0.0, 0.0, 0.0),
+            velocity: Vector3::new(0.0, 0.0, 0.0),
+            is_mobile: node.is_mobile,
+            timestamp_s: 0.0,
+            health: node.health,
+            sensor_type: node.sensor.sensor_type.clone(),
+            fov_half_angle_deg: Some(node.sensor.fov_half_angle_deg),
+            max_range_m: Some(node.sensor.max_range_m),
+            ..Default::default()
+        })
+        .collect();
+    sim.load_world(initial_platforms.clone(), Vec::new());
 
     // Stage 1: controllers, then battery.
     let mut battery = BatteryStage::new();
@@ -1113,6 +1126,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     if bundle.safety_blocking {
         sim.require(Stage::SafetyMonitor);
     }
+    sim.scenario_hash(bundle.content_hash());
     let sim = sim
         .build()
         .map_err(|error| BundleError::Invalid(error.to_string()))?;
@@ -1137,6 +1151,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                 .collect(),
             totals: GenerationTotals::default(),
         },
+        initial_platforms,
     })
 }
 
@@ -1380,6 +1395,19 @@ impl AssembledRun {
         self.sim
             .stage::<DeconflictStage>(Stage::Deconflict)
             .expect("assembly installs a DeconflictStage")
+    }
+
+    /// Back to a fresh run of the same scenario (A2.1): a new epoch, every
+    /// stage reset, the fleet reloaded as assembly loaded it, and the replay's
+    /// frames and generation totals dropped. What follows is the run a fresh
+    /// `assemble` of the same bundle would produce; the replay's `meta` (the
+    /// scenario's own, and any provenance a caller added) is kept.
+    pub fn reset(&mut self) {
+        self.sim.reset();
+        self.sim
+            .load_world(self.initial_platforms.clone(), Vec::new());
+        self.replay.clear_frames();
+        self.report.totals = GenerationTotals::default();
     }
 
     /// The timestamp the next tick will run at.
