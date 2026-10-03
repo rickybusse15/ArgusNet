@@ -37,17 +37,25 @@ fn scan_done(t: f64, n: usize, confidence: f64) -> MissionInputs {
     }
 }
 
+/// Stage 9's machine, reached through the session that owns it.
+fn machine(sim: &Simulation) -> &MissionStage {
+    MissionStage::of(sim).expect("stage 9 is a mission machine")
+}
+
+fn machine_mut(sim: &mut Simulation) -> &mut MissionStage {
+    MissionStage::of_mut(sim).expect("stage 9 is a mission machine")
+}
+
 #[test]
 fn a_mission_runs_to_complete_through_the_tick_pipeline() {
     let mut sim = simulation();
     let stage = MissionStage::new(MissionConfig::default());
-    let link = stage.link();
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
         .expect("stage 9 is not a transaction boundary");
 
-    assert_eq!(link.phase(), MissionPhase::Scanning);
+    assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
 
-    let mut phases = vec![link.phase()];
+    let mut phases = vec![machine(&sim).phase()];
     let mut all_events: Vec<MissionEvent> = Vec::new();
     for _ in 0..6 {
         // Stages run at the clock's *current* tick and only then advance, so
@@ -57,12 +65,12 @@ fn a_mission_runs_to_complete_through_the_tick_pipeline() {
         let mut inputs = scan_done(t, 2, 0.99);
         inputs.all_pois_complete = true;
         inputs.home_distances_m = vec![Some(0.0), Some(1.0)];
-        link.set_inputs(inputs);
+        machine_mut(&mut sim).set_inputs(inputs);
 
         sim.step().expect("no stage should fail");
-        all_events.extend(link.take_events());
-        if link.phase() != *phases.last().unwrap() {
-            phases.push(link.phase());
+        all_events.extend(machine_mut(&mut sim).take_events());
+        if machine(&sim).phase() != *phases.last().unwrap() {
+            phases.push(machine(&sim).phase());
         }
     }
 
@@ -88,19 +96,18 @@ fn a_mission_runs_to_complete_through_the_tick_pipeline() {
 fn the_trace_distinguishes_a_transition_from_a_quiet_tick() {
     let mut sim = simulation();
     let stage = MissionStage::new(MissionConfig::default());
-    let link = stage.link();
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
         .unwrap();
 
     // Tick 0 (t = 0): nothing has been scanned, so the machine holds.
-    link.set_inputs(MissionInputs::at(0.0));
+    machine_mut(&mut sim).set_inputs(MissionInputs::at(0.0));
     sim.step().unwrap();
-    assert!(link.take_events().is_empty());
+    assert!(machine_mut(&mut sim).take_events().is_empty());
 
     // Tick 1 (t = 0.5): scanning completes.
-    link.set_inputs(scan_done(0.5, 1, 0.99));
+    machine_mut(&mut sim).set_inputs(scan_done(0.5, 1, 0.99));
     sim.step().unwrap();
-    assert_eq!(link.phase(), MissionPhase::Inspecting);
+    assert_eq!(machine(&sim).phase(), MissionPhase::Inspecting);
 
     let records: Vec<_> = sim
         .trace()
@@ -130,7 +137,6 @@ fn the_trace_distinguishes_a_transition_from_a_quiet_tick() {
 fn a_disabled_mission_is_skipped_not_quiet() {
     let mut sim = simulation();
     let stage = MissionStage::disabled();
-    let link = stage.link();
     assert!(!stage.is_enabled());
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
         .unwrap();
@@ -138,7 +144,7 @@ fn a_disabled_mission_is_skipped_not_quiet() {
     // No inputs are supplied at all, which an enabled stage would refuse.
     sim.step().unwrap();
     sim.step().unwrap();
-    assert_eq!(link.phase(), MissionPhase::Scanning);
+    assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
 
     let records: Vec<_> = sim
         .trace()
@@ -180,12 +186,11 @@ fn an_enabled_mission_with_no_inputs_faults_the_run() {
 fn inputs_stamped_for_another_tick_are_refused() {
     let mut sim = simulation();
     let stage = MissionStage::new(MissionConfig::default());
-    let link = stage.link();
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
         .unwrap();
 
     // Tick 0 runs at t = 0; these are stamped for t = 3.0.
-    link.set_inputs(scan_done(3.0, 1, 0.99));
+    machine_mut(&mut sim).set_inputs(scan_done(3.0, 1, 0.99));
     let error = sim.step().expect_err("stale inputs");
     assert!(matches!(
         error,
@@ -195,7 +200,7 @@ fn inputs_stamped_for_another_tick_are_refused() {
         }
     ));
     assert_eq!(
-        link.phase(),
+        machine(&sim).phase(),
         MissionPhase::Scanning,
         "a refused tick must not have advanced the machine"
     );
@@ -207,19 +212,18 @@ fn inputs_stamped_for_another_tick_are_refused() {
 fn events_are_taken_once() {
     let mut sim = simulation();
     let stage = MissionStage::new(MissionConfig::default());
-    let link = stage.link();
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
         .unwrap();
 
-    link.set_inputs(scan_done(0.0, 1, 0.99));
+    machine_mut(&mut sim).set_inputs(scan_done(0.0, 1, 0.99));
     sim.step().unwrap();
-    let first = link.take_events();
+    let first = machine_mut(&mut sim).take_events();
     assert!(!first.is_empty());
-    assert!(link.take_events().is_empty());
+    assert!(machine_mut(&mut sim).take_events().is_empty());
 
     // And the next tick's run clears what the previous one left, so a quiet
     // tick cannot hand back stale events.
-    link.set_inputs(MissionInputs::at(0.5));
+    machine_mut(&mut sim).set_inputs(MissionInputs::at(0.5));
     sim.step().unwrap();
-    assert!(link.take_events().is_empty());
+    assert!(machine_mut(&mut sim).take_events().is_empty());
 }

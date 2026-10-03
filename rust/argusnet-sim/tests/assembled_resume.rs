@@ -103,7 +103,7 @@ fn step(run: &mut AssembledRun) -> Frame {
                 )
             })
             .collect(),
-        phase: run.mission.as_ref().map(|m| m.phase().to_string()),
+        phase: run.mission().map(|m| m.phase().to_string()),
         coverage: run.mapping().map(|m| m.coverage_fraction().to_bits()),
         safety: frame
             .safety_events

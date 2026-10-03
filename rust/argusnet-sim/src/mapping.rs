@@ -16,9 +16,9 @@
 //! Stage 8 runs **before** stage 9, so the phase it sees is the one committed
 //! at the end of the previous tick — not the one this tick is about to move
 //! to. That is §4's causal order made concrete, and it is why
-//! [`MappingStage::watch_mission`] takes a handle rather than the stage being
-//! told a phase: the handle reads whatever the machine had settled on, at the
-//! moment stage 8 asks.
+//! [`MappingStage::follow_mission_phase`] reads stage 9 rather than the stage
+//! being told a phase: the view shows whatever the machine had settled on, at
+//! the moment stage 8 asks.
 //!
 //! # Heading is zero below 0.1 m/s, not the last heading
 //!
@@ -112,7 +112,7 @@ use argusnet_mapping::{
     rasterize_circle, score_footprints, CoverageGrid, CoverageStats, GridBounds, Sampling,
 };
 
-use crate::mission::{MissionLink, MissionPhase};
+use crate::mission::{stage_nine_phase, MissionPhase};
 use crate::particles::particle_offsets;
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{StageError, StageOutcome};
@@ -206,9 +206,9 @@ struct State {
     /// `None` until localization is enabled, matching a run that does not
     /// localize at all rather than one that localizes with nothing to say.
     localizer: Option<GridLocalizer>,
-    /// Read at stage 8 time, so it carries the phase committed at the end of
-    /// the previous tick.
-    mission: Option<MissionLink>,
+    /// Gate localization on stage 9's phase, read at stage 8 time, so it is
+    /// the phase committed at the end of the previous tick.
+    follows_mission: bool,
     estimates: Vec<LocalizationEstimate>,
     /// `_loc_estimates`: the estimates of the last tick that localized. The
     /// reference keeps reporting them after localization stops; `estimates`
@@ -346,13 +346,14 @@ impl MappingStage {
         self.state.localizer = Some(GridLocalizer::new(config));
     }
 
-    /// Watch a mission machine, so localization runs only in the phases the
-    /// reference runs it in.
+    /// Follow stage 9's mission phase, so localization runs only in the
+    /// phases the reference runs it in. The phase is read through the views
+    /// lent to stage 8 ([`stage_nine_phase`]).
     ///
-    /// Without a handle the localizer runs every tick, which is what a run
-    /// with no mission machine does.
-    pub fn watch_mission(&mut self, mission: MissionLink) {
-        self.state.mission = Some(mission);
+    /// Without this the localizer runs every tick, which is what a run with
+    /// no mission machine does; so does a run whose stage 9 has none.
+    pub fn follow_mission_phase(&mut self) {
+        self.state.follows_mission = true;
     }
 
     /// This tick's estimates, in platform order. Empty when localization is
@@ -432,7 +433,7 @@ impl MappingStage {
                 scan_mode: true,
                 coverage,
                 localizer: None,
-                mission: None,
+                follows_mission: false,
                 estimates: Vec::new(),
                 last_estimates: Vec::new(),
                 localizer_timed_out: false,
@@ -659,9 +660,9 @@ impl StageHandler for MappingStage {
         // Reads the phase committed at the END of the previous tick, because
         // stage 8 runs before stage 9. See the module docs.
         let phase = shared
-            .mission
-            .as_ref()
-            .map(|mission| mission.phase())
+            .follows_mission
+            .then(|| stage_nine_phase(context.stages))
+            .flatten()
             // No mission machine means no phase gate, which is what a run
             // without one does.
             .unwrap_or(MissionPhase::Scanning);
@@ -853,6 +854,15 @@ mod tests {
     fn map(sim: &mut Simulation) -> &mut MappingStage {
         sim.stage_mut(Stage::UpdateMappingAndLocalization)
             .expect("stage 8 is installed")
+    }
+
+    /// Stage 9's machine, reached through the session that owns it.
+    fn machine(sim: &Simulation) -> &crate::mission::MissionStage {
+        crate::mission::MissionStage::of(sim).expect("stage 9 is a mission machine")
+    }
+
+    fn machine_mut(sim: &mut Simulation) -> &mut crate::mission::MissionStage {
+        crate::mission::MissionStage::of_mut(sim).expect("stage 9 is a mission machine")
     }
 
     fn mapped(sim: &Simulation) -> &MappingStage {
@@ -1242,8 +1252,7 @@ mod tests {
 
         let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
         let mission = MissionStage::new(MissionConfig::default());
-        let mission_link = mission.link();
-        map(&mut sim).watch_mission(mission_link.clone());
+        map(&mut sim).follow_mission_phase();
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
             .unwrap();
 
@@ -1251,7 +1260,7 @@ mod tests {
         let mut inputs = MissionInputs::at(0.0);
         inputs.mobile_count = 1;
         inputs.localization_confidences = vec![0.99];
-        mission_link.set_inputs(inputs);
+        machine_mut(&mut sim).set_inputs(inputs);
         sim.step().unwrap();
         assert_eq!(mapped(&sim).estimates().len(), 1, "Scanning localizes");
 
@@ -1261,9 +1270,9 @@ mod tests {
         done.localization_confidences = vec![0.99];
         done.coverage_fraction = 0.99;
         done.gap_cell_fraction = Some(0.0);
-        mission_link.set_inputs(done);
+        machine_mut(&mut sim).set_inputs(done);
         sim.step().unwrap();
-        assert_eq!(mission_link.phase(), MissionPhase::Inspecting);
+        assert_eq!(machine(&sim).phase(), MissionPhase::Inspecting);
         assert_eq!(
             mapped(&sim).estimates().len(),
             1,
@@ -1275,7 +1284,7 @@ mod tests {
         let mut after = MissionInputs::at(2.0);
         after.mobile_count = 1;
         after.localization_confidences = vec![0.99];
-        mission_link.set_inputs(after);
+        machine_mut(&mut sim).set_inputs(after);
         sim.step().unwrap();
         assert!(
             mapped(&sim).estimates().is_empty(),
@@ -1607,8 +1616,7 @@ mod tests {
 
         let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
         let mission = MissionStage::new(MissionConfig::default());
-        let mission_link = mission.link();
-        map(&mut sim).watch_mission(mission_link.clone());
+        map(&mut sim).follow_mission_phase();
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
             .unwrap();
 
@@ -1619,17 +1627,17 @@ mod tests {
         inputs.localization_confidences = vec![0.10];
         inputs.coverage_fraction = 0.99;
         inputs.gap_cell_fraction = Some(0.0);
-        mission_link.set_inputs(inputs);
+        machine_mut(&mut sim).set_inputs(inputs);
         sim.step().unwrap();
-        assert_eq!(mission_link.phase(), MissionPhase::Localizing);
+        assert_eq!(machine(&sim).phase(), MissionPhase::Localizing);
 
         let mut next = MissionInputs::at(1.0);
         next.mobile_count = 1;
         next.localization_confidences = vec![0.10];
-        mission_link.set_inputs(next);
+        machine_mut(&mut sim).set_inputs(next);
         sim.step().unwrap();
 
-        assert_eq!(mission_link.phase(), MissionPhase::Localizing);
+        assert_eq!(machine(&sim).phase(), MissionPhase::Localizing);
         assert_eq!(
             mapped(&sim).estimates().len(),
             1,

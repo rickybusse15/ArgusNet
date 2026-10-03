@@ -49,7 +49,7 @@ use crate::deconflict::{DeconflictStage, RoleTable};
 use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
 use crate::fusion::FusionStage;
 use crate::mapping::{InspectionZone, MappingStage};
-use crate::mission::{MissionConfig, MissionLink};
+use crate::mission::{MissionConfig, MissionStage};
 use crate::mission_driver::{DriverReportLink, MissionDriverConfig, MissionDriverStage};
 use crate::motion::BoundsXy;
 use crate::observation_follow::ObservationTriggeredFollow;
@@ -661,7 +661,6 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
 pub struct AssembledRun {
     pub sim: Simulation,
     /// Scan-map-inspect runs only.
-    pub mission: Option<MissionLink>,
     /// The mission driver's configuration and POIs, as constructed.
     pub mission_setup: Option<(MissionDriverConfig, Vec<InspectionPoi>)>,
     /// The mission driver's replay seam; see `LocalizationReplay`.
@@ -1039,7 +1038,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     }
 
     // Stages 2 and 9: the scan/map/localize/inspect/egress mission.
-    let mut mission_link = None;
     let mut localization_replay = None;
     let mut mission_setup = None;
     let mut driver_report = None;
@@ -1088,21 +1086,19 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                 .collect(),
             homes,
         );
-        let link = driver.mission_link();
         localization_replay = Some(driver.localization_replay());
         driver_report = Some(driver.report_link());
         // Read back off the constructed driver, so a caller (and the wiring
         // test) sees what the stage was actually given.
         mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));
-        mapping_handle.watch_mission(link.clone());
-        overrides.watch_mission(link.clone());
+        mapping_handle.follow_mission_phase();
+        overrides.follow_mission_phase();
         sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(overrides))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(driver))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
         sim.connect(Handoff::OverridesFromMission)
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
-        mission_link = Some(link);
     }
     if let Some(mapping) = mapping_stage {
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
@@ -1119,7 +1115,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     Ok(AssembledRun {
         localization_replay,
         mission_setup,
-        mission: mission_link,
         sim,
         truth,
         replay,
@@ -1330,6 +1325,11 @@ impl AssembledRun {
         BatteryStage::of_mut(&mut self.sim).expect("assembly chains a BatteryStage into stage 1")
     }
 
+    /// Stage 9's mission machine, for scan-map-inspect runs.
+    pub fn mission(&self) -> Option<&MissionStage> {
+        MissionStage::of(&self.sim)
+    }
+
     /// Stage 8, when the bundle names a coverage grid.
     pub fn mapping(&self) -> Option<&MappingStage> {
         self.sim
@@ -1487,7 +1487,7 @@ impl AssembledRun {
             })
             .collect();
 
-        let (Some(mission), Some(driver)) = (&self.mission, &self.driver_report) else {
+        let (Some(mission), Some(driver)) = (self.mission(), &self.driver_report) else {
             return;
         };
         let state = mission.state();

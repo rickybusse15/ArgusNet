@@ -45,7 +45,7 @@ use std::collections::HashMap;
 
 use argusnet_types::Vector3;
 
-use crate::mission::{MissionLink, MissionPhase};
+use crate::mission::{stage_nine_phase, MissionPhase};
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{StageError, StageOutcome};
 
@@ -187,9 +187,9 @@ struct State {
     frontier: HashMap<String, GotoHover>,
     poi: HashMap<String, GotoHover>,
     egress: HashMap<String, GotoHover>,
-    /// Read at stage 2 time, so it carries the phase committed at the end of
-    /// the previous tick.
-    mission: Option<MissionLink>,
+    /// Gate the frontier table on stage 9's phase, read at stage 2 time, so
+    /// it is the phase committed at the end of the previous tick.
+    follows_mission: bool,
     applied: HashMap<String, OverrideSource>,
 }
 
@@ -220,14 +220,15 @@ impl MissionOverrideStage {
         Self::default()
     }
 
-    /// Gate the frontier table on this machine's phase.
+    /// Gate the frontier table on stage 9's phase, read through the views
+    /// lent to stage 2 ([`stage_nine_phase`]).
     ///
-    /// Left unwatched, the frontier gate is **open**: a run with no mission
+    /// Left unfollowed, the frontier gate is **open**: a run with no mission
     /// machine has no phase to gate on, and the reference always has one. A
-    /// test pins that, so a future run that acquires phases without acquiring a
-    /// link fails rather than silently flying its drones through egress.
-    pub fn watch_mission(&mut self, mission: MissionLink) {
-        self.state.mission = Some(mission);
+    /// test pins that, so a future run that acquires phases without following
+    /// them fails rather than silently flying its drones through egress.
+    pub fn follow_mission_phase(&mut self) {
+        self.state.follows_mission = true;
     }
 
     pub fn set_frontier(&mut self, node_id: &str, trajectory: GotoHover) {
@@ -342,12 +343,14 @@ impl StageHandler for MissionOverrideStage {
         shared.applied.clear();
 
         // The reference reads `_scan_phase` here, before stage 9 has advanced
-        // it, so an unwatched link is the only case that needs deciding.
-        let frontier_open = match shared.mission.as_ref() {
-            Some(mission) => matches!(
-                mission.phase(),
-                MissionPhase::Scanning | MissionPhase::Localizing
-            ),
+        // it, so a stage with no phase to follow is the only case that needs
+        // deciding.
+        let followed = shared
+            .follows_mission
+            .then(|| stage_nine_phase(context.stages))
+            .flatten();
+        let frontier_open = match followed {
+            Some(phase) => matches!(phase, MissionPhase::Scanning | MissionPhase::Localizing),
             None => true,
         };
 
@@ -797,28 +800,37 @@ mod tests {
 
     /// Drives the mission machine through stage 9 so the phase stage 2 reads is
     /// one the machine actually committed, not one a test poked in.
-    fn rig_with_mission(platforms: Vec<NodeState>) -> (Simulation, MissionLink) {
+    fn rig_with_mission(platforms: Vec<NodeState>) -> Simulation {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
 
         let mut overrides = MissionOverrideStage::new();
         let mission = MissionStage::new(Default::default());
-        let mission_link = mission.link();
-        overrides.watch_mission(mission_link.clone());
+        overrides.follow_mission_phase();
 
         sim.set_stage_handler(Stage::ApplyMissionOverrides, Box::new(overrides))
             .expect("stage 2 is not a transaction boundary");
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
             .expect("stage 9 is not a transaction boundary");
-        (sim, mission_link)
+        sim
+    }
+
+    /// Stage 9's machine, reached through the session that owns it.
+    fn machine(sim: &Simulation) -> &crate::mission::MissionStage {
+        crate::mission::MissionStage::of(sim).expect("stage 9 is a mission machine")
+    }
+
+    fn machine_mut(sim: &mut Simulation) -> &mut crate::mission::MissionStage {
+        crate::mission::MissionStage::of_mut(sim).expect("stage 9 is a mission machine")
     }
 
     /// The mission stage rejects a tick it was given no inputs for, and rejects
     /// inputs stamped for a different tick — so every step through the mission
     /// rig has to feed it, stamped now.
-    fn step_with(sim: &mut Simulation, mission: &MissionLink, inputs: MissionInputs) {
-        mission.set_inputs(MissionInputs {
-            timestamp_s: sim.tick() as f64,
+    fn step_with(sim: &mut Simulation, inputs: MissionInputs) {
+        let timestamp_s = sim.tick() as f64;
+        machine_mut(sim).set_inputs(MissionInputs {
+            timestamp_s,
             ..inputs
         });
         sim.step().expect("tick runs");
@@ -847,15 +859,15 @@ mod tests {
 
     #[test]
     fn the_frontier_override_is_dropped_once_the_mission_leaves_localizing() {
-        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        let mut sim = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
         ov(&mut sim).set_frontier(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
         );
 
         // Tick 1: still scanning, so the frontier override flies the drone.
-        step_with(&mut sim, &mission, scanning_inputs());
-        assert_eq!(mission.phase(), MissionPhase::Scanning);
+        step_with(&mut sim, scanning_inputs());
+        assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
         assert_eq!(
             overridden(&sim).applied_source("d0"),
             Some(OverrideSource::Frontier)
@@ -863,15 +875,15 @@ mod tests {
 
         // Tick 2: stage 2 still sees `scanning` -- stage 9 has not run yet this
         // tick -- and only then does the machine move to `inspecting`.
-        step_with(&mut sim, &mission, converged_inputs());
-        assert_eq!(mission.phase(), MissionPhase::Inspecting);
+        step_with(&mut sim, converged_inputs());
+        assert_eq!(machine(&sim).phase(), MissionPhase::Inspecting);
         assert_eq!(
             overridden(&sim).applied_source("d0"),
             Some(OverrideSource::Frontier)
         );
 
         // Tick 3 is the first one stage 2 sees `inspecting` on.
-        step_with(&mut sim, &mission, converged_inputs());
+        step_with(&mut sim, converged_inputs());
         assert_eq!(overridden(&sim).applied_source("d0"), None);
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
@@ -880,16 +892,16 @@ mod tests {
     /// through every phase, because the reference's POI block has no gate.
     #[test]
     fn the_gate_is_on_the_frontier_table_only() {
-        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        let mut sim = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
         ov(&mut sim).set_poi(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [200.0, 0.0], 20.0, 0.0, 0.0),
         );
 
-        step_with(&mut sim, &mission, converged_inputs());
-        step_with(&mut sim, &mission, converged_inputs());
+        step_with(&mut sim, converged_inputs());
+        step_with(&mut sim, converged_inputs());
 
-        assert_eq!(mission.phase(), MissionPhase::Inspecting);
+        assert_eq!(machine(&sim).phase(), MissionPhase::Inspecting);
         assert_eq!(
             overridden(&sim).applied_source("d0"),
             Some(OverrideSource::Poi)
@@ -901,7 +913,7 @@ mod tests {
     /// lawnmower trajectory mid-localization.
     #[test]
     fn the_localizing_phase_keeps_the_frontier_override() {
-        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        let mut sim = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
         ov(&mut sim).set_frontier(
             "d0",
             GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0),
@@ -916,10 +928,10 @@ mod tests {
             localization_confidences: vec![0.10],
             ..MissionInputs::at(0.0)
         };
-        step_with(&mut sim, &mission, unconverged.clone());
-        assert_eq!(mission.phase(), MissionPhase::Localizing);
+        step_with(&mut sim, unconverged.clone());
+        assert_eq!(machine(&sim).phase(), MissionPhase::Localizing);
 
-        step_with(&mut sim, &mission, unconverged);
+        step_with(&mut sim, unconverged);
 
         assert_eq!(
             overridden(&sim).applied_source("d0"),
@@ -952,14 +964,14 @@ mod tests {
     /// is what makes the gate a gate rather than a delete.
     #[test]
     fn a_gated_frontier_trajectory_survives_to_fly_again() {
-        let (mut sim, mission) = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
+        let mut sim = rig_with_mission(vec![node("d0", 0.0, 0.0)]);
         let trajectory = GotoHover::over([0.0, 0.0, 0.0], [100.0, 0.0], 10.0, 0.0, 0.0);
         ov(&mut sim).set_frontier("d0", trajectory);
 
-        step_with(&mut sim, &mission, converged_inputs());
-        step_with(&mut sim, &mission, converged_inputs());
-        step_with(&mut sim, &mission, converged_inputs());
-        assert_eq!(mission.phase(), MissionPhase::Inspecting);
+        step_with(&mut sim, converged_inputs());
+        step_with(&mut sim, converged_inputs());
+        step_with(&mut sim, converged_inputs());
+        assert_eq!(machine(&sim).phase(), MissionPhase::Inspecting);
         assert_eq!(overridden(&sim).applied_source("d0"), None);
         // Suppressed, not discarded.
         assert_eq!(

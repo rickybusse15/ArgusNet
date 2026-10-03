@@ -368,10 +368,7 @@ fn sim(args: SimArgs) -> ExitCode {
         }
     }
 
-    let phase = run
-        .mission
-        .as_ref()
-        .map(|mission| mission.phase().to_string());
+    let phase = run.mission().map(|mission| mission.phase().to_string());
     // Read before `run_to_replay` consumes the run.
     let stage_summaries = run
         .sim

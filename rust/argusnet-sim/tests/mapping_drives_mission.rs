@@ -39,6 +39,15 @@ fn drone(id: &str) -> NodeState {
     }
 }
 
+/// Stage 9's machine, reached through the session that owns it.
+fn machine(sim: &Simulation) -> &MissionStage {
+    MissionStage::of(sim).expect("stage 9 is a mission machine")
+}
+
+fn machine_mut(sim: &mut Simulation) -> &mut MissionStage {
+    MissionStage::of_mut(sim).expect("stage 9 is a mission machine")
+}
+
 /// Stage 8's coverage, read through the session that owns it.
 fn coverage_fraction(sim: &Simulation) -> f64 {
     sim.stage::<MappingStage>(Stage::UpdateMappingAndLocalization)
@@ -63,11 +72,10 @@ fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
         .unwrap();
 
     let mission = MissionStage::new(MissionConfig::default());
-    let mission_link = mission.link();
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
         .unwrap();
 
-    assert_eq!(mission_link.phase(), MissionPhase::Scanning);
+    assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
 
     // A lawnmower over the 1 km square, 100 m steps.
     let mut x = 100.0;
@@ -91,11 +99,11 @@ fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
         inputs.localization_confidences = vec![0.99];
         inputs.gap_cell_fraction = Some(0.0);
         inputs.coverage_fraction = coverage_fraction(&sim);
-        mission_link.set_inputs(inputs);
+        machine_mut(&mut sim).set_inputs(inputs);
 
         sim.step().expect("no stage fails");
 
-        if mission_link.phase() != MissionPhase::Scanning && phase_at.is_none() {
+        if machine(&sim).phase() != MissionPhase::Scanning && phase_at.is_none() {
             phase_at = Some((step, coverage_fraction(&sim)));
             break;
         }
@@ -111,7 +119,7 @@ fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
     }
 
     let (step, fraction) = phase_at.expect("the mission never left Scanning");
-    assert_eq!(mission_link.phase(), MissionPhase::Inspecting);
+    assert_eq!(machine(&sim).phase(), MissionPhase::Inspecting);
     assert!(
         fraction >= MissionConfig::default().scan_coverage_threshold,
         "the gate tripped at {fraction}, below its own threshold"
@@ -141,7 +149,6 @@ fn a_stationary_drone_never_trips_the_gate() {
         .unwrap();
 
     let mission = MissionStage::new(MissionConfig::default());
-    let mission_link = mission.link();
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
         .unwrap();
 
@@ -150,11 +157,11 @@ fn a_stationary_drone_never_trips_the_gate() {
         inputs.mobile_count = 1;
         inputs.localization_confidences = vec![0.99];
         inputs.coverage_fraction = coverage_fraction(&sim);
-        mission_link.set_inputs(inputs);
+        machine_mut(&mut sim).set_inputs(inputs);
         sim.step().unwrap();
     }
 
-    assert_eq!(mission_link.phase(), MissionPhase::Scanning);
+    assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
     let fraction = coverage_fraction(&sim);
     assert!(fraction > 0.0, "it did cover its own footprint");
     assert!(
