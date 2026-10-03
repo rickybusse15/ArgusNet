@@ -67,7 +67,10 @@ an observer is also a writer.
    either a real assembly or an explicit *declared-absent* handler that
    records `Skipped { reason }`, which `UnportedStage` must never stand in
    for. That choice belongs in A1.3, and it is the reason A1.3 has to follow
-   this design.
+   this design. **Resolved in A1.3 (2026-10-03):** stage 5 is not in
+   `Stage::PRODUCTION_CORE`, so production runs neither require it nor
+   install a stand-in; a run that assembles VIO later adds it with
+   `ProductionBuilder::require`.
 4. **Two timings, both load-bearing.** Forward edges (4→7, 6→7) take effect
    in the same tick. Backward edges (6→1, 9→2, and the reads of stage 9's
    phase by 2 and 8) take effect on the next tick, because the consumer has

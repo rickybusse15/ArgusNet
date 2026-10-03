@@ -538,7 +538,7 @@ mod tests {
     use argusnet_types::{NodeState, Vector3};
 
     fn simulation() -> Simulation {
-        Simulation::new(SimulationConfig {
+        Simulation::bare(SimulationConfig {
             seed: 9,
             dt_s: 1.0,
             steps: Some(256),

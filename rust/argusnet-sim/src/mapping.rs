@@ -820,7 +820,7 @@ mod tests {
     const SEED: u32 = 11;
 
     fn simulation() -> Simulation {
-        Simulation::new(SimulationConfig {
+        Simulation::bare(SimulationConfig {
             seed: SEED,
             dt_s: 1.0,
             steps: Some(4_000),

@@ -15,7 +15,7 @@ use argusnet_sim::stage::{Stage, StageError, StageOutcome};
 use argusnet_types::{NodeState, TruthState, Vector3};
 
 fn simulation() -> Simulation {
-    Simulation::new(SimulationConfig {
+    Simulation::bare(SimulationConfig {
         seed: 3,
         dt_s: 0.25,
         steps: Some(32),

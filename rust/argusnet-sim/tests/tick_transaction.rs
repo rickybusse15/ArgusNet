@@ -26,7 +26,7 @@ fn config() -> SimulationConfig {
 }
 
 fn simulation() -> Simulation {
-    Simulation::new(config()).expect("config is valid")
+    Simulation::bare(config()).expect("config is valid")
 }
 
 /// A stage body that fails on demand, so fault handling can be exercised
@@ -126,7 +126,7 @@ fn stages_see_derived_time_and_the_python_seed_key() {
 
 #[test]
 fn the_trace_is_bounded_and_reports_what_it_dropped() {
-    let mut sim = Simulation::new(SimulationConfig {
+    let mut sim = Simulation::bare(SimulationConfig {
         steps: Some(2_000),
         ..config()
     })
@@ -180,7 +180,7 @@ fn revisions_are_monotonic_and_snapshots_are_shared_not_copied() {
 
 #[test]
 fn a_run_reports_completion_rather_than_stepping_past_its_length() {
-    let mut sim = Simulation::new(SimulationConfig {
+    let mut sim = Simulation::bare(SimulationConfig {
         steps: Some(2),
         ..config()
     })
@@ -659,7 +659,7 @@ fn queued_reset_recovers_a_fault_at_tick_zero_without_running_stages() {
 
 #[test]
 fn completed_runs_accept_immediate_reset_and_reject_unreachable_recovery() {
-    let mut sim = Simulation::new(SimulationConfig {
+    let mut sim = Simulation::bare(SimulationConfig {
         steps: Some(1),
         ..config()
     })
@@ -921,7 +921,7 @@ fn malformed_checkpoints_leave_existing_state_untouched() {
 
 #[test]
 fn restore_sets_a_large_valid_clock_directly() {
-    let mut sim = Simulation::new(SimulationConfig {
+    let mut sim = Simulation::bare(SimulationConfig {
         steps: None,
         ..config()
     })

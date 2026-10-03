@@ -14,10 +14,10 @@ P2.3 are merged (#122, `badb1e1`): the controller stage, world-backed stage 1,
 the scenario bundle and native builder, the mission driver, the causal-state
 audit of every assembled stateful stage, and an `argusnet-rs` CLI that builds
 and runs all seven canonical scenarios with no Python (six within every
-declared envelope; see [migration status](migration/STATUS.md)). Still open: a
-production constructor that rejects missing stages, owned subsystem state in
-place of the `Arc<Mutex<Shared>>` stage links, reset equal to fresh and full
-restore, a durable event journal, multi-seed qualification and the viewer
+declared envelope; see [migration status](migration/STATUS.md)), owned
+subsystem state in every stage (A1.2) and a production constructor that
+rejects a missing required stage by name (A1.3). Still open: reset equal to
+fresh and full restore, a durable event journal, multi-seed qualification and the viewer
 worker. No scheduler or aircraft qualification is claimed.
 
 The [Rust-only runtime target](RUST_RUNTIME_ARCHITECTURE.md) now specifies

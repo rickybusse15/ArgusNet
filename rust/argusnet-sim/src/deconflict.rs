@@ -364,7 +364,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn simulation() -> Simulation {
-        Simulation::new(SimulationConfig {
+        Simulation::bare(SimulationConfig {
             seed: 5,
             dt_s: 1.0,
             steps: Some(64),
