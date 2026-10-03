@@ -37,7 +37,9 @@ use crate::command::{
 use crate::config::{ConfigError, SimulationConfig, ValidatedConfig};
 use crate::controller::ControllerStage;
 use crate::fusion::FusionStage;
+use crate::mission_driver::MissionDriverStage;
 use crate::observe::ObserveStage;
+use crate::overrides::MissionOverrideStage;
 use crate::safety::SafetyStage;
 use crate::snapshot::{
     CheckpointHeader, RestoreError, RuntimeSnapshot, SimulationCheckpoint, SnapshotHeader,
@@ -125,6 +127,11 @@ pub enum Handoff {
     ObservationsToFusion,
     /// 4→7: stage 4's validations are stage 7's `safety_events` this tick.
     SafetyEventsToFusion,
+    /// 9→2: the POI and egress writes stage 9 queued, applied to stage 2's
+    /// tables in the order queued. Stage 2 flies them from the next tick.
+    /// Applied after every run, whatever it reported, because stage 9 queues
+    /// writes on runs that report `NoWork` too.
+    OverridesFromMission,
 }
 
 impl Handoff {
@@ -135,6 +142,17 @@ impl Handoff {
                 Stage::GenerateObservations
             }
             Handoff::SafetyEventsToFusion => Stage::SafetyMonitor,
+            Handoff::OverridesFromMission => Stage::EvaluateMissionTransitions,
+        }
+    }
+
+    /// Whether a run that reported `outcome` hands anything on.
+    fn follows(self, outcome: &StageOutcome) -> bool {
+        match self {
+            Handoff::EngagementToControllers
+            | Handoff::ObservationsToFusion
+            | Handoff::SafetyEventsToFusion => *outcome == StageOutcome::Ran,
+            Handoff::OverridesFromMission => true,
         }
     }
 }
@@ -440,6 +458,13 @@ impl Simulation {
             Handoff::SafetyEventsToFusion => {
                 fusion && self.stage::<SafetyStage>(Stage::SafetyMonitor).is_some()
             }
+            Handoff::OverridesFromMission => {
+                self.stage::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+                    .is_some()
+                    && self
+                        .stage::<MissionOverrideStage>(Stage::ApplyMissionOverrides)
+                        .is_some()
+            }
         };
         if !installed {
             return Err(StageError::Invariant(format!(
@@ -452,11 +477,12 @@ impl Simulation {
         Ok(())
     }
 
-    /// Apply the handoffs that follow `stage`, which has just run.
-    fn apply_handoffs(&mut self, stage: Stage, notes: &mut Vec<String>) {
+    /// Apply the handoffs that follow `stage`, which has just run and
+    /// reported `outcome`.
+    fn apply_handoffs(&mut self, stage: Stage, outcome: &StageOutcome, notes: &mut Vec<String>) {
         for index in 0..self.handoffs.len() {
             let handoff = self.handoffs[index];
-            if handoff.after() != stage {
+            if handoff.after() != stage || !handoff.follows(outcome) {
                 continue;
             }
             match handoff {
@@ -497,6 +523,21 @@ impl Simulation {
                     };
                     if let Some(fusion) = self.stage_mut::<FusionStage>(Stage::UpdateFusion) {
                         fusion.submit_safety_events(events);
+                    }
+                }
+                Handoff::OverridesFromMission => {
+                    let Some(commands) = self
+                        .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+                        .map(MissionDriverStage::take_override_commands)
+                    else {
+                        continue;
+                    };
+                    if let Some(overrides) =
+                        self.stage_mut::<MissionOverrideStage>(Stage::ApplyMissionOverrides)
+                    {
+                        for command in commands {
+                            overrides.apply(command);
+                        }
                     }
                 }
             }
@@ -886,8 +927,8 @@ impl Simulation {
                     outcome
                 }
             };
-            if matches!(outcome, Ok(StageOutcome::Ran)) {
-                self.apply_handoffs(stage, &mut notes);
+            if let Ok(ran) = &outcome {
+                self.apply_handoffs(stage, ran, &mut notes);
             }
             if stage != Stage::CommitSnapshot {
                 self.time_stage(stage, started);

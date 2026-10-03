@@ -43,7 +43,7 @@ use crate::mapping::MappingLink;
 use crate::mission::{
     MissionConfig, MissionEvent, MissionInputs, MissionLink, MissionPhase, MissionStage,
 };
-use crate::overrides::{GotoHover, OverrideLink};
+use crate::overrides::{GotoHover, OverrideCommand};
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{StageError, StageOutcome};
 
@@ -272,7 +272,11 @@ pub struct MissionDriverStage {
     machine: MissionStage,
     mission: MissionLink,
     mapping: MappingLink,
-    overrides: OverrideLink,
+    /// Writes into stage 2's tables, queued this run and drained by
+    /// [`Handoff::OverridesFromMission`] straight after it.
+    ///
+    /// [`Handoff::OverridesFromMission`]: crate::simulation::Handoff::OverridesFromMission
+    override_commands: Vec<OverrideCommand>,
     pois: PoiManager,
     initial_pois: Vec<InspectionPoi>,
     /// `_drone_home_positions`: each launched drone's station.
@@ -306,7 +310,6 @@ impl MissionDriverStage {
         pois: Vec<InspectionPoi>,
         homes: BTreeMap<String, [f64; 3]>,
         mapping: MappingLink,
-        overrides: OverrideLink,
     ) -> Self {
         let machine = MissionStage::new(config.mission);
         let mission = machine.link();
@@ -314,7 +317,7 @@ impl MissionDriverStage {
             machine,
             mission,
             mapping,
-            overrides,
+            override_commands: Vec::new(),
             pois: PoiManager::new(pois.clone()),
             initial_pois: pois,
             homes,
@@ -325,6 +328,11 @@ impl MissionDriverStage {
             replay: LocalizationReplay::default(),
             report: DriverReportLink::default(),
         }
+    }
+
+    /// Take the override writes the last run queued, in order.
+    pub fn take_override_commands(&mut self) -> Vec<OverrideCommand> {
+        std::mem::take(&mut self.override_commands)
     }
 
     /// The handle a replay writer reads stage 9's report through.
@@ -413,8 +421,8 @@ impl MissionDriverStage {
                         .iter()
                         .find(|p| p.poi_id == active)
                         .expect("an assigned POI is one of the manager's");
-                    self.overrides.set_poi(
-                        id,
+                    self.override_commands.push(OverrideCommand::SetPoi(
+                        id.clone(),
                         GotoHover::redirect(
                             *position,
                             [poi.position[0], poi.position[1]],
@@ -422,7 +430,7 @@ impl MissionDriverStage {
                             timestamp_s,
                             self.config.redirect_speed_mps,
                         ),
-                    );
+                    ));
                 }
             }
             // Handoff: a low drone with a POI passes it to the first fresh,
@@ -462,7 +470,8 @@ impl MissionDriverStage {
                 .collect();
             for drone in finished {
                 self.redirected.remove(&drone);
-                self.overrides.clear_poi(&drone);
+                self.override_commands
+                    .push(OverrideCommand::ClearPoi(drone.clone()));
             }
         }
     }
@@ -474,6 +483,9 @@ impl StageHandler for MissionDriverStage {
         // Stage 1's ledger, as it left it this tick, through the lent views
         // (SESSION_OWNERSHIP.md §2a). A run with none reads as an empty one:
         // every drone off the ledger, counted as full.
+        // Whatever a run that no handoff drained left behind is dropped, so a
+        // driver installed without stage 2 does not grow without bound.
+        self.override_commands.clear();
         let empty = BatteryStage::new();
         let battery = stage_one_battery(context.stages).unwrap_or(&empty);
         let phase = self.mission.phase();
@@ -548,13 +560,14 @@ impl StageHandler for MissionDriverStage {
             match event {
                 MissionEvent::EgressRoutesRequested { at_s } => {
                     for (id, _) in &mobile {
-                        self.overrides.clear_poi(id);
+                        self.override_commands
+                            .push(OverrideCommand::ClearPoi(id.clone()));
                     }
                     self.redirected.clear();
                     for (id, position) in &mobile {
                         if let Some(home) = self.homes.get(id) {
-                            self.overrides.set_egress(
-                                id,
+                            self.override_commands.push(OverrideCommand::SetEgress(
+                                id.clone(),
                                 GotoHover::redirect(
                                     *position,
                                     [home[0], home[1]],
@@ -562,12 +575,14 @@ impl StageHandler for MissionDriverStage {
                                     at_s,
                                     self.config.redirect_speed_mps,
                                 ),
-                            );
+                            ));
                         }
                     }
                     context.note("egress routes set");
                 }
-                MissionEvent::EgressRoutesCleared { .. } => self.overrides.clear_all_egress(),
+                MissionEvent::EgressRoutesCleared { .. } => {
+                    self.override_commands.push(OverrideCommand::ClearAllEgress)
+                }
                 MissionEvent::PhaseChanged { .. }
                 | MissionEvent::RescorePois { .. }
                 | MissionEvent::LocalizationTimedOut { .. } => {}
@@ -617,6 +632,7 @@ impl StageHandler for MissionDriverStage {
         self.redirected = decoded.redirected;
         self.rescored = decoded.rescored;
         self.coordinator = decoded.coordinator;
+        self.override_commands.clear();
         self.publish_report();
         Ok(())
     }
@@ -627,6 +643,7 @@ impl StageHandler for MissionDriverStage {
         self.redirected.clear();
         self.rescored = false;
         self.coordinator = None;
+        self.override_commands.clear();
         self.publish_report();
     }
 }
@@ -684,7 +701,6 @@ mod tests {
             Vec::new(),
             BTreeMap::new(),
             mapping_link.clone(),
-            crate::overrides::MissionOverrideStage::new().link(),
         );
         stage.localization_replay().load(replay);
         let mission = stage.mission_link();
@@ -791,7 +807,6 @@ mod tests {
             pois,
             BTreeMap::new(),
             mapping,
-            crate::overrides::MissionOverrideStage::new().link(),
         )
     }
 
@@ -920,7 +935,6 @@ mod tests {
             Vec::new(),
             BTreeMap::new(),
             mapping.link(),
-            crate::overrides::MissionOverrideStage::new().link(),
         );
         let report = stage.report_link();
         let mission = stage.mission_link();
