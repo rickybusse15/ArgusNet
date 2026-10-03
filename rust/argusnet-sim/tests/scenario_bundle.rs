@@ -129,7 +129,12 @@ fn run_rust(case: &str, steps: usize, search_drones: &[String]) -> RustRun {
         out.engaged.push(
             search_drones
                 .iter()
-                .map(|id| (id.clone(), run.controllers.is_engaged(id).unwrap_or(false)))
+                .map(|id| {
+                    (
+                        id.clone(),
+                        run.controllers().is_engaged(id).unwrap_or(false),
+                    )
+                })
                 .collect(),
         );
         let frame = run.fusion.frame().expect("stage 7 ran");
@@ -502,7 +507,7 @@ fn the_assembly_wires_every_capability() {
     );
     assert_eq!(run.battery.model(), reference_battery_model());
 
-    let summary = run.controllers.environment_summary().expect("installed");
+    let summary = run.controllers().environment_summary().expect("installed");
     assert!(summary.has_obstacles && summary.has_weather && summary.has_pursuit);
     assert!(summary.has_map_bounds && !summary.has_planner);
 

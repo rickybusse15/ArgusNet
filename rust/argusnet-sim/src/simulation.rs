@@ -35,6 +35,8 @@ use crate::command::{
     PROTOCOL_VERSION,
 };
 use crate::config::{ConfigError, SimulationConfig, ValidatedConfig};
+use crate::controller::ControllerStage;
+use crate::observe::ObserveStage;
 use crate::snapshot::{
     CheckpointHeader, RestoreError, RuntimeSnapshot, SimulationCheckpoint, SnapshotHeader,
 };
@@ -75,7 +77,57 @@ pub struct TickContext<'a> {
     /// capability, and a handler handed `None` has no other way to reach
     /// truth, so the restriction is structural rather than advisory.
     pub truth: Option<&'a [TruthState]>,
+    /// Read-only views of the other installed stages, for same-tick reads
+    /// (SESSION_OWNERSHIP.md §2a).
+    pub stages: StageViews<'a>,
     notes: &'a mut Vec<String>,
+}
+
+/// The installed stages, lent read-only to the stage that is running.
+///
+/// The running stage's own handler is not among them: it is taken out of the
+/// map for its run, which is what makes lending the rest sound. Stages run one
+/// at a time, so nothing can write what a view reads while it reads it.
+#[derive(Clone, Copy)]
+pub struct StageViews<'a> {
+    handlers: &'a BTreeMap<Stage, Box<dyn StageHandler>>,
+}
+
+impl<'a> StageViews<'a> {
+    /// The installed handler for `stage`, if it is a `T` and is not the stage
+    /// asking.
+    pub fn get<T: StageHandler>(self, stage: Stage) -> Option<&'a T> {
+        let handler: &dyn std::any::Any = self.handlers.get(&stage)?.as_ref();
+        handler.downcast_ref::<T>()
+    }
+}
+
+impl fmt::Debug for StageViews<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_set().entries(self.handlers.keys()).finish()
+    }
+}
+
+/// A typed write from one stage into another, applied by [`Simulation`]
+/// between stages (SESSION_OWNERSHIP.md §2a).
+///
+/// The edge is named here and applied in [`Simulation::step`], in a fixed
+/// order, instead of travelling through a handle the two stages share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Handoff {
+    /// 6→1: stage 6's accepted-observation counts engage stage 1's
+    /// search-then-follow controllers. Engagement is visible as soon as stage 6
+    /// has run; the motion it causes starts with the next tick's stage 1.
+    EngagementToControllers,
+}
+
+impl Handoff {
+    /// The stage whose successful run the handoff follows.
+    pub fn after(self) -> Stage {
+        match self {
+            Handoff::EngagementToControllers => Stage::GenerateObservations,
+        }
+    }
 }
 
 impl TickContext<'_> {
@@ -266,6 +318,8 @@ pub struct Simulation {
     /// Per-stage wall time, when a caller asked for it. Never causal: it is
     /// not in the trace, the replay or a checkpoint.
     stage_timings: Option<StageTimings>,
+    /// The connected handoffs, in the order they apply.
+    handoffs: Vec<Handoff>,
 }
 
 impl fmt::Debug for Simulation {
@@ -306,6 +360,7 @@ impl Simulation {
             world: TickWorld::default(),
             truth: Vec::new(),
             stage_timings: None,
+            handoffs: Vec::new(),
         })
     }
 
@@ -356,6 +411,58 @@ impl Simulation {
         }
         self.handlers.insert(stage, handler);
         Ok(())
+    }
+
+    /// Connect a [`Handoff`]. Both of its stages must already be installed,
+    /// as the types it moves data between. Connecting one twice is a no-op.
+    pub fn connect(&mut self, handoff: Handoff) -> Result<(), StageError> {
+        let installed = match handoff {
+            Handoff::EngagementToControllers => {
+                self.stage::<ObserveStage>(Stage::GenerateObservations)
+                    .is_some()
+                    && self
+                        .stage::<ControllerStage>(Stage::SampleControllersAndBattery)
+                        .is_some()
+            }
+        };
+        if !installed {
+            return Err(StageError::Invariant(format!(
+                "{handoff:?} needs both of its stages installed first"
+            )));
+        }
+        if !self.handoffs.contains(&handoff) {
+            self.handoffs.push(handoff);
+        }
+        Ok(())
+    }
+
+    /// Apply the handoffs that follow `stage`, which has just run.
+    fn apply_handoffs(&mut self, stage: Stage, notes: &mut Vec<String>) {
+        for index in 0..self.handoffs.len() {
+            let handoff = self.handoffs[index];
+            if handoff.after() != stage {
+                continue;
+            }
+            match handoff {
+                Handoff::EngagementToControllers => {
+                    let Some(accepted) = self
+                        .stage::<ObserveStage>(Stage::GenerateObservations)
+                        .map(|observe| observe.accepted_by_node_target().clone())
+                    else {
+                        continue;
+                    };
+                    if let Some(controllers) =
+                        self.stage_mut::<ControllerStage>(Stage::SampleControllersAndBattery)
+                    {
+                        for node_id in controllers.observe(&accepted) {
+                            notes.push(format!(
+                                "controller {node_id} engaged; follows from next tick"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn tick(&self) -> u64 {
@@ -715,6 +822,8 @@ impl Simulation {
                 // Timed where the work is, in `commit_timed`.
                 Stage::CommitSnapshot => Ok(StageOutcome::Ran),
                 _ => {
+                    // Taken out for its run, so the others can be lent.
+                    let mut handler = self.handlers.remove(&stage);
                     let mut context = TickContext {
                         tick,
                         timestamp_s: self.clock.timestamp_s(),
@@ -724,14 +833,24 @@ impl Simulation {
                         world: &mut self.world,
                         // The capability, handed out by stage and nowhere else.
                         truth: stage.may_read_truth().then_some(self.truth.as_slice()),
+                        stages: StageViews {
+                            handlers: &self.handlers,
+                        },
                         notes: &mut notes,
                     };
-                    match self.handlers.get_mut(&stage) {
+                    let outcome = match handler.as_mut() {
                         Some(handler) => handler.run(&mut context),
                         None => UnportedStage.run(&mut context),
+                    };
+                    if let Some(handler) = handler {
+                        self.handlers.insert(stage, handler);
                     }
+                    outcome
                 }
             };
+            if matches!(outcome, Ok(StageOutcome::Ran)) {
+                self.apply_handoffs(stage, &mut notes);
+            }
             if stage != Stage::CommitSnapshot {
                 self.time_stage(stage, started);
             }

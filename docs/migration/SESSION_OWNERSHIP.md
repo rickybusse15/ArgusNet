@@ -146,7 +146,7 @@ it.
 | 2 | `VioLink` | No production user (finding 2). **Done:** `VioStage` owns its filters; tests reach it through `Simulation::stage_mut` |
 | 3 | `SafetyLink` | One forward edge (→ fusion) and one same-tick read (battery). **Done:** `SafetyStage` owns its monitors and configuration; assembly configures it before installing; `AssembledRun::safety()`. It still holds the battery and fusion links until slices 6 and 7 |
 | 4 | `ObserveLink` | Forward edge (→ fusion) and the backward 6→1 inbox. **Done:** `ObserveStage` owns its sensor table, feeds and last batch; assembly configures it before installing; `AssembledRun::observe()`. The fusion and controller links it holds go with slices 5 and 6 |
-| 5 | `ControllerLink` | Receives 6→1; assembly only otherwise |
+| 5 | `ControllerLink` | Receives 6→1; assembly only otherwise. **Done** with §2a's two mechanisms: `Simulation::connect(Handoff::EngagementToControllers)` applies stage 6's accepted counts to stage 1 straight after a stage 6 run that reports `Ran` (same timing as before); `TickContext::stages` lends the other handlers read-only, and stage 6 reads stage 1's nominal poses through it (`ObserveStage::sense_from_controllers`). `ControllerStage` owns its controllers; `AssembledRun::controllers()`. Trace-only difference: the engagement note now follows stage 6's "generated" note instead of preceding it. VIO's `NominalTrajectory` impl went with the link: stage 5 had no production user of it (finding 2) |
 | 6 | `FusionLink` | Receives 4→7 and 6→7 through `TickWorld` once 3 and 4 have moved |
 | 7 | `BatteryLink` | Read by 4 and 9 (same tick); observers drain events |
 | 8 | `OverrideLink` | Receives 9→2 |

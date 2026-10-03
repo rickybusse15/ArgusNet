@@ -42,8 +42,8 @@ use serde::Deserialize;
 use crate::battery::{BatteryLink, BatteryStage};
 use crate::config::SimulationConfig;
 use crate::controller::{
-    ControllerEnvironment, ControllerLink, ControllerStage, LaunchProfile, Operational,
-    PlatformController, PursuitOracle,
+    ControllerEnvironment, ControllerStage, LaunchProfile, Operational, PlatformController,
+    PursuitOracle,
 };
 use crate::deconflict::{DeconflictStage, RoleTable};
 use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
@@ -63,7 +63,7 @@ use crate::replay::{
 };
 use crate::runtime_world::{SharedObstacles, SharedTerrain, SharedVisibility};
 use crate::safety::SafetyStage;
-use crate::simulation::{Simulation, TickError};
+use crate::simulation::{Handoff, Simulation, TickError};
 use crate::snapshot::RuntimeSnapshot;
 use crate::stage::Stage;
 use crate::trajectory::LaunchController;
@@ -660,7 +660,6 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
 /// A bundle, assembled into a running simulation.
 pub struct AssembledRun {
     pub sim: Simulation,
-    pub controllers: ControllerLink,
     pub battery: BatteryLink,
     pub fusion: FusionLink,
     /// Scan-map-inspect runs only.
@@ -854,8 +853,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     let battery = BatteryStage::new();
     let battery_link = battery.link();
     battery_link.set_model(reference_battery_model());
-    let stage_one = ControllerStage::new().with_battery(battery);
-    let controllers = stage_one.link();
+    let mut stage_one = ControllerStage::new().with_battery(battery);
     let mut follow_zones: Option<Vec<ZoneDocument>> = None;
     for node in &bundle.nodes {
         let controller = match &node.controller {
@@ -915,7 +913,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                 }
             }
         };
-        controllers.install(node.node_id.clone(), controller);
+        stage_one.install(node.node_id.clone(), controller);
     }
     // Every mobile node is on the ledger, launched or not -- the reference
     // registers `if node.is_mobile`, with no home unless it has a station.
@@ -924,7 +922,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
             battery_link.register(node.node_id.clone(), None);
         }
     }
-    controllers.set_environment(ControllerEnvironment {
+    stage_one.set_environment(ControllerEnvironment {
         terrain: Box::new(world.terrain.clone()),
         obstacles: Some(Box::new(world.obstacles.clone())),
         visibility: Box::new(world.visibility.with_clearance(FOLLOW_LOS_CLEARANCE_M)),
@@ -993,11 +991,12 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     ));
     observe.set_terrain(Box::new(world.terrain.clone()));
     observe.feed_fusion(fusion_link.clone());
-    observe.feed_controllers(controllers.clone());
     // The reference senses from each node's nominal controller pose, not
     // from where overrides and deconfliction moved it (P4.8e.2).
-    observe.set_pose_source(Box::new(controllers.clone()));
+    observe.sense_from_controllers();
     sim.set_stage_handler(Stage::GenerateObservations, Box::new(observe))
+        .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
+    sim.connect(Handoff::EngagementToControllers)
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     sim.set_stage_handler(Stage::UpdateFusion, Box::new(fusion))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
@@ -1126,7 +1125,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         mission: mission_link,
         mapping: mapping_link,
         sim,
-        controllers,
         battery: battery_link,
         fusion: fusion_link,
         truth,
@@ -1316,6 +1314,13 @@ impl fmt::Display for RunError {
 impl std::error::Error for RunError {}
 
 impl AssembledRun {
+    /// Stage 1, as assembled. Every assembled run installs it.
+    pub fn controllers(&self) -> &ControllerStage {
+        self.sim
+            .stage::<ControllerStage>(Stage::SampleControllersAndBattery)
+            .expect("assembly installs a ControllerStage")
+    }
+
     /// Stage 4, when the bundle asked for `safety_blocking`.
     pub fn safety(&self) -> Option<&SafetyStage> {
         self.sim.stage::<SafetyStage>(Stage::SafetyMonitor)

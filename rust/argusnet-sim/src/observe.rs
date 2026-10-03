@@ -77,11 +77,12 @@ use argusnet_sensing::{
 };
 use argusnet_types::{BearingObservation, ObservationRejection, Vector3};
 
-use crate::controller::ControllerLink;
+use crate::controller::ControllerStage;
 use crate::deterministic::{DeterministicRng, SeedPart};
 use crate::fusion::FusionLink;
+use crate::observation_follow::AcceptedByNodeTarget;
 use crate::simulation::{StageHandler, TickContext};
-use crate::stage::{StageError, StageOutcome};
+use crate::stage::{Stage, StageError, StageOutcome};
 
 /// `confidence_floor` — the floor on a published observation's confidence.
 pub const CONFIDENCE_FLOOR: f64 = 0.15;
@@ -428,14 +429,33 @@ struct ObserveState {
     terrain: Box<dyn TerrainHeight>,
     oracle: Box<dyn VisibilityOracle>,
     oracle_installed: bool,
-    pose_source: Option<Box<dyn SensorPoseSource>>,
+    pose_source: PoseSource,
     observations: Vec<BearingObservation>,
     tally: GenerationTally,
     records: Vec<PairRecord>,
     /// The last run's generation rejections, as the reference writes them.
     rejections: Vec<ObservationRejection>,
     fusion: Option<FusionLink>,
-    controllers: Option<ControllerLink>,
+}
+
+/// Where stage 6 takes each sensor's pose from.
+enum PoseSource {
+    /// `TickWorld`: where the platform is now.
+    World,
+    /// An injected source.
+    Custom(Box<dyn SensorPoseSource>),
+    /// Stage 1's nominal poses for this tick, read through the lent view.
+    Controllers,
+}
+
+impl fmt::Debug for PoseSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PoseSource::World => formatter.write_str("World"),
+            PoseSource::Custom(source) => formatter.debug_tuple("Custom").field(source).finish(),
+            PoseSource::Controllers => formatter.write_str("Controllers"),
+        }
+    }
 }
 
 impl SensorState {
@@ -473,13 +493,12 @@ impl ObserveStage {
                 terrain: Box::new(FlatDatum),
                 oracle: Box::new(AlwaysVisible),
                 oracle_installed: false,
-                pose_source: None,
+                pose_source: PoseSource::World,
                 observations: Vec::new(),
                 tally: GenerationTally::default(),
                 records: Vec::new(),
                 rejections: Vec::new(),
                 fusion: None,
-                controllers: None,
             },
         }
     }
@@ -549,22 +568,19 @@ impl ObserveStage {
     /// Sense from `source`'s poses rather than from `TickWorld`. See
     /// [`SensorPoseSource`].
     pub fn set_pose_source(&mut self, source: Box<dyn SensorPoseSource>) {
-        self.state.pose_source = Some(source);
+        self.state.pose_source = PoseSource::Custom(source);
+    }
+
+    /// Sense from stage 1's nominal controller poses for this tick, as the
+    /// reference does: before overrides and deconfliction move the platform
+    /// (P4.8e.2). A platform stage 1 did not sample senses from the world.
+    pub fn sense_from_controllers(&mut self) {
+        self.state.pose_source = PoseSource::Controllers;
     }
 
     /// Hand each tick's batch straight to stage 7.
     pub fn feed_fusion(&mut self, fusion: FusionLink) {
         self.state.fusion = Some(fusion);
-    }
-
-    /// Hand each tick's accepted-observation counts to the controller stage.
-    ///
-    /// This is the reference's `controller.update_from_frame(frame, batch)`
-    /// loop. It runs after fusion there and inside stage 6 here; the
-    /// difference is unobservable, because the only reader of the engagement
-    /// it sets is the *next* tick's stage 1.
-    pub fn feed_controllers(&mut self, controllers: ControllerLink) {
-        self.state.controllers = Some(controllers);
     }
 
     pub fn observations(&self) -> Vec<BearingObservation> {
@@ -573,6 +589,19 @@ impl ObserveStage {
 
     pub fn tally(&self) -> GenerationTally {
         self.state.tally.clone()
+    }
+
+    /// The last run's accepted-observation counts, which
+    /// [`Handoff::EngagementToControllers`] hands to stage 1.
+    ///
+    /// That is the reference's `controller.update_from_frame(frame, batch)`
+    /// loop. It runs after fusion there and straight after stage 6 here; the
+    /// difference is unobservable, because the only reader of the motion the
+    /// engagement causes is the *next* tick's stage 1.
+    ///
+    /// [`Handoff::EngagementToControllers`]: crate::simulation::Handoff::EngagementToControllers
+    pub fn accepted_by_node_target(&self) -> &AcceptedByNodeTarget {
+        &self.state.tally.accepted_by_node_target
     }
 
     /// Every pair considered on the last run, in `(node, target)` order.
@@ -825,6 +854,7 @@ impl StageHandler for ObserveStage {
         }
 
         let seed = context.seed;
+        let stages = context.stages;
         let seed_time_key = context.seed_time_key;
         let timestamp_s = context.timestamp_s;
         // Truth is copied out so the platform borrow below is free to be
@@ -853,11 +883,14 @@ impl StageHandler for ObserveStage {
                 continue;
             };
             let is_mobile = platform.is_mobile;
-            let (origin, velocity) = match shared
-                .pose_source
-                .as_ref()
-                .and_then(|source| source.pose(&node_id, timestamp_s))
-            {
+            let pose = match &shared.pose_source {
+                PoseSource::World => None,
+                PoseSource::Custom(source) => source.pose(&node_id, timestamp_s),
+                PoseSource::Controllers => stages
+                    .get::<ControllerStage>(Stage::SampleControllersAndBattery)
+                    .and_then(|controllers| controllers.nominal_pose(&node_id, timestamp_s)),
+            };
+            let (origin, velocity) = match pose {
                 Some((p, v)) => (
                     Vector3::new(p[0], p[1], p[2]),
                     Vector3::new(v[0], v[1], v[2]),
@@ -1134,19 +1167,6 @@ impl StageHandler for ObserveStage {
         if let Some(fusion) = shared.fusion.clone() {
             fusion.submit_observations(shared.observations.clone());
         }
-        let engagement_feed = shared
-            .controllers
-            .clone()
-            .map(|link| (link, shared.tally.accepted_by_node_target.clone()));
-        // The controller link takes its own lock.
-        if let Some((controllers, accepted)) = engagement_feed {
-            for node_id in controllers.observe(&accepted) {
-                context.note(format!(
-                    "controller {node_id} engaged; follows from next tick"
-                ));
-            }
-        }
-
         context.note(format!("generated {accepted} of {attempted} attempted"));
         Ok(StageOutcome::Ran)
     }
@@ -1158,7 +1178,6 @@ mod tests {
     use crate::config::SimulationConfig;
     use crate::fusion::FusionStage;
     use crate::simulation::Simulation;
-    use crate::stage::Stage;
     use argusnet_sensing::cascade::{Blocker, RejectReason};
 
     use argusnet_types::{NodeState, TruthState};

@@ -12,7 +12,7 @@ use argusnet_sim::command::{
     AckStatus, CommandEnvelope, CommandKind, CommandQueue, RejectReason, PROTOCOL_VERSION,
 };
 use argusnet_sim::config::SimulationConfig;
-use argusnet_sim::simulation::{Simulation, StageHandler, TickContext, TickError};
+use argusnet_sim::simulation::{Handoff, Simulation, StageHandler, TickContext, TickError};
 use argusnet_sim::snapshot::{CheckpointHeader, RestoreError};
 use argusnet_sim::stage::{Stage, StageError, StageOutcome};
 
@@ -1097,4 +1097,75 @@ fn invalid_control_checkpoint_does_not_mutate_the_receiver() {
         assert!(target.restore(&bad).is_err());
         assert_eq!(target.checkpoint().unwrap(), before);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lent views and handoffs (SESSION_OWNERSHIP.md §2a)
+// ---------------------------------------------------------------------------
+
+/// Reports, on each run, which stages its lent views could see as a
+/// `RecordingStage` -- itself included, which it must not be able to see.
+#[derive(Debug, Default)]
+struct ViewingStage;
+
+impl StageHandler for ViewingStage {
+    fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        let stages = context.stages;
+        let sees_recorder = stages
+            .get::<RecordingStage>(Stage::SampleControllersAndBattery)
+            .map(|recorder| recorder.seen.len());
+        let sees_itself = stages.get::<ViewingStage>(Stage::Deconflict).is_some();
+        context.note(format!("recorder {sees_recorder:?}, itself {sees_itself}"));
+        Ok(StageOutcome::Ran)
+    }
+}
+
+#[test]
+fn a_running_stage_reads_earlier_stages_this_tick_but_never_itself() {
+    let mut sim = simulation();
+    sim.set_stage_handler(
+        Stage::SampleControllersAndBattery,
+        Box::new(RecordingStage::default()),
+    )
+    .expect("not a boundary");
+    sim.set_stage_handler(Stage::Deconflict, Box::new(ViewingStage))
+        .expect("not a boundary");
+    sim.step().expect("tick runs");
+    sim.step().expect("tick runs");
+    let notes: Vec<String> = sim
+        .trace()
+        .records()
+        .iter()
+        .filter(|record| record.stage == Stage::Deconflict)
+        .flat_map(|record| record.notes.clone())
+        .collect();
+    // Stage 1 has already run this tick when stage 3 looks.
+    assert_eq!(
+        notes,
+        vec![
+            "recorder Some(1), itself false",
+            "recorder Some(2), itself false"
+        ]
+    );
+    // The handler went back where it came from.
+    assert!(sim.stage::<ViewingStage>(Stage::Deconflict).is_some());
+}
+
+#[test]
+fn a_handoff_is_refused_until_both_of_its_stages_are_installed() {
+    let mut sim = simulation();
+    assert!(sim.connect(Handoff::EngagementToControllers).is_err());
+    sim.set_stage_handler(
+        Stage::SampleControllersAndBattery,
+        Box::new(argusnet_sim::controller::ControllerStage::new()),
+    )
+    .expect("not a boundary");
+    assert!(sim.connect(Handoff::EngagementToControllers).is_err());
+    sim.set_stage_handler(
+        Stage::GenerateObservations,
+        Box::new(argusnet_sim::observe::ObserveStage::new()),
+    )
+    .expect("not a boundary");
+    sim.connect(Handoff::EngagementToControllers)
+        .expect("both stages installed");
 }

@@ -13,21 +13,21 @@
 //! every remaining tick.
 //!
 //! Engagement comes through the real pipeline: stage 6's sensor accepts the
-//! target, feeds stage 1's link, and the next tick's stage 1 follows. No test
+//! target, the session hands the counts to stage 1, and the next tick's stage 1 follows. No test
 //! shortcut calls `observe` directly.
 
 use argusnet_sensing::SensorErrorConfig;
 use argusnet_sim::battery::{BatteryLink, BatteryStage};
 use argusnet_sim::config::SimulationConfig;
 use argusnet_sim::controller::{
-    ControllerEnvironment, ControllerLink, ControllerStage, LaunchProfile, Operational,
-    PlatformController, PursuitOracle,
+    ControllerEnvironment, ControllerStage, LaunchProfile, Operational, PlatformController,
+    PursuitOracle,
 };
 use argusnet_sim::follow_path::{FollowPathConfig, FollowPathController, VisibilitySampler};
 use argusnet_sim::motion::{BoundsXy, TerrainSampler};
 use argusnet_sim::observation_follow::ObservationTriggeredFollow;
 use argusnet_sim::observe::{ObserveStage, SensorSpec};
-use argusnet_sim::simulation::Simulation;
+use argusnet_sim::simulation::{Handoff, Simulation};
 use argusnet_sim::snapshot::{RestoreError, SimulationCheckpoint};
 use argusnet_sim::stage::Stage;
 use argusnet_sim::trajectory::{LaunchController, WeatherSampler};
@@ -227,7 +227,6 @@ const WRONG_HISTORY: Options = Options {
 struct Rig {
     options: Options,
     sim: Simulation,
-    controllers: ControllerLink,
     battery: BatteryLink,
 }
 
@@ -253,9 +252,8 @@ impl Rig {
         battery_link.register("drone-search", Some(station(0.0, -400.0)));
         battery_link.register("drone-follow", Some(station(0.0, -400.0)));
 
-        let stage = ControllerStage::new().with_battery(battery);
-        let controllers = stage.link();
-        controllers.set_environment(ControllerEnvironment {
+        let mut stage = ControllerStage::new().with_battery(battery);
+        stage.set_environment(ControllerEnvironment {
             terrain: Box::new(Plane),
             obstacles: None,
             visibility: Box::new(ClearSky),
@@ -277,7 +275,7 @@ impl Rig {
         let station_order: [usize; 2] = if options.swap_order { [1, 0] } else { [0, 1] };
         for index in station_order {
             let (id, position_m) = stations[index];
-            controllers.install(id, PlatformController::Static { position_m });
+            stage.install(id, PlatformController::Static { position_m });
         }
         let search = launched(
             Operational::SearchThenFollow(ObservationTriggeredFollow::new(
@@ -295,9 +293,9 @@ impl Rig {
             },
             station(0.0, -400.0),
         );
-        controllers.install("drone-search", search);
-        controllers.install("drone-follow", follower);
-        controllers.install("drone-late", late_drone());
+        stage.install("drone-search", search);
+        stage.install("drone-follow", follower);
+        stage.install("drone-late", late_drone());
         sim.set_stage_handler(Stage::SampleControllersAndBattery, Box::new(stage))
             .expect("stage 1 is not a transaction boundary");
 
@@ -314,26 +312,36 @@ impl Rig {
                 ..SensorSpec::default()
             },
         );
-        observe.feed_controllers(controllers.clone());
         sim.set_stage_handler(Stage::GenerateObservations, Box::new(observe))
             .expect("stage 6 is not a transaction boundary");
+        sim.connect(Handoff::EngagementToControllers)
+            .expect("stages 1 and 6 are installed");
 
         Self {
             options,
             sim,
-            controllers,
             battery: battery_link,
         }
+    }
+
+    fn controllers(&self) -> &ControllerStage {
+        self.sim
+            .stage(Stage::SampleControllersAndBattery)
+            .expect("stage 1 is installed")
+    }
+
+    fn controllers_mut(&mut self) -> &mut ControllerStage {
+        self.sim
+            .stage_mut(Stage::SampleControllersAndBattery)
+            .expect("stage 1 is installed")
     }
 
     /// One tick, with truth prescribed for it first, as the scenario does.
     fn step(&mut self) -> Frame {
         if self.sim.tick() == self.options.late_launch_tick {
-            self.controllers.trigger_launch(
-                "drone-late",
-                self.sim.tick() as f64 * DT_S,
-                "target-a",
-            );
+            let tick = self.sim.tick();
+            self.controllers_mut()
+                .trigger_launch("drone-late", tick as f64 * DT_S, "target-a");
         }
         let (position, velocity) = target_state(self.sim.tick() as f64 * DT_S);
         self.sim.set_truth(vec![TruthState {
@@ -382,7 +390,7 @@ fn uninterrupted() -> (Vec<Frame>, u64) {
     let mut engaged_at = None;
     for _ in 0..STEPS {
         frames.push(rig.step());
-        if engaged_at.is_none() && rig.controllers.is_engaged("drone-search") == Some(true) {
+        if engaged_at.is_none() && rig.controllers().is_engaged("drone-search") == Some(true) {
             engaged_at = Some(rig.sim.tick());
         }
     }
@@ -564,7 +572,7 @@ fn a_checkpoint_for_a_different_fleet_is_refused_without_mutation() {
     // Same ids, but the follow drone is a search drone here: the checkpoint's
     // follow state has nowhere to go.
     let mut other = Rig::new();
-    other.controllers.install(
+    other.controllers_mut().install(
         "drone-follow",
         launched(Operational::Search(lane()), station(0.0, -400.0)),
     );
@@ -710,19 +718,19 @@ fn nominal_poses_answer_only_for_their_own_tick() {
     }
     let sampled_at = 11.0 * DT_S;
     let (position, _) = rig
-        .controllers
+        .controllers()
         .nominal_pose("drone-follow", sampled_at)
         .expect("the last tick's pose");
     assert!(position.iter().all(|v| v.is_finite()));
     assert_eq!(
-        rig.controllers
+        rig.controllers()
             .nominal_pose("drone-follow", sampled_at + DT_S),
         None
     );
     assert_eq!(
-        rig.controllers
+        rig.controllers()
             .nominal_pose("drone-follow", sampled_at - DT_S),
         None
     );
-    assert_eq!(rig.controllers.nominal_pose("nobody", sampled_at), None);
+    assert_eq!(rig.controllers().nominal_pose("nobody", sampled_at), None);
 }
