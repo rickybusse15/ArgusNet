@@ -46,9 +46,21 @@ from argusnet.evaluation.scenarios import CANONICAL_SCENARIOS  # noqa: E402
 RELEASE_BINARY = REPO_ROOT / "target" / "release" / "argusnet-rs"
 
 
+EXECUTOR_ARGS: list[str] = []
+
+
 def replay_hash(binary: Path, config_path: Path, replay: Path) -> str | None:
     completed = subprocess.run(
-        [str(binary), "sim", "--quiet", "--config", str(config_path), "--replay", str(replay)],
+        [
+            str(binary),
+            "sim",
+            "--quiet",
+            "--config",
+            str(config_path),
+            "--replay",
+            str(replay),
+            *EXECUTOR_ARGS,
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -62,7 +74,7 @@ def replay_hash(binary: Path, config_path: Path, replay: Path) -> str | None:
 
 def run_sim(binary: Path, config_path: Path, *extra: str) -> int:
     completed = subprocess.run(
-        [str(binary), "sim", "--quiet", "--config", str(config_path), *extra],
+        [str(binary), "sim", "--quiet", "--config", str(config_path), *extra, *EXECUTOR_ARGS],
         capture_output=True,
         text=True,
         check=False,
@@ -138,6 +150,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", default="7,42", help="comma-separated seeds")
     parser.add_argument("--binary", type=Path, default=RELEASE_BINARY)
+    parser.add_argument(
+        "--executor",
+        choices=("legacy", "scheduled"),
+        default="legacy",
+        help="argusnet-rs's executor; scheduled must reproduce legacy's hashes (B2.2)",
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--out", type=Path, help="record hashes here")
     mode.add_argument("--check", type=Path, help="compare against a record")
@@ -149,6 +167,7 @@ def main() -> int:
         print(f"{args.binary} missing: cargo build --release -p argusnet-cli")
         return 2
     seeds = [int(s) for s in args.seeds.split(",") if s]
+    EXECUTOR_ARGS[:] = ["--executor", args.executor]
     if args.lifecycle:
         failures = lifecycle(args.binary, seeds)
         for failure in failures:

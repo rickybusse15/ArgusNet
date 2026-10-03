@@ -16,14 +16,16 @@
 //!   at its timestamp is deferred to the next eligible boundary, with its
 //!   effective time recorded ([`EventQueue::push`]).
 //!
-//! Nothing here is wired into [`crate::simulation::Simulation`] yet; the
-//! legacy eleven-stage tick (`legacy_stages_v1`) is unchanged. The serial
-//! executor and the serial-equivalence gate are the next B2 slices.
+//! [`LegacyLaneExecutor`] (B2.2) drives the legacy eleven-stage tick from this
+//! queue as one compound lane (SCHEDULER_LEGACY_MAPPING.md); `legacy_stages_v1`
+//! itself is unchanged.
 //!
 //! [`RUST_RUNTIME_ARCHITECTURE.md`]: ../../../../docs/RUST_RUNTIME_ARCHITECTURE.md
 
+mod executor;
 mod queue;
 mod time;
 
+pub use executor::{ExecutorError, LaneTask, LegacyLaneExecutor, LEGACY_LANE};
 pub use queue::{EventKey, EventQueue, Phase, Scheduled, SourceId};
 pub use time::{Schedule, SimTime, TimeError, NANOS_PER_SECOND};
