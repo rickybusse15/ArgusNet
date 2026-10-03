@@ -107,6 +107,10 @@ struct SimArgs {
     /// as JSON. Timing is kept out of the replay so its bytes stay stable.
     #[arg(long)]
     timing_json: Option<PathBuf>,
+    /// Record each stage's wall time and print a per-stage table (P4.10-pre).
+    /// `--timing-json` then carries it too. Wall time stays out of the replay.
+    #[arg(long)]
+    stage_timing: bool,
 }
 
 const EXIT_FAULT: u8 = 1;
@@ -316,6 +320,9 @@ fn sim(args: SimArgs) -> ExitCode {
             return fail(EXIT_INVALID, format!("cannot resume: {error}"));
         }
     }
+    if args.stage_timing {
+        run.sim.enable_stage_timing();
+    }
     let startup_ms = started.elapsed().as_secs_f64() * 1e3;
     if !args.quiet {
         println!(
@@ -365,6 +372,13 @@ fn sim(args: SimArgs) -> ExitCode {
         .mission
         .as_ref()
         .map(|mission| mission.phase().to_string());
+    // Read before `run_to_replay` consumes the run.
+    let stage_summaries = run
+        .sim
+        .stage_timings()
+        .map(|timings| timings.summaries())
+        .unwrap_or_default();
+    let replay_started = Instant::now();
     let replay = match run.run_to_replay() {
         Ok(replay) => replay,
         Err(error) => return fail(EXIT_FAULT, error),
@@ -378,16 +392,25 @@ fn sim(args: SimArgs) -> ExitCode {
             return fail(EXIT_FAULT, format!("{}: {error}", path.display()));
         }
     }
+    let replay_write_ms = replay_started.elapsed().as_secs_f64() * 1e3;
     let mut sorted = tick_ms.clone();
     sorted.sort_by(f64::total_cmp);
     if let Some(path) = &args.timing_json {
-        let timing = serde_json::json!({
+        let mut timing = serde_json::json!({
             "startup_ms": startup_ms,
             "ticks": sorted.len(),
             "tick_ms": tick_summary(&sorted),
+            "replay_write_ms": replay_write_ms,
             "total_ms": started.elapsed().as_secs_f64() * 1e3,
             "build": if cfg!(debug_assertions) { "debug" } else { "release" },
         });
+        if args.stage_timing {
+            timing["stages"] = stage_summaries
+                .iter()
+                .map(|(stage, summary)| (stage.to_string(), serde_json::json!(summary)))
+                .collect::<serde_json::Map<_, _>>()
+                .into();
+        }
         if let Err(error) = std::fs::write(path, timing.to_string()) {
             return fail(EXIT_FAULT, format!("{}: {error}", path.display()));
         }
@@ -409,8 +432,47 @@ fn sim(args: SimArgs) -> ExitCode {
                 path.display()
             );
         }
+        if args.stage_timing {
+            print!("{}", stage_table(&stage_summaries, replay_write_ms));
+        }
     }
     ExitCode::SUCCESS
+}
+
+/// The `--stage-timing` table: each stage's share of the summed stage time.
+fn stage_table(
+    summaries: &[(
+        argusnet_sim::stage::Stage,
+        argusnet_sim::timing::TimingSummary,
+    )],
+    replay_write_ms: f64,
+) -> String {
+    let total: f64 = summaries.iter().map(|(_, summary)| summary.total_ms).sum();
+    let mut table = format!(
+        "{:<32} {:>7} {:>10} {:>10} {:>10} {:>10} {:>7}\n",
+        "stage", "ticks", "p50 ms", "p95 ms", "p99 ms", "total ms", "share"
+    );
+    for (stage, summary) in summaries {
+        let share = if total > 0.0 {
+            100.0 * summary.total_ms / total
+        } else {
+            0.0
+        };
+        table.push_str(&format!(
+            "{:<32} {:>7} {:>10.4} {:>10.4} {:>10.4} {:>10.2} {:>6.1}%\n",
+            stage.to_string(),
+            summary.count,
+            summary.p50_ms,
+            summary.p95_ms,
+            summary.p99_ms,
+            summary.total_ms,
+            share
+        ));
+    }
+    table.push_str(&format!(
+        "replay build and write: {replay_write_ms:.2} ms\n"
+    ));
+    table
 }
 
 fn main() -> ExitCode {
