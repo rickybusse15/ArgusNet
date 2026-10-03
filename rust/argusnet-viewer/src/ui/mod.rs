@@ -157,14 +157,9 @@ pub fn viewer_ui_system(
     .context();
     let canvas = show_shell(root, &layout, |region, ui| match region {
         Region::Header => {
-            if let Some(command) = header_bar(
-                ui,
-                source,
-                &scene_package,
-                &mut replay_state,
-                &mut view_mode,
-                &mut ui_state,
-            ) {
+            if let Some(command) =
+                header_bar(ui, source, &scene_package, &mut view_mode, &mut ui_state)
+            {
                 apply_shell_command(
                     command,
                     &mut ui_state,

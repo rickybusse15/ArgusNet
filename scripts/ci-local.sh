@@ -144,6 +144,8 @@ job_rust_viewer() {
   step "cargo test -p argusnet-viewer" cargo test -p argusnet-viewer
   step "build the viewer binary" cargo build -p argusnet-viewer --bin argusnet-viewer
   step "headless render smoke test" render_smoke
+  # Needs xvfb-run; the headless render never draws egui, this does.
+  step "windowed shell smoke test" scripts/viewer_window_smoke.sh /tmp/argusnet-render-scene 20
 }
 
 # The only check in the repository that reaches a shader. On Linux it needs

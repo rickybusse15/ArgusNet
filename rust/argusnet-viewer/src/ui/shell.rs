@@ -4,19 +4,21 @@
 use super::*;
 
 /// The application header (VIEWER_UI §4.3): identity and source, the
-/// workspace / projection / preset controls (C2.3), playback, the world view,
-/// and the tool panel (secondary destinations, §4.2). Returns a shell command
+/// workspace / projection / preset controls (C2.3), the world view, and the
+/// tool panel (secondary destinations, §4.2). Time controls live in the
+/// timeline. Returns a shell command
 /// for the caller to apply.
 pub(super) fn header_bar(
     ui: &mut egui::Ui,
     source: SourceContext,
     scene_package: &ScenePackage,
-    replay_state: &mut ReplayState,
     view_mode: &mut ViewMode,
     ui_state: &mut ViewerUiState,
 ) -> Option<ShellCommand> {
     let mut command = None;
-    ui.horizontal_centered(|ui| {
+    // One wrapping row: at the reference width it fits on a line, and a
+    // narrower window wraps it within the header rather than overlapping.
+    ui.horizontal_wrapped(|ui| {
         ui.strong("ArgusNet");
         // The source indicator (§3): first after identity, in the one region
         // no window size or drawer state removes.
@@ -24,48 +26,44 @@ pub(super) fn header_bar(
             .on_hover_text(source.explanation());
         ui.label(&scene_package.manifest.scene_id);
         ui.separator();
-        command = shell_controls(ui, ui_state);
+        command = shell_controls(ui, ui_state).or(command);
         ui.separator();
-        playback_buttons(ui, replay_state);
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let tools_label = if ui_state.drawer_open {
-                format!("Tools: {} \u{25BE}", mode_label(ui_state.mode))
-            } else {
-                "Tools \u{25BE}".to_string()
-            };
-            ui.menu_button(tools_label, |ui| {
-                for (mode, label) in [
-                    (ViewerMode::Mission, "Mission"),
-                    (ViewerMode::Replay, "Replay"),
-                    (ViewerMode::Diagnostics, "Diagnostics"),
-                    (ViewerMode::Scenario, "Scenario"),
-                ] {
-                    mode_button(ui, ui_state, mode, label);
-                }
-                ui.separator();
-                let toggle = if ui_state.drawer_open {
-                    "Close tool panel (T)"
-                } else {
-                    "Open tool panel (T)"
-                };
-                if ui.button(toggle).clicked() {
-                    command = Some(ShellCommand::ToggleToolPanel);
-                }
-            });
-            ui.separator();
+        for (mode, label) in [
+            (ViewMode::RealWorld, "Real"),
+            (ViewMode::ScanMap, "Scan"),
+            (ViewMode::Split, "Split"),
+        ] {
+            if ui
+                .selectable_label(*view_mode == mode, label)
+                .on_hover_text("World view (M cycles)")
+                .clicked()
+            {
+                *view_mode = mode;
+            }
+        }
+        ui.separator();
+        let tools_label = if ui_state.drawer_open {
+            format!("Tools: {}", mode_label(ui_state.mode))
+        } else {
+            "Tools".to_string()
+        };
+        ui.menu_button(tools_label, |ui| {
             for (mode, label) in [
-                (ViewMode::Split, "Split"),
-                (ViewMode::ScanMap, "Scan"),
-                (ViewMode::RealWorld, "Real"),
+                (ViewerMode::Mission, "Mission"),
+                (ViewerMode::Replay, "Replay"),
+                (ViewerMode::Diagnostics, "Diagnostics"),
+                (ViewerMode::Scenario, "Scenario"),
             ] {
-                if ui
-                    .selectable_label(*view_mode == mode, label)
-                    .on_hover_text("World view (M cycles)")
-                    .clicked()
-                {
-                    *view_mode = mode;
-                }
+                mode_button(ui, ui_state, mode, label);
+            }
+            ui.separator();
+            let toggle = if ui_state.drawer_open {
+                "Close tool panel (T)"
+            } else {
+                "Open tool panel (T)"
+            };
+            if ui.button(toggle).clicked() {
+                command = Some(ShellCommand::ToggleToolPanel);
             }
         });
     });
@@ -96,6 +94,8 @@ pub(super) fn status_line(
         if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
             status_chip(ui, phase, color);
             ui.label(detail);
+        } else if replay_state.frame_count() > 0 {
+            status_chip(ui, "NO MISSION STATE", egui::Color32::GRAY);
         } else {
             status_chip(ui, "NO REPLAY", egui::Color32::GRAY);
         }
@@ -173,6 +173,8 @@ pub(super) fn mission_rail(
     if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
         status_chip(ui, phase, color);
         ui.small(detail);
+    } else if replay_state.frame_count() > 0 {
+        ui.small("This replay carries no mission state.");
     } else {
         ui.small("No replay loaded.");
     }

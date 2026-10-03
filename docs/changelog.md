@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Shell fit and finish
+
+- The timeline holds the play, step and speed controls, and fits its region;
+  the header wraps instead of overlapping in narrow windows.
+- Sliders show their track again, and the status line says "no mission
+  state" rather than "no replay" when a replay simply has none.
+- CI runs the real viewer window on a virtual display, so a crash in the
+  operator shell can no longer pass.
+
 ## Unreleased — Workspaces, projections and presets (C2.3)
 
 - The header has three separate controls: the workspace (Operate, Plan,

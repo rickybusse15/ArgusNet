@@ -51,7 +51,7 @@ Each job mirrors one in `.github/workflows/ci.yml`:
 | `python` | ruff, mypy, the proto-regeneration and field-disposition checks, pytest, the benchmark smoke, the perf gate |
 | `rust-fast` | `cargo test --workspace --exclude argusnet-viewer` |
 | `rust-lint` | `cargo fmt --check`, `clippy --workspace --all-targets -D warnings` |
-| `rust-viewer` | the viewer's tests, the viewer binary, and the headless render smoke test |
+| `rust-viewer` | the viewer's tests, the viewer binary, the headless render smoke test, and the windowed shell smoke test (`scripts/viewer_window_smoke.sh`, under Xvfb) |
 | `packaging` | builds the wheel, installs it into a clean venv, runs the installed-package contract from `/tmp` |
 | `security` | pip-audit, bandit, cargo-audit — all advisory, all skipped when not installed |
 
