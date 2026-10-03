@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
 use argusnet_sim::scenario::{assemble, BundleError, RunError, ScenarioBundle};
-use argusnet_sim::scheduler::{ExecutorError, LegacyLaneExecutor};
+use argusnet_sim::scheduler::{ExecutorError, LegacyLaneExecutor, PhasedLaneExecutor};
 
 mod rundir;
 use argusnet_sim::simulation::TickError;
@@ -113,7 +113,9 @@ struct SimArgs {
     reset_at: Option<u64>,
     /// `legacy` steps the eleven-stage tick directly; `scheduled` drives the
     /// same tick from the scheduler's integer-time queue as one compound lane
-    /// (B2.2). The replay is identical either way.
+    /// (B2.2); `lanes` runs fusion, mapping, mission and publication as their
+    /// own phased tasks after the compound lane (B2.3). The replay is
+    /// identical every way.
     #[arg(long, value_enum, default_value = "legacy")]
     executor: Executor,
     /// Record the run in this new directory: its immutable configuration, a
@@ -148,6 +150,13 @@ struct SimArgs {
 enum Executor {
     Legacy,
     Scheduled,
+    Lanes,
+}
+
+/// The scheduler driving the run, if any.
+enum Driver {
+    Compound(LegacyLaneExecutor),
+    Lanes(PhasedLaneExecutor),
 }
 
 const EXIT_FAULT: u8 = 1;
@@ -155,6 +164,14 @@ const EXIT_FAULT: u8 = 1;
 pub(crate) const EXIT_CRASHED: i32 = 4;
 const EXIT_INVALID: u8 = 2;
 const EXIT_UNSUPPORTED: u8 = 3;
+
+/// A tick's own error as itself; the executor's as a broken invariant.
+fn executor_error(error: ExecutorError<RunError>) -> RunError {
+    match error {
+        ExecutorError::Tick(error) => error,
+        other => RunError::Invariant(other.to_string()),
+    }
+}
 
 fn fail(code: u8, message: impl std::fmt::Display) -> ExitCode {
     eprintln!("argusnet-rs: {message}");
@@ -450,17 +467,27 @@ fn sim(args: SimArgs) -> ExitCode {
         Executor::Legacy => None,
         Executor::Scheduled => {
             match LegacyLaneExecutor::new::<RunError>(bundle.dt_s, run.sim.tick()) {
-                Ok(executor) => Some(executor),
+                Ok(executor) => Some(Driver::Compound(executor)),
                 Err(error) => return fail(EXIT_INVALID, error),
             }
         }
+        Executor::Lanes => match PhasedLaneExecutor::new::<RunError>(bundle.dt_s, run.sim.tick()) {
+            Ok(executor) => Some(Driver::Lanes(executor)),
+            Err(error) => return fail(EXIT_INVALID, error),
+        },
     };
     loop {
         if reset_pending == Some(run.sim.tick()) {
             reset_pending = None;
             run.reset();
-            if let Some(executor) = executor.as_mut() {
-                executor.reset();
+            match executor.as_mut() {
+                Some(Driver::Compound(executor)) => {
+                    executor.reset();
+                }
+                Some(Driver::Lanes(executor)) => {
+                    executor.reset();
+                }
+                None => {}
             }
             tick_ms.clear();
             if !args.quiet {
@@ -488,15 +515,13 @@ fn sim(args: SimArgs) -> ExitCode {
         let tick_started = Instant::now();
         let stepped = match executor.as_mut() {
             None => run.step(),
-            Some(executor) => executor
+            Some(Driver::Compound(executor)) => executor
                 .step(|| {
                     let tick = run.sim.tick();
                     run.step().map(|snapshot| (tick, snapshot))
                 })
-                .map_err(|error| match error {
-                    ExecutorError::Tick(error) => error,
-                    other => RunError::Invariant(other.to_string()),
-                }),
+                .map_err(executor_error),
+            Some(Driver::Lanes(executor)) => executor.step(&mut run).map_err(executor_error),
         };
         match stepped {
             Ok(_) => {

@@ -380,6 +380,53 @@ impl StageHandler for UnportedStage {
     }
 }
 
+/// What [`Simulation::begin_tick`] left.
+#[derive(Debug)]
+pub enum TickStart {
+    /// The tick is open: run its stages, then commit it.
+    Open(OpenTick),
+    /// Stage 0 applied a Reset and committed the fresh run; there is nothing
+    /// more to run this tick.
+    Committed(Arc<RuntimeSnapshot>),
+}
+
+/// A tick in progress: how far its stages have run.
+#[derive(Debug)]
+pub struct OpenTick {
+    tick: u64,
+    epoch: u64,
+    /// The next stage's position in [`Stage::PIPELINE`].
+    next: usize,
+}
+
+impl OpenTick {
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+}
+
+impl crate::scheduler::PhasedTick for Simulation {
+    type Open = OpenTick;
+    type Output = Arc<RuntimeSnapshot>;
+    type Error = TickError;
+
+    fn current_tick(&self) -> u64 {
+        self.tick()
+    }
+    fn begin(&mut self) -> Result<Result<OpenTick, Arc<RuntimeSnapshot>>, TickError> {
+        Ok(match self.begin_tick()? {
+            TickStart::Open(open) => Ok(open),
+            TickStart::Committed(snapshot) => Err(snapshot),
+        })
+    }
+    fn run_through(&mut self, open: &mut OpenTick, last: Stage) -> Result<(), TickError> {
+        Simulation::run_through(self, open, last)
+    }
+    fn commit(&mut self, open: OpenTick) -> Result<Arc<RuntimeSnapshot>, TickError> {
+        self.commit_tick(open)
+    }
+}
+
 /// Why the run is not stepping.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TickError {
@@ -396,6 +443,9 @@ pub enum TickError {
     /// The run is paused. Not a failure either — `step` is how a caller finds
     /// out, since a paused run that silently advanced would be worse.
     Paused,
+    /// A tick run in parts was driven out of order (B2.3): a stage asked for
+    /// twice or skipped, or a commit before every stage ran.
+    OutOfOrder { detail: String },
 }
 
 impl fmt::Display for TickError {
@@ -413,6 +463,9 @@ impl fmt::Display for TickError {
                 write!(formatter, "run completed after {tick} ticks")
             }
             TickError::Paused => write!(formatter, "run is paused"),
+            TickError::OutOfOrder { detail } => {
+                write!(formatter, "tick run out of order: {detail}")
+            }
         }
     }
 }
@@ -949,8 +1002,24 @@ impl Simulation {
     /// Run one tick, or explain why not.
     ///
     /// On success exactly one snapshot is committed. On failure nothing is
-    /// published and the run is faulted.
+    /// published and the run is faulted. The same as [`Self::begin_tick`],
+    /// [`Self::run_through`] stage 9 and [`Self::commit_tick`], which a
+    /// scheduler uses to run the tick in parts (B2.3).
     pub fn step(&mut self) -> Result<Arc<RuntimeSnapshot>, TickError> {
+        let mut open = match self.begin_tick()? {
+            TickStart::Open(open) => open,
+            TickStart::Committed(snapshot) => return Ok(snapshot),
+        };
+        self.run_through(&mut open, Stage::EvaluateMissionTransitions)?;
+        self.commit_tick(open)
+    }
+
+    /// Stage 0 and the boundary checks: the first part of [`Self::step`].
+    ///
+    /// A Reset applied by stage 0 commits the fresh run at once
+    /// ([`TickStart::Committed`]); otherwise the tick is open for
+    /// [`Self::run_through`].
+    pub fn begin_tick(&mut self) -> Result<TickStart, TickError> {
         let tick = self.clock.tick();
         let epoch = self.epoch;
 
@@ -1000,7 +1069,7 @@ impl Simulation {
         // the rest of this tick would be operating on a clock that no longer
         // matches `tick`. Stop here and let the caller step the fresh run.
         if self.epoch != epoch {
-            return Ok(self.commit_timed());
+            return Ok(TickStart::Committed(self.commit_timed()));
         }
 
         if let RunState::Faulted { at_tick, stage } = &self.state {
@@ -1025,52 +1094,66 @@ impl Simulation {
             self.paused = true;
         }
         self.world.begin_tick();
+        Ok(TickStart::Open(OpenTick {
+            tick,
+            epoch,
+            next: 1,
+        }))
+    }
 
-        for stage in Stage::PIPELINE.into_iter().skip(1) {
+    /// Run the open tick's stages up to and including `last`, in pipeline
+    /// order, from wherever the tick has got to. Stages 0 and 10 are
+    /// [`Self::begin_tick`]'s and [`Self::commit_tick`]'s.
+    pub fn run_through(&mut self, open: &mut OpenTick, last: Stage) -> Result<(), TickError> {
+        if matches!(last, Stage::ApplyCommands | Stage::CommitSnapshot) {
+            return Err(TickError::OutOfOrder {
+                detail: format!("stage {last} is the tick's boundary, not a stage to run"),
+            });
+        }
+        if open.epoch != self.epoch || open.tick != self.clock.tick() {
+            return Err(TickError::OutOfOrder {
+                detail: "the open tick is not this run's current tick".into(),
+            });
+        }
+        if (last.order() as usize) < open.next {
+            return Err(TickError::OutOfOrder {
+                detail: format!("stage {last} has already run this tick"),
+            });
+        }
+        let tick = open.tick;
+        while open.next <= last.order() as usize {
+            let stage = Stage::PIPELINE[open.next];
             let mut notes = Vec::new();
-            let started = if stage == Stage::CommitSnapshot {
-                None
-            } else {
-                self.timer()
+            let started = self.timer();
+            // Taken out for its run, so the others can be lent.
+            let mut handler = self.handlers.remove(&stage);
+            let mut context = TickContext {
+                tick,
+                timestamp_s: self.clock.timestamp_s(),
+                dt_s: self.config.timestep().seconds(),
+                seed: self.config.seed(),
+                seed_time_key: self.clock.seed_time_key(),
+                world: &mut self.world,
+                // The capability, handed out by stage and nowhere else.
+                truth: stage.may_read_truth().then_some(self.truth.as_slice()),
+                stages: StageViews {
+                    handlers: &self.handlers,
+                    truth_visible: stage.may_read_truth(),
+                },
+                notes: &mut notes,
             };
-            let outcome = match stage {
-                Stage::ApplyCommands => unreachable!("stage 0 ran before the pause check"),
-                // Timed where the work is, in `commit_timed`.
-                Stage::CommitSnapshot => Ok(StageOutcome::Ran),
-                _ => {
-                    // Taken out for its run, so the others can be lent.
-                    let mut handler = self.handlers.remove(&stage);
-                    let mut context = TickContext {
-                        tick,
-                        timestamp_s: self.clock.timestamp_s(),
-                        dt_s: self.config.timestep().seconds(),
-                        seed: self.config.seed(),
-                        seed_time_key: self.clock.seed_time_key(),
-                        world: &mut self.world,
-                        // The capability, handed out by stage and nowhere else.
-                        truth: stage.may_read_truth().then_some(self.truth.as_slice()),
-                        stages: StageViews {
-                            handlers: &self.handlers,
-                            truth_visible: stage.may_read_truth(),
-                        },
-                        notes: &mut notes,
-                    };
-                    let outcome = match handler.as_mut() {
-                        Some(handler) => handler.run(&mut context),
-                        None => UnportedStage.run(&mut context),
-                    };
-                    if let Some(handler) = handler {
-                        self.handlers.insert(stage, handler);
-                    }
-                    outcome
-                }
+            let outcome = match handler.as_mut() {
+                Some(handler) => handler.run(&mut context),
+                None => UnportedStage.run(&mut context),
             };
+            if let Some(handler) = handler {
+                self.handlers.insert(stage, handler);
+            }
             if let Ok(ran) = &outcome {
                 self.apply_handoffs(stage, ran, &mut notes);
             }
-            if stage != Stage::CommitSnapshot {
-                self.time_stage(stage, started);
-            }
+            self.time_stage(stage, started);
+            open.next += 1;
 
             match outcome {
                 Ok(outcome) => self.trace.record(StageRecord {
@@ -1100,7 +1183,24 @@ impl Simulation {
                 }
             }
         }
+        Ok(())
+    }
 
+    /// Stage 10: commit the open tick. Every stage must have run.
+    pub fn commit_tick(&mut self, open: OpenTick) -> Result<Arc<RuntimeSnapshot>, TickError> {
+        let commit = Stage::CommitSnapshot.order() as usize;
+        if open.next != commit || open.epoch != self.epoch || open.tick != self.clock.tick() {
+            return Err(TickError::OutOfOrder {
+                detail: format!("commit with the tick at stage {} of {commit}", open.next),
+            });
+        }
+        self.trace.record(StageRecord {
+            tick: open.tick,
+            order: Stage::CommitSnapshot.order(),
+            stage: Stage::CommitSnapshot,
+            outcome: StageOutcome::Ran,
+            notes: Vec::new(),
+        });
         // Commit. Only now does the tick advance and a revision become visible.
         self.clock.advance();
         Ok(self.commit_timed())

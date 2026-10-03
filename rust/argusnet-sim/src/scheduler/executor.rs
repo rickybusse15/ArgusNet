@@ -138,7 +138,7 @@ impl LegacyLaneExecutor {
 
 /// `dt_s` in whole nanoseconds, if it is exactly that: the integer boundary
 /// converts back to the same `f64`.
-fn exact_nanos(dt_s: f64) -> Option<NonZeroU64> {
+pub(super) fn exact_nanos(dt_s: f64) -> Option<NonZeroU64> {
     if !dt_s.is_finite() || dt_s <= 0.0 {
         return None;
     }

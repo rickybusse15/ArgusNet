@@ -152,9 +152,10 @@ def main() -> int:
     parser.add_argument("--binary", type=Path, default=RELEASE_BINARY)
     parser.add_argument(
         "--executor",
-        choices=("legacy", "scheduled"),
+        choices=("legacy", "scheduled", "lanes"),
         default="legacy",
-        help="argusnet-rs's executor; scheduled must reproduce legacy's hashes (B2.2)",
+        help="argusnet-rs's executor; scheduled (B2.2) and lanes (B2.3) must reproduce "
+        "legacy's hashes",
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--out", type=Path, help="record hashes here")

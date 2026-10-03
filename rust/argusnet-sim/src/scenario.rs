@@ -63,7 +63,8 @@ use crate::replay::{
 };
 use crate::runtime_world::{SharedObstacles, SharedTerrain, SharedVisibility};
 use crate::safety::SafetyStage;
-use crate::simulation::{Handoff, Simulation, TickError};
+use crate::scheduler::PhasedTick;
+use crate::simulation::{Handoff, OpenTick, Simulation, TickError, TickStart};
 use crate::snapshot::RuntimeSnapshot;
 use crate::stage::Stage;
 use crate::trajectory::LaunchController;
@@ -670,6 +671,34 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
 }
 
 /// A bundle, assembled into a running simulation.
+/// An [`AssembledRun`] tick in progress: the open simulation tick, and the
+/// timestamp and truth its replay frame records.
+#[derive(Debug)]
+pub struct AssembledTick {
+    tick: OpenTick,
+    timestamp_s: f64,
+    truths: Vec<TruthState>,
+}
+
+impl PhasedTick for AssembledRun {
+    type Open = AssembledTick;
+    type Output = Arc<RuntimeSnapshot>;
+    type Error = RunError;
+
+    fn current_tick(&self) -> u64 {
+        self.sim.tick()
+    }
+    fn begin(&mut self) -> Result<Result<AssembledTick, Arc<RuntimeSnapshot>>, RunError> {
+        self.begin_tick()
+    }
+    fn run_through(&mut self, open: &mut AssembledTick, last: Stage) -> Result<(), RunError> {
+        AssembledRun::run_through(self, open, last)
+    }
+    fn commit(&mut self, open: AssembledTick) -> Result<Arc<RuntimeSnapshot>, RunError> {
+        self.commit_tick(open)
+    }
+}
+
 pub struct AssembledRun {
     pub sim: Simulation,
     /// The mission driver's configuration and POIs, as constructed.
@@ -1437,12 +1466,58 @@ impl AssembledRun {
         self.sim.tick() as f64 * self.dt_s
     }
 
-    /// One tick: prescribe truth for it, step, record a replay frame.
+    /// One tick: prescribe truth for it, step, record a replay frame. The
+    /// same as [`Self::begin_tick`], [`Self::run_through`] stage 9 and
+    /// [`Self::commit_tick`], which the lane executor runs in parts (B2.3).
     pub fn step(&mut self) -> Result<Arc<RuntimeSnapshot>, RunError> {
+        match self.begin_tick()? {
+            Ok(mut open) => {
+                self.run_through(&mut open, Stage::EvaluateMissionTransitions)?;
+                self.commit_tick(open)
+            }
+            Err(snapshot) => Ok(snapshot),
+        }
+    }
+
+    /// Prescribe truth for the next tick and run its stage 0. `Err` inside
+    /// the `Ok` is a tick stage 0 already committed (a reset), with its
+    /// replay frame recorded.
+    pub fn begin_tick(&mut self) -> Result<Result<AssembledTick, Arc<RuntimeSnapshot>>, RunError> {
         let timestamp_s = self.next_timestamp_s();
         let truths = self.truth.truths_at(timestamp_s).map_err(RunError::Truth)?;
         self.sim.set_truth(truths.clone());
-        let snapshot = self.sim.step().map_err(RunError::Tick)?;
+        match self.sim.begin_tick().map_err(RunError::Tick)? {
+            TickStart::Open(tick) => Ok(Ok(AssembledTick {
+                tick,
+                timestamp_s,
+                truths,
+            })),
+            TickStart::Committed(snapshot) => {
+                self.record_frame(snapshot, timestamp_s, truths).map(Err)
+            }
+        }
+    }
+
+    /// Run the open tick's stages through `last`.
+    pub fn run_through(&mut self, open: &mut AssembledTick, last: Stage) -> Result<(), RunError> {
+        self.sim
+            .run_through(&mut open.tick, last)
+            .map_err(RunError::Tick)
+    }
+
+    /// Commit the open tick and record its replay frame.
+    pub fn commit_tick(&mut self, open: AssembledTick) -> Result<Arc<RuntimeSnapshot>, RunError> {
+        let snapshot = self.sim.commit_tick(open.tick).map_err(RunError::Tick)?;
+        self.record_frame(snapshot, open.timestamp_s, open.truths)
+    }
+
+    /// The committed tick's replay frame.
+    fn record_frame(
+        &mut self,
+        snapshot: Arc<RuntimeSnapshot>,
+        timestamp_s: f64,
+        truths: Vec<TruthState>,
+    ) -> Result<Arc<RuntimeSnapshot>, RunError> {
         // Stage 7 runs on every tick, barren ones included (the track
         // lifecycle ages on ticks passing), so a missing frame is a broken
         // invariant, not an empty tick.

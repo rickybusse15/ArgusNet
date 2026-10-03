@@ -160,17 +160,24 @@ pub struct ViewerUiState {
     /// A selection the inspector's entity list asks for, applied by
     /// `picking::keyboard_selection_system` (the UI only reads the selection).
     pub select_request: Option<crate::picking::SelectRequest>,
+    /// The world canvas's top-left corner in logical pixels, as the shell
+    /// last laid it out: where canvas overlays (the phase HUD, the live
+    /// badge) anchor so that no rail or inspector covers them.
+    pub canvas_origin: [f32; 2],
 }
 
 impl Default for ViewerUiState {
     fn default() -> Self {
         Self {
             mode: ViewerMode::Mission,
-            drawer_open: true,
+            // A secondary destination (VIEWER_UI §4.1): closed until asked
+            // for, so the canvas stays the dominant region.
+            drawer_open: false,
             selected_timeline_frame: None,
             focused_entity_label: None,
             map_layer_preset: MapLayerPreset::Operator,
             select_request: None,
+            canvas_origin: [0.0, 0.0],
         }
     }
 }
