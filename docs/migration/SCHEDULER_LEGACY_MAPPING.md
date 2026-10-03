@@ -60,6 +60,37 @@ seed key, truth lookup and replay timestamp hangs off that value.
    the legacy derivation until its own extraction says otherwise; mixing the two
    inside one lane is refused.
 
+## B2.3: the first lanes out (done)
+
+Fusion (7), mapping (8), mission (9) and publication (10) leave the compound
+task. Their legacy order is the phases' order (estimators → mapping →
+mission/planning → publication), so each runs where it always ran and the run
+stays bit-exact. `PhasedLaneExecutor` (`scheduler/lanes.rs`) queues five tasks
+per legacy boundary at its integer deadline:
+
+| Lane (source) | Phase | Runs |
+|---|---|---|
+| compound (0) | `Propagate` | stage 0 and the boundary checks, then stages 1–6 |
+| fusion (1) | `Estimators` | stage 7 |
+| mapping (2) | `Mapping` | stage 8 |
+| mission (3) | `MissionPlanning` | stage 9 |
+| publication (4) | `Publication` | stage 10: commit |
+
+`Simulation` runs a tick in parts — `begin_tick`, `run_through(stage)`,
+`commit_tick` — and refuses parts out of order (`TickError::OutOfOrder`): a
+stage run twice or skipped, a commit before stage 9, a tick from another epoch.
+`step` is those three parts in sequence. A failed lane discards the rest of its
+boundary; a reset applied by stage 0 commits at once and the executor follows
+the run back to tick 0. Every lane still reads the legacy float time, so no
+lane mixes the two derivations.
+
+Stages 1–6 stay compound: moving any of them is a reorder (§1), and so a
+declared behaviour change of `scheduled_v1`, judged statistically.
+
+Evidence: `argusnet-rs sim --executor lanes` reproduces the legacy replays byte
+for byte (`scripts/replay_hashes.py --executor lanes --check`, 14/14) and
+passes `--lifecycle`.
+
 ## Not decided here
 
 Rates other than the legacy rate, per-subsystem elapsed time, fork-join (B3)

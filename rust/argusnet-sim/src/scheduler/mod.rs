@@ -18,14 +18,18 @@
 //!
 //! [`LegacyLaneExecutor`] (B2.2) drives the legacy eleven-stage tick from this
 //! queue as one compound lane (SCHEDULER_LEGACY_MAPPING.md); `legacy_stages_v1`
-//! itself is unchanged.
+//! itself is unchanged. [`PhasedLaneExecutor`] (B2.3) takes fusion, mapping,
+//! mission and publication out of that lane as their own phased tasks, in
+//! their legacy order.
 //!
 //! [`RUST_RUNTIME_ARCHITECTURE.md`]: ../../../../docs/RUST_RUNTIME_ARCHITECTURE.md
 
 mod executor;
+mod lanes;
 mod queue;
 mod time;
 
 pub use executor::{ExecutorError, LaneTask, LegacyLaneExecutor, LEGACY_LANE};
+pub use lanes::{Lane, LanePart, PhasedLaneExecutor, PhasedTick, LANES_V1};
 pub use queue::{EventKey, EventQueue, Phase, Scheduled, SourceId};
 pub use time::{Schedule, SimTime, TimeError, NANOS_PER_SECOND};

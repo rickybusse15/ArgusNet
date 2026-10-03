@@ -12,7 +12,10 @@ use argusnet_sim::command::{
     AckStatus, CommandEnvelope, CommandKind, CommandQueue, RejectReason, PROTOCOL_VERSION,
 };
 use argusnet_sim::config::SimulationConfig;
-use argusnet_sim::simulation::{Handoff, Simulation, StageHandler, TickContext, TickError};
+use argusnet_sim::scheduler::PhasedLaneExecutor;
+use argusnet_sim::simulation::{
+    Handoff, Simulation, StageHandler, TickContext, TickError, TickStart,
+};
 use argusnet_sim::snapshot::{CheckpointHeader, RestoreError};
 use argusnet_sim::stage::{Stage, StageError, StageOutcome};
 
@@ -1240,4 +1243,110 @@ fn only_vio_and_observations_may_read_truth() {
         readers,
         vec![Stage::UpdateVioAndPose, Stage::GenerateObservations]
     );
+}
+
+// ---------------------------------------------------------------------------
+// A tick in parts (B2.3)
+// ---------------------------------------------------------------------------
+
+fn open(sim: &mut Simulation) -> argusnet_sim::simulation::OpenTick {
+    match sim.begin_tick().expect("opens") {
+        TickStart::Open(open) => open,
+        TickStart::Committed(_) => panic!("no reset was queued"),
+    }
+}
+
+#[test]
+fn the_lane_executor_runs_the_same_ticks_as_step() {
+    let mut stepped = simulation();
+    let mut laned = simulation();
+    for sim in [&mut stepped, &mut laned] {
+        sim.set_stage_handler(Stage::UpdateFusion, Box::new(RecordingStage::default()))
+            .expect("stage 7 is delegable");
+    }
+    let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0).unwrap();
+    for _ in 0..20 {
+        let a = stepped.step().expect("tick");
+        let b = executor.step(&mut laned).expect("tick");
+        assert_eq!(a.header.tick, b.header.tick);
+        assert_eq!(a.header.epoch, b.header.epoch);
+        assert_eq!(a.header.revision, b.header.revision);
+        assert_eq!(
+            a.header.timestamp_s.to_bits(),
+            b.header.timestamp_s.to_bits()
+        );
+    }
+    assert_eq!(
+        stepped.trace().to_json().unwrap(),
+        laned.trace().to_json().unwrap(),
+        "the same stages, in the same order, with the same notes"
+    );
+    assert_eq!(executor.ran().len(), 5);
+}
+
+#[test]
+fn a_tick_in_parts_refuses_to_run_out_of_order() {
+    let mut sim = simulation();
+    let mut tick = open(&mut sim);
+    sim.run_through(&mut tick, Stage::UpdateFusion).unwrap();
+    for stage in [Stage::Deconflict, Stage::UpdateFusion] {
+        assert!(
+            matches!(
+                sim.run_through(&mut tick, stage),
+                Err(TickError::OutOfOrder { .. })
+            ),
+            "stage {stage} already ran"
+        );
+    }
+    for boundary in [Stage::ApplyCommands, Stage::CommitSnapshot] {
+        assert!(matches!(
+            sim.run_through(&mut tick, boundary),
+            Err(TickError::OutOfOrder { .. })
+        ));
+    }
+    assert!(
+        !sim.is_faulted(),
+        "a refused request is the caller's error, not the run's"
+    );
+    sim.run_through(&mut tick, Stage::UpdateMappingAndLocalization)
+        .unwrap();
+    assert!(
+        matches!(sim.commit_tick(tick), Err(TickError::OutOfOrder { .. })),
+        "a commit before stage 9 is refused"
+    );
+    assert_eq!(sim.tick(), 0);
+    assert_eq!(sim.revision(), 0, "and publishes nothing");
+}
+
+#[test]
+fn a_tick_from_another_epoch_cannot_run_or_commit() {
+    let mut sim = simulation();
+    let mut stale = open(&mut sim);
+    sim.reset();
+    assert!(matches!(
+        sim.run_through(&mut stale, Stage::UpdateFusion),
+        Err(TickError::OutOfOrder { .. })
+    ));
+    assert!(matches!(
+        sim.commit_tick(stale),
+        Err(TickError::OutOfOrder { .. })
+    ));
+}
+
+#[test]
+fn a_reset_at_stage_zero_ends_the_boundary_under_the_lane_executor() {
+    let mut sim = simulation();
+    let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0).unwrap();
+    for _ in 0..3 {
+        executor.step(&mut sim).expect("tick");
+    }
+    assert!(sim
+        .apply_command(CommandEnvelope::new(1, "scan", 0, CommandKind::Reset))
+        .is_accepted());
+    let reset = executor.step(&mut sim).expect("the reset commits");
+    assert_eq!((reset.header.tick, reset.header.epoch), (0, 1));
+    assert_eq!(executor.ran().len(), 1, "nothing after stage 0 ran");
+    // The executor follows the run back to tick 0 of the new epoch.
+    let next = executor.step(&mut sim).expect("tick 0 of the new epoch");
+    assert_eq!((next.header.tick, next.header.epoch), (1, 1));
 }

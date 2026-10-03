@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Fusion, mapping, mission and publication as lanes (B2.3)
+
+- `argusnet-rs sim --executor lanes` runs fusion, mapping, mission and
+  publication as their own scheduled tasks, each in its own phase, after the
+  compound lane. The replay is byte-identical to the legacy executor's.
+
 ## Unreleased — Why the mission did what it did (F3)
 
 - The mission driver records each decision it makes -- coordinator, POI
