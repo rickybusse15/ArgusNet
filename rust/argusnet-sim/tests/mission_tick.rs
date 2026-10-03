@@ -28,7 +28,7 @@ fn scan_done(t: f64, n: usize, confidence: f64) -> MissionInputs {
     MissionInputs {
         timestamp_s: t,
         coverage_fraction: 0.9,
-        gap_cell_fraction: 0.0,
+        gap_cell_fraction: Some(0.0),
         mobile_count: n,
         localization_confidences: vec![confidence; n],
         localizer_timed_out: false,

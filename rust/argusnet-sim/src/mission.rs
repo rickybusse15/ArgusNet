@@ -145,8 +145,11 @@ pub struct MissionInputs {
     pub timestamp_s: f64,
     /// `cov.coverage_fraction`, in [0, 1].
     pub coverage_fraction: f64,
-    /// Enclosed interior holes as a fraction of all cells.
-    pub gap_cell_fraction: f64,
+    /// Enclosed interior holes as a fraction of all cells, or `None` where
+    /// the caller did not search for them. The search is a whole-grid scan,
+    /// needed only on the scanning gate; a gate that finds `None` holds, so
+    /// an unevaluated value can never let the mission advance.
+    pub gap_cell_fraction: Option<f64>,
     /// Mobile platforms this tick — the reference's `len(mobile_states)`.
     ///
     /// Carried explicitly rather than inferred from either vector below,
@@ -171,7 +174,7 @@ impl MissionInputs {
         Self {
             timestamp_s,
             coverage_fraction: 0.0,
-            gap_cell_fraction: 0.0,
+            gap_cell_fraction: Some(0.0),
             mobile_count: 0,
             localization_confidences: Vec::new(),
             localizer_timed_out: false,
@@ -337,8 +340,10 @@ impl MissionState {
             return None;
         }
         // Strictly less: at exactly the threshold the mission keeps scanning.
-        if inputs.gap_cell_fraction >= config.gap_fill_min_fraction {
-            return None;
+        match inputs.gap_cell_fraction {
+            Some(fraction) if fraction < config.gap_fill_min_fraction => {}
+            // At or above the minimum, or never searched: keep scanning.
+            _ => return None,
         }
         // `(not mobile_states) or all(...)`: an empty fleet is converged here.
         // The localizing branch reads the same emptiness the other way.
@@ -592,7 +597,7 @@ mod tests {
         MissionInputs {
             timestamp_s: t,
             coverage_fraction: 0.0,
-            gap_cell_fraction: 0.0,
+            gap_cell_fraction: Some(0.0),
             mobile_count: n,
             localization_confidences: vec![confidence; n],
             localizer_timed_out: false,
@@ -605,7 +610,7 @@ mod tests {
     fn scan_done(t: f64, n: usize, confidence: f64) -> MissionInputs {
         MissionInputs {
             coverage_fraction: 0.70,
-            gap_cell_fraction: 0.0,
+            gap_cell_fraction: Some(0.0),
             ..inputs(t, n, confidence)
         }
     }
@@ -737,14 +742,20 @@ mod tests {
 
         // The gap gate is the only strict one: exactly at the fraction blocks.
         let mut at_gap = MissionState::new();
-        i.gap_cell_fraction = cfg.gap_fill_min_fraction;
+        i.gap_cell_fraction = Some(cfg.gap_fill_min_fraction);
         at_gap.advance(&cfg, &i);
         assert_eq!(at_gap.phase(), MissionPhase::Scanning, "`<`");
 
         let mut under_gap = MissionState::new();
-        i.gap_cell_fraction = cfg.gap_fill_min_fraction - 1e-12;
+        i.gap_cell_fraction = Some(cfg.gap_fill_min_fraction - 1e-12);
         under_gap.advance(&cfg, &i);
         assert_eq!(under_gap.phase(), MissionPhase::Inspecting);
+
+        // A gap fraction nobody searched for never opens the gate.
+        let mut unsearched = MissionState::new();
+        i.gap_cell_fraction = None;
+        unsearched.advance(&cfg, &i);
+        assert_eq!(unsearched.phase(), MissionPhase::Scanning, "None holds");
     }
 
     #[test]
@@ -1020,7 +1031,7 @@ mod tests {
         };
         let mut state = MissionState::new();
         let mut i = scan_done(1.0, 1, 0.20);
-        i.gap_cell_fraction = 0.40;
+        i.gap_cell_fraction = Some(0.40);
         state.advance(&cfg, &i);
         assert_eq!(state.phase(), MissionPhase::Scanning, "0.70 < 0.95");
 

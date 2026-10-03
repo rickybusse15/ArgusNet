@@ -805,7 +805,7 @@ mod tests {
     fn converged_inputs() -> MissionInputs {
         MissionInputs {
             coverage_fraction: 0.95,
-            gap_cell_fraction: 0.0,
+            gap_cell_fraction: Some(0.0),
             mobile_count: 1,
             localization_confidences: vec![0.99],
             ..MissionInputs::at(0.0)
@@ -869,7 +869,7 @@ mod tests {
         // `scanning` goes to `localizing` rather than `inspecting`.
         let unconverged = MissionInputs {
             coverage_fraction: 0.95,
-            gap_cell_fraction: 0.0,
+            gap_cell_fraction: Some(0.0),
             mobile_count: 1,
             localization_confidences: vec![0.10],
             ..MissionInputs::at(0.0)

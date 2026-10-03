@@ -132,12 +132,8 @@ fn gap_cell_fraction(mapping: &MappingLink) -> f64 {
     let Ok((nx, ny)) = bounds.dimensions() else {
         return 0.0;
     };
-    let mut counts = Vec::with_capacity(nx * ny);
-    for i in 0..nx {
-        for j in 0..ny {
-            counts.push(mapping.coverage_count_at(i, j));
-        }
-    }
+    let counts = mapping.coverage_counts();
+    debug_assert_eq!(counts.len(), nx * ny, "coverage grid and bounds disagree");
     let view = CoverageView {
         counts: &counts,
         bounds: argusnet_planning::frontier::GridBounds {
@@ -520,10 +516,19 @@ impl StageHandler for MissionDriverStage {
                 self.mapping.localizer_timed_out(),
             )
         };
+        // The gap search scans the whole grid. The reference runs it only on
+        // the scanning gate -- while scanning, once coverage has reached the
+        // threshold (`sim.py`) -- and that is the only place the machine
+        // reads it, so it is computed there and nowhere else (P4.10c: it was
+        // ~45 % of a scan scenario's tick when run every tick).
+        let coverage_fraction = self.mapping.coverage_fraction();
+        let gap_cell_fraction = (phase == MissionPhase::Scanning
+            && coverage_fraction >= self.machine.config().scan_coverage_threshold)
+            .then(|| gap_cell_fraction(&self.mapping));
         self.mission.set_inputs(MissionInputs {
             timestamp_s,
-            coverage_fraction: self.mapping.coverage_fraction(),
-            gap_cell_fraction: gap_cell_fraction(&self.mapping),
+            coverage_fraction,
+            gap_cell_fraction,
             mobile_count: mobile.len(),
             localization_confidences,
             localizer_timed_out,
