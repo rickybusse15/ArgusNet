@@ -25,6 +25,7 @@ use std::time::Instant;
 
 use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
 use argusnet_sim::scenario::{assemble, BundleError, RunError, ScenarioBundle};
+use argusnet_sim::scheduler::{ExecutorError, LegacyLaneExecutor};
 use argusnet_sim::simulation::TickError;
 use argusnet_sim::snapshot::SimulationCheckpoint;
 use clap::{Parser, Subcommand};
@@ -105,6 +106,11 @@ struct SimArgs {
     /// straight run's byte for byte.
     #[arg(long, conflicts_with = "resume")]
     reset_at: Option<u64>,
+    /// `legacy` steps the eleven-stage tick directly; `scheduled` drives the
+    /// same tick from the scheduler's integer-time queue as one compound lane
+    /// (B2.2). The replay is identical either way.
+    #[arg(long, value_enum, default_value = "legacy")]
+    executor: Executor,
     /// Print nothing but errors.
     #[arg(long)]
     quiet: bool,
@@ -116,6 +122,12 @@ struct SimArgs {
     /// `--timing-json` then carries it too. Wall time stays out of the replay.
     #[arg(long)]
     stage_timing: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Executor {
+    Legacy,
+    Scheduled,
 }
 
 const EXIT_FAULT: u8 = 1;
@@ -344,10 +356,22 @@ fn sim(args: SimArgs) -> ExitCode {
 
     let mut tick_ms: Vec<f64> = Vec::new();
     let mut reset_pending = args.reset_at;
+    let mut executor = match args.executor {
+        Executor::Legacy => None,
+        Executor::Scheduled => {
+            match LegacyLaneExecutor::new::<RunError>(bundle.dt_s, run.sim.tick()) {
+                Ok(executor) => Some(executor),
+                Err(error) => return fail(EXIT_INVALID, error),
+            }
+        }
+    };
     loop {
         if reset_pending == Some(run.sim.tick()) {
             reset_pending = None;
             run.reset();
+            if let Some(executor) = executor.as_mut() {
+                executor.reset();
+            }
             tick_ms.clear();
             if !args.quiet {
                 println!("reset; running again from tick 0");
@@ -372,7 +396,19 @@ fn sim(args: SimArgs) -> ExitCode {
             }
         }
         let tick_started = Instant::now();
-        match run.step() {
+        let stepped = match executor.as_mut() {
+            None => run.step(),
+            Some(executor) => executor
+                .step(|| {
+                    let tick = run.sim.tick();
+                    run.step().map(|snapshot| (tick, snapshot))
+                })
+                .map_err(|error| match error {
+                    ExecutorError::Tick(error) => error,
+                    other => RunError::Invariant(other.to_string()),
+                }),
+        };
+        match stepped {
             Ok(_) => tick_ms.push(tick_started.elapsed().as_secs_f64() * 1e3),
             Err(RunError::Tick(TickError::Completed { .. })) => break,
             // A tick error names its tick and stage; truth and invariant
