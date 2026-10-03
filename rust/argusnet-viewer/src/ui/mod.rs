@@ -20,6 +20,7 @@ mod shell;
 mod source;
 mod timeline;
 mod widgets;
+mod workspace;
 
 use commands::*;
 pub use inspectors::terrain_raster_status;
@@ -31,6 +32,8 @@ pub use source::{SourceContext, SourceInputs};
 use timeline::*;
 use widgets::*;
 pub use widgets::{covariance_diagonal, health_color};
+use workspace::*;
+pub use workspace::{apply_shell_command, shell_keyboard_system, ShellCommand};
 
 const MISSION_MODES: &[&str] = &["scan_map_inspect", "target_tracking"];
 
@@ -148,14 +151,23 @@ pub fn viewer_ui_system(
     }
     .context();
     let canvas = show_shell(root, &layout, |region, ui| match region {
-        Region::Header => header_bar(
-            ui,
-            source,
-            &scene_package,
-            &mut replay_state,
-            &mut view_mode,
-            &mut ui_state,
-        ),
+        Region::Header => {
+            if let Some(command) = header_bar(
+                ui,
+                source,
+                &scene_package,
+                &mut replay_state,
+                &mut view_mode,
+                &mut ui_state,
+            ) {
+                apply_shell_command(
+                    command,
+                    &mut ui_state,
+                    &mut runtime_visibility,
+                    &mut mission_overlay,
+                );
+            }
+        }
         Region::StatusLine => status_line(
             ui,
             &replay_state,
@@ -165,7 +177,7 @@ pub fn viewer_ui_system(
             &layout,
         ),
         Region::Timeline => section_operator_timeline(ui, &mut replay_state, &mut ui_state),
-        Region::Rail => mission_rail(ui, &replay_state, &mission_zones),
+        Region::Rail => mission_rail(ui, ui_state.workspace, &replay_state, &mission_zones),
         Region::Drawer => match ui_state.mode {
             ViewerMode::Mission => drawer_mission_content(
                 ui,
@@ -180,7 +192,6 @@ pub fn viewer_ui_system(
                 &raster_status,
                 &mut layer_visibility,
                 &mut zone_overlap_model,
-                &mut ui_state,
             ),
             ViewerMode::Replay => drawer_replay_content(ui, &mut replay_state, &mut ui_state),
             ViewerMode::Diagnostics => drawer_diagnostics_content(

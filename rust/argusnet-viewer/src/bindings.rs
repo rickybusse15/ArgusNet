@@ -42,6 +42,14 @@ pub enum Action {
     MoveUp,
     MoveDown,
     Faster,
+    /// Operate -> Plan -> Review (C2.3).
+    CycleWorkspace,
+    /// The next available projection.
+    CycleProjection,
+    /// Operational -> Reconstruction -> Safety.
+    CyclePreset,
+    /// Open or close the tool panel.
+    ToggleToolPanel,
     /// Recall bookmark 1-9; with Ctrl or Cmd held, save it.
     Bookmark(u8),
 }
@@ -49,7 +57,7 @@ pub enum Action {
 impl Action {
     /// Every action, in a stable order. A constant, so reading every binding
     /// each frame allocates nothing.
-    pub const ALL: [Action; 31] = [
+    pub const ALL: [Action; 35] = [
         Action::PlayPause,
         Action::StepBack,
         Action::StepForward,
@@ -72,6 +80,10 @@ impl Action {
         Action::MoveUp,
         Action::MoveDown,
         Action::Faster,
+        Action::CycleWorkspace,
+        Action::CycleProjection,
+        Action::CyclePreset,
+        Action::ToggleToolPanel,
         Action::Bookmark(1),
         Action::Bookmark(2),
         Action::Bookmark(3),
@@ -121,6 +133,10 @@ impl Action {
             Action::MoveUp => "move_up".into(),
             Action::MoveDown => "move_down".into(),
             Action::Faster => "faster".into(),
+            Action::CycleWorkspace => "cycle_workspace".into(),
+            Action::CycleProjection => "cycle_projection".into(),
+            Action::CyclePreset => "cycle_preset".into(),
+            Action::ToggleToolPanel => "toggle_tool_panel".into(),
             Action::Bookmark(n) => format!("bookmark_{n}"),
         }
     }
@@ -155,6 +171,10 @@ impl Action {
             Action::MoveUp => KeyCode::KeyE,
             Action::MoveDown => KeyCode::KeyQ,
             Action::Faster => KeyCode::ShiftLeft,
+            Action::CycleWorkspace => KeyCode::KeyO,
+            Action::CycleProjection => KeyCode::KeyV,
+            Action::CyclePreset => KeyCode::KeyP,
+            Action::ToggleToolPanel => KeyCode::KeyT,
             Action::Bookmark(n) => DIGITS[usize::from(n.clamp(1, 9)) - 1],
         }
     }

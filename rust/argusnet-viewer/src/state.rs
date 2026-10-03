@@ -149,6 +149,98 @@ pub enum MapLayerPreset {
     Safety,
 }
 
+impl MapLayerPreset {
+    pub const ALL: [MapLayerPreset; 3] = [
+        MapLayerPreset::Operator,
+        MapLayerPreset::Reconstruction,
+        MapLayerPreset::Safety,
+    ];
+
+    /// VIEWER_UI §4's preset names.
+    pub fn label(self) -> &'static str {
+        match self {
+            MapLayerPreset::Operator => "Operational",
+            MapLayerPreset::Reconstruction => "Reconstruction",
+            MapLayerPreset::Safety => "Safety",
+        }
+    }
+}
+
+/// The three primary operator verbs (VIEWER_UI §4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Workspace {
+    /// Supervise current mission execution.
+    #[default]
+    Operate,
+    /// Define or revise bounded mission intent.
+    Plan,
+    /// Reconstruct and assess what happened.
+    Review,
+}
+
+impl Workspace {
+    pub const ALL: [Workspace; 3] = [Workspace::Operate, Workspace::Plan, Workspace::Review];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Workspace::Operate => "Operate",
+            Workspace::Plan => "Plan",
+            Workspace::Review => "Review",
+        }
+    }
+
+    /// Why the workspace has nothing to show yet: the contract it waits for.
+    /// Shown instead of mock data (C2.3).
+    pub fn unavailable_until(self) -> Option<&'static str> {
+        match self {
+            Workspace::Operate => None,
+            Workspace::Plan => Some(
+                "Plan is unavailable until the canonical site, mission and trajectory \
+                 contracts exist (S1).",
+            ),
+            Workspace::Review => Some(
+                "Review is unavailable until the canonical journal, evidence and finding \
+                 contracts exist (S1).",
+            ),
+        }
+    }
+}
+
+/// How the world is projected onto the canvas (VIEWER_UI §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Projection {
+    #[default]
+    Perspective,
+    TopDown,
+    Section,
+}
+
+impl Projection {
+    pub const ALL: [Projection; 3] = [
+        Projection::Perspective,
+        Projection::TopDown,
+        Projection::Section,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Projection::Perspective => "Perspective",
+            Projection::TopDown => "Top-down",
+            Projection::Section => "Section",
+        }
+    }
+
+    /// Why the projection cannot be chosen yet, if it cannot.
+    pub fn unavailable_until(self) -> Option<&'static str> {
+        match self {
+            Projection::Perspective => None,
+            Projection::TopDown | Projection::Section => {
+                Some("Available with the projections and section view (P2.5e).")
+            }
+        }
+    }
+}
+
 /// UI-only presentation state for the operator shell.
 #[derive(Debug, Clone, Resource)]
 pub struct ViewerUiState {
@@ -164,6 +256,10 @@ pub struct ViewerUiState {
     /// last laid it out: where canvas overlays (the phase HUD, the live
     /// badge) anchor so that no rail or inspector covers them.
     pub canvas_origin: [f32; 2],
+    /// The primary workspace (§4.1). Independent of the projection and the
+    /// layer preset: three distinct controls, none touching the selection.
+    pub workspace: Workspace,
+    pub projection: Projection,
 }
 
 impl Default for ViewerUiState {
@@ -178,6 +274,8 @@ impl Default for ViewerUiState {
             map_layer_preset: MapLayerPreset::Operator,
             select_request: None,
             canvas_origin: [0.0, 0.0],
+            workspace: Workspace::Operate,
+            projection: Projection::Perspective,
         }
     }
 }

@@ -3,8 +3,10 @@
 
 use super::*;
 
-/// The application header (VIEWER_UI §4.3): identity, workspace and view
-/// controls, playback.
+/// The application header (VIEWER_UI §4.3): identity and source, the
+/// workspace / projection / preset controls (C2.3), playback, the world view,
+/// and the tool panel (secondary destinations, §4.2). Returns a shell command
+/// for the caller to apply.
 pub(super) fn header_bar(
     ui: &mut egui::Ui,
     source: SourceContext,
@@ -12,52 +14,71 @@ pub(super) fn header_bar(
     replay_state: &mut ReplayState,
     view_mode: &mut ViewMode,
     ui_state: &mut ViewerUiState,
-) {
+) -> Option<ShellCommand> {
+    let mut command = None;
     ui.horizontal_centered(|ui| {
         ui.strong("ArgusNet");
         // The source indicator (§3): first after identity, in the one region
         // no window size or drawer state removes.
         ui.label(source.rich_text())
             .on_hover_text(source.explanation());
-        ui.separator();
         ui.label(&scene_package.manifest.scene_id);
+        ui.separator();
+        command = shell_controls(ui, ui_state);
         ui.separator();
         playback_buttons(ui, replay_state);
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let drawer_label = if ui_state.drawer_open {
-                "Hide Panel"
+            let tools_label = if ui_state.drawer_open {
+                format!("Tools: {} \u{25BE}", mode_label(ui_state.mode))
             } else {
-                "Show Panel"
+                "Tools \u{25BE}".to_string()
             };
-            if ui.button(drawer_label).clicked() {
-                ui_state.drawer_open = !ui_state.drawer_open;
-            }
-            mode_button(ui, ui_state, ViewerMode::Scenario, "Scenario");
-            mode_button(ui, ui_state, ViewerMode::Diagnostics, "Diagnostics");
-            mode_button(ui, ui_state, ViewerMode::Replay, "Replay");
-            mode_button(ui, ui_state, ViewerMode::Mission, "Mission");
+            ui.menu_button(tools_label, |ui| {
+                for (mode, label) in [
+                    (ViewerMode::Mission, "Mission"),
+                    (ViewerMode::Replay, "Replay"),
+                    (ViewerMode::Diagnostics, "Diagnostics"),
+                    (ViewerMode::Scenario, "Scenario"),
+                ] {
+                    mode_button(ui, ui_state, mode, label);
+                }
+                ui.separator();
+                let toggle = if ui_state.drawer_open {
+                    "Close tool panel (T)"
+                } else {
+                    "Open tool panel (T)"
+                };
+                if ui.button(toggle).clicked() {
+                    command = Some(ShellCommand::ToggleToolPanel);
+                }
+            });
             ui.separator();
-            if ui
-                .selectable_label(*view_mode == ViewMode::Split, "Split")
-                .clicked()
-            {
-                *view_mode = ViewMode::Split;
-            }
-            if ui
-                .selectable_label(*view_mode == ViewMode::ScanMap, "Scan")
-                .clicked()
-            {
-                *view_mode = ViewMode::ScanMap;
-            }
-            if ui
-                .selectable_label(*view_mode == ViewMode::RealWorld, "Real")
-                .clicked()
-            {
-                *view_mode = ViewMode::RealWorld;
+            for (mode, label) in [
+                (ViewMode::Split, "Split"),
+                (ViewMode::ScanMap, "Scan"),
+                (ViewMode::RealWorld, "Real"),
+            ] {
+                if ui
+                    .selectable_label(*view_mode == mode, label)
+                    .on_hover_text("World view (M cycles)")
+                    .clicked()
+                {
+                    *view_mode = mode;
+                }
             }
         });
     });
+    command
+}
+
+fn mode_label(mode: ViewerMode) -> &'static str {
+    match mode {
+        ViewerMode::Mission => "Mission",
+        ViewerMode::Replay => "Replay",
+        ViewerMode::Diagnostics => "Diagnostics",
+        ViewerMode::Scenario => "Scenario",
+    }
 }
 
 /// The status and freshness line: mission phase, time, alert counts, the
@@ -140,9 +161,14 @@ pub(super) fn status_line(
 /// index-like.
 pub(super) fn mission_rail(
     ui: &mut egui::Ui,
+    workspace: crate::state::Workspace,
     replay_state: &ReplayState,
     mission_zones: &LoadedMissionZones,
 ) {
+    // Plan and Review say what they wait for rather than show mock data.
+    if workspace_unavailable(ui, workspace) {
+        return;
+    }
     ui.strong("Mission");
     if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
         status_chip(ui, phase, color);
@@ -298,13 +324,11 @@ pub(super) fn drawer_mission_content(
     raster_status: &str,
     layer_visibility: &mut LayerVisibilityState,
     zone_overlap_model: &mut ZoneOverlapModel,
-    ui_state: &mut ViewerUiState,
 ) {
     ui.heading("Mission");
     ui.label("Operator view");
     ui.separator();
 
-    mission_layer_presets(ui, ui_state, runtime_visibility, mission_overlay);
     section_mission_progress(ui, replay_state, view_mode);
     ui.separator();
     tab_mission_content(
@@ -323,30 +347,6 @@ pub(super) fn drawer_mission_content(
     section_layers(ui, scene_package, layer_visibility);
     ui.separator();
     section_mission_zones(ui, mission_zones, zone_overlap_model);
-}
-
-pub(super) fn mission_layer_presets(
-    ui: &mut egui::Ui,
-    ui_state: &mut ViewerUiState,
-    runtime_visibility: &mut RuntimeOverlayVisibility,
-    mission_overlay: &mut MissionOverlaySettings,
-) {
-    ui.horizontal(|ui| {
-        ui.label("Layer preset:");
-        for (preset, label) in &[
-            (MapLayerPreset::Operator, "Operator"),
-            (MapLayerPreset::Reconstruction, "Reconstruction"),
-            (MapLayerPreset::Safety, "Safety"),
-        ] {
-            if ui
-                .selectable_label(ui_state.map_layer_preset == *preset, *label)
-                .clicked()
-            {
-                ui_state.map_layer_preset = *preset;
-                apply_layer_preset(*preset, runtime_visibility, mission_overlay);
-            }
-        }
-    });
 }
 
 pub(super) fn apply_layer_preset(
@@ -887,6 +887,10 @@ pub(super) fn section_keyboard_shortcuts(ui: &mut egui::Ui) {
         ui.label("End         Last frame");
         ui.label("[ / ]       Previous / next event");
         ui.label("M           Cycle view mode");
+        ui.label("O           Cycle workspace");
+        ui.label("V           Cycle projection");
+        ui.label("P           Cycle layer preset");
+        ui.label("T           Open / close the tool panel");
         ui.label("R           Reset camera");
         ui.label("F           Focus the selection");
         ui.label("L / C       Follow / chase the selection");
