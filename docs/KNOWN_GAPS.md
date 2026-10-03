@@ -4,7 +4,7 @@
 
 | Capability | Status | Remaining evidence |
 | --- | --- | --- |
-| Rust stage composition, direct fusion and replay writer | Partial | Libraries/stages exist; complete production mission and CLI acceptance remain |
+| Rust stage composition, direct fusion and replay writer | Partial | 2026-10-03: `argusnet-rs` builds and runs all seven canonical scenarios with no Python, six within every envelope (#122). Remaining: production constructor rejecting missing stages, owned subsystem state, whether acceptance fixes a reference platform or stores the reference (the covariance metric is decided, D-1 #137), multi-seed and held-out qualification |
 | Command recovery and format-2 control checkpoints | Implemented in reviewed `ec9c2f7` | Not full causal checkpointing or proof of remote release |
 | Subsystem-wide reset/restore | Partial | Reconstruct filters/controllers/sensors/mission; match a fresh or uninterrupted run |
 | Independent/rational task and sensor rates | Planned P4.10 | Stable event order, physical sampling support and actual elapsed-time updates |

@@ -1,6 +1,6 @@
 # P4.8e.2: stage 6 senses the way the reference does
 
-**Status:** delivered 2026-09-23, locally verified only (not pushed). Package ID
+**Status:** delivered 2026-09-23, locally verified, then merged 2026-10-01 in #122 (`badb1e1`). Package ID
 `P4.8e.2`. See [STATUS.md](STATUS.md).
 
 P4.8e.1 ran a Python-built scenario in the Rust tick and matched it bit for bit

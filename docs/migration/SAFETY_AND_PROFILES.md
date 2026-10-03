@@ -1,6 +1,6 @@
 # P4.9d: blocking safety and mission profiles, native
 
-**Status:** local, 2026-09-23. See [STATUS.md](STATUS.md).
+**Status:** local 2026-09-23; merged 2026-10-01 in #122 (`badb1e1`). See [STATUS.md](STATUS.md).
 
 P4.9c's acceptance run refused two of the seven canonical scenarios,
 `sar_person_search` and `industrial_asset_survey`. Both are mission profiles,
