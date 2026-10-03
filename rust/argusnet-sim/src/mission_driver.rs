@@ -38,7 +38,7 @@ use argusnet_planning::poi::{
     InspectionPoi, PoiAssignmentContext, PoiManager, PoiState, PoiStatus,
 };
 
-use crate::battery::BatteryLink;
+use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingLink;
 use crate::mission::{
     MissionConfig, MissionEvent, MissionInputs, MissionLink, MissionPhase, MissionStage,
@@ -249,7 +249,7 @@ impl DriverReportLink {
 /// full.
 pub fn elect_coordinator(
     drone_ids: &[String],
-    battery: &BatteryLink,
+    battery: &BatteryStage,
     capacity_wh: f64,
 ) -> Option<String> {
     let mut best: Option<(&String, f64)> = None;
@@ -273,7 +273,6 @@ pub struct MissionDriverStage {
     mission: MissionLink,
     mapping: MappingLink,
     overrides: OverrideLink,
-    battery: BatteryLink,
     pois: PoiManager,
     initial_pois: Vec<InspectionPoi>,
     /// `_drone_home_positions`: each launched drone's station.
@@ -308,7 +307,6 @@ impl MissionDriverStage {
         homes: BTreeMap<String, [f64; 3]>,
         mapping: MappingLink,
         overrides: OverrideLink,
-        battery: BatteryLink,
     ) -> Self {
         let machine = MissionStage::new(config.mission);
         let mission = machine.link();
@@ -317,7 +315,6 @@ impl MissionDriverStage {
             mission,
             mapping,
             overrides,
-            battery,
             pois: PoiManager::new(pois.clone()),
             initial_pois: pois,
             homes,
@@ -378,7 +375,13 @@ impl MissionDriverStage {
         self.mission.clone()
     }
 
-    fn inspect(&mut self, timestamp_s: f64, dt_s: f64, mobile: &[(String, [f64; 3])]) {
+    fn inspect(
+        &mut self,
+        timestamp_s: f64,
+        dt_s: f64,
+        mobile: &[(String, [f64; 3])],
+        battery: &BatteryStage,
+    ) {
         if !self.rescored {
             let mapping = self.mapping.clone();
             let radius = self.config.rescore_radius_m;
@@ -387,15 +390,15 @@ impl MissionDriverStage {
             self.rescored = true;
         }
 
-        let capacity_wh = self.battery.model().capacity_wh;
-        let fraction_of = |battery: &BatteryLink, id: &str| {
+        let capacity_wh = battery.model().capacity_wh;
+        let fraction_of = |id: &str| {
             battery
                 .remaining_wh(id)
                 .map_or(1.0, |remaining| remaining / capacity_wh)
         };
         let mut unassigned: Vec<String> = Vec::new();
         for (id, position) in mobile {
-            let remaining_wh = self.battery.remaining_wh(id).unwrap_or(capacity_wh);
+            let remaining_wh = battery.remaining_wh(id).unwrap_or(capacity_wh);
             let context = PoiAssignmentContext::new(id, *position, remaining_wh, capacity_wh);
             let assigned = self.pois.assign_energy_aware(&context).is_some();
             if !assigned && self.pois.assignment_for(id).is_none() {
@@ -424,12 +427,12 @@ impl MissionDriverStage {
             }
             // Handoff: a low drone with a POI passes it to the first fresh,
             // free drone in fleet order.
-            if fraction_of(&self.battery, id) < self.config.handoff_low_fraction
+            if fraction_of(id) < self.config.handoff_low_fraction
                 && self.pois.assignment_for(id).is_some()
             {
                 for (other, _) in mobile {
                     if other != id
-                        && fraction_of(&self.battery, other) > self.config.handoff_fresh_fraction
+                        && fraction_of(other) > self.config.handoff_fresh_fraction
                         && self.pois.assignment_for(other).is_none()
                     {
                         self.pois.trigger_handoff(id, other);
@@ -468,6 +471,11 @@ impl MissionDriverStage {
 impl StageHandler for MissionDriverStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let timestamp_s = context.timestamp_s;
+        // Stage 1's ledger, as it left it this tick, through the lent views
+        // (SESSION_OWNERSHIP.md §2a). A run with none reads as an empty one:
+        // every drone off the ledger, counted as full.
+        let empty = BatteryStage::new();
+        let battery = stage_one_battery(context.stages).unwrap_or(&empty);
         let phase = self.mission.phase();
         // `mobile_states`: flown positions, fleet order.
         let mobile: Vec<(String, [f64; 3])> = context
@@ -485,12 +493,11 @@ impl StageHandler for MissionDriverStage {
         // fleet. The reference reads the batteries as stage 1 left them.
         if self.coordinator.is_none() && phase == MissionPhase::Scanning && !mobile.is_empty() {
             let ids: Vec<String> = mobile.iter().map(|(id, _)| id.clone()).collect();
-            self.coordinator =
-                elect_coordinator(&ids, &self.battery, self.battery.model().capacity_wh);
+            self.coordinator = elect_coordinator(&ids, battery, battery.model().capacity_wh);
         }
 
         if phase == MissionPhase::Inspecting {
-            self.inspect(timestamp_s, context.dt_s, &mobile);
+            self.inspect(timestamp_s, context.dt_s, &mobile, battery);
         }
 
         let home_distances_m = mobile
@@ -678,7 +685,6 @@ mod tests {
             BTreeMap::new(),
             mapping_link.clone(),
             crate::overrides::MissionOverrideStage::new().link(),
-            BatteryLink::default(),
         );
         stage.localization_replay().load(replay);
         let mission = stage.mission_link();
@@ -769,7 +775,7 @@ mod tests {
         );
     }
 
-    fn driver(pois: Vec<InspectionPoi>, battery: BatteryLink) -> MissionDriverStage {
+    fn driver(pois: Vec<InspectionPoi>) -> MissionDriverStage {
         let bounds = GridBounds {
             x_min_m: 0.0,
             x_max_m: 1000.0,
@@ -786,7 +792,6 @@ mod tests {
             BTreeMap::new(),
             mapping,
             crate::overrides::MissionOverrideStage::new().link(),
-            battery,
         )
     }
 
@@ -811,7 +816,7 @@ mod tests {
     /// a behaviour change and fail here.
     #[test]
     fn the_reference_team_assignment_branch_assigns_nothing() {
-        let battery = BatteryLink::default();
+        let mut battery = BatteryStage::new();
         battery.set_model(argusnet_planning::battery::BatteryModel {
             capacity_wh: 500.0,
             ..Default::default()
@@ -819,10 +824,7 @@ mod tests {
         for id in ["drone-a", "drone-b", "drone-c"] {
             battery.register(id, None);
         }
-        let mut stage = driver(
-            vec![poi("poi-00", 100.0, 2), poi("poi-01", 900.0, 1)],
-            battery.clone(),
-        );
+        let mut stage = driver(vec![poi("poi-00", 100.0, 2), poi("poi-01", 900.0, 1)]);
         // Below the 20% reserve: no usable energy, so no assignment.
         for id in ["drone-b", "drone-c"] {
             assert!(battery.set_remaining_wh(id, 50.0));
@@ -832,7 +834,7 @@ mod tests {
             ("drone-b".to_string(), [500.0, 0.0, 40.0]),
             ("drone-c".to_string(), [600.0, 0.0, 40.0]),
         ];
-        stage.inspect(0.0, 1.0, &mobile);
+        stage.inspect(0.0, 1.0, &mobile, &battery);
         assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
         let pending = stage
             .pois
@@ -849,7 +851,7 @@ mod tests {
     /// order on a tie; a drone off the ledger counts as full.
     #[test]
     fn the_coordinator_is_the_fullest_battery_first_on_a_tie() {
-        let battery = BatteryLink::default();
+        let mut battery = BatteryStage::new();
         battery.register("a", None);
         battery.register("b", None);
         let capacity_wh = battery.model().capacity_wh;
@@ -908,16 +910,17 @@ mod tests {
             resolution_m: 50.0,
         };
         let mapping = crate::mapping::MappingStage::new(bounds).expect("bounds");
-        let battery = BatteryLink::default();
+        let mut battery = BatteryStage::new();
         battery.register("drone-1", None);
         battery.register("drone-2", None);
+        sim.set_stage_handler(Stage::SampleControllersAndBattery, Box::new(battery))
+            .expect("stage 1");
         let stage = MissionDriverStage::new(
             MissionDriverConfig::default(),
             Vec::new(),
             BTreeMap::new(),
             mapping.link(),
             crate::overrides::MissionOverrideStage::new().link(),
-            battery.clone(),
         );
         let report = stage.report_link();
         let mission = stage.mission_link();
@@ -931,7 +934,9 @@ mod tests {
             report.report().coordinator_drone_id.as_deref(),
             Some("drone-1")
         );
-        battery.set_remaining_wh("drone-1", 10.0);
+        assert!(BatteryStage::of_mut(&mut sim)
+            .expect("stage 1 is a battery")
+            .set_remaining_wh("drone-1", 10.0));
         sim.step().expect("tick 1");
         assert_eq!(mission.phase(), MissionPhase::Scanning);
         assert_eq!(

@@ -90,7 +90,7 @@ use safety_engine::limits::DronePhysicalLimits;
 use safety_engine::simulation::{SimulationSafetyMonitor, State, Violation};
 use serde::{Deserialize, Serialize};
 
-use crate::battery::BatteryLink;
+use crate::battery::{stage_one_battery, NOT_APPLICABLE_FRACTION};
 use crate::observe::TerrainHeight;
 use crate::simulation::{decode_stage_state, StageHandler, StageStateError, TickContext};
 use crate::stage::{StageError, StageOutcome};
@@ -171,7 +171,7 @@ struct SafetyState {
     terrain: Box<dyn TerrainHeight>,
     monitors: BTreeMap<String, SimulationSafetyMonitor>,
     previous_velocities: BTreeMap<String, [f64; 3]>,
-    battery: Option<BatteryLink>,
+    reads_battery: bool,
     validations: Vec<SafetyValidation>,
 }
 
@@ -208,7 +208,7 @@ impl Default for SafetyState {
             terrain: Box::new(Level(0.0)),
             monitors: BTreeMap::new(),
             previous_velocities: BTreeMap::new(),
-            battery: None,
+            reads_battery: false,
             validations: Vec::new(),
         }
     }
@@ -256,8 +256,12 @@ impl SafetyStage {
     /// Without this the monitor is handed `None` and the energy checks do not
     /// fire at all — which is *not* what the reference does, so a production
     /// wiring should always supply it.
-    pub fn use_battery(&mut self, battery: BatteryLink) {
-        self.state.battery = Some(battery);
+    ///
+    /// Read through the views lent to stage 4 (SESSION_OWNERSHIP.md §2a):
+    /// stage 1 has already run this tick. A stage 1 with no ledger reads as
+    /// an empty one, [`NOT_APPLICABLE_FRACTION`] for everyone.
+    pub fn read_stage_one_battery(&mut self) {
+        self.state.reads_battery = true;
     }
 
     /// The safety state the monitor last assigned, or `"nominal"`.
@@ -342,6 +346,7 @@ impl StageHandler for SafetyStage {
         let tick = context.tick;
         let mut clamped_any = false;
         let mut notes: Vec<String> = Vec::new();
+        let battery = stage_one_battery(context.stages);
 
         for (node_id, position, velocity) in &mobile {
             let peers: Vec<[f64; 3]> = mobile
@@ -351,10 +356,9 @@ impl StageHandler for SafetyStage {
                 .collect();
 
             // The sentinel goes through untouched -- see the module docs.
-            let energy_fraction = shared
-                .battery
-                .as_ref()
-                .map(|battery| battery.fraction(node_id));
+            let energy_fraction = shared.reads_battery.then(|| {
+                battery.map_or(NOT_APPLICABLE_FRACTION, |battery| battery.fraction(node_id))
+            });
 
             if !shared.monitors.contains_key(node_id) {
                 let role = shared
@@ -1017,12 +1021,14 @@ mod tests {
             [5.0, 0.0, 0.0],
         )]);
         // A ledger with nothing registered: `fraction` returns the sentinel.
-        let battery = BatteryLink::default();
+        let battery = crate::battery::BatteryStage::new();
         assert_eq!(
             battery.fraction("drone-1"),
             crate::battery::NOT_APPLICABLE_FRACTION
         );
-        safety(&mut sim).use_battery(battery);
+        sim.set_stage_handler(Stage::SampleControllersAndBattery, Box::new(battery))
+            .expect("stage 1 is not a transaction boundary");
+        safety(&mut sim).read_stage_one_battery();
 
         sim.step().unwrap();
 
@@ -1047,9 +1053,11 @@ mod tests {
             [0.0, 0.0, 100.0],
             [5.0, 0.0, 0.0],
         )]);
-        let battery = BatteryLink::default();
+        let mut battery = crate::battery::BatteryStage::new();
         battery.register("drone-1", None);
-        safety(&mut sim).use_battery(battery);
+        sim.set_stage_handler(Stage::SampleControllersAndBattery, Box::new(battery))
+            .expect("stage 1 is not a transaction boundary");
+        safety(&mut sim).read_stage_one_battery();
 
         sim.step().unwrap();
         assert!(safety(&mut sim).take_validations().is_empty());
