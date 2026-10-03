@@ -1,6 +1,7 @@
 {
   "_reference": "src/argusnet/simulation/sim.py",
   "_source": "scripts/capture_controller_fixture.py",
+ "_captured_on": "macos-aarch64",
   "looped_waypoint_path": [
     {
       "avoid_obstacles": false,
