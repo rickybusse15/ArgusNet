@@ -199,7 +199,7 @@ Read from the repository on 2026-10-03 unless marked *unverified*.
 | `STATUS.md` rows | **stale**: still say "local" for work now merged; #128 updates part of it |
 | `KNOWN_GAPS.md`, `RUST_RUNTIME_MIGRATION.md`, `STATE_OWNERSHIP.md` banners | dated 2026-09-23 / baseline `ec9c2f7`; likely understate progress |
 | `sar_person_search` envelope `covariance_reduction_mean` | **fails** by metric definition; needs a human decision (D-1) |
-| Production ownership | `Arc<Mutex<Shared>>` link handles remain in `battery.rs`, `controller.rs`, `deconflict.rs`, `fusion.rs`, `mapping.rs`, `mission.rs` (verified by grep); the architecture says to replace them with owned state |
+| Production ownership | `Arc<Mutex<Shared>>` link handles remain in ten files: `battery.rs`, `controller.rs`, `overrides.rs`, `deconflict.rs`, `safety.rs`, `vio.rs`, `observe.rs`, `fusion.rs`, `mapping.rs`, `mission.rs` (`grep -rl 'Arc<Mutex' rust/argusnet-sim/src`); the architecture says to replace them with owned state |
 | Production-constructor check | No code found that rejects a missing required stage (grep for "required"/"production" in `argusnet-sim/src` found none) — *verify before A1.3* |
 | Reset/restore completeness | Partial per `KNOWN_GAPS.md`; `CAUSAL_STATE.md` audit exists for stateful stages |
 | Scheduler / parallel execution | **None**: no `scheduled_v1`, no integer-time scheduler, no per-stage timers, no worker pool in the sim crate |
@@ -315,8 +315,9 @@ gate" and "P4.9".
 ### A1 — Production ownership and lifecycle
 
 #### A1.1 Inventory the shared links (read-only)
-**Do:** list every `Arc<Mutex<…>>` link (`BatteryLink`, controller, deconflict,
-fusion, mapping, `MissionLink`; check VIO, safety, observation too), and for each:
+**Do:** list every `Arc<Mutex<…>>` link (`BatteryLink`, controller,
+`OverrideLink`, deconflict, `SafetyLink`, `VioLink`, `ObserveLink`, fusion,
+mapping, `MissionLink`; re-run the grep in §1.2 for any added since), and for each:
 who constructs it, who reads/writes outside the stage, and what that caller
 actually needs (seed fleet, read fractions, take events, watch mission).
 **Output:** `docs/migration/SESSION_OWNERSHIP.md` with the table plus a target
@@ -328,8 +329,9 @@ has a replacement access path (query methods on `Simulation` or a read-only
 `SessionView`).
 
 #### A1.2 Replace links one at a time
-**Do (per link, one PR each, in this order: battery → deconflict → controller →
-fusion → mapping → mission, because mapping watches mission):**
+**Do (per link, one PR each, in this order: battery → controller → overrides →
+deconflict → safety → VIO → observe → fusion → mapping → mission, i.e. stage
+order, except that mission goes last because mapping watches it):**
 1. Introduce owned state + accessor on `Simulation`; keep the old link as a
    thin shim delegating to it.
 2. Migrate callers; delete the shim.
@@ -452,8 +454,8 @@ untouched throughout; `scheduled_v1` is opt-in until B7.
   (platforms, observation pairs, footprints, tiles touched, particles).
 - A `--timing` option on `argusnet-rs sim` printing p50/p95/p99 per stage and
   startup/tick/replay-write split.
-- Allocation counters where the viewer's `presentation_budget.rs` pattern can be
-  reused.
+- Allocation counters where the pattern in
+  `rust/argusnet-viewer/tests/presentation_budget.rs` can be reused.
 **Run:** the 7 canonical scenarios on a **release** build, ≥5 runs, same
 machine; record machine metadata.
 **Output:** `docs/performance/rust-tick-profile-<date>.md`: per-stage share
