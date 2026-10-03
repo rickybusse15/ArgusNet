@@ -287,3 +287,14 @@ means is 10.9 m, so |Δ| is about one standard error, carried by one reference
 seed. Five seeds cannot tell this apart from parity; A3.2's ≥30 predetermined
 seeds with a held-out set can, and decide it.
 
+## A3.2: 30 seeds and a held-out set (2026-10-03)
+
+[a32-qualification-2026-10-03.md](../performance/a32-qualification-2026-10-03.md).
+Over 30 qualification seeds and 10 held-out seeds, every exact check, every
+timing gate and every statistical metric but one passes on all seven
+scenarios; `sar_person_search`'s RMSE passes (the five-seed failure was
+noise). `covariance_reduction_mean` fails on two scenarios of the
+qualification set and three of the held-out set, in both directions, each
+within 1.5 standard errors: its sampling noise is of the order of its envelope.
+Not widened; decision D-12.
+
