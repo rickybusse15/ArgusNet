@@ -673,7 +673,6 @@ fn a_scan_map_inspect_run_matches_until_localization_decides() {
     let bundle = bundle_of("scan");
     let mut run = assemble(&bundle).expect("scan bundle assembles");
     let mission = run.mission.clone().expect("a scan run has a mission");
-    let mapping = run.mapping.clone().expect("a scan run has mapping");
 
     let phase_name = |phase: MissionPhase| phase.to_string();
     let mut divergence = None;
@@ -723,7 +722,10 @@ fn a_scan_map_inspect_run_matches_until_localization_decides() {
         }
         if divergence.is_none() {
             assert_eq!(
-                mapping.coverage_fraction().to_bits(),
+                run.mapping()
+                    .expect("a scan run has mapping")
+                    .coverage_fraction()
+                    .to_bits(),
                 num(&frame["mission"]["coverage_fraction"]).to_bits(),
                 "coverage fraction at tick {i}"
             );
@@ -759,7 +761,6 @@ fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
     let bundle = bundle_of("scan");
     let mut run = assemble(&bundle).expect("scan bundle assembles");
     let mission = run.mission.clone().expect("mission");
-    let mapping = run.mapping.clone().expect("mapping");
     run.localization_replay
         .as_ref()
         .expect("a scan run has the seam")
@@ -798,7 +799,10 @@ fn a_scan_map_inspect_run_with_replayed_localization_matches_throughout() {
             phases.push(phase.clone());
         }
         assert_eq!(
-            mapping.coverage_fraction().to_bits(),
+            run.mapping()
+                .expect("mapping")
+                .coverage_fraction()
+                .to_bits(),
             num(&frame["mission"]["coverage_fraction"]).to_bits(),
             "coverage fraction at tick {i}"
         );

@@ -39,13 +39,13 @@ use argusnet_planning::poi::{
 };
 
 use crate::battery::{stage_one_battery, BatteryStage};
-use crate::mapping::MappingLink;
+use crate::mapping::MappingStage;
 use crate::mission::{
     MissionConfig, MissionEvent, MissionInputs, MissionLink, MissionPhase, MissionStage,
 };
 use crate::overrides::{GotoHover, OverrideCommand};
 use crate::simulation::{StageHandler, TickContext};
-use crate::stage::{StageError, StageOutcome};
+use crate::stage::{Stage, StageError, StageOutcome};
 
 /// Everything the driver takes from the scenario.
 #[derive(Debug, Clone, PartialEq)]
@@ -80,7 +80,7 @@ impl Default for MissionDriverConfig {
 /// resolution))`, cells kept where `di^2 + dj^2 <= r_cells^2` -- centred on the
 /// cell the point truncates into. `int()` truncates toward zero, as `as i64`
 /// does. An empty window reports zero coverage.
-pub fn coverage_in_region(mapping: &MappingLink, center_xy: [f64; 2], radius_m: f64) -> f64 {
+pub fn coverage_in_region(mapping: &MappingStage, center_xy: [f64; 2], radius_m: f64) -> f64 {
     coverage_in_grid_region(
         mapping.bounds(),
         |i, j| mapping.coverage_count_at(i, j),
@@ -127,7 +127,7 @@ pub fn coverage_in_grid_region(
 
 /// The fraction of cells that are enclosed interior holes -- the gap-fill
 /// gate's input.
-fn gap_cell_fraction(mapping: &MappingLink) -> f64 {
+fn gap_cell_fraction(mapping: &MappingStage) -> f64 {
     let bounds = mapping.bounds();
     let Ok((nx, ny)) = bounds.dimensions() else {
         return 0.0;
@@ -271,7 +271,6 @@ pub fn elect_coordinator(
 pub struct MissionDriverStage {
     machine: MissionStage,
     mission: MissionLink,
-    mapping: MappingLink,
     /// Writes into stage 2's tables, queued this run and drained by
     /// [`Handoff::OverridesFromMission`] straight after it.
     ///
@@ -309,14 +308,12 @@ impl MissionDriverStage {
         config: MissionDriverConfig,
         pois: Vec<InspectionPoi>,
         homes: BTreeMap<String, [f64; 3]>,
-        mapping: MappingLink,
     ) -> Self {
         let machine = MissionStage::new(config.mission);
         let mission = machine.link();
         Self {
             machine,
             mission,
-            mapping,
             override_commands: Vec::new(),
             pois: PoiManager::new(pois.clone()),
             initial_pois: pois,
@@ -389,12 +386,12 @@ impl MissionDriverStage {
         dt_s: f64,
         mobile: &[(String, [f64; 3])],
         battery: &BatteryStage,
+        mapping: &MappingStage,
     ) {
         if !self.rescored {
-            let mapping = self.mapping.clone();
             let radius = self.config.rescore_radius_m;
             self.pois
-                .rescore_from_map(|xy| Some(coverage_in_region(&mapping, xy, radius)));
+                .rescore_from_map(|xy| Some(coverage_in_region(mapping, xy, radius)));
             self.rescored = true;
         }
 
@@ -488,6 +485,13 @@ impl StageHandler for MissionDriverStage {
         self.override_commands.clear();
         let empty = BatteryStage::new();
         let battery = stage_one_battery(context.stages).unwrap_or(&empty);
+        // Stage 8's map as it left it this tick, through the lent views.
+        let mapping = context
+            .stages
+            .get::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .ok_or_else(|| {
+                StageError::Invariant("stage 9 needs stage 8's map installed".to_string())
+            })?;
         let phase = self.mission.phase();
         // `mobile_states`: flown positions, fleet order.
         let mobile: Vec<(String, [f64; 3])> = context
@@ -509,7 +513,7 @@ impl StageHandler for MissionDriverStage {
         }
 
         if phase == MissionPhase::Inspecting {
-            self.inspect(timestamp_s, context.dt_s, &mobile, battery);
+            self.inspect(timestamp_s, context.dt_s, &mobile, battery, mapping);
         }
 
         let home_distances_m = mobile
@@ -530,20 +534,17 @@ impl StageHandler for MissionDriverStage {
             })?;
             (recorded.confidences, recorded.timed_out)
         } else {
-            (
-                self.mapping.confidences(),
-                self.mapping.localizer_timed_out(),
-            )
+            (mapping.confidences(), mapping.localizer_timed_out())
         };
         // The gap search scans the whole grid. The reference runs it only on
         // the scanning gate -- while scanning, once coverage has reached the
         // threshold (`sim.py`) -- and that is the only place the machine
         // reads it, so it is computed there and nowhere else (P4.10c: it was
         // ~45 % of a scan scenario's tick when run every tick).
-        let coverage_fraction = self.mapping.coverage_fraction();
+        let coverage_fraction = mapping.coverage_fraction();
         let gap_cell_fraction = (phase == MissionPhase::Scanning
             && coverage_fraction >= self.machine.config().scan_coverage_threshold)
-            .then(|| gap_cell_fraction(&self.mapping));
+            .then(|| gap_cell_fraction(mapping));
         self.mission.set_inputs(MissionInputs {
             timestamp_s,
             coverage_fraction,
@@ -687,9 +688,8 @@ mod tests {
             y_max_m: 500.0,
             resolution_m: 50.0,
         };
-        let mapping = crate::mapping::MappingStage::new(bounds).expect("bounds");
-        let mapping_link = mapping.link();
-        mapping_link.set_footprint_radius_m(40.0);
+        let mut mapping = crate::mapping::MappingStage::new(bounds).expect("bounds");
+        mapping.set_footprint_radius_m(40.0);
         let stage = MissionDriverStage::new(
             MissionDriverConfig {
                 mission: MissionConfig {
@@ -700,11 +700,10 @@ mod tests {
             },
             Vec::new(),
             BTreeMap::new(),
-            mapping_link.clone(),
         );
         stage.localization_replay().load(replay);
         let mission = stage.mission_link();
-        mapping_link.watch_mission(mission.clone());
+        mapping.watch_mission(mission.clone());
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
             .expect("stage 8");
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
@@ -792,22 +791,18 @@ mod tests {
     }
 
     fn driver(pois: Vec<InspectionPoi>) -> MissionDriverStage {
-        let bounds = GridBounds {
+        MissionDriverStage::new(MissionDriverConfig::default(), pois, BTreeMap::new())
+    }
+
+    fn empty_map() -> crate::mapping::MappingStage {
+        crate::mapping::MappingStage::new(GridBounds {
             x_min_m: 0.0,
             x_max_m: 1000.0,
             y_min_m: 0.0,
             y_max_m: 1000.0,
             resolution_m: 50.0,
-        };
-        let mapping = crate::mapping::MappingStage::new(bounds)
-            .expect("bounds")
-            .link();
-        MissionDriverStage::new(
-            MissionDriverConfig::default(),
-            pois,
-            BTreeMap::new(),
-            mapping,
-        )
+        })
+        .expect("bounds")
     }
 
     fn poi(id: &str, x: f64, priority: i64) -> InspectionPoi {
@@ -849,7 +844,7 @@ mod tests {
             ("drone-b".to_string(), [500.0, 0.0, 40.0]),
             ("drone-c".to_string(), [600.0, 0.0, 40.0]),
         ];
-        stage.inspect(0.0, 1.0, &mobile, &battery);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
         assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
         let pending = stage
             .pois
@@ -930,12 +925,8 @@ mod tests {
         battery.register("drone-2", None);
         sim.set_stage_handler(Stage::SampleControllersAndBattery, Box::new(battery))
             .expect("stage 1");
-        let stage = MissionDriverStage::new(
-            MissionDriverConfig::default(),
-            Vec::new(),
-            BTreeMap::new(),
-            mapping.link(),
-        );
+        let stage =
+            MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), BTreeMap::new());
         let report = stage.report_link();
         let mission = stage.mission_link();
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))

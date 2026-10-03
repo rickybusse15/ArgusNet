@@ -39,6 +39,13 @@ fn drone(id: &str) -> NodeState {
     }
 }
 
+/// Stage 8's coverage, read through the session that owns it.
+fn coverage_fraction(sim: &Simulation) -> f64 {
+    sim.stage::<MappingStage>(Stage::UpdateMappingAndLocalization)
+        .expect("stage 8 is installed")
+        .coverage_fraction()
+}
+
 #[test]
 fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
     let mut sim = Simulation::new(SimulationConfig {
@@ -50,9 +57,8 @@ fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
     .expect("config is valid");
     sim.load_world(vec![drone("drone-1")], Vec::new());
 
-    let mapping = MappingStage::new(bounds()).expect("bounds are valid");
-    let mapping_link = mapping.link();
-    mapping_link.set_footprint_radius_m(150.0);
+    let mut mapping = MappingStage::new(bounds()).expect("bounds are valid");
+    mapping.set_footprint_radius_m(150.0);
     sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
         .unwrap();
 
@@ -84,13 +90,13 @@ fn flying_a_lawnmower_pattern_trips_the_missions_coverage_gate() {
         // Converged, so the gate that trips is the coverage one.
         inputs.localization_confidences = vec![0.99];
         inputs.gap_cell_fraction = Some(0.0);
-        inputs.coverage_fraction = mapping_link.coverage_fraction();
+        inputs.coverage_fraction = coverage_fraction(&sim);
         mission_link.set_inputs(inputs);
 
         sim.step().expect("no stage fails");
 
         if mission_link.phase() != MissionPhase::Scanning && phase_at.is_none() {
-            phase_at = Some((step, mapping_link.coverage_fraction()));
+            phase_at = Some((step, coverage_fraction(&sim)));
             break;
         }
 
@@ -129,9 +135,8 @@ fn a_stationary_drone_never_trips_the_gate() {
     .expect("config is valid");
     sim.load_world(vec![drone("drone-1")], Vec::new());
 
-    let mapping = MappingStage::new(bounds()).expect("bounds are valid");
-    let mapping_link = mapping.link();
-    mapping_link.set_footprint_radius_m(150.0);
+    let mut mapping = MappingStage::new(bounds()).expect("bounds are valid");
+    mapping.set_footprint_radius_m(150.0);
     sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(mapping))
         .unwrap();
 
@@ -144,13 +149,13 @@ fn a_stationary_drone_never_trips_the_gate() {
         let mut inputs = MissionInputs::at(sim.tick() as f64);
         inputs.mobile_count = 1;
         inputs.localization_confidences = vec![0.99];
-        inputs.coverage_fraction = mapping_link.coverage_fraction();
+        inputs.coverage_fraction = coverage_fraction(&sim);
         mission_link.set_inputs(inputs);
         sim.step().unwrap();
     }
 
     assert_eq!(mission_link.phase(), MissionPhase::Scanning);
-    let fraction = mapping_link.coverage_fraction();
+    let fraction = coverage_fraction(&sim);
     assert!(fraction > 0.0, "it did cover its own footprint");
     assert!(
         fraction < MissionConfig::default().scan_coverage_threshold,
