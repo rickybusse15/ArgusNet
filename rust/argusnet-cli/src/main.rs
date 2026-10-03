@@ -26,9 +26,12 @@ use std::time::Instant;
 use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
 use argusnet_sim::scenario::{assemble, BundleError, RunError, ScenarioBundle};
 use argusnet_sim::scheduler::{ExecutorError, LegacyLaneExecutor};
+
+mod rundir;
 use argusnet_sim::simulation::TickError;
 use argusnet_sim::snapshot::SimulationCheckpoint;
 use clap::{Parser, Subcommand};
+use rundir::{Recorder, RunDir};
 
 #[derive(Parser)]
 #[command(
@@ -42,6 +45,8 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// Parsed once per process; boxing the largest variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Run a scenario bundle (or a scenario config) to completion and write a
     /// replay.
@@ -78,7 +83,7 @@ struct BuildArgs {
 }
 
 #[derive(clap::Args)]
-#[command(group(clap::ArgGroup::new("input").required(true).args(["bundle", "config"])))]
+#[command(group(clap::ArgGroup::new("input").required(true).args(["bundle", "config", "recover"])))]
 struct SimArgs {
     /// The scenario bundle (`argusnet sim --export-bundle`, or `argusnet-rs
     /// build`).
@@ -111,6 +116,21 @@ struct SimArgs {
     /// (B2.2). The replay is identical either way.
     #[arg(long, value_enum, default_value = "legacy")]
     executor: Executor,
+    /// Record the run in this new directory: its immutable configuration, a
+    /// durable journal of every committed tick, checkpoints, and a completion
+    /// marker (A4). A crashed run is finished with `--recover`.
+    #[arg(long, conflicts_with_all = ["resume", "reset_at", "recover"])]
+    run_dir: Option<PathBuf>,
+    /// With `--run-dir` or `--recover`: checkpoint every this many ticks.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    checkpoint_every: Option<u64>,
+    /// Finish a crashed run from its directory: restore its latest
+    /// checkpoint, cut the journal back to it, and run to completion.
+    #[arg(long, conflicts_with_all = ["resume", "reset_at"])]
+    recover: Option<PathBuf>,
+    /// Testing aid: exit as a crash would after this many recorded ticks.
+    #[arg(long, hide = true, requires = "run_dir")]
+    crash_after: Option<u64>,
     /// Print nothing but errors.
     #[arg(long)]
     quiet: bool,
@@ -131,6 +151,8 @@ enum Executor {
 }
 
 const EXIT_FAULT: u8 = 1;
+/// `--crash-after`'s exit: distinct from every real outcome.
+pub(crate) const EXIT_CRASHED: i32 = 4;
 const EXIT_INVALID: u8 = 2;
 const EXIT_UNSUPPORTED: u8 = 3;
 
@@ -299,7 +321,20 @@ fn sim(args: SimArgs) -> ExitCode {
             }
             Err(code) => return code,
         },
-        (None, None) => unreachable!("clap requires one of --bundle and --config"),
+        (None, None) => match &args.recover {
+            Some(path) => {
+                let dir = RunDir::new(path);
+                if dir.is_complete() {
+                    println!("{}: already complete; nothing to recover", path.display());
+                    return ExitCode::SUCCESS;
+                }
+                match dir.bundle_text() {
+                    Ok(text) => text,
+                    Err(error) => return fail(EXIT_INVALID, error),
+                }
+            }
+            None => unreachable!("clap requires one of --bundle, --config and --recover"),
+        },
     };
     let bundle = match ScenarioBundle::from_json(&text) {
         Ok(bundle) => bundle,
@@ -321,7 +356,13 @@ fn sim(args: SimArgs) -> ExitCode {
             "bundle_version": bundle.version,
             "checkpoint_format": argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION,
             "runtime_algorithm": argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
-            "input": if args.config.is_some() { "config" } else { "bundle" },
+            "input": if args.recover.is_some() {
+                "recovered run directory"
+            } else if args.config.is_some() {
+                "config"
+            } else {
+                "bundle"
+            },
             "config": resolved_config,
         }),
     )]);
@@ -336,6 +377,55 @@ fn sim(args: SimArgs) -> ExitCode {
         if let Err(error) = run.sim.restore(&checkpoint) {
             return fail(EXIT_INVALID, format!("cannot resume: {error}"));
         }
+    }
+    let mut recovered_from_tick = None;
+    let mut recorder = match (&args.run_dir, &args.recover) {
+        (Some(path), _) => {
+            let dir = RunDir::new(path);
+            if let Err(error) = dir.create(&text) {
+                return fail(EXIT_INVALID, error);
+            }
+            match Recorder::start(
+                dir,
+                bundle.content_hash(),
+                args.checkpoint_every,
+                args.crash_after,
+            ) {
+                Ok(recorder) => Some(recorder),
+                Err(error) => return fail(EXIT_FAULT, error),
+            }
+        }
+        (None, Some(path)) => {
+            let dir = RunDir::new(path);
+            let keep = match dir.checkpoint() {
+                Ok(Some(checkpoint)) => {
+                    if let Err(error) = run.sim.restore(&checkpoint) {
+                        return fail(EXIT_INVALID, format!("cannot recover: {error}"));
+                    }
+                    recovered_from_tick = Some(checkpoint.tick);
+                    checkpoint.header.journal_cursor
+                }
+                Ok(None) => {
+                    recovered_from_tick = Some(0);
+                    0
+                }
+                Err(error) => return fail(EXIT_INVALID, format!("cannot recover: {error}")),
+            };
+            match Recorder::resume(dir, bundle.content_hash(), keep, args.checkpoint_every) {
+                Ok(recorder) => Some(recorder),
+                Err(error) => return fail(EXIT_INVALID, error),
+            }
+        }
+        (None, None) => None,
+    };
+    if let Some(tick) = recovered_from_tick {
+        run.extend_replay_meta([(
+            "recovery".to_string(),
+            serde_json::json!({
+                "recovered_from_tick": tick,
+                "note": "frames before this tick were lost with the crash; the journal is complete",
+            }),
+        )]);
     }
     if args.stage_timing {
         run.sim.enable_stage_timing();
@@ -409,7 +499,14 @@ fn sim(args: SimArgs) -> ExitCode {
                 }),
         };
         match stepped {
-            Ok(_) => tick_ms.push(tick_started.elapsed().as_secs_f64() * 1e3),
+            Ok(_) => {
+                tick_ms.push(tick_started.elapsed().as_secs_f64() * 1e3);
+                if let Some(recorder) = recorder.as_mut() {
+                    if let Err(error) = recorder.after_tick(&mut run) {
+                        return fail(EXIT_FAULT, error);
+                    }
+                }
+            }
             Err(RunError::Tick(TickError::Completed { .. })) => break,
             // A tick error names its tick and stage; truth and invariant
             // faults do not, so the tick is added for them.
@@ -440,6 +537,16 @@ fn sim(args: SimArgs) -> ExitCode {
         }
     }
     let replay_write_ms = replay_started.elapsed().as_secs_f64() * 1e3;
+    if let Some(recorder) = &recorder {
+        let summary = serde_json::json!({
+            "journal_records": recorder.cursor(),
+            "recovered_from_tick": recovered_from_tick,
+            "replay": args.replay.as_ref().map(|path| path.display().to_string()),
+        });
+        if let Err(error) = recorder.dir.mark_complete(&summary) {
+            return fail(EXIT_FAULT, format!("marking the run complete: {error}"));
+        }
+    }
     let mut sorted = tick_ms.clone();
     sorted.sort_by(f64::total_cmp);
     if let Some(path) = &args.timing_json {

@@ -10,6 +10,7 @@ pub mod deconflict;
 pub mod deterministic;
 pub mod follow_path;
 pub mod fusion;
+pub mod journal;
 pub mod mapping;
 pub mod mission;
 pub mod mission_driver;

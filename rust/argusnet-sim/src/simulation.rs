@@ -674,6 +674,17 @@ impl Simulation {
         self.clock.tick()
     }
 
+    /// Where the durable event journal stands: set by the recorder after each
+    /// durable append (A4), carried by every snapshot and checkpoint, so a
+    /// recovery knows how much of the journal a checkpoint already covers.
+    pub fn set_journal_cursor(&mut self, cursor: u64) {
+        self.journal_cursor = cursor;
+    }
+
+    pub fn journal_cursor(&self) -> u64 {
+        self.journal_cursor
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }

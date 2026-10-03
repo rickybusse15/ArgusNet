@@ -476,3 +476,164 @@ fn stage_timing_reports_every_stage_and_leaves_the_replay_unchanged() {
         "{stage_total} > {tick_total}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A4: the crash-recoverable run directory
+// ---------------------------------------------------------------------------
+
+fn run_dir(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+fn record(bundle: &str, dir: &Path, extra: &[&str]) -> std::process::Output {
+    binary()
+        .args(["sim", "--quiet", "--bundle"])
+        .arg(fixture(bundle))
+        .arg("--run-dir")
+        .arg(dir)
+        .args(["--checkpoint-every", "25"])
+        .args(extra)
+        .output()
+        .expect("runs")
+}
+
+fn recover(dir: &Path) -> std::process::Output {
+    binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(dir)
+        .args(["--checkpoint-every", "25"])
+        .output()
+        .expect("runs")
+}
+
+/// A run that crashes mid-way, with a write torn by the crash, recovers from
+/// its last checkpoint to exactly the journal an uninterrupted run writes.
+#[test]
+fn a_crashed_run_recovers_to_the_uninterrupted_journal() {
+    let whole = run_dir("journal-whole");
+    let output = record("scenario_bundle_scan.json", &whole, &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(whole.join("complete.json").exists());
+
+    let crashed = run_dir("journal-crashed");
+    let output = record(
+        "scenario_bundle_scan.json",
+        &crashed,
+        &["--crash-after", "60"],
+    );
+    assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
+    assert!(
+        !crashed.join("complete.json").exists(),
+        "a crashed run is incomplete"
+    );
+    // The crash also tore the write in flight.
+    let mut journal = std::fs::OpenOptions::new()
+        .append(true)
+        .open(crashed.join("journal.jsonl"))
+        .unwrap();
+    std::io::Write::write_all(&mut journal, b"00ff00ff00ff00ff {\"seq\":60,").unwrap();
+    drop(journal);
+
+    let output = recover(&crashed);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let complete: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("complete.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        complete["recovered_from_tick"], 50,
+        "the last checkpoint before the crash"
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        std::fs::read(whole.join("journal.jsonl")).unwrap(),
+        "the recovered journal is not the uninterrupted one"
+    );
+
+    // Recovering a complete run does nothing.
+    let output = recover(&crashed);
+    assert!(output.status.success());
+}
+
+#[test]
+fn a_run_directory_is_never_reused() {
+    let dir = run_dir("journal-reuse");
+    assert!(record("scenario_bundle_tt.json", &dir, &[])
+        .status
+        .success());
+    let output = record("scenario_bundle_tt.json", &dir, &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("never reused"));
+}
+
+/// A damaged immutable configuration is reported as an incomplete artifact,
+/// not run.
+#[test]
+fn a_damaged_run_configuration_is_an_incomplete_artifact() {
+    let dir = run_dir("journal-damaged-config");
+    let output = record("scenario_bundle_tt.json", &dir, &["--crash-after", "10"]);
+    assert_eq!(output.status.code(), Some(4));
+    let text = std::fs::read_to_string(dir.join("run.json")).unwrap();
+    std::fs::write(
+        dir.join("run.json"),
+        text.replacen("\\\"seed\\\":", "\\\"seed\\\":1", 1),
+    )
+    .unwrap();
+    let output = recover(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("incomplete run artifact"), "{stderr}");
+}
+
+/// Damage in the middle of the journal, inside what the checkpoint covers, is
+/// refused rather than truncated away.
+#[test]
+fn a_corrupt_journal_is_refused() {
+    let dir = run_dir("journal-corrupt");
+    let output = record("scenario_bundle_tt.json", &dir, &["--crash-after", "40"]);
+    assert_eq!(output.status.code(), Some(4));
+    let text = std::fs::read_to_string(dir.join("journal.jsonl")).unwrap();
+    let mut lines: Vec<&str> = text.lines().collect();
+    let damaged = lines[5].replacen("\"tick\":5", "\"tick\":6", 1);
+    assert_ne!(damaged, lines[5]);
+    lines[5] = &damaged;
+    std::fs::write(dir.join("journal.jsonl"), lines.join("\n") + "\n").unwrap();
+    let output = recover(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("corrupt"), "{stderr}");
+}
+
+/// A checkpoint from another scenario, dropped into a run directory, is
+/// refused before anything runs.
+#[test]
+fn a_checkpoint_from_another_run_is_refused() {
+    let tt = run_dir("journal-tt");
+    assert_eq!(
+        record("scenario_bundle_tt.json", &tt, &["--crash-after", "30"])
+            .status
+            .code(),
+        Some(4)
+    );
+    let scan = run_dir("journal-scan");
+    assert_eq!(
+        record("scenario_bundle_scan.json", &scan, &["--crash-after", "30"])
+            .status
+            .code(),
+        Some(4)
+    );
+    std::fs::copy(tt.join("checkpoint.json"), scan.join("checkpoint.json")).unwrap();
+    let output = recover(&scan);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot recover"), "{stderr}");
+}
