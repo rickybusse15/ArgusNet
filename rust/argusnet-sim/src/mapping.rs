@@ -16,7 +16,7 @@
 //! Stage 8 runs **before** stage 9, so the phase it sees is the one committed
 //! at the end of the previous tick — not the one this tick is about to move
 //! to. That is §4's causal order made concrete, and it is why
-//! [`MappingLink::watch_mission`] takes a handle rather than the stage being
+//! [`MappingStage::watch_mission`] takes a handle rather than the stage being
 //! told a phase: the handle reads whatever the machine had settled on, at the
 //! moment stage 8 asks.
 //!
@@ -53,7 +53,7 @@
 //! The asymmetry worth keeping: the second map is only fed under
 //! `mission_mode == "scan_map_inspect"`. In any other mode `WorldMap` stays
 //! empty while the top-level map fills, so the two agree only in scan mode.
-//! [`MappingLink::set_scan_mode`] reproduces that, and the coverage *fraction*
+//! [`MappingStage::set_scan_mode`] reproduces that, and the coverage *fraction*
 //! is read from one grid either way — which is the point of P4.6's *"one
 //! footprint rasterizer whose indices/weights feed both coverage and belief
 //! updates"*.
@@ -69,7 +69,7 @@
 //! three-deep chain across two crates for no reviewer's benefit. Nothing
 //! consumes belief yet — P2.1b is still deferred — whereas the coverage
 //! fraction has a consumer today, which is the mission machine of P4.8a.
-//! [`MappingLink::coverage_fraction`] is what closes that loop.
+//! [`MappingStage::coverage_fraction`] is what closes that loop.
 //!
 //! # The footprint radius is derived, and floored
 //!
@@ -106,7 +106,6 @@
 //! outer one.
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use argusnet_localization::{GridLocalizer, LocalizationConfig, LocalizationEstimate, StepInput};
 use argusnet_mapping::{
@@ -195,14 +194,8 @@ struct ZoneCheckpoint {
     inside: BTreeSet<String>,
 }
 
-/// A handle onto the mapping stage.
-#[derive(Debug, Clone)]
-pub struct MappingLink {
-    inner: Arc<Mutex<Shared>>,
-}
-
 #[derive(Debug)]
-struct Shared {
+struct State {
     bounds: GridBounds,
     footprint_radius_m: f64,
     sampling: Sampling,
@@ -234,36 +227,32 @@ struct Shared {
     newly_covered: Vec<(usize, usize)>,
 }
 
-impl MappingLink {
-    fn lock(&self) -> MutexGuard<'_, Shared> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
+impl MappingStage {
     pub fn bounds(&self) -> GridBounds {
-        self.lock().bounds
+        self.state.bounds
     }
 
     pub fn footprint_radius_m(&self) -> f64 {
-        self.lock().footprint_radius_m
+        self.state.footprint_radius_m
     }
 
-    pub fn set_footprint_radius_m(&self, radius_m: f64) {
-        self.lock().footprint_radius_m = radius_m;
+    pub fn set_footprint_radius_m(&mut self, radius_m: f64) {
+        self.state.footprint_radius_m = radius_m;
     }
 
     /// Which of P4.6a's two rasterizations to use. The reference's coverage
     /// map uses the metre-anchored lattice.
-    pub fn set_sampling(&self, sampling: Sampling) {
-        self.lock().sampling = sampling;
+    pub fn set_sampling(&mut self, sampling: Sampling) {
+        self.state.sampling = sampling;
     }
 
-    pub fn set_scan_mode(&self, scan_mode: bool) {
-        self.lock().scan_mode = scan_mode;
+    pub fn set_scan_mode(&mut self, scan_mode: bool) {
+        self.state.scan_mode = scan_mode;
     }
 
     /// `MappingState`'s four fields, from the maintained aggregates.
     pub fn stats(&self) -> CoverageStats {
-        self.lock().coverage.stats()
+        self.state.coverage.stats()
     }
 
     /// What the mission machine reads as `scan_frac`.
@@ -271,20 +260,18 @@ impl MappingLink {
     /// One grid, so this cannot drift from [`Self::stats`] the way the
     /// reference's two maps could.
     pub fn coverage_fraction(&self) -> f64 {
-        self.lock().coverage.stats().coverage_fraction
+        self.state.coverage.stats().coverage_fraction
     }
 
     /// Per-cell observation counts, for a consumer that needs more than the
     /// aggregates.
     pub fn coverage_count_at(&self, i: usize, j: usize) -> u32 {
-        self.lock().coverage.count_at(i, j)
+        self.state.coverage.count_at(i, j)
     }
 
-    /// Every cell's count, `i`-major (`counts[i * ny + j]`), read under one
-    /// lock. A whole-grid reader calling [`Self::coverage_count_at`] per cell
-    /// takes the lock `nx * ny` times.
+    /// Every cell's count, `i`-major (`counts[i * ny + j]`).
     pub fn coverage_counts(&self) -> Vec<u32> {
-        let shared = self.lock();
+        let shared = &self.state;
         let (nx, ny) = shared.coverage.dimensions();
         let mut counts = Vec::with_capacity(nx * ny);
         for i in 0..nx {
@@ -299,8 +286,8 @@ impl MappingLink {
     ///
     /// Each zone's coverage map covers the stage's whole grid, as the
     /// reference's does.
-    pub fn set_zones(&self, zones: Vec<InspectionZone>) -> Result<(), &'static str> {
-        let mut shared = self.lock();
+    pub fn set_zones(&mut self, zones: Vec<InspectionZone>) -> Result<(), &'static str> {
+        let shared = &mut self.state;
         let bounds = shared.bounds;
         let tracks = zones
             .into_iter()
@@ -318,12 +305,12 @@ impl MappingLink {
 
     /// This tick's zone events, zone by zone, drone by drone.
     pub fn inspection_events(&self) -> Vec<InspectionEvent> {
-        self.lock().inspection_events.clone()
+        self.state.inspection_events.clone()
     }
 
     /// The centres of this tick's newly observed cells, in `np.where` order.
     pub fn newly_covered_cells(&self) -> Vec<[f64; 2]> {
-        let shared = self.lock();
+        let shared = &self.state;
         let bounds = shared.bounds;
         shared
             .newly_covered
@@ -340,23 +327,23 @@ impl MappingLink {
 
     /// Fuse the fleet's estimates after every localizing tick, as the
     /// reference's cooperative search does.
-    pub fn set_cooperative_search(&self, cooperative: bool) {
-        self.lock().cooperative = cooperative;
+    pub fn set_cooperative_search(&mut self, cooperative: bool) {
+        self.state.cooperative = cooperative;
     }
 
     /// The last team fusion, if cooperative search has produced one.
     pub fn team_localization(&self) -> Option<TeamLocalization> {
-        self.lock().team.clone()
+        self.state.team.clone()
     }
 
     /// The estimates of the last tick that localized; see `last_estimates`.
     pub fn last_estimates(&self) -> Vec<LocalizationEstimate> {
-        self.lock().last_estimates.clone()
+        self.state.last_estimates.clone()
     }
 
     /// Turn on the localization half of stage 8.
-    pub fn enable_localization(&self, config: LocalizationConfig) {
-        self.lock().localizer = Some(GridLocalizer::new(config));
+    pub fn enable_localization(&mut self, config: LocalizationConfig) {
+        self.state.localizer = Some(GridLocalizer::new(config));
     }
 
     /// Watch a mission machine, so localization runs only in the phases the
@@ -364,19 +351,19 @@ impl MappingLink {
     ///
     /// Without a handle the localizer runs every tick, which is what a run
     /// with no mission machine does.
-    pub fn watch_mission(&self, mission: MissionLink) {
-        self.lock().mission = Some(mission);
+    pub fn watch_mission(&mut self, mission: MissionLink) {
+        self.state.mission = Some(mission);
     }
 
     /// This tick's estimates, in platform order. Empty when localization is
     /// off or the phase does not run it.
     pub fn estimates(&self) -> Vec<LocalizationEstimate> {
-        self.lock().estimates.clone()
+        self.state.estimates.clone()
     }
 
     /// What the mission machine reads as `localization_confidences`.
     pub fn confidences(&self) -> Vec<f64> {
-        self.lock()
+        self.state
             .estimates
             .iter()
             .map(|estimate| estimate.confidence)
@@ -385,12 +372,12 @@ impl MappingLink {
 
     /// `GridLocalizer.any_timed_out` as of the last run.
     pub fn localizer_timed_out(&self) -> bool {
-        self.lock().localizer_timed_out
+        self.state.localizer_timed_out
     }
 
     /// Drop all accumulated coverage, and any localization state.
-    pub fn clear(&self) {
-        let mut shared = self.lock();
+    pub fn clear(&mut self) {
+        let shared = &mut self.state;
         shared.coverage.reset();
         if let Some(localizer) = shared.localizer.as_mut() {
             localizer.reset(None);
@@ -428,7 +415,7 @@ struct MappingCheckpoint {
 /// [`Stage::UpdateMappingAndLocalization`]: crate::stage::Stage::UpdateMappingAndLocalization
 #[derive(Debug)]
 pub struct MappingStage {
-    link: MappingLink,
+    state: State,
 }
 
 impl MappingStage {
@@ -436,26 +423,24 @@ impl MappingStage {
     pub fn new(bounds: GridBounds) -> Result<Self, &'static str> {
         let coverage = CoverageGrid::new(bounds)?;
         Ok(Self {
-            link: MappingLink {
-                inner: Arc::new(Mutex::new(Shared {
-                    bounds,
-                    footprint_radius_m: MIN_FOOTPRINT_RADIUS_M,
-                    // The reference's coverage map uses the metre-anchored
-                    // lattice; see P4.6a for why the two differ.
-                    sampling: Sampling::WorldAnchored,
-                    scan_mode: true,
-                    coverage,
-                    localizer: None,
-                    mission: None,
-                    estimates: Vec::new(),
-                    last_estimates: Vec::new(),
-                    localizer_timed_out: false,
-                    cooperative: false,
-                    team: None,
-                    zones: Vec::new(),
-                    inspection_events: Vec::new(),
-                    newly_covered: Vec::new(),
-                })),
+            state: State {
+                bounds,
+                footprint_radius_m: MIN_FOOTPRINT_RADIUS_M,
+                // The reference's coverage map uses the metre-anchored
+                // lattice; see P4.6a for why the two differ.
+                sampling: Sampling::WorldAnchored,
+                scan_mode: true,
+                coverage,
+                localizer: None,
+                mission: None,
+                estimates: Vec::new(),
+                last_estimates: Vec::new(),
+                localizer_timed_out: false,
+                cooperative: false,
+                team: None,
+                zones: Vec::new(),
+                inspection_events: Vec::new(),
+                newly_covered: Vec::new(),
             },
         })
     }
@@ -465,9 +450,9 @@ impl MappingStage {
         bounds: GridBounds,
         mobile_count: usize,
     ) -> Result<Self, &'static str> {
-        let stage = Self::new(bounds)?;
+        let mut stage = Self::new(bounds)?;
         let (nx, ny) = bounds.dimensions()?;
-        stage.link.set_footprint_radius_m(footprint_radius_m(
+        stage.set_footprint_radius_m(footprint_radius_m(
             nx,
             ny,
             mobile_count,
@@ -475,22 +460,17 @@ impl MappingStage {
         ));
         Ok(stage)
     }
-
-    /// A handle to keep before installing the stage.
-    pub fn link(&self) -> MappingLink {
-        self.link.clone()
-    }
 }
 
 impl StageHandler for MappingStage {
     fn reset(&mut self) {
-        self.link.clear();
+        self.clear();
     }
 
     /// Coverage counts (and their running aggregates), the localizer, its
     /// last estimates and the timeout latch.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
-        let shared = self.link.lock();
+        let shared = &self.state;
         let state = MappingCheckpoint {
             coverage: shared.coverage.clone(),
             localizer: shared.localizer.clone(),
@@ -516,7 +496,7 @@ impl StageHandler for MappingStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
-        let shared = self.link.lock();
+        let shared = &self.state;
         let malformed = |detail: &str| crate::simulation::StageStateError::Malformed {
             detail: detail.to_string(),
         };
@@ -551,7 +531,7 @@ impl StageHandler for MappingStage {
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
         let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.coverage = decoded.coverage;
         shared.localizer = decoded.localizer;
         shared.estimates = decoded.estimates;
@@ -568,7 +548,7 @@ impl StageHandler for MappingStage {
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        let mut shared = self.link.lock();
+        let shared = &mut self.state;
         shared.inspection_events.clear();
         shared.newly_covered.clear();
 
@@ -588,7 +568,7 @@ impl StageHandler for MappingStage {
             return Ok(StageOutcome::NoWork);
         }
 
-        let Shared {
+        let State {
             bounds,
             footprint_radius_m,
             sampling,
@@ -623,7 +603,7 @@ impl StageHandler for MappingStage {
 
         // --- zone inspection ------------------------------------------------
         let timestamp_s = context.timestamp_s;
-        let Shared {
+        let State {
             zones,
             inspection_events,
             ..
@@ -688,7 +668,7 @@ impl StageHandler for MappingStage {
         let localizing_phase = matches!(phase, MissionPhase::Scanning | MissionPhase::Localizing);
 
         shared.estimates.clear();
-        if shared.localizer.is_some() && localizing_phase {
+        if let Some(localizer) = shared.localizer.as_mut().filter(|_| localizing_phase) {
             let coverage_fraction = stats.coverage_fraction;
             let (grid_nx, grid_ny) = shared.coverage.dimensions();
             // `score_footprints` takes the reference's `int32` layout, and
@@ -722,7 +702,6 @@ impl StageHandler for MappingStage {
                     platform.position.z,
                 ];
 
-                let localizer = shared.localizer.as_mut().expect("checked above");
                 // The step the draw is keyed on is the one this update will
                 // become, so it is the stored count plus one.
                 let step = localizer.step_count(node_id) + 1;
@@ -770,7 +749,6 @@ impl StageHandler for MappingStage {
             // `if _coop_search_active and len(_loc_estimates) > 1`: fuse, and
             // keep the previous team estimate when the fusion has nothing.
             if shared.cooperative && shared.estimates.len() > 1 {
-                let localizer = shared.localizer.as_ref().expect("checked above");
                 let ids: Vec<&str> = shared
                     .estimates
                     .iter()
@@ -804,7 +782,6 @@ impl StageHandler for MappingStage {
             }
         }
         let localized = shared.estimates.len();
-        drop(shared);
 
         if marked == 0 {
             // Every platform's footprint fell outside the grid.
@@ -863,14 +840,24 @@ mod tests {
         }
     }
 
-    fn rig(platforms: Vec<NodeState>) -> (Simulation, MappingLink) {
+    fn rig(platforms: Vec<NodeState>) -> Simulation {
         let mut sim = simulation();
         sim.load_world(platforms, Vec::new());
         let stage = MappingStage::new(bounds()).expect("bounds are valid");
-        let link = stage.link();
         sim.set_stage_handler(Stage::UpdateMappingAndLocalization, Box::new(stage))
             .expect("stage 8 is not a transaction boundary");
-        (sim, link)
+        sim
+    }
+
+    /// The installed stage, reached through the session that owns it.
+    fn map(sim: &mut Simulation) -> &mut MappingStage {
+        sim.stage_mut(Stage::UpdateMappingAndLocalization)
+            .expect("stage 8 is installed")
+    }
+
+    fn mapped(sim: &Simulation) -> &MappingStage {
+        sim.stage(Stage::UpdateMappingAndLocalization)
+            .expect("stage 8 is installed")
     }
 
     fn outcome(sim: &Simulation) -> StageOutcome {
@@ -926,7 +913,7 @@ mod tests {
         let stage = MappingStage::with_derived_footprint(bounds(), 4).unwrap();
         let (nx, ny) = bounds().dimensions().unwrap();
         assert_eq!(
-            stage.link().footprint_radius_m(),
+            stage.footprint_radius_m(),
             footprint_radius_m(nx, ny, 4, bounds().resolution_m)
         );
     }
@@ -937,34 +924,34 @@ mod tests {
 
     #[test]
     fn a_drone_marks_a_disc_and_coverage_rises() {
-        let (mut sim, link) = rig(vec![node("drone-1", true, 500.0, 500.0)]);
-        link.set_footprint_radius_m(150.0);
-        assert_eq!(link.stats().covered_cells, 0);
+        let mut sim = rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(150.0);
+        assert_eq!(mapped(&sim).stats().covered_cells, 0);
 
         sim.step().unwrap();
 
-        let stats = link.stats();
+        let stats = mapped(&sim).stats();
         assert!(stats.covered_cells > 0);
         assert_eq!(stats.total_cells, 20 * 20);
         assert!(stats.coverage_fraction > 0.0 && stats.coverage_fraction < 1.0);
         assert_eq!(outcome(&sim), StageOutcome::Ran);
         // The cell under the drone is marked.
-        assert!(link.coverage_count_at(10, 10) > 0);
+        assert!(mapped(&sim).coverage_count_at(10, 10) > 0);
     }
 
     /// Revisiting the same ground raises revisits without raising coverage:
     /// `covered_cells` counts cells, not hits.
     #[test]
     fn revisiting_raises_revisits_not_coverage() {
-        let (mut sim, link) = rig(vec![node("drone-1", true, 500.0, 500.0)]);
-        link.set_footprint_radius_m(150.0);
+        let mut sim = rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(150.0);
         sim.step().unwrap();
-        let first = link.stats();
+        let first = mapped(&sim).stats();
 
         for _ in 0..4 {
             sim.step().unwrap();
         }
-        let later = link.stats();
+        let later = mapped(&sim).stats();
 
         assert_eq!(later.covered_cells, first.covered_cells);
         assert_eq!(later.coverage_fraction, first.coverage_fraction);
@@ -973,18 +960,18 @@ mod tests {
 
     #[test]
     fn a_fixed_node_never_marks_anything() {
-        let (mut sim, link) = rig(vec![node("tower", false, 500.0, 500.0)]);
-        link.set_footprint_radius_m(150.0);
+        let mut sim = rig(vec![node("tower", false, 500.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(150.0);
         sim.step().unwrap();
-        assert_eq!(link.stats().covered_cells, 0);
+        assert_eq!(mapped(&sim).stats().covered_cells, 0);
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
     #[test]
     fn a_world_with_no_mobile_platforms_reports_no_work() {
-        let (mut sim, link) = rig(Vec::new());
+        let mut sim = rig(Vec::new());
         sim.step().unwrap();
-        assert_eq!(link.stats().covered_cells, 0);
+        assert_eq!(mapped(&sim).stats().covered_cells, 0);
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
@@ -992,19 +979,19 @@ mod tests {
     #[test]
     fn two_drones_cover_more_than_one() {
         let one = {
-            let (mut sim, link) = rig(vec![node("drone-1", true, 250.0, 500.0)]);
-            link.set_footprint_radius_m(150.0);
+            let mut sim = rig(vec![node("drone-1", true, 250.0, 500.0)]);
+            map(&mut sim).set_footprint_radius_m(150.0);
             sim.step().unwrap();
-            link.stats().covered_cells
+            mapped(&sim).stats().covered_cells
         };
         let two = {
-            let (mut sim, link) = rig(vec![
+            let mut sim = rig(vec![
                 node("drone-1", true, 250.0, 500.0),
                 node("drone-2", true, 750.0, 500.0),
             ]);
-            link.set_footprint_radius_m(150.0);
+            map(&mut sim).set_footprint_radius_m(150.0);
             sim.step().unwrap();
-            link.stats().covered_cells
+            mapped(&sim).stats().covered_cells
         };
         assert!(two > one, "{two} should exceed {one}");
     }
@@ -1013,10 +1000,10 @@ mod tests {
     /// it had nothing to do rather than claiming it worked.
     #[test]
     fn a_footprint_off_the_grid_marks_nothing() {
-        let (mut sim, link) = rig(vec![node("drone-1", true, 50_000.0, 50_000.0)]);
-        link.set_footprint_radius_m(10.0);
+        let mut sim = rig(vec![node("drone-1", true, 50_000.0, 50_000.0)]);
+        map(&mut sim).set_footprint_radius_m(10.0);
         sim.step().unwrap();
-        assert_eq!(link.stats().covered_cells, 0);
+        assert_eq!(mapped(&sim).stats().covered_cells, 0);
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
     }
 
@@ -1030,11 +1017,11 @@ mod tests {
     /// construction.
     #[test]
     fn the_maintained_aggregates_equal_a_full_reduction() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-1", true, 200.0, 200.0),
             node("drone-2", true, 800.0, 300.0),
         ]);
-        link.set_footprint_radius_m(120.0);
+        map(&mut sim).set_footprint_radius_m(120.0);
         for k in 0..6 {
             // Move them around so cells are hit different numbers of times.
             let shift = f64::from(k) * 60.0;
@@ -1042,8 +1029,8 @@ mod tests {
             sim.world_mut().platform_mut("drone-2").unwrap().position.y = 300.0 + shift;
             sim.step().unwrap();
         }
-        // Reach the grid through the link's own accessor, then compare.
-        let stats = link.stats();
+        // Reach the grid through the stage's own accessor, then compare.
+        let stats = mapped(&sim).stats();
         assert!(stats.covered_cells > 0);
         assert!(stats.mean_revisits >= 1.0);
 
@@ -1051,7 +1038,7 @@ mod tests {
         let mut observations = 0u64;
         for i in 0..20 {
             for j in 0..20 {
-                let count = u64::from(link.coverage_count_at(i, j));
+                let count = u64::from(mapped(&sim).coverage_count_at(i, j));
                 if count > 0 {
                     covered += 1;
                 }
@@ -1069,21 +1056,24 @@ mod tests {
     /// could.
     #[test]
     fn the_coverage_fraction_matches_the_stats() {
-        let (mut sim, link) = rig(vec![node("drone-1", true, 500.0, 500.0)]);
-        link.set_footprint_radius_m(200.0);
+        let mut sim = rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(200.0);
         sim.step().unwrap();
-        assert_eq!(link.coverage_fraction(), link.stats().coverage_fraction);
+        assert_eq!(
+            mapped(&sim).coverage_fraction(),
+            mapped(&sim).stats().coverage_fraction
+        );
     }
 
     #[test]
     fn clearing_drops_all_coverage() {
-        let (mut sim, link) = rig(vec![node("drone-1", true, 500.0, 500.0)]);
-        link.set_footprint_radius_m(150.0);
+        let mut sim = rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(150.0);
         sim.step().unwrap();
-        assert!(link.stats().covered_cells > 0);
+        assert!(mapped(&sim).stats().covered_cells > 0);
 
-        link.clear();
-        let stats = link.stats();
+        map(&mut sim).clear();
+        let stats = mapped(&sim).stats();
         assert_eq!(stats.covered_cells, 0);
         assert_eq!(stats.coverage_fraction, 0.0);
         assert_eq!(stats.mean_revisits, 0.0, "not a NaN with nothing covered");
@@ -1095,12 +1085,12 @@ mod tests {
     #[test]
     fn the_two_samplings_disagree_at_a_non_integral_radius() {
         let covered_with = |sampling: Sampling| {
-            let (mut sim, link) = rig(vec![node("drone-1", true, 500.0, 500.0)]);
-            link.set_sampling(sampling);
+            let mut sim = rig(vec![node("drone-1", true, 500.0, 500.0)]);
+            map(&mut sim).set_sampling(sampling);
             // 125 / 50 is not a whole number of cells.
-            link.set_footprint_radius_m(125.0);
+            map(&mut sim).set_footprint_radius_m(125.0);
             sim.step().unwrap();
-            link.stats().covered_cells
+            mapped(&sim).stats().covered_cells
         };
         assert_ne!(
             covered_with(Sampling::WorldAnchored),
@@ -1127,19 +1117,19 @@ mod tests {
     fn a_sample_on_the_far_edge_folds_onto_the_last_cell_and_counts_twice() {
         // x_max is 1000 and the resolution 50, so a centre at 950 puts lattice
         // samples on both 950 (index 19) and exactly 1000 (index 20 -> 19).
-        let (mut sim, link) = rig(vec![node("drone-1", true, 950.0, 500.0)]);
-        link.set_footprint_radius_m(150.0);
+        let mut sim = rig(vec![node("drone-1", true, 950.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(150.0);
 
         sim.step().unwrap();
 
         assert_eq!(
-            link.coverage_count_at(19, 10),
+            mapped(&sim).coverage_count_at(19, 10),
             2,
             "the edge sample and its neighbour both land on the last cell"
         );
         // One column in, nothing folds, so the same footprint hits once.
         assert_eq!(
-            link.coverage_count_at(18, 10),
+            mapped(&sim).coverage_count_at(18, 10),
             1,
             "an unfolded cell is hit once by one footprint"
         );
@@ -1149,56 +1139,56 @@ mod tests {
     // Localization
     // -----------------------------------------------------------------
 
-    fn localizing_rig(platforms: Vec<NodeState>) -> (Simulation, MappingLink) {
-        let (sim, link) = rig(platforms);
-        link.set_footprint_radius_m(150.0);
-        link.enable_localization(LocalizationConfig::default());
-        (sim, link)
+    fn localizing_rig(platforms: Vec<NodeState>) -> Simulation {
+        let mut sim = rig(platforms);
+        map(&mut sim).set_footprint_radius_m(150.0);
+        map(&mut sim).enable_localization(LocalizationConfig::default());
+        sim
     }
 
     /// With localization off — the default — stage 8 is coverage only, and
     /// says so by producing no estimates rather than empty ones.
     #[test]
     fn localization_is_off_until_it_is_enabled() {
-        let (mut sim, link) = rig(vec![node("drone-1", true, 500.0, 500.0)]);
-        link.set_footprint_radius_m(150.0);
+        let mut sim = rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(150.0);
         for _ in 0..5 {
             sim.step().unwrap();
         }
-        assert!(link.estimates().is_empty());
-        assert!(link.confidences().is_empty());
-        assert!(!link.localizer_timed_out());
+        assert!(mapped(&sim).estimates().is_empty());
+        assert!(mapped(&sim).confidences().is_empty());
+        assert!(!mapped(&sim).localizer_timed_out());
     }
 
     #[test]
     fn an_enabled_localizer_produces_one_estimate_per_mobile_platform() {
-        let (mut sim, link) = localizing_rig(vec![
+        let mut sim = localizing_rig(vec![
             node("drone-a", true, 300.0, 300.0),
             node("tower", false, 500.0, 500.0),
             node("drone-b", true, 700.0, 700.0),
         ]);
         sim.step().unwrap();
 
-        let estimates = link.estimates();
+        let estimates = mapped(&sim).estimates();
         assert_eq!(estimates.len(), 2, "one per mobile platform, not per node");
         let ids: Vec<&str> = estimates.iter().map(|e| e.platform_id.as_str()).collect();
         assert_eq!(ids, vec!["drone-a", "drone-b"]);
-        assert_eq!(link.confidences().len(), 2);
+        assert_eq!(mapped(&sim).confidences().len(), 2);
     }
 
     /// Below the coverage floor the estimator reports no confidence at all,
     /// and it still records an estimate rather than skipping the platform.
     #[test]
     fn below_the_coverage_floor_confidence_is_zero() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
         sim.step().unwrap();
 
-        let coverage = link.coverage_fraction();
+        let coverage = mapped(&sim).coverage_fraction();
         assert!(
             coverage < LocalizationConfig::default().min_coverage_to_localize,
             "one footprint is {coverage}, which must be under the floor"
         );
-        let estimates = link.estimates();
+        let estimates = mapped(&sim).estimates();
         assert_eq!(estimates.len(), 1);
         assert_eq!(estimates[0].confidence, 0.0);
     }
@@ -1207,7 +1197,7 @@ mod tests {
     /// matching a footprint against an accumulated coverage map.
     #[test]
     fn confidence_rises_as_the_map_fills() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        let mut sim = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
 
         let mut x = 100.0;
         let mut y = 100.0;
@@ -1220,7 +1210,7 @@ mod tests {
                 platform.velocity.x = 20.0;
             }
             sim.step().unwrap();
-            if let Some(estimate) = link.estimates().first() {
+            if let Some(estimate) = mapped(&sim).estimates().first() {
                 best = best.max(estimate.confidence);
             }
             x += 100.0;
@@ -1232,7 +1222,10 @@ mod tests {
                 y = 100.0;
             }
         }
-        assert!(link.coverage_fraction() > LocalizationConfig::default().min_coverage_to_localize);
+        assert!(
+            mapped(&sim).coverage_fraction()
+                > LocalizationConfig::default().min_coverage_to_localize
+        );
         assert!(best > 0.0, "confidence never rose above zero");
     }
 
@@ -1247,10 +1240,10 @@ mod tests {
     fn localization_stops_outside_the_scanning_and_localizing_phases() {
         use crate::mission::{MissionConfig, MissionInputs, MissionStage};
 
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
         let mission = MissionStage::new(MissionConfig::default());
         let mission_link = mission.link();
-        link.watch_mission(mission_link.clone());
+        map(&mut sim).watch_mission(mission_link.clone());
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
             .unwrap();
 
@@ -1260,7 +1253,7 @@ mod tests {
         inputs.localization_confidences = vec![0.99];
         mission_link.set_inputs(inputs);
         sim.step().unwrap();
-        assert_eq!(link.estimates().len(), 1, "Scanning localizes");
+        assert_eq!(mapped(&sim).estimates().len(), 1, "Scanning localizes");
 
         // Push it out of Scanning.
         let mut done = MissionInputs::at(1.0);
@@ -1272,11 +1265,11 @@ mod tests {
         sim.step().unwrap();
         assert_eq!(mission_link.phase(), MissionPhase::Inspecting);
         assert_eq!(
-            link.estimates().len(),
+            mapped(&sim).estimates().len(),
             1,
             "that tick still saw the PREVIOUS phase, which was Scanning"
         );
-        let last_localized = link.estimates();
+        let last_localized = mapped(&sim).estimates();
 
         // The next tick reads Inspecting and stops.
         let mut after = MissionInputs::at(2.0);
@@ -1284,10 +1277,13 @@ mod tests {
         after.localization_confidences = vec![0.99];
         mission_link.set_inputs(after);
         sim.step().unwrap();
-        assert!(link.estimates().is_empty(), "Inspecting must not localize");
+        assert!(
+            mapped(&sim).estimates().is_empty(),
+            "Inspecting must not localize"
+        );
         // The replay keeps reporting the last estimates, as `_loc_estimates`
         // does; the mission machine's own read above stays empty.
-        assert_eq!(link.last_estimates(), last_localized);
+        assert_eq!(mapped(&sim).last_estimates(), last_localized);
         assert!(!last_localized.is_empty());
     }
 
@@ -1295,7 +1291,7 @@ mod tests {
     /// last heading. A platform that slows to a hover points east.
     #[test]
     fn heading_is_zero_below_the_speed_floor_not_the_last_heading() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
 
         // Moving north: atan2(20, 0) = pi/2.
         {
@@ -1304,7 +1300,7 @@ mod tests {
             platform.velocity.y = 20.0;
         }
         sim.step().unwrap();
-        let moving = link.estimates()[0].heading_rad;
+        let moving = mapped(&sim).estimates()[0].heading_rad;
         assert!(
             (moving - std::f64::consts::FRAC_PI_2).abs() < 1e-12,
             "moving north should read pi/2, got {moving}"
@@ -1318,7 +1314,7 @@ mod tests {
         }
         sim.step().unwrap();
         assert_eq!(
-            link.estimates()[0].heading_rad,
+            mapped(&sim).estimates()[0].heading_rad,
             0.0,
             "below 0.1 m/s the reference reports exactly zero"
         );
@@ -1328,14 +1324,14 @@ mod tests {
     #[test]
     fn the_heading_speed_floor_is_strict() {
         let heading_at = |speed: f64| {
-            let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
+            let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
             {
                 let platform = sim.world_mut().platform_mut("drone-1").unwrap();
                 platform.velocity.x = 0.0;
                 platform.velocity.y = speed;
             }
             sim.step().unwrap();
-            link.estimates()[0].heading_rad
+            mapped(&sim).estimates()[0].heading_rad
         };
         assert_eq!(heading_at(MIN_SPEED_FOR_HEADING_MPS), 0.0, "`>`, not `>=`");
         assert!(heading_at(MIN_SPEED_FOR_HEADING_MPS + 1e-9) > 0.0);
@@ -1351,7 +1347,7 @@ mod tests {
     #[test]
     fn a_run_is_reproducible_for_a_fixed_seed() {
         let run = || {
-            let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 200.0, 200.0)]);
+            let mut sim = localizing_rig(vec![node("drone-1", true, 200.0, 200.0)]);
             for k in 0..12 {
                 {
                     let platform = sim.world_mut().platform_mut("drone-1").unwrap();
@@ -1360,7 +1356,7 @@ mod tests {
                 }
                 sim.step().unwrap();
             }
-            link.estimates()
+            mapped(&sim).estimates()
         };
         let first = run();
         let second = run();
@@ -1370,20 +1366,20 @@ mod tests {
 
     #[test]
     fn clearing_resets_the_localizer_too() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
         sim.step().unwrap();
-        assert!(!link.estimates().is_empty());
+        assert!(!mapped(&sim).estimates().is_empty());
 
-        link.clear();
-        assert!(link.estimates().is_empty());
-        assert!(!link.localizer_timed_out());
-        assert_eq!(link.stats().covered_cells, 0);
+        map(&mut sim).clear();
+        assert!(mapped(&sim).estimates().is_empty());
+        assert!(!mapped(&sim).localizer_timed_out());
+        assert_eq!(mapped(&sim).stats().covered_cells, 0);
     }
 
     /// Fly a lawnmower until coverage clears the localizer's floor, so the
     /// estimator is actually estimating rather than short-circuiting on
     /// `MapUnavailable`. Returns the drone to a fixed pose afterwards.
-    fn cover_the_map(sim: &mut Simulation, link: &MappingLink, node_id: &str) {
+    fn cover_the_map(sim: &mut Simulation, node_id: &str) {
         let mut x = 100.0;
         let mut y = 100.0;
         for _ in 0..80 {
@@ -1394,7 +1390,9 @@ mod tests {
                 platform.velocity.x = 20.0;
             }
             sim.step().unwrap();
-            if link.coverage_fraction() > LocalizationConfig::default().min_coverage_to_localize {
+            if mapped(sim).coverage_fraction()
+                > LocalizationConfig::default().min_coverage_to_localize
+            {
                 break;
             }
             x += 100.0;
@@ -1407,7 +1405,8 @@ mod tests {
             }
         }
         assert!(
-            link.coverage_fraction() > LocalizationConfig::default().min_coverage_to_localize,
+            mapped(sim).coverage_fraction()
+                > LocalizationConfig::default().min_coverage_to_localize,
             "the map never filled enough to localize"
         );
         let platform = sim.world_mut().platform_mut(node_id).unwrap();
@@ -1422,13 +1421,13 @@ mod tests {
     /// the previous step would repeat the draw and freeze the estimate.
     #[test]
     fn consecutive_ticks_draw_different_particles() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
-        cover_the_map(&mut sim, &link, "drone-1");
+        let mut sim = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        cover_the_map(&mut sim, "drone-1");
 
         sim.step().unwrap();
-        let first = link.estimates()[0].clone();
+        let first = mapped(&sim).estimates()[0].clone();
         sim.step().unwrap();
-        let second = link.estimates()[0].clone();
+        let second = mapped(&sim).estimates()[0].clone();
 
         assert_ne!(
             first.position_estimate, second.position_estimate,
@@ -1442,11 +1441,11 @@ mod tests {
     /// agreement and be an artefact.
     #[test]
     fn two_platforms_in_the_same_place_draw_different_particles() {
-        let (mut sim, link) = localizing_rig(vec![
+        let mut sim = localizing_rig(vec![
             node("drone-a", true, 100.0, 100.0),
             node("drone-b", true, 100.0, 100.0),
         ]);
-        cover_the_map(&mut sim, &link, "drone-a");
+        cover_the_map(&mut sim, "drone-a");
         {
             let platform = sim.world_mut().platform_mut("drone-b").unwrap();
             platform.position.x = 500.0;
@@ -1455,7 +1454,7 @@ mod tests {
         }
         sim.step().unwrap();
 
-        let estimates = link.estimates();
+        let estimates = mapped(&sim).estimates();
         assert_eq!(estimates.len(), 2);
         assert_eq!(
             estimates[0].position_estimate[0],
@@ -1473,11 +1472,11 @@ mod tests {
     /// and report a confident estimate it has not earned.
     #[test]
     fn the_particle_cloud_is_scaled_by_the_search_radius() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
-        cover_the_map(&mut sim, &link, "drone-1");
+        let mut sim = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        cover_the_map(&mut sim, "drone-1");
         sim.step().unwrap();
 
-        let estimate = &link.estimates()[0];
+        let estimate = &mapped(&sim).estimates()[0];
         assert!(
             estimate.position_std_m > 5.0,
             "an early cloud spans tens of metres, not {}",
@@ -1490,11 +1489,11 @@ mod tests {
     /// the drone.
     #[test]
     fn particles_are_offsets_around_the_platform() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
-        cover_the_map(&mut sim, &link, "drone-1");
+        let mut sim = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        cover_the_map(&mut sim, "drone-1");
         sim.step().unwrap();
 
-        let estimate = &link.estimates()[0];
+        let estimate = &mapped(&sim).estimates()[0];
         let dx = estimate.position_estimate[0] - 500.0;
         let dy = estimate.position_estimate[1] - 500.0;
         let offset = dx.hypot(dy);
@@ -1509,36 +1508,36 @@ mod tests {
     /// the mission machine reads.
     #[test]
     fn the_localizer_timeout_latches() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
-        cover_the_map(&mut sim, &link, "drone-1");
+        let mut sim = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        cover_the_map(&mut sim, "drone-1");
 
         // A fresh localizer with a short budget, over the map already built.
-        link.enable_localization(LocalizationConfig {
+        map(&mut sim).enable_localization(LocalizationConfig {
             localization_timeout_steps: 3,
             ..LocalizationConfig::default()
         });
-        assert!(!link.localizer_timed_out());
+        assert!(!mapped(&sim).localizer_timed_out());
 
         for _ in 0..5 {
             sim.step().unwrap();
         }
         assert!(
-            link.localizer_timed_out(),
+            mapped(&sim).localizer_timed_out(),
             "running past the step budget must latch the timeout"
         );
 
         // The latch is checkpoint state: nothing re-derives it after the
         // localizing phase, so a resumed run must be handed it.
         let checkpoint = sim.checkpoint().expect("not faulted");
-        let (mut fresh, fresh_link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
-        fresh_link.enable_localization(LocalizationConfig {
+        let mut fresh = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        map(&mut fresh).enable_localization(LocalizationConfig {
             localization_timeout_steps: 3,
             ..LocalizationConfig::default()
         });
-        assert!(!fresh_link.localizer_timed_out());
+        assert!(!mapped(&fresh).localizer_timed_out());
         fresh.restore(&checkpoint).expect("restore accepted");
         assert!(
-            fresh_link.localizer_timed_out(),
+            mapped(&fresh).localizer_timed_out(),
             "a restore dropped the localization-timeout latch"
         );
     }
@@ -1553,9 +1552,9 @@ mod tests {
     /// map actually does.
     #[test]
     fn a_platform_below_the_coverage_floor_never_times_out() {
-        let (mut sim, link) = rig(vec![node("drone-1", true, 500.0, 500.0)]);
-        link.set_footprint_radius_m(150.0);
-        link.enable_localization(LocalizationConfig {
+        let mut sim = rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        map(&mut sim).set_footprint_radius_m(150.0);
+        map(&mut sim).enable_localization(LocalizationConfig {
             localization_timeout_steps: 3,
             ..LocalizationConfig::default()
         });
@@ -1564,9 +1563,12 @@ mod tests {
         for _ in 0..40 {
             sim.step().unwrap();
         }
-        assert!(link.coverage_fraction() < LocalizationConfig::default().min_coverage_to_localize);
         assert!(
-            !link.localizer_timed_out(),
+            mapped(&sim).coverage_fraction()
+                < LocalizationConfig::default().min_coverage_to_localize
+        );
+        assert!(
+            !mapped(&sim).localizer_timed_out(),
             "forty ticks with no map is zero localization steps"
         );
     }
@@ -1576,17 +1578,17 @@ mod tests {
     /// annealing and start with a cloud far tighter than it has earned.
     #[test]
     fn clearing_resets_the_localizers_annealing() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
-        cover_the_map(&mut sim, &link, "drone-1");
+        let mut sim = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        cover_the_map(&mut sim, "drone-1");
         for _ in 0..20 {
             sim.step().unwrap();
         }
-        let annealed = link.estimates()[0].position_std_m;
+        let annealed = mapped(&sim).estimates()[0].position_std_m;
 
-        link.clear();
-        cover_the_map(&mut sim, &link, "drone-1");
+        map(&mut sim).clear();
+        cover_the_map(&mut sim, "drone-1");
         sim.step().unwrap();
-        let fresh = link.estimates()[0].position_std_m;
+        let fresh = mapped(&sim).estimates()[0].position_std_m;
 
         assert!(
             fresh > annealed,
@@ -1603,10 +1605,10 @@ mod tests {
     fn the_localizing_phase_still_localizes() {
         use crate::mission::{MissionConfig, MissionInputs, MissionStage};
 
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
+        let mut sim = localizing_rig(vec![node("drone-1", true, 500.0, 500.0)]);
         let mission = MissionStage::new(MissionConfig::default());
         let mission_link = mission.link();
-        link.watch_mission(mission_link.clone());
+        map(&mut sim).watch_mission(mission_link.clone());
         sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(mission))
             .unwrap();
 
@@ -1629,7 +1631,7 @@ mod tests {
 
         assert_eq!(mission_link.phase(), MissionPhase::Localizing);
         assert_eq!(
-            link.estimates().len(),
+            mapped(&sim).estimates().len(),
             1,
             "Localizing is exactly when the estimate matters most"
         );
@@ -1657,8 +1659,8 @@ mod tests {
     /// tick's map gives a different scale and a different answer.
     #[test]
     fn the_estimator_receives_the_step_scale_and_candidates_the_contract_specifies() {
-        let (mut sim, link) = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
-        cover_the_map(&mut sim, &link, "drone-1");
+        let mut sim = localizing_rig(vec![node("drone-1", true, 100.0, 100.0)]);
+        cover_the_map(&mut sim, "drone-1");
 
         // The pose the tick will run at. Nothing else is installed, so the
         // platform does not move during it.
@@ -1680,20 +1682,20 @@ mod tests {
         // coverage.
         let config = LocalizationConfig::default();
         let mut reference = GridLocalizer::new(config);
-        link.enable_localization(config);
+        map(&mut sim).enable_localization(config);
         sim.step().unwrap();
-        let from_stage = link.estimates()[0].clone();
+        let from_stage = mapped(&sim).estimates()[0].clone();
 
         // Read the map AFTER the tick: stage 8 marks coverage and then
         // localizes, so the estimator sees this tick's own footprint. Reading
         // the previous tick's map would be a different -- and staler --
         // estimate.
-        let coverage_fraction = link.coverage_fraction();
+        let coverage_fraction = mapped(&sim).coverage_fraction();
         let (grid_nx, grid_ny) = (20usize, 20usize);
         let mut counts: Vec<i32> = Vec::with_capacity(grid_nx * grid_ny);
         for i in 0..grid_nx {
             for j in 0..grid_ny {
-                counts.push(i32::try_from(link.coverage_count_at(i, j)).unwrap());
+                counts.push(i32::try_from(mapped(&sim).coverage_count_at(i, j)).unwrap());
             }
         }
 
@@ -1755,8 +1757,9 @@ mod tests {
         platform.position.y = y;
     }
 
-    fn events(link: &MappingLink) -> Vec<(String, String, String)> {
-        link.inspection_events()
+    fn events(sim: &Simulation) -> Vec<(String, String, String)> {
+        mapped(sim)
+            .inspection_events()
             .into_iter()
             .map(|e| (e.zone_id, e.node_id, e.event_type))
             .collect()
@@ -1770,28 +1773,29 @@ mod tests {
     /// exclusion zone is a violation; the radius is inclusive.
     #[test]
     fn zone_events_are_edges_and_an_exclusion_entry_is_a_violation() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-1", true, 900.0, 900.0),
             node("drone-2", true, 900.0, 100.0),
         ]);
-        link.set_zones(vec![
-            zone("patrol", "patrol", 500.0, 500.0, 100.0),
-            zone("keep-out", EXCLUSION_ZONE_TYPE, 200.0, 200.0, 50.0),
-        ])
-        .unwrap();
+        map(&mut sim)
+            .set_zones(vec![
+                zone("patrol", "patrol", 500.0, 500.0, 100.0),
+                zone("keep-out", EXCLUSION_ZONE_TYPE, 200.0, 200.0, 50.0),
+            ])
+            .unwrap();
 
         sim.step().unwrap();
-        assert!(events(&link).is_empty(), "nobody is inside anything");
+        assert!(events(&sim).is_empty(), "nobody is inside anything");
 
         // Exactly on the radius: inside.
         place(&mut sim, "drone-1", 600.0, 500.0);
         sim.step().unwrap();
-        assert_eq!(events(&link), vec![event("patrol", "drone-1", "entered")]);
+        assert_eq!(events(&sim), vec![event("patrol", "drone-1", "entered")]);
 
         place(&mut sim, "drone-2", 200.0, 200.0);
         sim.step().unwrap();
         assert_eq!(
-            events(&link),
+            events(&sim),
             vec![
                 event("patrol", "drone-1", "coverage_updated"),
                 event("keep-out", "drone-2", "violation"),
@@ -1802,7 +1806,7 @@ mod tests {
         place(&mut sim, "drone-2", 900.0, 100.0);
         sim.step().unwrap();
         assert_eq!(
-            events(&link),
+            events(&sim),
             vec![
                 event("patrol", "drone-1", "exited"),
                 event("keep-out", "drone-2", "exited"),
@@ -1814,14 +1818,15 @@ mod tests {
     /// before the next drone's -- the zone loop is the outer one.
     #[test]
     fn a_zone_event_reads_coverage_between_drones() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-1", true, 450.0, 500.0),
             node("drone-2", true, 550.0, 500.0),
         ]);
-        link.set_zones(vec![zone("patrol", "patrol", 500.0, 500.0, 100.0)])
+        map(&mut sim)
+            .set_zones(vec![zone("patrol", "patrol", 500.0, 500.0, 100.0)])
             .unwrap();
         sim.step().unwrap();
-        let fractions: Vec<f64> = link
+        let fractions: Vec<f64> = mapped(&sim)
             .inspection_events()
             .iter()
             .map(|e| e.zone_coverage_fraction)
@@ -1842,7 +1847,7 @@ mod tests {
         );
         // The zone map is separate from the stage's own grid only in what
         // it marks: here both drones were inside, so they agree.
-        assert_eq!(fractions[1], link.coverage_fraction());
+        assert_eq!(fractions[1], mapped(&sim).coverage_fraction());
     }
 
     /// Cooperative search reports the fleet's fused estimate from the drones
@@ -1851,11 +1856,11 @@ mod tests {
     #[test]
     fn cooperative_search_reports_a_team_estimate_and_keeps_it() {
         for cooperative in [false, true] {
-            let (mut sim, link) = localizing_rig(vec![
+            let mut sim = localizing_rig(vec![
                 node("drone-1", true, 100.0, 100.0),
                 node("drone-2", true, 900.0, 900.0),
             ]);
-            link.set_cooperative_search(cooperative);
+            map(&mut sim).set_cooperative_search(cooperative);
             let half_radius_m = LocalizationConfig::default().search_radius_m * 0.5;
             let mut x = 100.0;
             let mut y = 100.0;
@@ -1865,14 +1870,16 @@ mod tests {
                 place(&mut sim, "drone-2", 1_000.0 - x, 1_000.0 - y);
                 sim.step().unwrap();
                 // Every tick that fuses, fuses exactly the tight drones.
-                let estimates = link.estimates();
+                let estimates = mapped(&sim).estimates();
                 let tight: Vec<String> = estimates
                     .iter()
                     .filter(|e| e.position_std_m < half_radius_m)
                     .map(|e| e.platform_id.clone())
                     .collect();
                 if cooperative && !tight.is_empty() {
-                    let team = link.team_localization().expect("a tight drone fuses");
+                    let team = mapped(&sim)
+                        .team_localization()
+                        .expect("a tight drone fuses");
                     assert_eq!(team.contributing_node_ids, tight);
                     if tight.len() < estimates.len() {
                         mixed_ticks += 1;
@@ -1887,14 +1894,14 @@ mod tests {
                     y = 100.0;
                 }
             }
-            let team = link.team_localization();
+            let team = mapped(&sim).team_localization();
             if !cooperative {
                 assert_eq!(team, None);
                 continue;
             }
             assert!(mixed_ticks > 0, "no tick fused some drones and not others");
             let team = team.expect("two converged drones fuse");
-            let tight: Vec<String> = link
+            let tight: Vec<String> = mapped(&sim)
                 .estimates()
                 .iter()
                 .filter(|e| e.position_std_m < half_radius_m)
@@ -1903,7 +1910,7 @@ mod tests {
             assert!(!tight.is_empty());
             assert_eq!(team.contributing_node_ids, tight);
             // Inverse-variance fusion is at least as tight as its best input.
-            let best = link
+            let best = mapped(&sim)
                 .estimates()
                 .iter()
                 .map(|e| e.position_std_m)
@@ -1913,10 +1920,10 @@ mod tests {
             // Survives a checkpoint, as the reference's `_team_loc_current`
             // survives the rest of the run.
             let checkpoint = sim.checkpoint().unwrap();
-            link.clear();
-            assert_eq!(link.team_localization(), None);
+            map(&mut sim).clear();
+            assert_eq!(mapped(&sim).team_localization(), None);
             sim.restore(&checkpoint).unwrap();
-            assert_eq!(link.team_localization(), Some(team));
+            assert_eq!(mapped(&sim).team_localization(), Some(team));
         }
     }
 
@@ -1925,21 +1932,21 @@ mod tests {
     /// later drone here covers the lower `i`.
     #[test]
     fn newly_covered_cells_are_in_np_where_order_and_unique() {
-        let (mut sim, link) = rig(vec![
+        let mut sim = rig(vec![
             node("drone-1", true, 600.0, 500.0),
             node("drone-2", true, 450.0, 500.0),
         ]);
-        link.set_footprint_radius_m(150.0);
+        map(&mut sim).set_footprint_radius_m(150.0);
         sim.step().unwrap();
-        let cells = link.newly_covered_cells();
+        let cells = mapped(&sim).newly_covered_cells();
         let mut expected = cells.clone();
         expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
         expected.dedup();
         assert_eq!(cells, expected);
-        assert_eq!(cells.len() as u64, link.stats().covered_cells);
+        assert_eq!(cells.len() as u64, mapped(&sim).stats().covered_cells);
         sim.step().unwrap();
         assert!(
-            link.newly_covered_cells().is_empty(),
+            mapped(&sim).newly_covered_cells().is_empty(),
             "nothing new the second time"
         );
     }

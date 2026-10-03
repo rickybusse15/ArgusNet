@@ -48,7 +48,7 @@ use crate::controller::{
 use crate::deconflict::{DeconflictStage, RoleTable};
 use crate::follow_path::{FollowPathConfig, FollowPathController, MissionZone};
 use crate::fusion::FusionStage;
-use crate::mapping::{InspectionZone, MappingLink, MappingStage};
+use crate::mapping::{InspectionZone, MappingStage};
 use crate::mission::{MissionConfig, MissionLink};
 use crate::mission_driver::{DriverReportLink, MissionDriverConfig, MissionDriverStage};
 use crate::motion::BoundsXy;
@@ -662,7 +662,6 @@ pub struct AssembledRun {
     pub sim: Simulation,
     /// Scan-map-inspect runs only.
     pub mission: Option<MissionLink>,
-    pub mapping: Option<MappingLink>,
     /// The mission driver's configuration and POIs, as constructed.
     pub mission_setup: Option<(MissionDriverConfig, Vec<InspectionPoi>)>,
     /// The mission driver's replay seam; see `LocalizationReplay`.
@@ -1018,27 +1017,26 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     let mut mapping_stage = None;
     if let Some(bounds) = coverage_bounds {
         let mobile_count = bundle.nodes.iter().filter(|n| n.is_mobile).count();
-        let mapping = MappingStage::with_derived_footprint(bounds.grid(), mobile_count)
+        let mut mapping = MappingStage::with_derived_footprint(bounds.grid(), mobile_count)
             .map_err(|error| BundleError::Invalid(format!("coverage bounds: {error}")))?;
-        let link = mapping.link();
-        link.set_scan_mode(bundle.mission.is_some());
-        link.set_cooperative_search(bundle.cooperative_search);
-        link.set_zones(
-            bundle
-                .mission_zones
-                .iter()
-                .map(|zone| InspectionZone {
-                    zone_id: zone.zone_id.clone(),
-                    zone_type: zone.zone_type.clone(),
-                    center_xy: [zone.center_m[0], zone.center_m[1]],
-                    radius_m: zone.radius_m,
-                })
-                .collect(),
-        )
-        .map_err(|error| BundleError::Invalid(format!("zone coverage: {error}")))?;
+        mapping.set_scan_mode(bundle.mission.is_some());
+        mapping.set_cooperative_search(bundle.cooperative_search);
+        mapping
+            .set_zones(
+                bundle
+                    .mission_zones
+                    .iter()
+                    .map(|zone| InspectionZone {
+                        zone_id: zone.zone_id.clone(),
+                        zone_type: zone.zone_type.clone(),
+                        center_xy: [zone.center_m[0], zone.center_m[1]],
+                        radius_m: zone.radius_m,
+                    })
+                    .collect(),
+            )
+            .map_err(|error| BundleError::Invalid(format!("zone coverage: {error}")))?;
         mapping_stage = Some(mapping);
     }
-    let mapping_link = mapping_stage.as_ref().map(MappingStage::link);
 
     // Stages 2 and 9: the scan/map/localize/inspect/egress mission.
     let mut mission_link = None;
@@ -1047,8 +1045,8 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
     let mut driver_report = None;
     let mut homes_for_egress = BTreeMap::new();
     if let Some(mission) = &bundle.mission {
-        let mapping_handle = mapping_link
-            .clone()
+        let mapping_handle = mapping_stage
+            .as_mut()
             .expect("a mission names its coverage grid, so stage 8 exists");
         mapping_handle.enable_localization(mission.localization);
 
@@ -1089,7 +1087,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
                 })
                 .collect(),
             homes,
-            mapping_handle.clone(),
         );
         let link = driver.mission_link();
         localization_replay = Some(driver.localization_replay());
@@ -1123,7 +1120,6 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
         localization_replay,
         mission_setup,
         mission: mission_link,
-        mapping: mapping_link,
         sim,
         truth,
         replay,
@@ -1334,6 +1330,12 @@ impl AssembledRun {
         BatteryStage::of_mut(&mut self.sim).expect("assembly chains a BatteryStage into stage 1")
     }
 
+    /// Stage 8, when the bundle names a coverage grid.
+    pub fn mapping(&self) -> Option<&MappingStage> {
+        self.sim
+            .stage::<MappingStage>(Stage::UpdateMappingAndLocalization)
+    }
+
     /// Stage 7, as assembled. Every assembled run installs it.
     pub fn fusion(&self) -> &FusionStage {
         self.sim
@@ -1463,7 +1465,7 @@ impl AssembledRun {
             })
             .collect();
 
-        let Some(mapping) = &self.mapping else {
+        let Some(mapping) = self.mapping() else {
             return;
         };
         let stats = mapping.stats();
