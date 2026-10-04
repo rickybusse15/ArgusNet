@@ -353,7 +353,11 @@
             "duplicate_node_observation",
             "insufficient_cluster_observations",
             "weak_intersection_geometry",
-            "fusion_failure"
+            "fusion_failure",
+            "delivery_late",
+            "delivery_duplicate",
+            "delivery_stale_epoch",
+            "delivery_overflow"
           ]
         },
         "detail": {

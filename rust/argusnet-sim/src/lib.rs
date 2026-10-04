@@ -8,6 +8,7 @@ pub mod compute;
 pub mod config;
 pub mod controller;
 pub mod deconflict;
+pub mod delivery;
 pub mod deterministic;
 pub mod follow_path;
 pub mod fusion;

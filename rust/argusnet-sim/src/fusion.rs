@@ -87,6 +87,9 @@ struct State {
     /// re-fusing the last tick's batch.
     inbox: Inbox,
     frame: Option<Arc<PlatformFrame>>,
+    /// Timestamped delivery between capture and fusion (B4). `None` is the
+    /// legacy path: this tick's batch is fused this tick.
+    delivery: Option<crate::delivery::DeliveryNetwork>,
 }
 
 /// `TrackingEngine` is not `Debug`, and `StageHandler` requires it. Written by
@@ -103,6 +106,33 @@ impl fmt::Debug for State {
                 &self.frame.as_ref().map(|frame| frame.tracks.len()),
             )
             .finish()
+    }
+}
+
+/// The key a fusion checkpoint keeps its delivery network under.
+const DELIVERY_KEY: &str = "delivery_network";
+
+/// A fusion checkpoint: the engine alone (legacy), or the engine and the
+/// delivery network.
+fn split_checkpoint(
+    state: &serde_json::Value,
+) -> Result<
+    (TrackingEngine, Option<crate::delivery::DeliveryNetwork>),
+    crate::simulation::StageStateError,
+> {
+    match state.get(DELIVERY_KEY) {
+        None => Ok((crate::simulation::decode_stage_state(state)?, None)),
+        Some(delivery) => {
+            let engine = state.get("engine").ok_or_else(|| {
+                crate::simulation::StageStateError::Malformed {
+                    detail: "a checkpoint with a delivery network has no engine".into(),
+                }
+            })?;
+            Ok((
+                crate::simulation::decode_stage_state(engine)?,
+                Some(crate::simulation::decode_stage_state(delivery)?),
+            ))
+        }
     }
 }
 
@@ -124,8 +154,24 @@ impl FusionStage {
                 engine,
                 inbox: Inbox::default(),
                 frame: None,
+                delivery: None,
             },
         })
+    }
+
+    /// Route observations through a delivery network (B4): fusion then
+    /// ingests, at each tick, the evidence acquired the profile's fusion lag
+    /// ago. `None` restores the legacy same-tick path.
+    pub fn set_delivery(&mut self, delivery: Option<crate::delivery::DeliveryNetwork>) {
+        self.state.delivery = delivery;
+    }
+
+    pub fn delivery(&self) -> Option<&crate::delivery::DeliveryNetwork> {
+        self.state.delivery.as_ref()
+    }
+
+    pub fn delivery_mut(&mut self) -> Option<&mut crate::delivery::DeliveryNetwork> {
+        self.state.delivery.as_mut()
     }
 
     /// The observation batch for the next run. Stage 6 fills it through
@@ -167,18 +213,44 @@ impl StageHandler for FusionStage {
         shared.engine = TrackingEngine::new(config).expect("the config was valid at construction");
         shared.inbox = Inbox::default();
         shared.frame = None;
+        if let Some(delivery) = shared.delivery.as_mut() {
+            delivery.reset();
+        }
     }
 
     /// Every track's filters, lifecycle and history, and each node's health.
+    /// With a delivery network, the envelopes in transit too, under
+    /// [`DELIVERY_KEY`]; without one the state is exactly the engine's, as it
+    /// always was.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
-        Some(serde_json::to_value(&self.state.engine).expect("engine state serialises"))
+        let engine = serde_json::to_value(&self.state.engine).expect("engine state serialises");
+        Some(match &self.state.delivery {
+            None => engine,
+            Some(delivery) => serde_json::json!({
+                "engine": engine,
+                DELIVERY_KEY: serde_json::to_value(delivery).expect("delivery state serialises"),
+            }),
+        })
     }
 
     fn check_state(
         &self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let engine: TrackingEngine = crate::simulation::decode_stage_state(state)?;
+        let (engine, delivery) = split_checkpoint(state)?;
+        if delivery.is_some() != self.state.delivery.is_some() {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: "the checkpoint and this run disagree on whether delivery is modelled"
+                    .into(),
+            });
+        }
+        if let (Some(saved), Some(ours)) = (&delivery, &self.state.delivery) {
+            if saved.profile() != ours.profile() {
+                return Err(crate::simulation::StageStateError::Malformed {
+                    detail: "the checkpoint's delivery profile differs from this run's".into(),
+                });
+            }
+        }
         if engine.config() != self.state.engine.config() {
             return Err(crate::simulation::StageStateError::Malformed {
                 detail: "the checkpoint's tracker was configured differently from this run's"
@@ -192,11 +264,14 @@ impl StageHandler for FusionStage {
         &mut self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let engine: TrackingEngine = crate::simulation::decode_stage_state(state)?;
+        let (engine, delivery) = split_checkpoint(state)?;
         let shared = &mut self.state;
         shared.engine = engine;
         shared.inbox = Inbox::default();
         shared.frame = None;
+        if delivery.is_some() {
+            shared.delivery = delivery;
+        }
         Ok(())
     }
 
@@ -213,10 +288,24 @@ impl StageHandler for FusionStage {
         // `Coasting` and `Lost` on the strength of ticks passing, so skipping a
         // barren tick would keep a stale track alive forever.
         let node_states = context.world.platforms().to_vec();
-        let frame = shared.engine.ingest_frame(
-            context.timestamp_s,
+        // With delivery modelled, fuse what was acquired at the horizon, at
+        // the horizon's time. Before the first horizon nothing can have been
+        // delivered, so an empty batch is fused at the current time; no track
+        // can exist yet, so nothing is aged at the wrong time.
+        let (fusion_time_s, observations, drops) = match shared.delivery.as_mut() {
+            None => (context.timestamp_s, inbox.observations, Vec::new()),
+            Some(delivery) => {
+                delivery.capture(context.tick, context.timestamp_s, &inbox.observations);
+                let (time_s, batch) = delivery
+                    .deliver(context.tick)
+                    .unwrap_or((context.timestamp_s, Vec::new()));
+                (time_s, batch, delivery.take_drops())
+            }
+        };
+        let mut frame = shared.engine.ingest_frame(
+            fusion_time_s,
             node_states,
-            inbox.observations,
+            observations,
             // Empty by design. See the module docs: fusion is measured against
             // truth, not informed by it, and this stage holds no truth
             // capability.
@@ -225,6 +314,13 @@ impl StageHandler for FusionStage {
             inbox.safety_events,
         );
 
+        // Every delivery drop is recorded with its reason, beside the
+        // tracker's own rejections.
+        if !drops.is_empty() {
+            Arc::make_mut(&mut frame)
+                .rejected_observations
+                .extend(drops.iter().map(|drop| drop.rejection(context.dt_s)));
+        }
         context.world.set_tracks(frame.tracks.clone());
         let track_count = frame.tracks.len();
         let observation_count = frame.observations.len();

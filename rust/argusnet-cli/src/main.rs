@@ -123,6 +123,24 @@ struct SimArgs {
     /// the serial path.
     #[arg(long, default_value_t = 1)]
     workers: usize,
+    /// Model timestamped delivery (B4): fusion ingests the evidence acquired
+    /// this many seconds ago. Delays plus jitter must not exceed it. Omit for
+    /// the legacy same-tick path.
+    #[arg(long)]
+    fusion_lag_s: Option<f64>,
+    /// Every source's delivery delay, unless `--source-delay` names it.
+    #[arg(long, default_value_t = 0.0, requires = "fusion_lag_s")]
+    delivery_delay_s: f64,
+    /// A source's own delay, as `NODE_ID=SECONDS`; repeat per source.
+    #[arg(long, value_parser = parse_source_delay, requires = "fusion_lag_s")]
+    source_delay: Vec<(String, f64)>,
+    /// Extra delay drawn uniformly per envelope (seeded), which reorders
+    /// arrivals.
+    #[arg(long, default_value_t = 0.0, requires = "fusion_lag_s")]
+    delivery_jitter_s: f64,
+    /// Envelopes one source may have queued before new ones overflow.
+    #[arg(long, default_value_t = argusnet_sim::delivery::DEFAULT_QUEUE_CAPACITY, requires = "fusion_lag_s")]
+    delivery_queue_capacity: usize,
     /// Record the run in this new directory: its immutable configuration, a
     /// durable journal of every committed tick, checkpoints, and a completion
     /// marker (A4). A crashed run is finished with `--recover`.
@@ -169,6 +187,20 @@ const EXIT_FAULT: u8 = 1;
 pub(crate) const EXIT_CRASHED: i32 = 4;
 const EXIT_INVALID: u8 = 2;
 const EXIT_UNSUPPORTED: u8 = 3;
+
+/// `NODE_ID=SECONDS` for `--source-delay`.
+fn parse_source_delay(text: &str) -> Result<(String, f64), String> {
+    let (id, seconds) = text
+        .split_once('=')
+        .ok_or_else(|| format!("expected NODE_ID=SECONDS, got {text:?}"))?;
+    let seconds: f64 = seconds
+        .parse()
+        .map_err(|_| format!("{seconds:?} is not a number of seconds"))?;
+    if id.is_empty() {
+        return Err("the node id is empty".into());
+    }
+    Ok((id.to_string(), seconds))
+}
 
 /// A tick's own error as itself; the executor's as a broken invariant.
 fn executor_error(error: ExecutorError<RunError>) -> RunError {
@@ -371,6 +403,29 @@ fn sim(args: SimArgs) -> ExitCode {
         Err(error @ BundleError::Unsupported(_)) => return fail(EXIT_UNSUPPORTED, error),
         Err(error) => return fail(EXIT_INVALID, error),
     };
+    if let Some(lag_s) = args.fusion_lag_s {
+        let profile = argusnet_sim::delivery::DeliveryProfile::from_seconds(
+            bundle.dt_s,
+            lag_s,
+            args.delivery_delay_s,
+            &args.source_delay.iter().cloned().collect(),
+            args.delivery_jitter_s,
+            args.delivery_queue_capacity,
+            bundle.seed,
+        );
+        match profile.and_then(|profile| {
+            run.set_delivery(profile.clone())?;
+            Ok(profile)
+        }) {
+            Ok(profile) => run.extend_replay_meta([(
+                "delivery_profile".to_string(),
+                serde_json::to_value(&profile).expect("profile serialises"),
+            )]),
+            // Refused before anything runs (B4: an unsupported delayed
+            // profile is rejected before the run).
+            Err(error) => return fail(EXIT_UNSUPPORTED, error),
+        }
+    }
     // P4.9: "emit resolved config/version/provenance". No clock and no host,
     // so a replay's bytes depend only on what was run.
     run.extend_replay_meta([(

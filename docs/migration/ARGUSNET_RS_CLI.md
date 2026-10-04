@@ -55,6 +55,18 @@ checkpoint is `SimulationCheckpoint` format 3, and restore checks every stage's
 state against the run before changing anything (P4.8e.4). A checkpoint of a
 different scenario is refused with exit 2, and the run is left untouched.
 
+## Timestamped delivery (B4)
+
+`--fusion-lag-s L` models delivery between capture and fusion: fusion ingests
+the evidence acquired `L` seconds ago, at its acquisition time. The delays come
+from `--delivery-delay-s` (every source), `--source-delay NODE_ID=SECONDS`
+(repeatable) and a seeded `--delivery-jitter-s`, and must not exceed `L`
+(otherwise exit 3, before the run). `--delivery-queue-capacity` bounds each
+source's queue. Every dropped envelope is a rejected observation with a
+`delivery_*` reason, and `meta.delivery_totals` accounts for them all. Without
+`--fusion-lag-s` the run is the legacy run, byte for byte. Design and
+evidence: [DELIVERY_TIMING.md](DELIVERY_TIMING.md).
+
 ## Crash-recoverable runs (A4)
 
 `argusnet-rs sim --bundle B --run-dir D [--checkpoint-every N]` records the

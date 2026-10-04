@@ -10,6 +10,7 @@ use argusnet_core::LifecycleState;
 use argusnet_mapping::BeliefCellStatus;
 use argusnet_planning::deconfliction::Resolution;
 use argusnet_sensing::cascade::RejectReason;
+use argusnet_sim::delivery::DropReason;
 use argusnet_sim::mapping::INSPECTION_EVENT_TYPES;
 use argusnet_sim::mission::MissionPhase;
 
@@ -107,6 +108,24 @@ fn observation_rejection_reasons() {
         argusnet_core::REJECT_WEAK_GEOMETRY,
         argusnet_core::REJECT_FUSION_FAILURE,
     ]);
+    // Timestamped delivery's drops (B4), each with its reason.
+    fn delivered(reason: DropReason) -> &'static str {
+        match reason {
+            DropReason::Late { .. }
+            | DropReason::Duplicate
+            | DropReason::StaleEpoch { .. }
+            | DropReason::Overflow { .. } => reason.code(),
+        }
+    }
+    written.extend(
+        [
+            DropReason::Late { horizon_tick: 0 },
+            DropReason::Duplicate,
+            DropReason::StaleEpoch { current_epoch: 0 },
+            DropReason::Overflow { capacity: 0 },
+        ]
+        .map(delivered),
+    );
     assert_within(
         "observation rejection reason",
         &written,
