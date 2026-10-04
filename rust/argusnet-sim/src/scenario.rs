@@ -1481,6 +1481,16 @@ impl AssembledRun {
         })
     }
 
+    /// The replay frame the last committed tick recorded, if any.
+    pub fn last_frame(&self) -> Option<&crate::replay::ReplayFrame> {
+        self.replay.last_frame()
+    }
+
+    /// The run id commands must carry.
+    pub fn run_id(&self) -> &str {
+        self.sim.run_id()
+    }
+
     /// The legacy timestep.
     pub fn dt_s(&self) -> f64 {
         self.dt_s

@@ -738,6 +738,11 @@ impl Simulation {
         self.journal_cursor
     }
 
+    /// The run id every command must carry.
+    pub fn run_id(&self) -> &str {
+        self.config.run_id()
+    }
+
     pub fn epoch(&self) -> u64 {
         self.epoch
     }

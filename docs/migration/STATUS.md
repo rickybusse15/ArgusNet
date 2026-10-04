@@ -10,16 +10,18 @@ States: **done** (merged), **local** (committed and locally verified but not pus
 **open**, **blocked** (with the reason). **done** rows cite the merging PR and
 its merge commit on `main`.
 
-## Why P5.0 is not startable yet
+## P5.0: what it needed, and where it stands
 
 P5.0 needs P4.9, a Rust CLI running supported scenarios with no Python runtime,
 and P2.x, a viewer engine that presents the runtime's snapshots. At 2026-09-23
 `argusnet-rs sim --config` builds and runs every canonical scenario with no
 Python, mission profiles and the blocking safety monitor included (P4.9d). Six
 of the seven pass every declared envelope. One envelope,
-`sar_person_search`'s `covariance_reduction_mean`, fails for a reason in the
-metric's definition, which needs a decision; see
-[SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md).
+`sar_person_search`'s `covariance_reduction_mean`, failed for a reason in the
+metric's definition ([SAFETY_AND_PROFILES.md](SAFETY_AND_PROFILES.md)). That
+was decided (D-1, D-10, D-12), and the CLI is now qualified over 30 seeds plus
+a held-out set (A3.2). P5.0 has started: the simulation worker (D1.1) is
+merged, and wiring it into the viewer (D1.2) is next.
 
 At 2026-09-25 the viewer track has P2.0 to P2.3 locally: the snapshot
 adapter, the terrain and belief material, persistent sensor, zone and trail
@@ -93,6 +95,7 @@ A skip is not a pass.
 | A3.2 | Statistical qualification: 30 predetermined seeds + 10 held-out, variance estimates | done: [a32-qualification-2026-10-03.md](../performance/a32-qualification-2026-10-03.md); all exact checks, timing gates and statistical metrics pass but `covariance_reduction_mean` (underpowered, both directions, < 1.5 SE; not widened, D-12). D-12 (median, envelope unchanged) confirmed on 30 fresh seeds: 7/7 pass, [d12-confirmation-2026-10-04.md](../performance/d12-confirmation-2026-10-04.md) |
 | A3.4 | Truth isolation | done: lent views withhold stages 5 and 6 from stages without the truth capability (stage 6 keeps each pair's true range); `tests/truth_isolation.rs` holds measurements fixed (blind sensors, clutter only), changes hidden truth, and requires fleet, mission, mapping, fusion and safety output bit-identical over 400 ticks, with a control proving the two truths are measured differently when sensors see; `only_vio_and_observations_may_read_truth`. Documented exception: the legacy follow controllers' pursuit oracle (truth-fed by design, noted in every trace) |
 | A4.1 | Durable event journal and crash recovery for `argusnet-rs` | done: `--run-dir` (immutable `run.json`, checksummed per-tick `journal.jsonl` synced before advancing, atomic `checkpoint.json` bound to the journal cursor, `complete.json`), `--recover` (torn tail dropped, journal cut back to the checkpoint, run completed: journal byte-identical to an uninterrupted run, replay marked `recovered_from_tick`); refusals for damaged config, corrupt journal, foreign checkpoint, reused directory. Open: viewer-facing journal reader and live backpressure policy (P5) |
+| P5.0 (D1.1) | Simulation worker: one thread owns the assembled production run; the front end never ticks | done: `argusnet_sim::worker::SimWorker`. World built on the worker thread; closing during load returns at once and the world is never published. Starts held (paused through the run's own Pause), so Run is a Resume. Bounded command channel answering `Busy` when full; every admitted command answered twice (admission, then Applied or Cancelled); retries keep the original answer with `duplicate`. Reset applied at the run level (fleet reloaded, replay cleared, new epoch, held again). Lossless ordered frame channel plus latest-wins snapshot; real-time pacing at dt / speed, or unpaced. Tests: a slow reader receives every tick identical to the straight run, single step, pacing, saturation, close-during-load, rapid run/stop, failed build. Viewer wiring is D1.2 | `argusnet-sim/src/worker.rs` |
 | F1 | Mission outcome scorecards | done (replay-derived slice): `argusnet.evaluation.outcome.mission_outcome` → `completed` / `aborted` / `incomplete` / `objectives_unmet`, each with coded reasons citing frame ticks, safety `validation_id`s and POI ids; objectives, evidence sufficiency, energy (ground-station sentinel excluded), violations by code, degradation; unsupported metrics `unavailable`, never zero. `SystemScorecard.outcome` (additive). `tests/test_mission_outcome.py`. Open: journal-seq evidence ids and the Review/Reporting viewer surfaces |
 | F3 | Operator explanations | done (mission slice): stage 9 records typed `Decision`s each run (coordinator election, POI rescore, assignment, handoff, team assignment, completion, egress, egress cleared, phase change, localization timeout) with candidates, selection, reason code, inputs, resulting command and status (`applied` / `queued_for_next_tick` / `rejected`); journaled per tick (A4), never in replays or checkpoints. `tests/decisions.rs` traces every queued assignment to stage 2 flying it next tick, every release to it stopping, and every phase transition to exactly one decision. Open: route/trajectory planner records and the viewer inspectors |
 
