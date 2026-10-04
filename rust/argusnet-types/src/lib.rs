@@ -22,6 +22,13 @@ pub use nalgebra::Vector3;
 /// the third implementation from inventing a fourth answer.
 pub const DEFAULT_SENSOR_TYPE: &str = "optical";
 
+/// The sensor modalities a node may declare (decision D-14), as Python's
+/// `argusnet.core.types.SENSOR_TYPES` lists them. `"thermal"`, `"lwir"`,
+/// `"mwir"` and `"ir"` select the thermal band; `"optical"` and `"radar"` the
+/// optical one. A bundle naming anything else is refused rather than silently
+/// treated as optical.
+pub const SENSOR_TYPES: [&str; 6] = ["optical", "radar", "thermal", "lwir", "mwir", "ir"];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NodeState {
     pub node_id: String,

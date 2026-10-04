@@ -224,10 +224,14 @@
         },
         "sensor_type": {
           "type": "string",
-          "description": "Type of sensor on the node.",
+          "description": "Type of sensor on the node (decision D-14): optical and radar use the optical band; thermal, lwir, mwir and ir the thermal band.",
           "enum": [
             "optical",
-            "radar"
+            "radar",
+            "thermal",
+            "lwir",
+            "mwir",
+            "ir"
           ]
         },
         "fov_half_angle_deg": {

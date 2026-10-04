@@ -132,7 +132,7 @@ struct PartialTrackerConfig {
 }
 
 impl PartialTrackerConfig {
-    fn apply(self, mut config: TrackerConfig) -> TrackerConfig {
+    fn apply(self, mut config: TrackerConfig) -> Result<TrackerConfig, String> {
         if let Some(value) = self.min_observations {
             config.min_observations = value;
         }
@@ -155,11 +155,7 @@ impl PartialTrackerConfig {
             config.min_intersection_angle_deg = value;
         }
         if let Some(value) = self.data_association_mode {
-            config.data_association_mode = match value.to_lowercase().as_str() {
-                "gnn" => argusnet_core::AssociationMode::GNN,
-                "jpda" => argusnet_core::AssociationMode::JPDA,
-                _ => argusnet_core::AssociationMode::Labeled,
-            };
+            config.data_association_mode = argusnet_proto::parse_association_mode(&value)?;
         }
         if let Some(value) = self.cv_process_accel_std {
             config.cv_process_accel_std = value;
@@ -206,7 +202,7 @@ impl PartialTrackerConfig {
         if let Some(value) = self.min_quality_score {
             config.min_quality_score = value;
         }
-        config
+        Ok(config)
     }
 }
 
@@ -215,7 +211,7 @@ pub fn load_tracker_config(args: &ServeArgs) -> Result<TrackerConfig> {
 
     if let Some(path) = &args.config {
         let parsed: PartialTrackerConfig = serde_yaml::from_str(&std::fs::read_to_string(path)?)?;
-        config = parsed.apply(config);
+        config = parsed.apply(config).map_err(|error| anyhow!(error))?;
     }
 
     config = PartialTrackerConfig {
@@ -243,7 +239,8 @@ pub fn load_tracker_config(args: &ServeArgs) -> Result<TrackerConfig> {
         max_coast_seconds: args.max_coast_seconds,
         min_quality_score: args.min_quality_score,
     }
-    .apply(config);
+    .apply(config)
+    .map_err(|error| anyhow!(error))?;
 
     config.validate().map_err(|error| anyhow!(error))?;
     Ok(config)

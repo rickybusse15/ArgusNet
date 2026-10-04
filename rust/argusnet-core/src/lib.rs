@@ -885,7 +885,16 @@ pub enum LifecycleState {
 }
 
 impl LifecycleState {
-    fn as_str(self) -> &'static str {
+    /// Every state, for the replay vocabulary check.
+    pub const ALL: [LifecycleState; 4] = [
+        Self::Tentative,
+        Self::Confirmed,
+        Self::Coasting,
+        Self::Deleted,
+    ];
+
+    /// What replay's `lifecycle_state` carries.
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Tentative => "tentative",
             Self::Confirmed => "confirmed",

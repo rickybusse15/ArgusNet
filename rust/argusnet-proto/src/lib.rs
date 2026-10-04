@@ -42,11 +42,17 @@ fn association_mode_to_string(mode: &AssociationMode) -> String {
     }
 }
 
-fn association_mode_from_string(value: &str) -> AssociationMode {
+/// The association mode a tracker config names. Empty is the wire's
+/// "unset", so the default; any other unknown name is refused rather than
+/// silently run as labeled association (G0).
+pub fn parse_association_mode(value: &str) -> Result<AssociationMode, String> {
     match value.to_lowercase().as_str() {
-        "gnn" => AssociationMode::GNN,
-        "jpda" => AssociationMode::JPDA,
-        _ => AssociationMode::Labeled,
+        "" | "labeled" => Ok(AssociationMode::Labeled),
+        "gnn" => Ok(AssociationMode::GNN),
+        "jpda" => Ok(AssociationMode::JPDA),
+        other => Err(format!(
+            "data_association_mode {other:?} is not one of labeled, gnn, jpda"
+        )),
     }
 }
 
@@ -87,7 +93,7 @@ pub fn tracker_config_from_pb(config: pb::TrackerConfig) -> Result<TrackerConfig
         max_bearing_std_rad: config.max_bearing_std_rad,
         max_timestamp_skew_s: config.max_timestamp_skew_s,
         min_intersection_angle_deg: config.min_intersection_angle_deg,
-        data_association_mode: association_mode_from_string(&config.data_association_mode),
+        data_association_mode: parse_association_mode(&config.data_association_mode)?,
         cv_process_accel_std: if config.cv_process_accel_std == 0.0 {
             TrackerConfig::default().cv_process_accel_std
         } else {
@@ -683,6 +689,20 @@ pub fn frame_from_pb(frame: pb::PlatformFrame) -> Result<PlatformFrame, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unknown_association_mode_is_refused_and_unset_is_the_default() {
+        assert_eq!(parse_association_mode(""), Ok(AssociationMode::Labeled));
+        assert_eq!(parse_association_mode("JPDA"), Ok(AssociationMode::JPDA));
+        assert_eq!(parse_association_mode("gnn"), Ok(AssociationMode::GNN));
+        let error = parse_association_mode("hungarian").unwrap_err();
+        assert!(error.contains("hungarian"), "{error}");
+        let wire = pb::TrackerConfig {
+            data_association_mode: "hungarian".into(),
+            ..tracker_config_to_pb(&TrackerConfig::default())
+        };
+        assert!(tracker_config_from_pb(wire).is_err());
+    }
     use argusnet_core::PlatformMetrics;
     use nalgebra::Vector3;
 

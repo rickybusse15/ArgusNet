@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Sensor types and tracker modes are checked (G0)
+
+- A configuration or scenario naming a sensor type other than optical,
+  radar, thermal, lwir, mwir or ir is refused; replays may now say thermal.
+  An unknown tracker association mode is refused instead of quietly running
+  as labeled association.
+
 ## Unreleased — Version checks (G0)
 
 - Python now refuses a replay written in a different major schema version

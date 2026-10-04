@@ -795,22 +795,8 @@ mod tests {
             is_mobile: battery.is_some(),
             timestamp_s: 0.5,
             health: 0.875,
-            // `"radar"`, not `"thermal"`, and the difference is a live
-            // defect rather than a preference. `SensorBand::from_sensor_type`
-            // in `crate::observe` classifies `"thermal" | "lwir" | "mwir" |
-            // "ir"` into a band that moves both the noise multiplier and the
-            // confidence -- but `docs/replay-schema.json` constrains
-            // `sensor_type` to `["optical", "radar"]`, so a thermal platform
-            // writes a replay that Python rejects under strict validation.
-            // `core/config.py` takes the field as a free string, so a config
-            // can reach that state today.
-            //
-            // The fixture stays inside the enum so this slice's contract
-            // holds; the gap is pinned by
-            // `test_a_thermal_sensor_type_is_currently_outside_the_schema` in
-            // `tests/test_rust_replay_contract.py`, which fails the moment
-            // someone widens the enum -- forcing the decision to be made
-            // deliberately rather than discovered by a viewer.
+            // Any of `argusnet_types::SENSOR_TYPES` is valid in the schema
+            // since decision D-14; the fixture keeps the radar it had.
             sensor_type: "radar".to_string(),
             fov_half_angle_deg: Some(37.5),
             max_range_m: Some(1200.0),

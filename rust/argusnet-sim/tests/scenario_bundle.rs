@@ -213,6 +213,17 @@ fn the_bundle_parses_and_refuses_what_it_does_not_know() {
         ScenarioBundle::from_json(&other),
         Err(BundleError::Format { .. })
     ));
+    // A sensor type outside the vocabulary is refused, not read as optical.
+    let sonar = text.replacen(
+        "\"sensor_type\":\"optical\"",
+        "\"sensor_type\":\"sonar\"",
+        1,
+    );
+    assert_ne!(sonar, text, "the fixture has an optical sensor");
+    match ScenarioBundle::from_json(&sonar) {
+        Err(BundleError::Invalid(reason)) => assert!(reason.contains("sonar"), "{reason}"),
+        other => panic!("accepted a sonar sensor: {:?}", other.err()),
+    }
 
     // A scan bundle must carry its mission section; a mode this build does
     // not know is refused by name.
