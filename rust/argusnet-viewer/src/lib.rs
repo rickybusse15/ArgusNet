@@ -5,6 +5,7 @@ pub mod camera_control;
 pub mod glyphs;
 pub mod headless;
 pub mod land_cover_raster;
+pub mod layers;
 #[cfg(feature = "live-stream")]
 pub mod live;
 pub mod marker_meshes;
@@ -14,6 +15,7 @@ pub mod picking;
 pub mod prefs;
 pub mod presentation;
 pub mod projection;
+pub mod quality;
 pub mod replay;
 pub mod schema;
 pub mod selection_outline;

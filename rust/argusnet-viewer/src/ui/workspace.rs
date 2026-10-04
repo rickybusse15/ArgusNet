@@ -4,6 +4,7 @@
 //! neither can reach the selection: it is not among the arguments.
 
 use super::*;
+use crate::layers::apply_layer_preset;
 use crate::state::{Projection, Workspace};
 
 /// A change to the shell's own presentation state.
@@ -21,6 +22,8 @@ pub enum ShellCommand {
     SectionAxis,
     SectionThicker,
     SectionThinner,
+    /// The rendering quality tier (C6). Changes how, never what, is drawn.
+    Quality(crate::quality::QualityTier),
 }
 
 /// Apply `command`. An unavailable projection is refused, so the shell never
@@ -39,6 +42,7 @@ pub fn apply_shell_command(
         ui_state.map_layer_preset,
         ui_state.drawer_open,
         ui_state.section,
+        ui_state.quality,
     );
     let in_section = ui_state.projection == Projection::Section;
     match command {
@@ -74,6 +78,7 @@ pub fn apply_shell_command(
         }
         ShellCommand::SectionThicker if in_section => ui_state.section.scale_thickness(2.0),
         ShellCommand::SectionThinner if in_section => ui_state.section.scale_thickness(0.5),
+        ShellCommand::Quality(tier) => ui_state.quality = tier,
         ShellCommand::SectionStep(_)
         | ShellCommand::SectionAxis
         | ShellCommand::SectionThicker
@@ -86,6 +91,7 @@ pub fn apply_shell_command(
             ui_state.map_layer_preset,
             ui_state.drawer_open,
             ui_state.section,
+            ui_state.quality,
         )
 }
 

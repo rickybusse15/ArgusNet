@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Layer presets and quality tiers (C6)
+
+- The Operational, Reconstruction and Safety presets now show what the
+  design says each is for; the viewer starts in Operational.
+- Tools → Quality chooses Low, Standard or High rendering (also
+  `--quality`), and the choice is remembered. Tiers change shadows, haze and
+  glow only, never what is shown. Glow (bloom) is now off unless High is
+  chosen.
+- The belief overlay looks the same at every tier: its colours no longer
+  fade with haze, and the "unknown" hatch is bluer and more clearly striped.
+
 ## Unreleased — Section view (C5.2)
 
 - Section shows a vertical slice through the world, looking north or east:

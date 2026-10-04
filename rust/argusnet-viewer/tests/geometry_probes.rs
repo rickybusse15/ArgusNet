@@ -118,6 +118,7 @@ fn render(
             height: 480,
             fps: 30,
             view_mode: ViewMode::RealWorld,
+            quality: Default::default(),
             probe: Some(ProbeRequest {
                 belief: None,
                 belief_overlay: false,

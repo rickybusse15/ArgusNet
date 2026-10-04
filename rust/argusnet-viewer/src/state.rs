@@ -15,7 +15,7 @@ pub struct LayerVisibilityState {
     pub base_layers: HashMap<String, bool>,
 }
 
-#[derive(Debug, Clone, Resource)]
+#[derive(Debug, Clone, PartialEq, Resource)]
 pub struct RuntimeOverlayVisibility {
     pub diagnostic_glyphs: bool,
     pub tracks: bool,
@@ -39,6 +39,7 @@ pub struct RuntimeOverlayVisibility {
     pub trails: bool,
 }
 
+/// The startup layers are the Operational preset's (`crate::layers`).
 impl Default for RuntimeOverlayVisibility {
     fn default() -> Self {
         Self {
@@ -50,10 +51,10 @@ impl Default for RuntimeOverlayVisibility {
             rejection_markers: false,
             zones: true,
             fov_cones: false,
-            radar_rings: true,
+            radar_rings: false,
             coverage_overlay: false,
-            inspection_events: true,
-            launch_lines: true,
+            inspection_events: false,
+            launch_lines: false,
             show_covariance_ellipsoids: false,
             belief: false,
             land_cover_tint: true,
@@ -62,7 +63,7 @@ impl Default for RuntimeOverlayVisibility {
     }
 }
 
-#[derive(Debug, Clone, Resource)]
+#[derive(Debug, Clone, PartialEq, Resource)]
 pub struct MissionOverlaySettings {
     pub show_scan_grid: bool,
     pub show_poi_markers: bool,
@@ -72,14 +73,15 @@ pub struct MissionOverlaySettings {
     pub show_egress_paths: bool,
 }
 
+/// The startup layers are the Operational preset's (`crate::layers`).
 impl Default for MissionOverlaySettings {
     fn default() -> Self {
         Self {
-            show_scan_grid: true,
+            show_scan_grid: false,
             show_poi_markers: true,
-            show_loc_ellipses: true,
+            show_loc_ellipses: false,
             show_reconstruction: true,
-            show_coord_frame: true,
+            show_coord_frame: false,
             show_egress_paths: true,
         }
     }
@@ -340,6 +342,9 @@ pub struct ViewerUiState {
     pub projection: Projection,
     /// The slab Section shows (C5.2).
     pub section: SectionPlane,
+    /// The quality tier the operator chose (C6); `crate::quality` carries it
+    /// to the renderer and the preferences.
+    pub quality: crate::quality::QualityTier,
     /// The safety event the inspector shows, when one is open (C3.3). It
     /// takes the inspector over from the selection until closed; the
     /// selection itself is untouched.
@@ -382,6 +387,7 @@ impl Default for ViewerUiState {
             workspace: Workspace::Operate,
             projection: Projection::Perspective,
             section: SectionPlane::default(),
+            quality: crate::quality::QualityTier::default(),
             inspected_event: None,
             inspected_cell: None,
         }

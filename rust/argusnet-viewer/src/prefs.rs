@@ -36,6 +36,10 @@ pub struct PrefsFile {
     /// `action name -> key name`; see [`crate::bindings`].
     #[serde(default)]
     pub bindings: BTreeMap<String, String>,
+    /// The quality tier's name (`low`, `standard`, `high`); see
+    /// [`crate::quality`]. Absent means standard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
 }
 
 /// The loaded preferences, where they came from, and what went wrong.
@@ -85,6 +89,28 @@ impl ViewerPrefs {
             }
         }
         prefs
+    }
+
+    /// The saved quality tier; an unknown name is standard, with the problem
+    /// recorded.
+    pub fn quality_tier(&mut self) -> crate::quality::QualityTier {
+        let Some(name) = self.file.quality.as_deref() else {
+            return crate::quality::QualityTier::default();
+        };
+        match crate::quality::QualityTier::from_name(name) {
+            Some(tier) => tier,
+            None => {
+                self.problems
+                    .push(format!("unknown quality tier {name:?}; using standard"));
+                crate::quality::QualityTier::default()
+            }
+        }
+    }
+
+    /// Remember the quality tier.
+    pub fn set_quality_tier(&mut self, tier: crate::quality::QualityTier) -> Result<(), String> {
+        self.file.quality = Some(tier.name().to_string());
+        self.save()
     }
 
     pub fn bookmark(&self, slot: u8) -> Option<Bookmark> {

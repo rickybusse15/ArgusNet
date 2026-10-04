@@ -206,7 +206,7 @@ impl TerrainSettings {
 pub const BELIEF_SAFE: Vec3 = Vec3::new(0.10, 0.85, 0.30);
 pub const BELIEF_UNCERTAIN: Vec3 = Vec3::new(0.95, 0.70, 0.05);
 pub const BELIEF_OBSTACLE: Vec3 = Vec3::new(0.95, 0.10, 0.10);
-pub const BELIEF_UNKNOWN: Vec3 = Vec3::new(0.55, 0.20, 0.85);
+pub const BELIEF_UNKNOWN: Vec3 = Vec3::new(0.45, 0.20, 0.90);
 pub const BELIEF_OUTSIDE: Vec3 = Vec3::new(0.15, 0.15, 0.18);
 
 pub struct TerrainMaterialPlugin;
