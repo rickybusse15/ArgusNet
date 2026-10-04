@@ -208,6 +208,35 @@ Performance gains are not acceptable if they break required mission metrics, det
 
 ---
 
+### 4.1 Comparing variants of a scenario (F4)
+
+To ask whether a configuration or policy change helps, compare variants of one
+scenario over the **same** seeds with `scripts/compare_scenarios.py`. Each seed
+is then a pair, and the seed's own luck cancels out of the difference:
+
+```bash
+cargo build --release -p argusnet-cli
+python3 scripts/compare_scenarios.py --scenario intercept_stress \
+    --variant "three-drones=" --variant "five-drones=--drone-count 5" \
+    --seed-set qualification --jobs 4 \
+    --out comparison.json --markdown comparison.md
+```
+
+A variant is the canonical scenario plus `argusnet sim` arguments; the first
+variant is the baseline. The report gives:
+
+- each metric's definition and which direction is better;
+- per variant: n, mean, median, SD, min and max;
+- against the baseline: the paired mean difference with a 95% interval
+  (Student's t), and the count of seeds that improved, worsened or tied.
+
+It also counts failed runs per variant (with each reason) and runs outside
+the scenario's envelope, and reports runtime cost. It records the scenario,
+each variant's arguments, every run's config sha256, the world, the git
+commit and the runtime binary's sha256. Seed sets are those of
+`run_phase_acceptance.py`. Example:
+[f4-intercept-stress-drones-2026-10-04.md](performance/f4-intercept-stress-drones-2026-10-04.md).
+
 ## 5. Data Type and Schema Standards
 
 ### 5.1 Units and numeric precision
