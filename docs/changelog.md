@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Failure and degraded states (C7.1)
+
+- Problems now show on the map as a banner that says what is affected,
+  what you are still looking at, and what to do next, most serious first:
+  no source, a live link reconnecting or dropping frames, belief data
+  missing under the belief overlay, a failed simulation run, and a replay
+  written in a newer format than this viewer reads. Where the viewer can
+  act (hide the overlay, open the Scenario panel) the banner has a button.
+
 ## Unreleased — Layer presets and quality tiers (C6)
 
 - The Operational, Reconstruction and Safety presets now show what the

@@ -221,6 +221,7 @@ fn run_inner(
         .init_resource::<crate::projection::SavedPerspective>()
         .init_resource::<crate::projection::SectionSlab>()
         .init_resource::<crate::projection::SectionCut>()
+        .init_resource::<crate::ui::conditions::ActiveConditions>()
         .insert_resource(scene_package)
         .insert_resource(working_scene_root)
         .insert_resource(replay_state)
@@ -305,7 +306,12 @@ fn run_inner(
         // systems must be registered there rather than ordered within `Update`.
         .add_systems(
             EguiPrimaryContextPass,
-            (crate::theme::install_theme_system, viewer_ui_system).chain(),
+            (
+                crate::theme::install_theme_system,
+                viewer_ui_system,
+                crate::ui::conditions::conditions_ui_system,
+            )
+                .chain(),
         );
     }
 
@@ -320,6 +326,7 @@ fn run_inner(
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh));
     configure_viewer_sets(&mut app);
     // After both writers of the main camera's transform (C5.1).
+    app.add_systems(Update, crate::ui::conditions::detect_conditions_system);
     app.add_systems(
         Update,
         (
