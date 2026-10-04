@@ -71,7 +71,7 @@ impl OrbitCamera {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn update_orbit_camera(
+pub fn update_orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut mouse_motion: MessageReader<MouseMotion>,

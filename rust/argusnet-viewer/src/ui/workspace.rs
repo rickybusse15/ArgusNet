@@ -299,16 +299,24 @@ mod tests {
             &mut vis,
             &mut overlay
         ));
-        assert!(!apply_shell_command(
+        assert_eq!(ui.projection, Projection::Perspective);
+        assert!(Projection::Section.unavailable_until().is_some());
+        // Top-down is drawn (C5.1): cycling reaches it, skips Section, and
+        // comes back.
+        assert!(apply_shell_command(
             ShellCommand::CycleProjection,
             &mut ui,
             &mut vis,
             &mut overlay
         ));
-        assert_eq!(ui.projection, Projection::Perspective);
-        for projection in [Projection::TopDown, Projection::Section] {
-            assert!(projection.unavailable_until().is_some());
-        }
+        assert_eq!(ui.projection, Projection::TopDown);
+        assert!(apply_shell_command(
+            ShellCommand::CycleProjection,
+            &mut ui,
+            &mut vis,
+            &mut overlay
+        ));
+        assert_eq!(ui.projection, Projection::Perspective, "Section is skipped");
     }
 
     #[test]

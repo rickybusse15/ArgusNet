@@ -176,8 +176,9 @@ jobs:
           # not. mesa-vulkan-drivers supplies lavapipe, a software Vulkan
           # implementation, and is needed only by the render step below: a
           # hosted runner has no GPU and wgpu has no software fallback.
-          # xvfb and libxkbcommon-x11-0 are for the windowed shell smoke test.
-          sudo apt-get install -y pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers xvfb libxkbcommon-x11-0
+          # xvfb, libxkbcommon-x11-0 and imagemagick (its `import`) are for the
+          # windowed shell smoke test.
+          sudo apt-get install -y pkg-config libasound2-dev libudev-dev mesa-vulkan-drivers xvfb libxkbcommon-x11-0 imagemagick
       - name: Install pinned Rust toolchain
         run: |
           # Sourced, not run: a child process cannot change this step's PATH.

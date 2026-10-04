@@ -13,6 +13,7 @@ pub mod orbit_camera;
 pub mod picking;
 pub mod prefs;
 pub mod presentation;
+pub mod projection;
 pub mod replay;
 pub mod schema;
 pub mod selection_outline;
