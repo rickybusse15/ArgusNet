@@ -421,38 +421,34 @@ pub(super) fn mode_button(
     }
 }
 
+/// The timeline's transport: every button issues a [`PlaybackCommand`], the
+/// same command its key does.
 pub(super) fn playback_buttons(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
     let has_replay = replay_state.frame_count() > 0;
+    let mut command = None;
     ui.add_enabled_ui(has_replay, |ui| {
-        if ui.small_button("|<").on_hover_text("First frame").clicked() {
-            replay_state.playing = false;
-            replay_state.step_to(0);
-        }
-        if ui
-            .small_button("<")
-            .on_hover_text("Previous frame")
-            .clicked()
-        {
-            replay_state.playing = false;
-            replay_state.step_to(replay_state.frame_index.saturating_sub(1));
-        }
-        let play_label = if replay_state.playing {
+        let play = if replay_state.playing {
             "Pause"
         } else {
             "Play"
         };
-        if ui.small_button(play_label).clicked() {
-            replay_state.playing = !replay_state.playing;
-        }
-        if ui.small_button(">").on_hover_text("Next frame").clicked() {
-            replay_state.playing = false;
-            replay_state.step_to(replay_state.frame_index + 1);
-        }
-        if ui.small_button(">|").on_hover_text("Last frame").clicked() {
-            replay_state.playing = false;
-            replay_state.step_to(replay_state.frame_count().saturating_sub(1));
+        for (label, hover, issued) in [
+            ("|<", "First frame (Home)", PlaybackCommand::First),
+            ("[", "Previous event ([)", PlaybackCommand::PreviousEvent),
+            ("<", "Previous frame (Left)", PlaybackCommand::StepBack),
+            (play, "Play / pause (Space)", PlaybackCommand::PlayPause),
+            (">", "Next frame (Right)", PlaybackCommand::StepForward),
+            ("]", "Next event (])", PlaybackCommand::NextEvent),
+            (">|", "Last frame (End)", PlaybackCommand::Last),
+        ] {
+            if ui.small_button(label).on_hover_text(hover).clicked() {
+                command = Some(issued);
+            }
         }
     });
+    if let Some(command) = command {
+        apply_playback(replay_state, command);
+    }
 }
 
 pub(super) fn status_chip(ui: &mut egui::Ui, label: &str, color: egui::Color32) {
@@ -583,17 +579,12 @@ pub(super) fn apply_layer_preset(
     }
 }
 
-pub(super) fn drawer_replay_content(
-    ui: &mut egui::Ui,
-    replay_state: &mut ReplayState,
-    ui_state: &mut ViewerUiState,
-) {
+pub(super) fn drawer_replay_content(ui: &mut egui::Ui, replay_state: &ReplayState) {
     ui.heading("Replay");
-    ui.label("Timeline and frame events");
+    // Time is controlled in the timeline alone (C4); this lists what the
+    // current frame holds.
+    ui.label("Frame events");
     ui.separator();
-    section_operator_timeline(ui, replay_state, ui_state);
-    ui.separator();
-    jump_to_event_controls(ui, replay_state, ui_state);
     section_inspection_events(ui, replay_state);
     section_frame_events(ui, replay_state);
 }
@@ -1005,9 +996,6 @@ pub(super) fn tab_scene_content(
     ui.separator();
 
     section_scenario(ui, supports_hot_swap, sim_runner);
-    ui.separator();
-
-    section_playback_timeline(ui, replay_state);
     ui.separator();
 
     section_performance(ui, replay_state, diagnostics);

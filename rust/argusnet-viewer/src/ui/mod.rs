@@ -21,6 +21,7 @@ mod layout;
 mod platform;
 mod shell;
 mod source;
+mod time;
 mod timeline;
 mod widgets;
 mod workspace;
@@ -36,6 +37,8 @@ use layout::*;
 use platform::*;
 use shell::*;
 pub use source::{SourceContext, SourceInputs};
+use time::*;
+pub use time::{apply_playback, PlaybackCommand};
 use timeline::*;
 use widgets::*;
 pub use widgets::{covariance_diagonal, health_color};
@@ -213,7 +216,7 @@ pub fn viewer_ui_system(
                 &mut layer_visibility,
                 &mut zone_overlap_model,
             ),
-            ViewerMode::Replay => drawer_replay_content(ui, &mut replay_state, &mut ui_state),
+            ViewerMode::Replay => drawer_replay_content(ui, &replay_state),
             ViewerMode::Diagnostics => drawer_diagnostics_content(
                 ui,
                 &replay_state,
