@@ -1,0 +1,599 @@
+{
+ "kind": "argusnet.g2-fixtures",
+ "version": 1,
+ "machine": {
+  "platform": "Linux-6.18.44-fc-v64-x86_64-with-glibc2.39",
+  "processor": "x86_64"
+ },
+ "frames_per_run": 120,
+ "high_entity_count": 400,
+ "runs": [
+  {
+   "fixture": "overview",
+   "tier": "low",
+   "camera": "top-down",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "442bd137356f517c654df2eec66fca4194ca052cd919ad959965eed65e76b3ab",
+   "summary": {
+    "frames": 120,
+    "max_ms": 30.519840240478516,
+    "mean_ms": 23.168821334838867,
+    "p50_ms": 22.887496948242188,
+    "p95_ms": 28.275413513183594,
+    "p99_ms": 30.307844161987305,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.028508272022008896,
+    "drawn_at_frame": 58,
+    "frames_waiting_assets": 0,
+    "settle_frames": 81
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "overview",
+   "tier": "standard",
+   "camera": "top-down",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "feb71695ce3099367a33fd4981fc6939dd2dc865da50abd8739339cfe442144c",
+   "summary": {
+    "frames": 120,
+    "max_ms": 66.12792205810547,
+    "mean_ms": 51.47075271606445,
+    "p50_ms": 51.0425910949707,
+    "p95_ms": 60.90916061401367,
+    "p99_ms": 64.2388916015625,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.047435734421014786,
+    "drawn_at_frame": 3,
+    "frames_waiting_assets": 1,
+    "settle_frames": 52
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   },
+   "repeat_summary": {
+    "frames": 120,
+    "max_ms": 68.10108947753906,
+    "mean_ms": 50.96520233154297,
+    "p50_ms": 50.688743591308594,
+    "p95_ms": 59.78559494018555,
+    "p99_ms": 64.43284606933594,
+    "stalls_over_100ms": 0
+   }
+  },
+  {
+   "fixture": "overview",
+   "tier": "high",
+   "camera": "top-down",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "b61e6ad751f29ae9ea70defc8921035c6dc9c1f8dc08e70ddd7fd60edc81e359",
+   "summary": {
+    "frames": 120,
+    "max_ms": 135.80667114257812,
+    "mean_ms": 78.41446685791016,
+    "p50_ms": 77.4293212890625,
+    "p95_ms": 89.19209289550781,
+    "p99_ms": 93.52974700927734,
+    "stalls_over_100ms": 1
+   },
+   "warmup": {
+    "assets_s": 0.04206719994544983,
+    "drawn_at_frame": 15,
+    "frames_waiting_assets": 1,
+    "settle_frames": 41
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "close",
+   "tier": "low",
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "1884fa01721a73e10bfa4dbd52991c2c2797535201b1be93dca9f13114fae493",
+   "summary": {
+    "frames": 120,
+    "max_ms": 75.28902435302734,
+    "mean_ms": 25.027433395385742,
+    "p50_ms": 24.527788162231445,
+    "p95_ms": 29.219301223754883,
+    "p99_ms": 32.075382232666016,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04056859016418457,
+    "drawn_at_frame": 9,
+    "frames_waiting_assets": 1,
+    "settle_frames": 66
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "close",
+   "tier": "standard",
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "19c2d589e2554004f109179575c733952c6febadd62ccae1ea55cd1aa2485b26",
+   "summary": {
+    "frames": 120,
+    "max_ms": 90.95564270019531,
+    "mean_ms": 73.83499908447266,
+    "p50_ms": 72.95469665527344,
+    "p95_ms": 80.95036315917969,
+    "p99_ms": 87.39287567138672,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04029678925871849,
+    "drawn_at_frame": 16,
+    "frames_waiting_assets": 1,
+    "settle_frames": 48
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   },
+   "repeat_summary": {
+    "frames": 120,
+    "max_ms": 92.89218139648438,
+    "mean_ms": 76.54451751708984,
+    "p50_ms": 75.3355484008789,
+    "p95_ms": 87.71074676513672,
+    "p99_ms": 91.84928131103516,
+    "stalls_over_100ms": 0
+   }
+  },
+  {
+   "fixture": "close",
+   "tier": "high",
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "57885a58e557d3f195a1377ef71ad977ed28152ab76ac3c6cc8e3c113429f367",
+   "summary": {
+    "frames": 120,
+    "max_ms": 122.71381378173828,
+    "mean_ms": 100.32359313964844,
+    "p50_ms": 99.8736343383789,
+    "p95_ms": 111.13127136230469,
+    "p99_ms": 118.83940124511719,
+    "stalls_over_100ms": 58
+   },
+   "warmup": {
+    "assets_s": 0.03960515186190605,
+    "drawn_at_frame": 18,
+    "frames_waiting_assets": 1,
+    "settle_frames": 46
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "low_pitch",
+   "tier": "low",
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "4b0d2a1585918b427580622d1bb72722d46a6fc32dc9c1d14f7657cd97f22dc6",
+   "summary": {
+    "frames": 120,
+    "max_ms": 35.123687744140625,
+    "mean_ms": 17.53380012512207,
+    "p50_ms": 16.937437057495117,
+    "p95_ms": 21.694286346435547,
+    "p99_ms": 27.61703872680664,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04297002777457237,
+    "drawn_at_frame": 37,
+    "frames_waiting_assets": 1,
+    "settle_frames": 67
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "low_pitch",
+   "tier": "standard",
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "db97c591dd18c65013f45554382103c649e38da7f1f26606cea2070cebf82c82",
+   "summary": {
+    "frames": 120,
+    "max_ms": 55.617549896240234,
+    "mean_ms": 42.94876480102539,
+    "p50_ms": 42.14401626586914,
+    "p95_ms": 49.47932815551758,
+    "p99_ms": 52.44585418701172,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04783113673329353,
+    "drawn_at_frame": 3,
+    "frames_waiting_assets": 1,
+    "settle_frames": 50
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   },
+   "repeat_summary": {
+    "frames": 120,
+    "max_ms": 49.916507720947266,
+    "mean_ms": 39.83664321899414,
+    "p50_ms": 39.11808776855469,
+    "p95_ms": 45.586544036865234,
+    "p99_ms": 49.118141174316406,
+    "stalls_over_100ms": 0
+   }
+  },
+  {
+   "fixture": "low_pitch",
+   "tier": "high",
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "b9f7d25f9d10556281375504224e7057b14bd49c4e9cfca4b83f0d23468d5fde",
+   "summary": {
+    "frames": 120,
+    "max_ms": 82.09561157226562,
+    "mean_ms": 66.35863494873047,
+    "p50_ms": 65.58634185791016,
+    "p95_ms": 74.31087493896484,
+    "p99_ms": 81.32966613769531,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.055673494935035706,
+    "drawn_at_frame": 8,
+    "frames_waiting_assets": 1,
+    "settle_frames": 46
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "split",
+   "tier": "low",
+   "camera": "isometric",
+   "view_mode": "split",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "4228b7b3ad71acfebe1466fb919e2b8cfec0a4e14808cadfabd00a3daaa88354",
+   "summary": {
+    "frames": 120,
+    "max_ms": 33.26958084106445,
+    "mean_ms": 26.87183380126953,
+    "p50_ms": 26.48988151550293,
+    "p95_ms": 31.754858016967773,
+    "p99_ms": 33.14332580566406,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.042628128081560135,
+    "drawn_at_frame": 8,
+    "frames_waiting_assets": 1,
+    "settle_frames": 63
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "split",
+   "tier": "standard",
+   "camera": "isometric",
+   "view_mode": "split",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "f1ad3a9875d958b4f97e85bd9374e974bf817d690219e0dcfc9e80ef0bb2c007",
+   "summary": {
+    "frames": 120,
+    "max_ms": 70.97299194335938,
+    "mean_ms": 53.6078987121582,
+    "p50_ms": 52.06679916381836,
+    "p95_ms": 63.02812576293945,
+    "p99_ms": 67.7674789428711,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04132087901234627,
+    "drawn_at_frame": 8,
+    "frames_waiting_assets": 1,
+    "settle_frames": 47
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   },
+   "repeat_summary": {
+    "frames": 120,
+    "max_ms": 70.23318481445312,
+    "mean_ms": 53.77887725830078,
+    "p50_ms": 52.32538986206055,
+    "p95_ms": 62.96244430541992,
+    "p99_ms": 69.88048553466797,
+    "stalls_over_100ms": 0
+   }
+  },
+  {
+   "fixture": "split",
+   "tier": "high",
+   "camera": "isometric",
+   "view_mode": "split",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "552cf0caa93907c532733de207b00001708b4eadd5443ac9d62f389ed0982bb4",
+   "image_sha256": "3a6d89dab9c1d025e3c706000274eca2bcd07b932e30e6eca12695a4b6d115f2",
+   "summary": {
+    "frames": 120,
+    "max_ms": 110.85282897949219,
+    "mean_ms": 67.79875183105469,
+    "p50_ms": 66.630126953125,
+    "p95_ms": 76.12110900878906,
+    "p99_ms": 86.47689819335938,
+    "stalls_over_100ms": 1
+   },
+   "warmup": {
+    "assets_s": 0.04095745459198952,
+    "drawn_at_frame": 9,
+    "frames_waiting_assets": 1,
+    "settle_frames": 51
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "high_entity",
+   "tier": "low",
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "437842ec40ddb7013ecbeb56b83891aba224c608c2a07d19b2eb346c639bf1b3",
+   "image_sha256": "87ceb83a36c88a8732ec180273319ac9c785bf471d7ceb9b9bbc5ce650765243",
+   "summary": {
+    "frames": 120,
+    "max_ms": 30.46554183959961,
+    "mean_ms": 23.343782424926758,
+    "p50_ms": 23.268896102905273,
+    "p95_ms": 26.644250869750977,
+    "p99_ms": 28.486364364624023,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04918684437870979,
+    "drawn_at_frame": 29,
+    "frames_waiting_assets": 1,
+    "settle_frames": 58
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  },
+  {
+   "fixture": "high_entity",
+   "tier": "standard",
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "437842ec40ddb7013ecbeb56b83891aba224c608c2a07d19b2eb346c639bf1b3",
+   "image_sha256": "c60cbfd302ff5f04f4866e631524febd48f9794ec09e4ca810aeb7e5df11e28e",
+   "summary": {
+    "frames": 120,
+    "max_ms": 73.94891357421875,
+    "mean_ms": 54.03263854980469,
+    "p50_ms": 52.57710266113281,
+    "p95_ms": 64.13386535644531,
+    "p99_ms": 71.47455596923828,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04463627189397812,
+    "drawn_at_frame": 8,
+    "frames_waiting_assets": 1,
+    "settle_frames": 43
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   },
+   "repeat_summary": {
+    "frames": 120,
+    "max_ms": 72.00289916992188,
+    "mean_ms": 53.85462951660156,
+    "p50_ms": 52.720542907714844,
+    "p95_ms": 65.08572387695312,
+    "p99_ms": 71.04704284667969,
+    "stalls_over_100ms": 0
+   }
+  },
+  {
+   "fixture": "high_entity",
+   "tier": "high",
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    650,
+    480
+   ],
+   "scene_sha256": "437842ec40ddb7013ecbeb56b83891aba224c608c2a07d19b2eb346c639bf1b3",
+   "image_sha256": "a1b6f378583000b4b92b60190f1d09eff53b37dd4a48f42ad63a4b5af716cf23",
+   "summary": {
+    "frames": 120,
+    "max_ms": 98.40155792236328,
+    "mean_ms": 78.72223663330078,
+    "p50_ms": 77.25421905517578,
+    "p95_ms": 88.82926940917969,
+    "p99_ms": 96.88356018066406,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.04401031881570816,
+    "drawn_at_frame": 20,
+    "frames_waiting_assets": 1,
+    "settle_frames": 46
+   },
+   "profile": "release",
+   "renderer_class": "software",
+   "adapter": {
+    "backend": "Vulkan",
+    "device_type": "Cpu",
+    "driver": "llvmpipe",
+    "driver_info": "Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)"
+   }
+  }
+ ],
+ "date": "2026-10-04",
+ "note": "Software renderer (llvmpipe): a shader-correctness and relative-cost baseline, not the 60 Hz hardware budget (VERIFICATION_AND_ROLLOUT.md section 5; D-5). Stills are bit-identical across runs on this renderer; image_sha256 is the same-renderer regression key."
+}

@@ -103,7 +103,7 @@ A skip is not a pass.
 | --- | --- | --- |
 | G0 | Semantic contract inventory and conversion | open (field parity done) |
 | G1 | Proto regeneration and no-diff check | done |
-| G2 | Renderer fixtures, CPU/GPU frame instrumentation baselines | open |
+| G2 | Renderer fixtures, CPU/GPU frame instrumentation baselines | software half done (E2): five fixtures × three tiers through the real renderer (`scripts/render_fixtures.py`), warm-up-aware frame statistics (`--frame-stats`), baseline [g2-software-baseline-2026-10-04.md](../performance/g2-software-baseline-2026-10-04.md) on llvmpipe, labelled software; stills bit-identical across runs. Open: reference hardware budgets (D-5), GPU timestamps; D-13 stands until then |
 | G3 | Scanner triage, artifact and provenance checks | open |
 
 ## Decisions recorded here
