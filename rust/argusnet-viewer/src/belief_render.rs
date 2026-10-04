@@ -357,6 +357,23 @@ impl BeliefRenderSnapshot {
         BeliefClass::from_code(self.class[j * self.nx + i])
     }
 
+    /// The cell containing a world point, as `sample` finds it; `None`
+    /// outside the grid.
+    pub fn cell_at(&self, x_m: f64, y_m: f64) -> Option<(usize, usize)> {
+        let b = self.bounds;
+        let (ci, cj) = (
+            ((x_m - b.x_min_m) / b.resolution_m).floor(),
+            ((y_m - b.y_min_m) / b.resolution_m).floor(),
+        );
+        (ci >= 0.0 && cj >= 0.0 && ci < self.nx as f64 && cj < self.ny as f64)
+            .then_some((ci as usize, cj as usize))
+    }
+
+    /// Whether the cell has ever been observed, by index.
+    pub fn observed_ij(&self, i: usize, j: usize) -> bool {
+        self.observed[j * self.nx + i] != 0
+    }
+
     /// The cell's confidence, by index, uninterpolated.
     pub fn confidence_ij(&self, i: usize, j: usize) -> f32 {
         self.confidence[j * self.nx + i]

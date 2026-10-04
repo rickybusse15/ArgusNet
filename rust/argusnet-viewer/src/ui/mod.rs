@@ -13,6 +13,7 @@ use crate::state::{
     ZoneFocus, ZoneOverlapModel,
 };
 
+mod cell;
 mod commands;
 mod event;
 mod inspectors;
@@ -24,6 +25,7 @@ mod timeline;
 mod widgets;
 mod workspace;
 
+use cell::*;
 use commands::*;
 pub use event::EventRef;
 use event::*;
@@ -231,6 +233,7 @@ pub fn viewer_ui_system(
         },
         Region::Inspector => selection_inspector(
             ui,
+            &belief,
             &mut replay_state,
             &selection,
             &markers,
