@@ -222,6 +222,7 @@ fn run_inner(
         .init_resource::<crate::projection::SectionSlab>()
         .init_resource::<crate::projection::SectionCut>()
         .init_resource::<crate::ui::conditions::ActiveConditions>()
+        .init_resource::<crate::ui::preferences::KeyCapture>()
         .insert_resource(scene_package)
         .insert_resource(working_scene_root)
         .insert_resource(replay_state)
@@ -308,8 +309,10 @@ fn run_inner(
             EguiPrimaryContextPass,
             (
                 crate::theme::install_theme_system,
+                crate::ui::preferences::apply_accessibility_system,
                 viewer_ui_system,
                 crate::ui::conditions::conditions_ui_system,
+                crate::ui::preferences::preferences_ui_system,
             )
                 .chain(),
         );

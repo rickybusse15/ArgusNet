@@ -65,6 +65,9 @@ pub(super) fn header_bar(
             if ui.button(toggle).clicked() {
                 command = Some(ShellCommand::ToggleToolPanel);
             }
+            if ui.button("Preferences…").clicked() {
+                ui_state.show_preferences = true;
+            }
             ui.separator();
             ui.label("Quality");
             for tier in crate::quality::QualityTier::ALL {

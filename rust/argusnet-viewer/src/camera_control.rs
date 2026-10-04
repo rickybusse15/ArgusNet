@@ -264,6 +264,9 @@ pub struct CameraControl {
     last_known: Option<Vec3>,
     heading: f32,
     notice: Option<(String, f32)>,
+    /// Reduced motion (C7.2): goals are reached at once rather than eased
+    /// toward. Free-fly's acceleration stays: it is control, not transition.
+    pub reduced_motion: bool,
 }
 
 impl CameraControl {
@@ -284,6 +287,7 @@ impl CameraControl {
             last_known: None,
             heading: 0.0,
             notice: None,
+            reduced_motion: false,
         }
     }
 
@@ -531,34 +535,38 @@ impl CameraControl {
         }
 
         // Damped orbit goals. Settled fields are dropped; follow and chase
-        // set theirs again every frame.
+        // set theirs again every frame. Reduced motion settles them at once.
         let goal = self.goal;
+        let (dt, tau) = if self.reduced_motion {
+            (1.0, 1e-6)
+        } else {
+            (dt, FOCUS_TAU_S)
+        };
         if let Some(focus) = goal.focus {
             orbit.focus = Vec3::new(
-                approach(orbit.focus.x, focus.x, dt, FOCUS_TAU_S),
-                approach(orbit.focus.y, focus.y, dt, FOCUS_TAU_S),
-                approach(orbit.focus.z, focus.z, dt, FOCUS_TAU_S),
+                approach(orbit.focus.x, focus.x, dt, tau),
+                approach(orbit.focus.y, focus.y, dt, tau),
+                approach(orbit.focus.z, focus.z, dt, tau),
             );
             if orbit.focus.distance(focus) < 0.01 {
                 self.goal.focus = None;
             }
         }
         if let Some(radius) = goal.radius {
-            orbit.radius = approach(orbit.radius, radius, dt, FOCUS_TAU_S)
-                .clamp(orbit.min_radius, orbit.max_radius);
+            orbit.radius =
+                approach(orbit.radius, radius, dt, tau).clamp(orbit.min_radius, orbit.max_radius);
             if (orbit.radius - radius).abs() < 0.01 {
                 self.goal.radius = None;
             }
         }
         if let Some(yaw) = goal.yaw {
-            orbit.yaw = approach_angle(orbit.yaw, yaw, dt, FOCUS_TAU_S);
+            orbit.yaw = approach_angle(orbit.yaw, yaw, dt, tau);
             if ((yaw - orbit.yaw + PI).rem_euclid(TAU) - PI).abs() < 1e-4 {
                 self.goal.yaw = None;
             }
         }
         if let Some(pitch) = goal.pitch {
-            orbit.pitch =
-                approach(orbit.pitch, pitch, dt, FOCUS_TAU_S).clamp(MIN_PITCH_RAD, MAX_PITCH_RAD);
+            orbit.pitch = approach(orbit.pitch, pitch, dt, tau).clamp(MIN_PITCH_RAD, MAX_PITCH_RAD);
             if (orbit.pitch - pitch).abs() < 1e-4 {
                 self.goal.pitch = None;
             }
@@ -1183,6 +1191,26 @@ mod tests {
         scene.step(&mut control, &mut o, &press(&[Action::ResetCamera]));
         settle(&scene, &mut control, &mut o, 3.0);
         assert!(OrbitPose::of(&o).focus.distance(home.focus) < 0.05);
+    }
+
+    /// Reduced motion: a camera goal is reached in the frame it is set,
+    /// where the default eases toward it.
+    #[test]
+    fn reduced_motion_arrives_at_once() {
+        let scene = Scene::new();
+        for reduced in [false, true] {
+            let mut o = orbit();
+            let home = OrbitPose::of(&o);
+            let mut control = CameraControl::new(home);
+            control.reduced_motion = reduced;
+            o.focus += Vec3::new(400.0, -300.0, 0.0);
+            o.radius *= 0.5;
+            scene.step(&mut control, &mut o, &press(&[Action::ResetCamera]));
+            let now = OrbitPose::of(&o);
+            let arrived =
+                now.focus.distance(home.focus) < 0.05 && (now.radius - home.radius).abs() < 0.05;
+            assert_eq!(arrived, reduced, "reduced motion {reduced}");
+        }
     }
 
     /// Notices expire in render time.

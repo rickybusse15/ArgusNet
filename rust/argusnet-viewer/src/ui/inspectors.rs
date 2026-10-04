@@ -950,7 +950,17 @@ pub(super) fn collect_alerts(
             ));
         }
     }
+    order_by_severity(&mut alerts);
     Some(alerts)
+}
+
+/// Errors before warnings, each kind in the order found (§13: alerts are
+/// ordered by operational severity).
+pub(super) fn order_by_severity(alerts: &mut [(AlertLevel, String)]) {
+    alerts.sort_by_key(|(level, _)| match level {
+        AlertLevel::Error => 0,
+        AlertLevel::Warning => 1,
+    });
 }
 
 pub(super) fn section_targets(ui: &mut egui::Ui, replay_state: &ReplayState) {

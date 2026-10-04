@@ -40,7 +40,16 @@ pub struct PrefsFile {
     /// [`crate::quality`]. Absent means standard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<String>,
+    /// UI scale, independent of the world's (C7.2). Absent means 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_scale: Option<f32>,
+    /// Disable nonessential transitions (C7.2). Absent means off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduced_motion: Option<bool>,
 }
+
+/// The UI scales offered, smallest to largest.
+pub const UI_SCALES: [f32; 7] = [0.75, 0.875, 1.0, 1.125, 1.25, 1.5, 2.0];
 
 /// The loaded preferences, where they came from, and what went wrong.
 #[derive(Resource, Debug, Clone, Default)]
@@ -105,6 +114,28 @@ impl ViewerPrefs {
                 crate::quality::QualityTier::default()
             }
         }
+    }
+
+    /// The saved UI scale, snapped to an offered one.
+    pub fn ui_scale(&self) -> f32 {
+        let wanted = self.file.ui_scale.unwrap_or(1.0);
+        UI_SCALES
+            .into_iter()
+            .min_by(|a, b| (a - wanted).abs().total_cmp(&(b - wanted).abs()))
+            .unwrap_or(1.0)
+    }
+
+    /// Remember the UI scale and reduced motion.
+    pub fn set_accessibility(&mut self, ui_scale: f32, reduced_motion: bool) -> Result<(), String> {
+        self.file.ui_scale = Some(ui_scale);
+        self.file.reduced_motion = Some(reduced_motion);
+        self.save()
+    }
+
+    /// Remember the key bindings that differ from the defaults.
+    pub fn set_bindings(&mut self, overrides: BTreeMap<String, String>) -> Result<(), String> {
+        self.file.bindings = overrides;
+        self.save()
     }
 
     /// Remember the quality tier.

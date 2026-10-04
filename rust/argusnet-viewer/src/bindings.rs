@@ -215,6 +215,12 @@ const DIGITS: [KeyCode; 9] = [
     KeyCode::Digit9,
 ];
 
+/// A key's name, as a preferences file and the key table write it: the
+/// `KeyCode` variant (`KeyA`, `Digit1`, `PageUp`).
+pub fn key_name(key: KeyCode) -> String {
+    format!("{key:?}")
+}
+
 /// The keys a preferences file may name, by their `KeyCode` names.
 pub fn key_from_name(name: &str) -> Option<KeyCode> {
     let letters = [
@@ -336,6 +342,32 @@ impl Default for Bindings {
 }
 
 impl Bindings {
+    /// Put `action` on `key`, unless another action already has it.
+    pub fn rebind(&mut self, action: Action, key: KeyCode) -> Result<(), String> {
+        if key_from_name(&key_name(key)) != Some(key) {
+            return Err(format!("{} cannot be bound", key_name(key)));
+        }
+        if let Some((other, _)) = self
+            .keys
+            .iter()
+            .find(|(other, bound)| **other != action && **bound == key)
+        {
+            return Err(format!("{} is already {}", key_name(key), other.name()));
+        }
+        self.keys.insert(action, key);
+        Ok(())
+    }
+
+    /// The bindings that differ from the defaults, as a preferences file
+    /// names them.
+    pub fn overrides(&self) -> BTreeMap<String, String> {
+        self.keys
+            .iter()
+            .filter(|(action, key)| action.default_key() != **key)
+            .map(|(action, key)| (action.name(), key_name(*key)))
+            .collect()
+    }
+
     pub fn key(&self, action: Action) -> KeyCode {
         self.keys[&action]
     }
@@ -398,15 +430,22 @@ pub struct KeyboardGate {
 
 /// Asks egui, once a frame, whether a text field has the keyboard. Headless
 /// has no egui: nothing is typing there.
-pub fn keyboard_gate_system(contexts: Option<EguiContexts>, mut gate: ResMut<KeyboardGate>) {
-    let typing = contexts
-        .and_then(|mut contexts| {
-            contexts
-                .ctx_mut()
-                .ok()
-                .map(|ctx| text_field_has_keyboard(ctx))
-        })
-        .unwrap_or(false);
+pub fn keyboard_gate_system(
+    contexts: Option<EguiContexts>,
+    ui_state: Option<Res<crate::state::ViewerUiState>>,
+    mut gate: ResMut<KeyboardGate>,
+) {
+    // A key being captured for a rebinding belongs to the capture alone.
+    let capturing = ui_state.is_some_and(|ui| ui.capturing_key);
+    let typing = capturing
+        || contexts
+            .and_then(|mut contexts| {
+                contexts
+                    .ctx_mut()
+                    .ok()
+                    .map(|ctx| text_field_has_keyboard(ctx))
+            })
+            .unwrap_or(false);
     gate.set_if_neq(KeyboardGate { typing });
 }
 

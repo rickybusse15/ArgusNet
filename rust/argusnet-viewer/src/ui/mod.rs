@@ -20,6 +20,7 @@ mod event;
 mod inspectors;
 mod layout;
 mod platform;
+pub mod preferences;
 mod shell;
 mod source;
 mod time;
