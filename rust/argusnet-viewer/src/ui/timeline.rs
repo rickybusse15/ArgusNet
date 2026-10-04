@@ -8,9 +8,14 @@ pub(super) fn section_operator_timeline(
     ui: &mut egui::Ui,
     replay_state: &mut ReplayState,
     ui_state: &mut ViewerUiState,
+    sim: bool,
 ) {
     let Some((first_s, last_s)) = replay_state.time_range() else {
-        ui.label("No replay packaged with this scene.");
+        ui.label(if sim {
+            "The run has not ticked yet. Run or Step it from the simulation controls."
+        } else {
+            "No replay packaged with this scene."
+        });
         return;
     };
 
@@ -21,7 +26,12 @@ pub(super) fn section_operator_timeline(
     ui.horizontal(|ui| {
         playback_buttons(ui, replay_state);
         ui.separator();
-        let (source, recording) = if replay_state.live {
+        let (source, recording) = if sim {
+            (
+                "Run history",
+                "Every tick of the in-process run so far. Reviewing it never rewinds the run.",
+            )
+        } else if replay_state.live {
             (
                 "Live history",
                 "Read-only review of retained live history. The viewer does not record (D3).",

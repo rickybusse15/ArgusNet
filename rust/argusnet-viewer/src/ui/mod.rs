@@ -38,7 +38,7 @@ pub use layout::ShellLayout;
 use layout::*;
 use platform::*;
 use shell::*;
-pub use source::{SourceContext, SourceInputs};
+pub use source::{SimRunState, SourceContext, SourceInputs};
 use time::*;
 pub use time::{apply_playback, PlaybackCommand};
 use timeline::*;
@@ -98,6 +98,8 @@ pub struct UiReads<'w> {
     belief: Res<'w, crate::belief_render::BeliefLayer>,
     camera: Res<'w, crate::camera_control::CameraControl>,
     prefs: Res<'w, crate::prefs::ViewerPrefs>,
+    /// The in-process run's state, when `--run` started one (D1).
+    sim: Option<Res<'w, crate::sim_session::SimSourceState>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -126,6 +128,7 @@ pub fn viewer_ui_system(
         belief,
         camera,
         prefs,
+        sim,
     } = reads;
     // `ctx_mut` is fallible in bevy_egui 0.42: no primary context means there is
     // no frame to draw into yet.
@@ -159,12 +162,14 @@ pub fn viewer_ui_system(
         ShellLayout::for_viewport(viewport.width(), viewport.height(), ui_state.drawer_open);
     let alerts = collect_alerts(&replay_state, &mission_zones);
     let frame_count = replay_state.frame_count();
+    let sim = sim.and_then(|sim| sim.0);
     let source = SourceInputs {
         has_frames: frame_count > 0,
-        live: replay_state.live,
+        // An in-process run appends frames as a stream does, but it is a
+        // simulation the operator commands, not a live feed.
+        live: replay_state.live && sim.is_none(),
         at_newest: frame_count > 0 && replay_state.frame_index + 1 >= frame_count,
-        // The in-process worker and SIL/HIL adapters arrive with D1.
-        sim: None,
+        sim,
         in_loop: None,
         truth_shown: runtime_visibility.truths,
     }
@@ -190,7 +195,9 @@ pub fn viewer_ui_system(
             &prefs,
             &layout,
         ),
-        Region::Timeline => section_operator_timeline(ui, &mut replay_state, &mut ui_state),
+        Region::Timeline => {
+            section_operator_timeline(ui, &mut replay_state, &mut ui_state, sim.is_some())
+        }
         Region::Rail => {
             let workspace = ui_state.workspace;
             mission_rail(

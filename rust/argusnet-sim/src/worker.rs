@@ -108,8 +108,10 @@ struct Shared {
 pub struct SimWorker {
     controls: SyncSender<Control>,
     capacity: usize,
-    acks: Receiver<CommandAck>,
-    frames: Receiver<WorkerFrame>,
+    // Behind locks so the handle is `Sync`, as a front end's shared
+    // resources must be; only the handle's owner ever drains them.
+    acks: Mutex<Receiver<CommandAck>>,
+    frames: Mutex<Receiver<WorkerFrame>>,
     shared: Arc<Shared>,
     handle: Option<JoinHandle<()>>,
 }
@@ -178,8 +180,8 @@ impl SimWorker {
         Self {
             controls,
             capacity,
-            acks,
-            frames,
+            acks: Mutex::new(acks),
+            frames: Mutex::new(frames),
             shared,
             handle: Some(handle),
         }
@@ -212,14 +214,14 @@ impl SimWorker {
         }
     }
 
-    /// Every acknowledgement so far, in order. Lossless.
-    pub fn acks(&self) -> impl Iterator<Item = CommandAck> + '_ {
-        self.acks.try_iter()
+    /// Every acknowledgement since the last call, in order. Lossless.
+    pub fn acks(&self) -> Vec<CommandAck> {
+        self.acks.lock().expect("acks").try_iter().collect()
     }
 
     /// Every committed tick's frame since the last call, in order. Lossless.
-    pub fn frames(&self) -> impl Iterator<Item = WorkerFrame> + '_ {
-        self.frames.try_iter()
+    pub fn frames(&self) -> Vec<WorkerFrame> {
+        self.frames.lock().expect("frames").try_iter().collect()
     }
 
     /// The newest snapshot: latest-wins.
@@ -574,7 +576,7 @@ mod tests {
         let status = wait_for(&worker, |s| s.phase == WorkerPhase::Paused);
         assert_eq!(status.tick, 0);
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(worker.frames().count(), 0);
+        assert!(worker.frames().is_empty());
         assert!(worker.latest_snapshot().is_none());
     }
 
@@ -663,7 +665,7 @@ mod tests {
         let status = wait_for(&worker, |s| s.tick == 1 && s.phase == WorkerPhase::Paused);
         assert_eq!(status.tick, 1);
         std::thread::sleep(Duration::from_millis(50));
-        let frames: Vec<_> = worker.frames().collect();
+        let frames = worker.frames();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].tick, 0);
     }
@@ -676,7 +678,7 @@ mod tests {
         command(&worker, 7, CommandKind::SetSpeed { multiplier: 2.0 });
         let deadline = Instant::now() + Duration::from_secs(10);
         let retry = loop {
-            if let Some(ack) = worker.acks().find(|a| a.command_id == 7) {
+            if let Some(ack) = worker.acks().into_iter().find(|a| a.command_id == 7) {
                 break ack;
             }
             assert!(Instant::now() < deadline);

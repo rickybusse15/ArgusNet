@@ -78,8 +78,18 @@ struct Args {
                 reload, tier, projection) and write <output>.lifecycle.json (C8)."
     )]
     lifecycle: u32,
+    #[arg(
+        long,
+        help = "Run this scenario (an argusnet.scenario-config or scenario bundle) in process, \
+                in the scene: it starts paused; Run, Step, Speed and Reset drive it."
+    )]
+    run: Option<PathBuf>,
     #[cfg(feature = "live-stream")]
-    #[arg(long, help = "Subscribe to live frames from this argusnetd endpoint.")]
+    #[arg(
+        long,
+        conflicts_with = "run",
+        help = "Subscribe to live frames from this argusnetd endpoint."
+    )]
     live: Option<String>,
     /// CA (PEM) that signed the daemon certificate. Required, unless the endpoint
     /// is loopback, to stream from `--live`.
@@ -121,6 +131,9 @@ fn main() -> Result<()> {
                 lifecycle: args.lifecycle,
             },
         );
+    }
+    if let Some(run) = args.run {
+        return argusnet_viewer::run_sim(args.scene, run, args.view_mode, args.quality);
     }
     #[cfg(feature = "live-stream")]
     if let Some(endpoint) = args.live {

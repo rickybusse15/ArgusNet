@@ -78,6 +78,7 @@ pub fn run(
         autoplay,
         quality,
         None,
+        None,
     )
 }
 
@@ -97,6 +98,27 @@ pub fn run_live(
         autoplay,
         quality,
         None,
+        None,
+    )
+}
+
+/// Open `scene_path` and drive an in-process simulation of `run_path` (a
+/// scenario config or bundle) in it (D1): the run ticks on its own thread and
+/// the viewer presents its frames as they commit.
+pub fn run_sim(
+    scene_path: impl AsRef<Path>,
+    run_path: std::path::PathBuf,
+    initial_view_mode: ViewMode,
+    quality: Option<crate::quality::QualityTier>,
+) -> Result<()> {
+    run_inner(
+        scene_path.as_ref(),
+        None,
+        initial_view_mode,
+        false,
+        quality,
+        None,
+        Some(run_path),
     )
 }
 
@@ -123,6 +145,7 @@ pub fn run_headless(
         false,
         quality,
         Some(request),
+        None,
     )
 }
 
@@ -133,6 +156,7 @@ fn run_inner(
     autoplay: bool,
     quality: Option<crate::quality::QualityTier>,
     headless: Option<HeadlessRequest>,
+    sim_run: Option<std::path::PathBuf>,
 ) -> Result<()> {
     let (scene_package, working_scene_root) = initialize_scene_package(scene_path)?;
     let replay_document = scene_package
@@ -440,6 +464,24 @@ fn run_inner(
     }
     #[cfg(not(feature = "live-stream"))]
     let _ = live_endpoint;
+
+    if let Some(run_path) = sim_run {
+        app.insert_resource(crate::sim_session::SimSession::start(
+            run_path,
+            argusnet_sim::worker::Pacing::RealTime,
+        ));
+        app.init_resource::<crate::sim_session::SimSourceState>();
+        app.add_systems(
+            Update,
+            crate::sim_session::ingest_sim_frames_system
+                .in_set(ViewerSet::Input)
+                .before(advance_playback_system),
+        );
+        app.add_systems(
+            EguiPrimaryContextPass,
+            crate::sim_session::sim_controls_ui_system.after(viewer_ui_system),
+        );
+    }
 
     // A headless capture that refused its frame exits with an error; so
     // must the process.
