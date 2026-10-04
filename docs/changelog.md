@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Top-down view (C5.1)
+
+- Top-down is now a true plan view: straight down, north up, at the same
+  scale the 3D view had. V switches between it and the perspective view;
+  pan and zoom work in both.
+- Fixed a start-up race that could leave the whole operator interface
+  invisible.
+
 ## Unreleased — One timeline (C4)
 
 - Time is controlled in the bottom timeline only. Its buttons now include

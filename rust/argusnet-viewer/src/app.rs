@@ -198,6 +198,7 @@ fn run_inner(
         .insert_resource(bindings)
         .init_resource::<crate::bindings::KeyboardGate>()
         .init_resource::<crate::camera_control::EscapeUsed>()
+        .init_resource::<crate::projection::SavedPerspective>()
         .insert_resource(scene_package)
         .insert_resource(working_scene_root)
         .insert_resource(replay_state)
@@ -267,6 +268,16 @@ fn run_inner(
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
+        // The shell's context goes on the main camera, chosen, not on "the
+        // first camera created": with the reconstruction camera (inactive
+        // until Split) also spawned, the automatic choice could land there,
+        // and then the UI was drawn every frame and shown nowhere -- seen in
+        // the real window when an unrelated change reordered the schedule.
+        .insert_resource(bevy_egui::EguiGlobalSettings {
+            auto_create_primary_context: false,
+            ..default()
+        })
+        .add_systems(Startup, attach_ui_to_main_camera.after(setup_world))
         // bevy_egui 0.42 replaced `EguiSet::BeginPass` inside `Update` with a
         // dedicated schedule that runs between egui's begin/end pass, so UI
         // systems must be registered there rather than ordered within `Update`.
@@ -286,6 +297,13 @@ fn run_inner(
         ))
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh));
     configure_viewer_sets(&mut app);
+    // After both writers of the main camera's transform (C5.1).
+    app.add_systems(
+        Update,
+        crate::projection::apply_projection_system
+            .after(crate::orbit_camera::update_orbit_camera)
+            .after(crate::camera_control::drive_main_camera_system),
+    );
     app.add_systems(
         Update,
         (
@@ -809,6 +827,15 @@ fn merged_layer_visibility(
             .insert(layer.id.clone(), visible);
     }
     layer_visibility
+}
+
+/// Put the egui shell's context on the main camera (windowed runs only).
+fn attach_ui_to_main_camera(mut commands: Commands, main: Query<Entity, With<MainCamera>>) {
+    for camera in &main {
+        commands
+            .entity(camera)
+            .insert(bevy_egui::PrimaryEguiContext);
+    }
 }
 
 fn advance_playback_system(time: Res<Time>, mut replay_state: ResMut<ReplayState>) {
@@ -2449,6 +2476,27 @@ fn reframe_camera_for_scene(
 mod tests {
     /// View mode cycles with `M` in a scene with no replay: before P2.4b the
     /// key sat after the "no replay" return and did nothing there.
+    /// The shell's context goes on the main camera, never on the
+    /// reconstruction camera, whatever order they were spawned in.
+    #[test]
+    fn the_ui_context_is_on_the_main_camera() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        let recon = app
+            .world_mut()
+            .spawn((Camera::default(), crate::state::ReconstructionCamera))
+            .id();
+        let main = app
+            .world_mut()
+            .spawn((Camera::default(), super::MainCamera))
+            .id();
+        app.add_systems(Update, super::attach_ui_to_main_camera);
+        app.update();
+        let world = app.world();
+        assert!(world.get::<bevy_egui::PrimaryEguiContext>(main).is_some());
+        assert!(world.get::<bevy_egui::PrimaryEguiContext>(recon).is_none());
+    }
+
     #[test]
     fn cycle_view_works_without_a_replay() {
         use bevy::prelude::*;

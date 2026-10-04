@@ -234,9 +234,8 @@ impl Projection {
     pub fn unavailable_until(self) -> Option<&'static str> {
         match self {
             Projection::Perspective => None,
-            Projection::TopDown | Projection::Section => {
-                Some("Available with the projections and section view (P2.5e).")
-            }
+            Projection::TopDown => None,
+            Projection::Section => Some("Available with the section view (P2.5e)."),
         }
     }
 }
