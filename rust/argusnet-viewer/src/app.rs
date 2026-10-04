@@ -199,6 +199,8 @@ fn run_inner(
         .init_resource::<crate::bindings::KeyboardGate>()
         .init_resource::<crate::camera_control::EscapeUsed>()
         .init_resource::<crate::projection::SavedPerspective>()
+        .init_resource::<crate::projection::SectionSlab>()
+        .init_resource::<crate::projection::SectionCut>()
         .insert_resource(scene_package)
         .insert_resource(working_scene_root)
         .insert_resource(replay_state)
@@ -300,9 +302,13 @@ fn run_inner(
     // After both writers of the main camera's transform (C5.1).
     app.add_systems(
         Update,
-        crate::projection::apply_projection_system
-            .after(crate::orbit_camera::update_orbit_camera)
-            .after(crate::camera_control::drive_main_camera_system),
+        (
+            crate::projection::apply_projection_system
+                .after(crate::orbit_camera::update_orbit_camera)
+                .after(crate::camera_control::drive_main_camera_system),
+            crate::projection::draw_section_cut_system
+                .after(crate::projection::apply_projection_system),
+        ),
     );
     app.add_systems(
         Update,

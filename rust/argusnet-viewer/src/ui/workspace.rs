@@ -16,10 +16,17 @@ pub enum ShellCommand {
     CycleProjection,
     CyclePreset,
     ToggleToolPanel,
+    /// Section only (C5.2): move the slab by whole thicknesses.
+    SectionStep(i8),
+    SectionAxis,
+    SectionThicker,
+    SectionThinner,
 }
 
 /// Apply `command`. An unavailable projection is refused, so the shell never
-/// claims a projection it cannot draw. Returns whether anything changed.
+/// claims a projection it cannot draw, and the Section commands are refused
+/// outside Section, so a key never changes a slab nobody can see. Returns
+/// whether anything changed.
 pub fn apply_shell_command(
     command: ShellCommand,
     ui_state: &mut ViewerUiState,
@@ -31,7 +38,9 @@ pub fn apply_shell_command(
         ui_state.projection,
         ui_state.map_layer_preset,
         ui_state.drawer_open,
+        ui_state.section,
     );
+    let in_section = ui_state.projection == Projection::Section;
     match command {
         ShellCommand::Workspace(workspace) => ui_state.workspace = workspace,
         ShellCommand::CycleWorkspace => {
@@ -57,6 +66,18 @@ pub fn apply_shell_command(
             apply_layer_preset(preset, runtime_visibility, mission_overlay);
         }
         ShellCommand::ToggleToolPanel => ui_state.drawer_open = !ui_state.drawer_open,
+        ShellCommand::SectionStep(steps) if in_section => {
+            ui_state.section.step(f32::from(steps));
+        }
+        ShellCommand::SectionAxis if in_section => {
+            ui_state.section.axis = ui_state.section.axis.other();
+        }
+        ShellCommand::SectionThicker if in_section => ui_state.section.scale_thickness(2.0),
+        ShellCommand::SectionThinner if in_section => ui_state.section.scale_thickness(0.5),
+        ShellCommand::SectionStep(_)
+        | ShellCommand::SectionAxis
+        | ShellCommand::SectionThicker
+        | ShellCommand::SectionThinner => {}
     }
     before
         != (
@@ -64,6 +85,7 @@ pub fn apply_shell_command(
             ui_state.projection,
             ui_state.map_layer_preset,
             ui_state.drawer_open,
+            ui_state.section,
         )
 }
 
@@ -117,6 +139,70 @@ pub(super) fn shell_controls(ui: &mut egui::Ui, ui_state: &ViewerUiState) -> Opt
     command
 }
 
+/// What the Section overlay states about the slab (VIEWER_UI §6.1): its
+/// plane, offset and thickness, and that what it hides is clipped.
+pub fn section_readout(plane: &crate::state::SectionPlane) -> [String; 3] {
+    [
+        format!("Section · {}", plane.axis.label()),
+        format!(
+            "offset {:+.0} m · thickness {:.0} m",
+            plane.offset_m, plane.thickness_m
+        ),
+        "Outside the slab is clipped, not observed-free.".to_string(),
+    ]
+}
+
+/// The Section overlay, at the canvas's top right: the readout and the
+/// controls the Section keys also reach.
+pub(super) fn section_overlay(
+    context: &egui::Context,
+    ui_state: &ViewerUiState,
+    canvas: egui::Rect,
+) -> Option<ShellCommand> {
+    if ui_state.projection != Projection::Section {
+        return None;
+    }
+    let mut command = None;
+    let [plane, extent, caveat] = section_readout(&ui_state.section);
+    egui::Area::new(egui::Id::new("section_overlay"))
+        .pivot(egui::Align2::RIGHT_TOP)
+        .fixed_pos(canvas.right_top() + egui::vec2(-12.0, 8.0))
+        .order(egui::Order::Foreground)
+        .show(context, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(plane).strong()).extend());
+                ui.add(egui::Label::new(extent).extend());
+                ui.label(egui::RichText::new(caveat).small());
+                ui.horizontal(|ui| {
+                    for (label, hover, action) in [
+                        (
+                            "◀",
+                            "Back one thickness (PageDown)",
+                            ShellCommand::SectionStep(-1),
+                        ),
+                        (
+                            "▶",
+                            "Forward one thickness (PageUp)",
+                            ShellCommand::SectionStep(1),
+                        ),
+                        ("−", "Halve the thickness (-)", ShellCommand::SectionThinner),
+                        (
+                            "+",
+                            "Double the thickness (=)",
+                            ShellCommand::SectionThicker,
+                        ),
+                        ("Axis", "Cut the other plane (X)", ShellCommand::SectionAxis),
+                    ] {
+                        if ui.button(label).on_hover_text(hover).clicked() {
+                            command = Some(action);
+                        }
+                    }
+                });
+            });
+        });
+    command
+}
+
 /// What a workspace without its contract shows instead of mock data.
 pub(super) fn workspace_unavailable(ui: &mut egui::Ui, workspace: Workspace) -> bool {
     let Some(why) = workspace.unavailable_until() else {
@@ -144,6 +230,11 @@ pub fn shell_keyboard_system(
         (Action::CycleProjection, ShellCommand::CycleProjection),
         (Action::CyclePreset, ShellCommand::CyclePreset),
         (Action::ToggleToolPanel, ShellCommand::ToggleToolPanel),
+        (Action::SectionForward, ShellCommand::SectionStep(1)),
+        (Action::SectionBack, ShellCommand::SectionStep(-1)),
+        (Action::SectionAxis, ShellCommand::SectionAxis),
+        (Action::SectionThicker, ShellCommand::SectionThicker),
+        (Action::SectionThinner, ShellCommand::SectionThinner),
     ] {
         if bindings.just_pressed(&gate, &keys, action) {
             apply_shell_command(
@@ -291,32 +382,64 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_projections_are_refused_not_claimed() {
+    fn every_projection_is_drawn_and_cycling_visits_each() {
         let (mut ui, mut vis, mut overlay) = state();
-        assert!(!apply_shell_command(
-            ShellCommand::Projection(Projection::Section),
-            &mut ui,
-            &mut vis,
-            &mut overlay
-        ));
-        assert_eq!(ui.projection, Projection::Perspective);
-        assert!(Projection::Section.unavailable_until().is_some());
-        // Top-down is drawn (C5.1): cycling reaches it, skips Section, and
-        // comes back.
-        assert!(apply_shell_command(
-            ShellCommand::CycleProjection,
-            &mut ui,
-            &mut vis,
-            &mut overlay
-        ));
-        assert_eq!(ui.projection, Projection::TopDown);
-        assert!(apply_shell_command(
-            ShellCommand::CycleProjection,
-            &mut ui,
-            &mut vis,
-            &mut overlay
-        ));
-        assert_eq!(ui.projection, Projection::Perspective, "Section is skipped");
+        assert!(Projection::ALL
+            .iter()
+            .all(|projection| projection.unavailable_until().is_none()));
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            assert!(apply_shell_command(
+                ShellCommand::CycleProjection,
+                &mut ui,
+                &mut vis,
+                &mut overlay
+            ));
+            seen.push(ui.projection);
+        }
+        assert_eq!(
+            seen,
+            [
+                Projection::TopDown,
+                Projection::Section,
+                Projection::Perspective
+            ]
+        );
+    }
+
+    #[test]
+    fn section_commands_move_the_slab_only_in_section() {
+        let (mut ui, mut vis, mut overlay) = state();
+        let mut apply = |ui: &mut ViewerUiState, command| {
+            apply_shell_command(command, ui, &mut vis, &mut overlay)
+        };
+        assert!(
+            !apply(&mut ui, ShellCommand::SectionStep(1)),
+            "not in Section"
+        );
+        assert_eq!(ui.section, crate::state::SectionPlane::default());
+        apply(&mut ui, ShellCommand::Projection(Projection::Section));
+        assert!(apply(&mut ui, ShellCommand::SectionStep(2)));
+        assert_eq!(ui.section.offset_m, 100.0, "two 50 m thicknesses");
+        assert!(apply(&mut ui, ShellCommand::SectionThinner));
+        assert_eq!(ui.section.thickness_m, 25.0);
+        assert!(apply(&mut ui, ShellCommand::SectionStep(-1)));
+        assert_eq!(ui.section.offset_m, 75.0);
+        assert!(apply(&mut ui, ShellCommand::SectionAxis));
+        assert_eq!(ui.section.axis, crate::state::SectionAxis::LookingEast);
+    }
+
+    #[test]
+    fn the_section_overlay_states_plane_extent_and_clipping() {
+        let plane = crate::state::SectionPlane {
+            axis: crate::state::SectionAxis::LookingEast,
+            offset_m: -75.0,
+            thickness_m: 25.0,
+        };
+        let [axis, extent, caveat] = section_readout(&plane);
+        assert_eq!(axis, "Section · looking east");
+        assert_eq!(extent, "offset -75 m · thickness 25 m");
+        assert!(caveat.contains("clipped, not observed-free"));
     }
 
     #[test]

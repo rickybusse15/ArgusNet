@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Section view (C5.2)
+
+- Section shows a vertical slice through the world, looking north or east:
+  the terrain's profile and the buildings it cuts are drawn, and everything
+  outside the slice is hidden and cannot be clicked. PgUp/PgDn move the
+  slice, X turns it, - and = make it thinner or thicker; the overlay on the
+  map has the same controls and says that hidden is not the same as empty.
+
 ## Unreleased — Top-down view (C5.1)
 
 - Top-down is now a true plan view: straight down, north up, at the same
