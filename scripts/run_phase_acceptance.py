@@ -66,8 +66,10 @@ STORED_REFERENCE = REPO_ROOT / "docs" / "performance" / "p49c-reference.json"
 OUTPUT_ONLY_FLAGS = {"--streaming": 0, "--max-frames-in-memory": 1}
 
 # The declared envelopes (PHASE_ACCEPTANCE.md). metric -> (relative, absolute):
-# the allowed |mean(rust) - mean(reference)| is max(relative * |reference|,
-# absolute), or just `absolute` where `relative` is None.
+# the allowed |centre(rust) - centre(reference)| is max(relative *
+# |reference|, absolute), or just `absolute` where `relative` is None. The
+# centre is each side's mean over the seeds, except where MEDIAN_CENTRED says
+# median.
 STATISTICAL = {
     "localisation_rmse_m": (0.25, 2.0),
     "track_continuity_mean": (None, 0.10),
@@ -76,6 +78,13 @@ STATISTICAL = {
     "mission_completion_rate": (None, 0.20),
     "energy_reserve_min": (None, 0.02),
 }
+# Decision D-12 (AGENT_EXECUTION_PLAN.md §14), declared before the run that
+# judges it: `covariance_reduction_mean` is heavy-tailed on both sides (A3.2:
+# its seed-to-seed sd was of the order of the envelope), so one seed's tail
+# moved the mean across the envelope in either direction. Its centre is the
+# median over the seeds; the 0.10 envelope is unchanged. Judged first on
+# CONFIRMATION_SEEDS, which no run had seen when this was declared.
+MEDIAN_CENTRED = frozenset({"covariance_reduction_mean"})
 VERDICT_AGREEMENT_MIN = 4
 # `covariance_reduction_mean` is a mean over tracks. A side's mean over the
 # seeds is scored only when that many tracks qualified across all its seeds:
@@ -100,10 +109,21 @@ HELD_OUT_SEEDS = (
     1247680579, 312432243, 1886478947, 1664495409, 1639383676,
     1544757366, 1206485469, 1146316589, 2040669012, 1734468567,
 )  # fmt: skip
+# D-12's confirmation set: `random.Random("argusnet-d12-confirmation-v1")`
+# drawing from [1, 2**31), skipping every seed above, fixed in the same commit
+# as MEDIAN_CENTRED and before any run on it.
+CONFIRMATION_SEEDS = (
+    1449037034, 42880197, 504463255, 1477941436, 609213591, 1662533068,
+    952888901, 868778859, 1528063893, 1511898296, 471451006, 980588537,
+    155911670, 273785175, 1813008518, 1887330520, 2095086773, 1311157760,
+    332705048, 2125304938, 1071566534, 336477963, 593090549, 1393592928,
+    1010913022, 2033908991, 1017753632, 1559501533, 618264006, 92961147,
+)  # fmt: skip
 SEED_SETS = {
     "canonical": tuple(CANONICAL_SEEDS),
     "qualification": QUALIFICATION_SEEDS,
     "held-out": HELD_OUT_SEEDS,
+    "confirmation": CONFIRMATION_SEEDS,
 }
 TICK_P95_MAX_MS = 5.0
 STARTUP_MAX_MS = 2000.0
@@ -245,6 +265,7 @@ def spread(runs: list[dict], metric: str) -> dict:
         out[side] = {
             "n": len(values),
             "mean": statistics.fmean(values) if values else None,
+            "median": statistics.median(values) if values else None,
             "sd": sd,
         }
         variances.append(sd * sd / len(values) if sd is not None else None)
@@ -252,9 +273,13 @@ def spread(runs: list[dict], metric: str) -> dict:
     return out
 
 
-def mean_of(runs: list[dict], side: str, metric: str) -> float | None:
+def centre_of(runs: list[dict], side: str, metric: str) -> float | None:
+    """A side's centre over the seeds: the median for MEDIAN_CENTRED metrics
+    (D-12), the mean otherwise."""
     values = [r[side][metric] for r in runs if r[side].get(metric) is not None]
-    return statistics.fmean(values) if values else None
+    if not values:
+        return None
+    return statistics.median(values) if metric in MEDIAN_CENTRED else statistics.fmean(values)
 
 
 def tracks_of(runs: list[dict], side: str, count_key: str) -> int:
@@ -291,8 +316,9 @@ def judge(name: str, runs: list[dict]) -> dict:
             f"{ref_total} / {rust_total}",
         )
     for metric, (relative, absolute) in STATISTICAL.items():
-        ref_mean = mean_of(runs, "reference", metric)
-        rust_mean = mean_of(runs, "rust", metric)
+        ref_mean = centre_of(runs, "reference", metric)
+        rust_mean = centre_of(runs, "rust", metric)
+        centre = "median" if metric in MEDIAN_CENTRED else "mean"
         if metric in MIN_QUALIFYING_TRACKS:
             count_key, minimum = MIN_QUALIFYING_TRACKS[metric]
             ref_tracks = tracks_of(runs, "reference", count_key)
@@ -316,7 +342,8 @@ def judge(name: str, runs: list[dict]) -> dict:
             "statistical",
             metric,
             delta <= allowed,
-            f"reference {ref_mean:.4g}, rust {rust_mean:.4g}, |delta| {delta:.4g} <= {allowed:.4g}",
+            f"{centre}: reference {ref_mean:.4g}, rust {rust_mean:.4g}, "
+            f"|delta| {delta:.4g} <= {allowed:.4g}",
         )
     agreeing = sum(1 for r in runs if r["reference"]["passed"] == r["rust"]["passed"])
     check(

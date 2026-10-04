@@ -298,3 +298,25 @@ qualification set and three of the held-out set, in both directions, each
 within 1.5 standard errors: its sampling noise is of the order of its envelope.
 Not widened; decision D-12.
 
+
+## D-12: the covariance metric is judged by its median (declared 2026-10-04)
+
+**Declared before the run that judges it.** A3.2 found
+`covariance_reduction_mean` heavy-tailed on both sides: its seed-to-seed
+standard deviation was of the order of the 0.10 envelope, so a single seed's
+tail moved either side's *mean* over the seeds across the envelope, in no
+consistent direction. Decision D-12 (made by the project lead):
+
+- the cross-seed centre of `covariance_reduction_mean` is the **median**, not
+  the mean (`MEDIAN_CENTRED` in `scripts/run_phase_acceptance.py`); every other
+  metric keeps the mean;
+- the envelope is **unchanged** at 0.10 absolute; D-1's minimum of five
+  qualifying tracks per side still applies;
+- the change is judged first on **`--seed-set confirmation`**: 30 seeds drawn
+  with `random.Random("argusnet-d12-confirmation-v1")`, disjoint from every
+  other set, fixed in the commit that declares this and run by nobody before
+  it. The qualification and held-out results above were the evidence for the
+  decision, so they cannot also be its test.
+
+Whatever the confirmation run shows is reported as it is; the statistic is not
+revisited on its result.
