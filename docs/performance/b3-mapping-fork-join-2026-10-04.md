@@ -93,11 +93,23 @@ workers do not overlap. It is smaller than observation generation's (2.7x at
 
 - **Footprint rasterization** (B3 candidate 3): 1.4–8 µs per tick, below the
   cost of waking a worker.
-- **Controllers and battery** (candidate 4): not attempted yet. They are
-  10–30 % of tick time in the tracking and SAR scenarios, but per-platform
-  work at canonical sizes is a few microseconds. On this evidence they would
-  need a fleet far beyond today's to pay. The next step is to measure them
-  with the work counters P4.10-pre still lacks.
+- **Controllers and battery** (candidate 4): **not forked**, measured
+  2026-10-04. Target-tracking runs with as many targets as drones and 4
+  ground stations, 60 s, seed 7, median of 3:
+
+  | Drones | Stage per tick | Per drone | Share of tick |
+  | --- | --- | --- | --- |
+  | 3 | 25.1 µs | 8.4 µs | 13.4 % |
+  | 8 | 53.4 µs | 6.7 µs | 9.0 % |
+  | 16 | 119.1 µs | 7.4 µs | 7.1 % |
+  | 32 | 287.9 µs | 9.0 µs | 5.0 % |
+
+  The stage grows linearly, but the rest of the tick grows faster
+  (observation pairs, fusion), so its share falls as fleets grow. At small
+  fleets the whole stage costs less than waking the workers. At 32 drones a
+  perfect 4-way split would save about 215 µs of a 5.7 ms tick (about 4 %),
+  below the 2–25 % run-to-run noise. Under §9's decision rule it stays
+  serial.
 - **Pool wake-up cost** is the common limit. A pool that spins briefly
   between ticks, instead of sleeping, would lower every crossover point, at
   the cost of burning idle CPU. That is a separate, measured decision.
