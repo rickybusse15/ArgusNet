@@ -838,38 +838,20 @@ fn keyboard_playback_system(
         };
     }
 
-    if replay_state.frame_count() == 0 {
-        return;
-    }
-
-    if pressed(Action::PlayPause) {
-        replay_state.playing = !replay_state.playing;
-    }
-    if pressed(Action::StepBack) {
-        replay_state.playing = false;
-        let prev = replay_state.frame_index.saturating_sub(1);
-        replay_state.step_to(prev);
-    }
-    if pressed(Action::StepForward) {
-        replay_state.playing = false;
-        let next = replay_state.frame_index + 1;
-        replay_state.step_to(next);
-    }
-    if pressed(Action::First) {
-        replay_state.playing = false;
-        replay_state.step_to(0);
-    }
-    if pressed(Action::Last) {
-        replay_state.playing = false;
-        let last = replay_state.frame_count().saturating_sub(1);
-        replay_state.step_to(last);
-    }
-    // Jump to the previous or next frame with events (P2.4a).
-    if pressed(Action::PreviousEvent) {
-        replay_state.jump_to_event(false);
-    }
-    if pressed(Action::NextEvent) {
-        replay_state.jump_to_event(true);
+    // The same commands the timeline's buttons issue (C4).
+    use crate::ui::PlaybackCommand;
+    for (action, command) in [
+        (Action::PlayPause, PlaybackCommand::PlayPause),
+        (Action::StepBack, PlaybackCommand::StepBack),
+        (Action::StepForward, PlaybackCommand::StepForward),
+        (Action::First, PlaybackCommand::First),
+        (Action::Last, PlaybackCommand::Last),
+        (Action::PreviousEvent, PlaybackCommand::PreviousEvent),
+        (Action::NextEvent, PlaybackCommand::NextEvent),
+    ] {
+        if pressed(action) {
+            crate::ui::apply_playback(&mut replay_state, command);
+        }
     }
 }
 

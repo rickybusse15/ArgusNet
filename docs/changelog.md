@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — One timeline (C4)
+
+- Time is controlled in the bottom timeline only. Its buttons now include
+  previous / next event, and every button does exactly what its key does.
+- The timeline shows the run's epoch, elapsed time and frame, marks events
+  in lanes (mission, safety, command, evidence, fault), and names the
+  current frame's events next to the scrubber.
+
 ## Unreleased — Map-cell inspector (C3.4)
 
 - Clicking empty ground shows what the belief map says about that spot: its
