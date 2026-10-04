@@ -34,4 +34,5 @@ pub mod trajectory;
 pub mod vio;
 pub mod waypoint_path;
 pub mod weather;
+pub mod worker;
 pub mod world;
