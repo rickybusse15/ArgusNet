@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Scenario comparisons (F4)
+
+- `scripts/compare_scenarios.py` compares variants of a scenario over the same
+  seeds. The report shows each metric's spread per variant and the paired
+  difference against the baseline with a 95% interval. Failed runs, runtime
+  cost and everything needed to reproduce the comparison are recorded.
+
 ## Unreleased — Run a simulation inside the viewer (P5.0)
 
 - `argusnet-viewer --scene <scene> --run <config>` runs the scenario in
