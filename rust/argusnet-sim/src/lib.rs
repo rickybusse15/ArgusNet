@@ -4,6 +4,7 @@ pub mod battery;
 pub mod builder;
 pub mod clock;
 pub mod command;
+pub mod compute;
 pub mod config;
 pub mod controller;
 pub mod deconflict;

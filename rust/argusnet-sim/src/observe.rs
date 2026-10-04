@@ -183,7 +183,7 @@ impl SensorBand {
 ///
 /// Injected for the same reason the visibility oracle is: the sampler lives in
 /// `argusnet-world`, and the reference only consults it for one number.
-pub trait TerrainHeight: fmt::Debug + Send {
+pub trait TerrainHeight: fmt::Debug + Send + Sync {
     fn height_at(&self, x_m: f64, y_m: f64) -> f64;
 }
 
@@ -345,7 +345,7 @@ fn blocker_name(blocker: Blocker) -> &'static str {
 }
 
 /// Whether the path from a sensor to a target is clear.
-pub trait VisibilityOracle: fmt::Debug + Send {
+pub trait VisibilityOracle: fmt::Debug + Send + Sync {
     fn sight_line(&self, from: [f64; 3], to: [f64; 3]) -> SightLine;
 
     /// The sight line, and the world's detection model along it.
@@ -474,6 +474,9 @@ impl SensorState {
 #[derive(Debug)]
 pub struct ObserveStage {
     state: ObserveState,
+    /// The session's workers for the pair evaluations (B3); serial unless
+    /// the session gives it more.
+    compute: std::sync::Arc<crate::compute::ComputePool>,
 }
 
 impl Default for ObserveStage {
@@ -497,6 +500,7 @@ impl ObserveStage {
                 records: Vec::new(),
                 rejections: Vec::new(),
             },
+            compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
         }
     }
 
@@ -535,6 +539,12 @@ impl ObserveStage {
 
     pub fn sensor(&self, node_id: &str) -> Option<SensorSpec> {
         self.state.sensors.get(node_id).copied()
+    }
+
+    /// The session's workers for the pair evaluations (B3). The output is
+    /// the same at every worker count.
+    pub fn set_compute(&mut self, compute: std::sync::Arc<crate::compute::ComputePool>) {
+        self.compute = compute;
     }
 
     pub fn set_visibility_oracle(&mut self, oracle: Box<dyn VisibilityOracle>) {
@@ -605,6 +615,238 @@ impl ObserveStage {
     /// generation_rejections`, in `(node, target)` order.
     pub fn generation_rejections(&self) -> Vec<ObservationRejection> {
         self.state.rejections.clone()
+    }
+}
+
+/// A sensor as the pairs see it this tick.
+struct NodeView {
+    node_id: String,
+    spec: SensorSpec,
+    origin: Vector3<f64>,
+    is_mobile: bool,
+    look: Option<[f64; 3]>,
+}
+
+/// What every pair reads: immutable world state and the tick's keys.
+struct PairContext<'a> {
+    oracle: &'a dyn VisibilityOracle,
+    terrain: &'a dyn TerrainHeight,
+    seed: u32,
+    seed_time_key: i64,
+    timestamp_s: f64,
+}
+
+/// One pair's evaluation, before anything is combined.
+struct PairResult {
+    range_m: f64,
+    outcome: Outcome,
+    rejection: Option<ObservationRejection>,
+    accepted: Option<AcceptedPair>,
+}
+
+/// An accepted pair's observation before the sensor's bias walk is applied,
+/// and its thermal duplicate, if the band has one.
+struct AcceptedPair {
+    direction: Vector3<f64>,
+    bearing_std_rad: f64,
+    confidence: f64,
+    thermal: Option<ThermalDuplicate>,
+}
+
+struct ThermalDuplicate {
+    direction: Vector3<f64>,
+    bearing_std_rad: f64,
+    confidence: f64,
+}
+
+/// One `(sensor, target)` pair: the gates, and for an accepted pair its
+/// noise draws, all from the pair's own stream. Pure in its inputs, so pairs
+/// may run in any order on any thread.
+fn evaluate_pair(
+    context: &PairContext<'_>,
+    node: &NodeView,
+    target_id: &str,
+    target_position: Vector3<f64>,
+) -> PairResult {
+    let NodeView {
+        node_id,
+        spec,
+        origin,
+        is_mobile,
+        look,
+    } = node;
+    let (origin, is_mobile, look) = (*origin, *is_mobile, *look);
+    let line_of_sight = target_position - origin;
+    let range_m = line_of_sight.norm();
+
+    // Elevation above the horizontal, in degrees. Guarded against a
+    // zero-length sight line, which the range gate rejects anyway
+    // but which would produce a NaN before it got there.
+    let elevation_deg = if range_m > 0.0 {
+        (line_of_sight.z / range_m).asin().to_degrees()
+    } else {
+        0.0
+    };
+
+    // The FOV gate needs a look direction. A sensor that is not
+    // moving has none, and the cascade's contract is to skip the
+    // gate rather than treat that as a rejection.
+    let fov = spec.fov_half_angle_deg.and_then(|half_angle_deg| {
+        let look = look?;
+        if range_m <= 0.0 {
+            return None;
+        }
+        Some(FovInput {
+            angle_deg: fov_angle_deg(
+                [line_of_sight.x, line_of_sight.y, line_of_sight.z],
+                range_m,
+                look,
+            ),
+            half_angle_deg,
+        })
+    });
+
+    let transmittance = atmospheric_attenuation(range_m, &spec.error);
+    let sensor_pd = detection_probability(range_m, &spec.error, transmittance);
+    let (sight_line, detection) = context.oracle.sight_and_detection(
+        [origin.x, origin.y, origin.z],
+        [target_position.x, target_position.y, target_position.z],
+        spec.max_range_m,
+    );
+    let visibility = sight_line.visibility;
+    let dominant_loss_factor = detection.map(|detection| detection.dominant_loss_factor);
+    let (combined_pd, dominant_loss, noise_multiplier) = match detection {
+        // The reference: `max(0, min(1, p_d * sensor_pd *
+        // cloud_factor))`, multiplied left to right.
+        Some(detection) => (
+            (detection.p_d * sensor_pd * detection.cloud_factor).clamp(0.0, 1.0),
+            if detection.transmittance_dominant() {
+                DominantLoss::Transmittance
+            } else {
+                DominantLoss::Other
+            },
+            detection.effective_noise_multiplier,
+        ),
+        // No world detection model: the sensor alone, as P4.8c.
+        None => (
+            sensor_pd,
+            if transmittance < 1.0 && transmittance <= sensor_pd {
+                DominantLoss::Transmittance
+            } else {
+                DominantLoss::Other
+            },
+            sight_line.noise_multiplier,
+        ),
+    };
+
+    let input = PairInput {
+        range_m,
+        max_range_m: spec.max_range_m,
+        fov,
+        dropout_probability: spec.dropout_probability,
+        elevation_deg,
+        required_elevation_deg: spec.required_elevation_deg,
+        visibility,
+        combined_pd,
+        dominant_loss,
+    };
+
+    // Opened here, after the draw-free gates, exactly as the
+    // reference defers it. See the module docs.
+    let mut pair_rng = DeterministicRng::keyed(
+        context.seed,
+        &[
+            SeedPart::Str(node_id),
+            SeedPart::Str(target_id),
+            SeedPart::Int(context.seed_time_key),
+        ],
+    );
+    let (outcome, gate) = {
+        let mut uniform = || pair_rng.uniform();
+        evaluate_pair_traced(&input, &mut uniform)
+    };
+    let rejection = if let Outcome::Rejected(reason) = outcome {
+        let rejection =
+            generation_rejection(&input, gate, reason, &sight_line, dominant_loss_factor);
+        Some(ObservationRejection {
+            node_id: node_id.clone(),
+            target_id: target_id.to_string(),
+            timestamp_s: context.timestamp_s,
+            reason: reason.as_str().to_string(),
+            detail: rejection.detail,
+            origin: Some(origin),
+            attempted_point: Some(target_position),
+            closest_point: rejection.closest_point.map(Vector3::from),
+            blocker_type: rejection.blocker_type,
+            first_hit_range_m: rejection.first_hit_range_m,
+        })
+    } else {
+        None
+    };
+
+    let Outcome::Accepted { fov_fraction } = outcome else {
+        return PairResult {
+            range_m,
+            outcome,
+            rejection,
+            accepted: None,
+        };
+    };
+
+    let (fov_noise_multiplier, fov_confidence_factor) = fov_quality(fov_fraction);
+    // The reference ramps on altitude only for a mobile sensor: a
+    // mast-mounted camera at the same height is not treated as
+    // airborne.
+    let (altitude_noise_multiplier, altitude_confidence_factor) = if is_mobile {
+        let agl_m = (origin.z - context.terrain.height_at(origin.x, origin.y)).max(0.0);
+        altitude_quality(agl_m)
+    } else {
+        (1.0, 1.0)
+    };
+
+    let effective_bearing_std = argusnet_sensing::range_dependent_bearing_noise(
+        spec.base_bearing_std_rad,
+        range_m,
+        &spec.error,
+    ) * noise_multiplier
+        * fov_noise_multiplier
+        * altitude_noise_multiplier;
+
+    let perturbation = bearing_perturbation(effective_bearing_std, &mut pair_rng);
+    let direction = perturb_unit_vector(line_of_sight, perturbation);
+
+    let confidence = CONFIDENCE_FLOOR.max(
+        (1.0 - (range_m / spec.max_range_m) * CONFIDENCE_RANGE_SLOPE)
+            * combined_pd
+            * fov_confidence_factor
+            * altitude_confidence_factor,
+    );
+
+    // A thermal sensor publishes a second observation of the same
+    // target: noisier, less confident, and drawn from the SAME pair
+    // stream immediately after the first -- so its three draws
+    // follow the primary's three, and adding or removing the
+    // thermal path shifts nothing else.
+    let thermal = (spec.band == SensorBand::Thermal).then(|| {
+        let thermal_std = effective_bearing_std * THERMAL_NOISE_FACTOR;
+        let thermal_perturbation = bearing_perturbation(thermal_std, &mut pair_rng);
+        ThermalDuplicate {
+            direction: perturb_unit_vector(line_of_sight, thermal_perturbation),
+            bearing_std_rad: thermal_std,
+            confidence: confidence * THERMAL_CONFIDENCE_FACTOR,
+        }
+    });
+
+    PairResult {
+        range_m,
+        outcome,
+        rejection,
+        accepted: Some(AcceptedPair {
+            direction,
+            bearing_std_rad: effective_bearing_std,
+            confidence,
+            thermal,
+        }),
     }
 }
 
@@ -866,6 +1108,9 @@ impl StageHandler for ObserveStage {
             .map(|(id, spec)| (id.clone(), *spec))
             .collect();
 
+        // Each sensor's pose and look, in id order. Serial: the pose can come
+        // from stage 1 through the lent view.
+        let mut nodes: Vec<NodeView> = Vec::with_capacity(specs.len());
         for (node_id, spec) in specs {
             let Some(platform) = context.world.platform(&node_id) else {
                 // A sensor installed for a platform that is not in the world.
@@ -895,157 +1140,71 @@ impl StageHandler for ObserveStage {
                 [velocity.x, velocity.y, velocity.z],
                 spec.look_down_angle_deg,
             ));
+            nodes.push(NodeView {
+                node_id,
+                spec,
+                origin,
+                is_mobile,
+                look,
+            });
+        }
 
-            for (target_id, target_position) in &targets {
-                let line_of_sight = target_position - origin;
-                let range_m = line_of_sight.norm();
+        // Every pair evaluated, possibly on the session's workers (B3). Each
+        // pair reads only immutable world state and draws only from its own
+        // `(node, target, tick)` stream, so where and in what order the pairs
+        // run cannot change any value; results come back in pair order.
+        let pairs: Vec<(usize, usize)> = (0..nodes.len())
+            .flat_map(|n| (0..targets.len()).map(move |t| (n, t)))
+            .collect();
+        let evaluated = {
+            let oracle = &*shared.oracle;
+            let terrain = &*shared.terrain;
+            let pair_context = PairContext {
+                oracle,
+                terrain,
+                seed,
+                seed_time_key,
+                timestamp_s,
+            };
+            self.compute.map_ordered(&pairs, |&(n, t)| {
+                let (target_id, target_position) = &targets[t];
+                evaluate_pair(&pair_context, &nodes[n], target_id, *target_position)
+            })
+        };
 
-                // Elevation above the horizontal, in degrees. Guarded against a
-                // zero-length sight line, which the range gate rejects anyway
-                // but which would produce a NaN before it got there.
-                let elevation_deg = if range_m > 0.0 {
-                    (line_of_sight.z / range_m).asin().to_degrees()
-                } else {
-                    0.0
-                };
-
-                // The FOV gate needs a look direction. A sensor that is not
-                // moving has none, and the cascade's contract is to skip the
-                // gate rather than treat that as a rejection.
-                let fov = spec.fov_half_angle_deg.and_then(|half_angle_deg| {
-                    let look = look?;
-                    if range_m <= 0.0 {
-                        return None;
-                    }
-                    Some(FovInput {
-                        angle_deg: fov_angle_deg(
-                            [line_of_sight.x, line_of_sight.y, line_of_sight.z],
-                            range_m,
-                            look,
-                        ),
-                        half_angle_deg,
-                    })
-                });
-
-                let transmittance = atmospheric_attenuation(range_m, &spec.error);
-                let sensor_pd = detection_probability(range_m, &spec.error, transmittance);
-                let (sight_line, detection) = shared.oracle.sight_and_detection(
-                    [origin.x, origin.y, origin.z],
-                    [target_position.x, target_position.y, target_position.z],
-                    spec.max_range_m,
-                );
-                let visibility = sight_line.visibility;
-                let dominant_loss_factor =
-                    detection.map(|detection| detection.dominant_loss_factor);
-                let (combined_pd, dominant_loss, noise_multiplier) = match detection {
-                    // The reference: `max(0, min(1, p_d * sensor_pd *
-                    // cloud_factor))`, multiplied left to right.
-                    Some(detection) => (
-                        (detection.p_d * sensor_pd * detection.cloud_factor).clamp(0.0, 1.0),
-                        if detection.transmittance_dominant() {
-                            DominantLoss::Transmittance
-                        } else {
-                            DominantLoss::Other
-                        },
-                        detection.effective_noise_multiplier,
-                    ),
-                    // No world detection model: the sensor alone, as P4.8c.
-                    None => (
-                        sensor_pd,
-                        if transmittance < 1.0 && transmittance <= sensor_pd {
-                            DominantLoss::Transmittance
-                        } else {
-                            DominantLoss::Other
-                        },
-                        sight_line.noise_multiplier,
-                    ),
-                };
-
-                let input = PairInput {
-                    range_m,
-                    max_range_m: spec.max_range_m,
-                    fov,
-                    dropout_probability: spec.dropout_probability,
-                    elevation_deg,
-                    required_elevation_deg: spec.required_elevation_deg,
-                    visibility,
-                    combined_pd,
-                    dominant_loss,
-                };
-
-                // Opened here, after the draw-free gates, exactly as the
-                // reference defers it. See the module docs.
-                let mut pair_rng = DeterministicRng::keyed(
-                    seed,
-                    &[
-                        SeedPart::Str(&node_id),
-                        SeedPart::Str(target_id),
-                        SeedPart::Int(seed_time_key),
-                    ],
-                );
-                let (outcome, gate) = {
-                    let mut uniform = || pair_rng.uniform();
-                    evaluate_pair_traced(&input, &mut uniform)
-                };
-                if let Outcome::Rejected(reason) = outcome {
-                    let rejection = generation_rejection(
-                        &input,
-                        gate,
-                        reason,
-                        &sight_line,
-                        dominant_loss_factor,
-                    );
-                    shared.rejections.push(ObservationRejection {
-                        node_id: node_id.clone(),
-                        target_id: target_id.clone(),
-                        timestamp_s,
-                        reason: reason.as_str().to_string(),
-                        detail: rejection.detail,
-                        origin: Some(origin),
-                        attempted_point: Some(*target_position),
-                        closest_point: rejection.closest_point.map(Vector3::from),
-                        blocker_type: rejection.blocker_type,
-                        first_hit_range_m: rejection.first_hit_range_m,
-                    });
+        // Combined serially, in pair order -- sensors in id order, each
+        // sensor's targets in truth order, then its clutter -- exactly the
+        // order of the single loop this replaced. The bias walk is per-sensor
+        // state stepped once per accepted observation, so it is stepped here.
+        let mut evaluated = evaluated.into_iter();
+        for node in &nodes {
+            let NodeView {
+                node_id,
+                spec,
+                origin,
+                ..
+            } = node;
+            let origin = *origin;
+            for (target_id, _) in &targets {
+                let pair = evaluated.next().expect("one result per pair");
+                if let Some(rejection) = pair.rejection {
+                    shared.rejections.push(rejection);
                 }
-                shared.tally.record(&node_id, target_id, outcome);
+                shared.tally.record(node_id, target_id, pair.outcome);
                 shared.records.push(PairRecord {
                     node_id: node_id.clone(),
                     target_id: target_id.clone(),
-                    range_m,
-                    outcome,
+                    range_m: pair.range_m,
+                    outcome: pair.outcome,
                 });
-
-                let Outcome::Accepted { fov_fraction } = outcome else {
+                let Some(accepted) = pair.accepted else {
                     continue;
                 };
-
-                let (fov_noise_multiplier, fov_confidence_factor) = fov_quality(fov_fraction);
-                // The reference ramps on altitude only for a mobile sensor: a
-                // mast-mounted camera at the same height is not treated as
-                // airborne.
-                let (altitude_noise_multiplier, altitude_confidence_factor) = if is_mobile {
-                    let agl_m = (origin.z - shared.terrain.height_at(origin.x, origin.y)).max(0.0);
-                    altitude_quality(agl_m)
-                } else {
-                    (1.0, 1.0)
-                };
-
-                let effective_bearing_std = argusnet_sensing::range_dependent_bearing_noise(
-                    spec.base_bearing_std_rad,
-                    range_m,
-                    &spec.error,
-                ) * noise_multiplier
-                    * fov_noise_multiplier
-                    * altitude_noise_multiplier;
-
-                let perturbation = bearing_perturbation(effective_bearing_std, &mut pair_rng);
-                let direction = perturb_unit_vector(line_of_sight, perturbation);
 
                 // The bias walk steps once per observation, from the sensor's
                 // own stream -- see `SensorState`. It is applied after the
                 // noise, so the two compose as rotate-then-tilt.
-                let direction = match shared.drifts.get_mut(&node_id) {
+                let direction = match shared.drifts.get_mut(node_id) {
                     Some(state) => {
                         let bias_rad = match state.drift.increment_std(timestamp_s) {
                             Some(increment_std) => {
@@ -1054,46 +1213,30 @@ impl StageHandler for ObserveStage {
                             }
                             None => state.drift.step(timestamp_s, 0.0),
                         };
-                        apply_bias_to_direction(direction, bias_rad)
+                        apply_bias_to_direction(accepted.direction, bias_rad)
                     }
-                    None => direction,
+                    None => accepted.direction,
                 };
-
-                let confidence = CONFIDENCE_FLOOR.max(
-                    (1.0 - (range_m / spec.max_range_m) * CONFIDENCE_RANGE_SLOPE)
-                        * combined_pd
-                        * fov_confidence_factor
-                        * altitude_confidence_factor,
-                );
 
                 shared.observations.push(BearingObservation {
                     node_id: node_id.clone(),
                     target_id: target_id.clone(),
                     origin,
                     direction,
-                    bearing_std_rad: effective_bearing_std,
+                    bearing_std_rad: accepted.bearing_std_rad,
                     timestamp_s,
-                    confidence,
+                    confidence: accepted.confidence,
                 });
 
-                // A thermal sensor publishes a second observation of the same
-                // target: noisier, less confident, and drawn from the SAME pair
-                // stream immediately after the first -- so its three draws
-                // follow the primary's three, and adding or removing the
-                // thermal path shifts nothing else.
-                if spec.band == SensorBand::Thermal {
-                    let thermal_std = effective_bearing_std * THERMAL_NOISE_FACTOR;
-                    let thermal_perturbation = bearing_perturbation(thermal_std, &mut pair_rng);
-                    let thermal_direction =
-                        perturb_unit_vector(line_of_sight, thermal_perturbation);
+                if let Some(thermal) = accepted.thermal {
                     shared.observations.push(BearingObservation {
                         node_id: node_id.clone(),
                         target_id: target_id.clone(),
                         origin,
-                        direction: thermal_direction,
-                        bearing_std_rad: thermal_std,
+                        direction: thermal.direction,
+                        bearing_std_rad: thermal.bearing_std_rad,
                         timestamp_s,
-                        confidence: confidence * THERMAL_CONFIDENCE_FACTOR,
+                        confidence: thermal.confidence,
                     });
                 }
             }
@@ -1106,7 +1249,7 @@ impl StageHandler for ObserveStage {
                 let mut clutter_rng = DeterministicRng::keyed(
                     seed,
                     &[
-                        SeedPart::Str(&node_id),
+                        SeedPart::Str(node_id),
                         SeedPart::Str(CLUTTER_TARGET_ID),
                         SeedPart::Int(seed_time_key),
                     ],

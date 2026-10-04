@@ -158,6 +158,13 @@ def main() -> int:
         "legacy's hashes",
     )
     mode = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="argusnet-rs's pair-evaluation workers (B3); every count must reproduce "
+        "the serial replays byte for byte",
+    )
     mode.add_argument("--out", type=Path, help="record hashes here")
     mode.add_argument("--check", type=Path, help="compare against a record")
     mode.add_argument(
@@ -169,6 +176,8 @@ def main() -> int:
         return 2
     seeds = [int(s) for s in args.seeds.split(",") if s]
     EXECUTOR_ARGS[:] = ["--executor", args.executor]
+    if args.workers != 1:
+        EXECUTOR_ARGS.extend(["--workers", str(args.workers)])
     if args.lifecycle:
         failures = lifecycle(args.binary, seeds)
         for failure in failures:

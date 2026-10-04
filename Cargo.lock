@@ -387,6 +387,7 @@ dependencies = [
  "libm",
  "rand_chacha",
  "rand_core 0.10.1",
+ "rayon",
  "safety-engine",
  "serde",
  "serde_json",

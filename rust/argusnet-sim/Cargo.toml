@@ -34,6 +34,10 @@ libm = "=0.2.16"
 # `serde`: a checkpoint carries each sensor's bias-drift stream position.
 rand_chacha = { version = "=0.10.0", features = ["serde"] }
 rand_core = "=0.10.1"
+# B3: a dedicated, bounded worker pool owned by the session (never rayon's
+# global pool). Results are gathered by input index, so output order never
+# depends on scheduling; see `compute.rs`.
+rayon = "1.11"
 serde.workspace = true
 # `float_roundtrip` comes from the workspace dependency; see the root
 # Cargo.toml for why it cannot be enabled per crate.

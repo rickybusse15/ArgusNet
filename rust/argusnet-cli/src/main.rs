@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
-use argusnet_sim::scenario::{assemble, BundleError, RunError, ScenarioBundle};
+use argusnet_sim::scenario::{assemble_with, BundleError, RunError, ScenarioBundle};
 use argusnet_sim::scheduler::{ExecutorError, LegacyLaneExecutor, PhasedLaneExecutor};
 
 mod rundir;
@@ -118,6 +118,11 @@ struct SimArgs {
     /// identical every way.
     #[arg(long, value_enum, default_value = "legacy")]
     executor: Executor,
+    /// Workers for the stages that fork work inside a phase (B3): currently
+    /// observation generation. The replay is identical at every count; 1 is
+    /// the serial path.
+    #[arg(long, default_value_t = 1)]
+    workers: usize,
     /// Record the run in this new directory: its immutable configuration, a
     /// durable journal of every committed tick, checkpoints, and a completion
     /// marker (A4). A crashed run is finished with `--recover`.
@@ -357,7 +362,11 @@ fn sim(args: SimArgs) -> ExitCode {
         Ok(bundle) => bundle,
         Err(error) => return fail(EXIT_INVALID, error),
     };
-    let mut run = match assemble(&bundle) {
+    let compute = match argusnet_sim::compute::ComputePool::new(args.workers) {
+        Ok(pool) => std::sync::Arc::new(pool),
+        Err(error) => return fail(EXIT_INVALID, error),
+    };
+    let mut run = match assemble_with(&bundle, compute) {
         Ok(run) => run,
         Err(error @ BundleError::Unsupported(_)) => return fail(EXIT_UNSUPPORTED, error),
         Err(error) => return fail(EXIT_INVALID, error),

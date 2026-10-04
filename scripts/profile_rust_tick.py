@@ -64,6 +64,9 @@ def export_config(config, seed: int, work: Path) -> Path:
     return exported
 
 
+WORKER_ARGS: list[str] = []
+
+
 def run_once(binary: Path, config_path: Path, work: Path) -> dict | None:
     timing_path = work / "timing.json"
     completed = subprocess.run(
@@ -76,6 +79,7 @@ def run_once(binary: Path, config_path: Path, work: Path) -> dict | None:
             str(config_path),
             "--timing-json",
             str(timing_path),
+            *WORKER_ARGS,
         ],
         capture_output=True,
         text=True,
@@ -131,7 +135,12 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=5, help="runs per scenario and seed")
     parser.add_argument("--binary", type=Path, default=RELEASE_BINARY)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--workers", type=int, default=1, help="argusnet-rs pair-evaluation workers (B3)"
+    )
     args = parser.parse_args()
+    if args.workers != 1:
+        WORKER_ARGS[:] = ["--workers", str(args.workers)]
     if not args.binary.exists():
         print(f"{args.binary} missing: cargo build --release -p argusnet-cli")
         return 2
