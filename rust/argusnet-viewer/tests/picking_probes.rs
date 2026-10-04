@@ -136,6 +136,7 @@ fn render(name: &str, scene: &Path, view_mode: ViewMode, probe: ProbeRequest) ->
             view_mode,
             quality: Default::default(),
             frame_stats: 0,
+            lifecycle: 0,
             probe: Some(ProbeRequest {
                 output: output.clone(),
                 ..probe

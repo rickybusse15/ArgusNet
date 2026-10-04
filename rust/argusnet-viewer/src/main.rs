@@ -71,6 +71,13 @@ struct Args {
                 <output>.frames.json (G2 frame statistics)."
     )]
     frame_stats: u32,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Headless: after the still, run this many lifecycle rotations (seek, toggle, \
+                reload, tier, projection) and write <output>.lifecycle.json (C8)."
+    )]
+    lifecycle: u32,
     #[cfg(feature = "live-stream")]
     #[arg(long, help = "Subscribe to live frames from this argusnetd endpoint.")]
     live: Option<String>,
@@ -111,6 +118,7 @@ fn main() -> Result<()> {
                 probe: None,
                 quality: args.quality.unwrap_or_default(),
                 frame_stats: args.frame_stats,
+                lifecycle: args.lifecycle,
             },
         );
     }

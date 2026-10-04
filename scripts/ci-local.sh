@@ -144,6 +144,11 @@ job_rust_viewer() {
   step "cargo test -p argusnet-viewer" cargo test -p argusnet-viewer
   step "build the viewer binary" cargo build -p argusnet-viewer --bin argusnet-viewer
   step "headless render smoke test" render_smoke
+  # The pixel and lifecycle probes CI's viewer job runs, on the same
+  # software Vulkan the render smoke needs.
+  step "GPU probes (belief, geometry, picking, lifecycle)" \
+    env ARGUSNET_GPU_TESTS=1 cargo test -p argusnet-viewer --test belief_probes \
+    --test geometry_probes --test picking_probes --test lifecycle_probes -- --test-threads=1
   # Needs xvfb-run; the headless render never draws egui, this does.
   step "windowed shell smoke test" scripts/viewer_window_smoke.sh /tmp/argusnet-render-scene 20
 }

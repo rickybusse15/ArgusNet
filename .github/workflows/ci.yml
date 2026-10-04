@@ -258,6 +258,12 @@ jobs:
         env:
           ARGUSNET_GPU_TESTS: "1"
         run: cargo test -p argusnet-viewer --test picking_probes -- --test-threads=1
+      # C8: repeated seek, reload, toggle, tier and projection changes leave
+      # the world's entity, mesh, material, image and trail counts flat.
+      - name: Lifecycle resource-growth probe
+        env:
+          ARGUSNET_GPU_TESTS: "1"
+        run: cargo test -p argusnet-viewer --test lifecycle_probes -- --test-threads=1
 
   rust-lint:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
