@@ -16,6 +16,13 @@ from argusnet.core.types import PlatformFrame, to_jsonable
 
 ReplayDocument = dict[str, object]
 
+# The replay schema this package writes, and the major version it reads. A
+# declared version of another major is refused (G0: no silent acceptance of a
+# payload the reader was not written for); an undeclared one is accepted, as
+# older replays and fixtures carry none.
+REPLAY_SCHEMA_VERSION = "2.0"
+SUPPORTED_REPLAY_SCHEMA_MAJOR = "2"
+
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "replay-schema.json"
 
 
@@ -144,6 +151,15 @@ def validate_replay_document(document: Mapping[str, object]) -> None:
     if not isinstance(meta, Mapping):
         errors.append("Replay document must contain a meta object.")
     else:
+        declared = meta.get("schema_version")
+        if declared is not None and (
+            not isinstance(declared, str)
+            or declared.split(".", 1)[0] != SUPPORTED_REPLAY_SCHEMA_MAJOR
+        ):
+            errors.append(
+                f"Replay document meta.schema_version {declared!r} is not supported; "
+                f"this reader reads {SUPPORTED_REPLAY_SCHEMA_MAJOR}.x."
+            )
         dt_s = meta.get("dt_s")
         if not isinstance(dt_s, (int, float)) or not np.isfinite(dt_s) or dt_s <= 0.0:
             errors.append("Replay document meta.dt_s must be a finite value greater than 0.")

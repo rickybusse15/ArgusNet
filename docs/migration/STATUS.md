@@ -35,6 +35,17 @@ its RMSE envelope by 0.11 m instead, a platform effect of the reference, so
 whether acceptance fixes a reference platform or stores the reference is the
 open decision ([PHASE_ACCEPTANCE.md](PHASE_ACCEPTANCE.md#after-d-1-the-covariance-metric-redefined-2026-10-03)).
 
+At 2026-10-04 that decision is made (D-10, stored reference) and
+`argusnet-rs` is qualified statistically: 30 seeds plus 10 held-out (A3.2),
+with `covariance_reduction_mean` judged by its median (D-12) and confirmed
+7/7 on a fresh 30-seed set. Owned state, lifecycle and recovery (A1, A2,
+A4.1) and the phased-lane executor (B2.3) are merged. The viewer shell is
+complete through C7 (shell, inspectors, timeline, projections with Section,
+presets and quality tiers, failure states, preferences); C8 has its
+lifecycle resource-growth probe, and G2 has its software baseline. What is
+left before P5.0: G0 (this file's next row), G3, C8's image diffs and the
+hardware frame budget (D-5), and cross-platform determinism (A3.3, D-9).
+
 ## Baseline run (Wave 0.2)
 
 `main` at `0b1032c`, 2026-10-03, in a Linux container (x86_64, glibc 2.39,
@@ -101,7 +112,7 @@ A skip is not a pass.
 
 | ID | Slice | State |
 | --- | --- | --- |
-| G0 | Semantic contract inventory and conversion | open (field parity done) |
+| G0 | Semantic contract inventory and conversion | versions done (E1.1): [CONTRACT_VERSIONS.md](CONTRACT_VERSIONS.md) lists every versioned payload, writer, reader and behaviour; gaps closed (Python replay readers refuse another schema major, environment bundles check `smartmap-v1`, recovery refuses a `run.json` checkpoint format this build cannot read) and every rejecting reader has a test feeding another version. Field parity done. Open: closed string vocabularies (E1.2), installed-wheel/clean-checkout contract jobs |
 | G1 | Proto regeneration and no-diff check | done |
 | G2 | Renderer fixtures, CPU/GPU frame instrumentation baselines | software half done (E2): five fixtures × three tiers through the real renderer (`scripts/render_fixtures.py`), warm-up-aware frame statistics (`--frame-stats`), baseline [g2-software-baseline-2026-10-04.md](../performance/g2-software-baseline-2026-10-04.md) on llvmpipe, labelled software; stills bit-identical across runs. Open: reference hardware budgets (D-5), GPU timestamps; D-13 stands until then |
 | G3 | Scanner triage, artifact and provenance checks | open |

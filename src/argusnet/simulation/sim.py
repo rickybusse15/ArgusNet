@@ -55,7 +55,12 @@ from argusnet.core.types import (
     vec3,
 )
 from argusnet.evaluation.recording import RotatingFrameRecorder
-from argusnet.evaluation.replay import ReplayDocument, build_replay_document, write_replay_document
+from argusnet.evaluation.replay import (
+    REPLAY_SCHEMA_VERSION,
+    ReplayDocument,
+    build_replay_document,
+    write_replay_document,
+)
 from argusnet.localization.engine import GridLocalizer, LocalizationConfig
 from argusnet.localization.vio import EKFVIO, VisualFeature
 from argusnet.mapping.coverage import CoverageMap
@@ -4875,7 +4880,7 @@ def _build_replay_metadata(
         else simulation_config.actual_duration_s
     )
     return {
-        "schema_version": "2.0",
+        "schema_version": REPLAY_SCHEMA_VERSION,
         **{key: scenario_meta[key] for key in _SCENARIO_META_BEFORE_PLATFORM},
         "platform": {
             "min_observations": tracker_config.min_observations,

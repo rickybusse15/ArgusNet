@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Version checks (G0)
+
+- Python now refuses a replay written in a different major schema version
+  instead of reading it silently, and refuses an environment bundle of an
+  unknown format. Recovering a run directory written by a build with a
+  different checkpoint format is refused with both formats named.
+
 ## Unreleased — Resource growth checked (C8)
 
 - `argusnet-viewer --headless --lifecycle N` reloads, seeks, toggles

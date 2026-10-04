@@ -744,4 +744,16 @@ mod tests {
             Err(BuildError::Invalid(_))
         ));
     }
+
+    #[test]
+    fn a_config_of_another_format_or_version_is_refused_by_name() {
+        let refused = |text: &str| match ScenarioConfig::from_json(text) {
+            Err(BuildError::Invalid(reason)) => reason,
+            other => panic!("accepted {text}: {}", other.is_ok()),
+        };
+        let reason = refused(r#"{"format":"argusnet.scenario-bundle","version":1}"#);
+        assert!(reason.contains("argusnet.scenario-bundle"), "{reason}");
+        let reason = refused(r#"{"format":"argusnet.scenario-config","version":2}"#);
+        assert!(reason.contains("version 2"), "{reason}");
+    }
 }

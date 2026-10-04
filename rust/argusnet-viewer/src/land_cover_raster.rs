@@ -251,6 +251,12 @@ mod tests {
         assert!(LandCoverRaster::from_document(wrong)
             .unwrap_err()
             .contains("argusnet.land-cover"));
+        let mut newer = document(75.0);
+        newer.version += 1;
+        assert!(
+            LandCoverRaster::from_document(newer).is_err(),
+            "a newer version"
+        );
         let huge = document(1.0e6);
         assert!(LandCoverRaster::from_document(huge)
             .unwrap_err()
