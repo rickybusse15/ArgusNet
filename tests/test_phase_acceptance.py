@@ -195,3 +195,41 @@ def test_output_only_flags_are_dropped_from_the_rust_side(tmp_path):
     # The flag's value goes with it; everything else survives in order.
     kept = [t for t in reference if t not in ("--streaming", "--max-frames-in-memory", "500")]
     assert argv == [*kept, "--export-config", str(tmp_path / "c.json")]
+
+
+def test_covariance_reduction_is_judged_by_its_median_d12():
+    # One heavy-tailed seed moves the mean 0.24 past the reference but the
+    # median not at all: D-12 judges the median, with the 0.10 envelope kept.
+    tail = [0.8, 0.8, 0.8, 0.8, 2.0]
+    runs = _covariance_runs([2] * 5, [2] * 5)
+    for run, value in zip(runs, tail, strict=True):
+        run["rust"]["covariance_reduction_mean"] = value
+    found = _check(acceptance.judge("s", runs), "covariance_reduction_mean")
+    assert found["passed"], found
+    assert found["detail"].startswith("median:")
+
+
+def test_the_median_keeps_the_envelope():
+    # A shift of the typical seed still fails: the envelope is not widened.
+    runs = _covariance_runs([2] * 5, [2] * 5, rust_value=0.901)
+    found = _check(acceptance.judge("s", runs), "covariance_reduction_mean")
+    assert found["passed"] is False
+    assert "0.1" in found["detail"]
+
+
+def test_other_metrics_keep_the_mean():
+    assert {"covariance_reduction_mean"} == acceptance.MEDIAN_CENTRED
+    runs = [_run(seed, rust={"track_continuity_mean": value}) for seed, value in
+            enumerate([0.5, 0.5, 0.5, 0.5, 1.05])]  # fmt: skip
+    found = _check(acceptance.judge("s", runs), "track_continuity_mean")
+    # Mean 0.61 vs 0.5: |delta| 0.11 > 0.10, which a median would hide.
+    assert found["passed"] is False
+    assert found["detail"].startswith("mean:")
+
+
+def test_the_confirmation_seeds_are_fresh():
+    sets = acceptance.SEED_SETS
+    confirmation = set(sets["confirmation"])
+    assert len(confirmation) == 30
+    for other in ("canonical", "qualification", "held-out"):
+        assert not confirmation & set(sets[other]), other
