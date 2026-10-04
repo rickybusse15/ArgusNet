@@ -93,6 +93,7 @@ fn render_with_report(
             fps: 30,
             view_mode: ViewMode::RealWorld,
             quality: tier,
+            frame_stats: 0,
             probe: Some(probe),
         },
     )

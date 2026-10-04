@@ -49,6 +49,12 @@ pub enum CameraPreset {
     TopDown,
     Isometric,
     FollowTarget,
+    /// Isometric, a fifth of the scene-sized distance from its centre (G2's
+    /// close view).
+    Close,
+    /// Grazing: just above the horizon, where depth complexity and fog are
+    /// greatest (G2's low pitch).
+    LowPitch,
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +74,9 @@ pub struct HeadlessRenderOptions {
     pub probe: Option<ProbeRequest>,
     /// The rendering quality tier (C6).
     pub quality: crate::quality::QualityTier,
+    /// After the still, time this many unpaced frames and write the
+    /// statistics beside it (G2, E2). Zero measures nothing.
+    pub frame_stats: u32,
 }
 
 /// A pointer position for a probe: a world point's pixel through the live
@@ -124,6 +133,7 @@ pub struct HeadlessRequest {
     pub target_id: Option<String>,
     pub probe: Option<ProbeRequest>,
     pub quality: crate::quality::QualityTier,
+    pub frame_stats: u32,
 }
 
 impl HeadlessRenderOptions {
@@ -146,6 +156,7 @@ impl HeadlessRenderOptions {
                 target_id: self.target_id,
                 probe: self.probe,
                 quality: self.quality,
+                frame_stats: self.frame_stats,
             },
         ))
     }
@@ -239,7 +250,7 @@ impl Plugin for HeadlessRenderPlugin {
             .insert_resource(HeadlessCapture::new(&self.0))
             .insert_resource(self.0.clone())
             .add_systems(PostStartup, setup_headless_target_system)
-            .add_systems(Last, headless_capture_system);
+            .add_systems(Last, (headless_capture_system, frame_stats_system).chain());
 
         let render_app = app.sub_app_mut(RenderApp);
         render_app
@@ -401,6 +412,11 @@ struct HeadlessCapture {
     /// The probe's interactions have run; what each click selected.
     interacted: bool,
     clicks: Vec<serde_json::Value>,
+    /// Frames to time after the still, and where to write what was found.
+    frame_stats: u32,
+    stats_path: Option<PathBuf>,
+    last_frame: Option<Instant>,
+    samples_ms: Vec<f32>,
 }
 
 /// Where a headless run spent its time, and on which frame each milestone fell.
@@ -493,6 +509,9 @@ enum CapturePhase {
         waiting: Option<u64>,
     },
     Capture,
+    /// Timing frames after the still: the loop runs unpaced, so each sample
+    /// is the frame's own cost, including the readback headless performs.
+    Measuring,
     Done,
 }
 
@@ -560,6 +579,13 @@ impl HeadlessCapture {
             timing: CaptureTiming::new(),
             interacted: false,
             clicks: Vec::new(),
+            frame_stats: request.frame_stats,
+            stats_path: request
+                .output
+                .as_ref()
+                .map(|output| output.with_extension("frames.json")),
+            last_frame: None,
+            samples_ms: Vec::new(),
         }
     }
 }
@@ -649,6 +675,15 @@ fn apply_camera_preset(
         CameraPreset::Isometric => {
             orbit.yaw = std::f32::consts::FRAC_PI_4;
             orbit.pitch = ISOMETRIC_PITCH_RAD;
+        }
+        CameraPreset::Close => {
+            orbit.yaw = std::f32::consts::FRAC_PI_4;
+            orbit.pitch = ISOMETRIC_PITCH_RAD;
+            orbit.radius = (orbit.radius * 0.2).max(orbit.min_radius);
+        }
+        CameraPreset::LowPitch => {
+            orbit.yaw = std::f32::consts::FRAC_PI_4;
+            orbit.pitch = crate::orbit_camera::MIN_PITCH_RAD;
         }
         CameraPreset::FollowTarget => {
             orbit.yaw = std::f32::consts::FRAC_PI_4;
@@ -1099,7 +1134,11 @@ fn headless_capture_system(
                     }
                 }
                 if capture.record_dir.is_none() {
-                    capture.phase = CapturePhase::Done;
+                    capture.phase = if capture.frame_stats > 0 {
+                        CapturePhase::Measuring
+                    } else {
+                        CapturePhase::Done
+                    };
                     return;
                 }
             }
@@ -1125,6 +1164,8 @@ fn headless_capture_system(
                 None => capture.phase = CapturePhase::Done,
             }
         }
+        // `frame_stats_system` owns this phase.
+        CapturePhase::Measuring => {}
         CapturePhase::Done => {
             exit.write(if capture.failed {
                 AppExit::error()
@@ -1133,6 +1174,110 @@ fn headless_capture_system(
             });
         }
     }
+}
+
+/// A frame-time distribution: nearest-rank percentiles, in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct FrameSummary {
+    pub frames: usize,
+    pub mean_ms: f32,
+    pub p50_ms: f32,
+    pub p95_ms: f32,
+    pub p99_ms: f32,
+    pub max_ms: f32,
+    /// Frames over 100 ms: VIEWER_UI's "no unexplained stall".
+    pub stalls_over_100ms: usize,
+}
+
+/// Summarise frame times; `None` for no samples.
+pub fn frame_summary(samples_ms: &[f32]) -> Option<FrameSummary> {
+    if samples_ms.is_empty() {
+        return None;
+    }
+    let mut sorted = samples_ms.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let rank = |p: f32| {
+        let index = ((p * sorted.len() as f32).ceil() as usize).clamp(1, sorted.len()) - 1;
+        sorted[index]
+    };
+    Some(FrameSummary {
+        frames: sorted.len(),
+        mean_ms: sorted.iter().sum::<f32>() / sorted.len() as f32,
+        p50_ms: rank(0.50),
+        p95_ms: rank(0.95),
+        p99_ms: rank(0.99),
+        max_ms: sorted[sorted.len() - 1],
+        stalls_over_100ms: sorted.iter().filter(|ms| **ms > 100.0).count(),
+    })
+}
+
+/// Times frames after the still (G2), then writes the statistics, with the
+/// warm-up reported apart from them rather than discarded, and exits.
+fn frame_stats_system(
+    mut capture: ResMut<HeadlessCapture>,
+    request: Res<HeadlessRequest>,
+    adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
+) {
+    if capture.phase != CapturePhase::Measuring {
+        return;
+    }
+    let now = Instant::now();
+    if let Some(last) = capture.last_frame {
+        let ms = now.duration_since(last).as_secs_f32() * 1000.0;
+        capture.samples_ms.push(ms);
+    }
+    capture.last_frame = Some(now);
+    if capture.samples_ms.len() < capture.frame_stats as usize {
+        return;
+    }
+    let adapter = adapter.map(|info| {
+        serde_json::json!({
+            "name": info.name,
+            "backend": format!("{:?}", info.backend),
+            "device_type": format!("{:?}", info.device_type),
+            "driver": info.driver,
+            "driver_info": info.driver_info,
+        })
+    });
+    let software = adapter
+        .as_ref()
+        .is_some_and(|info| info["device_type"] == "Cpu");
+    let warmup_s = capture
+        .timing
+        .assets_ready
+        .map(|ready| ready.duration_since(capture.timing.started).as_secs_f32());
+    let report = serde_json::json!({
+        "kind": "argusnet.g2-frame-stats",
+        "version": 1,
+        "viewport": [request.width, request.height],
+        "camera": format!("{:?}", request.camera),
+        "quality": request.quality.name(),
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "adapter": adapter,
+        "renderer_class": if software { "software" } else { "hardware" },
+        "timing_scope": "unpaced headless loop: main and render world, including the \
+                         per-frame image readback headless performs",
+        "gpu_time_ms": null,
+        "gpu_time_unavailable": "GPU timestamp queries are not recorded yet",
+        "warmup": {
+            "assets_s": warmup_s,
+            "frames_waiting_assets": capture.timing.frames_waiting_assets,
+            "drawn_at_frame": capture.timing.drawn_at_frame,
+            "settle_frames": capture.timing.settle_frames,
+        },
+        "summary": frame_summary(&capture.samples_ms),
+        "samples_ms": capture.samples_ms,
+    });
+    if let Some(path) = capture.stats_path.clone() {
+        let written = serde_json::to_string_pretty(&report)
+            .map_err(anyhow::Error::from)
+            .and_then(|text| std::fs::write(&path, text).map_err(anyhow::Error::from));
+        if let Err(error) = written {
+            error!("failed to write {}: {error:#}", path.display());
+            capture.failed = true;
+        }
+    }
+    capture.phase = CapturePhase::Done;
 }
 
 /// Cheap identity for a rendered frame, used to detect that the output has
@@ -1308,7 +1453,22 @@ mod tests {
             view_mode: ViewMode::RealWorld,
             probe: None,
             quality: Default::default(),
+            frame_stats: 0,
         }
+    }
+
+    #[test]
+    fn frame_summaries_use_nearest_rank_and_count_stalls() {
+        assert_eq!(frame_summary(&[]), None);
+        let mut samples: Vec<f32> = (1..=100).map(|ms| ms as f32).collect();
+        samples.push(250.0);
+        let summary = frame_summary(&samples).unwrap();
+        assert_eq!(summary.frames, 101);
+        assert_eq!(summary.p50_ms, 51.0);
+        assert_eq!(summary.p95_ms, 96.0);
+        assert_eq!(summary.p99_ms, 100.0);
+        assert_eq!(summary.max_ms, 250.0);
+        assert_eq!(summary.stalls_over_100ms, 1);
     }
 
     #[test]
@@ -1330,6 +1490,7 @@ mod tests {
             view_mode: ViewMode::Split,
             probe: None,
             quality: crate::quality::QualityTier::Low,
+            frame_stats: 0,
         };
         let (view_mode, request) = opts.into_request().unwrap();
         assert_eq!(view_mode, ViewMode::Split);

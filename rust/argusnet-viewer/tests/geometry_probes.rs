@@ -119,6 +119,7 @@ fn render(
             fps: 30,
             view_mode: ViewMode::RealWorld,
             quality: Default::default(),
+            frame_stats: 0,
             probe: Some(ProbeRequest {
                 belief: None,
                 belief_overlay: false,

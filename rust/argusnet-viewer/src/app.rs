@@ -259,6 +259,13 @@ fn run_inner(
         ..default()
     };
     if let Some(request) = headless {
+        // Paced at 60 Hz for stills; unpaced when frames are being timed, so
+        // a sample is the frame's own cost rather than the pacing's.
+        let pacing = if request.frame_stats > 0 {
+            std::time::Duration::ZERO
+        } else {
+            std::time::Duration::from_secs_f64(1.0 / 60.0)
+        };
         // No window at all: winit panics without a display server, and
         // ScheduleRunnerPlugin drives the loop in its place.
         //
@@ -278,9 +285,7 @@ fn run_inner(
                 })
                 .disable::<bevy::winit::WinitPlugin>(),
         )
-        .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::from_secs_f64(1.0 / 60.0),
-        ))
+        .add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(pacing))
         .add_plugins(crate::headless::HeadlessRenderPlugin(request));
     } else {
         app.add_plugins(DefaultPlugins.set(asset_plugin).set(WindowPlugin {

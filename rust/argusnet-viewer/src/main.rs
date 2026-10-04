@@ -64,6 +64,13 @@ struct Args {
                 preference. Headless renders default to standard."
     )]
     quality: Option<QualityTier>,
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Headless: after the still, time this many unpaced frames and write \
+                <output>.frames.json (G2 frame statistics)."
+    )]
+    frame_stats: u32,
     #[cfg(feature = "live-stream")]
     #[arg(long, help = "Subscribe to live frames from this argusnetd endpoint.")]
     live: Option<String>,
@@ -103,6 +110,7 @@ fn main() -> Result<()> {
                 view_mode: args.view_mode,
                 probe: None,
                 quality: args.quality.unwrap_or_default(),
+                frame_stats: args.frame_stats,
             },
         );
     }

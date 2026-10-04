@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Renderer fixtures and frame statistics (E2)
+
+- `argusnet-viewer --headless --frame-stats N` times N frames after the
+  still and writes their distribution, the warm-up and the graphics adapter
+  beside it. New `--camera close` and `--camera low-pitch` presets.
+- `scripts/render_fixtures.py` renders the five standard views in every
+  quality tier and writes one manifest; a software-renderer baseline is in
+  `docs/performance/`.
+
 ## Unreleased — Preferences: scale, motion, keys (C7.2)
 
 - Tools → Preferences… sets the interface scale (75–200 %) without
