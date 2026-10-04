@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use argusnet_viewer::quality::QualityTier;
 use argusnet_viewer::{render_headless, CameraPreset, HeadlessRenderOptions, ViewMode};
 use clap::Parser;
 
@@ -56,6 +57,13 @@ struct Args {
                 reconstruction without pressing Space)."
     )]
     autoplay: bool,
+    #[arg(
+        long,
+        value_enum,
+        help = "Rendering quality tier (low, standard, high); overrides the saved \
+                preference. Headless renders default to standard."
+    )]
+    quality: Option<QualityTier>,
     #[cfg(feature = "live-stream")]
     #[arg(long, help = "Subscribe to live frames from this argusnetd endpoint.")]
     live: Option<String>,
@@ -94,6 +102,7 @@ fn main() -> Result<()> {
                 fps: args.fps,
                 view_mode: args.view_mode,
                 probe: None,
+                quality: args.quality.unwrap_or_default(),
             },
         );
     }
@@ -105,7 +114,14 @@ fn main() -> Result<()> {
             client_key: args.live_tls_key,
             domain_name: args.live_tls_domain,
         };
-        return argusnet_viewer::run_live(args.scene, endpoint, tls, args.view_mode, args.autoplay);
+        return argusnet_viewer::run_live(
+            args.scene,
+            endpoint,
+            tls,
+            args.view_mode,
+            args.autoplay,
+            args.quality,
+        );
     }
-    argusnet_viewer::run(args.scene, args.view_mode, args.autoplay)
+    argusnet_viewer::run(args.scene, args.view_mode, args.autoplay, args.quality)
 }

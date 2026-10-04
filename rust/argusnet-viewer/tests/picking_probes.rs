@@ -134,6 +134,7 @@ fn render(name: &str, scene: &Path, view_mode: ViewMode, probe: ProbeRequest) ->
             height: HEIGHT,
             fps: 30,
             view_mode,
+            quality: Default::default(),
             probe: Some(ProbeRequest {
                 output: output.clone(),
                 ..probe

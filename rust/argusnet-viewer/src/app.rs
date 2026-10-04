@@ -6,11 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
+use bevy::camera::Hdr;
 use bevy::camera::{ClearColorConfig, Exposure, Viewport};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::pbr::{DistanceFog, FogFalloff};
-use bevy::post_process::bloom::{Bloom, BloomPrefilter};
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
@@ -69,8 +69,16 @@ pub fn run(
     scene_path: impl AsRef<Path>,
     initial_view_mode: ViewMode,
     autoplay: bool,
+    quality: Option<crate::quality::QualityTier>,
 ) -> Result<()> {
-    run_inner(scene_path.as_ref(), None, initial_view_mode, autoplay, None)
+    run_inner(
+        scene_path.as_ref(),
+        None,
+        initial_view_mode,
+        autoplay,
+        quality,
+        None,
+    )
 }
 
 #[cfg(feature = "live-stream")]
@@ -80,12 +88,14 @@ pub fn run_live(
     tls: crate::live::LiveTlsConfig,
     initial_view_mode: ViewMode,
     autoplay: bool,
+    quality: Option<crate::quality::QualityTier>,
 ) -> Result<()> {
     run_inner(
         scene_path.as_ref(),
         Some((endpoint, tls)),
         initial_view_mode,
         autoplay,
+        quality,
         None,
     )
 }
@@ -105,11 +115,13 @@ pub fn run_headless(
     initial_view_mode: ViewMode,
     request: HeadlessRequest,
 ) -> Result<()> {
+    let quality = Some(request.quality);
     run_inner(
         scene_path.as_ref(),
         None,
         initial_view_mode,
         false,
+        quality,
         Some(request),
     )
 }
@@ -119,6 +131,7 @@ fn run_inner(
     live_endpoint: LiveEndpoint,
     initial_view_mode: ViewMode,
     autoplay: bool,
+    quality: Option<crate::quality::QualityTier>,
     headless: Option<HeadlessRequest>,
 ) -> Result<()> {
     let (scene_package, working_scene_root) = initialize_scene_package(scene_path)?;
@@ -189,12 +202,19 @@ fn run_inner(
     let (bindings, binding_problems) =
         crate::bindings::Bindings::with_overrides(&prefs.file.bindings);
     prefs.problems.extend(binding_problems);
+    // The command line wins over the preferences file; headless runs read no
+    // preferences, so a render's tier is the one it asked for.
+    let quality = match quality {
+        Some(tier) => tier,
+        None => prefs.quality_tier(),
+    };
     for problem in &prefs.problems {
         warn!("viewer preferences: {problem}");
     }
 
     app.insert_resource(ClearColor(HORIZON_COLOR))
         .insert_resource(prefs)
+        .insert_resource(quality)
         .insert_resource(bindings)
         .init_resource::<crate::bindings::KeyboardGate>()
         .init_resource::<crate::camera_control::EscapeUsed>()
@@ -300,6 +320,15 @@ fn run_inner(
         .add_systems(Startup, (setup_world, setup_reconstruction_mesh));
     configure_viewer_sets(&mut app);
     // After both writers of the main camera's transform (C5.1).
+    app.add_systems(
+        Update,
+        (
+            crate::quality::sync_quality_choice_system,
+            crate::quality::apply_quality_tier_system,
+        )
+            .chain()
+            .before(sync_fog_to_camera_system),
+    );
     app.add_systems(
         Update,
         (
@@ -598,44 +627,19 @@ fn setup_world(
         // without it they silently fall back to a placeholder LUT. Keeping to an
         // analytic curve holds the trimmed feature set from the dependency pass.
         Tonemapping::AcesFitted,
-        // Bloom carries `#[require(Hdr)]`, so this is what puts the camera on an
-        // HDR intermediate target — a prerequisite for anything emissive to
-        // read as bright rather than merely pale.
-        //
-        // `NATURAL` thresholds at zero, which blooms *everything*, so plain white
-        // building roofs smeared as hard as a beacon would. Thresholding just
-        // above display white restricts the glow to genuinely over-bright
-        // (emissive) surfaces, which is where the mission-control look wants it —
-        // tracks and zones, not terrain features that happen to be pale.
-        Bloom {
-            prefilter: BloomPrefilter {
-                threshold: 1.0,
-                threshold_softness: 0.4,
-            },
-            ..Bloom::NATURAL
-        },
+        // An HDR intermediate target, so anything emissive reads as bright
+        // rather than merely pale. Bloom, which used to put it there, is now
+        // the high quality tier's alone (§15: off by default).
+        Hdr,
         // Slightly more exposure than Bevy's default (EV100 9.7), to offset the
         // midtones AcesFitted pulls down. EV100 is inverse: a *higher* number
         // stops the camera down, so `Exposure::OVERCAST` (12) — despite matching
         // this scene's 12 000 lux key light by name — renders it about two stops
         // darker and crushes the terrain to black.
         Exposure { ev100: 9.0 },
-        // Depth cueing, so a 4 km site does not render every ridge at identical
-        // contrast. The distances are filled in per-frame by
-        // `sync_fog_to_camera_system`: fog is measured from the camera, and the
-        // camera orbits *outside* the scene, so any fixed distance derived from
-        // the scene span alone either swallows the whole terrain or never
-        // reaches it.
-        DistanceFog {
-            // The sky's own horizon colour, so distant terrain fades *into* the
-            // sky rather than into a band standing in front of it.
-            color: HORIZON_COLOR,
-            falloff: FogFalloff::Linear {
-                start: 0.0,
-                end: f32::MAX,
-            },
-            ..default()
-        },
+        // Depth cueing (`DistanceFog`) and bloom are the quality tier's: see
+        // `crate::quality::apply_quality_tier_system`, which adds them to this
+        // camera, and `sync_fog_to_camera_system`, which sizes the fog.
         // Sees the world (layer 0) plus the reconstruction (RECON_LAYER) so the
         // scan-map overlay still shows in RealWorld/ScanMap and the Split left pane.
         RenderLayers::from_layers(&[0, RECON_LAYER]),

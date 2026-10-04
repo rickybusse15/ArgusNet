@@ -62,6 +62,13 @@ struct TerrainSettings {
 const CLASS_OUTSIDE: u32 = 1u;
 const CLASS_UNKNOWN: u32 = 2u;
 const CLASS_OBSTACLE: u32 = 3u;
+
+// The belief overlay's own shading: a fixed sun (the scene light's direction)
+// and ambient floor, so relief still reads through it, and a brightness that
+// puts its classes in the lit terrain's range before tonemapping.
+const BELIEF_SUN: vec3<f32> = vec3<f32>(0.5726, 0.3436, 0.7444);
+const BELIEF_AMBIENT: f32 = 0.55;
+const BELIEF_EXPOSURE: f32 = 0.6;
 const CLASS_UNCERTAIN: u32 = 4u;
 const CLASS_SAFE: u32 = 5u;
 
@@ -120,7 +127,7 @@ fn belief_overlay(xy: vec2<f32>, frag: vec2<f32>) -> vec4<f32> {
     let stripes = hatch(frag);
     if mode == 1u {
         // Unavailable: no belief exists to draw, so everywhere is unknown.
-        return vec4<f32>(terrain.belief_unknown_color.rgb, strength * (0.55 + 0.45 * stripes));
+        return vec4<f32>(terrain.belief_unknown_color.rgb * (0.6 + 0.4 * stripes), strength * (0.55 + 0.45 * stripes));
     }
     let cell = cell_of(xy, terrain.belief_grid, terrain.belief_dims);
     if cell.x < 0 {
@@ -128,7 +135,7 @@ fn belief_overlay(xy: vec2<f32>, frag: vec2<f32>) -> vec4<f32> {
     }
     let class_code = textureLoad(belief_class, cell, 0).r;
     if class_code == CLASS_UNKNOWN {
-        return vec4<f32>(terrain.belief_unknown_color.rgb, strength * (0.55 + 0.45 * stripes));
+        return vec4<f32>(terrain.belief_unknown_color.rgb * (0.6 + 0.4 * stripes), strength * (0.55 + 0.45 * stripes));
     }
     if class_code == CLASS_OUTSIDE {
         return vec4<f32>(terrain.belief_outside_color.rgb, strength);
@@ -207,11 +214,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         }
     }
 
-    var base_rgb = pbr_input.material.base_color.rgb * tint;
-    // Belief replaces rather than multiplies, so its classes stay legible over
-    // whatever colour the terrain was baked with.
-    let overlay = belief_overlay(xy, in.position.xy);
-    base_rgb = mix(base_rgb, overlay.rgb, overlay.a);
+    let base_rgb = pbr_input.material.base_color.rgb * tint;
     pbr_input.material.base_color = vec4<f32>(base_rgb, pbr_input.material.base_color.a);
 
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
@@ -221,5 +224,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // Fog and tonemapping live here. Dropping this line is what makes a custom
     // terrain material stop fading into the sky.
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+
+    // Belief is information, not scenery: it is composited after lighting and
+    // fog, with its own fixed relief shading, so no quality tier's shadows,
+    // fog or bloom can shift a class's colour (VIEWER_UI §15). It replaces
+    // rather than multiplies, so its classes stay legible over whatever colour
+    // the terrain was baked with.
+    let overlay = belief_overlay(xy, in.position.xy);
+    if overlay.a > 0.0 {
+        let relief = BELIEF_AMBIENT + (1.0 - BELIEF_AMBIENT) * clamp(dot(normal, BELIEF_SUN), 0.0, 1.0);
+        let shaded = overlay.rgb * relief * BELIEF_EXPOSURE;
+        out.color = vec4<f32>(mix(out.color.rgb, shaded, overlay.a), out.color.a);
+    }
     return out;
 }

@@ -65,6 +65,17 @@ pub(super) fn header_bar(
             if ui.button(toggle).clicked() {
                 command = Some(ShellCommand::ToggleToolPanel);
             }
+            ui.separator();
+            ui.label("Quality");
+            for tier in crate::quality::QualityTier::ALL {
+                if ui
+                    .selectable_label(ui_state.quality == tier, tier.label())
+                    .on_hover_text("Rendering detail only: no tier hides what is shown")
+                    .clicked()
+                {
+                    command = Some(ShellCommand::Quality(tier));
+                }
+            }
         });
     });
     command
@@ -529,54 +540,6 @@ pub(super) fn drawer_mission_content(
     section_layers(ui, scene_package, layer_visibility);
     ui.separator();
     section_mission_zones(ui, mission_zones, zone_overlap_model);
-}
-
-pub(super) fn apply_layer_preset(
-    preset: MapLayerPreset,
-    runtime_visibility: &mut RuntimeOverlayVisibility,
-    mission_overlay: &mut MissionOverlaySettings,
-) {
-    match preset {
-        MapLayerPreset::Operator => {
-            runtime_visibility.nodes = true;
-            runtime_visibility.tracks = true;
-            runtime_visibility.truths = false;
-            runtime_visibility.zones = true;
-            runtime_visibility.radar_rings = true;
-            runtime_visibility.observations = false;
-            runtime_visibility.rejection_markers = false;
-            mission_overlay.show_scan_grid = true;
-            mission_overlay.show_poi_markers = true;
-            mission_overlay.show_reconstruction = true;
-            mission_overlay.show_coord_frame = true;
-        }
-        MapLayerPreset::Reconstruction => {
-            runtime_visibility.nodes = true;
-            runtime_visibility.tracks = false;
-            runtime_visibility.truths = false;
-            runtime_visibility.zones = true;
-            runtime_visibility.radar_rings = false;
-            runtime_visibility.observations = false;
-            runtime_visibility.rejection_markers = false;
-            mission_overlay.show_scan_grid = true;
-            mission_overlay.show_poi_markers = true;
-            mission_overlay.show_reconstruction = true;
-            mission_overlay.show_coord_frame = true;
-        }
-        MapLayerPreset::Safety => {
-            runtime_visibility.nodes = true;
-            runtime_visibility.tracks = true;
-            runtime_visibility.truths = false;
-            runtime_visibility.zones = true;
-            runtime_visibility.radar_rings = true;
-            runtime_visibility.observations = true;
-            runtime_visibility.rejection_markers = true;
-            mission_overlay.show_scan_grid = false;
-            mission_overlay.show_poi_markers = true;
-            mission_overlay.show_reconstruction = false;
-            mission_overlay.show_coord_frame = false;
-        }
-    }
 }
 
 pub(super) fn drawer_replay_content(ui: &mut egui::Ui, replay_state: &ReplayState) {

@@ -66,6 +66,8 @@ pub struct HeadlessRenderOptions {
     pub view_mode: ViewMode,
     /// Pixel probes (P2.1): not on the command line; the probe tests use it.
     pub probe: Option<ProbeRequest>,
+    /// The rendering quality tier (C6).
+    pub quality: crate::quality::QualityTier,
 }
 
 /// A pointer position for a probe: a world point's pixel through the live
@@ -121,6 +123,7 @@ pub struct HeadlessRequest {
     pub camera: CameraPreset,
     pub target_id: Option<String>,
     pub probe: Option<ProbeRequest>,
+    pub quality: crate::quality::QualityTier,
 }
 
 impl HeadlessRenderOptions {
@@ -142,6 +145,7 @@ impl HeadlessRenderOptions {
                 camera: self.camera,
                 target_id: self.target_id,
                 probe: self.probe,
+                quality: self.quality,
             },
         ))
     }
@@ -1303,6 +1307,7 @@ mod tests {
             fps: 30,
             view_mode: ViewMode::RealWorld,
             probe: None,
+            quality: Default::default(),
         }
     }
 
@@ -1324,6 +1329,7 @@ mod tests {
             fps: 12,
             view_mode: ViewMode::Split,
             probe: None,
+            quality: crate::quality::QualityTier::Low,
         };
         let (view_mode, request) = opts.into_request().unwrap();
         assert_eq!(view_mode, ViewMode::Split);
@@ -1331,6 +1337,7 @@ mod tests {
         assert_eq!(request.record_dir, Some(PathBuf::from("frames")));
         assert_eq!(request.camera, CameraPreset::Isometric);
         assert_eq!(request.target_id.as_deref(), Some("truth-1"));
+        assert_eq!(request.quality, crate::quality::QualityTier::Low);
         assert_eq!(
             (request.width, request.height, request.fps),
             (1280, 720, 12)

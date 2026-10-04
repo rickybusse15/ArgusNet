@@ -4,7 +4,9 @@
 //! Each probe projects a world point through the live camera after capture and
 //! records the 9 x 9 pixels around it. Lighting and tonemapping change absolute
 //! colours, so the checks are on which channel dominates and by how much, and
-//! on the stripes of the unknown hatch, never on exact values.
+//! on the stripes of the unknown hatch, never on exact values. The belief
+//! probes run in every quality tier: no tier's shadows, fog or bloom may
+//! change what a class reads as (VIEWER_UI §15).
 //!
 //! Needs a GPU (or a software Vulkan such as lavapipe), so it runs only with
 //! `ARGUSNET_GPU_TESTS=1`; CI's viewer job sets it.
@@ -17,6 +19,7 @@ use argusnet_viewer::belief_render::{
 };
 use argusnet_viewer::headless::{CameraPreset, HeadlessRenderOptions, ProbeRequest};
 use argusnet_viewer::land_cover_raster::{LandCoverDocument, LandCoverRaster};
+use argusnet_viewer::quality::QualityTier;
 use argusnet_viewer::{render_headless, ViewMode};
 
 fn gpu_tests() -> bool {
@@ -64,15 +67,17 @@ impl Probe {
     }
 }
 
-fn render(name: &str, scene: &Path, probe: ProbeRequest) -> Vec<Probe> {
-    render_with_report(name, scene, probe).0
+fn render(name: &str, scene: &Path, tier: QualityTier, probe: ProbeRequest) -> Vec<Probe> {
+    render_with_report(name, scene, tier, probe).0
 }
 
 fn render_with_report(
     name: &str,
     scene: &Path,
+    tier: QualityTier,
     probe: ProbeRequest,
 ) -> (Vec<Probe>, serde_json::Value) {
+    let name = &format!("{name}-{}", tier.name());
     let dir = scratch(name);
     let probes_path = probe.output.clone();
     let still = dir.join(format!("{name}.png"));
@@ -87,6 +92,7 @@ fn render_with_report(
             height: 480,
             fps: 30,
             view_mode: ViewMode::RealWorld,
+            quality: tier,
             probe: Some(probe),
         },
     )
@@ -143,11 +149,18 @@ fn the_rendered_belief_is_the_cpu_belief() {
         eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
         return;
     }
+    for tier in QualityTier::ALL {
+        the_rendered_belief_is_the_cpu_belief_in(tier);
+    }
+}
+
+fn the_rendered_belief_is_the_cpu_belief_in(tier: QualityTier) {
     let (store, targets) = probe_belief_layout(EXTENT);
     let snapshot = BeliefRenderSnapshot::from_store(&store).unwrap();
     let probes = render(
         "belief",
         &committed_scene(),
+        tier,
         ProbeRequest {
             belief: Some(store),
             belief_overlay: true,
@@ -210,6 +223,12 @@ fn a_late_revision_is_drawn_through_tile_writes_alone() {
         eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
         return;
     }
+    for tier in QualityTier::ALL {
+        a_late_revision_is_drawn_through_tile_writes_alone_in(tier);
+    }
+}
+
+fn a_late_revision_is_drawn_through_tile_writes_alone_in(tier: QualityTier) {
     let (mut store, targets) = probe_belief_layout(EXTENT);
     let initial = store.clone();
     // Drive the safe block to obstacle: three occupied marks per cell.
@@ -260,6 +279,7 @@ fn a_late_revision_is_drawn_through_tile_writes_alone() {
     let (probes, rasters) = render_with_report(
         "late",
         &committed_scene(),
+        tier,
         ProbeRequest {
             belief: Some(initial),
             belief_overlay: true,
@@ -298,10 +318,17 @@ fn no_belief_renders_as_unavailable_not_as_a_guess() {
         eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
         return;
     }
+    for tier in QualityTier::ALL {
+        no_belief_renders_as_unavailable_not_as_a_guess_in(tier);
+    }
+}
+
+fn no_belief_renders_as_unavailable_not_as_a_guess_in(tier: QualityTier) {
     let (_, targets) = probe_belief_layout(EXTENT);
     let probes = render(
         "unavailable",
         &committed_scene(),
+        tier,
         ProbeRequest {
             belief: None,
             belief_overlay: true,
@@ -394,6 +421,7 @@ fn the_land_cover_tint_is_the_runtime_layers_class() {
     let probes = render(
         "land-cover",
         &scene,
+        QualityTier::default(),
         ProbeRequest {
             belief: None,
             belief_overlay: false,
