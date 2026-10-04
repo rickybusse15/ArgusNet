@@ -345,6 +345,16 @@ pub struct ViewerUiState {
     /// The quality tier the operator chose (C6); `crate::quality` carries it
     /// to the renderer and the preferences.
     pub quality: crate::quality::QualityTier,
+    /// UI scale (C7.2): egui's zoom, independent of the world's scale.
+    /// `canvas_rect` is in UI points; window pixels are points times this.
+    pub ui_scale: f32,
+    /// Nonessential transitions off (C7.2).
+    pub reduced_motion: bool,
+    /// The preferences window is open.
+    pub show_preferences: bool,
+    /// The preferences window is waiting for a key to bind; the viewer's own
+    /// keys are held until it has one.
+    pub capturing_key: bool,
     /// The safety event the inspector shows, when one is open (C3.3). It
     /// takes the inspector over from the selection until closed; the
     /// selection itself is untouched.
@@ -363,6 +373,13 @@ impl ViewerUiState {
     /// Whether a window position is on the world canvas. With no shell
     /// laid out, everything is.
     pub fn on_canvas(&self, position: [f32; 2]) -> bool {
+        // The pointer comes in window pixels, the canvas in UI points.
+        let scale = if self.ui_scale > 0.0 {
+            self.ui_scale
+        } else {
+            1.0
+        };
+        let position = [position[0] / scale, position[1] / scale];
         self.canvas_rect.is_none_or(|[min_x, min_y, max_x, max_y]| {
             position[0] >= min_x
                 && position[0] < max_x
@@ -388,6 +405,10 @@ impl Default for ViewerUiState {
             projection: Projection::Perspective,
             section: SectionPlane::default(),
             quality: crate::quality::QualityTier::default(),
+            ui_scale: 1.0,
+            reduced_motion: false,
+            show_preferences: false,
+            capturing_key: false,
             inspected_event: None,
             inspected_cell: None,
         }

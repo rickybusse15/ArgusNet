@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Preferences: scale, motion, keys (C7.2)
+
+- Tools → Preferences… sets the interface scale (75–200 %) without
+  changing the map, turns on reduced motion (camera moves arrive at once,
+  no interface animations), and lists every key with a Rebind button. A key
+  already in use is refused with the action that has it; Reset restores the
+  defaults. Everything is remembered.
+
 ## Unreleased — Failure and degraded states (C7.1)
 
 - Problems now show on the map as a banner that says what is affected,
