@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-import xml.etree.ElementTree as ET
+
+# G3 triage (B405): builds KML/GPX, never parses XML.
+import xml.etree.ElementTree as ET  # nosec B405
 import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone

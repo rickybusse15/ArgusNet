@@ -5,7 +5,9 @@ import importlib.util
 import json
 import logging
 import os
-import subprocess
+
+# G3 triage (B404): argument lists only, never a shell.
+import subprocess  # nosec B404
 import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -656,7 +658,8 @@ def _run_live(args: argparse.Namespace) -> None:
     try:
         if not args.connect_only:
             children.append(
-                subprocess.Popen(
+                # G3 triage (B603): our argusnetd, the operator's own arguments; no shell.
+                subprocess.Popen(  # nosec B603
                     [str(daemon), "serve", "--listen", args.endpoint],
                     cwd=root,
                 )
@@ -688,11 +691,13 @@ def _run_live(args: argparse.Namespace) -> None:
                 sim_cmd.append("--cooperative-search")
             if args.adaptive_search:
                 sim_cmd.append("--adaptive-search")
-            children.append(subprocess.Popen(sim_cmd, cwd=root, env=environment))
+            # G3 triage (B603): sys.executable -m argusnet, the operator's arguments; no shell.
+            children.append(subprocess.Popen(sim_cmd, cwd=root, env=environment))  # nosec B603
         # Default the viewer to split when running a cooperative search so the
         # live reconstruction and team co-localization are visible immediately.
         view_mode = args.view_mode or ("split" if args.cooperative_search else "real-world")
-        viewer_process = subprocess.Popen(
+        # G3 triage (B603): our viewer binary, the operator's own arguments; no shell.
+        viewer_process = subprocess.Popen(  # nosec B603
             [
                 str(viewer),
                 "--scene",

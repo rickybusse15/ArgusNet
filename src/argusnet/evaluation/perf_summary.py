@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import platform
-import subprocess
+
+# G3 triage (B404): argument lists only, never a shell.
+import subprocess  # nosec B404
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -17,7 +19,8 @@ SCHEMA_VERSION = "argusnet-performance-v1"
 
 def _command_output(command: Sequence[str], cwd: str | Path | None = None) -> str | None:
     try:
-        result = subprocess.check_output(
+        # G3 triage (B603): fixed git/rustc/cargo metadata commands; no shell.
+        result = subprocess.check_output(  # nosec B603
             list(command),
             cwd=str(cwd) if cwd is not None else None,
             stderr=subprocess.DEVNULL,

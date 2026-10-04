@@ -11,7 +11,9 @@ import math
 import os
 import platform
 import statistics
-import subprocess
+
+# G3 triage (B404): argument lists only, never a shell.
+import subprocess  # nosec B404
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
@@ -586,7 +588,8 @@ def normalize_command(command: Sequence[object] | str | None = None) -> list[str
 
 def _run_metadata_command(command: Sequence[str], cwd: str | Path | None = None) -> str | None:
     try:
-        result = subprocess.run(
+        # G3 triage (B603): fixed git/rustc/cargo metadata commands; no shell.
+        result = subprocess.run(  # nosec B603
             list(command),
             cwd=str(cwd) if cwd is not None else None,
             check=False,

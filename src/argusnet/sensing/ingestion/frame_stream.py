@@ -302,7 +302,8 @@ class MQTTIngestionAdapter:
 
     def _verify_envelope(self, payload: dict[str, Any], topic: str) -> dict[str, Any] | None:
         """Verify the signed envelope and return the un-signed body, or None to drop."""
-        assert self._verifier is not None  # for type checkers; guarded by caller
+        if self._verifier is None:  # guarded by the caller; checked, not asserted
+            raise RuntimeError("signed-envelope verification without a verifier")
         missing = {"device_id", "sequence", "signature"} - payload.keys()
         if missing:
             logger.warning(

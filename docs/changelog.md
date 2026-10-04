@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Security scan triage (G3)
+
+- Dependency updates fix three reported vulnerabilities in the viewer's
+  libraries (XML parsing, browser launching) and two unsound crates.
+- The Python static analysis check is now required to pass.
+- Mission validity checks now log a platform they could not evaluate
+  instead of skipping it silently.
+
 ## Unreleased — Sensor types and tracker modes are checked (G0)
 
 - A configuration or scenario naming a sensor type other than optical,
