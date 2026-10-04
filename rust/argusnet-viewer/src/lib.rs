@@ -20,6 +20,7 @@ pub mod replay;
 pub mod schema;
 pub mod selection_outline;
 pub mod sensor_volumes;
+pub mod sim_session;
 pub mod sky;
 pub mod state;
 pub mod terrain_material;
@@ -32,5 +33,6 @@ pub mod zone_walls;
 pub use app::run;
 #[cfg(feature = "live-stream")]
 pub use app::run_live;
+pub use app::run_sim;
 pub use headless::{render_headless, CameraPreset, HeadlessRenderOptions};
 pub use state::ViewMode;

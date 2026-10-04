@@ -27,6 +27,8 @@ live-stream = [
 
 [dependencies]
 argusnet-replay = { path = "../argusnet-replay" }
+# D1: the in-process simulation worker (`--run`).
+argusnet-sim = { path = "../argusnet-sim" }
 argusnet-world = { path = "../argusnet-world" }
 argusnet-mapping = { path = "../argusnet-mapping" }
 argusnet-sensing = { path = "../argusnet-sensing" }

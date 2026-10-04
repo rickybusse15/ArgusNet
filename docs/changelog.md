@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Run a simulation inside the viewer (P5.0)
+
+- `argusnet-viewer --scene <scene> --run <config>` runs the scenario in
+  process, in Rust, starting paused. Run, Pause, Step, Speed and Reset drive
+  it. Each control shows as pending until the run confirms it, and refusals
+  say why. The timeline keeps every tick for review.
+
 ## Unreleased — Parallel observation generation (B3)
 
 - `argusnet-rs sim --workers N` evaluates sensor/target pairs on N worker

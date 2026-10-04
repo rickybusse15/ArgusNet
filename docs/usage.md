@@ -109,6 +109,34 @@ handful of drones will not close the distance to scattered targets, so most
 observations are rejected `out_of_range` and no tracks confirm; the CLI prints a
 diagnostic hint when that happens.
 
+### Run a simulation inside the viewer
+
+The viewer can run a scenario itself instead of playing a recorded replay (P5.0,
+D1). Export the scenario's configuration and build a scene for its world once:
+
+```bash
+argusnet sim --mission-mode target_tracking --map-preset small --target-count 3 \
+  --drone-count 4 --target-motion mixed --duration-s 120 --seed 7 \
+  --replay runs/demo.json --export-config runs/demo-config.json
+argusnet build-scene --replay runs/demo.json --output runs/demo.smartscene
+cargo run -p argusnet-viewer -- --scene runs/demo.smartscene --run runs/demo-config.json
+```
+
+`--run` also accepts a scenario bundle (`argusnet-rs build`). The run ticks on
+its own thread, in Rust, with no Python. It opens paused at tick 0. The
+simulation strip over the map has these controls:
+
+- **Run / Pause** starts and stops it.
+- **Step** runs exactly one tick.
+- **Speed** sets wall-clock pacing from 0.5× to 10×. The physics timestep
+  never changes.
+- **Reset** starts the run again from tick 0, paused.
+
+Each control shows as pending until the run confirms it took effect, and a
+refusal says why (for example, Run on a finished run). The timeline holds
+every tick so far; scrubbing it reviews history without rewinding the run.
+Rewinding the run itself needs retained checkpoints and is shown disabled.
+
 ### Mapping run with split-view 3-D reconstruction
 
 Run a scan/map/inspect mission, package it, and open the viewer with the real
