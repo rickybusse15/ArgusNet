@@ -855,8 +855,17 @@ fn operational(
     })
 }
 
-/// Build a configured [`Simulation`] from a bundle.
+/// Build a configured [`Simulation`] from a bundle, serially.
 pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
+    assemble_with(bundle, Arc::new(crate::compute::ComputePool::serial()))
+}
+
+/// [`assemble`], with the session's worker pool for the stages that fork
+/// work across it (B3). A run's output is the same at every worker count.
+pub fn assemble_with(
+    bundle: &ScenarioBundle,
+    compute: Arc<crate::compute::ComputePool>,
+) -> Result<AssembledRun, BundleError> {
     match (bundle.mission_mode.as_str(), &bundle.mission) {
         ("target_tracking", None) | ("scan_map_inspect", Some(_)) => {}
         ("scan_map_inspect", None) => {
@@ -1027,6 +1036,7 @@ pub fn assemble(bundle: &ScenarioBundle) -> Result<AssembledRun, BundleError> {
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
     let mut observe = ObserveStage::new();
+    observe.set_compute(compute);
     for node in &bundle.nodes {
         observe.install_sensor(&node.node_id, node.sensor.spec());
     }

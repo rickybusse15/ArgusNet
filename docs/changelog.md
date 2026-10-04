@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Parallel observation generation (B3)
+
+- `argusnet-rs sim --workers N` evaluates sensor/target pairs on N worker
+  threads. Output is identical at every worker count. It pays off on large
+  fleets (2.7x faster ticks at 24 drones and 48 targets on 4 cores) but not
+  on small ones, so the default stays 1.
+
 ## Unreleased — Security scan triage (G3)
 
 - Dependency updates fix three reported vulnerabilities in the viewer's
