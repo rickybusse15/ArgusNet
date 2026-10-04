@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Resource growth checked (C8)
+
+- `argusnet-viewer --headless --lifecycle N` reloads, seeks, toggles
+  layers, changes quality and projection N times over and records what the
+  viewer holds after each round; a test requires those counts to stay flat.
+
 ## Unreleased — Renderer fixtures and frame statistics (E2)
 
 - `argusnet-viewer --headless --frame-stats N` times N frames after the

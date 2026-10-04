@@ -77,6 +77,10 @@ pub struct HeadlessRenderOptions {
     /// After the still, time this many unpaced frames and write the
     /// statistics beside it (G2, E2). Zero measures nothing.
     pub frame_stats: u32,
+    /// After the still, run this many lifecycle rotations (seek, toggle,
+    /// reload, tier, projection) and write the world's counts after each
+    /// (C8 resource growth). Zero runs none.
+    pub lifecycle: u32,
 }
 
 /// A pointer position for a probe: a world point's pixel through the live
@@ -134,6 +138,7 @@ pub struct HeadlessRequest {
     pub probe: Option<ProbeRequest>,
     pub quality: crate::quality::QualityTier,
     pub frame_stats: u32,
+    pub lifecycle: u32,
 }
 
 impl HeadlessRenderOptions {
@@ -157,6 +162,7 @@ impl HeadlessRenderOptions {
                 probe: self.probe,
                 quality: self.quality,
                 frame_stats: self.frame_stats,
+                lifecycle: self.lifecycle,
             },
         ))
     }
@@ -250,7 +256,15 @@ impl Plugin for HeadlessRenderPlugin {
             .insert_resource(HeadlessCapture::new(&self.0))
             .insert_resource(self.0.clone())
             .add_systems(PostStartup, setup_headless_target_system)
-            .add_systems(Last, (headless_capture_system, frame_stats_system).chain());
+            .add_systems(
+                Last,
+                (
+                    headless_capture_system,
+                    lifecycle_system,
+                    frame_stats_system,
+                )
+                    .chain(),
+            );
 
         let render_app = app.sub_app_mut(RenderApp);
         render_app
@@ -417,6 +431,10 @@ struct HeadlessCapture {
     stats_path: Option<PathBuf>,
     last_frame: Option<Instant>,
     samples_ms: Vec<f32>,
+    /// Lifecycle rotations to run, the step reached, and the counts taken.
+    lifecycle: u32,
+    lifecycle_step: u32,
+    lifecycle_counts: Vec<serde_json::Value>,
 }
 
 /// Where a headless run spent its time, and on which frame each milestone fell.
@@ -509,6 +527,9 @@ enum CapturePhase {
         waiting: Option<u64>,
     },
     Capture,
+    /// Cycling the presentation through seek, toggle, reload, tier and
+    /// projection changes, counting what the world holds after each rotation.
+    Cycling,
     /// Timing frames after the still: the loop runs unpaced, so each sample
     /// is the frame's own cost, including the readback headless performs.
     Measuring,
@@ -586,6 +607,9 @@ impl HeadlessCapture {
                 .map(|output| output.with_extension("frames.json")),
             last_frame: None,
             samples_ms: Vec::new(),
+            lifecycle: request.lifecycle,
+            lifecycle_step: 0,
+            lifecycle_counts: Vec::new(),
         }
     }
 }
@@ -1134,10 +1158,10 @@ fn headless_capture_system(
                     }
                 }
                 if capture.record_dir.is_none() {
-                    capture.phase = if capture.frame_stats > 0 {
-                        CapturePhase::Measuring
+                    capture.phase = if capture.lifecycle > 0 {
+                        CapturePhase::Cycling
                     } else {
-                        CapturePhase::Done
+                        capture.after_lifecycle()
                     };
                     return;
                 }
@@ -1164,8 +1188,8 @@ fn headless_capture_system(
                 None => capture.phase = CapturePhase::Done,
             }
         }
-        // `frame_stats_system` owns this phase.
-        CapturePhase::Measuring => {}
+        // `lifecycle_system` and `frame_stats_system` own these phases.
+        CapturePhase::Cycling | CapturePhase::Measuring => {}
         CapturePhase::Done => {
             exit.write(if capture.failed {
                 AppExit::error()
@@ -1173,6 +1197,131 @@ fn headless_capture_system(
                 AppExit::Success
             });
         }
+    }
+}
+
+impl HeadlessCapture {
+    /// What follows the lifecycle (or the still, without one).
+    fn after_lifecycle(&self) -> CapturePhase {
+        if self.frame_stats > 0 {
+            CapturePhase::Measuring
+        } else {
+            CapturePhase::Done
+        }
+    }
+}
+
+/// Steps in one lifecycle rotation.
+const LIFECYCLE_STEPS: u32 = 8;
+
+/// What the world holds: the counts a lifecycle must keep flat.
+#[derive(bevy::ecs::system::SystemParam)]
+struct WorldCounts<'w, 's> {
+    entities: Query<'w, 's, Entity>,
+    meshes: Res<'w, Assets<Mesh>>,
+    standard: Res<'w, Assets<StandardMaterial>>,
+    hologram: Option<Res<'w, Assets<crate::marker_meshes::HologramMaterial>>>,
+    terrain: Option<Res<'w, Assets<crate::terrain_material::TerrainMaterial>>>,
+    images: Res<'w, Assets<Image>>,
+    ribbons: Option<Res<'w, crate::trail_ribbons::TrailRibbons>>,
+}
+
+impl WorldCounts<'_, '_> {
+    fn snapshot(&self, rotation: u32) -> serde_json::Value {
+        serde_json::json!({
+            "rotation": rotation,
+            "entities": self.entities.iter().count(),
+            "meshes": self.meshes.len(),
+            "standard_materials": self.standard.len(),
+            "hologram_materials": self.hologram.as_ref().map(|a| a.len()),
+            "terrain_materials": self.terrain.as_ref().map(|a| a.len()),
+            "images": self.images.len(),
+            "trail_ribbons": self.ribbons.as_ref().map(|r| r.ribbon_count()),
+            "trail_samples": self.ribbons.as_ref().map(|r| r.store.total_samples()),
+        })
+    }
+}
+
+/// One frame of a lifecycle rotation (reload, seek to the start, toggle off
+/// and on, tier step, Section and back, seek to the end): the step's change,
+/// and after each rotation the world's counts (VERIFICATION_AND_ROLLOUT.md §5: seek, reload,
+/// source switch and toggle repeatedly; counts must stay bounded).
+fn lifecycle_system(
+    mut capture: ResMut<HeadlessCapture>,
+    mut replay: ResMut<ReplayState>,
+    mut visibility: ResMut<crate::state::RuntimeOverlayVisibility>,
+    mut ui_state: ResMut<crate::state::ViewerUiState>,
+    mut tier: ResMut<crate::quality::QualityTier>,
+    counts: WorldCounts,
+) {
+    if capture.phase != CapturePhase::Cycling {
+        return;
+    }
+    let step = capture.lifecycle_step;
+    // Counts are taken at the start of a rotation, once the last one's final
+    // change has been presented.
+    if step > 0 && step.is_multiple_of(LIFECYCLE_STEPS) {
+        let rotation = step / LIFECYCLE_STEPS;
+        capture.lifecycle_counts.push(counts.snapshot(rotation));
+        if rotation >= capture.lifecycle {
+            write_lifecycle(&mut capture);
+            capture.phase = capture.after_lifecycle();
+            return;
+        }
+    }
+    // Ends on the last frame, so the counts see full trails.
+    match step % LIFECYCLE_STEPS {
+        0 => {
+            // A reload: the same run again, as a new epoch.
+            let document = replay.document.clone();
+            replay.begin_epoch(document);
+        }
+        1 => replay.step_to(0),
+        2 | 3 => {
+            visibility.tracks = !visibility.tracks;
+            visibility.nodes = !visibility.nodes;
+            visibility.trails = !visibility.trails;
+            visibility.zones = !visibility.zones;
+            visibility.radar_rings = !visibility.radar_rings;
+        }
+        4 => {
+            let all = crate::quality::QualityTier::ALL;
+            let next = all
+                .iter()
+                .position(|t| *t == *tier)
+                .map_or(0, |i| (i + 1) % all.len());
+            *tier = all[next];
+        }
+        5 => ui_state.projection = crate::state::Projection::Section,
+        6 => ui_state.projection = crate::state::Projection::Perspective,
+        _ => {
+            let last = replay.frame_count().saturating_sub(1);
+            replay.step_to(last);
+        }
+    }
+    capture.lifecycle_step += 1;
+}
+
+fn write_lifecycle(capture: &mut HeadlessCapture) {
+    let Some(path) = capture
+        .stats_path
+        .as_ref()
+        .map(|stats| stats.with_extension("").with_extension("lifecycle.json"))
+    else {
+        return;
+    };
+    let report = serde_json::json!({
+        "kind": "argusnet.lifecycle-counts",
+        "version": 1,
+        "steps_per_rotation": LIFECYCLE_STEPS,
+        "rotations": capture.lifecycle_counts,
+    });
+    let written = serde_json::to_string_pretty(&report)
+        .map_err(anyhow::Error::from)
+        .and_then(|text| std::fs::write(&path, text).map_err(anyhow::Error::from));
+    if let Err(error) = written {
+        error!("failed to write {}: {error:#}", path.display());
+        capture.failed = true;
     }
 }
 
@@ -1454,6 +1603,7 @@ mod tests {
             probe: None,
             quality: Default::default(),
             frame_stats: 0,
+            lifecycle: 0,
         }
     }
 
@@ -1491,6 +1641,7 @@ mod tests {
             probe: None,
             quality: crate::quality::QualityTier::Low,
             frame_stats: 0,
+            lifecycle: 0,
         };
         let (view_mode, request) = opts.into_request().unwrap();
         assert_eq!(view_mode, ViewMode::Split);

@@ -94,6 +94,7 @@ fn render_with_report(
             view_mode: ViewMode::RealWorld,
             quality: tier,
             frame_stats: 0,
+            lifecycle: 0,
             probe: Some(probe),
         },
     )
