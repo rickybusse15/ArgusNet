@@ -320,3 +320,8 @@ consistent direction. Decision D-12 (made by the project lead):
 
 Whatever the confirmation run shows is reported as it is; the statistic is not
 revisited on its result.
+
+**Confirmation result (2026-10-04): 7/7 scenarios pass.** The medians of
+`covariance_reduction_mean` agree within 0.048 on the three scored scenarios;
+the means would still have failed `search_acquisition` (Δ −0.194). Report:
+[`d12-confirmation-2026-10-04.md`](../performance/d12-confirmation-2026-10-04.md).

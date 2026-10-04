@@ -8,6 +8,12 @@
   slice, X turns it, - and = make it thinner or thicker; the overlay on the
   map has the same controls and says that hidden is not the same as empty.
 
+## Unreleased — D-12 confirmed
+
+- The Rust runtime's covariance-reduction metric, now judged by its median
+  across seeds, matches the reference on 30 fresh seeds: all seven canonical
+  scenarios pass acceptance.
+
 ## Unreleased — Top-down view (C5.1)
 
 - Top-down is now a true plan view: straight down, north up, at the same
