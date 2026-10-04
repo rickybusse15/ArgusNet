@@ -14,6 +14,13 @@ def vec3(x_m: float, y_m: float, z_m: float) -> Vector3:
     return np.array([x_m, y_m, z_m], dtype=float)
 
 
+# The sensor modalities a node may declare (decision D-14). "thermal", "lwir",
+# "mwir" and "ir" select the thermal band in the observation model; "optical"
+# and "radar" the optical one. A config or bundle naming anything else is
+# refused rather than silently treated as optical.
+SENSOR_TYPES: tuple[str, ...] = ("optical", "radar", "thermal", "lwir", "mwir", "ir")
+
+
 @dataclass(frozen=True)
 class NodeState:
     node_id: str

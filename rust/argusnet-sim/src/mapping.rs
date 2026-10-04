@@ -117,6 +117,19 @@ use crate::particles::particle_offsets;
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{StageError, StageOutcome};
 
+/// The inspection event types a replay carries, as the reference names them.
+pub const INSPECTION_ENTERED: &str = "entered";
+pub const INSPECTION_COVERAGE_UPDATED: &str = "coverage_updated";
+pub const INSPECTION_EXITED: &str = "exited";
+pub const INSPECTION_VIOLATION: &str = "violation";
+/// Every one of them, for the replay vocabulary check.
+pub const INSPECTION_EVENT_TYPES: [&str; 4] = [
+    INSPECTION_ENTERED,
+    INSPECTION_COVERAGE_UPDATED,
+    INSPECTION_EXITED,
+    INSPECTION_VIOLATION,
+];
+
 /// `getattr(scenario.options, "coverage_resolution_m", 50.0)`.
 pub const DEFAULT_COVERAGE_RESOLUTION_M: f64 = 50.0;
 /// The `max(50.0, ...)` floor on the derived footprint.
@@ -632,15 +645,15 @@ impl StageHandler for MappingStage {
                 let event_type = if inside && !was_inside {
                     track.inside.insert(node_id.clone());
                     if track.zone.zone_type == EXCLUSION_ZONE_TYPE {
-                        "violation"
+                        INSPECTION_VIOLATION
                     } else {
-                        "entered"
+                        INSPECTION_ENTERED
                     }
                 } else if !inside && was_inside {
                     track.inside.remove(node_id);
-                    "exited"
+                    INSPECTION_EXITED
                 } else if inside {
-                    "coverage_updated"
+                    INSPECTION_COVERAGE_UPDATED
                 } else {
                     continue;
                 };

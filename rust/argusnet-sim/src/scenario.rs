@@ -520,7 +520,21 @@ impl ScenarioBundle {
                 found: envelope.version,
             });
         }
-        serde_json::from_str(text).map_err(|error| BundleError::Parse(error.to_string()))
+        let bundle: Self =
+            serde_json::from_str(text).map_err(|error| BundleError::Parse(error.to_string()))?;
+        if let Some(node) = bundle
+            .nodes
+            .iter()
+            .find(|node| !argusnet_types::SENSOR_TYPES.contains(&node.sensor.sensor_type.as_str()))
+        {
+            return Err(BundleError::Invalid(format!(
+                "node {} has sensor type {:?}; expected one of {}",
+                node.node_id,
+                node.sensor.sensor_type,
+                argusnet_types::SENSOR_TYPES.join(", ")
+            )));
+        }
+        Ok(bundle)
     }
 }
 

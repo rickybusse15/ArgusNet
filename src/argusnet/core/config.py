@@ -188,6 +188,17 @@ class SensorConfig:
     launch_detection_range_fraction: float = 0.8
     """Fraction of ground station max_range at which drone launch is triggered."""
 
+    def __post_init__(self) -> None:
+        from argusnet.core.types import SENSOR_TYPES
+
+        for name in ("ground_station_sensor_type", "drone_sensor_type"):
+            value = getattr(self, name)
+            if value not in SENSOR_TYPES:
+                raise ValueError(
+                    f"sensors.{name} {value!r} is not a known sensor type; "
+                    f"expected one of {', '.join(SENSOR_TYPES)}"
+                )
+
 
 # ---------------------------------------------------------------------------
 # Flight dynamics configuration

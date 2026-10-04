@@ -156,33 +156,30 @@ class RustReplayContractTest(unittest.TestCase):
             "fixture is symmetric -- this test cannot detect a transpose",
         )
 
-    def test_a_thermal_sensor_type_is_currently_outside_the_schema(self) -> None:
-        """A KNOWN GAP, pinned so it cannot be discovered by a viewer.
+    def test_every_sensor_type_the_runtime_models_is_in_the_schema(self) -> None:
+        """Decision D-14 closed the gap this test used to pin.
 
         `SensorBand::from_sensor_type` in `argusnet-sim`'s `observe` module
-        classifies ``"thermal"``, ``"lwir"``, ``"mwir"`` and ``"ir"`` into a
-        thermal band that moves both the noise multiplier and the confidence.
-        The schema constrains `sensor_type` to ``["optical", "radar"]``, and
-        `core/argusnet/core/config.py` takes `drone_sensor_type` as a free
-        string -- so a config naming a thermal sensor runs correctly in Rust
-        and writes a replay that fails strict validation here.
-
-        Nothing is broken today: Python's own simulation only ever emits the
-        two enum values. This test asserts the *current* behaviour rather than
-        the desired one, so whoever resolves the mismatch -- by widening the
-        enum or by constraining the config -- has to delete or invert it, and
-        cannot do so by accident.
+        classifies ``"thermal"``, ``"lwir"``, ``"mwir"`` and ``"ir"`` into the
+        thermal band; the schema once allowed only ``"optical"`` and
+        ``"radar"``, so a thermal platform wrote a replay that failed strict
+        validation. Now the vocabulary is one list
+        (`argusnet.core.types.SENSOR_TYPES`, `argusnet_types::SENSOR_TYPES`),
+        the schema accepts every member, configs and bundles refuse anything
+        else, and a name outside it is still refused here.
         """
+        from argusnet.core.types import SENSOR_TYPES
         from argusnet.evaluation.replay import validate_replay_with_schema
 
+        for sensor_type in SENSOR_TYPES:
+            document = _load()
+            document["frames"][0]["nodes"][0]["sensor_type"] = sensor_type
+            self.assertEqual(validate_replay_with_schema(document), [], sensor_type)
         document = _load()
-        document["frames"][0]["nodes"][0]["sensor_type"] = "thermal"
-        errors = validate_replay_with_schema(document)
+        document["frames"][0]["nodes"][0]["sensor_type"] = "sonar"
         self.assertTrue(
-            any("sensor_type" in error for error in errors),
-            "the schema now accepts a thermal sensor_type. If that was "
-            "deliberate, delete this test; the Rust observation stage has "
-            "always supported the band.",
+            any("sensor_type" in error for error in validate_replay_with_schema(document)),
+            "a sensor type outside the vocabulary must still be refused",
         )
 
     def test_a_tampered_document_is_rejected(self) -> None:
