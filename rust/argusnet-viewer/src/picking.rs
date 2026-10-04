@@ -195,6 +195,23 @@ pub fn pick_along(
     keys.get(*entity).ok().copied()
 }
 
+/// Where the ray first meets the ground or a base-layer mesh: the point a
+/// click on empty world inspects (the map-cell inspector, C3.4).
+pub fn ground_point_along(
+    ray: Ray3d,
+    ray_cast: &mut MeshRayCast,
+    occluders: &Query<(), With<PickOccluder>>,
+) -> Option<Vec3> {
+    let filter = |entity: Entity| occluders.contains(entity);
+    let settings = MeshRayCastSettings::default()
+        .with_visibility(RayCastVisibility::Visible)
+        .with_filter(&filter);
+    ray_cast
+        .cast_ray(ray, &settings)
+        .first()
+        .map(|(_, hit)| hit.point)
+}
+
 /// A new selection of `marker`. Its details are filled from the current frame
 /// by `sync_current_markers_system`, which re-resolves a changed selection.
 pub fn selection_of(marker: &RuntimeMarker, epoch: u64) -> Selection {
@@ -334,6 +351,16 @@ pub fn tag_pick_occluders_system(
     }
 }
 
+/// What the picker writes besides the hover: the selection, its log, and the
+/// inspected map cell.
+type PickOutputs<'w> = (
+    Res<'w, PickGeneration>,
+    ResMut<'w, HoverState>,
+    ResMut<'w, SelectionState>,
+    ResMut<'w, PickLog>,
+    ResMut<'w, ViewerUiState>,
+);
+
 /// Hover, and selection on click. See the module docs.
 #[allow(clippy::too_many_arguments)]
 pub fn pick_world_system(
@@ -344,12 +371,7 @@ pub fn pick_world_system(
     occluders: Query<(), With<PickOccluder>>,
     markers: Res<CurrentRuntimeMarkers>,
     visibility: Res<RuntimeOverlayVisibility>,
-    (generation, mut hover, mut selection, mut log): (
-        Res<PickGeneration>,
-        ResMut<HoverState>,
-        ResMut<SelectionState>,
-        ResMut<PickLog>,
-    ),
+    (generation, mut hover, mut selection, mut log, mut ui_state): PickOutputs,
 ) {
     let pressed = std::mem::take(&mut pointer.bypass_change_detection().pressed);
     let target = if pointer.over_ui {
@@ -389,10 +411,19 @@ pub fn pick_world_system(
         log.clicks += 1;
         log.last_ignored = target.is_none();
         log.last = None;
-        if target.is_some() {
+        if let Some((ray, _)) = target {
             let picked = hover.hovered;
             select_key(&mut selection, &markers, picked);
             log.last = picked;
+            // Empty world: inspect the ground there instead (§7.3).
+            let cell = match picked {
+                Some(_) => None,
+                None => ground_point_along(ray, &mut ray_cast, &occluders)
+                    .map(|point| [point.x, point.y]),
+            };
+            if ui_state.inspected_cell != cell {
+                ui_state.inspected_cell = cell;
+            }
         }
     }
 }
@@ -420,6 +451,7 @@ pub fn keyboard_selection_system(
     // leave a transient mode (VIEWER_UI §12's order).
     if bindings.just_pressed(&gate, &keys, Action::Escape) && !escape.0 {
         select_key(&mut selection, &markers, None);
+        ui_state.inspected_cell = None;
     } else if bindings.just_pressed(&gate, &keys, Action::NextSelection) {
         let back = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
         let current = selection.selected.as_ref().map(|s| s.key);

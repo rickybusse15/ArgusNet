@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Map-cell inspector (C3.4)
+
+- Clicking empty ground shows what the belief map says about that spot: its
+  classification, whether it was ever observed and when, and the confidence
+  the terrain is drawn with. Places never observed say so rather than
+  showing a confidence of zero.
+
 ## Unreleased — Safety-event inspector (C3.3)
 
 - The mission rail lists each frame's safety events. Opening one shows its

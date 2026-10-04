@@ -335,10 +335,33 @@ fn event_inspector(
     });
 }
 
+/// §7.3's map-cell inspector for the clicked ground point.
+fn map_cell_inspector(
+    ui: &mut egui::Ui,
+    belief: &crate::belief_render::BeliefLayer,
+    x_m: f64,
+    y_m: f64,
+) {
+    ui.label(crate::theme::TypeRole::WorkspaceTitle.text("Map cell"));
+    for row in inspect_cell(belief, x_m, y_m) {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(row.label);
+            ui.label(
+                egui::RichText::new(row.value.display(String::clone))
+                    .color(row.value.status().color()),
+            );
+        });
+    }
+    ui.small("Esc clears. Click a marker to select it instead.");
+}
+
 /// The selection inspector (§4.3). With `essential`, only the selection
 /// itself: the entity list is the first thing a narrow window gives up.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn selection_inspector(
     ui: &mut egui::Ui,
+    belief: &crate::belief_render::BeliefLayer,
     replay_state: &mut ReplayState,
     selection: &SelectionState,
     markers: &CurrentRuntimeMarkers,
@@ -367,9 +390,14 @@ pub(super) fn selection_inspector(
             .and_then(|frame| inspect_platform(frame, &selected.label))
             .map(|sections| (selected.label.clone(), sections))
     });
-    match platform {
-        Some((label, sections)) => platform_inspector(ui, &label, &sections, essential),
-        None => section_selection(ui, selection, replay_state.max_stale_steps()),
+    match (
+        platform,
+        selection.selected.is_some(),
+        ui_state.inspected_cell,
+    ) {
+        (Some((label, sections)), _, _) => platform_inspector(ui, &label, &sections, essential),
+        (None, false, Some([x, y])) => map_cell_inspector(ui, belief, f64::from(x), f64::from(y)),
+        _ => section_selection(ui, selection, replay_state.max_stale_steps()),
     }
     if !essential {
         ui.separator();

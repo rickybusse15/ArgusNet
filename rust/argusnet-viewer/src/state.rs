@@ -266,6 +266,9 @@ pub struct ViewerUiState {
     /// takes the inspector over from the selection until closed; the
     /// selection itself is untouched.
     pub inspected_event: Option<crate::ui::EventRef>,
+    /// The ground point a click on empty world asked about, in scene metres
+    /// (C3.4). The map-cell inspector shows it when nothing is selected.
+    pub inspected_cell: Option<[f32; 2]>,
 }
 
 impl ViewerUiState {
@@ -301,6 +304,7 @@ impl Default for ViewerUiState {
             workspace: Workspace::Operate,
             projection: Projection::Perspective,
             inspected_event: None,
+            inspected_cell: None,
         }
     }
 }
