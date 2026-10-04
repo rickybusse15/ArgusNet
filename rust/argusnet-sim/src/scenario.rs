@@ -1036,7 +1036,7 @@ pub fn assemble_with(
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
     }
     let mut observe = ObserveStage::new();
-    observe.set_compute(compute);
+    observe.set_compute(Arc::clone(&compute));
     for node in &bundle.nodes {
         observe.install_sensor(&node.node_id, node.sensor.spec());
     }
@@ -1080,6 +1080,7 @@ pub fn assemble_with(
         let mobile_count = bundle.nodes.iter().filter(|n| n.is_mobile).count();
         let mut mapping = MappingStage::with_derived_footprint(bounds.grid(), mobile_count)
             .map_err(|error| BundleError::Invalid(format!("coverage bounds: {error}")))?;
+        mapping.set_compute(Arc::clone(&compute));
         mapping.set_scan_mode(bundle.mission.is_some());
         mapping.set_cooperative_search(bundle.cooperative_search);
         mapping

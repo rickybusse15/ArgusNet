@@ -424,12 +424,32 @@ struct MappingCheckpoint {
     team: Option<TeamLocalization>,
 }
 
+/// Fewest platforms whose particle work is forked across the session's
+/// workers (B3). Each platform costs 10-40 us; below this many, waking the
+/// workers costs more than they save. Measured on 4 cores: 4 and 8 drones
+/// were slower forked, 16 and 32 were 1.4x and 1.3x faster at 4 workers
+/// (docs/performance/b3-mapping-fork-join-2026-10-04.md).
+pub const MIN_PLATFORMS_TO_FORK: usize = 12;
+
+/// One platform's particle offsets and their footprint scores.
+type PreparedParticles = (Vec<[f64; 2]>, Vec<f64>);
+
+/// One platform's localizer inputs this tick.
+struct LocalizeInput<'a> {
+    node_id: &'a str,
+    heading_rad: f64,
+    nominal_position: [f64; 3],
+}
+
 /// [`Stage::UpdateMappingAndLocalization`]'s coverage and belief half.
 ///
 /// [`Stage::UpdateMappingAndLocalization`]: crate::stage::Stage::UpdateMappingAndLocalization
 #[derive(Debug)]
 pub struct MappingStage {
     state: State,
+    /// The session's workers for the per-platform particle draws and
+    /// scoring (B3); serial unless the session gives it more.
+    compute: std::sync::Arc<crate::compute::ComputePool>,
 }
 
 impl MappingStage {
@@ -456,7 +476,14 @@ impl MappingStage {
                 inspection_events: Vec::new(),
                 newly_covered: Vec::new(),
             },
+            compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
         })
+    }
+
+    /// The session's workers for the per-platform particle work (B3). The
+    /// output is the same at every worker count.
+    pub fn set_compute(&mut self, compute: std::sync::Arc<crate::compute::ComputePool>) {
+        self.compute = compute;
     }
 
     /// A stage whose footprint is derived the way the reference derives it.
@@ -562,6 +589,7 @@ impl StageHandler for MappingStage {
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        let compute = &*self.compute;
         let shared = &mut self.state;
         shared.inspection_events.clear();
         shared.newly_covered.clear();
@@ -698,63 +726,94 @@ impl StageHandler for MappingStage {
             let origin = [bounds.x_min_m, bounds.y_min_m];
             let seed = context.seed;
 
-            for (node_id, _) in &positions {
-                let platform = context
-                    .world
-                    .platform(node_id)
-                    .expect("the id came from this world");
-                // `atan2(vy, vx)` above 0.1 m/s, otherwise exactly zero.
-                let speed_xy = platform.velocity.x.hypot(platform.velocity.y);
-                let heading_rad = if speed_xy > MIN_SPEED_FOR_HEADING_MPS {
-                    platform.velocity.y.atan2(platform.velocity.x)
-                } else {
-                    0.0
-                };
-                let nominal_position = [
-                    platform.position.x,
-                    platform.position.y,
-                    platform.position.z,
-                ];
+            // Each platform's inputs, in platform order.
+            let inputs: Vec<LocalizeInput<'_>> = positions
+                .iter()
+                .map(|(node_id, _)| {
+                    let platform = context
+                        .world
+                        .platform(node_id)
+                        .expect("the id came from this world");
+                    // `atan2(vy, vx)` above 0.1 m/s, otherwise exactly zero.
+                    let speed_xy = platform.velocity.x.hypot(platform.velocity.y);
+                    let heading_rad = if speed_xy > MIN_SPEED_FOR_HEADING_MPS {
+                        platform.velocity.y.atan2(platform.velocity.x)
+                    } else {
+                        0.0
+                    };
+                    LocalizeInput {
+                        node_id,
+                        heading_rad,
+                        nominal_position: [
+                            platform.position.x,
+                            platform.position.y,
+                            platform.position.z,
+                        ],
+                    }
+                })
+                .collect();
 
-                // The step the draw is keyed on is the one this update will
-                // become, so it is the stored count plus one.
-                let step = localizer.step_count(node_id) + 1;
-                let scale = localizer.particle_scale(step, coverage_fraction);
-                let config = localizer.config();
-                let offsets = particle_offsets(seed, node_id, step, config.particle_count, scale);
+            // Each platform's particle draws and footprint scores (B3). They
+            // read only the platform's own `(platform, step)` stream, the
+            // localizer's configuration and the coverage counts, so they may
+            // run on the session's workers in any order; the results come back
+            // in platform order.
+            let prepared: Vec<Result<PreparedParticles, StageError>> = {
+                let localizer: &GridLocalizer = localizer;
+                let counts = &counts;
+                compute.map_ordered_from(MIN_PLATFORMS_TO_FORK, &inputs, |input| {
+                    // The step the draw is keyed on is the one this update
+                    // will become, so it is the stored count plus one.
+                    let step = localizer.step_count(input.node_id) + 1;
+                    let scale = localizer.particle_scale(step, coverage_fraction);
+                    let config = localizer.config();
+                    let offsets =
+                        particle_offsets(seed, input.node_id, step, config.particle_count, scale);
 
-                let candidates: Vec<[f64; 2]> = offsets
-                    .iter()
-                    .map(|offset| {
-                        [
-                            nominal_position[0] + offset[0],
-                            nominal_position[1] + offset[1],
-                        ]
-                    })
-                    .collect();
-                let scores = score_footprints(
-                    &counts,
-                    [grid_nx, grid_ny],
-                    origin,
-                    bounds.resolution_m,
-                    footprint_radius_m,
-                    &candidates,
-                )
-                .map_err(|e| StageError::Invariant(format!("scoring {node_id}: {e}")))?;
+                    let candidates: Vec<[f64; 2]> = offsets
+                        .iter()
+                        .map(|offset| {
+                            [
+                                input.nominal_position[0] + offset[0],
+                                input.nominal_position[1] + offset[1],
+                            ]
+                        })
+                        .collect();
+                    let scores = score_footprints(
+                        counts,
+                        [grid_nx, grid_ny],
+                        origin,
+                        bounds.resolution_m,
+                        footprint_radius_m,
+                        &candidates,
+                    )
+                    .map_err(|e| {
+                        StageError::Invariant(format!("scoring {}: {e}", input.node_id))
+                    })?;
+                    Ok((offsets, scores))
+                })
+            };
 
+            // The updates are the localizer's state, so they stay serial, in
+            // platform order: a failure stops at the same platform, with the
+            // same platforms before it updated, as the single loop it replaced.
+            for (input, prepared) in inputs.iter().zip(prepared) {
+                let (offsets, scores) = prepared?;
                 let estimate = localizer
                     .update(
                         StepInput {
-                            platform_id: node_id,
-                            nominal_position,
-                            heading_rad,
+                            platform_id: input.node_id,
+                            nominal_position: input.nominal_position,
+                            heading_rad: input.heading_rad,
                             timestamp_s: context.timestamp_s,
                             coverage_fraction,
                         },
                         &offsets,
                         &scores,
                     )
-                    .map_err(|e| StageError::Invariant(format!("localizing {node_id}: {e}")))?;
+                    .map_err(|e| {
+                        StageError::Invariant(format!("localizing {}: {e}", input.node_id))
+                    })?;
                 shared.estimates.push(estimate);
             }
 

@@ -6,6 +6,9 @@
   threads. Output is identical at every worker count. It pays off on large
   fleets (2.7x faster ticks at 24 drones and 48 targets on 4 cores) but not
   on small ones, so the default stays 1.
+- With `--workers`, scan missions of 12 or more drones also run each drone's
+  localization on the worker threads (1.5x faster ticks at 32 drones).
+  Smaller fleets are unaffected.
 
 ## Unreleased — Security scan triage (G3)
 

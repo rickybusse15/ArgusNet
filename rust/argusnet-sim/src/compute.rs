@@ -80,8 +80,22 @@ impl ComputePool {
         R: Send,
         F: Fn(&T) -> R + Sync + Send,
     {
+        self.map_ordered_from(PARALLEL_THRESHOLD, items, f)
+    }
+
+    /// [`map_ordered`](Self::map_ordered) for heavier items: forked from
+    /// `min_items` up rather than from [`PARALLEL_THRESHOLD`]. For tasks
+    /// that each cost tens of microseconds (a platform's particle scoring),
+    /// two items are already worth a thread; for sub-microsecond ones they
+    /// are not.
+    pub fn map_ordered_from<T, R, F>(&self, min_items: usize, items: &[T], f: F) -> Vec<R>
+    where
+        T: Sync,
+        R: Send,
+        F: Fn(&T) -> R + Sync + Send,
+    {
         match &self.pool {
-            Some(pool) if items.len() >= PARALLEL_THRESHOLD => {
+            Some(pool) if items.len() >= min_items.max(2) => {
                 // `collect` on an indexed parallel iterator places each result
                 // at its input's index, whatever order the tasks finish in.
                 pool.install(|| items.par_iter().map(&f).collect())
