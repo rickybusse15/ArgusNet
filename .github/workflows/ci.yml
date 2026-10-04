@@ -372,16 +372,22 @@ jobs:
           # Sourced, not run: a child process cannot change this step's PATH.
           # See the script for why a self-hosted runner needs it at all.
           source scripts/ci-rust-path.sh
+      # pip and setuptools are the environment's tooling, not the project's
+      # dependencies; the runner's bundled versions carry advisories the
+      # project cannot fix, so they are brought current before the audit.
       - name: Install dependencies
-        run: pip install -e ".[dev]" pip-audit bandit
-      # New scanners are non-blocking until an initial pass has triaged any
-      # existing findings; flip to blocking (drop continue-on-error) once clean.
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install -e ".[dev]" pip-audit bandit
+      # Scanners turn blocking one at a time once triaged
+      # (docs/migration/SECURITY_TRIAGE.md). bandit is blocking: every finding
+      # is fixed or carries a reasoned `# nosec`. pip-audit and cargo-audit stay
+      # advisory until their triage has held for a release.
       - name: pip-audit (dependency vulnerabilities)
         continue-on-error: true
         run: pip-audit
       - name: bandit (Python static analysis)
-        continue-on-error: true
-        run: bandit -r src/ -x src/argusnet/v1
+        run: bandit -q -r src/ -x src/argusnet/v1
       # `cargo install` COMPILES cargo-audit from source, and unconditionally:
       # on a self-hosted runner that rebuilt the same binary on every run, for
       # several minutes of CPU each time, making this by far the longest step

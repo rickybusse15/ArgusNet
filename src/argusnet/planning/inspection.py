@@ -18,6 +18,7 @@ Public API
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 
@@ -31,6 +32,9 @@ from argusnet.core.types import (
     Vector3,
     vec3,
 )
+
+_LOG = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -1164,8 +1168,8 @@ def validate_mission(
                     failures.append(
                         f"Node {node.node_id} AGL {agl:.1f} m < clearance {clearance:.1f} m at t=0"
                     )
-            except Exception:
-                pass  # node state may not be available; skip gracefully
+            except Exception as exc:  # node state may not be available; skip it, visibly
+                _LOG.warning("terrain clearance not checked for %s: %s", node.node_id, exc)
 
     # Obstacle penetration check
     active_obstacles = None
@@ -1182,8 +1186,8 @@ def validate_mission(
                         physically_valid = False
                         failures.append(f"Node {node.node_id} is inside obstacle at t=0")
                         break
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOG.warning("obstacle penetration not checked for %s: %s", node.node_id, exc)
 
     # ----------------------------------------------------------------
     # Sensor validity: at least one node sees each target at t=0
@@ -1196,7 +1200,8 @@ def validate_mission(
         try:
             truth = target.truth_state(0.0)
             target_pos = truth.position
-        except Exception:
+        except Exception as exc:
+            _LOG.warning("sensor coverage not checked for %s: %s", target.target_id, exc)
             continue
 
         covered = False
@@ -1209,7 +1214,8 @@ def validate_mission(
                 if dist <= max_range:
                     covered = True
                     break
-            except Exception:
+            except Exception as exc:
+                _LOG.warning("coverage of a target by %s not checked: %s", node.node_id, exc)
                 continue
 
         # Fall back: if any node exists with max_range_m == 0, treat as infinite range.
@@ -1281,8 +1287,8 @@ def validate_mission(
             try:
                 state = node.state(0.0)
                 mobile_positions.append(state.position.copy())
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOG.warning("sensor baseline omits %s: %s", node.node_id, exc)
 
     min_baseline = spec.constraints.min_sensor_baseline_m
     if len(mobile_positions) >= 2:
@@ -1446,7 +1452,8 @@ def generate_mission(spec: MissionSpec) -> GeneratedMission:
             return mission
 
     # All attempts failed; return last attempt with its (possibly invalid) report
-    assert last_mission is not None
+    if last_mission is None:
+        raise RuntimeError("mission generation made no attempts")
     return last_mission
 
 

@@ -205,7 +205,7 @@ job_packaging() {
 }
 
 job_security() {
-  # All advisory, matching CI's continue-on-error. gitleaks is not run here:
+  # bandit blocks; the rest is advisory, matching CI. gitleaks is not run here:
   # CI uses a container action for it, and there is no local equivalent to
   # invoke without asking the contributor to install one.
   local ran=0
@@ -216,7 +216,9 @@ job_security() {
     absent="$absent pip-audit"
   fi
   if command -v bandit >/dev/null 2>&1; then
-    soft_step "bandit" bandit -q -r src/ -x src/argusnet/v1; ran=$((ran + 1))
+    # Blocking, as in CI (G3): every finding is fixed or carries a reasoned
+    # `# nosec`; see docs/migration/SECURITY_TRIAGE.md.
+    step "bandit" bandit -q -r src/ -x src/argusnet/v1; ran=$((ran + 1))
   else
     absent="$absent bandit"
   fi

@@ -5,7 +5,9 @@ import os
 import queue
 import shutil
 import socket
-import subprocess
+
+# G3 triage (B404): argument lists only, never a shell.
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time
@@ -575,7 +577,8 @@ class TrackingService:
 
         command = self._resolve_daemon_command(daemon_path)
         self._owned_log_handle = log_path.open("w", encoding="utf-8")
-        process = subprocess.Popen(
+        # G3 triage (B603): the resolved argusnetd binary, fixed arguments; no shell.
+        process = subprocess.Popen(  # nosec B603
             [*command, "serve", "--listen", f"{host}:{port}", "--config", str(config_path)],
             cwd=self._repo_root(),
             stdout=self._owned_log_handle,
@@ -649,7 +652,8 @@ class TrackingService:
                 "Building argusnetd (this may take a minute on first run)...",
                 file=sys.stderr,
             )
-            subprocess.run(
+            # G3 triage (B603): cargo building this repository's own manifest; no shell.
+            subprocess.run(  # nosec B603
                 [
                     cargo,
                     "build",
