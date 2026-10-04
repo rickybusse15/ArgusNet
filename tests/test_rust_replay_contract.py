@@ -87,14 +87,20 @@ class RustReplayContractTest(unittest.TestCase):
         If these diverge, a consumer branching on the version takes different
         paths for documents that are identical in shape.
         """
+        from argusnet.evaluation.replay import REPLAY_SCHEMA_VERSION
+
         source = (
             Path(__file__).parent.parent / "src" / "argusnet" / "simulation" / "sim.py"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            '"schema_version": "2.0"',
+            '"schema_version": REPLAY_SCHEMA_VERSION',
             source,
-            "sim.py no longer writes schema_version 2.0; the Rust writer's "
-            "SCHEMA_VERSION must move with it",
+            "sim.py no longer writes REPLAY_SCHEMA_VERSION",
+        )
+        self.assertEqual(
+            _load()["meta"]["schema_version"],
+            REPLAY_SCHEMA_VERSION,
+            "the Rust writer's SCHEMA_VERSION must move with the Python one",
         )
 
     def test_a_platform_with_no_battery_carries_the_sentinel(self) -> None:

@@ -28,6 +28,9 @@ from .obstacles import (
     WallSegment,
 )
 
+# The environment bundle format this module writes and reads.
+ENVIRONMENT_BUNDLE_FORMAT = "smartmap-v1"
+
 
 def _array_to_blob(array: np.ndarray) -> dict[str, object]:
     raw = np.ascontiguousarray(array).tobytes(order="C")
@@ -103,7 +106,7 @@ def write_environment_bundle(path: str, environment: EnvironmentModel) -> None:
         obstacle_entries.append({"tx": tx, "ty": ty, "path": str(relative_path)})
 
     manifest = {
-        "format_version": "smartmap-v1",
+        "format_version": ENVIRONMENT_BUNDLE_FORMAT,
         "environment_id": environment.environment_id,
         "crs": environment.crs.to_metadata(),
         "bounds_xy_m": environment.bounds_xy_m.to_metadata(),
@@ -135,6 +138,12 @@ def write_environment_bundle(path: str, environment: EnvironmentModel) -> None:
 def load_environment_bundle(path: str) -> EnvironmentModel:
     bundle_root = Path(path)
     manifest = json.loads((bundle_root / "environment_manifest.json").read_text(encoding="utf-8"))
+    declared = manifest.get("format_version")
+    if declared != ENVIRONMENT_BUNDLE_FORMAT:
+        raise ValueError(
+            f"unsupported environment bundle format {declared!r}; "
+            f"this reader reads {ENVIRONMENT_BUNDLE_FORMAT!r}"
+        )
     bounds_xy_m = Bounds2D.from_mapping(manifest["bounds_xy_m"])
 
     terrain_manifest = manifest["terrain"]

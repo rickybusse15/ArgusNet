@@ -292,6 +292,62 @@ mod tests {
 
     use super::{safe_manifest_path, ScenePackage};
 
+    /// The committed scene, copied to a temporary directory for editing.
+    fn scene_copy(name: &str) -> std::path::PathBuf {
+        fn copy(from: &Path, to: &Path) {
+            fs::create_dir_all(to).unwrap();
+            for entry in fs::read_dir(from).unwrap() {
+                let entry = entry.unwrap();
+                let target = to.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy(&entry.path(), &target);
+                } else {
+                    fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("argusnet-schema-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        copy(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scene.smartscene"),
+            &root,
+        );
+        root
+    }
+
+    fn edit_json(path: &Path, key: &str, value: &str) {
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        doc[key] = json!(value);
+        fs::write(path, doc.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_scene_or_style_of_another_version_is_refused_by_name() {
+        let scene = scene_copy("scene-version");
+        assert!(
+            ScenePackage::load(&scene).is_ok(),
+            "the committed scene loads"
+        );
+        edit_json(
+            &scene.join("scene_manifest.json"),
+            "format_version",
+            "smartscene-v2",
+        );
+        let error = ScenePackage::load(&scene).unwrap_err().to_string();
+        assert!(error.contains("smartscene-v2"), "{error}");
+
+        let scene = scene_copy("style-version");
+        edit_json(
+            &scene.join("metadata/style.json"),
+            "style_version",
+            "smartstyle-v9",
+        );
+        let error = format!("{:#}", ScenePackage::load(&scene).unwrap_err());
+        assert!(error.contains("smartstyle-v9"), "{error}");
+    }
+
     #[test]
     fn safe_manifest_path_resolves_contained_relative_path() {
         let root = Path::new("/scene-root");

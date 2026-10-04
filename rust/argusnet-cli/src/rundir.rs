@@ -106,6 +106,16 @@ impl RunDir {
                 config.format
             )));
         }
+        // Recorded for the recovery that reads it back: a run whose checkpoints
+        // this build cannot read is refused here, by name, rather than failing
+        // later on the checkpoint's own header.
+        let checkpoint_format = argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION;
+        if config.checkpoint_format != checkpoint_format {
+            return Err(incomplete(format!(
+                "run.json records checkpoint format {}, this build reads {checkpoint_format}",
+                config.checkpoint_format
+            )));
+        }
         if config.bundle_fnv1a != format!("{:016x}", fnv1a(config.bundle.as_bytes())) {
             return Err(incomplete(
                 "run.json's bundle does not match its hash".to_string(),
@@ -207,5 +217,48 @@ impl Recorder {
             std::process::exit(crate::EXIT_CRASHED);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A run directory whose run.json is `config` with `edit` applied.
+    fn run_dir(name: &str, edit: impl FnOnce(&mut serde_json::Value)) -> RunDir {
+        let path =
+            std::env::temp_dir().join(format!("argusnet-rundir-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        let dir = RunDir::new(&path);
+        dir.create("{\"bundle\": true}").unwrap();
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.file("run.json")).unwrap()).unwrap();
+        edit(&mut config);
+        std::fs::write(dir.file("run.json"), config.to_string()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_run_as_written_reads_back() {
+        let dir = run_dir("ok", |_| {});
+        assert_eq!(dir.bundle_text().unwrap(), "{\"bundle\": true}");
+    }
+
+    #[test]
+    fn an_unsupported_run_format_is_refused_by_name() {
+        let dir = run_dir("format", |config| {
+            config["format"] = "argusnet-run/2".into()
+        });
+        let error = dir.bundle_text().unwrap_err();
+        assert!(error.contains("format argusnet-run/2"), "{error}");
+    }
+
+    #[test]
+    fn a_checkpoint_format_this_build_cannot_read_is_refused() {
+        let dir = run_dir("checkpoint", |config| {
+            config["checkpoint_format"] = 99.into()
+        });
+        let error = dir.bundle_text().unwrap_err();
+        assert!(error.contains("checkpoint format 99"), "{error}");
     }
 }
