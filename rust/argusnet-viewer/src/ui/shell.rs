@@ -1063,6 +1063,8 @@ pub(super) fn section_keyboard_shortcuts(ui: &mut egui::Ui) {
         ui.label("M           Cycle view mode");
         ui.label("O           Cycle workspace");
         ui.label("V           Cycle projection");
+        ui.label("PgUp/PgDn   Section: move the slab");
+        ui.label("X  - =      Section: axis, thinner, thicker");
         ui.label("P           Cycle layer preset");
         ui.label("T           Open / close the tool panel");
         ui.label("R           Reset camera");

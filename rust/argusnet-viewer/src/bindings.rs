@@ -50,6 +50,14 @@ pub enum Action {
     CyclePreset,
     /// Open or close the tool panel.
     ToggleToolPanel,
+    /// Section (C5.2): move the slab one thickness forward / back.
+    SectionForward,
+    SectionBack,
+    /// Section: cut the other vertical plane.
+    SectionAxis,
+    /// Section: double / halve the slab's thickness.
+    SectionThicker,
+    SectionThinner,
     /// Recall bookmark 1-9; with Ctrl or Cmd held, save it.
     Bookmark(u8),
 }
@@ -57,7 +65,7 @@ pub enum Action {
 impl Action {
     /// Every action, in a stable order. A constant, so reading every binding
     /// each frame allocates nothing.
-    pub const ALL: [Action; 35] = [
+    pub const ALL: [Action; 40] = [
         Action::PlayPause,
         Action::StepBack,
         Action::StepForward,
@@ -84,6 +92,11 @@ impl Action {
         Action::CycleProjection,
         Action::CyclePreset,
         Action::ToggleToolPanel,
+        Action::SectionForward,
+        Action::SectionBack,
+        Action::SectionAxis,
+        Action::SectionThicker,
+        Action::SectionThinner,
         Action::Bookmark(1),
         Action::Bookmark(2),
         Action::Bookmark(3),
@@ -137,6 +150,11 @@ impl Action {
             Action::CycleProjection => "cycle_projection".into(),
             Action::CyclePreset => "cycle_preset".into(),
             Action::ToggleToolPanel => "toggle_tool_panel".into(),
+            Action::SectionForward => "section_forward".into(),
+            Action::SectionBack => "section_back".into(),
+            Action::SectionAxis => "section_axis".into(),
+            Action::SectionThicker => "section_thicker".into(),
+            Action::SectionThinner => "section_thinner".into(),
             Action::Bookmark(n) => format!("bookmark_{n}"),
         }
     }
@@ -175,6 +193,11 @@ impl Action {
             Action::CycleProjection => KeyCode::KeyV,
             Action::CyclePreset => KeyCode::KeyP,
             Action::ToggleToolPanel => KeyCode::KeyT,
+            Action::SectionForward => KeyCode::PageUp,
+            Action::SectionBack => KeyCode::PageDown,
+            Action::SectionAxis => KeyCode::KeyX,
+            Action::SectionThicker => KeyCode::Equal,
+            Action::SectionThinner => KeyCode::Minus,
             Action::Bookmark(n) => DIGITS[usize::from(n.clamp(1, 9)) - 1],
         }
     }

@@ -234,9 +234,86 @@ impl Projection {
     pub fn unavailable_until(self) -> Option<&'static str> {
         match self {
             Projection::Perspective => None,
-            Projection::TopDown => None,
-            Projection::Section => Some("Available with the section view (P2.5e)."),
+            Projection::TopDown | Projection::Section => None,
         }
+    }
+}
+
+/// Which vertical plane a Section cuts (C5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SectionAxis {
+    /// The plane runs east-west; the view looks north along +Y, east to the
+    /// right.
+    #[default]
+    LookingNorth,
+    /// The plane runs north-south; the view looks east along +X, north to the
+    /// left.
+    LookingEast,
+}
+
+impl SectionAxis {
+    pub fn normal(self) -> Vec3 {
+        match self {
+            SectionAxis::LookingNorth => Vec3::Y,
+            SectionAxis::LookingEast => Vec3::X,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SectionAxis::LookingNorth => "looking north",
+            SectionAxis::LookingEast => "looking east",
+        }
+    }
+
+    pub fn other(self) -> Self {
+        match self {
+            SectionAxis::LookingNorth => SectionAxis::LookingEast,
+            SectionAxis::LookingEast => SectionAxis::LookingNorth,
+        }
+    }
+}
+
+/// A vertical slab through the world (VIEWER_UI §6.1: plane/frame, offset,
+/// thickness). Its centre plane passes `offset_m` along the axis's normal
+/// from the orbit focus; everything outside `thickness_m` is clipped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionPlane {
+    pub axis: SectionAxis,
+    pub offset_m: f32,
+    pub thickness_m: f32,
+}
+
+impl Default for SectionPlane {
+    fn default() -> Self {
+        Self {
+            axis: SectionAxis::LookingNorth,
+            offset_m: 0.0,
+            thickness_m: 50.0,
+        }
+    }
+}
+
+impl SectionPlane {
+    pub const MIN_THICKNESS_M: f32 = 1.0;
+    pub const MAX_THICKNESS_M: f32 = 2000.0;
+
+    /// Whether `point` lies in the slab around `focus`. A point outside is
+    /// clipped from view and from picking -- clipped, not observed-free.
+    pub fn contains(&self, focus: Vec3, point: Vec3) -> bool {
+        let along = (point - focus).dot(self.axis.normal()) - self.offset_m;
+        along.abs() <= self.thickness_m * 0.5
+    }
+
+    /// Scale the thickness by `factor`, within the limits.
+    pub fn scale_thickness(&mut self, factor: f32) {
+        self.thickness_m =
+            (self.thickness_m * factor).clamp(Self::MIN_THICKNESS_M, Self::MAX_THICKNESS_M);
+    }
+
+    /// Move the slab by `steps` thicknesses along its normal.
+    pub fn step(&mut self, steps: f32) {
+        self.offset_m += steps * self.thickness_m;
     }
 }
 
@@ -261,6 +338,8 @@ pub struct ViewerUiState {
     /// layer preset: three distinct controls, none touching the selection.
     pub workspace: Workspace,
     pub projection: Projection,
+    /// The slab Section shows (C5.2).
+    pub section: SectionPlane,
     /// The safety event the inspector shows, when one is open (C3.3). It
     /// takes the inspector over from the selection until closed; the
     /// selection itself is untouched.
@@ -302,6 +381,7 @@ impl Default for ViewerUiState {
             canvas_rect: None,
             workspace: Workspace::Operate,
             projection: Projection::Perspective,
+            section: SectionPlane::default(),
             inspected_event: None,
             inspected_cell: None,
         }
@@ -654,6 +734,24 @@ mod tests {
             revision: 0,
             is_synthetic: false,
         }
+    }
+
+    #[test]
+    fn a_section_slab_holds_what_lies_within_half_its_thickness() {
+        let focus = Vec3::new(10.0, 20.0, 0.0);
+        let mut plane = SectionPlane::default();
+        assert!(plane.contains(focus, focus + Vec3::new(900.0, 25.0, 300.0)));
+        assert!(!plane.contains(focus, focus + Vec3::new(0.0, 25.5, 0.0)));
+        plane.step(2.0);
+        assert_eq!(plane.offset_m, 100.0);
+        assert!(plane.contains(focus, focus + Vec3::new(0.0, 110.0, 0.0)));
+        assert!(!plane.contains(focus, focus));
+        plane.axis = plane.axis.other();
+        assert!(plane.contains(focus, focus + Vec3::new(100.0, 0.0, 0.0)));
+        plane.scale_thickness(1e6);
+        assert_eq!(plane.thickness_m, SectionPlane::MAX_THICKNESS_M);
+        plane.scale_thickness(1e-9);
+        assert_eq!(plane.thickness_m, SectionPlane::MIN_THICKNESS_M);
     }
 
     #[test]

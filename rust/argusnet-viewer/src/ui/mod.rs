@@ -249,6 +249,14 @@ pub fn viewer_ui_system(
     ui_state.canvas_rect = Some([canvas.min.x, canvas.min.y, canvas.max.x, canvas.max.y]);
     draw_zone_badges(&context, &projected_badges);
     draw_mission_phase_hud(&context, &replay_state, canvas.min);
+    if let Some(command) = workspace::section_overlay(&context, &ui_state, canvas) {
+        apply_shell_command(
+            command,
+            &mut ui_state,
+            &mut runtime_visibility,
+            &mut mission_overlay,
+        );
+    }
 }
 
 /// A region of the operate shell.

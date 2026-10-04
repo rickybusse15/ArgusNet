@@ -61,6 +61,7 @@ use bevy_egui::EguiContexts;
 
 use crate::app::{is_marker_visible, MainCamera};
 use crate::presentation::{CurrentRuntimeMarkers, EntityKey};
+use crate::projection::SectionSlab;
 use crate::replay::{MarkerKind, RuntimeMarker};
 use crate::state::{
     LayerEntityIndex, LayerVisibilityState, NodeDetails, RuntimeOverlayVisibility, Selection,
@@ -118,6 +119,7 @@ pub struct HoverInputs {
     pub pose_revision: u64,
     pub shown_kinds: [bool; 3],
     pub occluders: u64,
+    pub slab: SectionSlab,
 }
 
 /// Every click the picker has consumed, and what the last one did: the
@@ -177,6 +179,7 @@ pub fn pick_along(
     occluders: &Query<(), With<PickOccluder>>,
     markers: &CurrentRuntimeMarkers,
     visibility: &RuntimeOverlayVisibility,
+    slab: &SectionSlab,
 ) -> Option<EntityKey> {
     // The kind check as well as the entity's visibility: a toggle flipped this
     // frame has not yet propagated to `InheritedVisibility`.
@@ -188,11 +191,31 @@ pub fn pick_along(
                     .is_some_and(|marker| is_marker_visible(marker, visibility))
             })
     };
-    let settings = MeshRayCastSettings::default()
+    let (entity, _) = first_in_slab(ray, ray_cast, &filter, slab)?;
+    keys.get(entity).ok().copied()
+}
+
+/// The first hit along `ray` among entities `filter` admits, skipping hits
+/// outside the Section slab: what is clipped from view is not picked, and
+/// does not occlude what is in the slab.
+fn first_in_slab(
+    ray: Ray3d,
+    ray_cast: &mut MeshRayCast,
+    filter: &impl Fn(Entity) -> bool,
+    slab: &SectionSlab,
+) -> Option<(Entity, Vec3)> {
+    let all_hits = |_: Entity| false;
+    let mut settings = MeshRayCastSettings::default()
         .with_visibility(RayCastVisibility::Visible)
-        .with_filter(&filter);
-    let (entity, _) = ray_cast.cast_ray(ray, &settings).first()?;
-    keys.get(*entity).ok().copied()
+        .with_filter(filter);
+    if slab.0.is_some() {
+        settings = settings.with_early_exit_test(&all_hits);
+    }
+    ray_cast
+        .cast_ray(ray, &settings)
+        .iter()
+        .find(|(_, hit)| slab.admits(hit.point))
+        .map(|(entity, hit)| (*entity, hit.point))
 }
 
 /// Where the ray first meets the ground or a base-layer mesh: the point a
@@ -201,15 +224,10 @@ pub fn ground_point_along(
     ray: Ray3d,
     ray_cast: &mut MeshRayCast,
     occluders: &Query<(), With<PickOccluder>>,
+    slab: &SectionSlab,
 ) -> Option<Vec3> {
     let filter = |entity: Entity| occluders.contains(entity);
-    let settings = MeshRayCastSettings::default()
-        .with_visibility(RayCastVisibility::Visible)
-        .with_filter(&filter);
-    ray_cast
-        .cast_ray(ray, &settings)
-        .first()
-        .map(|(_, hit)| hit.point)
+    first_in_slab(ray, ray_cast, &filter, slab).map(|(_, point)| point)
 }
 
 /// A new selection of `marker`. Its details are filled from the current frame
@@ -371,6 +389,7 @@ pub fn pick_world_system(
     occluders: Query<(), With<PickOccluder>>,
     markers: Res<CurrentRuntimeMarkers>,
     visibility: Res<RuntimeOverlayVisibility>,
+    slab: Res<SectionSlab>,
     (generation, mut hover, mut selection, mut log, mut ui_state): PickOutputs,
 ) {
     let pressed = std::mem::take(&mut pointer.bypass_change_detection().pressed);
@@ -389,6 +408,7 @@ pub fn pick_world_system(
                 pose_revision: markers.pose_revision(),
                 shown_kinds: shown_kinds(&visibility),
                 occluders: generation.0,
+                slab: *slab,
             };
             Some((ray, inputs))
         })
@@ -397,7 +417,15 @@ pub fn pick_world_system(
     let inputs = target.map(|(_, inputs)| inputs);
     if hover.inputs != inputs {
         let hovered = target.and_then(|(ray, _)| {
-            pick_along(ray, &mut ray_cast, &keys, &occluders, &markers, &visibility)
+            pick_along(
+                ray,
+                &mut ray_cast,
+                &keys,
+                &occluders,
+                &markers,
+                &visibility,
+                &slab,
+            )
         });
         let hover = hover.as_mut();
         hover.inputs = inputs;
@@ -418,7 +446,7 @@ pub fn pick_world_system(
             // Empty world: inspect the ground there instead (§7.3).
             let cell = match picked {
                 Some(_) => None,
-                None => ground_point_along(ray, &mut ray_cast, &occluders)
+                None => ground_point_along(ray, &mut ray_cast, &occluders, &slab)
                     .map(|point| [point.x, point.y]),
             };
             if ui_state.inspected_cell != cell {
@@ -558,6 +586,15 @@ mod tests {
         visibility: RuntimeOverlayVisibility,
         ray: Ray3d,
     ) -> Option<EntityKey> {
+        cast_in(world, visibility, ray, SectionSlab::default())
+    }
+
+    fn cast_in(
+        world: &mut World3,
+        visibility: RuntimeOverlayVisibility,
+        ray: Ray3d,
+        slab: SectionSlab,
+    ) -> Option<EntityKey> {
         world.app.insert_resource(visibility);
         world
             .app
@@ -568,7 +605,15 @@ mod tests {
                       occluders: Query<(), With<PickOccluder>>,
                       markers: Res<CurrentRuntimeMarkers>,
                       visibility: Res<RuntimeOverlayVisibility>| {
-                    pick_along(ray, &mut ray_cast, &keys, &occluders, &markers, &visibility)
+                    pick_along(
+                        ray,
+                        &mut ray_cast,
+                        &keys,
+                        &occluders,
+                        &markers,
+                        &visibility,
+                        &slab,
+                    )
                 },
             )
             .unwrap()
@@ -586,6 +631,58 @@ mod tests {
     /// Straight down through the stack at the origin, from above.
     fn down() -> Ray3d {
         Ray3d::new(Vec3::new(0.0, 0.0, 500.0), Dir3::NEG_Z)
+    }
+
+    fn ground_at(world: &mut World3, ray: Ray3d, slab: SectionSlab) -> Option<Vec3> {
+        world
+            .app
+            .world_mut()
+            .run_system_once(
+                move |mut ray_cast: MeshRayCast, occluders: Query<(), With<PickOccluder>>| {
+                    ground_point_along(ray, &mut ray_cast, &occluders, &slab)
+                },
+            )
+            .unwrap()
+    }
+
+    /// A Section slab `offset_m` north of the origin, 50 m thick.
+    fn slab_north(offset_m: f32) -> SectionSlab {
+        SectionSlab(Some((
+            Vec3::ZERO,
+            crate::state::SectionPlane {
+                offset_m,
+                ..Default::default()
+            },
+        )))
+    }
+
+    #[test]
+    fn what_section_clips_is_neither_picked_nor_occluding() {
+        let markers = fixture();
+        let mut w = world(&markers, Some(0.0), &[]);
+        // The stack at the origin lies in a slab around it...
+        assert_eq!(
+            cast_in(&mut w, all_shown(), down(), slab_north(0.0)),
+            Some(key(&markers, MarkerKind::Node, "near"))
+        );
+        // ...and is clipped from one 100 m north: nothing there to pick, and
+        // the ground under it is outside the slab too.
+        assert_eq!(
+            cast_in(&mut w, all_shown(), down(), slab_north(100.0)),
+            None
+        );
+        assert_eq!(ground_at(&mut w, down(), slab_north(100.0)), None);
+        // Inside that slab the ground is found, through nothing.
+        let inside = Ray3d::new(Vec3::new(0.0, 100.0, 500.0), Dir3::NEG_Z);
+        let point = ground_at(&mut w, inside, slab_north(100.0)).unwrap();
+        assert!((point.y - 100.0).abs() < 1e-3, "{point:?}");
+        // A horizontal ray through the stack from the south: the slab in
+        // front of the stack is empty, so the stack is the first thing met.
+        let level = Ray3d::new(Vec3::new(0.0, -400.0, 80.0), Dir3::Y);
+        assert_eq!(
+            cast_in(&mut w, all_shown(), level, slab_north(0.0)),
+            Some(key(&markers, MarkerKind::Node, "near"))
+        );
     }
 
     #[test]
@@ -835,6 +932,7 @@ mod tests {
             .init_resource::<PointerInput>()
             .init_resource::<PickGeneration>()
             .init_resource::<HoverState>()
+            .init_resource::<SectionSlab>()
             .init_resource::<SelectionState>()
             .init_resource::<PickLog>()
             .init_resource::<ViewerUiState>()
