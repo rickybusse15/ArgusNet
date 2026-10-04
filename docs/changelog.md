@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Timestamped sensor delivery (B4)
+
+- `argusnet-rs sim --fusion-lag-s ... --delivery-delay-s ...` models sensor
+  evidence arriving later than it was captured, per source, with seeded
+  jitter. Fusion uses each observation's capture time and keeps tracks ageing
+  through gaps. Evidence it cannot use (late, duplicate, from before a sensor
+  restart, or overflowing a queue) is recorded with the reason. Without these
+  flags runs are unchanged.
+
 ## Unreleased — Scenario comparisons (F4)
 
 - `scripts/compare_scenarios.py` compares variants of a scenario over the same

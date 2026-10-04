@@ -1481,6 +1481,21 @@ impl AssembledRun {
         })
     }
 
+    /// Model timestamped delivery between capture and fusion (B4). The profile
+    /// is validated against this run's timestep before anything runs.
+    pub fn set_delivery(
+        &mut self,
+        profile: crate::delivery::DeliveryProfile,
+    ) -> Result<(), String> {
+        profile.validate(self.dt_s)?;
+        let network = crate::delivery::DeliveryNetwork::new(profile);
+        self.sim
+            .stage_mut::<FusionStage>(Stage::UpdateFusion)
+            .expect("assembly installs a FusionStage")
+            .set_delivery(Some(network));
+        Ok(())
+    }
+
     /// The replay frame the last committed tick recorded, if any.
     pub fn last_frame(&self) -> Option<&crate::replay::ReplayFrame> {
         self.replay.last_frame()
@@ -1774,6 +1789,20 @@ impl AssembledRun {
         let totals = self.report.totals.document();
         self.replay
             .extend_meta([("observation_generation".to_string(), totals)]);
+        // B4: every captured envelope accounted for: fused, dropped (by
+        // reason), or still in transit when the run ended. Absent without a
+        // delivery profile, so a legacy replay is unchanged.
+        if let Some(delivery) = self.fusion().delivery() {
+            let totals = delivery.totals();
+            let document = serde_json::json!({
+                "captured": totals.captured,
+                "fused": totals.fused,
+                "dropped": totals.dropped,
+                "in_transit_at_end": delivery.pending(),
+            });
+            self.replay
+                .extend_meta([("delivery_totals".to_string(), document)]);
+        }
         Ok(self.replay.finish())
     }
 }
