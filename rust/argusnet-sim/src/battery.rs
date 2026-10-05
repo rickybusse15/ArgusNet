@@ -52,7 +52,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use argusnet_planning::battery::{BatteryModel, BatteryState};
+use argusnet_planning::battery::{BatteryModel, BatteryState, EnergyProfile};
 use serde::{Deserialize, Serialize};
 
 use crate::controller::ControllerStage;
@@ -92,6 +92,8 @@ struct State {
     /// whole of "the first tick is free".
     previous_positions: BTreeMap<String, Option<[f64; 3]>>,
     homes: BTreeMap<String, [f64; 3]>,
+    /// How a tick's energy is charged (D-3). Legacy unless set.
+    profile: EnergyProfile,
     wind_mps: Option<[f64; 3]>,
     warned: BTreeSet<String>,
     events: Vec<BatteryEvent>,
@@ -126,6 +128,17 @@ impl BatteryStage {
 
     pub fn model(&self) -> BatteryModel {
         self.state.model
+    }
+
+    /// How each tick's energy is charged (D-3). [`EnergyProfile::Legacy`]
+    /// charges motion only; [`EnergyProfile::PhysicalV1`] also charges hover
+    /// for the part of the tick not spent moving.
+    pub fn set_energy_profile(&mut self, profile: EnergyProfile) {
+        self.state.profile = profile;
+    }
+
+    pub fn energy_profile(&self) -> EnergyProfile {
+        self.state.profile
     }
 
     /// Wind for the return-home estimate, for the ticks that follow.
@@ -241,6 +254,9 @@ struct BatteryCheckpoint {
     ledger: BTreeMap<String, (f64, f64)>,
     previous_positions: BTreeMap<String, Option<[f64; 3]>>,
     warned: BTreeSet<String>,
+    /// Absent for legacy, so a legacy checkpoint is unchanged (D-3).
+    #[serde(default, skip_serializing_if = "EnergyProfile::is_legacy")]
+    energy_profile: EnergyProfile,
 }
 
 impl StageHandler for BatteryStage {
@@ -286,8 +302,19 @@ impl StageHandler for BatteryStage {
                 .copied()
                 .unwrap_or(None);
 
-            if let Some(previous) = previous {
-                let cost_wh = model.segment_cost_wh(previous, position);
+            // Legacy: the segment since the previous position, so the first
+            // tick is free. Physical (D-3): motion plus hover for the rest of
+            // the tick, first tick included -- the platform is airborne.
+            let cost_wh = match (shared.profile, previous) {
+                (EnergyProfile::Legacy, None) => None,
+                (EnergyProfile::Legacy, Some(previous)) => {
+                    Some(model.segment_cost_wh(previous, position))
+                }
+                (EnergyProfile::PhysicalV1, previous) => {
+                    Some(model.tick_cost_wh(previous, position, context.dt_s))
+                }
+            };
+            if let Some(cost_wh) = cost_wh {
                 let drawn = shared
                     .states
                     .get(&node_id)
@@ -403,6 +430,7 @@ impl StageHandler for BatteryStage {
                 .collect(),
             previous_positions: shared.previous_positions.clone(),
             warned: shared.warned.clone(),
+            energy_profile: shared.profile,
         };
         Some(serde_json::to_value(state).expect("battery checkpoint serialises"))
     }
@@ -410,6 +438,15 @@ impl StageHandler for BatteryStage {
     fn check_state(&self, state: &serde_json::Value) -> Result<(), StageStateError> {
         let decoded: BatteryCheckpoint = decode_stage_state(state)?;
         let shared = &self.state;
+        if decoded.energy_profile != shared.profile {
+            return Err(StageStateError::Malformed {
+                detail: format!(
+                    "the checkpoint charged energy as {}, this run as {}",
+                    decoded.energy_profile.as_str(),
+                    shared.profile.as_str()
+                ),
+            });
+        }
         // The ledger must describe the fleet this run registered. A platform
         // present on one side only is a checkpoint from a different scenario.
         if decoded.ledger.keys().ne(shared.states.keys()) {
@@ -726,6 +763,73 @@ mod tests {
             ledger(&sim).model().hover_power_w > 0.0,
             "the model does carry a hover power -- it is simply never charged"
         );
+    }
+
+    /// D-3's physical profile charges hover for elapsed time: a stationary
+    /// platform draws `hover_power_w` for every tick, the first included.
+    #[test]
+    fn under_the_physical_profile_hovering_costs_hover_power() {
+        let mut sim = rig(vec![node("drone-1", true, 0.0)]);
+        bat(&mut sim).register("drone-1", None);
+        bat(&mut sim).set_energy_profile(EnergyProfile::PhysicalV1);
+        let full = ledger(&sim).remaining_wh("drone-1").unwrap();
+        for _ in 0..50 {
+            sim.step().unwrap();
+        }
+        let hover_w = ledger(&sim).model().hover_power_w;
+        let drawn = full - ledger(&sim).remaining_wh("drone-1").unwrap();
+        // dt is 1 s in this rig: 50 ticks of hover.
+        assert!(
+            (drawn - 50.0 * hover_w / 3600.0).abs() < 1e-9,
+            "drew {drawn} Wh"
+        );
+    }
+
+    /// Continuous with the legacy model: motion that fills the tick costs the
+    /// segment cost and no more; motion that fills half of it adds hover for
+    /// the other half.
+    #[test]
+    fn the_physical_tick_cost_adds_hover_only_for_time_not_moving() {
+        let model = BatteryModel::default();
+        let start = [0.0, 0.0, 50.0];
+        let dt = 1.0;
+        let full = [model.cruise_speed_m_per_s * dt, 0.0, 50.0];
+        assert_eq!(
+            model.tick_cost_wh(Some(start), full, dt),
+            model.segment_cost_wh(start, full)
+        );
+        let half = [model.cruise_speed_m_per_s * dt * 0.5, 0.0, 50.0];
+        let expected = model.segment_cost_wh(start, half) + model.hover_power_w * 0.5 / 3600.0;
+        assert!((model.tick_cost_wh(Some(start), half, dt) - expected).abs() < 1e-12);
+        assert_eq!(
+            model.tick_cost_wh(None, start, dt),
+            model.hover_power_w * dt / 3600.0,
+            "the first tick hovers"
+        );
+        // Motion longer than the tick is never discounted below the segment.
+        let far = [model.cruise_speed_m_per_s * dt * 3.0, 0.0, 50.0];
+        assert_eq!(
+            model.tick_cost_wh(Some(start), far, dt),
+            model.segment_cost_wh(start, far)
+        );
+    }
+
+    /// A checkpoint is only restored under the profile it was charged with.
+    #[test]
+    fn a_checkpoint_is_refused_under_another_energy_profile() {
+        let mut sim = rig(vec![node("drone-1", true, 0.0)]);
+        bat(&mut sim).register("drone-1", None);
+        bat(&mut sim).set_energy_profile(EnergyProfile::PhysicalV1);
+        sim.step().unwrap();
+        let state = ledger(&sim).checkpoint_state().unwrap();
+        assert_eq!(state["energy_profile"], "physical_v1");
+        let mut legacy = rig(vec![node("drone-1", true, 0.0)]);
+        bat(&mut legacy).register("drone-1", None);
+        let error = ledger(&legacy).check_state(&state).unwrap_err();
+        assert!(format!("{error:?}").contains("physical_v1"), "{error:?}");
+        // A legacy checkpoint carries no profile field at all.
+        let legacy_state = ledger(&legacy).checkpoint_state().unwrap();
+        assert!(legacy_state.get("energy_profile").is_none());
     }
 
     /// Descending costs less than climbing the same distance: the branch in

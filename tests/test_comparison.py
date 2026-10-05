@@ -156,3 +156,25 @@ def test_a_rounding_difference_is_a_tie_not_a_change():
     p = paired(base, var, "higher")
     assert (p["improved"], p["worsened"], p["tied"]) == (0, 0, 10)
     assert p["verdict"] == "no detectable difference"
+
+
+def test_battery_remaining_min_reads_the_ledger_and_skips_the_sentinel():
+    from argusnet.evaluation.metrics import _battery_remaining_min
+
+    frames = [
+        {
+            "nodes": [
+                {"is_mobile": True, "battery_fraction": 0.9},
+                {"is_mobile": False, "battery_fraction": -1.0},
+            ]
+        },
+        {
+            "nodes": [
+                {"is_mobile": True, "battery_fraction": 0.42},
+                {"is_mobile": True, "battery_fraction": -1.0},
+            ]
+        },
+    ]
+    assert _battery_remaining_min(frames) == 0.42
+    assert _battery_remaining_min([{"nodes": [{"is_mobile": True}]}]) is None
+    assert "battery_remaining_min" in METRICS

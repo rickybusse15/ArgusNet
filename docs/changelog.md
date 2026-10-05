@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Hover costs energy, as an opt-in profile (D-3)
+
+- `argusnet-rs sim --energy-profile physical_v1` charges hover power while a
+  drone is airborne but not moving. Previously a stationary drone had unlimited
+  endurance. The default (`legacy`) is unchanged, so existing results stand.
+- Evaluation reports gain `battery_remaining_min`, the lowest battery level any
+  drone reached as the battery ledger recorded it.
+
 ## Unreleased — Timestamped sensor delivery (B4)
 
 - `argusnet-rs sim --fusion-lag-s ... --delivery-delay-s ...` models sensor

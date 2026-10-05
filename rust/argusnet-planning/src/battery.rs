@@ -15,6 +15,34 @@
 //! across would give a misleading name a second life in a typed language,
 //! where `fraction()` returning an energy is worse than in Python.
 
+/// How a tick's energy is charged (D-3, decided 2026-10-05).
+///
+/// `Legacy` is the reference's accounting: only motion costs energy, so a
+/// stationary platform draws nothing. It is kept unchanged so every existing
+/// run, golden file and acceptance result stays valid. `PhysicalV1` also
+/// charges hover power for the part of each tick not spent moving; see
+/// [`BatteryModel::tick_cost_wh`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnergyProfile {
+    #[default]
+    Legacy,
+    PhysicalV1,
+}
+
+impl EnergyProfile {
+    pub fn is_legacy(&self) -> bool {
+        *self == EnergyProfile::Legacy
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EnergyProfile::Legacy => "legacy",
+            EnergyProfile::PhysicalV1 => "physical_v1",
+        }
+    }
+}
+
 /// Energy model for a multirotor. Defaults match the reference's dataclass.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BatteryModel {
@@ -66,6 +94,27 @@ impl BatteryModel {
             self.hover_power_w * 0.8
         };
         power * duration_s / 3600.0
+    }
+
+    /// Energy for one tick under [`EnergyProfile::PhysicalV1`] (D-3).
+    ///
+    /// The legacy segment cost for the motion, plus hover power for the part
+    /// of the tick not spent in that modelled motion: a multirotor that is
+    /// airborne draws power whether or not it moves. Continuous with the
+    /// legacy model -- a platform moving at cruise for the whole tick costs
+    /// exactly the segment cost -- and a stationary one draws `hover_power_w`
+    /// for the full tick. With no previous position (the first tick) the
+    /// platform hovers for the whole tick.
+    pub fn tick_cost_wh(&self, start: Option<[f64; 3]>, end: [f64; 3], dt_s: f64) -> f64 {
+        let Some(start) = start else {
+            return self.hover_power_w * dt_s.max(0.0) / 3600.0;
+        };
+        let horizontal = ((end[0] - start[0]).powi(2) + (end[1] - start[1]).powi(2)).sqrt();
+        let delta_z = end[2] - start[2];
+        let motion_s = horizontal / self.cruise_speed_m_per_s.max(0.01)
+            + delta_z.abs() / self.climb_speed_m_per_s.max(0.01);
+        let hover_s = (dt_s - motion_s).max(0.0);
+        self.segment_cost_wh(start, end) + self.hover_power_w * hover_s / 3600.0
     }
 
     /// Energy to move between two points: horizontal plus vertical.
