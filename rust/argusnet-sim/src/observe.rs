@@ -517,6 +517,11 @@ impl ObserveStage {
             .insert(node_id.to_string(), SensorState::fresh(node_id, &spec));
     }
 
+    /// Every installed sensor, by node.
+    pub fn sensors(&self) -> &BTreeMap<String, SensorSpec> {
+        &self.state.sensors
+    }
+
     pub fn remove_sensor(&mut self, node_id: &str) {
         let shared = &mut self.state;
         shared.sensors.remove(node_id);

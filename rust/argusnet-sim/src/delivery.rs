@@ -286,6 +286,11 @@ pub struct DeliveryNetwork {
     next_capture_index: u64,
     /// Each tick's timestamp, kept until fusion has passed it.
     tick_times: BTreeMap<u64, f64>,
+    /// Temporary per-source delays (F2's link faults), outside the profile so
+    /// a checkpoint's profile still matches the run's. Set every tick from
+    /// the fault schedule.
+    #[serde(default)]
+    delay_override: BTreeMap<String, u64>,
     /// This tick's drops; taken by fusion.
     drops: Vec<Dropped>,
     totals: DeliveryTotals,
@@ -303,6 +308,7 @@ impl DeliveryNetwork {
             queued: BTreeMap::new(),
             next_capture_index: 0,
             tick_times: BTreeMap::new(),
+            delay_override: BTreeMap::new(),
             drops: Vec::new(),
             totals: DeliveryTotals::default(),
         }
@@ -319,6 +325,28 @@ impl DeliveryNetwork {
     /// Back to the start of a run, with the same profile.
     pub fn reset(&mut self) {
         *self = Self::new(self.profile.clone());
+    }
+
+    /// Delay `source` by `ticks` instead of its profile delay, until set back
+    /// to `None`. Refused when the delay plus jitter would exceed the fusion
+    /// lag: that evidence would be late by construction.
+    pub fn set_delay_override(&mut self, source: &str, ticks: Option<u64>) -> Result<(), String> {
+        match ticks {
+            Some(ticks) => {
+                if ticks + self.profile.jitter_ticks > self.profile.fusion_lag_ticks {
+                    return Err(format!(
+                        "a delay of {ticks} tick(s) for {source} plus {} of jitter exceeds the \
+                         fusion lag of {} tick(s)",
+                        self.profile.jitter_ticks, self.profile.fusion_lag_ticks
+                    ));
+                }
+                self.delay_override.insert(source.to_string(), ticks);
+            }
+            None => {
+                self.delay_override.remove(source);
+            }
+        }
+        Ok(())
     }
 
     /// The source restarted: its sequence starts again in a new epoch, and
@@ -355,7 +383,13 @@ impl DeliveryNetwork {
                 rng.next_u64() % (self.profile.jitter_ticks + 1)
             };
             let envelope = SensorEnvelope {
-                availability_tick: tick + self.profile.delay_for(&source) + jitter,
+                availability_tick: tick
+                    + self
+                        .delay_override
+                        .get(&source)
+                        .copied()
+                        .unwrap_or_else(|| self.profile.delay_for(&source))
+                    + jitter,
                 source_id: source,
                 sequence,
                 source_epoch: epoch,
