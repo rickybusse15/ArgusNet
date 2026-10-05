@@ -67,6 +67,15 @@ source's queue. Every dropped envelope is a rejected observation with a
 `--fusion-lag-s` the run is the legacy run, byte for byte. Design and
 evidence: [DELIVERY_TIMING.md](DELIVERY_TIMING.md).
 
+## Scheduled faults (F2)
+
+`--faults MANIFEST` applies an `argusnet.fault-manifest`: sensor outages,
+link delays and source restarts at given simulated times. The manifest is
+validated before the run (exit 3 if a node has no sensor, an interval is
+empty, or a link fault lacks `--fusion-lag-s` or exceeds it) and recorded in
+`meta.fault_manifest`. See [FAILURE_SCENARIOS.md](FAILURE_SCENARIOS.md) and
+`tests/fixtures/fault_manifest_example.json`.
+
 ## Crash-recoverable runs (A4)
 
 `argusnet-rs sim --bundle B --run-dir D [--checkpoint-every N]` records the

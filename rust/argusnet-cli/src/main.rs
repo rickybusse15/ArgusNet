@@ -123,6 +123,11 @@ struct SimArgs {
     /// the serial path.
     #[arg(long, default_value_t = 1)]
     workers: usize,
+    /// Scheduled sensor and link faults (F2): an `argusnet.fault-manifest`.
+    /// Recorded in the replay's `meta.fault_manifest`. Link faults need
+    /// `--fusion-lag-s`.
+    #[arg(long)]
+    faults: Option<PathBuf>,
     /// How battery energy is charged (D-3): `legacy` charges motion only, as
     /// the reference does; `physical_v1` also charges hover power for the part
     /// of each tick not spent moving.
@@ -447,6 +452,15 @@ fn sim(args: SimArgs) -> ExitCode {
             Err(error) => return fail(EXIT_UNSUPPORTED, error),
         }
     }
+    if let Some(path) = &args.faults {
+        let manifest = std::fs::read_to_string(path)
+            .map_err(|error| format!("{}: {error}", path.display()))
+            .and_then(|text| argusnet_sim::faults::FaultManifest::from_json(&text));
+        // Refused before anything runs, like an unsupported delivery profile.
+        if let Err(error) = manifest.and_then(|manifest| run.set_faults(manifest)) {
+            return fail(EXIT_UNSUPPORTED, error);
+        }
+    }
     // P4.9: "emit resolved config/version/provenance". No clock and no host,
     // so a replay's bytes depend only on what was run.
     run.extend_replay_meta([(
@@ -476,7 +490,7 @@ fn sim(args: SimArgs) -> ExitCode {
             Ok(checkpoint) => checkpoint,
             Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
         };
-        if let Err(error) = run.sim.restore(&checkpoint) {
+        if let Err(error) = run.restore(&checkpoint) {
             return fail(EXIT_INVALID, format!("cannot resume: {error}"));
         }
     }
@@ -501,7 +515,7 @@ fn sim(args: SimArgs) -> ExitCode {
             let dir = RunDir::new(path);
             let keep = match dir.checkpoint() {
                 Ok(Some(checkpoint)) => {
-                    if let Err(error) = run.sim.restore(&checkpoint) {
+                    if let Err(error) = run.restore(&checkpoint) {
                         return fail(EXIT_INVALID, format!("cannot recover: {error}"));
                     }
                     recovered_from_tick = Some(checkpoint.tick);

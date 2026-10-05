@@ -725,6 +725,12 @@ pub struct AssembledRun {
     /// The fleet as assembly loaded it, before any tick: what
     /// [`AssembledRun::reset`] reloads.
     initial_platforms: Vec<NodeState>,
+    /// Scheduled sensor and link faults (F2), applied before every tick.
+    faults: Option<crate::faults::FaultSchedule>,
+    /// The tick whose source restarts were last applied, so a tick re-entered
+    /// while paused does not restart a source twice. Not checkpointed: a
+    /// restart's effect is the delivery network's epoch, which is.
+    restarts_applied_at: Option<u64>,
 }
 
 /// What the replay frames need beyond the stages' own handles.
@@ -1206,6 +1212,8 @@ pub fn assemble_with(
             totals: GenerationTotals::default(),
         },
         initial_platforms,
+        faults: None,
+        restarts_applied_at: None,
     })
 }
 
@@ -1462,6 +1470,7 @@ impl AssembledRun {
             .load_world(self.initial_platforms.clone(), Vec::new());
         self.replay.clear_frames();
         self.report.totals = GenerationTotals::default();
+        self.restarts_applied_at = None;
     }
 
     /// The last tick's evidence and decisions, for the durable journal (A4):
@@ -1493,6 +1502,121 @@ impl AssembledRun {
             .stage_mut::<FusionStage>(Stage::UpdateFusion)
             .expect("assembly installs a FusionStage")
             .set_delivery(Some(network));
+        Ok(())
+    }
+
+    /// Schedule sensor and link faults (F2). Validated against this run: its
+    /// sensors, and its delivery profile for link faults (set delivery
+    /// first). The manifest is recorded in `meta.fault_manifest`.
+    pub fn set_faults(&mut self, manifest: crate::faults::FaultManifest) -> Result<(), String> {
+        let sensors = self.observe().sensors().clone();
+        let lag_and_jitter = self
+            .fusion()
+            .delivery()
+            .map(|d| (d.profile().fusion_lag_ticks, d.profile().jitter_ticks));
+        let fits = move |ticks: u64| -> Result<(), String> {
+            let (lag, jitter) = lag_and_jitter.expect("only offered with delivery");
+            if ticks + jitter > lag {
+                Err(format!(
+                    "a delay of {ticks} tick(s) plus {jitter} of jitter exceeds the fusion lag \
+                     of {lag} tick(s)"
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let schedule = crate::faults::FaultSchedule::new(
+            manifest,
+            self.dt_s,
+            &sensors,
+            lag_and_jitter.map(|_| &fits as &dyn Fn(u64) -> Result<(), String>),
+        )?;
+        self.replay.extend_meta([(
+            "fault_manifest".to_string(),
+            serde_json::to_value(schedule.manifest()).expect("manifest serialises"),
+        )]);
+        self.faults = Some(schedule);
+        Ok(())
+    }
+
+    /// Outage sensors removed or restored as the schedule has them at `tick`.
+    fn apply_sensor_faults(&mut self, tick: u64) {
+        let Some(schedule) = self.faults.as_ref() else {
+            return;
+        };
+        let sensors: Vec<(String, crate::observe::SensorSpec, bool)> = schedule
+            .sensor_states(tick)
+            .into_iter()
+            .map(|(node, spec, out)| (node.to_string(), spec, out))
+            .collect();
+        let observe = self
+            .sim
+            .stage_mut::<ObserveStage>(Stage::GenerateObservations)
+            .expect("assembly installs an ObserveStage");
+        for (node, spec, out) in sensors {
+            match (out, observe.sensor(&node).is_some()) {
+                (true, true) => observe.remove_sensor(&node),
+                // Back from an outage: a restarted sensor, fresh bias state.
+                (false, false) => observe.install_sensor(&node, spec),
+                _ => {}
+            }
+        }
+    }
+
+    /// Restore a checkpoint into this run. With a fault schedule, the sensor
+    /// table is first put in the state the schedule has at the checkpoint's
+    /// tick, so a checkpoint taken mid-outage matches. Prefer this to
+    /// `sim.restore` on an assembled run.
+    pub fn restore(
+        &mut self,
+        checkpoint: &crate::snapshot::SimulationCheckpoint,
+    ) -> Result<(), crate::snapshot::RestoreError> {
+        self.apply_sensor_faults(checkpoint.tick);
+        self.sim.restore(checkpoint)
+    }
+
+    /// Put the world in the state the fault schedule prescribes for the next
+    /// tick: outage sensors removed or restored, link delays overridden or
+    /// cleared, and restarts due at this tick applied once.
+    fn apply_faults(&mut self) -> Result<(), RunError> {
+        if self.faults.is_none() {
+            return Ok(());
+        }
+        let tick = self.sim.tick();
+        self.apply_sensor_faults(tick);
+        let schedule = self.faults.as_ref().expect("checked above");
+        let delays: Vec<(String, Option<u64>)> = schedule
+            .delay_overrides(tick)
+            .into_iter()
+            .map(|(node, delay)| (node.to_string(), delay))
+            .collect();
+        let restarts: Vec<String> = if self.restarts_applied_at == Some(tick) {
+            Vec::new()
+        } else {
+            schedule
+                .restarts_at(tick)
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        };
+        if delays.is_empty() && restarts.is_empty() {
+            return Ok(());
+        }
+        let delivery = self
+            .sim
+            .stage_mut::<FusionStage>(Stage::UpdateFusion)
+            .expect("assembly installs a FusionStage")
+            .delivery_mut()
+            .ok_or_else(|| RunError::Invariant("link faults without delivery".into()))?;
+        for (node, delay) in delays {
+            delivery
+                .set_delay_override(&node, delay)
+                .map_err(RunError::Invariant)?;
+        }
+        for node in restarts {
+            delivery.restart_source(&node);
+        }
+        self.restarts_applied_at = Some(tick);
         Ok(())
     }
 
@@ -1533,6 +1657,7 @@ impl AssembledRun {
     /// the `Ok` is a tick stage 0 already committed (a reset), with its
     /// replay frame recorded.
     pub fn begin_tick(&mut self) -> Result<Result<AssembledTick, Arc<RuntimeSnapshot>>, RunError> {
+        self.apply_faults()?;
         let timestamp_s = self.next_timestamp_s();
         let truths = self.truth.truths_at(timestamp_s).map_err(RunError::Truth)?;
         self.sim.set_truth(truths.clone());

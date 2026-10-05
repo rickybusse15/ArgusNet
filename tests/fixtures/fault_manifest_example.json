@@ -1,0 +1,9 @@
+{
+  "format": "argusnet.fault-manifest",
+  "version": 1,
+  "faults": [
+    {"kind": "sensor_outage", "node_id": "drone-east", "start_s": 20.0, "end_s": 40.0},
+    {"kind": "link_delay", "node_id": "drone-north", "start_s": 30.0, "end_s": 60.0, "delay_s": 1.0},
+    {"kind": "source_restart", "node_id": "drone-west", "at_s": 45.0}
+  ]
+}

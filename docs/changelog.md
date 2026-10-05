@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Sensor and link failure scenarios (F2)
+
+- `argusnet-rs sim --faults manifest.json` schedules sensor outages, link
+  delays and sensor restarts at given times. The run stays deterministic, can
+  resume from a checkpoint taken mid-fault, and records the manifest in the
+  replay. Invalid or impossible manifests are refused before the run.
+
 ## Unreleased — Hover costs energy, as an opt-in profile (D-3)
 
 - `argusnet-rs sim --energy-profile physical_v1` charges hover power while a
