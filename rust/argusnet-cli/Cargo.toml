@@ -15,6 +15,7 @@ path = "src/main.rs"
 argusnet-core = { path = "../argusnet-core" }
 argusnet-proto = { path = "../argusnet-proto" }
 argusnet-sim = { path = "../argusnet-sim" }
+argusnet-planning = { path = "../argusnet-planning" }
 prost.workspace = true
 clap.workspace = true
 serde.workspace = true

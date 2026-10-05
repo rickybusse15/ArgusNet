@@ -49,10 +49,22 @@ from argusnet.simulation import sim  # noqa: E402
 
 
 def parse_variant(text: str) -> tuple[str, list[str]]:
+    """``NAME=ARGS``: ``argusnet sim`` arguments, then optionally ``--rs``
+    followed by ``argusnet-rs sim`` arguments (for example
+    ``--energy-profile physical_v1``). Kept as one token list; see
+    :func:`split_args`."""
     name, sep, args = text.partition("=")
     if not sep or not name.strip():
         raise argparse.ArgumentTypeError(f"--variant takes NAME=ARGS, got {text!r}")
     return name.strip(), shlex.split(args)
+
+
+def split_args(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """A variant's tokens as (scenario arguments, runtime arguments)."""
+    if "--rs" not in tokens:
+        return tokens, []
+    at = tokens.index("--rs")
+    return tokens[:at], tokens[at + 1 :]
 
 
 def export(config, extra: list[str], seed: int, work: Path) -> tuple[Path | None, str | None]:
@@ -71,7 +83,15 @@ def export(config, extra: list[str], seed: int, work: Path) -> tuple[Path | None
     return exported, None
 
 
-def run_one(config, variant: str, seed: int, exported: Path, binary: Path, work: Path) -> RunResult:
+def run_one(
+    config,
+    variant: str,
+    seed: int,
+    exported: Path,
+    binary: Path,
+    work: Path,
+    runtime_args: list[str] | None = None,
+) -> RunResult:
     result = RunResult(variant=variant, seed=seed)
     result.config_sha256 = hashlib.sha256(exported.read_bytes()).hexdigest()
     replay_path, timing_path = work / "replay.json", work / "timing.json"
@@ -88,6 +108,7 @@ def run_one(config, variant: str, seed: int, exported: Path, binary: Path, work:
             str(replay_path),
             "--timing-json",
             str(timing_path),
+            *(runtime_args or []),
         ],
         capture_output=True,
         text=True,
@@ -182,7 +203,8 @@ def main() -> int:
     runs: list[RunResult] = []
     with tempfile.TemporaryDirectory() as scratch:
         jobs = []
-        for name, extra in args.variant:
+        for name, tokens in args.variant:
+            extra, runtime_args = split_args(tokens)
             for seed in seed_list:
                 work = Path(scratch) / name / str(seed)
                 exported, error = export(config, extra, seed, work)
@@ -190,14 +212,13 @@ def main() -> int:
                     runs.append(RunResult(variant=name, seed=seed, error=error))
                     print(f"{name} / {seed}: {error}", flush=True)
                 else:
-                    jobs.append((name, seed, exported, work))
+                    jobs.append((name, seed, exported, work, runtime_args))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
             futures = {
-                pool.submit(run_one, config, name, seed, exported, args.binary, work): (
-                    name,
-                    seed,
-                )
-                for name, seed, exported, work in jobs
+                pool.submit(
+                    run_one, config, name, seed, exported, args.binary, work, runtime_args
+                ): (name, seed)
+                for name, seed, exported, work, runtime_args in jobs
             }
             for future in concurrent.futures.as_completed(futures):
                 name, seed = futures[future]

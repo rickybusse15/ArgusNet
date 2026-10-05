@@ -87,6 +87,11 @@ class EvaluationReport:
     required_objectives_total: int = 0
     energy_reserve_min: float = 1.0
     energy_reserve_per_drone: dict[str, float] = field(default_factory=dict)
+    # The battery ledger's own reading: the lowest `battery_fraction` any
+    # drone reached in the replay. None when the replay carries no battery
+    # (older replays, or a run without a ledger). `energy_reserve_min` above
+    # is a distance-based estimate and does not see hover or the profile.
+    battery_remaining_min: float | None = None
 
     # Performance matrix
     wall_clock_s: float | None = None
@@ -523,6 +528,7 @@ def evaluate_replay(
         required_objectives_total=required_total,
         energy_reserve_min=energy_min,
         energy_reserve_per_drone=energy_per_drone,
+        battery_remaining_min=_battery_remaining_min(frames),
         # Performance matrix
         wall_clock_s=_optional_float(performance_meta.get("wall_clock_s")),
         frame_time_mean_ms=_optional_float(frame_times.get("mean_ms")),
@@ -538,6 +544,24 @@ def evaluate_replay(
         tags=[],
         generated_at_utc=now_utc,
     )
+
+
+def _battery_remaining_min(frames: list[dict]) -> float | None:
+    """The lowest battery fraction any mobile node reports in the replay.
+
+    Reads the ledger's published `battery_fraction`; a negative value is the
+    no-battery sentinel and is skipped.
+    """
+    lowest: float | None = None
+    for frame in frames:
+        for node in frame.get("nodes") or []:
+            if not node.get("is_mobile", False):
+                continue
+            fraction = node.get("battery_fraction")
+            if fraction is None or fraction < 0:
+                continue
+            lowest = float(fraction) if lowest is None else min(lowest, float(fraction))
+    return lowest
 
 
 def _compute_energy_reserves(frames: list[dict]) -> dict[str, float]:
@@ -813,6 +837,9 @@ def report_from_dict(d: dict) -> EvaluationReport:
         required_objectives_total=int(d.get("required_objectives_total", 0)),
         energy_reserve_min=float(d.get("energy_reserve_min", 1.0)),
         energy_reserve_per_drone=dict(d.get("energy_reserve_per_drone") or {}),
+        battery_remaining_min=(
+            None if d.get("battery_remaining_min") is None else float(d["battery_remaining_min"])
+        ),
         wall_clock_s=_optional_float(d.get("wall_clock_s")),
         frame_time_mean_ms=_optional_float(d.get("frame_time_mean_ms")),
         frame_time_p95_ms=_optional_float(d.get("frame_time_p95_ms")),

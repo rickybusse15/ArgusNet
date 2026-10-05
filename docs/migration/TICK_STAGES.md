@@ -33,6 +33,9 @@ So **a drone that stops moving has unlimited endurance in this simulation.**
 That is preserved rather than corrected: charging hover would move every
 existing golden run, and it belongs in a decision of its own rather than
 arriving inside a port.
+**D-3 (2026-10-05)** kept this as the `legacy` energy profile and added
+`physical_v1`, which charges hover for the part of each tick not spent moving
+(`BatteryModel::tick_cost_wh`); see the battery stage and STATUS.
 `a_hovering_platform_consumes_nothing_because_there_is_no_hover_term` pins it,
 and asserts that the model does carry a hover power — it is simply never
 charged, which is the part that would otherwise read as a porting slip.

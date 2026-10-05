@@ -59,6 +59,11 @@ METRICS: dict[str, tuple[str | None, str]] = {
         "higher",
         "Lowest battery fraction left on any drone at the end of the run.",
     ),
+    "battery_remaining_min": (
+        "higher",
+        "Lowest battery fraction any drone reached, as the battery ledger recorded it. "
+        "Unlike energy_reserve_min it follows the energy profile, hover included (D-3).",
+    ),
     "false_handoff_rate": ("lower", "Fraction of track handoffs that went to the wrong target."),
     "safety_override_count": (
         None,

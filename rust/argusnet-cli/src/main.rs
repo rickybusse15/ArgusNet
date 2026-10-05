@@ -123,6 +123,11 @@ struct SimArgs {
     /// the serial path.
     #[arg(long, default_value_t = 1)]
     workers: usize,
+    /// How battery energy is charged (D-3): `legacy` charges motion only, as
+    /// the reference does; `physical_v1` also charges hover power for the part
+    /// of each tick not spent moving.
+    #[arg(long, value_enum, default_value = "legacy")]
+    energy_profile: EnergyProfileArg,
     /// Model timestamped delivery (B4): fusion ingests the evidence acquired
     /// this many seconds ago. Delays plus jitter must not exceed it. Omit for
     /// the legacy same-tick path.
@@ -187,6 +192,14 @@ const EXIT_FAULT: u8 = 1;
 pub(crate) const EXIT_CRASHED: i32 = 4;
 const EXIT_INVALID: u8 = 2;
 const EXIT_UNSUPPORTED: u8 = 3;
+
+/// `--energy-profile`'s values (D-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum EnergyProfileArg {
+    Legacy,
+    #[value(name = "physical_v1")]
+    PhysicalV1,
+}
 
 /// `NODE_ID=SECONDS` for `--source-delay`.
 fn parse_source_delay(text: &str) -> Result<(String, f64), String> {
@@ -403,6 +416,14 @@ fn sim(args: SimArgs) -> ExitCode {
         Err(error @ BundleError::Unsupported(_)) => return fail(EXIT_UNSUPPORTED, error),
         Err(error) => return fail(EXIT_INVALID, error),
     };
+    if args.energy_profile == EnergyProfileArg::PhysicalV1 {
+        run.battery_mut()
+            .set_energy_profile(argusnet_planning::battery::EnergyProfile::PhysicalV1);
+        run.extend_replay_meta([(
+            "energy_profile".to_string(),
+            serde_json::json!(argusnet_planning::battery::EnergyProfile::PhysicalV1.as_str()),
+        )]);
+    }
     if let Some(lag_s) = args.fusion_lag_s {
         let profile = argusnet_sim::delivery::DeliveryProfile::from_seconds(
             bundle.dt_s,
