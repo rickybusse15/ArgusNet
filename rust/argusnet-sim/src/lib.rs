@@ -24,6 +24,7 @@ pub mod observe;
 pub mod overrides;
 pub mod particles;
 pub mod replay;
+pub mod run_options;
 pub mod runtime_world;
 pub mod safety;
 pub mod scenario;

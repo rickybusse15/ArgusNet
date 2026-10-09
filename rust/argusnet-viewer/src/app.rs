@@ -108,9 +108,14 @@ pub fn run_live(
 pub fn run_sim(
     scene_path: impl AsRef<Path>,
     run_path: std::path::PathBuf,
+    options: argusnet_sim::run_options::RunOptions,
     initial_view_mode: ViewMode,
     quality: Option<crate::quality::QualityTier>,
 ) -> Result<()> {
+    // Refuse a run that cannot start before opening a window: an unreadable
+    // scenario, an unsupported delivery profile, an impossible fault
+    // manifest. The worker would only report the same refusal in the strip.
+    crate::sim_session::load_run(&run_path, &options).map_err(|error| anyhow::anyhow!(error))?;
     run_inner(
         scene_path.as_ref(),
         None,
@@ -118,7 +123,7 @@ pub fn run_sim(
         false,
         quality,
         None,
-        Some(run_path),
+        Some((run_path, options)),
     )
 }
 
@@ -156,7 +161,7 @@ fn run_inner(
     autoplay: bool,
     quality: Option<crate::quality::QualityTier>,
     headless: Option<HeadlessRequest>,
-    sim_run: Option<std::path::PathBuf>,
+    sim_run: Option<(std::path::PathBuf, argusnet_sim::run_options::RunOptions)>,
 ) -> Result<()> {
     let (scene_package, working_scene_root) = initialize_scene_package(scene_path)?;
     let replay_document = scene_package
@@ -465,9 +470,10 @@ fn run_inner(
     #[cfg(not(feature = "live-stream"))]
     let _ = live_endpoint;
 
-    if let Some(run_path) = sim_run {
+    if let Some((run_path, options)) = sim_run {
         app.insert_resource(crate::sim_session::SimSession::start(
             run_path,
+            options,
             argusnet_sim::worker::Pacing::RealTime,
         ));
         app.init_resource::<crate::sim_session::SimSourceState>();
