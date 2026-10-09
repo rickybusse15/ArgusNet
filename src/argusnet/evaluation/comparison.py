@@ -34,7 +34,19 @@ METRICS: dict[str, tuple[str | None, str]] = {
     "localisation_rmse_m": (
         "lower",
         "Root-mean-square distance in metres between each fused track and the truth it "
-        "was first paired with, over every frame the track exists.",
+        "was first paired with, over every frame the track exists, with truth taken at "
+        "the track's own (evidence) time.",
+    ),
+    "present_error_rmse_m": (
+        "lower",
+        "As localisation_rmse_m, but against truth at the frame time: the error of a "
+        "published track taken as describing the present. Exceeds localisation_rmse_m by "
+        "the cost of evidence age when delivery is modelled (B4).",
+    ),
+    "track_evidence_age_mean_s": (
+        "lower",
+        "Mean age in seconds of the evidence behind the published tracks (frame time minus "
+        "track time). 0 when tracks are fused at frame time.",
     ),
     "track_continuity_mean": (
         "higher",

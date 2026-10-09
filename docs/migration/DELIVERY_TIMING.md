@@ -124,6 +124,51 @@ The delayed run's extra error is mostly the lag itself: targets move about
 25 m/s, and its tracks are estimates as of 1.25 s ago. All three replays
 validate against `docs/replay-schema.json`.
 
+## Evidence age and track error
+
+Fixed-lag fusion publishes each track as of its evidence time: a track's
+`timestamp_s` is the fusion horizon, `fusion_lag` before the frame. Scoring it
+against the frame's truth mixes up two different costs. The first is how good
+the estimate is. The second is how old it is. The evaluation now reports them
+separately:
+
+- `localisation_rmse_m` scores each track against truth at the track's own
+  time. This is the estimator's error.
+- `present_error_rmse_m` scores it against truth at the frame time. This is
+  what a consumer gets if it takes the track as the present.
+- `track_evidence_age_mean_s` is the mean of frame time minus track time.
+
+The two errors are equal without delivery modelling.
+
+The demo scenario (`small` map, 4 drones, 3 `mixed` targets, seed 7, 120 s,
+dt 0.25 s) at increasing fusion lag:
+
+| Fusion lag | `localisation_rmse_m` | `present_error_rmse_m` | Evidence age |
+|---|---|---|---|
+| none (legacy) | 13.5 m | 13.5 m | 0 s |
+| 0.25 s | 13.5 m | 18.6 m | 0.25 s |
+| 0.5 s | 13.5 m | 24.7 m | 0.5 s |
+| 1.5 s | 13.6 m | 47.6 m | 1.5 s |
+
+So the estimate does not degrade with lag. The present error is the targets'
+motion over the evidence age.
+
+**Projecting tracks to the frame time was tried and rejected.** Each track was
+predicted forward over the lag with the tracker's own IMM filter. That made the
+present error worse: a mean of 47.7 m against 41.8 m without projection, at
+1.5 s lag. There are two reasons:
+
+- The filter's velocity is poor for these targets. Its mean error is 18.6 m/s
+  in the legacy run, against target speeds of about 17 m/s.
+- The targets manoeuvre hard. Even extrapolating with the *true* velocity at
+  the evidence time misses by 21.9 m on average over 1.5 s.
+
+Scaling the projection back to a quarter or half of the predicted motion
+recovered only 1–2 m. A useful present-time estimate needs a better motion
+model or faster evidence, not extrapolation. The published tracks therefore
+stay at their evidence time, labelled with it, and consumers can see
+`now - timestamp_s`.
+
 ## Not in this slice (rest of P4.10b)
 
 - Buffered mapping inputs with batch-size and max-age triggers (no lost
