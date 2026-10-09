@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — See the map being built
+
+- The viewer shows a no-prior run's map as the drones build it. The true
+  terrain and buildings are hidden, and in their place is the ground the
+  drones have measured: pale where it has few returns, solid where it has
+  many, glowing where it is new. Buildings the drones have found are raised
+  in magenta. Each drone's range returns are drawn as rays. A readout tracks
+  how much is known, how close it is to the truth, and how many buildings
+  were found.
+- Range returns now report a building that stands in front of the ground. An
+  earlier cut reported the ground behind it, so buildings were mostly missed.
+
 ## Unreleased — Start from no world knowledge
 
 - `--world-knowledge none` (in `argusnet-rs sim` and `argusnet-viewer --run`)

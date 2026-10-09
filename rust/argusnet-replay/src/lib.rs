@@ -194,6 +194,17 @@ impl ReplayDocument {
             .map(|value| value as u32)
     }
 
+    /// The self-built map's layout, in a run that started from no world
+    /// knowledge; `None` in every other run.
+    pub fn belief_grid(&self) -> Option<BeliefGridLayout> {
+        self.meta
+            .as_ref()
+            .and_then(|m| m.get("world_knowledge"))
+            .filter(|wk| wk.get("knowledge").and_then(Value::as_str) == Some("none"))
+            .and_then(|wk| wk.get("belief_grid"))
+            .and_then(|grid| serde_json::from_value(grid.clone()).ok())
+    }
+
     pub fn terrain_viewer_mesh(&self) -> Option<TerrainViewerMesh> {
         self.meta
             .as_ref()
@@ -234,6 +245,108 @@ pub struct ReplayFrame {
     pub target_metadata: Vec<TargetMetadata>,
     #[serde(default)]
     pub safety_events: Vec<SafetyEvent>,
+    /// A run that maps the world for itself (`world_knowledge: none`): the
+    /// belief cells this frame changed. Applying the frames' rows in order
+    /// rebuilds the map; see [`ReplayDocument::belief_grid`] for its layout.
+    #[serde(default)]
+    pub belief_updates: Vec<BeliefCellRow>,
+    /// A sample of each mobile platform's range returns this frame.
+    #[serde(default)]
+    pub range_scans: Vec<RangeScanSample>,
+    /// Platforms physics put back out of the true ground or a structure.
+    #[serde(default)]
+    pub world_contacts: Vec<WorldContact>,
+}
+
+/// `[i, j, ground_cm, structure_top_cm, occupancy_pct, confidence]`, as the
+/// schema's `belief_updates` row.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct BeliefCellRow(
+    pub u32,
+    pub u32,
+    pub Option<i32>,
+    pub Option<i32>,
+    pub u8,
+    pub u8,
+);
+
+impl BeliefCellRow {
+    pub fn ij(&self) -> (u32, u32) {
+        (self.0, self.1)
+    }
+    /// Believed ground height, metres; `None` until a ground return lands.
+    pub fn ground_m(&self) -> Option<f32> {
+        self.2.map(|cm| cm as f32 / 100.0)
+    }
+    /// Highest structure return, metres, when the cell is believed occupied.
+    pub fn structure_top_m(&self) -> Option<f32> {
+        self.3.map(|cm| cm as f32 / 100.0)
+    }
+    pub fn occupancy(&self) -> f32 {
+        self.4 as f32 / 100.0
+    }
+    /// 0 (no returns) to 4 (eight or more).
+    pub fn confidence_level(&self) -> u8 {
+        self.5
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RangeScanSample {
+    pub node_id: String,
+    pub origin_m: [f32; 3],
+    #[serde(default)]
+    pub ground: Vec<[f32; 3]>,
+    #[serde(default)]
+    pub structure: Vec<[f32; 3]>,
+    #[serde(default)]
+    pub misses: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct WorldContact {
+    pub node_id: String,
+    pub timestamp_s: f32,
+    pub kind: String,
+    pub correction_m: f32,
+}
+
+/// Where a run's belief cells are: `meta.world_knowledge.belief_grid`.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct BeliefGridLayout {
+    pub origin_m: [f32; 2],
+    pub resolution_m: f32,
+    pub dimensions: [u32; 2],
+}
+
+impl BeliefGridLayout {
+    /// The centre of cell `(i, j)`, metres.
+    pub fn centre(&self, i: u32, j: u32) -> [f32; 2] {
+        [
+            self.origin_m[0] + (i as f32 + 0.5) * self.resolution_m,
+            self.origin_m[1] + (j as f32 + 0.5) * self.resolution_m,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct BeliefStats {
+    #[serde(default)]
+    pub known_cells: u64,
+    #[serde(default)]
+    pub total_cells: u64,
+    #[serde(default)]
+    pub known_fraction: f32,
+    #[serde(default)]
+    pub ground_rmse_m: Option<f32>,
+    #[serde(default)]
+    pub ground_max_abs_error_m: Option<f32>,
+    #[serde(default)]
+    pub structure_cells: u64,
+    #[serde(default)]
+    pub structure_precision: Option<f32>,
+    #[serde(default)]
+    pub structure_recall: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -499,6 +612,9 @@ pub struct MappingState {
     pub total_cells: u32,
     #[serde(default)]
     pub mean_revisits: f32,
+    /// The self-built map's progress, in a run without a prior map.
+    #[serde(default)]
+    pub belief: Option<BeliefStats>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -671,6 +787,10 @@ mod live_stream {
                     reason: value.reason,
                 })
                 .collect(),
+            // Replay-only: the tracker wire carries no belief.
+            belief_updates: Vec::new(),
+            range_scans: Vec::new(),
+            world_contacts: Vec::new(),
         }
     }
 

@@ -97,6 +97,9 @@ pub struct SimSession {
     epoch: Option<u64>,
     /// The scene's replay metadata, carried into each run's document.
     meta: Option<ReplayDocument>,
+    /// What the run's options record in its meta (its world knowledge and
+    /// belief grid, its delivery profile, ...), merged over the scene's.
+    run_meta: serde_json::Map<String, serde_json::Value>,
     pub frames_received: u64,
     pub conversion_errors: u64,
 }
@@ -112,9 +115,19 @@ impl SimSession {
             notice: None,
             epoch: None,
             meta: None,
+            run_meta: serde_json::Map::new(),
             frames_received: 0,
             conversion_errors: 0,
         }
+    }
+
+    /// Carry the run's own meta keys into the documents the session builds.
+    pub fn with_run_meta(
+        mut self,
+        meta: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.run_meta = meta.into_iter().collect();
+        self
     }
 
     pub fn status(&self) -> WorkerStatus {
@@ -206,8 +219,18 @@ impl SimSession {
         if self.meta.is_none() {
             // The scene's metadata (ids, zones, terrain summary) describes the
             // world the run happens in; its recorded frames do not.
+            let mut meta = replay
+                .document
+                .as_ref()
+                .and_then(|d| d.meta.clone())
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let Some(object) = meta.as_object_mut() {
+                for (key, value) in &self.run_meta {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
             self.meta = Some(ReplayDocument {
-                meta: replay.document.as_ref().and_then(|d| d.meta.clone()),
+                meta: Some(meta),
                 summary: None,
                 frames: Vec::new(),
             });

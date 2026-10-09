@@ -18,7 +18,7 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 /// Render layer holding only the scan-map reconstruction mesh. The reconstruction
 /// camera renders this layer alone, so the Split-mode right pane shows the believed
 /// terrain on an otherwise empty background (no real terrain, drones, or gizmos).
-const RECON_LAYER: usize = 1;
+pub(crate) const RECON_LAYER: usize = 1;
 
 use crate::glyphs::{GlyphProjection, NODE_GLYPH_PX, TRACK_GLYPH_PX, TRUTH_GLYPH_PX};
 use crate::headless::{HeadlessRequest, HeadlessTarget};
@@ -115,7 +115,10 @@ pub fn run_sim(
     // Refuse a run that cannot start before opening a window: an unreadable
     // scenario, an unsupported delivery profile, an impossible fault
     // manifest. The worker would only report the same refusal in the strip.
-    crate::sim_session::load_run(&run_path, &options).map_err(|error| anyhow::anyhow!(error))?;
+    let probe = crate::sim_session::load_run(&run_path, &options)
+        .map_err(|error| anyhow::anyhow!(error))?;
+    let run_meta = probe.replay_extra_meta().clone();
+    drop(probe);
     run_inner(
         scene_path.as_ref(),
         None,
@@ -123,7 +126,7 @@ pub fn run_sim(
         false,
         quality,
         None,
-        Some((run_path, options)),
+        Some((run_path, options, run_meta)),
     )
 }
 
@@ -161,7 +164,11 @@ fn run_inner(
     autoplay: bool,
     quality: Option<crate::quality::QualityTier>,
     headless: Option<HeadlessRequest>,
-    sim_run: Option<(std::path::PathBuf, argusnet_sim::run_options::RunOptions)>,
+    sim_run: Option<(
+        std::path::PathBuf,
+        argusnet_sim::run_options::RunOptions,
+        std::collections::BTreeMap<String, serde_json::Value>,
+    )>,
 ) -> Result<()> {
     let (scene_package, working_scene_root) = initialize_scene_package(scene_path)?;
     let replay_document = scene_package
@@ -280,6 +287,7 @@ fn run_inner(
         .insert_resource(ProjectedZoneBadges::default())
         .insert_resource(MissionOverlaySettings::default())
         .insert_resource(ReconstructionCloud::default())
+        .init_resource::<crate::belief_map::BeliefMapView>()
         .insert_resource(ViewerUiState::default())
         .insert_resource(initial_view_mode);
 
@@ -347,6 +355,7 @@ fn run_inner(
                 viewer_ui_system,
                 crate::ui::conditions::conditions_ui_system,
                 crate::ui::preferences::preferences_ui_system,
+                crate::belief_map::belief_readout_ui_system,
             )
                 .chain(),
         );
@@ -419,6 +428,9 @@ fn run_inner(
                 // overlay toggle -- see the note on the run conditions below.
                 update_reconstruction_system,
                 maintain_reconstruction_mesh_system,
+                // A self-built map (world_knowledge: none), as of the cursor.
+                crate::belief_map::sync_belief_map_system,
+                crate::belief_map::render_belief_chunks_system,
             )
                 .chain()
                 .in_set(ViewerSet::Presentation),
@@ -445,6 +457,7 @@ fn run_inner(
                 draw_team_localization_system.run_if(loc_ellipses_enabled),
                 draw_coord_frame_system.run_if(coord_frame_enabled),
                 draw_egress_paths_system.run_if(egress_paths_enabled),
+                crate::belief_map::belief_overlays_system,
             )
                 .chain()
                 .in_set(ViewerSet::Overlays),
@@ -470,12 +483,15 @@ fn run_inner(
     #[cfg(not(feature = "live-stream"))]
     let _ = live_endpoint;
 
-    if let Some((run_path, options)) = sim_run {
-        app.insert_resource(crate::sim_session::SimSession::start(
-            run_path,
-            options,
-            argusnet_sim::worker::Pacing::RealTime,
-        ));
+    if let Some((run_path, options, run_meta)) = sim_run {
+        app.insert_resource(
+            crate::sim_session::SimSession::start(
+                run_path,
+                options,
+                argusnet_sim::worker::Pacing::RealTime,
+            )
+            .with_run_meta(run_meta),
+        );
         app.init_resource::<crate::sim_session::SimSourceState>();
         app.add_systems(
             Update,
@@ -2663,6 +2679,9 @@ mod tests {
             scan_mission_state: None,
             target_metadata: Vec::new(),
             safety_events: Vec::new(),
+            belief_updates: Vec::new(),
+            range_scans: Vec::new(),
+            world_contacts: Vec::new(),
         };
 
         let rejection = RejectedObservation {

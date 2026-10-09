@@ -92,19 +92,52 @@ All additions are optional:
 - **Frame `world_contacts`**: as above.
 - **`mapping_state.belief`**: known cells and fraction; ground RMSE and
   maximum error against the true terrain at known cell centres; structure
-  cells. These are evaluation figures, computed by the writer and never read
-  by the run.
+  cells, with structure precision (believed cells with a true building or
+  wall within one cell) and recall (true building cells with a believed
+  structure within one cell). These are evaluation figures, computed by the
+  writer and never read by the run.
 - **`meta.world_knowledge`**: the exploration config, the grid layout
   (origin, resolution, dimensions) and the launch floor.
+
+## The viewer
+
+A replay or `--run` from a `none` run shows the map the drones had at the
+cursor. The scene's own layers (the true terrain and buildings) are hidden
+when such a run opens, and stay in the Layers panel as truth for comparison.
+
+- **Known ground**: a surface over every cell with a ground return, its
+  corners averaged from neighbouring cells. Few returns show washed toward
+  slate; many show as solid terrain colours.
+- **New cells**: they glow cyan for 2.5 s, so the edge of the map visibly
+  moves.
+- **Structures**: extruded in magenta to their highest return.
+- **Unknown**: black, inside a faint outline of the map bounds.
+- **Range returns**: each drone's returns this frame, drawn as rays.
+- **Contacts**: red rings.
+- **Readout**: known %, ground RMSE, structure found and right %, and
+  contacts.
+
+Scrubbing back rebuilds the map from the start. Mesh rebuilds are confined
+to the 32×32-cell chunks that changed.
 
 ## Evidence
 
 Release build, 4 workers, seed 7, 120 s at dt 0.25 s:
 
-| Scenario | Known at 1 s / 10 s / 30 s / 60 s / 120 s | Ground RMSE at 120 s (max) | Contacts | Tick p50 (prior → none) | Replay (prior → none) |
-|---|---|---|---|---|---|
-| Demo: `small` map, 4 drones, target tracking | 8% / 61% / 78% / 83% / 87% | 0.97 m (9.6 m) | 0 | 0.26 → 3.1 ms | 9.4 → 11.9 MB |
-| Regional: 16 drones, scan/map/inspect, 178,848 cells | 1% / 9% / 27% / 45% / 74% | 0.28 m (2.2 m) | 0 | 0.60 → 8.4 ms | 5.8 → 21.3 MB |
+| Scenario | Known at 1 s / 10 s / 30 s / 60 s / 120 s | Ground RMSE at 120 s (max) | Structures at 120 s: found / right | Contacts | Tick p50 (prior → none) | Replay (prior → none) |
+|---|---|---|---|---|---|---|
+| Demo: `small` map, 4 drones, target tracking | 8% / 60% / 78% / 82% / 86% | 0.98 m | 88% / 100% | 0 | 0.26 → 3.4 ms | 9.4 → 11.9 MB |
+| Regional: 16 drones, scan/map/inspect, 178,848 cells | 1% / 9% / 27% / 45% / 74% | 0.28 m (2.2 m) | 13% / 100% | 0 | 0.60 → 9.8 ms | 5.8 → 21.3 MB |
+
+The regional recall is a coverage figure, not a mapping error. The scan lanes
+were planned around the large building (432 × 252 m) by the bundle builder,
+which still uses the true obstacle layer (see below). No drone ever flies over
+it, and at working altitude the 400 m scan range does not reach its roof.
+Everything that has been seen is mapped right.
+
+A range return reports the nearer of the terrain crossing and the first
+building or wall face. An earlier cut used the visibility test, which checks
+terrain first, and so missed nearly every building.
 
 The worst ground errors are steep cells, where a 10 m cell's mean return
 differs from the height at its centre. Over the regional run, stage 6 (the
@@ -140,6 +173,9 @@ mistaken for done:
   heights, all before the run starts. In a no-prior run these are mission
   inputs the platforms did not earn. The builder needs a mode that leaves the
   lanes straight and lets the belief obstacles deflect them.
+- **Unseen buildings stay unknown.** Unknown ground already stands in high,
+  so planning stays safe. But a mapping mission should go and look, which is
+  frontier exploration again.
 - **Mission progress counts footprint coverage.** The scan mission's
   `coverage_fraction` is still the 50 m footprint bookkeeping, not the
   belief's known fraction, so a scan mission completes on the old measure.
