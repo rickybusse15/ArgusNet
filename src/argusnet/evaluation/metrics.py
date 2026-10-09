@@ -70,6 +70,13 @@ class EvaluationReport:
     track_continuity_per_target: dict[str, float] = field(default_factory=dict)
     localisation_rmse_m: float | None = None
     localisation_rmse_per_track: dict[str, float] = field(default_factory=dict)
+    # Each track against truth at the frame time, whatever its evidence time
+    # (B4): what a consumer of the published track experiences. Equal to
+    # `localisation_rmse_m` when tracks are fused at frame time.
+    present_error_rmse_m: float | None = None
+    # Mean of (frame time - track time) over every scored track sample: how
+    # old the evidence behind the published tracks is. 0 without delivery.
+    track_evidence_age_mean_s: float | None = None
     covariance_reduction_mean: float | None = None
     # Tracks behind covariance_reduction_mean; 0 when it is None.
     covariance_reduction_tracks: int = 0
@@ -242,10 +249,50 @@ def compute_track_continuity(
     return mean_continuity, per_target
 
 
+def _truth_at_track_time(frames: list[dict]):
+    """A lookup of truth positions by time, for scoring a track at its own
+    timestamp. A fixed-lag run (B4) publishes tracks fused at the evidence
+    time, earlier than the frame; the estimate is judged against where the
+    target was then. Times resolve to the nearest frame within half a frame
+    period; anything else falls back to the frame's own truths."""
+    times = np.asarray([float(f.get("timestamp_s", 0.0)) for f in frames])
+    period = float(np.median(np.diff(times))) if len(times) > 1 else 0.0
+    by_index: list[dict[str, np.ndarray] | None] = [None] * len(frames)
+
+    def truths(index: int) -> dict[str, np.ndarray]:
+        cached = by_index[index]
+        if cached is None:
+            cached = {
+                t.get("target_id", ""): _truth_position(t)
+                for t in _extract_truths_from_frame(frames[index])
+            }
+            by_index[index] = cached
+        return cached
+
+    def lookup(frame_index: int, track: dict) -> dict[str, np.ndarray]:
+        stamp = track.get("timestamp_s")
+        frame_time = times[frame_index]
+        if stamp is None or period <= 0.0 or abs(float(stamp) - frame_time) <= 1e-9:
+            return truths(frame_index)
+        nearest = int(np.argmin(np.abs(times[: frame_index + 1] - float(stamp))))
+        if abs(times[nearest] - float(stamp)) <= period / 2.0:
+            return truths(nearest)
+        return truths(frame_index)
+
+    return times, truths, lookup
+
+
 def compute_localisation_rmse(
     frames: list[dict],
+    at_evidence_time: bool = True,
 ) -> tuple[float | None, dict[str, float]]:
     """Compute localisation RMSE (metres) per track and mission-wide.
+
+    With ``at_evidence_time`` (the default), a track is scored against truth
+    at its own ``timestamp_s``: a fixed-lag run publishes tracks fused at the
+    evidence time, and this is the estimator's error. Without it, against
+    the frame's truths: the error of the track taken as describing the
+    present. The two agree for tracks fused at frame time.
 
     Each track is matched to a truth once, in the first frame where it
     appears alongside at least one truth, and keeps that pairing for the
@@ -299,17 +346,15 @@ def compute_localisation_rmse(
 
     # Accumulate squared errors per track
     sq_errors: dict[str, list[float]] = {tid: [] for tid in track_to_truth}
+    _, frame_truths, truths_for = _truth_at_track_time(frames)
 
-    for frame in frames:
+    for index, frame in enumerate(frames):
         tracks = _extract_tracks_from_frame(frame)
-        truths = _extract_truths_from_frame(frame)
-        truth_by_id: dict[str, np.ndarray] = {
-            t.get("target_id", ""): _truth_position(t) for t in truths
-        }
         for track in tracks:
             tid = track.get("track_id", "")
             if tid not in track_to_truth:
                 continue
+            truth_by_id = truths_for(index, track) if at_evidence_time else frame_truths(index)
             target_id = track_to_truth[tid]
             if target_id not in truth_by_id:
                 continue
@@ -329,6 +374,19 @@ def compute_localisation_rmse(
 
     mission_rmse = float(np.sqrt(np.mean(all_sq)))
     return mission_rmse, per_track
+
+
+def compute_track_evidence_age(frames: list[dict]) -> float | None:
+    """Mean of (frame time - track time) over every track in every frame:
+    how old the evidence behind the published tracks is. None without
+    tracks."""
+    ages = [
+        float(frame.get("timestamp_s", 0.0)) - float(track["timestamp_s"])
+        for frame in frames
+        for track in _extract_tracks_from_frame(frame)
+        if track.get("timestamp_s") is not None
+    ]
+    return float(np.mean(ages)) if ages else None
 
 
 COVARIANCE_REDUCTION_MIN_UPDATES = 5
@@ -453,6 +511,7 @@ def evaluate_replay(
     ttr_mean, ttr_p95 = compute_time_to_reacquire(frames)
     cont_mean, cont_per_target = compute_track_continuity(frames, target_ids)
     loc_rmse, loc_per_track = compute_localisation_rmse(frames)
+    present_rmse, _ = compute_localisation_rmse(frames, at_evidence_time=False)
     cov_reductions = compute_covariance_reductions(frames)
     cov_reduction = float(np.mean(cov_reductions)) if cov_reductions else None
 
@@ -514,6 +573,8 @@ def evaluate_replay(
         track_continuity_per_target=cont_per_target,
         localisation_rmse_m=loc_rmse,
         localisation_rmse_per_track=loc_per_track,
+        present_error_rmse_m=present_rmse,
+        track_evidence_age_mean_s=compute_track_evidence_age(frames),
         covariance_reduction_mean=cov_reduction,
         covariance_reduction_tracks=len(cov_reductions),
         # Reliability
@@ -752,6 +813,8 @@ def report_to_dict(report: EvaluationReport) -> dict:
         "localisation_rmse_m": (
             float(report.localisation_rmse_m) if report.localisation_rmse_m is not None else None
         ),
+        "present_error_rmse_m": _float_or_none(report.present_error_rmse_m),
+        "track_evidence_age_mean_s": _float_or_none(report.track_evidence_age_mean_s),
         "localisation_rmse_per_track": {
             k: float(v) for k, v in report.localisation_rmse_per_track.items()
         },
@@ -821,6 +884,8 @@ def report_from_dict(d: dict) -> EvaluationReport:
             float(d["localisation_rmse_m"]) if d.get("localisation_rmse_m") is not None else None
         ),
         localisation_rmse_per_track=dict(d.get("localisation_rmse_per_track") or {}),
+        present_error_rmse_m=_optional_float(d.get("present_error_rmse_m")),
+        track_evidence_age_mean_s=_optional_float(d.get("track_evidence_age_mean_s")),
         covariance_reduction_mean=(
             float(d["covariance_reduction_mean"])
             if d.get("covariance_reduction_mean") is not None

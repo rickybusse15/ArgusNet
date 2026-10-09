@@ -17,6 +17,7 @@ from argusnet.evaluation.metrics import (
     compute_localisation_rmse,
     compute_time_to_reacquire,
     compute_track_continuity,
+    compute_track_evidence_age,
     evaluate_replay,
     report_from_dict,
     report_to_dict,
@@ -226,6 +227,67 @@ class TestTrackContinuity:
 # ===================================================================
 # compute_localisation_rmse
 # ===================================================================
+
+
+def _lagged_frames(lag_frames: int, n: int = 10, dt: float = 0.5) -> list[dict]:
+    """A target moving at 10 m/s along x. Each frame's track sits exactly
+    where the target was ``lag_frames`` frames earlier, stamped with that
+    time, as a fixed-lag run (B4) publishes it."""
+    frames = []
+    for i in range(n):
+        t = i * dt
+        truth = {"target_id": "tgt1", "position": [10.0 * t, 0.0, 0.0]}
+        tracks = []
+        if i >= lag_frames:
+            ta = (i - lag_frames) * dt
+            track = _make_track("tgt1", [10.0 * ta, 0.0, 0.0])
+            track["timestamp_s"] = ta
+            tracks.append(track)
+        frames.append(_make_frame(t, tracks=tracks, truths=[truth]))
+    return frames
+
+
+class TestEvidenceTimeScoring:
+    def test_a_lagged_exact_estimate_scores_zero_at_its_evidence_time(self):
+        frames = _lagged_frames(2)
+        rmse, _ = compute_localisation_rmse(frames)
+        assert rmse == pytest.approx(0.0)
+
+    def test_the_present_error_is_the_distance_moved_over_the_lag(self):
+        frames = _lagged_frames(2)
+        present, _ = compute_localisation_rmse(frames, at_evidence_time=False)
+        assert present == pytest.approx(10.0)  # 10 m/s for 2 frames of 0.5 s
+        assert compute_track_evidence_age(frames) == pytest.approx(1.0)
+
+    def test_without_lag_both_agree_and_age_is_zero(self):
+        frames = _lagged_frames(0)
+        for frame in frames:
+            for track in frame["tracks"]:
+                track["position"][1] = 3.0
+        at_evidence, _ = compute_localisation_rmse(frames)
+        present, _ = compute_localisation_rmse(frames, at_evidence_time=False)
+        assert at_evidence == pytest.approx(3.0)
+        assert present == pytest.approx(3.0)
+        assert compute_track_evidence_age(frames) == pytest.approx(0.0)
+
+    def test_tracks_without_a_timestamp_are_scored_at_the_frame(self):
+        frames = _lagged_frames(2)
+        for frame in frames:
+            for track in frame["tracks"]:
+                del track["timestamp_s"]
+        rmse, _ = compute_localisation_rmse(frames)
+        assert rmse == pytest.approx(10.0)
+        assert compute_track_evidence_age(frames) is None
+
+    def test_the_report_carries_both_and_round_trips(self):
+        doc = {"meta": {}, "frames": _lagged_frames(2)}
+        report = evaluate_replay(doc, "s", "m", 0.0, 1)
+        assert report.localisation_rmse_m == pytest.approx(0.0)
+        assert report.present_error_rmse_m == pytest.approx(10.0)
+        assert report.track_evidence_age_mean_s == pytest.approx(1.0)
+        again = report_from_dict(report_to_dict(report))
+        assert again.present_error_rmse_m == report.present_error_rmse_m
+        assert again.track_evidence_age_mean_s == report.track_evidence_age_mean_s
 
 
 class TestLocalisationRMSE:

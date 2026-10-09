@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Track error scored at evidence time (B4)
+
+- Evaluation reports score each track against truth at the track's own time.
+  Under a fusion lag, tracks describe the moment their evidence was taken, so
+  `localisation_rmse_m` now measures the estimate rather than its age. It is
+  unchanged for runs without delivery modelling.
+- New `present_error_rmse_m` (the error if the track is taken as the present)
+  and `track_evidence_age_mean_s` show what the lag costs. On the demo
+  scenario the estimate holds at 13.5 m at every lag, while the present error
+  grows from 13.5 m to 47.6 m at 1.5 s. Projecting tracks forward with the
+  tracker's velocity made it worse, so tracks stay at their evidence time (see
+  `docs/migration/DELIVERY_TIMING.md`).
+
 ## Unreleased — Sensor and link failure scenarios (F2)
 
 - `argusnet-rs sim --faults manifest.json` schedules sensor outages, link
