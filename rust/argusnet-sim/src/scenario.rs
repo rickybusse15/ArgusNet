@@ -2120,6 +2120,17 @@ impl AssembledRun {
 
     /// Add keys to the replay's `meta` -- provenance a caller knows and the
     /// run does not, such as the config it was built from.
+    /// The map's extent, metres.
+    pub fn map_bounds_m(&self) -> Bounds2d {
+        self.map_bounds_m
+    }
+
+    /// The highest launch pad or station: all a platform knows of the ground
+    /// before sensing it.
+    pub fn launch_floor_m(&self) -> f64 {
+        self.launch_floor_m
+    }
+
     /// What the options installed record in the replay's meta
     /// (`world_knowledge`, `delivery_profile`, ...), before any tick.
     pub fn replay_extra_meta(&self) -> &BTreeMap<String, serde_json::Value> {

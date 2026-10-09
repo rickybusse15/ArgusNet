@@ -231,6 +231,78 @@ impl ScenePackage {
     }
 }
 
+/// Write a scene package with no layers at all into `dir`: the frame for a
+/// run whose world is not known in advance (`world_knowledge: none`). It
+/// carries the map's bounds, so camera, fog, sky and shadows frame the right
+/// area; a rough height span from the launch pads; and the marker styles. The
+/// terrain and buildings are what the drones build.
+pub fn write_unmapped_scene(
+    dir: &Path,
+    scene_id: &str,
+    bounds: [f64; 4],
+    height_span_m: (f64, f64),
+) -> Result<PathBuf> {
+    let [x_min, x_max, y_min, y_max] = bounds;
+    let bounds = serde_json::json!({
+        "x_min_m": x_min, "x_max_m": x_max, "y_min_m": y_min, "y_max_m": y_max,
+    });
+    let crs = serde_json::json!({
+        "source_crs_id": "local-enu",
+        "runtime_crs_id": "local-enu",
+        "origin_geodetic": {"lat_deg": null, "lon_deg": null, "h_m": null},
+        "xy_units": "meters",
+        "z_datum": "local",
+    });
+    let manifest = serde_json::json!({
+        "format_version": "smartscene-v1",
+        "scene_id": scene_id,
+        "bounds_xy_m": bounds,
+        "runtime_crs": crs,
+        "source_crs_id": "local-enu",
+        "layers": [],
+        "replay": null,
+        "metadata": {"environment": "metadata/environment.json", "style": "metadata/style.json"},
+        "build": {"source_kind": "self-built", "tool": "argusnet-viewer --run --world-knowledge none"},
+    });
+    let environment = serde_json::json!({
+        "source_kind": "self-built",
+        "scene_id": scene_id,
+        "source_crs_id": "local-enu",
+        "runtime_crs": crs,
+        "bounds_xy_m": bounds,
+        "terrain_summary": {
+            "kind": "unknown-until-sensed",
+            "min_height_m": height_span_m.0,
+            "max_height_m": height_span_m.1,
+        },
+    });
+    let style_layer = |id: &str, rgba: [f64; 4]| {
+        serde_json::json!({
+            "id": id, "semantic_kind": id, "color_rgba": rgba, "opacity": rgba[3],
+            "elevation_mode": "absolute", "draw_order": 100, "default_visibility": true,
+        })
+    };
+    let style = serde_json::json!({
+        "style_version": "smartstyle-v1",
+        "layers": [
+            style_layer("tracks", [1.0, 0.604, 0.302, 1.0]),
+            style_layer("truths", [0.302, 0.835, 0.906, 1.0]),
+            style_layer("nodes", [0.953, 0.941, 0.647, 1.0]),
+        ],
+    });
+    fs::create_dir_all(dir.join("metadata"))
+        .with_context(|| format!("failed to create {}", dir.display()))?;
+    for (path, value) in [
+        ("scene_manifest.json", &manifest),
+        ("metadata/environment.json", &environment),
+        ("metadata/style.json", &style),
+    ] {
+        fs::write(dir.join(path), serde_json::to_vec_pretty(value)?)
+            .with_context(|| format!("failed to write {}", dir.join(path).display()))?;
+    }
+    Ok(dir.to_path_buf())
+}
+
 pub fn normalize_scene_root(scene_path: &Path) -> Result<PathBuf> {
     let resolved = scene_path
         .canonicalize()
@@ -556,5 +628,23 @@ mod tests {
         assert!(ScenePackage::load(&root).is_err());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_unmapped_scene_loads_with_bounds_and_no_layers() {
+        let dir =
+            std::env::temp_dir().join(format!("argusnet-unmapped-test-{}", std::process::id()));
+        let path =
+            super::write_unmapped_scene(&dir, "demo", [-100.0, 200.0, -50.0, 150.0], (10.0, 160.0))
+                .expect("written");
+        let package = ScenePackage::load(&path).expect("loads");
+        assert!(package.manifest.layers.is_empty());
+        assert_eq!(package.manifest.bounds_xy_m.x_max_m, 200.0);
+        assert!(package.style_for("tracks").is_some());
+        assert!(
+            !package.is_synthetic_source(),
+            "no hot-swap for a self-built world"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

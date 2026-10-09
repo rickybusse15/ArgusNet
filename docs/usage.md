@@ -158,8 +158,13 @@ a range scanner, builds its own map, and plans only on that map.
 
 ```bash
 argusnet-rs sim --config runs/demo-config.json --world-knowledge none --replay runs/scratch.json
-cargo run -p argusnet-viewer -- --scene runs/demo.smartscene --run runs/demo-config.json --world-knowledge none
+cargo run -p argusnet-viewer -- --run runs/demo-config.json --world-knowledge none
 ```
+
+No `--scene` is needed. Without one, the viewer opens on the run's map bounds
+with nothing drawn, and the terrain and buildings appear as the drones measure
+them. Pass `--scene` to have the true world available for comparison; it is
+hidden when the run opens and stays in the Layers panel.
 
 The replay's `mapping_state.belief` reports how much of the map is known and
 how far its ground is from the truth. `world_contacts` lists any time the map

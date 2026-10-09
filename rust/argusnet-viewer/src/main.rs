@@ -13,9 +13,12 @@ use clap::Parser;
 struct Args {
     #[arg(
         long,
-        help = "Path to a smartscene-v1 directory or scene_manifest.json file."
+        help = "Path to a smartscene-v1 directory or scene_manifest.json file. Optional \
+                with --run: without it the viewer opens on the run's map bounds alone \
+                and draws only what the run reveals (with --world-knowledge none, the \
+                map the drones build)."
     )]
-    scene: PathBuf,
+    scene: Option<PathBuf>,
     #[arg(
         long,
         default_value_t = false,
@@ -193,8 +196,11 @@ fn parse_source_delay(text: &str) -> std::result::Result<(String, f64), String> 
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.headless {
+        let Some(scene) = args.scene.clone() else {
+            anyhow::bail!("--scene is required for a headless render");
+        };
         return render_headless(
-            args.scene,
+            scene,
             HeadlessRenderOptions {
                 output: args.output,
                 record_dir: args.record_dir,
@@ -215,6 +221,9 @@ fn main() -> Result<()> {
         let options = args.run_options.options()?;
         return argusnet_viewer::run_sim(args.scene, run, options, args.view_mode, args.quality);
     }
+    let Some(scene) = args.scene else {
+        anyhow::bail!("--scene is required, except with --run");
+    };
     #[cfg(feature = "live-stream")]
     if let Some(endpoint) = args.live {
         let tls = argusnet_viewer::live::LiveTlsConfig {
@@ -224,7 +233,7 @@ fn main() -> Result<()> {
             domain_name: args.live_tls_domain,
         };
         return argusnet_viewer::run_live(
-            args.scene,
+            scene,
             endpoint,
             tls,
             args.view_mode,
@@ -232,5 +241,5 @@ fn main() -> Result<()> {
             args.quality,
         );
     }
-    argusnet_viewer::run(args.scene, args.view_mode, args.autoplay, args.quality)
+    argusnet_viewer::run(scene, args.view_mode, args.autoplay, args.quality)
 }

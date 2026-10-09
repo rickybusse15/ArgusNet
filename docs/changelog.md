@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — The drones' map as a 3D world, with no scene needed
+
+- `argusnet-viewer --run <scenario> --world-knowledge none` no longer needs a
+  scene package. The viewer opens on the scenario's map bounds with nothing
+  in them, and the world appears as the drones measure it.
+- The map is drawn as real terrain: one continuous, lit surface, with a
+  darker cut edge where the known area ends. Each building is a single solid
+  traced from the cells the drones found, not a stack of per-cell boxes.
+
 ## Unreleased — See the map being built
 
 - The viewer shows a no-prior run's map as the drones build it. The true
