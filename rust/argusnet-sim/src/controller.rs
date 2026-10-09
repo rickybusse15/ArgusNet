@@ -327,6 +327,16 @@ impl ControllerStage {
         self.state.environment = Some(environment);
     }
 
+    /// The installed environment, to change what the controllers read.
+    pub fn environment_mut(&mut self) -> Option<&mut ControllerEnvironment> {
+        self.state.environment.as_mut()
+    }
+
+    /// Keep sampled positions out of the true ground and structures.
+    pub fn set_physical_guard(&mut self, guard: crate::belief_world::PhysicalGuard) {
+        self.guard = Some(guard);
+    }
+
     /// Launch a parked platform. Ignored for one already launched, as in the
     /// reference.
     pub fn trigger_launch(&mut self, node_id: &str, timestamp_s: f64, target_id: &str) -> bool {
@@ -549,6 +559,11 @@ impl ControllerStage {
 pub struct ControllerStage {
     state: State,
     battery: Option<BatteryStage>,
+    /// Physics, in a run whose controllers plan against a belief rather than
+    /// the true world (`world_knowledge: none`): a sampled position inside
+    /// the ground or a structure is put back and recorded. `None` in every
+    /// prior run, which then samples exactly as before.
+    guard: Option<crate::belief_world::PhysicalGuard>,
 }
 
 impl fmt::Debug for ControllerStage {
@@ -581,6 +596,7 @@ impl ControllerStage {
         Self {
             state: State::default(),
             battery: None,
+            guard: None,
         }
     }
 
@@ -601,6 +617,7 @@ impl ControllerStage {
     }
 
     fn sample_all(&mut self, context: &mut TickContext<'_>) -> Result<bool, StageError> {
+        let guard = self.guard.as_ref();
         let State {
             controllers,
             environment,
@@ -620,6 +637,10 @@ impl ControllerStage {
             if let Some(detail) = log.failure.borrow_mut().take() {
                 return Err(StageError::Invariant(format!("{node_id}: {detail}")));
             }
+            let position = match guard {
+                Some(guard) => guard.enforce(node_id, timestamp_s, position),
+                None => position,
+            };
             let platform = context.world.platform_mut(node_id).ok_or_else(|| {
                 StageError::Invariant(format!("controller {node_id} has no platform in the world"))
             })?;

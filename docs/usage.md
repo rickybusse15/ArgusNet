@@ -150,6 +150,22 @@ refusal says why (for example, Run on a finished run). The timeline holds
 every tick so far; scrubbing it reviews history without rewinding the run.
 Rewinding the run itself needs retained checkpoints and is shown disabled.
 
+### Start from no world knowledge
+
+By default the drones are given the true terrain and buildings. With
+`--world-knowledge none` they know nothing but their launch pads: each carries
+a range scanner, builds its own map, and plans only on that map.
+
+```bash
+argusnet-rs sim --config runs/demo-config.json --world-knowledge none --replay runs/scratch.json
+cargo run -p argusnet-viewer -- --scene runs/demo.smartscene --run runs/demo-config.json --world-knowledge none
+```
+
+The replay's `mapping_state.belief` reports how much of the map is known and
+how far its ground is from the truth. `world_contacts` lists any time the map
+led a drone somewhere physics had to correct. See
+`docs/migration/UNKNOWN_WORLD.md`.
+
 ### Mapping run with split-view 3-D reconstruction
 
 Run a scan/map/inspect mission, package it, and open the viewer with the real

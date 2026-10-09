@@ -287,6 +287,64 @@ pub struct ReplayMappingState {
     pub covered_cells: u64,
     pub total_cells: u64,
     pub mean_revisits: f64,
+    /// The self-built map's progress, in a run without a prior map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub belief: Option<ReplayBeliefStats>,
+}
+
+/// How much of the world the platforms have mapped, and how well. The error
+/// figures compare the belief with the true terrain. They are evaluation,
+/// computed by the writer, never read by the run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayBeliefStats {
+    pub known_cells: u64,
+    pub total_cells: u64,
+    pub known_fraction: f64,
+    /// Over known cells: belief ground minus true ground at the cell centre.
+    pub ground_rmse_m: Option<f64>,
+    pub ground_max_abs_error_m: Option<f64>,
+    /// Cells believed occupied by a structure.
+    pub structure_cells: u64,
+}
+
+/// A sample of one platform's range returns this tick, rounded to the
+/// decimetre.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayRangeScan {
+    pub node_id: String,
+    pub origin_m: [f64; 3],
+    pub ground: Vec<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub structure: Vec<[f64; 3]>,
+    pub misses: u32,
+}
+
+/// Most returns per scan a replay frame carries. The frame's returns are a
+/// picture of the sensing; the map itself travels in `belief_updates`.
+pub const REPLAY_RETURNS_PER_SCAN: usize = 32;
+
+impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
+    /// An evenly strided sample of at most [`REPLAY_RETURNS_PER_SCAN`]
+    /// returns, in ray order.
+    fn from(scan: &crate::range_scan::RangeScan) -> Self {
+        let dm = |p: [f64; 3]| p.map(|v| (v * 10.0).round() / 10.0);
+        let stride = scan.returns.len().div_ceil(REPLAY_RETURNS_PER_SCAN).max(1);
+        let of = |class| {
+            scan.returns
+                .iter()
+                .step_by(stride)
+                .filter(|hit| hit.class == class)
+                .map(|hit| dm(hit.point_m))
+                .collect()
+        };
+        Self {
+            node_id: scan.node_id.clone(),
+            origin_m: dm(scan.origin_m),
+            ground: of(crate::range_scan::ReturnClass::Ground),
+            structure: of(crate::range_scan::ReturnClass::Structure),
+            misses: scan.misses,
+        }
+    }
 }
 
 /// `localization_state`: track quality, derived from the frame's tracks and
@@ -434,6 +492,18 @@ pub struct ReplayFrame {
     /// Stage 4's validations, as the fused frame echoes them (P4.9d).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub safety_events: Vec<ReplaySafetyEvent>,
+    /// The belief cells this tick changed, in a run that maps the world for
+    /// itself (`world_knowledge: none`). Each row replaces the cell's last,
+    /// so applying the frames in order rebuilds the map.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub belief_updates: Vec<crate::belief_world::BeliefCellUpdate>,
+    /// This tick's range returns, per mobile platform.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub range_scans: Vec<ReplayRangeScan>,
+    /// Platforms physics put back out of the ground or a structure this tick:
+    /// the belief had them somewhere they could not be.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub world_contacts: Vec<crate::belief_world::WorldContact>,
 }
 
 /// A `SafetyValidationResult` as the reference writes it: the fused frame's
@@ -628,6 +698,9 @@ impl ReplayWriter {
             scan_mission_state: None,
             target_metadata: Vec::new(),
             safety_events: Vec::new(),
+            belief_updates: Vec::new(),
+            range_scans: Vec::new(),
+            world_contacts: Vec::new(),
         }
     }
 

@@ -422,6 +422,28 @@ struct MappingCheckpoint {
     zones: Vec<ZoneCheckpoint>,
     #[serde(default)]
     team: Option<TeamLocalization>,
+    /// The self-built map, in a run without a prior one. Absent otherwise,
+    /// so a prior run's checkpoint is the one it always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    belief: Option<crate::belief_world::BeliefGrid>,
+}
+
+/// Stage 8's self-built map (`world_knowledge: none`): the grid, the handle
+/// the next tick's planners read, and this tick's scans.
+#[derive(Debug)]
+struct BeliefMapping {
+    grid: crate::belief_world::BeliefGrid,
+    config: crate::belief_world::ExplorationConfig,
+    handle: crate::belief_world::BeliefHandle,
+    inbox: Vec<crate::range_scan::RangeScan>,
+    /// The scans fused this tick, kept for the replay.
+    fused: Vec<crate::range_scan::RangeScan>,
+}
+
+impl BeliefMapping {
+    fn publish(&mut self) {
+        self.handle.publish(self.grid.snapshot(&self.config));
+    }
 }
 
 /// Fewest platforms whose particle work is forked across the session's
@@ -450,9 +472,72 @@ pub struct MappingStage {
     /// The session's workers for the per-platform particle draws and
     /// scoring (B3); serial unless the session gives it more.
     compute: std::sync::Arc<crate::compute::ComputePool>,
+    belief: Option<BeliefMapping>,
 }
 
 impl MappingStage {
+    /// Build a map from range scans into `grid` (empty), and publish it to
+    /// the returned handle after every tick. The handle starts with the empty
+    /// grid's snapshot, so the first tick plans against nothing known.
+    pub fn set_belief(
+        &mut self,
+        mut grid: crate::belief_world::BeliefGrid,
+        config: crate::belief_world::ExplorationConfig,
+    ) -> crate::belief_world::BeliefHandle {
+        let handle = crate::belief_world::BeliefHandle::new(grid.snapshot(&config));
+        self.belief = Some(BeliefMapping {
+            grid,
+            config,
+            handle: handle.clone(),
+            inbox: Vec::new(),
+            fused: Vec::new(),
+        });
+        handle
+    }
+
+    /// The scans stage 6 made this tick (`Handoff::RangeScansToMapping`).
+    pub fn submit_range_scans(&mut self, scans: Vec<crate::range_scan::RangeScan>) {
+        if let Some(belief) = self.belief.as_mut() {
+            belief.inbox = scans;
+        }
+    }
+
+    /// The self-built map, in a run without a prior one.
+    pub fn belief_grid(&self) -> Option<&crate::belief_world::BeliefGrid> {
+        self.belief.as_ref().map(|belief| &belief.grid)
+    }
+
+    /// The occupancy threshold the belief uses.
+    pub fn exploration_config(&self) -> Option<&crate::belief_world::ExplorationConfig> {
+        self.belief.as_ref().map(|belief| &belief.config)
+    }
+
+    /// The belief cells changed since the last call, as replay rows.
+    pub fn take_belief_updates(&mut self) -> Vec<crate::belief_world::BeliefCellUpdate> {
+        self.belief.as_mut().map_or_else(Vec::new, |belief| {
+            let threshold = belief.config.occupied_probability;
+            belief.grid.take_changed_cells(threshold)
+        })
+    }
+
+    /// The scans fused this tick.
+    pub fn fused_scans(&self) -> &[crate::range_scan::RangeScan] {
+        self.belief.as_ref().map_or(&[], |belief| &belief.fused)
+    }
+
+    /// Fuse this tick's scans and publish the result.
+    fn update_belief(&mut self, tick: u64) {
+        let Some(belief) = self.belief.as_mut() else {
+            return;
+        };
+        let scans = std::mem::take(&mut belief.inbox);
+        for scan in &scans {
+            belief.grid.integrate(scan, tick);
+        }
+        belief.fused = scans;
+        belief.publish();
+    }
+
     /// A stage over `bounds`, with the footprint radius still to be set.
     pub fn new(bounds: GridBounds) -> Result<Self, &'static str> {
         let coverage = CoverageGrid::new(bounds)?;
@@ -477,6 +562,7 @@ impl MappingStage {
                 newly_covered: Vec::new(),
             },
             compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
+            belief: None,
         })
     }
 
@@ -506,6 +592,12 @@ impl MappingStage {
 impl StageHandler for MappingStage {
     fn reset(&mut self) {
         self.clear();
+        if let Some(belief) = self.belief.as_mut() {
+            belief.grid.clear();
+            belief.inbox.clear();
+            belief.fused.clear();
+            belief.publish();
+        }
     }
 
     /// Coverage counts (and their running aggregates), the localizer, its
@@ -528,6 +620,7 @@ impl StageHandler for MappingStage {
                 })
                 .collect(),
             team: shared.team.clone(),
+            belief: self.belief.as_ref().map(|belief| belief.grid.clone()),
         };
         Some(serde_json::to_value(state).expect("mapping state serialises"))
     }
@@ -564,6 +657,16 @@ impl StageHandler for MappingStage {
         {
             return Err(malformed("a zone's coverage grid differs"));
         }
+        match (&self.belief, &decoded.belief) {
+            (None, None) => {}
+            (Some(belief), Some(saved)) if belief.grid.same_layout(saved) => {}
+            (Some(_), Some(_)) => return Err(malformed("the belief grid's layout differs")),
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(malformed(
+                    "one run builds its own map and the other has a prior one",
+                ))
+            }
+        }
         Ok(())
     }
 
@@ -585,10 +688,17 @@ impl StageHandler for MappingStage {
         }
         shared.inspection_events.clear();
         shared.newly_covered.clear();
+        if let (Some(belief), Some(saved)) = (self.belief.as_mut(), decoded.belief) {
+            belief.grid = saved;
+            belief.inbox.clear();
+            belief.fused.clear();
+            belief.publish();
+        }
         Ok(())
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        self.update_belief(context.tick);
         let compute = &*self.compute;
         let shared = &mut self.state;
         shared.inspection_events.clear();

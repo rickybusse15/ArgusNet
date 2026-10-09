@@ -584,6 +584,7 @@ mod tests {
             faults: Some(
                 RunOptions::read_faults(&fixture("fault_manifest_example.json")).expect("manifest"),
             ),
+            ..RunOptions::default()
         }
     }
 

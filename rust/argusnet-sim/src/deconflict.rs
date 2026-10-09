@@ -190,6 +190,10 @@ struct State {
 pub struct DeconflictStage {
     state: State,
     resolver: Box<dyn ConflictResolver>,
+    /// Physics, in a run whose planners read a belief rather than the true
+    /// world: a resolved position inside the ground or a structure is put
+    /// back and recorded. `None` (every prior run) changes nothing.
+    guard: Option<crate::belief_world::PhysicalGuard>,
 }
 
 impl Default for DeconflictStage {
@@ -207,7 +211,13 @@ impl DeconflictStage {
         Self {
             state: State::default(),
             resolver,
+            guard: None,
         }
+    }
+
+    /// Keep resolved positions out of the true ground and structures.
+    pub fn set_physical_guard(&mut self, guard: crate::belief_world::PhysicalGuard) {
+        self.guard = Some(guard);
     }
 
     pub fn with_config(mut self, config: DeconflictionConfig) -> Self {
@@ -331,9 +341,15 @@ impl StageHandler for DeconflictStage {
                     proposal.drone_id
                 )));
             };
-            platform.position.x = proposal.position[0];
-            platform.position.y = proposal.position[1];
-            platform.position.z = proposal.position[2];
+            let position = match &self.guard {
+                Some(guard) => {
+                    guard.enforce(&proposal.drone_id, context.timestamp_s, proposal.position)
+                }
+                None => proposal.position,
+            };
+            platform.position.x = position[0];
+            platform.position.y = position[1];
+            platform.position.z = position[2];
             platform.velocity.x = proposal.velocity[0];
             platform.velocity.y = proposal.velocity[1];
             platform.velocity.z = proposal.velocity[2];

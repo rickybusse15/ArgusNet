@@ -477,6 +477,12 @@ pub struct ObserveStage {
     /// The session's workers for the pair evaluations (B3); serial unless
     /// the session gives it more.
     compute: std::sync::Arc<crate::compute::ComputePool>,
+    /// The mobile platforms' range scanner, in a run that maps the world for
+    /// itself (`world_knowledge: none`). `None` otherwise: no scans, and the
+    /// stage is the one it always was.
+    range: Option<crate::range_scan::RangeScanner>,
+    /// This tick's scans, handed to stage 8.
+    scans: Vec<crate::range_scan::RangeScan>,
 }
 
 impl Default for ObserveStage {
@@ -501,7 +507,54 @@ impl ObserveStage {
                 rejections: Vec::new(),
             },
             compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
+            range: None,
+            scans: Vec::new(),
         }
+    }
+
+    /// Scan with `scanner` from every mobile platform, every tick.
+    pub fn set_range_scanner(&mut self, scanner: crate::range_scan::RangeScanner) {
+        self.range = Some(scanner);
+    }
+
+    /// This tick's range scans, in platform order. Empty without a scanner.
+    pub fn range_scans(&self) -> &[crate::range_scan::RangeScan] {
+        &self.scans
+    }
+
+    /// Scan from where each mobile platform is after this tick's motion.
+    /// Each platform's scan is independent and keyed on its own node and
+    /// tick, so they fork across the session's workers (B3) and come back in
+    /// platform order: the result is the same at every worker count.
+    fn scan_ranges(&mut self, context: &TickContext<'_>) {
+        self.scans.clear();
+        let Some(scanner) = &self.range else {
+            return;
+        };
+        let poses: Vec<&argusnet_types::NodeState> = context
+            .world
+            .platforms()
+            .iter()
+            .filter(|p| p.is_mobile)
+            .collect();
+        let (tick, timestamp_s) = (context.tick, context.timestamp_s);
+        self.scans = self.compute.map_ordered(&poses, |platform| {
+            scanner.scan(
+                &platform.node_id,
+                tick,
+                timestamp_s,
+                [
+                    platform.position.x,
+                    platform.position.y,
+                    platform.position.z,
+                ],
+                [
+                    platform.velocity.x,
+                    platform.velocity.y,
+                    platform.velocity.z,
+                ],
+            )
+        });
     }
 
     /// Give `node_id` a sensor. A platform with no spec generates nothing.
@@ -1028,6 +1081,7 @@ impl StageHandler for ObserveStage {
             .map(|(id, spec)| (id.clone(), SensorState::fresh(id, spec)))
             .collect();
         shared.drifts = fresh;
+        self.scans.clear();
         shared.observations.clear();
         shared.records.clear();
         shared.rejections.clear();
@@ -1070,6 +1124,7 @@ impl StageHandler for ObserveStage {
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        self.scan_ranges(context);
         let shared = &mut self.state;
         shared.observations.clear();
         shared.records.clear();

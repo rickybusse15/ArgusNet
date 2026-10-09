@@ -128,6 +128,11 @@ struct SimArgs {
     /// `--fusion-lag-s`.
     #[arg(long)]
     faults: Option<PathBuf>,
+    /// What the platforms know of the world before they sense it: `prior`
+    /// (the true terrain and obstacles, as every run before) or `none` (they
+    /// map it themselves with range scanners and plan only on that map).
+    #[arg(long, value_enum, default_value = "prior")]
+    world_knowledge: WorldKnowledgeArg,
     /// How battery energy is charged (D-3): `legacy` charges motion only, as
     /// the reference does; `physical_v1` also charges hover power for the part
     /// of each tick not spent moving.
@@ -198,6 +203,13 @@ pub(crate) const EXIT_CRASHED: i32 = 4;
 const EXIT_INVALID: u8 = 2;
 const EXIT_UNSUPPORTED: u8 = 3;
 
+/// `--world-knowledge`'s values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum WorldKnowledgeArg {
+    Prior,
+    None,
+}
+
 /// `--energy-profile`'s values (D-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum EnergyProfileArg {
@@ -227,6 +239,11 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             .as_deref()
             .map(RunOptions::read_faults)
             .transpose()?,
+        world_knowledge: match args.world_knowledge {
+            WorldKnowledgeArg::Prior => argusnet_sim::belief_world::WorldKnowledge::Prior,
+            WorldKnowledgeArg::None => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
+        },
+        exploration: None,
     })
 }
 

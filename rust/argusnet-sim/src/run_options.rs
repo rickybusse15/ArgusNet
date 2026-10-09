@@ -1,5 +1,6 @@
 //! The run options shared by every front end that assembles a run: the
-//! energy profile (D-3), timestamped delivery (B4) and scheduled faults (F2).
+//! energy profile (D-3), timestamped delivery (B4), scheduled faults (F2) and
+//! what the platforms know of the world before sensing it.
 //!
 //! `argusnet-rs sim` and the viewer's in-process run (`--run`) both apply them
 //! through [`RunOptions::apply`], so a run commanded from the viewer is the
@@ -12,6 +13,7 @@ use std::collections::BTreeMap;
 pub use argusnet_planning::battery::EnergyProfile;
 use serde::{Deserialize, Serialize};
 
+use crate::belief_world::{ExplorationConfig, WorldKnowledge};
 use crate::delivery::{DeliveryProfile, DEFAULT_QUEUE_CAPACITY};
 use crate::faults::FaultManifest;
 use crate::scenario::{AssembledRun, ScenarioBundle};
@@ -66,13 +68,20 @@ pub struct RunOptions {
     /// `None` is the legacy same-tick path.
     pub delivery: Option<DeliverySeconds>,
     pub faults: Option<FaultManifest>,
+    /// What the platforms know of the world before sensing it.
+    pub world_knowledge: WorldKnowledge,
+    /// How a `none` run senses and maps; the defaults when `None`.
+    pub exploration: Option<ExplorationConfig>,
 }
 
 impl RunOptions {
     /// Whether these are the legacy options: nothing to apply, nothing
     /// recorded.
     pub fn is_legacy(&self) -> bool {
-        self.energy_profile.is_legacy() && self.delivery.is_none() && self.faults.is_none()
+        self.energy_profile.is_legacy()
+            && self.delivery.is_none()
+            && self.faults.is_none()
+            && self.world_knowledge == WorldKnowledge::Prior
     }
 
     /// Install the options on `run`, assembled from `bundle`, and record what
@@ -98,6 +107,10 @@ impl RunOptions {
         if let Some(manifest) = &self.faults {
             run.set_faults(manifest.clone())?;
         }
+        run.set_world_knowledge(
+            self.world_knowledge,
+            self.exploration.clone().unwrap_or_default(),
+        )?;
         Ok(())
     }
 

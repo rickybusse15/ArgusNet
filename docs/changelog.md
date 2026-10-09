@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Start from no world knowledge
+
+- `--world-knowledge none` (in `argusnet-rs sim` and `argusnet-viewer --run`)
+  runs a scenario with the platforms knowing nothing about the terrain or the
+  buildings. Each drone carries a range scanner; the returns build a map, and
+  every planning decision reads only that map. Ground nobody has seen is
+  treated as high, never as open air, so drones climb out cautiously and
+  settle as the map fills. Physics still uses the real world, and each time a
+  drone's map put it somewhere it could not be is recorded as a contact.
+- Replays from such runs carry the map's changes (`belief_updates`), samples
+  of each drone's returns (`range_scans`), contacts, and the map's progress
+  and accuracy (`mapping_state.belief`). On the demo scenario the map is 87%
+  complete after two minutes, within 1 m of the true ground, with no contacts.
+  See `docs/migration/UNKNOWN_WORLD.md`.
+
 ## Unreleased — The viewer's in-process run takes the run options
 
 - `argusnet-viewer --run` accepts `--fusion-lag-s`, `--delivery-delay-s`,
