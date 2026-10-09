@@ -60,6 +60,9 @@ pub struct BeliefMapView {
     /// Chunks with glowing cells, and when the last glow ends.
     fresh_until: HashMap<(u32, u32), f32>,
     chunks: HashMap<(u32, u32), Entity>,
+    /// The believed structures, as one mesh.
+    buildings: Option<Entity>,
+    buildings_dirty: bool,
     material: Option<Handle<StandardMaterial>>,
     truth_hidden: bool,
     now_s: f32,
@@ -77,6 +80,9 @@ impl BeliefMapView {
         for (_, entity) in self.chunks.drain() {
             commands.entity(entity).despawn();
         }
+        if let Some(entity) = self.buildings.take() {
+            commands.entity(entity).despawn();
+        }
         self.cells.clear();
         self.applied_through_s = None;
         self.dirty.clear();
@@ -85,20 +91,39 @@ impl BeliefMapView {
         self.contacts = 0;
     }
 
+    /// Apply a frame's rows. A cell glows from when it first became known,
+    /// which is the map's leading edge; later refinements do not relight it.
     fn apply(&mut self, rows: &[BeliefCellRow], at_s: f32) {
         for row in rows {
             let (i, j) = row.ij();
+            let previous = self.cells.get(&(i, j)).copied();
+            let first_known_s = previous.map_or(at_s, |cell| cell.updated_s);
+            if previous.map(|cell| cell.row.structure_top_m()) != Some(row.structure_top_m())
+                && (row.structure_top_m().is_some()
+                    || previous.is_some_and(|cell| cell.row.structure_top_m().is_some()))
+            {
+                self.buildings_dirty = true;
+            }
             self.cells.insert(
                 (i, j),
                 Cell {
                     row: *row,
-                    updated_s: at_s,
+                    updated_s: first_known_s,
                 },
             );
-            let chunk = (i / CHUNK, j / CHUNK);
-            self.dirty.insert(chunk);
-            let until = self.fresh_until.entry(chunk).or_insert(0.0);
-            *until = until.max(at_s + FRESH_S);
+            // A cell's corners are shared with its neighbours, which may sit
+            // in the next chunk over: every chunk touching it is redrawn.
+            for (di, dj) in [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let (ni, nj) = (i as i64 + di, j as i64 + dj);
+                if ni >= 0 && nj >= 0 {
+                    self.dirty.insert((ni as u32 / CHUNK, nj as u32 / CHUNK));
+                }
+            }
+            if previous.is_none() {
+                let chunk = (i / CHUNK, j / CHUNK);
+                let until = self.fresh_until.entry(chunk).or_insert(0.0);
+                *until = until.max(at_s + FRESH_S);
+            }
         }
     }
 
@@ -200,21 +225,51 @@ pub fn render_belief_chunks_system(
     let Some(layout) = view.layout else {
         return;
     };
-    if view.dirty.is_empty() {
+    if view.dirty.is_empty() && !view.buildings_dirty {
         return;
     }
+    // Lit like the scene's own terrain: on the main layer, where the sun is,
+    // as well as the reconstruction layer the split view's right pane draws.
     let material = view
         .material
         .get_or_insert_with(|| {
             materials.add(StandardMaterial {
                 base_color: Color::WHITE,
-                unlit: true,
+                perceptual_roughness: 0.95,
+                metallic: 0.0,
+                reflectance: 0.2,
                 cull_mode: None,
                 double_sided: true,
                 ..default()
             })
         })
         .clone();
+    let layers = RenderLayers::from_layers(&[0, crate::app::RECON_LAYER]);
+    if std::mem::take(&mut view.buildings_dirty) {
+        match (buildings_mesh(&view, layout), view.buildings) {
+            (Some(mesh), Some(entity)) => {
+                commands.entity(entity).insert(Mesh3d(meshes.add(mesh)));
+            }
+            (Some(mesh), None) => {
+                let entity = commands
+                    .spawn((
+                        Mesh3d(meshes.add(mesh)),
+                        MeshMaterial3d(material.clone()),
+                        layers.clone(),
+                        Visibility::Visible,
+                        BeliefChunk,
+                        Name::new("belief-structures"),
+                    ))
+                    .id();
+                view.buildings = Some(entity);
+            }
+            (None, Some(entity)) => {
+                commands.entity(entity).despawn();
+                view.buildings = None;
+            }
+            (None, None) => {}
+        }
+    }
     let (low, high) = height_range(&view);
     let dirty = std::mem::take(&mut view.dirty);
     for chunk in dirty {
@@ -228,7 +283,7 @@ pub fn render_belief_chunks_system(
                     .spawn((
                         Mesh3d(meshes.add(mesh)),
                         MeshMaterial3d(material.clone()),
-                        RenderLayers::layer(crate::app::RECON_LAYER),
+                        layers.clone(),
                         Visibility::Visible,
                         BeliefChunk,
                         Name::new(format!("belief-chunk-{}-{}", chunk.0, chunk.1)),
@@ -263,21 +318,32 @@ fn height_range(view: &BeliefMapView) -> (f32, f32) {
 
 /// Ground colour: low ground dark green-grey, high ground pale stone,
 /// washed toward slate where a cell has few returns, and toward cyan while it
-/// is new.
-fn ground_colour(height: f32, low: f32, high: f32, level: u8, glow: f32, shade: f32) -> [f32; 4] {
+/// is new. Lighting comes from the renderer; this is albedo.
+fn ground_colour(height: f32, low: f32, high: f32, level: u8, glow: f32) -> [f32; 3] {
     let t = ((height - low) / (high - low)).clamp(0.0, 1.0);
-    let base = [0.18 + 0.42 * t, 0.26 + 0.34 * t, 0.22 + 0.26 * t];
+    let base = [0.20 + 0.40 * t, 0.29 + 0.32 * t, 0.23 + 0.25 * t];
     let confidence = (level.clamp(1, 4) as f32 - 1.0) / 3.0;
-    let washed = [0.34, 0.40, 0.46];
+    let washed = [0.40, 0.46, 0.52];
     let fresh = [0.40, 0.90, 1.0];
-    let mut rgb = [0.0; 3];
-    for k in 0..3 {
+    std::array::from_fn(|k| {
         let settled = washed[k] + (base[k] - washed[k]) * (0.35 + 0.65 * confidence);
-        rgb[k] = (settled * shade) * (1.0 - glow) + fresh[k] * glow;
-    }
-    [rgb[0], rgb[1], rgb[2], 1.0]
+        settled * (1.0 - glow) + fresh[k] * glow
+    })
 }
 
+/// A cell side: the neighbour across it, its two corners (cell-corner
+/// indices for the ground, metres for structures) and its outward normal.
+type CornerSide = ((i64, i64), [(i64, i64); 2], [f32; 3]);
+type WallSide = ((i64, i64), [[f32; 2]; 2], [f32; 3]);
+
+/// How far the cut edge of the known map drops below its surface, metres.
+const SKIRT_M: f32 = 6.0;
+
+/// One chunk of the known ground as a continuous surface: vertices at cell
+/// corners, shared by every known cell that touches them, so the surface
+/// has no seams; normals from the corner heights, so it takes the scene's
+/// light like terrain; and a darker skirt dropping from every edge where the
+/// known map meets the unknown, so the map reads as a cut-out of the world.
 fn chunk_mesh(
     view: &BeliefMapView,
     layout: BeliefGridLayout,
@@ -285,126 +351,238 @@ fn chunk_mesh(
     low: f32,
     high: f32,
 ) -> Option<Mesh> {
-    let mut positions: Vec<[f32; 3]> = Vec::new();
-    let mut colours: Vec<[f32; 4]> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
     let res = layout.resolution_m;
     let [x0, y0] = layout.origin_m;
-    let light = Vec3::new(-0.45, -0.35, 0.82).normalize();
-    for j in chunk.1 * CHUNK..((chunk.1 + 1) * CHUNK).min(layout.dimensions[1]) {
-        for i in chunk.0 * CHUNK..((chunk.0 + 1) * CHUNK).min(layout.dimensions[0]) {
-            let Some(cell) = view.cells.get(&(i, j)) else {
+    let (i_lo, j_lo) = (chunk.0 * CHUNK, chunk.1 * CHUNK);
+    let i_hi = ((chunk.0 + 1) * CHUNK).min(layout.dimensions[0]);
+    let j_hi = ((chunk.1 + 1) * CHUNK).min(layout.dimensions[1]);
+    let known = |i: i64, j: i64| view.ground(i, j).is_some();
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut colours: Vec<[f32; 4]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let mut corner_index: HashMap<(i64, i64), u32> = HashMap::new();
+    let corner_height = |ci: i64, cj: i64| view.corner(ci, cj);
+    // A corner's colour is the mean of the known cells around it; its glow,
+    // the brightest of them.
+    let corner_colour = |ci: i64, cj: i64| -> [f32; 4] {
+        let mut sum = [0.0f32; 3];
+        let mut glow = 0.0f32;
+        let mut n = 0.0;
+        for (di, dj) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
+            let (i, j) = (ci + di, cj + dj);
+            if i < 0 || j < 0 {
                 continue;
-            };
-            let glow = ((cell.updated_s + FRESH_S - view.now_s) / FRESH_S).clamp(0.0, 1.0) * 0.8;
-            if let Some(h) = cell.row.ground_m() {
-                let (ii, jj) = (i as i64, j as i64);
-                let corners = [(ii, jj), (ii + 1, jj), (ii + 1, jj + 1), (ii, jj + 1)];
-                let z: Vec<f32> = corners
-                    .iter()
-                    .map(|&(ci, cj)| view.corner(ci, cj).unwrap_or(h))
-                    .collect();
-                // Baked hillshade from the quad's slope; the material is unlit.
-                let dzdx = ((z[1] + z[2]) - (z[0] + z[3])) / (2.0 * res);
-                let dzdy = ((z[2] + z[3]) - (z[0] + z[1])) / (2.0 * res);
-                let normal = Vec3::new(-dzdx, -dzdy, 1.0).normalize();
-                let shade = 0.55 + 0.6 * normal.dot(light).max(0.0);
-                let colour = ground_colour(h, low, high, cell.row.confidence_level(), glow, shade);
-                let base = positions.len() as u32;
-                for (k, &(ci, cj)) in corners.iter().enumerate() {
-                    positions.push([x0 + ci as f32 * res, y0 + cj as f32 * res, z[k] + 0.3]);
-                    colours.push(colour);
-                }
-                indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }
-            if let Some(top) = cell.row.structure_top_m() {
-                let floor = cell.row.ground_m().unwrap_or(top - 8.0).min(top - 1.0);
-                let tint = 0.55 + 0.45 * cell.row.occupancy();
-                let colour = |s: f32| {
-                    let c = [0.86 * tint * s, 0.62 * tint * s, 0.78 * tint * s];
-                    [
-                        c[0] * (1.0 - glow) + 0.40 * glow,
-                        c[1] * (1.0 - glow) + 0.90 * glow,
-                        c[2] * (1.0 - glow) + glow,
-                        1.0,
-                    ]
-                };
-                let inset = res * 0.08;
-                let (ax, ay) = (x0 + i as f32 * res + inset, y0 + j as f32 * res + inset);
-                let (bx, by) = (ax + res - 2.0 * inset, ay + res - 2.0 * inset);
-                let quads: [([[f32; 3]; 4], f32); 5] = [
-                    (
-                        [[ax, ay, top], [bx, ay, top], [bx, by, top], [ax, by, top]],
-                        1.0,
-                    ),
-                    (
-                        [
-                            [ax, ay, floor],
-                            [bx, ay, floor],
-                            [bx, ay, top],
-                            [ax, ay, top],
-                        ],
-                        0.7,
-                    ),
-                    (
-                        [
-                            [bx, ay, floor],
-                            [bx, by, floor],
-                            [bx, by, top],
-                            [bx, ay, top],
-                        ],
-                        0.85,
-                    ),
-                    (
-                        [
-                            [bx, by, floor],
-                            [ax, by, floor],
-                            [ax, by, top],
-                            [bx, by, top],
-                        ],
-                        0.6,
-                    ),
-                    (
-                        [
-                            [ax, by, floor],
-                            [ax, ay, floor],
-                            [ax, ay, top],
-                            [ax, by, top],
-                        ],
-                        0.75,
-                    ),
-                ];
-                for (quad, s) in quads {
-                    let base = positions.len() as u32;
-                    for p in quad {
-                        positions.push(p);
-                        colours.push(colour(s));
+            if let Some(cell) = view.cells.get(&(i as u32, j as u32)) {
+                if let Some(h) = cell.row.ground_m() {
+                    let g =
+                        ((cell.updated_s + FRESH_S - view.now_s) / FRESH_S).clamp(0.0, 1.0) * 0.8;
+                    let c = ground_colour(h, low, high, cell.row.confidence_level(), 0.0);
+                    for k in 0..3 {
+                        sum[k] += c[k];
                     }
-                    indices.extend_from_slice(&[
-                        base,
-                        base + 1,
-                        base + 2,
-                        base,
-                        base + 2,
-                        base + 3,
-                    ]);
+                    glow = glow.max(g);
+                    n += 1.0;
                 }
             }
         }
+        let fresh = [0.40, 0.90, 1.0];
+        let c: [f32; 3] = std::array::from_fn(|k| {
+            let base = if n > 0.0 { sum[k] / n } else { 0.3 };
+            base * (1.0 - glow) + fresh[k] * glow
+        });
+        [c[0], c[1], c[2], 1.0]
+    };
+    let mut vertex = |ci: i64,
+                      cj: i64,
+                      positions: &mut Vec<[f32; 3]>,
+                      normals: &mut Vec<[f32; 3]>,
+                      colours: &mut Vec<[f32; 4]>|
+     -> u32 {
+        *corner_index.entry((ci, cj)).or_insert_with(|| {
+            let h = corner_height(ci, cj).unwrap_or(low);
+            let around = |a: i64, b: i64| corner_height(a, b).unwrap_or(h);
+            let dzdx = (around(ci + 1, cj) - around(ci - 1, cj)) / (2.0 * res);
+            let dzdy = (around(ci, cj + 1) - around(ci, cj - 1)) / (2.0 * res);
+            let n = Vec3::new(-dzdx, -dzdy, 1.0).normalize();
+            positions.push([x0 + ci as f32 * res, y0 + cj as f32 * res, h]);
+            normals.push(n.to_array());
+            colours.push(corner_colour(ci, cj));
+            (positions.len() - 1) as u32
+        })
+    };
+    for j in j_lo..j_hi {
+        for i in i_lo..i_hi {
+            let (ii, jj) = (i as i64, j as i64);
+            if !known(ii, jj) {
+                continue;
+            }
+            let a = vertex(ii, jj, &mut positions, &mut normals, &mut colours);
+            let b = vertex(ii + 1, jj, &mut positions, &mut normals, &mut colours);
+            let c = vertex(ii + 1, jj + 1, &mut positions, &mut normals, &mut colours);
+            let d = vertex(ii, jj + 1, &mut positions, &mut normals, &mut colours);
+            indices.extend_from_slice(&[a, b, c, a, c, d]);
+        }
     }
-    if positions.is_empty() {
+    // Skirts along the boundary of the known map, after the surface so they
+    // do not share its smoothed vertices.
+    for j in j_lo..j_hi {
+        for i in i_lo..i_hi {
+            let (ii, jj) = (i as i64, j as i64);
+            if !known(ii, jj) {
+                continue;
+            }
+            // (neighbour offset, edge corners, outward normal)
+            let edges: [CornerSide; 4] = [
+                ((0, -1), [(ii + 1, jj), (ii, jj)], [0.0, -1.0, 0.0]),
+                ((1, 0), [(ii + 1, jj + 1), (ii + 1, jj)], [1.0, 0.0, 0.0]),
+                ((0, 1), [(ii, jj + 1), (ii + 1, jj + 1)], [0.0, 1.0, 0.0]),
+                ((-1, 0), [(ii, jj), (ii, jj + 1)], [-1.0, 0.0, 0.0]),
+            ];
+            for ((di, dj), corners, normal) in edges {
+                if known(ii + di, jj + dj) {
+                    continue;
+                }
+                let base = positions.len() as u32;
+                for &(ci, cj) in &corners {
+                    let h = corner_height(ci, cj).unwrap_or(low);
+                    let p = [x0 + ci as f32 * res, y0 + cj as f32 * res];
+                    positions.push([p[0], p[1], h]);
+                    positions.push([p[0], p[1], h - SKIRT_M]);
+                    for _ in 0..2 {
+                        normals.push(normal);
+                    }
+                    colours.push([0.20, 0.22, 0.24, 1.0]);
+                    colours.push([0.07, 0.08, 0.09, 1.0]);
+                }
+                indices.extend_from_slice(&[base, base + 1, base + 3, base, base + 3, base + 2]);
+            }
+        }
+    }
+    finish_mesh(positions, normals, colours, indices)
+}
+
+fn finish_mesh(
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    colours: Vec<[f32; 4]>,
+    indices: Vec<u32>,
+) -> Option<Mesh> {
+    if indices.is_empty() {
         return None;
     }
-    let count = positions.len();
+    let uvs: Vec<[f32; 2]> = positions.iter().map(|p| [p[0], p[1]]).collect();
+    // The palette is written in sRGB; vertex colours are linear.
+    let colours: Vec<[f32; 4]> = colours
+        .into_iter()
+        .map(|c| {
+            let l = LinearRgba::from(Color::srgba(c[0], c[1], c[2], c[3]));
+            [l.red, l.green, l.blue, l.alpha]
+        })
+        .collect();
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0_f32, 0.0, 1.0]; count]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
     mesh.insert_indices(Indices::U32(indices));
     Some(mesh)
+}
+
+/// Every believed structure as one solid: a roof over each occupied cell at
+/// its own top, and a wall on each side where the neighbour is lower or not
+/// a structure. Neighbouring cells merge into one outline, so a building
+/// reads as a building, not a stack of boxes.
+fn buildings_mesh(view: &BeliefMapView, layout: BeliefGridLayout) -> Option<Mesh> {
+    let res = layout.resolution_m;
+    let [x0, y0] = layout.origin_m;
+    let top = |i: i64, j: i64| -> Option<f32> {
+        if i < 0 || j < 0 {
+            return None;
+        }
+        view.cells
+            .get(&(i as u32, j as u32))
+            .and_then(|cell| cell.row.structure_top_m())
+    };
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut colours = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let mut quad = |corners: [[f32; 3]; 4], normal: [f32; 3], colour: [f32; 4]| {
+        let base = positions.len() as u32;
+        for c in corners {
+            positions.push(c);
+            normals.push(normal);
+            colours.push(colour);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    };
+    let mut cells: Vec<(u32, u32)> = view
+        .cells
+        .iter()
+        .filter(|(_, cell)| cell.row.structure_top_m().is_some())
+        .map(|(ij, _)| *ij)
+        .collect();
+    cells.sort_unstable();
+    for (i, j) in cells {
+        let (ii, jj) = (i as i64, j as i64);
+        let cell = view.cells[&(i, j)];
+        let roof = cell.row.structure_top_m().unwrap_or_default();
+        // The ground the walls stand on: this cell's, a neighbour's, or a
+        // storey below the roof when nothing under it has been seen.
+        let footing = view
+            .ground(ii, jj)
+            .or_else(|| {
+                [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                    .iter()
+                    .filter_map(|(di, dj)| view.ground(ii + di, jj + dj))
+                    .reduce(f32::min)
+            })
+            .unwrap_or(roof - 12.0)
+            .min(roof - 1.0);
+        let tint = 0.62 + 0.38 * cell.row.occupancy();
+        let wall = [0.80 * tint, 0.66 * tint, 0.78 * tint, 1.0];
+        let roof_colour = [0.90 * tint, 0.74 * tint, 0.86 * tint, 1.0];
+        let (ax, ay) = (x0 + i as f32 * res, y0 + j as f32 * res);
+        let (bx, by) = (ax + res, ay + res);
+        quad(
+            [
+                [ax, ay, roof],
+                [bx, ay, roof],
+                [bx, by, roof],
+                [ax, by, roof],
+            ],
+            [0.0, 0.0, 1.0],
+            roof_colour,
+        );
+        let sides: [WallSide; 4] = [
+            ((0, -1), [[bx, ay], [ax, ay]], [0.0, -1.0, 0.0]),
+            ((1, 0), [[bx, by], [bx, ay]], [1.0, 0.0, 0.0]),
+            ((0, 1), [[ax, by], [bx, by]], [0.0, 1.0, 0.0]),
+            ((-1, 0), [[ax, ay], [ax, by]], [-1.0, 0.0, 0.0]),
+        ];
+        for ((di, dj), [p, q], normal) in sides {
+            let foot = top(ii + di, jj + dj).unwrap_or(footing).max(footing);
+            if foot >= roof {
+                continue;
+            }
+            quad(
+                [
+                    [p[0], p[1], foot],
+                    [q[0], q[1], foot],
+                    [q[0], q[1], roof],
+                    [p[0], p[1], roof],
+                ],
+                normal,
+                wall,
+            );
+        }
+    }
+    finish_mesh(positions, normals, colours, indices)
 }
 
 /// The map's bounds, this frame's range returns, and any contacts.
@@ -554,27 +732,63 @@ mod tests {
         assert_eq!(view.cells.len(), 1);
         assert_eq!(view.ground(40, 3), Some(7.0));
         assert!(view.dirty.contains(&(1, 0)));
-        assert_eq!(view.fresh_until[&(1, 0)], 2.0 + FRESH_S);
+        assert_eq!(
+            view.fresh_until[&(1, 0)],
+            1.0 + FRESH_S,
+            "the glow runs from first sight"
+        );
     }
 
-    #[test]
-    fn a_chunk_of_known_ground_meshes_and_an_empty_one_does_not() {
-        let mut view = BeliefMapView::default();
-        let layout = BeliefGridLayout {
+    fn layout() -> BeliefGridLayout {
+        BeliefGridLayout {
             origin_m: [0.0, 0.0],
             resolution_m: 10.0,
             dimensions: [64, 64],
-        };
-        view.apply(
-            &[
-                row(1, 1, Some(1200)),
-                BeliefCellRow(2, 1, Some(1200), Some(4000), 90, 3),
-            ],
-            0.0,
+        }
+    }
+
+    #[test]
+    fn known_ground_is_one_surface_with_a_skirt_round_its_edge() {
+        let mut view = BeliefMapView::default();
+        view.apply(&[row(1, 1, Some(1200)), row(2, 1, Some(1400))], 0.0);
+        let mesh = chunk_mesh(&view, layout(), (0, 0), 12.0, 14.0).expect("meshes");
+        // Two cells share an edge: 6 surface corners, not 8. The outline has
+        // 6 edges, each a skirt quad of 4 vertices.
+        assert_eq!(mesh.count_vertices(), 6 + 6 * 4);
+        assert!(chunk_mesh(&view, layout(), (1, 1), 12.0, 14.0).is_none());
+    }
+
+    #[test]
+    fn a_cell_on_a_chunk_edge_redraws_its_neighbouring_chunk() {
+        let mut view = BeliefMapView::default();
+        view.apply(&[row(CHUNK, 5, Some(1000))], 0.0);
+        assert!(view.dirty.contains(&(1, 0)));
+        assert!(
+            view.dirty.contains(&(0, 0)),
+            "its corners are shared with chunk (0, 0)"
         );
-        let mesh = chunk_mesh(&view, layout, (0, 0), 12.0, 13.0).expect("meshes");
-        // Two ground quads and one structure's five faces.
-        assert_eq!(mesh.count_vertices(), 4 * 2 + 4 * 5);
-        assert!(chunk_mesh(&view, layout, (1, 1), 12.0, 13.0).is_none());
+    }
+
+    #[test]
+    fn neighbouring_structure_cells_merge_into_one_outline() {
+        let mut view = BeliefMapView::default();
+        let building = |i: u32| BeliefCellRow(i, 4, Some(1000), Some(4000), 90, 3);
+        view.apply(&[building(3), building(4)], 0.0);
+        assert!(view.buildings_dirty);
+        let mesh = buildings_mesh(&view, layout()).expect("a building");
+        // Two roofs and the six outer walls; no wall between the two cells.
+        assert_eq!(mesh.count_vertices(), 4 * (2 + 6));
+        // A lower neighbour gets a wall down to its own roof.
+        view.apply(&[BeliefCellRow(5, 4, Some(1000), Some(2500), 90, 3)], 1.0);
+        let mesh = buildings_mesh(&view, layout()).expect("a building");
+        assert_eq!(mesh.count_vertices(), 4 * (3 + 6 + 3));
+    }
+
+    #[test]
+    fn a_cell_glows_from_when_it_first_became_known() {
+        let mut view = BeliefMapView::default();
+        view.apply(&[row(0, 0, Some(1000))], 1.0);
+        view.apply(&[row(0, 0, Some(1050))], 9.0);
+        assert_eq!(view.cells[&(0, 0)].updated_s, 1.0);
     }
 }

@@ -102,15 +102,23 @@ All additions are optional:
 ## The viewer
 
 A replay or `--run` from a `none` run shows the map the drones had at the
-cursor. The scene's own layers (the true terrain and buildings) are hidden
-when such a run opens, and stay in the Layers panel as truth for comparison.
+cursor. `--run` needs no scene package. Without one, the viewer writes a
+package holding only the run's bounds and the marker styles, and opens on
+that; the world it draws is the one the drones build. With `--scene`, the
+scene's own layers (the true terrain and buildings) are hidden when such a
+run opens, and stay in the Layers panel as truth for comparison.
 
-- **Known ground**: a surface over every cell with a ground return, its
-  corners averaged from neighbouring cells. Few returns show washed toward
-  slate; many show as solid terrain colours.
-- **New cells**: they glow cyan for 2.5 s, so the edge of the map visibly
-  moves.
-- **Structures**: extruded in magenta to their highest return.
+- **Known ground**: one continuous lit surface over every cell with a ground
+  return. Its vertices are the cell corners, shared between cells, with
+  normals taken from the corner heights. Few returns show washed toward
+  slate; many show as solid terrain colours. A darker skirt drops from every
+  edge where the known map meets the unknown, so the map reads as a cut-out
+  of the world.
+- **New cells**: they glow cyan for 2.5 s from first being sensed, so the
+  edge of the map visibly moves.
+- **Structures**: one solid, with a roof over each occupied cell at its own
+  top and a wall wherever the neighbour is lower or empty. Adjacent cells
+  merge into a single building outline.
 - **Unknown**: black, inside a faint outline of the map bounds.
 - **Range returns**: each drone's returns this frame, drawn as rays.
 - **Contacts**: red rings.

@@ -104,9 +104,11 @@ pub fn run_live(
 
 /// Open `scene_path` and drive an in-process simulation of `run_path` (a
 /// scenario config or bundle) in it (D1): the run ticks on its own thread and
-/// the viewer presents its frames as they commit.
+/// the viewer presents its frames as they commit. Without a scene, the viewer
+/// opens on the run's map bounds with no world drawn: what appears is what
+/// the run reveals.
 pub fn run_sim(
-    scene_path: impl AsRef<Path>,
+    scene_path: Option<std::path::PathBuf>,
     run_path: std::path::PathBuf,
     options: argusnet_sim::run_options::RunOptions,
     initial_view_mode: ViewMode,
@@ -118,9 +120,36 @@ pub fn run_sim(
     let probe = crate::sim_session::load_run(&run_path, &options)
         .map_err(|error| anyhow::anyhow!(error))?;
     let run_meta = probe.replay_extra_meta().clone();
+    // No scene: the world is only what the run reveals. The viewer gets a
+    // package with the map's bounds and nothing in it.
+    let scene_path = match scene_path {
+        Some(path) => path,
+        None => {
+            let bounds = probe.map_bounds_m();
+            let floor = probe.launch_floor_m();
+            let dir = std::env::temp_dir().join(format!(
+                "argusnet-unmapped-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |elapsed| elapsed.as_nanos())
+            ));
+            crate::schema::write_unmapped_scene(
+                &dir,
+                probe.run_id(),
+                [
+                    bounds.x_min_m,
+                    bounds.x_max_m,
+                    bounds.y_min_m,
+                    bounds.y_max_m,
+                ],
+                (floor - 100.0, floor + 50.0),
+            )?
+        }
+    };
     drop(probe);
     run_inner(
-        scene_path.as_ref(),
+        scene_path.as_path(),
         None,
         initial_view_mode,
         false,
