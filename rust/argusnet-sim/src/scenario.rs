@@ -741,6 +741,9 @@ pub struct AssembledRun {
     launch_floor_m: f64,
     /// Physics, in a run without a prior map: its contacts go to the replay.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// Which belief cells a true building or wall covers, for the replay's
+    /// evaluation figures. Never read by the run.
+    true_structures: Vec<bool>,
 }
 
 /// What the replay frames need beyond the stages' own handles.
@@ -877,6 +880,7 @@ fn belief_stats(
     grid: &crate::belief_world::BeliefGrid,
     occupied_probability: f64,
     terrain: Option<&SharedTerrain>,
+    true_structures: &[bool],
 ) -> crate::replay::ReplayBeliefStats {
     let (nx, ny) = grid.dimensions();
     let mut squared = 0.0;
@@ -896,6 +900,28 @@ fn belief_stats(
             }
         }
     }
+    // Structure precision and recall, each with one cell of tolerance: a
+    // return off a wall lands in the cell beside the footprint as often as in
+    // it.
+    let near = |i: usize, j: usize, hit: &dyn Fn(usize, usize) -> bool| {
+        (i.saturating_sub(1)..=(i + 1).min(nx - 1))
+            .any(|ii| (j.saturating_sub(1)..=(j + 1).min(ny - 1)).any(|jj| hit(ii, jj)))
+    };
+    let believed = |i: usize, j: usize| grid.is_structure_ij(i, j, occupied_probability);
+    let truly = |i: usize, j: usize| true_structures.get(j * nx + i).copied().unwrap_or(false);
+    let (mut believed_n, mut believed_right, mut true_n, mut true_found) = (0u64, 0u64, 0u64, 0u64);
+    for j in 0..ny {
+        for i in 0..nx {
+            if believed(i, j) {
+                believed_n += 1;
+                believed_right += u64::from(near(i, j, &truly));
+            }
+            if truly(i, j) {
+                true_n += 1;
+                true_found += u64::from(near(i, j, &believed));
+            }
+        }
+    }
     let known = grid.known_cells() as u64;
     let total = grid.cell_count() as u64;
     crate::replay::ReplayBeliefStats {
@@ -904,7 +930,9 @@ fn belief_stats(
         known_fraction: known as f64 / total.max(1) as f64,
         ground_rmse_m: (measured > 0).then(|| (squared / measured as f64).sqrt()),
         ground_max_abs_error_m: (measured > 0).then_some(worst),
-        structure_cells: grid.structure_cells_at(occupied_probability) as u64,
+        structure_cells: believed_n,
+        structure_precision: (believed_n > 0).then(|| believed_right as f64 / believed_n as f64),
+        structure_recall: (true_n > 0).then(|| true_found as f64 / true_n as f64),
     }
 }
 
@@ -1275,6 +1303,7 @@ pub fn assemble_with(
         map_bounds_m: bundle.map_bounds_m,
         world,
         guard: None,
+        true_structures: Vec::new(),
     })
 }
 
@@ -1598,6 +1627,17 @@ impl AssembledRun {
         config.validate()?;
         let grid = BeliefGrid::new(self.map_bounds_m, config.resolution_m, self.launch_floor_m)?;
         let resolution_m = config.resolution_m;
+        let (nx, ny) = grid.dimensions();
+        self.true_structures = (0..nx * ny)
+            .map(|k| {
+                let [x, y] = grid.centre_ij(k % nx, k / nx);
+                let ground = crate::motion::TerrainSampler::height_at(&self.world.terrain, x, y);
+                crate::motion::ObstacleSampler::collides(
+                    &self.world.obstacles,
+                    [x, y, ground + 2.0],
+                )
+            })
+            .collect();
         let scanner = crate::range_scan::RangeScanner::new(
             config.scan.clone(),
             self.world.visibility.clone(),
@@ -1974,6 +2014,7 @@ impl AssembledRun {
                         grid,
                         config.occupied_probability,
                         self.report.terrain.as_ref(),
+                        &self.true_structures,
                     )
                 },
             ),
@@ -2079,6 +2120,12 @@ impl AssembledRun {
 
     /// Add keys to the replay's `meta` -- provenance a caller knows and the
     /// run does not, such as the config it was built from.
+    /// What the options installed record in the replay's meta
+    /// (`world_knowledge`, `delivery_profile`, ...), before any tick.
+    pub fn replay_extra_meta(&self) -> &BTreeMap<String, serde_json::Value> {
+        self.replay.extra_meta()
+    }
+
     pub fn extend_replay_meta(
         &mut self,
         entries: impl IntoIterator<Item = (String, serde_json::Value)>,

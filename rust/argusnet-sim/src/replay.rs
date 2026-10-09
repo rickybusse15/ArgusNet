@@ -305,6 +305,15 @@ pub struct ReplayBeliefStats {
     pub ground_max_abs_error_m: Option<f64>,
     /// Cells believed occupied by a structure.
     pub structure_cells: u64,
+    /// Of the believed structure cells, the fraction with a true building or
+    /// wall within one cell. `None` with none believed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure_precision: Option<f64>,
+    /// Of the cells a true building or wall covers (at its centre), the
+    /// fraction with a believed structure within one cell. `None` in a world
+    /// without any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure_recall: Option<f64>,
 }
 
 /// A sample of one platform's range returns this tick, rounded to the
@@ -647,6 +656,11 @@ impl ReplayWriter {
                 self.meta.insert(key, value);
             }
         }
+    }
+
+    /// The keys added with [`ReplayWriter::extend_meta`].
+    pub fn extra_meta(&self) -> &BTreeMap<String, serde_json::Value> {
+        &self.meta
     }
 
     /// Stamp the document with a generation time.

@@ -177,35 +177,52 @@ impl SharedVisibility {
 }
 
 impl SharedVisibility {
-    /// The first hard surface a ray from `from` toward `to` meets: its blocker
-    /// type (`terrain`, `building`, `wall`, `vegetation`) and the point. A
-    /// terrain point lies on the ground under the ray's crossing.
-    /// The ray is cut at the edge of the terrain first, so a ray that would
-    /// leave the world still reports what it meets before the edge; `None`
-    /// when it meets nothing.
+    /// The first surface a ray from `from` toward `to` meets: `terrain`,
+    /// `building` or `wall`, and the point. The nearer of the terrain crossing
+    /// and the first structure face wins. (`los` answers a different question,
+    /// whether anything blocks, and checks terrain first.) Vegetation lets the
+    /// ray through. The ray is cut at the edge of the terrain first, so a ray
+    /// that would leave the world still reports what it meets before the
+    /// edge. `None` when it meets nothing.
     pub fn first_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<(String, [f64; 3])> {
         let bounds = self.terrain.bounds;
         if !bounds.contains_xy(from[0], from[1]) {
             return None;
         }
         let (_, t_end) = visibility::clip([from[0], from[1]], [to[0], to[1]], bounds)?;
-        // A hair inside the edge, so `los` does not call the end point out of
-        // coverage.
         let t_end = (t_end - 1e-6).max(0.0);
         let end: [f64; 3] = std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t_end);
-        let result = visibility::los(
-            &self.terrain,
-            &self.obstacles,
-            from,
-            end,
-            &self.profile,
-            0,
-            0.0,
+        let terrain = visibility::terrain_intersection(&self.terrain, from, end, 0.0).and_then(
+            |(kind, t, point)| match (kind.as_str(), t) {
+                ("terrain", Some(t)) => Some((t, "terrain".to_string(), point)),
+                _ => None,
+            },
         );
-        match (result.blocker_type.as_str(), result.closest_point) {
-            ("none" | "out_of_coverage", _) | (_, None) => None,
-            (kind, Some(point)) => Some((kind.to_string(), point)),
+        let box_ = argusnet_world::obstacles::Bounds2d::new(
+            from[0].min(end[0]),
+            from[0].max(end[0]) + 1e-6,
+            from[1].min(end[1]),
+            from[1].max(end[1]) + 1e-6,
+        );
+        let structure = self
+            .obstacles
+            .query(box_)
+            .into_iter()
+            .filter(|o| matches!(o.blocker_type.as_str(), "building" | "wall"))
+            .filter_map(|o| {
+                o.first_hit_t(from, end)
+                    .map(|t| (t, o.blocker_type.as_str().to_string()))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(t, kind)| {
+                let point: [f64; 3] = std::array::from_fn(|i| from[i] + (end[i] - from[i]) * t);
+                (t, kind, point)
+            });
+        match (terrain, structure) {
+            (Some(t), Some(o)) => Some(if o.0 < t.0 { o } else { t }),
+            (t, o) => t.or(o),
         }
+        .map(|(_, kind, point)| (kind, point))
     }
 }
 

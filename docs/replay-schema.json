@@ -593,6 +593,24 @@
             "structure_cells": {
               "type": "integer",
               "minimum": 0
+            },
+            "structure_precision": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Of the believed structure cells, the fraction with a true building or wall within one cell."
+            },
+            "structure_recall": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Of the cells a true building or wall covers at its centre, the fraction with a believed structure within one cell."
             }
           }
         }
