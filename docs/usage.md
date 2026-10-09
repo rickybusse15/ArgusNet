@@ -132,6 +132,19 @@ simulation strip over the map has these controls:
   never changes.
 - **Reset** starts the run again from tick 0, paused.
 
+`--run` takes the same run options as `argusnet-rs sim`, with the same
+meanings. They are applied by the same code, so the viewer's run equals the
+CLI's byte for byte:
+
+```bash
+cargo run -p argusnet-viewer -- --scene runs/demo.smartscene --run runs/demo-config.json \
+  --fusion-lag-s 1.5 --delivery-delay-s 0.25 --delivery-jitter-s 0.25 \
+  --energy-profile physical_v1 --faults tests/fixtures/fault_manifest_example.json
+```
+
+An option the run cannot support (for example, a delay longer than the fusion
+lag) is refused before the window opens. Reset keeps the options.
+
 Each control shows as pending until the run confirms it took effect, and a
 refusal says why (for example, Run on a finished run). The timeline holds
 every tick so far; scrubbing it reviews history without rewinding the run.

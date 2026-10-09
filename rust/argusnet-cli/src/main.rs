@@ -206,6 +206,30 @@ enum EnergyProfileArg {
     PhysicalV1,
 }
 
+/// The energy profile, delivery and faults the flags ask for, applied by
+/// the same code as the viewer's in-process run.
+fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, String> {
+    use argusnet_sim::run_options::{DeliverySeconds, RunOptions};
+    Ok(RunOptions {
+        energy_profile: match args.energy_profile {
+            EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
+            EnergyProfileArg::PhysicalV1 => argusnet_planning::battery::EnergyProfile::PhysicalV1,
+        },
+        delivery: args.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {
+            fusion_lag_s,
+            delay_s: args.delivery_delay_s,
+            source_delay_s: args.source_delay.iter().cloned().collect(),
+            jitter_s: args.delivery_jitter_s,
+            queue_capacity: args.delivery_queue_capacity,
+        }),
+        faults: args
+            .faults
+            .as_deref()
+            .map(RunOptions::read_faults)
+            .transpose()?,
+    })
+}
+
 /// `NODE_ID=SECONDS` for `--source-delay`.
 fn parse_source_delay(text: &str) -> Result<(String, f64), String> {
     let (id, seconds) = text
@@ -421,45 +445,14 @@ fn sim(args: SimArgs) -> ExitCode {
         Err(error @ BundleError::Unsupported(_)) => return fail(EXIT_UNSUPPORTED, error),
         Err(error) => return fail(EXIT_INVALID, error),
     };
-    if args.energy_profile == EnergyProfileArg::PhysicalV1 {
-        run.battery_mut()
-            .set_energy_profile(argusnet_planning::battery::EnergyProfile::PhysicalV1);
-        run.extend_replay_meta([(
-            "energy_profile".to_string(),
-            serde_json::json!(argusnet_planning::battery::EnergyProfile::PhysicalV1.as_str()),
-        )]);
-    }
-    if let Some(lag_s) = args.fusion_lag_s {
-        let profile = argusnet_sim::delivery::DeliveryProfile::from_seconds(
-            bundle.dt_s,
-            lag_s,
-            args.delivery_delay_s,
-            &args.source_delay.iter().cloned().collect(),
-            args.delivery_jitter_s,
-            args.delivery_queue_capacity,
-            bundle.seed,
-        );
-        match profile.and_then(|profile| {
-            run.set_delivery(profile.clone())?;
-            Ok(profile)
-        }) {
-            Ok(profile) => run.extend_replay_meta([(
-                "delivery_profile".to_string(),
-                serde_json::to_value(&profile).expect("profile serialises"),
-            )]),
-            // Refused before anything runs (B4: an unsupported delayed
-            // profile is rejected before the run).
-            Err(error) => return fail(EXIT_UNSUPPORTED, error),
-        }
-    }
-    if let Some(path) = &args.faults {
-        let manifest = std::fs::read_to_string(path)
-            .map_err(|error| format!("{}: {error}", path.display()))
-            .and_then(|text| argusnet_sim::faults::FaultManifest::from_json(&text));
-        // Refused before anything runs, like an unsupported delivery profile.
-        if let Err(error) = manifest.and_then(|manifest| run.set_faults(manifest)) {
-            return fail(EXIT_UNSUPPORTED, error);
-        }
+    let options = match run_options(&args) {
+        Ok(options) => options,
+        Err(error) => return fail(EXIT_UNSUPPORTED, error),
+    };
+    // Refused before anything runs (B4, F2: an unsupported delivery profile
+    // or an impossible fault manifest is rejected before the run).
+    if let Err(error) = options.apply(&mut run, &bundle) {
+        return fail(EXIT_UNSUPPORTED, error);
     }
     // P4.9: "emit resolved config/version/provenance". No clock and no host,
     // so a replay's bytes depend only on what was run.

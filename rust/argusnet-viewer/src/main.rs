@@ -84,6 +84,8 @@ struct Args {
                 in the scene: it starts paused; Run, Step, Speed and Reset drive it."
     )]
     run: Option<PathBuf>,
+    #[command(flatten)]
+    run_options: RunOptionArgs,
     #[cfg(feature = "live-stream")]
     #[arg(
         long,
@@ -111,6 +113,74 @@ struct Args {
     live_tls_domain: Option<String>,
 }
 
+/// The options `argusnet-rs sim` takes for a run, with the same meanings,
+/// for `--run`: the energy profile (D-3), timestamped delivery (B4) and
+/// scheduled faults (F2).
+#[derive(clap::Args, Debug)]
+struct RunOptionArgs {
+    /// `legacy` charges motion only; `physical_v1` also charges hover power.
+    #[arg(long, value_parser = ["legacy", "physical_v1"], default_value = "legacy", requires = "run")]
+    energy_profile: String,
+    /// Fuse the evidence acquired this many seconds ago (B4). Omit for the
+    /// legacy same-tick path.
+    #[arg(long, requires = "run")]
+    fusion_lag_s: Option<f64>,
+    /// Every source's delivery delay, unless `--source-delay` names it.
+    #[arg(long, default_value_t = 0.0, requires = "fusion_lag_s")]
+    delivery_delay_s: f64,
+    /// A source's own delay, as `NODE_ID=SECONDS`; repeat per source.
+    #[arg(long, value_parser = parse_source_delay, requires = "fusion_lag_s")]
+    source_delay: Vec<(String, f64)>,
+    /// Extra delay drawn uniformly per envelope (seeded).
+    #[arg(long, default_value_t = 0.0, requires = "fusion_lag_s")]
+    delivery_jitter_s: f64,
+    /// Envelopes one source may have queued before new ones overflow.
+    #[arg(long, default_value_t = argusnet_sim::delivery::DEFAULT_QUEUE_CAPACITY, requires = "fusion_lag_s")]
+    delivery_queue_capacity: usize,
+    /// Scheduled sensor and link faults: an `argusnet.fault-manifest` (F2).
+    #[arg(long, requires = "run")]
+    faults: Option<PathBuf>,
+}
+
+impl RunOptionArgs {
+    fn options(&self) -> Result<argusnet_sim::run_options::RunOptions> {
+        use argusnet_sim::run_options::{DeliverySeconds, RunOptions};
+        Ok(RunOptions {
+            energy_profile: match self.energy_profile.as_str() {
+                "physical_v1" => argusnet_sim::run_options::EnergyProfile::PhysicalV1,
+                _ => argusnet_sim::run_options::EnergyProfile::Legacy,
+            },
+            delivery: self.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {
+                fusion_lag_s,
+                delay_s: self.delivery_delay_s,
+                source_delay_s: self.source_delay.iter().cloned().collect(),
+                jitter_s: self.delivery_jitter_s,
+                queue_capacity: self.delivery_queue_capacity,
+            }),
+            faults: self
+                .faults
+                .as_deref()
+                .map(RunOptions::read_faults)
+                .transpose()
+                .map_err(|error| anyhow::anyhow!(error))?,
+        })
+    }
+}
+
+/// `NODE_ID=SECONDS` for `--source-delay`.
+fn parse_source_delay(text: &str) -> std::result::Result<(String, f64), String> {
+    let (id, seconds) = text
+        .split_once('=')
+        .ok_or_else(|| format!("expected NODE_ID=SECONDS, got {text:?}"))?;
+    let seconds: f64 = seconds
+        .parse()
+        .map_err(|_| format!("{seconds:?} is not a number of seconds"))?;
+    if id.is_empty() {
+        return Err("the node id is empty".into());
+    }
+    Ok((id.to_string(), seconds))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.headless {
@@ -133,7 +203,8 @@ fn main() -> Result<()> {
         );
     }
     if let Some(run) = args.run {
-        return argusnet_viewer::run_sim(args.scene, run, args.view_mode, args.quality);
+        let options = args.run_options.options()?;
+        return argusnet_viewer::run_sim(args.scene, run, options, args.view_mode, args.quality);
     }
     #[cfg(feature = "live-stream")]
     if let Some(endpoint) = args.live {

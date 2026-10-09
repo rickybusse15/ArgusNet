@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — The viewer's in-process run takes the run options
+
+- `argusnet-viewer --run` accepts `--fusion-lag-s`, `--delivery-delay-s`,
+  `--source-delay`, `--delivery-jitter-s`, `--delivery-queue-capacity`,
+  `--energy-profile` and `--faults`, as `argusnet-rs sim` does. Both apply them
+  through `argusnet_sim::run_options::RunOptions`, so the same options give the
+  same run. Unsupported options are refused before the window opens.
+
 ## Unreleased — Track error scored at evidence time (B4)
 
 - Evaluation reports score each track against truth at the track's own time.

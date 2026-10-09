@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use argusnet_sim::builder::{build_bundle, ScenarioConfig};
 use argusnet_sim::command::{AckStatus, CommandAck, CommandEnvelope, CommandKind, RejectReason};
+use argusnet_sim::run_options::RunOptions;
 use argusnet_sim::scenario::{assemble, AssembledRun, ScenarioBundle};
 use argusnet_sim::worker::{Pacing, SimWorker, WorkerPhase, WorkerStatus};
 use bevy::prelude::*;
@@ -40,7 +41,9 @@ const NOTICE_FOR: Duration = Duration::from_secs(6);
 
 /// Build a run from a scenario config (`argusnet.scenario-config`) or a
 /// scenario bundle (`argusnet.scenario-bundle`), whichever the file is.
-pub fn load_run(path: &Path) -> Result<AssembledRun, String> {
+/// Assemble the run at `path` and install `options` on it -- through the same
+/// [`RunOptions::apply`] as `argusnet-rs sim`, so the viewer's run is the CLI's.
+pub fn load_run(path: &Path, options: &RunOptions) -> Result<AssembledRun, String> {
     let text =
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let value: serde_json::Value =
@@ -62,7 +65,9 @@ pub fn load_run(path: &Path) -> Result<AssembledRun, String> {
         }
     };
     let bundle = ScenarioBundle::from_json(&bundle_text).map_err(|error| error.to_string())?;
-    assemble(&bundle).map_err(|error| error.to_string())
+    let mut run = assemble(&bundle).map_err(|error| error.to_string())?;
+    options.apply(&mut run, &bundle)?;
+    Ok(run)
 }
 
 /// A sim frame in the viewer's replay representation. Both sides speak the
@@ -97,10 +102,10 @@ pub struct SimSession {
 }
 
 impl SimSession {
-    pub fn start(source: PathBuf, pacing: Pacing) -> Self {
+    pub fn start(source: PathBuf, options: RunOptions, pacing: Pacing) -> Self {
         let path = source.clone();
         Self {
-            worker: SimWorker::spawn(move || load_run(&path), pacing),
+            worker: SimWorker::spawn(move || load_run(&path, &options), pacing),
             source,
             next_id: 1,
             pending: BTreeMap::new(),
@@ -439,6 +444,10 @@ fn phase_badge(phase: &WorkerPhase) -> (char, egui::Color32, &'static str) {
 mod tests {
     use super::*;
 
+    fn load_run_legacy(path: &Path) -> Result<AssembledRun, String> {
+        load_run(path, &RunOptions::default())
+    }
+
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures")
@@ -468,7 +477,7 @@ mod tests {
 
     #[test]
     fn every_sim_frame_converts_to_the_viewer_representation() {
-        let mut run = load_run(&fixture("scenario_bundle_tt.json")).expect("loads");
+        let mut run = load_run_legacy(&fixture("scenario_bundle_tt.json")).expect("loads");
         for _ in 0..5 {
             run.step().expect("ticks");
             let frame = run.last_frame().expect("a frame");
@@ -480,9 +489,10 @@ mod tests {
 
     #[test]
     fn a_scenario_config_loads_too() {
-        let run = load_run(&fixture("scenario_config_scan_16_drones.json")).expect("loads");
+        let run = load_run_legacy(&fixture("scenario_config_scan_16_drones.json")).expect("loads");
         assert!(!run.run_id().is_empty());
-        let Err(error) = load_run(&fixture("scenario_bundle_tt.json").with_extension("missing"))
+        let Err(error) =
+            load_run_legacy(&fixture("scenario_bundle_tt.json").with_extension("missing"))
         else {
             panic!("a missing file is an error");
         };
@@ -493,7 +503,11 @@ mod tests {
     /// pending until the run says it took effect.
     #[test]
     fn controls_are_pending_until_applied_and_frames_follow_the_tail() {
-        let mut session = SimSession::start(fixture("scenario_bundle_tt.json"), Pacing::Unpaced);
+        let mut session = SimSession::start(
+            fixture("scenario_bundle_tt.json"),
+            RunOptions::default(),
+            Pacing::Unpaced,
+        );
         let mut replay = ReplayState::new(None);
         wait(&mut session, &mut replay, |s, _| {
             s.status().phase == WorkerPhase::Paused
@@ -544,7 +558,11 @@ mod tests {
 
     #[test]
     fn a_run_that_cannot_load_is_reported_as_faulted() {
-        let mut session = SimSession::start(fixture("no_such_config.json"), Pacing::Unpaced);
+        let mut session = SimSession::start(
+            fixture("no_such_config.json"),
+            RunOptions::default(),
+            Pacing::Unpaced,
+        );
         let mut replay = ReplayState::new(None);
         wait(&mut session, &mut replay, |s, _| {
             matches!(s.status().phase, WorkerPhase::Failed(_))
@@ -554,5 +572,111 @@ mod tests {
         assert!(session
             .notice()
             .is_some_and(|n| n.contains("failed to load")));
+    }
+
+    fn wave3_options() -> RunOptions {
+        let mut delivery = argusnet_sim::run_options::DeliverySeconds::with_lag(1.5);
+        delivery.delay_s = 0.5;
+        delivery.jitter_s = 0.5;
+        RunOptions {
+            energy_profile: argusnet_sim::run_options::EnergyProfile::PhysicalV1,
+            delivery: Some(delivery),
+            faults: Some(
+                RunOptions::read_faults(&fixture("fault_manifest_example.json")).expect("manifest"),
+            ),
+        }
+    }
+
+    fn frames_of(run: AssembledRun) -> Vec<String> {
+        run.run_to_replay()
+            .expect("runs")
+            .frames
+            .iter()
+            .map(|frame| serde_json::to_string(frame).unwrap())
+            .collect()
+    }
+
+    /// `--run` with options is the CLI's run with the same options: both go
+    /// through `RunOptions::apply`, and the replay records what was applied.
+    #[test]
+    fn run_options_reach_the_viewers_run() {
+        let options = wave3_options();
+        let path = fixture("scenario_bundle_tt.json");
+        let viewer = load_run(&path, &options).expect("loads with options");
+        let replay = viewer.run_to_replay().expect("runs");
+        let meta = serde_json::to_value(&replay.meta).unwrap();
+        assert_eq!(meta["energy_profile"], "physical_v1");
+        assert_eq!(meta["delivery_profile"]["fusion_lag_ticks"], 3);
+        assert!(meta["fault_manifest"].is_object());
+        assert!(meta["delivery_totals"]["captured"].as_u64().unwrap() > 0);
+
+        let bundle = ScenarioBundle::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut direct = assemble(&bundle).unwrap();
+        options.apply(&mut direct, &bundle).expect("applies");
+        let viewer_frames: Vec<String> = replay
+            .frames
+            .iter()
+            .map(|frame| serde_json::to_string(frame).unwrap())
+            .collect();
+        assert_eq!(viewer_frames, frames_of(direct));
+        assert_ne!(
+            viewer_frames,
+            frames_of(load_run_legacy(&path).unwrap()),
+            "the options changed the run"
+        );
+    }
+
+    #[test]
+    fn an_unsupported_option_is_refused_at_load() {
+        let mut options = RunOptions::default();
+        let mut delivery = argusnet_sim::run_options::DeliverySeconds::with_lag(0.5);
+        delivery.delay_s = 2.0;
+        options.delivery = Some(delivery);
+        let Err(error) = load_run(&fixture("scenario_bundle_tt.json"), &options) else {
+            panic!("a delay beyond the fusion lag is refused");
+        };
+        assert!(error.contains("unsupported delivery profile"), "{error}");
+    }
+
+    /// Reset keeps the options: the run after a reset is the first run again,
+    /// delivery, energy profile and faults included.
+    #[test]
+    fn a_reset_run_keeps_its_options() {
+        let mut session = SimSession::start(
+            fixture("scenario_bundle_tt.json"),
+            wave3_options(),
+            Pacing::Unpaced,
+        );
+        let mut replay = ReplayState::new(None);
+        let run_once = |session: &mut SimSession, replay: &mut ReplayState| {
+            wait(session, replay, |s, _| {
+                s.status().phase == WorkerPhase::Paused
+            });
+            session.send("Run", CommandKind::Resume).expect("sent");
+            wait(session, replay, |s, _| {
+                s.status().phase == WorkerPhase::Completed
+            });
+            session.take_frames(replay);
+            replay
+                .document
+                .as_ref()
+                .map(|document| {
+                    document
+                        .frames
+                        .iter()
+                        .map(|frame| format!("{:?}", frame.tracks))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let first = run_once(&mut session, &mut replay);
+        let epoch = replay.epoch();
+        session.send("Reset", CommandKind::Reset).expect("sent");
+        wait(&mut session, &mut replay, |s, r| {
+            !s.is_pending("Reset") && r.epoch() > epoch
+        });
+        let second = run_once(&mut session, &mut replay);
+        assert_eq!(first.len(), 80);
+        assert_eq!(first, second);
     }
 }
