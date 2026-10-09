@@ -1,6 +1,7 @@
 //! The Rust simulation runtime shell.
 
 pub mod battery;
+pub mod belief_world;
 pub mod builder;
 pub mod clock;
 pub mod command;
@@ -23,6 +24,7 @@ pub mod observation_follow;
 pub mod observe;
 pub mod overrides;
 pub mod particles;
+pub mod range_scan;
 pub mod replay;
 pub mod run_options;
 pub mod runtime_world;

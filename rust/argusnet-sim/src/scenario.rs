@@ -622,6 +622,7 @@ impl PursuitOracle for TablePursuit {
 // ---------------------------------------------------------------------------
 
 /// A built world, shared by every stage that reads it.
+#[derive(Clone)]
 pub struct BuiltWorld {
     pub terrain: SharedTerrain,
     pub obstacles: SharedObstacles,
@@ -731,6 +732,15 @@ pub struct AssembledRun {
     /// while paused does not restart a source twice. Not checkpointed: a
     /// restart's effect is the delivery network's epoch, which is.
     restarts_applied_at: Option<u64>,
+    /// The true world, for the range scanner and the physical guard a run
+    /// without a prior map installs. Planning stages never see it there.
+    world: BuiltWorld,
+    map_bounds_m: Bounds2d,
+    /// The highest launch pad or station: what a platform knows of the
+    /// ground before it has sensed any.
+    launch_floor_m: f64,
+    /// Physics, in a run without a prior map: its contacts go to the replay.
+    guard: Option<crate::belief_world::PhysicalGuard>,
 }
 
 /// What the replay frames need beyond the stages' own handles.
@@ -859,6 +869,43 @@ fn operational(
             )
         }
     })
+}
+
+/// The belief's progress against the true terrain. Evaluation only: the run
+/// never reads it. Error is measured at each known cell's centre.
+fn belief_stats(
+    grid: &crate::belief_world::BeliefGrid,
+    occupied_probability: f64,
+    terrain: Option<&SharedTerrain>,
+) -> crate::replay::ReplayBeliefStats {
+    let (nx, ny) = grid.dimensions();
+    let mut squared = 0.0;
+    let mut worst: f64 = 0.0;
+    let mut measured = 0u64;
+    if let Some(terrain) = terrain {
+        for j in 0..ny {
+            for i in 0..nx {
+                let Some(ground) = grid.ground_ij(i, j) else {
+                    continue;
+                };
+                let [x, y] = grid.centre_ij(i, j);
+                let error = ground - crate::motion::TerrainSampler::height_at(terrain, x, y);
+                squared += error * error;
+                worst = worst.max(error.abs());
+                measured += 1;
+            }
+        }
+    }
+    let known = grid.known_cells() as u64;
+    let total = grid.cell_count() as u64;
+    crate::replay::ReplayBeliefStats {
+        known_cells: known,
+        total_cells: total,
+        known_fraction: known as f64 / total.max(1) as f64,
+        ground_rmse_m: (measured > 0).then(|| (squared / measured as f64).sqrt()),
+        ground_max_abs_error_m: (measured > 0).then_some(worst),
+        structure_cells: grid.structure_cells_at(occupied_probability) as u64,
+    }
 }
 
 /// Build a configured [`Simulation`] from a bundle, serially.
@@ -1214,6 +1261,20 @@ pub fn assemble_with(
         initial_platforms,
         faults: None,
         restarts_applied_at: None,
+        launch_floor_m: bundle
+            .nodes
+            .iter()
+            .map(|node| match &node.controller {
+                ControllerDocument::Static { position_m } => position_m[2],
+                ControllerDocument::Launched {
+                    station_position_m, ..
+                } => station_position_m[2],
+            })
+            .fold(f64::NEG_INFINITY, f64::max)
+            .max(f64::MIN),
+        map_bounds_m: bundle.map_bounds_m,
+        world,
+        guard: None,
     })
 }
 
@@ -1446,6 +1507,12 @@ impl AssembledRun {
     }
 
     /// Stage 6, as assembled. Every assembled run installs it.
+    fn observe_mut(&mut self) -> &mut ObserveStage {
+        self.sim
+            .stage_mut::<ObserveStage>(Stage::GenerateObservations)
+            .expect("assembly installs stage 6")
+    }
+
     pub fn observe(&self) -> &ObserveStage {
         self.sim
             .stage::<ObserveStage>(Stage::GenerateObservations)
@@ -1471,6 +1538,9 @@ impl AssembledRun {
         self.replay.clear_frames();
         self.report.totals = GenerationTotals::default();
         self.restarts_applied_at = None;
+        if let Some(guard) = &self.guard {
+            guard.take_contacts();
+        }
     }
 
     /// The last tick's evidence and decisions, for the durable journal (A4):
@@ -1502,6 +1572,97 @@ impl AssembledRun {
             .stage_mut::<FusionStage>(Stage::UpdateFusion)
             .expect("assembly installs a FusionStage")
             .set_delivery(Some(network));
+        Ok(())
+    }
+
+    /// What the platforms know of the world before sensing it. `Prior` is
+    /// every run as it was. `NoPrior` installs the range scanner (stage 6),
+    /// the self-built map (stage 8), belief-backed terrain, obstacles and
+    /// visibility for the planning stages (1, 3, 4) and the physical guard;
+    /// see [`crate::belief_world`]. Before the first tick only.
+    pub fn set_world_knowledge(
+        &mut self,
+        knowledge: crate::belief_world::WorldKnowledge,
+        config: crate::belief_world::ExplorationConfig,
+    ) -> Result<(), String> {
+        use crate::belief_world::{
+            BeliefGrid, BeliefObstacles, BeliefTerrain, BeliefVisibility, PhysicalGuard,
+            WorldKnowledge,
+        };
+        if knowledge == WorldKnowledge::Prior {
+            return Ok(());
+        }
+        if self.sim.tick() != 0 || self.replay.last_frame().is_some() {
+            return Err("world knowledge is set before the first tick".into());
+        }
+        config.validate()?;
+        let grid = BeliefGrid::new(self.map_bounds_m, config.resolution_m, self.launch_floor_m)?;
+        let resolution_m = config.resolution_m;
+        let scanner = crate::range_scan::RangeScanner::new(
+            config.scan.clone(),
+            self.world.visibility.clone(),
+        )?;
+        let summary = serde_json::json!({
+            "knowledge": knowledge.as_str(),
+            "exploration": &config,
+            "belief_grid": {
+                "origin_m": grid.origin_m(),
+                "resolution_m": resolution_m,
+                "dimensions": grid.dimensions(),
+            },
+            "launch_floor_m": self.launch_floor_m,
+        });
+        let handle = self
+            .sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .ok_or_else(|| {
+                "world_knowledge none maps into stage 8, which this run does not have \
+                 (its bundle names no coverage bounds)"
+                    .to_string()
+            })?
+            .set_belief(grid, config.clone());
+        let terrain = BeliefTerrain::new(handle.clone(), resolution_m);
+        let guard = PhysicalGuard::new(
+            self.world.terrain.clone(),
+            self.world.obstacles.clone(),
+            config.contact_clearance_m,
+        );
+
+        let controllers = self
+            .sim
+            .stage_mut::<ControllerStage>(Stage::SampleControllersAndBattery)
+            .expect("assembly installs stage 1");
+        let environment = controllers
+            .environment_mut()
+            .expect("assembly sets stage 1's environment");
+        environment.terrain = Box::new(terrain.clone());
+        environment.obstacles = Some(Box::new(BeliefObstacles::new(handle.clone())));
+        environment.visibility = Box::new(BeliefVisibility::new(
+            handle.clone(),
+            FOLLOW_LOS_CLEARANCE_M,
+        ));
+        controllers.set_physical_guard(guard.clone());
+
+        let deconflict = self
+            .sim
+            .stage_mut::<DeconflictStage>(Stage::Deconflict)
+            .expect("assembly installs stage 3");
+        let roles = deconflict
+            .roles()
+            .clone()
+            .with_terrain(Arc::new(terrain.clone()));
+        deconflict.set_roles(roles);
+        deconflict.set_physical_guard(guard.clone());
+
+        if let Some(safety) = self.sim.stage_mut::<SafetyStage>(Stage::SafetyMonitor) {
+            safety.set_terrain(Box::new(terrain));
+        }
+        self.observe_mut().set_range_scanner(scanner);
+        self.sim
+            .connect(crate::simulation::Handoff::RangeScansToMapping)
+            .map_err(|error| format!("{error:?}"))?;
+        self.guard = Some(guard);
+        self.extend_replay_meta([("world_knowledge".to_string(), summary)]);
         Ok(())
     }
 
@@ -1790,6 +1951,14 @@ impl AssembledRun {
             })
             .collect();
 
+        if let Some(guard) = &self.guard {
+            frame.world_contacts = guard.take_contacts();
+        }
+        let belief_updates = self
+            .sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .map(MappingStage::take_belief_updates)
+            .unwrap_or_default();
         let Some(mapping) = self.mapping() else {
             return;
         };
@@ -1799,7 +1968,22 @@ impl AssembledRun {
             covered_cells: stats.covered_cells,
             total_cells: stats.total_cells,
             mean_revisits: stats.mean_revisits,
+            belief: mapping.belief_grid().zip(mapping.exploration_config()).map(
+                |(grid, config)| {
+                    belief_stats(
+                        grid,
+                        config.occupied_probability,
+                        self.report.terrain.as_ref(),
+                    )
+                },
+            ),
         });
+        frame.range_scans = mapping
+            .fused_scans()
+            .iter()
+            .map(crate::replay::ReplayRangeScan::from)
+            .collect();
+        frame.belief_updates = belief_updates;
         frame.inspection_events = mapping
             .inspection_events()
             .into_iter()

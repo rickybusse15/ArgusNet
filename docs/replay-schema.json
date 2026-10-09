@@ -554,6 +554,47 @@
         "mean_revisits": {
           "type": "number",
           "minimum": 0
+        },
+        "belief": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "World-knowledge `none` runs: the self-built map's progress. Error figures compare the belief with the true terrain at known cell centres; they are evaluation, never read by the run.",
+          "additionalProperties": true,
+          "properties": {
+            "known_cells": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_cells": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "known_fraction": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "ground_rmse_m": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "ground_max_abs_error_m": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "structure_cells": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     },
@@ -863,6 +904,133 @@
           "description": "Optional inspection evidence records captured or indexed this frame.",
           "items": {
             "$ref": "#/definitions/inspection_evidence_record"
+          }
+        },
+        "belief_updates": {
+          "type": "array",
+          "description": "World-knowledge `none` runs: the belief cells this tick changed, as rows [i, j, ground_cm, structure_top_cm, occupancy_pct, confidence]. ground_cm is null until a ground return lands; structure_top_cm is null unless the cell is believed occupied; occupancy_pct is 0 for a cell with no structure return; confidence is 1 + floor(log2(returns)) capped at 4. Each row replaces the cell's previous one, so applying the frames in order rebuilds the map. Cell (i, j) spans meta.world_knowledge.belief_grid origin + (i, j) * resolution.",
+          "items": {
+            "type": "array",
+            "minItems": 6,
+            "maxItems": 6,
+            "items": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4
+              }
+            ]
+          }
+        },
+        "range_scans": {
+          "type": "array",
+          "description": "World-knowledge `none` runs: a strided sample (at most 32 returns per scan) of each mobile platform's range returns this tick, rounded to the decimetre.",
+          "items": {
+            "type": "object",
+            "required": [
+              "node_id",
+              "origin_m",
+              "ground",
+              "misses"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "node_id": {
+                "type": "string"
+              },
+              "origin_m": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "ground": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "structure": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "misses": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "world_contacts": {
+          "type": "array",
+          "description": "World-knowledge `none` runs: platforms physics put back out of the true ground or a structure this tick, because their belief had them there.",
+          "items": {
+            "type": "object",
+            "required": [
+              "node_id",
+              "timestamp_s",
+              "kind",
+              "correction_m"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "node_id": {
+                "type": "string"
+              },
+              "timestamp_s": {
+                "type": "number"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "terrain",
+                  "structure"
+                ]
+              },
+              "correction_m": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
           }
         }
       }

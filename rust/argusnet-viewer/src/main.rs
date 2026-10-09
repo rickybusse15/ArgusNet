@@ -140,6 +140,10 @@ struct RunOptionArgs {
     /// Scheduled sensor and link faults: an `argusnet.fault-manifest` (F2).
     #[arg(long, requires = "run")]
     faults: Option<PathBuf>,
+    /// `prior` (the true terrain and obstacles) or `none`: the platforms map
+    /// the world themselves and the view shows the map they build.
+    #[arg(long, value_parser = ["prior", "none"], default_value = "prior", requires = "run")]
+    world_knowledge: String,
 }
 
 impl RunOptionArgs {
@@ -163,6 +167,11 @@ impl RunOptionArgs {
                 .map(RunOptions::read_faults)
                 .transpose()
                 .map_err(|error| anyhow::anyhow!(error))?,
+            world_knowledge: match self.world_knowledge.as_str() {
+                "none" => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
+                _ => argusnet_sim::belief_world::WorldKnowledge::Prior,
+            },
+            exploration: None,
         })
     }
 }

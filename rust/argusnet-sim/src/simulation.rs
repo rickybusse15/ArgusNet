@@ -240,15 +240,19 @@ pub enum Handoff {
     /// Applied after every run, whatever it reported, because stage 9 queues
     /// writes on runs that report `NoWork` too.
     OverridesFromMission,
+    /// 6→8: stage 6's range scans are what stage 8 maps this tick, in a run
+    /// that builds its own map. Handed on whatever stage 6 reported: a stage
+    /// with no bearing sensors still scans.
+    RangeScansToMapping,
 }
 
 impl Handoff {
     /// The stage whose successful run the handoff follows.
     pub fn after(self) -> Stage {
         match self {
-            Handoff::EngagementToControllers | Handoff::ObservationsToFusion => {
-                Stage::GenerateObservations
-            }
+            Handoff::EngagementToControllers
+            | Handoff::ObservationsToFusion
+            | Handoff::RangeScansToMapping => Stage::GenerateObservations,
             Handoff::SafetyEventsToFusion => Stage::SafetyMonitor,
             Handoff::OverridesFromMission => Stage::EvaluateMissionTransitions,
         }
@@ -260,7 +264,7 @@ impl Handoff {
             Handoff::EngagementToControllers
             | Handoff::ObservationsToFusion
             | Handoff::SafetyEventsToFusion => *outcome == StageOutcome::Ran,
-            Handoff::OverridesFromMission => true,
+            Handoff::OverridesFromMission | Handoff::RangeScansToMapping => true,
         }
     }
 }
@@ -634,6 +638,12 @@ impl Simulation {
                         .is_some()
             }
             Handoff::ObservationsToFusion => observe && fusion,
+            Handoff::RangeScansToMapping => {
+                observe
+                    && self
+                        .stage::<crate::mapping::MappingStage>(Stage::UpdateMappingAndLocalization)
+                        .is_some()
+            }
             Handoff::SafetyEventsToFusion => {
                 fusion && self.stage::<SafetyStage>(Stage::SafetyMonitor).is_some()
             }
@@ -691,6 +701,19 @@ impl Simulation {
                     };
                     if let Some(fusion) = self.stage_mut::<FusionStage>(Stage::UpdateFusion) {
                         fusion.submit_observations(observations);
+                    }
+                }
+                Handoff::RangeScansToMapping => {
+                    let Some(scans) = self
+                        .stage::<ObserveStage>(Stage::GenerateObservations)
+                        .map(|observe| observe.range_scans().to_vec())
+                    else {
+                        continue;
+                    };
+                    if let Some(mapping) = self.stage_mut::<crate::mapping::MappingStage>(
+                        Stage::UpdateMappingAndLocalization,
+                    ) {
+                        mapping.submit_range_scans(scans);
                     }
                 }
                 Handoff::SafetyEventsToFusion => {

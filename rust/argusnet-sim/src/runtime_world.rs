@@ -176,6 +176,39 @@ impl SharedVisibility {
     }
 }
 
+impl SharedVisibility {
+    /// The first hard surface a ray from `from` toward `to` meets: its blocker
+    /// type (`terrain`, `building`, `wall`, `vegetation`) and the point. A
+    /// terrain point lies on the ground under the ray's crossing.
+    /// The ray is cut at the edge of the terrain first, so a ray that would
+    /// leave the world still reports what it meets before the edge; `None`
+    /// when it meets nothing.
+    pub fn first_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<(String, [f64; 3])> {
+        let bounds = self.terrain.bounds;
+        if !bounds.contains_xy(from[0], from[1]) {
+            return None;
+        }
+        let (_, t_end) = visibility::clip([from[0], from[1]], [to[0], to[1]], bounds)?;
+        // A hair inside the edge, so `los` does not call the end point out of
+        // coverage.
+        let t_end = (t_end - 1e-6).max(0.0);
+        let end: [f64; 3] = std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t_end);
+        let result = visibility::los(
+            &self.terrain,
+            &self.obstacles,
+            from,
+            end,
+            &self.profile,
+            0,
+            0.0,
+        );
+        match (result.blocker_type.as_str(), result.closest_point) {
+            ("none" | "out_of_coverage", _) | (_, None) => None,
+            (kind, Some(point)) => Some((kind.to_string(), point)),
+        }
+    }
+}
+
 impl VisibilitySampler for SharedVisibility {
     fn is_visible(&self, observer_m: [f64; 3], target_m: [f64; 3]) -> bool {
         self.los(observer_m, target_m).visible
