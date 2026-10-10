@@ -125,6 +125,26 @@ run opens, and stay in the Layers panel as truth for comparison.
 - **Readout**: known %, ground RMSE, structure found and right %, and
   contacts.
 
+It is part of the viewer, not an overlay on top of it:
+
+- **Terrain material.** The ground uses the same material as a scene's
+  terrain: the terrain style's base colour, the elevation tint, contour lines
+  and slope shading. Cells with few returns, and cells sensed in the last
+  2.5 s, are tinted on top of that.
+- **Belief overlay.** Each changed tile is republished to the viewer's belief
+  pipeline (`belief_render`), in the store's own patch format. The
+  Reconstruction preset then draws the classes (safe, obstacle, unknown),
+  confidence and staleness over the drones' terrain, through the overlay the
+  pipeline was built for.
+- **Terrain heights.** Marker footprints, zone walls and the camera's ground
+  read the drones' measured ground, refreshed once a second. An unknown cell
+  is no data, not zero.
+- **Layers panel.** "Drones' map" is a layer of its own. The scene's layers,
+  when a scene was given, are labelled as truth.
+- **Split view.** The right pane shows the drones' map alone, in 3D.
+- **Picking.** The drones' terrain and buildings hide what is behind them, as
+  a scene's own geometry does.
+
 Scrubbing back rebuilds the map from the start. Mesh rebuilds are confined
 to the 32×32-cell chunks that changed.
 

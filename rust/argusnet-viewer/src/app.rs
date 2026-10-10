@@ -460,6 +460,7 @@ fn run_inner(
                 // A self-built map (world_knowledge: none), as of the cursor.
                 crate::belief_map::sync_belief_map_system,
                 crate::belief_map::render_belief_chunks_system,
+                crate::belief_map::sync_belief_viewer_state_system,
             )
                 .chain()
                 .in_set(ViewerSet::Presentation),
@@ -711,6 +712,9 @@ fn setup_world(
         }
         .build(),
         Transform::from_xyz(2000.0, 1200.0, 2600.0).looking_at(Vec3::ZERO, Vec3::Z),
+        // The sun lights the reconstruction layer too: a self-built map drawn
+        // only in the split view's right pane is still terrain in daylight.
+        RenderLayers::from_layers(&[0, RECON_LAYER]),
     ));
 
     // The main camera must set its projection explicitly. Without it Bevy applies

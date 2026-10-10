@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — The drones' map is part of the viewer
+
+- The terrain the drones build is drawn with the same terrain material as a
+  real scene: the same colours, elevation bands and contour lines.
+- The Reconstruction preset's belief overlay (safe, obstacle, unknown,
+  confidence, staleness) now draws the drones' own map. Before this it only
+  ever showed test data.
+- Markers, zone walls and the camera rest on the drones' measured ground, and
+  the "terrain data unavailable" alert no longer appears in a run with no
+  scene.
+- "Drones' map" has its own entry in the Layers panel, Split view shows it
+  alone in the right pane, and it blocks picking like real terrain.
+
 ## Unreleased — The drones' map as a 3D world, with no scene needed
 
 - `argusnet-viewer --run <scenario> --world-knowledge none` no longer needs a

@@ -30,9 +30,19 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy_egui::{egui, EguiContexts};
 
+use crate::belief_render::{BeliefLayer, BeliefRenderSnapshot, BeliefUnavailable};
 use crate::replay::{BeliefCellRow, BeliefGridLayout, BeliefStats, ReplayState};
 use crate::schema::ScenePackage;
-use crate::state::LayerVisibilityState;
+use crate::state::{LayerVisibilityState, LoadedMissionZones, ViewMode};
+use crate::terrain_material::{scene_settings, TerrainExtension, TerrainMaterial};
+use crate::terrain_rasters::TerrainRasters;
+
+/// The drones' map in the Layers panel, beside the scene's own layers.
+pub const LAYER_ID: &str = "drones-map";
+/// How often, in source seconds, the viewer's terrain-height lookups are
+/// refreshed from the map. They feed marker footprints, zone walls and the
+/// camera's ground, none of which needs every tick.
+const HEIGHTS_EVERY_S: f32 = 1.0;
 
 /// Cells per side of a mesh chunk: a change rebuilds only its chunk.
 const CHUNK: u32 = 32;
@@ -45,7 +55,10 @@ pub struct BeliefChunk;
 #[derive(Debug, Clone, Copy)]
 struct Cell {
     row: BeliefCellRow,
+    /// When the cell first became known: what the glow runs from.
     updated_s: f32,
+    /// When its last row arrived: what the belief overlay ages from.
+    last_s: f32,
 }
 
 /// The map as of the cursor, and the entities that draw it.
@@ -64,6 +77,16 @@ pub struct BeliefMapView {
     buildings: Option<Entity>,
     buildings_dirty: bool,
     material: Option<Handle<StandardMaterial>>,
+    ground_material: Option<Handle<TerrainMaterial>>,
+    /// Belief tiles (one per chunk) to republish to the terrain material's
+    /// overlay, and whether every tile must be (the map was rebuilt).
+    overlay_dirty: BTreeSet<(u32, u32)>,
+    overlay_all: bool,
+    overlay_revision: u64,
+    /// Whether this view put the [`BeliefLayer`] there.
+    owns_belief_layer: bool,
+    heights_dirty: bool,
+    heights_at_s: Option<f32>,
     truth_hidden: bool,
     now_s: f32,
     stats: Option<BeliefStats>,
@@ -84,6 +107,9 @@ impl BeliefMapView {
             commands.entity(entity).despawn();
         }
         self.cells.clear();
+        self.overlay_all = true;
+        self.heights_dirty = true;
+        self.heights_at_s = None;
         self.applied_through_s = None;
         self.dirty.clear();
         self.fresh_until.clear();
@@ -109,8 +135,11 @@ impl BeliefMapView {
                 Cell {
                     row: *row,
                     updated_s: first_known_s,
+                    last_s: at_s,
                 },
             );
+            self.overlay_dirty.insert((i / CHUNK, j / CHUNK));
+            self.heights_dirty = true;
             // A cell's corners are shared with its neighbours, which may sit
             // in the next chunk over: every chunk touching it is redrawn.
             for (di, dj) in [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
@@ -174,6 +203,7 @@ pub fn sync_belief_map_system(
                 layers.base_layers.insert(layer.id.clone(), false);
             }
         }
+        layers.base_layers.insert(LAYER_ID.to_string(), true);
         view.truth_hidden = true;
     }
     let Some(current) = replay.current_frame() else {
@@ -216,17 +246,27 @@ pub fn sync_belief_map_system(
 }
 
 /// Rebuild the meshes of the chunks that changed.
+#[allow(clippy::too_many_arguments)]
 pub fn render_belief_chunks_system(
     mut commands: Commands,
+    pick_generation: Option<ResMut<crate::picking::PickGeneration>>,
     mut view: ResMut<BeliefMapView>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut terrain_materials: ResMut<Assets<TerrainMaterial>>,
+    rasters: Res<TerrainRasters>,
+    scene: Res<ScenePackage>,
 ) {
     let Some(layout) = view.layout else {
         return;
     };
     if view.dirty.is_empty() && !view.buildings_dirty {
         return;
+    }
+    // The geometry under the pointer is about to change: a cached hover is
+    // recomputed against it.
+    if let Some(mut generation) = pick_generation {
+        generation.0 += 1;
     }
     // Lit like the scene's own terrain: on the main layer, where the sun is,
     // as well as the reconstruction layer the split view's right pane draws.
@@ -244,6 +284,34 @@ pub fn render_belief_chunks_system(
             })
         })
         .clone();
+    // The ground takes the terrain material every scene's terrain takes: the
+    // same elevation tint, contours and slope shading, and the same belief
+    // overlay. It is created with the rasters' current settings and textures;
+    // the raster system keeps every terrain material current after that.
+    let ground_material = view
+        .ground_material
+        .get_or_insert_with(|| {
+            terrain_materials.add(TerrainMaterial {
+                base: StandardMaterial {
+                    // What a scene's terrain layer is baked with (its style's
+                    // `terrain-base` colour); the extension's elevation tint
+                    // multiplies it.
+                    base_color: Color::srgb(0.655, 0.710, 0.545),
+                    perceptual_roughness: 0.95,
+                    reflectance: 0.2,
+                    cull_mode: None,
+                    double_sided: true,
+                    ..default()
+                },
+                extension: TerrainExtension {
+                    settings: rasters.apply_to(scene_settings(&scene)),
+                    belief_class: rasters.belief_class.clone(),
+                    belief_numeric: rasters.belief_numeric.clone(),
+                    land_cover: rasters.land_cover.clone(),
+                },
+            })
+        })
+        .clone();
     let layers = RenderLayers::from_layers(&[0, crate::app::RECON_LAYER]);
     if std::mem::take(&mut view.buildings_dirty) {
         match (buildings_mesh(&view, layout), view.buildings) {
@@ -258,6 +326,10 @@ pub fn render_belief_chunks_system(
                         layers.clone(),
                         Visibility::Visible,
                         BeliefChunk,
+                        // The drones' terrain and buildings hide what is
+                        // behind them from picking, as a scene's own do.
+                        crate::picking::PickOccluder,
+                        bevy::picking::mesh_picking::ray_cast::RayCastBackfaces,
                         Name::new("belief-structures"),
                     ))
                     .id();
@@ -270,10 +342,10 @@ pub fn render_belief_chunks_system(
             (None, None) => {}
         }
     }
-    let (low, high) = height_range(&view);
+    let (low, _) = height_range(&view);
     let dirty = std::mem::take(&mut view.dirty);
     for chunk in dirty {
-        let mesh = chunk_mesh(&view, layout, chunk, low, high);
+        let mesh = chunk_mesh(&view, layout, chunk, low);
         match (mesh, view.chunks.get(&chunk).copied()) {
             (Some(mesh), Some(entity)) => {
                 commands.entity(entity).insert(Mesh3d(meshes.add(mesh)));
@@ -282,10 +354,14 @@ pub fn render_belief_chunks_system(
                 let entity = commands
                     .spawn((
                         Mesh3d(meshes.add(mesh)),
-                        MeshMaterial3d(material.clone()),
+                        MeshMaterial3d(ground_material.clone()),
                         layers.clone(),
                         Visibility::Visible,
                         BeliefChunk,
+                        // The drones' terrain and buildings hide what is
+                        // behind them from picking, as a scene's own do.
+                        crate::picking::PickOccluder,
+                        bevy::picking::mesh_picking::ray_cast::RayCastBackfaces,
                         Name::new(format!("belief-chunk-{}-{}", chunk.0, chunk.1)),
                     ))
                     .id();
@@ -316,17 +392,15 @@ fn height_range(view: &BeliefMapView) -> (f32, f32) {
     }
 }
 
-/// Ground colour: low ground dark green-grey, high ground pale stone,
-/// washed toward slate where a cell has few returns, and toward cyan while it
-/// is new. Lighting comes from the renderer; this is albedo.
-fn ground_colour(height: f32, low: f32, high: f32, level: u8, glow: f32) -> [f32; 3] {
-    let t = ((height - low) / (high - low)).clamp(0.0, 1.0);
-    let base = [0.20 + 0.40 * t, 0.29 + 0.32 * t, 0.23 + 0.25 * t];
+/// What a cell multiplies the terrain material's colour by: white once well
+/// measured, so it looks like any scene's terrain; washed toward slate while
+/// it has few returns; toward cyan while it is new.
+fn ground_tint(level: u8, glow: f32) -> [f32; 3] {
     let confidence = (level.clamp(1, 4) as f32 - 1.0) / 3.0;
-    let washed = [0.40, 0.46, 0.52];
-    let fresh = [0.40, 0.90, 1.0];
+    let washed = [0.62, 0.70, 0.82];
+    let fresh = [0.45, 1.0, 1.0];
     std::array::from_fn(|k| {
-        let settled = washed[k] + (base[k] - washed[k]) * (0.35 + 0.65 * confidence);
+        let settled = washed[k] + (1.0 - washed[k]) * confidence;
         settled * (1.0 - glow) + fresh[k] * glow
     })
 }
@@ -349,7 +423,6 @@ fn chunk_mesh(
     layout: BeliefGridLayout,
     chunk: (u32, u32),
     low: f32,
-    high: f32,
 ) -> Option<Mesh> {
     let res = layout.resolution_m;
     let [x0, y0] = layout.origin_m;
@@ -375,10 +448,10 @@ fn chunk_mesh(
                 continue;
             }
             if let Some(cell) = view.cells.get(&(i as u32, j as u32)) {
-                if let Some(h) = cell.row.ground_m() {
+                if cell.row.ground_m().is_some() {
                     let g =
                         ((cell.updated_s + FRESH_S - view.now_s) / FRESH_S).clamp(0.0, 1.0) * 0.8;
-                    let c = ground_colour(h, low, high, cell.row.confidence_level(), 0.0);
+                    let c = ground_tint(cell.row.confidence_level(), 0.0);
                     for k in 0..3 {
                         sum[k] += c[k];
                     }
@@ -387,9 +460,9 @@ fn chunk_mesh(
                 }
             }
         }
-        let fresh = [0.40, 0.90, 1.0];
+        let fresh = [0.45, 1.0, 1.0];
         let c: [f32; 3] = std::array::from_fn(|k| {
-            let base = if n > 0.0 { sum[k] / n } else { 0.3 };
+            let base = if n > 0.0 { sum[k] / n } else { 1.0 };
             base * (1.0 - glow) + fresh[k] * glow
         });
         [c[0], c[1], c[2], 1.0]
@@ -585,6 +658,191 @@ fn buildings_mesh(view: &BeliefMapView, layout: BeliefGridLayout) -> Option<Mesh
     finish_mesh(positions, normals, colours, indices)
 }
 
+/// The map as the rest of the viewer reads it:
+///
+/// - **The belief overlay.** Changed tiles are republished to the
+///   [`BeliefLayer`], which the terrain material draws as classes, confidence
+///   and staleness when the belief layer is on (the Reconstruction preset).
+///   This is the same publication the belief pipeline was built for.
+/// - **Terrain heights.** Marker footprints, zone walls and the camera's
+///   ground read `LoadedMissionZones::terrain_mesh`. It becomes the map's
+///   measured ground, refreshed every [`HEIGHTS_EVERY_S`]; unknown cells are
+///   NaN, which the lookup reads as no data rather than as zero.
+/// - **Layers and views.** The map shows when its Layers entry is on. In the
+///   split view it moves to the right pane only, beside whatever the left
+///   pane shows (the scene's truth layers, if switched on).
+#[allow(clippy::too_many_arguments)]
+pub fn sync_belief_viewer_state_system(
+    mut view: ResMut<BeliefMapView>,
+    mut belief: ResMut<BeliefLayer>,
+    mut zones: ResMut<LoadedMissionZones>,
+    layers: Res<LayerVisibilityState>,
+    view_mode: Res<ViewMode>,
+    mut entities: Query<(&mut Visibility, &mut RenderLayers), With<BeliefChunk>>,
+) {
+    let Some(layout) = view.layout else {
+        if view.owns_belief_layer {
+            *belief = BeliefLayer::Unavailable(BeliefUnavailable::NoBeliefData);
+            view.owns_belief_layer = false;
+        }
+        return;
+    };
+    let view = &mut *view;
+
+    // The belief overlay.
+    let fresh_snapshot = !view.owns_belief_layer || view.overlay_all;
+    if fresh_snapshot {
+        let bounds = argusnet_mapping::GridBounds {
+            x_min_m: layout.origin_m[0] as f64,
+            x_max_m: (layout.origin_m[0] + layout.dimensions[0] as f32 * layout.resolution_m)
+                as f64,
+            y_min_m: layout.origin_m[1] as f64,
+            y_max_m: (layout.origin_m[1] + layout.dimensions[1] as f32 * layout.resolution_m)
+                as f64,
+            resolution_m: layout.resolution_m as f64,
+        };
+        *belief = match BeliefRenderSnapshot::new(bounds, CHUNK as usize) {
+            Ok(snapshot) => BeliefLayer::Ready(Box::new(snapshot)),
+            Err(reason) => BeliefLayer::Unavailable(reason),
+        };
+        view.owns_belief_layer = true;
+        view.overlay_all = false;
+        // Every tile, so tiles that went back to unknown are republished too.
+        let (ti, tj) = (
+            layout.dimensions[0].div_ceil(CHUNK),
+            layout.dimensions[1].div_ceil(CHUNK),
+        );
+        for a in 0..ti {
+            for b in 0..tj {
+                view.overlay_dirty.insert((a, b));
+            }
+        }
+    }
+    if let BeliefLayer::Ready(snapshot) = &mut *belief {
+        for tile in std::mem::take(&mut view.overlay_dirty) {
+            view.overlay_revision += 1;
+            snapshot.apply_patch(&tile_patch(view, layout, tile, view.overlay_revision));
+        }
+    } else {
+        view.overlay_dirty.clear();
+    }
+
+    // Terrain heights for the rest of the viewer.
+    let due = view
+        .heights_at_s
+        .is_none_or(|at| (view.now_s - at).abs() >= HEIGHTS_EVERY_S);
+    if view.heights_dirty && due {
+        zones.terrain_mesh = Some(height_raster(view, layout));
+        view.heights_dirty = false;
+        view.heights_at_s = Some(view.now_s);
+    }
+
+    // Layers and views.
+    let shown = layers.base_layers.get(LAYER_ID).copied().unwrap_or(true);
+    let wanted_layers = if *view_mode == ViewMode::Split {
+        RenderLayers::layer(crate::app::RECON_LAYER)
+    } else {
+        RenderLayers::from_layers(&[0, crate::app::RECON_LAYER])
+    };
+    let wanted_visibility = if shown {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for (mut visibility, mut render_layers) in &mut entities {
+        if *visibility != wanted_visibility {
+            *visibility = wanted_visibility;
+        }
+        if *render_layers != wanted_layers {
+            *render_layers = wanted_layers.clone();
+        }
+    }
+}
+
+/// One belief tile in the store's publication format, from the replay's
+/// rows: what [`BeliefRenderSnapshot::apply_patch`] takes. Cells are i-major,
+/// j contiguous. Coverage is the confidence level's return count
+/// (1, 2, 4, 8); obstacle probability is the row's occupancy, which is 0 for
+/// a cell with ground returns only.
+fn tile_patch(
+    view: &BeliefMapView,
+    layout: BeliefGridLayout,
+    tile: (u32, u32),
+    revision: u64,
+) -> argusnet_mapping::BeliefTilePatch {
+    let (i0, j0) = (tile.0 * CHUNK, tile.1 * CHUNK);
+    let di = CHUNK.min(layout.dimensions[0] - i0) as usize;
+    let dj = CHUNK.min(layout.dimensions[1] - j0) as usize;
+    let n = di * dj;
+    let mut patch = argusnet_mapping::BeliefTilePatch {
+        revision: argusnet_mapping::Revision(revision),
+        tile: argusnet_mapping::TileIndex {
+            ti: tile.0 as usize,
+            tj: tile.1 as usize,
+        },
+        origin_ij: (i0 as usize, j0 as usize),
+        dims: (di, dj),
+        observed: vec![false; n],
+        coverage_count: vec![0; n],
+        mean_height_m: vec![f64::NAN; n],
+        height_uncertainty_m: vec![f64::NAN; n],
+        height_dispersion_m: vec![f64::NAN; n],
+        obstacle_probability: vec![0.5; n],
+        max_obstacle_height_m: vec![0.0; n],
+        last_observed_s: vec![f64::NAN; n],
+        source_mask: vec![0; n],
+        source_names: Vec::new(),
+    };
+    for a in 0..di {
+        for b in 0..dj {
+            let Some(cell) = view.cells.get(&(i0 + a as u32, j0 + b as u32)) else {
+                continue;
+            };
+            let k = a * dj + b;
+            let returns = 1u32 << cell.row.confidence_level().clamp(1, 4).saturating_sub(1);
+            patch.observed[k] = true;
+            patch.coverage_count[k] = returns;
+            patch.obstacle_probability[k] = cell.row.occupancy() as f64;
+            patch.last_observed_s[k] = cell.last_s as f64;
+            if let Some(h) = cell.row.ground_m() {
+                patch.mean_height_m[k] = h as f64;
+                patch.height_uncertainty_m[k] =
+                    layout.resolution_m as f64 / (returns as f64).sqrt();
+            }
+            if let (Some(top), Some(ground)) = (cell.row.structure_top_m(), cell.row.ground_m()) {
+                patch.max_obstacle_height_m[k] = (top - ground).max(0.0) as f64;
+            }
+        }
+    }
+    patch
+}
+
+/// The measured ground as the viewer's terrain-height lookup: one sample per
+/// cell centre, NaN where the drones have no ground return.
+fn height_raster(
+    view: &BeliefMapView,
+    layout: BeliefGridLayout,
+) -> crate::replay::TerrainViewerMesh {
+    let [nx, ny] = layout.dimensions;
+    let res = layout.resolution_m;
+    let [x0, y0] = layout.origin_m;
+    crate::replay::TerrainViewerMesh {
+        x_min_m: x0 + 0.5 * res,
+        x_max_m: x0 + (nx as f32 - 0.5) * res,
+        y_min_m: y0 + 0.5 * res,
+        y_max_m: y0 + (ny as f32 - 0.5) * res,
+        rows: ny as usize,
+        cols: nx as usize,
+        heights_m: (0..ny)
+            .map(|j| {
+                (0..nx)
+                    .map(|i| view.ground(i as i64, j as i64).unwrap_or(f32::NAN))
+                    .collect()
+            })
+            .collect(),
+    }
+}
+
 /// The map's bounds, this frame's range returns, and any contacts.
 pub fn belief_overlays_system(
     view: Res<BeliefMapView>,
@@ -751,11 +1009,11 @@ mod tests {
     fn known_ground_is_one_surface_with_a_skirt_round_its_edge() {
         let mut view = BeliefMapView::default();
         view.apply(&[row(1, 1, Some(1200)), row(2, 1, Some(1400))], 0.0);
-        let mesh = chunk_mesh(&view, layout(), (0, 0), 12.0, 14.0).expect("meshes");
+        let mesh = chunk_mesh(&view, layout(), (0, 0), 12.0).expect("meshes");
         // Two cells share an edge: 6 surface corners, not 8. The outline has
         // 6 edges, each a skirt quad of 4 vertices.
         assert_eq!(mesh.count_vertices(), 6 + 6 * 4);
-        assert!(chunk_mesh(&view, layout(), (1, 1), 12.0, 14.0).is_none());
+        assert!(chunk_mesh(&view, layout(), (1, 1), 12.0).is_none());
     }
 
     #[test]
@@ -790,5 +1048,74 @@ mod tests {
         view.apply(&[row(0, 0, Some(1000))], 1.0);
         view.apply(&[row(0, 0, Some(1050))], 9.0);
         assert_eq!(view.cells[&(0, 0)].updated_s, 1.0);
+    }
+
+    #[test]
+    fn rows_become_store_patches_the_belief_overlay_classifies() {
+        let mut view = BeliefMapView::default();
+        let layout = layout();
+        view.apply(
+            &[
+                BeliefCellRow(1, 2, Some(1000), None, 0, 4),
+                BeliefCellRow(3, 1, Some(1000), Some(4000), 90, 2),
+            ],
+            5.0,
+        );
+        let patch = tile_patch(&view, layout, (0, 0), 7);
+        assert_eq!(patch.dims, (32, 32));
+        // i-major, j contiguous.
+        let k = 32 + 2;
+        assert!(patch.observed[k]);
+        assert_eq!(patch.coverage_count[k], 8);
+        assert_eq!(patch.obstacle_probability[k], 0.0);
+        assert_eq!(patch.last_observed_s[k], 5.0);
+        assert_eq!(patch.max_obstacle_height_m[3 * 32 + 1], 30.0);
+        let bounds = argusnet_mapping::GridBounds {
+            x_min_m: 0.0,
+            x_max_m: 640.0,
+            y_min_m: 0.0,
+            y_max_m: 640.0,
+            resolution_m: 10.0,
+        };
+        let mut snapshot = BeliefRenderSnapshot::new(bounds, CHUNK as usize).unwrap();
+        snapshot.apply_patch(&patch);
+        assert_eq!(snapshot.rejected_patches(), 0);
+        assert_eq!(
+            snapshot.class_ij(1, 2),
+            crate::belief_render::BeliefClass::KnownSafe
+        );
+        assert_eq!(
+            snapshot.class_ij(3, 1),
+            crate::belief_render::BeliefClass::KnownObstacle
+        );
+        assert_eq!(
+            snapshot.class_ij(9, 9),
+            crate::belief_render::BeliefClass::Unknown
+        );
+    }
+
+    #[test]
+    fn the_height_lookup_answers_only_where_ground_was_measured() {
+        let mut view = BeliefMapView::default();
+        let layout = layout();
+        view.apply(
+            &[
+                row(0, 0, Some(1000)),
+                row(1, 0, Some(1200)),
+                row(0, 1, Some(1000)),
+                row(1, 1, Some(1200)),
+            ],
+            0.0,
+        );
+        let raster = height_raster(&view, layout);
+        let h = raster
+            .height_at(10.0, 10.0)
+            .expect("inside the measured cells");
+        assert!((h - 11.0).abs() < 1e-4);
+        assert_eq!(
+            raster.height_at(300.0, 300.0),
+            None,
+            "unknown is no data, not zero"
+        );
     }
 }
