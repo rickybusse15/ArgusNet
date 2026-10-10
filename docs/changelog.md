@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Save the drones' map as a 3D world
+
+- `argusnet-rs sim --world-knowledge none --export-scene DIR` saves the map
+  the drones built as a scene package. It holds the measured ground and the
+  buildings as 3D models (GLB), the map itself, and the run that built it.
+  `argusnet-viewer --scene DIR` opens it like any other world, with the run on
+  the timeline.
+- The viewer's map readout has **Save map as scene**, which saves the map at
+  the cursor, live or replayed.
+- Buildings now come out at their real height. A range return that came down
+  onto a roof was reported where it crossed the building's outline in plan
+  view, up to 150 m above the roof. Roofs now match the truth to within the
+  scanner's noise, and more of each building is found: 100% of the demo
+  building (was 88%), and 44% of the regional one (was 13%).
+
 ## Unreleased — The drones' map is part of the viewer
 
 - The terrain the drones build is drawn with the same terrain material as a

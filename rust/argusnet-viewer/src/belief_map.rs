@@ -30,6 +30,14 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy_egui::{egui, EguiContexts};
 
+use argusnet_sim::belief_mesh::{
+    ground_mesh, structures_mesh, BeliefCells, GridLayout, GroundColours, MeshData,
+};
+use argusnet_sim::belief_world::BeliefCellUpdate;
+use argusnet_sim::scene_export::{
+    export_belief_scene, BeliefRows, SKIRT_M, STRUCTURE_ROOF_SRGB, STRUCTURE_WALL_SRGB,
+};
+
 use crate::belief_render::{BeliefLayer, BeliefRenderSnapshot, BeliefUnavailable};
 use crate::replay::{BeliefCellRow, BeliefGridLayout, BeliefStats, ReplayState};
 use crate::schema::ScenePackage;
@@ -91,6 +99,8 @@ pub struct BeliefMapView {
     now_s: f32,
     stats: Option<BeliefStats>,
     contacts: usize,
+    /// What the last "Save map as scene" wrote, or why it could not.
+    saved: Option<Result<String, String>>,
 }
 
 impl BeliefMapView {
@@ -115,6 +125,33 @@ impl BeliefMapView {
         self.fresh_until.clear();
         self.stats = None;
         self.contacts = 0;
+    }
+
+    /// Save the map at the cursor as a scene package, the one
+    /// `argusnet-rs sim --export-scene` writes, in a new directory under
+    /// `root`. `argusnet-viewer --scene DIR` reopens it.
+    pub fn save_scene(&self, root: &std::path::Path) -> Result<std::path::PathBuf, String> {
+        let layout = self.layout.ok_or("no self-built map is shown")?;
+        let mut rows = BeliefRows::default();
+        rows.0.extend(self.cells.iter().map(|(ij, cell)| {
+            let r = cell.row;
+            (*ij, BeliefCellUpdate(r.0, r.1, r.2, r.3, r.4, r.5))
+        }));
+        let at_s = self.applied_through_s.unwrap_or(self.now_s).max(0.0);
+        let stem = format!("self-built-t{at_s:.0}s");
+        let dir = (0..)
+            .map(|n| match n {
+                0 => root.join(&stem),
+                n => root.join(format!("{stem}-{n}")),
+            })
+            .find(|dir| !dir.exists())
+            .expect("an unused name");
+        let provenance = serde_json::json!({
+            "producer": "argusnet-viewer",
+            "map_at_s": at_s,
+        });
+        export_belief_scene(&dir, &stem, grid_layout(layout), &rows, provenance)
+            .map(|export| export.root)
     }
 
     /// Apply a frame's rows. A cell glows from when it first became known,
@@ -163,19 +200,6 @@ impl BeliefMapView {
         self.cells
             .get(&(i as u32, j as u32))
             .and_then(|cell| cell.row.ground_m())
-    }
-
-    /// A cell corner's height: the mean of the known cells that share it.
-    fn corner(&self, ci: i64, cj: i64) -> Option<f32> {
-        let mut sum = 0.0;
-        let mut count = 0;
-        for (di, dj) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
-            if let Some(h) = self.ground(ci + di, cj + dj) {
-                sum += h;
-                count += 1;
-            }
-        }
-        (count > 0).then(|| sum / count as f32)
     }
 }
 
@@ -405,39 +429,55 @@ fn ground_tint(level: u8, glow: f32) -> [f32; 3] {
     })
 }
 
-/// A cell side: the neighbour across it, its two corners (cell-corner
-/// indices for the ground, metres for structures) and its outward normal.
-type CornerSide = ((i64, i64), [(i64, i64); 2], [f32; 3]);
-type WallSide = ((i64, i64), [[f32; 2]; 2], [f32; 3]);
+impl BeliefCells for BeliefMapView {
+    fn ground(&self, i: i64, j: i64) -> Option<f32> {
+        BeliefMapView::ground(self, i, j)
+    }
 
-/// How far the cut edge of the known map drops below its surface, metres.
-const SKIRT_M: f32 = 6.0;
+    fn structure_top(&self, i: i64, j: i64) -> Option<f32> {
+        if i < 0 || j < 0 {
+            return None;
+        }
+        self.cells
+            .get(&(i as u32, j as u32))
+            .and_then(|cell| cell.row.structure_top_m())
+    }
 
-/// One chunk of the known ground as a continuous surface: vertices at cell
-/// corners, shared by every known cell that touches them, so the surface
-/// has no seams; normals from the corner heights, so it takes the scene's
-/// light like terrain; and a darker skirt dropping from every edge where the
-/// known map meets the unknown, so the map reads as a cut-out of the world.
+    fn structure_cells(&self) -> Vec<(u32, u32)> {
+        let mut cells: Vec<(u32, u32)> = self
+            .cells
+            .iter()
+            .filter(|(_, cell)| cell.row.structure_top_m().is_some())
+            .map(|(ij, _)| *ij)
+            .collect();
+        cells.sort_unstable();
+        cells
+    }
+}
+
+fn grid_layout(layout: BeliefGridLayout) -> GridLayout {
+    GridLayout {
+        origin_m: layout.origin_m,
+        resolution_m: layout.resolution_m,
+        dimensions: layout.dimensions,
+    }
+}
+
+/// One chunk of the known ground, built by the same code that writes a saved
+/// map's terrain ([`argusnet_sim::belief_mesh::ground_mesh`]): one surface on
+/// shared cell corners with a skirt round its edge. The viewer adds its own
+/// colours: a corner is the mean tint of the known cells around it, and glows
+/// with the brightest of them.
 fn chunk_mesh(
     view: &BeliefMapView,
     layout: BeliefGridLayout,
     chunk: (u32, u32),
     low: f32,
 ) -> Option<Mesh> {
-    let res = layout.resolution_m;
-    let [x0, y0] = layout.origin_m;
-    let (i_lo, j_lo) = (chunk.0 * CHUNK, chunk.1 * CHUNK);
+    let i_lo = chunk.0 * CHUNK;
+    let j_lo = chunk.1 * CHUNK;
     let i_hi = ((chunk.0 + 1) * CHUNK).min(layout.dimensions[0]);
     let j_hi = ((chunk.1 + 1) * CHUNK).min(layout.dimensions[1]);
-    let known = |i: i64, j: i64| view.ground(i, j).is_some();
-    let mut positions: Vec<[f32; 3]> = Vec::new();
-    let mut normals: Vec<[f32; 3]> = Vec::new();
-    let mut colours: Vec<[f32; 4]> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-    let mut corner_index: HashMap<(i64, i64), u32> = HashMap::new();
-    let corner_height = |ci: i64, cj: i64| view.corner(ci, cj);
-    // A corner's colour is the mean of the known cells around it; its glow,
-    // the brightest of them.
     let corner_colour = |ci: i64, cj: i64| -> [f32; 4] {
         let mut sum = [0.0f32; 3];
         let mut glow = 0.0f32;
@@ -467,84 +507,33 @@ fn chunk_mesh(
         });
         [c[0], c[1], c[2], 1.0]
     };
-    let mut vertex = |ci: i64,
-                      cj: i64,
-                      positions: &mut Vec<[f32; 3]>,
-                      normals: &mut Vec<[f32; 3]>,
-                      colours: &mut Vec<[f32; 4]>|
-     -> u32 {
-        *corner_index.entry((ci, cj)).or_insert_with(|| {
-            let h = corner_height(ci, cj).unwrap_or(low);
-            let around = |a: i64, b: i64| corner_height(a, b).unwrap_or(h);
-            let dzdx = (around(ci + 1, cj) - around(ci - 1, cj)) / (2.0 * res);
-            let dzdy = (around(ci, cj + 1) - around(ci, cj - 1)) / (2.0 * res);
-            let n = Vec3::new(-dzdx, -dzdy, 1.0).normalize();
-            positions.push([x0 + ci as f32 * res, y0 + cj as f32 * res, h]);
-            normals.push(n.to_array());
-            colours.push(corner_colour(ci, cj));
-            (positions.len() - 1) as u32
-        })
+    let colours = GroundColours {
+        corner: &corner_colour,
+        skirt_top: [0.20, 0.22, 0.24, 1.0],
+        skirt_bottom: [0.07, 0.08, 0.09, 1.0],
     };
-    for j in j_lo..j_hi {
-        for i in i_lo..i_hi {
-            let (ii, jj) = (i as i64, j as i64);
-            if !known(ii, jj) {
-                continue;
-            }
-            let a = vertex(ii, jj, &mut positions, &mut normals, &mut colours);
-            let b = vertex(ii + 1, jj, &mut positions, &mut normals, &mut colours);
-            let c = vertex(ii + 1, jj + 1, &mut positions, &mut normals, &mut colours);
-            let d = vertex(ii, jj + 1, &mut positions, &mut normals, &mut colours);
-            indices.extend_from_slice(&[a, b, c, a, c, d]);
-        }
-    }
-    // Skirts along the boundary of the known map, after the surface so they
-    // do not share its smoothed vertices.
-    for j in j_lo..j_hi {
-        for i in i_lo..i_hi {
-            let (ii, jj) = (i as i64, j as i64);
-            if !known(ii, jj) {
-                continue;
-            }
-            // (neighbour offset, edge corners, outward normal)
-            let edges: [CornerSide; 4] = [
-                ((0, -1), [(ii + 1, jj), (ii, jj)], [0.0, -1.0, 0.0]),
-                ((1, 0), [(ii + 1, jj + 1), (ii + 1, jj)], [1.0, 0.0, 0.0]),
-                ((0, 1), [(ii, jj + 1), (ii + 1, jj + 1)], [0.0, 1.0, 0.0]),
-                ((-1, 0), [(ii, jj), (ii, jj + 1)], [-1.0, 0.0, 0.0]),
-            ];
-            for ((di, dj), corners, normal) in edges {
-                if known(ii + di, jj + dj) {
-                    continue;
-                }
-                let base = positions.len() as u32;
-                for &(ci, cj) in &corners {
-                    let h = corner_height(ci, cj).unwrap_or(low);
-                    let p = [x0 + ci as f32 * res, y0 + cj as f32 * res];
-                    positions.push([p[0], p[1], h]);
-                    positions.push([p[0], p[1], h - SKIRT_M]);
-                    for _ in 0..2 {
-                        normals.push(normal);
-                    }
-                    colours.push([0.20, 0.22, 0.24, 1.0]);
-                    colours.push([0.07, 0.08, 0.09, 1.0]);
-                }
-                indices.extend_from_slice(&[base, base + 1, base + 3, base, base + 3, base + 2]);
-            }
-        }
-    }
-    finish_mesh(positions, normals, colours, indices)
+    let mesh = ground_mesh(
+        view,
+        grid_layout(layout),
+        i_lo..i_hi,
+        j_lo..j_hi,
+        low,
+        SKIRT_M,
+        &colours,
+    );
+    finish_mesh(mesh)
 }
 
-fn finish_mesh(
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    colours: Vec<[f32; 4]>,
-    indices: Vec<u32>,
-) -> Option<Mesh> {
-    if indices.is_empty() {
+fn finish_mesh(mesh: MeshData) -> Option<Mesh> {
+    if mesh.is_empty() {
         return None;
     }
+    let MeshData {
+        positions,
+        normals,
+        colours,
+        indices,
+    } = mesh;
     let uvs: Vec<[f32; 2]> = positions.iter().map(|p| [p[0], p[1]]).collect();
     // The palette is written in sRGB; vertex colours are linear.
     let colours: Vec<[f32; 4]> = colours
@@ -554,108 +543,35 @@ fn finish_mesh(
             [l.red, l.green, l.blue, l.alpha]
         })
         .collect();
-    let mut mesh = Mesh::new(
+    let mut out = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
-    mesh.insert_indices(Indices::U32(indices));
-    Some(mesh)
+    out.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    out.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    out.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    out.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+    out.insert_indices(Indices::U32(indices));
+    Some(out)
 }
 
-/// Every believed structure as one solid: a roof over each occupied cell at
-/// its own top, and a wall on each side where the neighbour is lower or not
-/// a structure. Neighbouring cells merge into one outline, so a building
-/// reads as a building, not a stack of boxes.
+/// Every believed structure as one solid, as a saved map's buildings are
+/// ([`argusnet_sim::belief_mesh::structures_mesh`]), shaded by occupancy.
 fn buildings_mesh(view: &BeliefMapView, layout: BeliefGridLayout) -> Option<Mesh> {
-    let res = layout.resolution_m;
-    let [x0, y0] = layout.origin_m;
-    let top = |i: i64, j: i64| -> Option<f32> {
-        if i < 0 || j < 0 {
-            return None;
-        }
-        view.cells
+    let colour = |i: i64, j: i64| -> ([f32; 4], [f32; 4]) {
+        let occupancy = view
+            .cells
             .get(&(i as u32, j as u32))
-            .and_then(|cell| cell.row.structure_top_m())
+            .map_or(1.0, |cell| cell.row.occupancy());
+        let tint = 0.62 + 0.38 * occupancy;
+        let [r, g, b] = STRUCTURE_ROOF_SRGB;
+        let [wr, wg, wb] = STRUCTURE_WALL_SRGB;
+        (
+            [r * tint, g * tint, b * tint, 1.0],
+            [wr * tint, wg * tint, wb * tint, 1.0],
+        )
     };
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut colours = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-    let mut quad = |corners: [[f32; 3]; 4], normal: [f32; 3], colour: [f32; 4]| {
-        let base = positions.len() as u32;
-        for c in corners {
-            positions.push(c);
-            normals.push(normal);
-            colours.push(colour);
-        }
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-    };
-    let mut cells: Vec<(u32, u32)> = view
-        .cells
-        .iter()
-        .filter(|(_, cell)| cell.row.structure_top_m().is_some())
-        .map(|(ij, _)| *ij)
-        .collect();
-    cells.sort_unstable();
-    for (i, j) in cells {
-        let (ii, jj) = (i as i64, j as i64);
-        let cell = view.cells[&(i, j)];
-        let roof = cell.row.structure_top_m().unwrap_or_default();
-        // The ground the walls stand on: this cell's, a neighbour's, or a
-        // storey below the roof when nothing under it has been seen.
-        let footing = view
-            .ground(ii, jj)
-            .or_else(|| {
-                [(1, 0), (-1, 0), (0, 1), (0, -1)]
-                    .iter()
-                    .filter_map(|(di, dj)| view.ground(ii + di, jj + dj))
-                    .reduce(f32::min)
-            })
-            .unwrap_or(roof - 12.0)
-            .min(roof - 1.0);
-        let tint = 0.62 + 0.38 * cell.row.occupancy();
-        let wall = [0.80 * tint, 0.66 * tint, 0.78 * tint, 1.0];
-        let roof_colour = [0.90 * tint, 0.74 * tint, 0.86 * tint, 1.0];
-        let (ax, ay) = (x0 + i as f32 * res, y0 + j as f32 * res);
-        let (bx, by) = (ax + res, ay + res);
-        quad(
-            [
-                [ax, ay, roof],
-                [bx, ay, roof],
-                [bx, by, roof],
-                [ax, by, roof],
-            ],
-            [0.0, 0.0, 1.0],
-            roof_colour,
-        );
-        let sides: [WallSide; 4] = [
-            ((0, -1), [[bx, ay], [ax, ay]], [0.0, -1.0, 0.0]),
-            ((1, 0), [[bx, by], [bx, ay]], [1.0, 0.0, 0.0]),
-            ((0, 1), [[ax, by], [bx, by]], [0.0, 1.0, 0.0]),
-            ((-1, 0), [[ax, ay], [ax, by]], [-1.0, 0.0, 0.0]),
-        ];
-        for ((di, dj), [p, q], normal) in sides {
-            let foot = top(ii + di, jj + dj).unwrap_or(footing).max(footing);
-            if foot >= roof {
-                continue;
-            }
-            quad(
-                [
-                    [p[0], p[1], foot],
-                    [q[0], q[1], foot],
-                    [q[0], q[1], roof],
-                    [p[0], p[1], roof],
-                ],
-                normal,
-                wall,
-            );
-        }
-    }
-    finish_mesh(positions, normals, colours, indices)
+    finish_mesh(structures_mesh(view, grid_layout(layout), &colour))
 }
 
 /// The map as the rest of the viewer reads it:
@@ -899,7 +815,7 @@ pub fn belief_overlays_system(
 /// The map's progress, bottom left of the canvas.
 pub fn belief_readout_ui_system(
     mut contexts: EguiContexts,
-    view: Res<BeliefMapView>,
+    mut view: ResMut<BeliefMapView>,
     ui_state: Res<crate::state::ViewerUiState>,
 ) {
     if !view.active() {
@@ -958,12 +874,41 @@ pub fn belief_readout_ui_system(
                 ui.monospace(contacts);
                 ui.label(
                     crate::theme::TypeRole::Utility
-                        .text("error is against truth, for evaluation · truth layers hidden")
+                        .text("error is against truth, for evaluation · scene layers hidden")
                         .color(crate::theme::TEXT_MUTED),
                 );
+                if ui
+                    .button("Save map as scene")
+                    .on_hover_text(
+                        "Write the map at the cursor as a scene package under ./argusnet-maps; \
+                         open it with argusnet-viewer --scene DIR",
+                    )
+                    .clicked()
+                {
+                    let saved = view
+                        .save_scene(std::path::Path::new(SAVED_MAPS_DIR))
+                        .map(|dir| dir.display().to_string());
+                    view.saved = Some(saved);
+                }
+                match &view.saved {
+                    Some(Ok(path)) => {
+                        ui.label(
+                            crate::theme::TypeRole::Utility
+                                .text(format!("saved → {path}"))
+                                .color(crate::theme::TEXT_MUTED),
+                        );
+                    }
+                    Some(Err(error)) => {
+                        ui.colored_label(egui::Color32::from_rgb(230, 110, 100), error);
+                    }
+                    None => {}
+                }
             });
         });
 }
+
+/// Where "Save map as scene" writes, relative to the working directory.
+const SAVED_MAPS_DIR: &str = "argusnet-maps";
 
 #[cfg(test)]
 mod tests {
@@ -1092,6 +1037,41 @@ mod tests {
             snapshot.class_ij(9, 9),
             crate::belief_render::BeliefClass::Unknown
         );
+    }
+
+    #[test]
+    fn the_map_at_the_cursor_saves_as_a_scene_package() {
+        let mut view = BeliefMapView {
+            layout: Some(layout()),
+            ..default()
+        };
+        assert!(view
+            .save_scene(std::path::Path::new("/nonexistent"))
+            .is_err());
+        view.apply(
+            &[
+                row(1, 1, Some(500)),
+                row(2, 1, Some(520)),
+                BeliefCellRow(3, 1, Some(510), Some(2_500), 90, 4),
+            ],
+            3.0,
+        );
+        view.applied_through_s = Some(3.0);
+        let root = std::env::temp_dir().join(format!("belief-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let first = view.save_scene(&root).unwrap();
+        let second = view.save_scene(&root).unwrap();
+        assert_eq!(first, root.join("self-built-t3s"));
+        assert_eq!(second, root.join("self-built-t3s-1"));
+        for file in [
+            "scene_manifest.json",
+            "terrain/terrain-base.glb",
+            "overlays/buildings.glb",
+            "metadata/belief_map.json",
+        ] {
+            assert!(first.join(file).is_file(), "{file}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
