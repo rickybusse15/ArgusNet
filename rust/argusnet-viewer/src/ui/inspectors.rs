@@ -1204,11 +1204,28 @@ pub(super) fn section_layers(
                 .map(|style| style.draw_order)
                 .unwrap_or_default()
         });
+        // A run that maps the world for itself puts its map first; the
+        // scene's own layers are then the true world, kept for comparison.
+        let self_built = layer_visibility
+            .base_layers
+            .contains_key(crate::belief_map::LAYER_ID);
+        if self_built {
+            let entry = layer_visibility
+                .base_layers
+                .entry(crate::belief_map::LAYER_ID.to_string())
+                .or_insert(true);
+            ui.checkbox(entry, "Drones' map (built from their scans)");
+        }
         for layer in base_layers {
             let style_name = scene_package
                 .style_for(&layer.style_id)
                 .map(|style| format!("{} ({})", layer.id, style.semantic_kind))
                 .unwrap_or_else(|| layer.id.clone());
+            let style_name = if self_built {
+                format!("{style_name} · truth")
+            } else {
+                style_name
+            };
             let entry = layer_visibility
                 .base_layers
                 .entry(layer.id.clone())
