@@ -171,6 +171,44 @@ fn the_replay_rows_rebuild_the_map() {
 }
 
 #[test]
+fn the_built_map_saves_as_a_scene_package_with_the_run_that_built_it() {
+    let bundle = bundle("scenario_bundle_tt.json");
+    let replay = no_prior(&bundle).run_to_replay().unwrap();
+    let dir = std::env::temp_dir().join(format!("wk-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let export = argusnet_sim::scene_export::export_replay_scene(
+        &dir,
+        "tt-self-built",
+        &replay,
+        serde_json::json!({"test": true}),
+    )
+    .expect("a no-prior run exports");
+    let stats = replay
+        .frames
+        .last()
+        .and_then(|frame| frame.mapping_state.as_ref())
+        .and_then(|m| m.belief.clone())
+        .unwrap();
+    assert_eq!(export.known_cells as u64, stats.known_cells);
+    assert_eq!(export.structure_cells as u64, stats.structure_cells);
+    assert!(export.ground_triangles > 0);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("scene_manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["replay"]["path"], "replay/replay.json");
+    let packaged = std::fs::read_to_string(dir.join("replay/replay.json")).unwrap();
+    assert_eq!(packaged, argusnet_sim::replay::to_json(&replay).unwrap());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A prior run built no map, so there is nothing to save.
+    let prior = assemble(&bundle).unwrap().run_to_replay().unwrap();
+    let error =
+        argusnet_sim::scene_export::export_replay_scene(&dir, "x", &prior, serde_json::json!({}))
+            .unwrap_err();
+    assert!(error.contains("built no map"), "{error}");
+    assert!(!dir.exists());
+}
+
+#[test]
 fn a_run_without_stage_eight_or_with_a_bad_config_is_refused() {
     let mut bundle = bundle("scenario_bundle_tt.json");
     let config = ExplorationConfig {

@@ -171,6 +171,18 @@ how far its ground is from the truth. `world_contacts` lists any time the map
 led a drone somewhere physics had to correct. See
 `docs/migration/UNKNOWN_WORLD.md`.
 
+To keep the map, save it as a scene package and open it like any other world:
+
+```bash
+argusnet-rs sim --config runs/demo-config.json --world-knowledge none --export-scene runs/demo-map
+cargo run -p argusnet-viewer -- --scene runs/demo-map
+```
+
+The package holds the measured ground and the buildings as 3D models, the map
+itself, and the run that built it. Opening it plays that run on the timeline.
+In the viewer, **Save map as scene** in the map readout saves the map at the
+cursor to `./argusnet-maps/`.
+
 ### Mapping run with split-view 3-D reconstruction
 
 Run a scan/map/inspect mission, package it, and open the viewer with the real

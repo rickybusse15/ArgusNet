@@ -1,6 +1,7 @@
 //! The Rust simulation runtime shell.
 
 pub mod battery;
+pub mod belief_mesh;
 pub mod belief_world;
 pub mod builder;
 pub mod clock;
@@ -30,6 +31,7 @@ pub mod run_options;
 pub mod runtime_world;
 pub mod safety;
 pub mod scenario;
+pub mod scene_export;
 pub mod scheduler;
 pub mod simulation;
 pub mod snapshot;

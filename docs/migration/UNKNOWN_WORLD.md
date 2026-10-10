@@ -148,24 +148,70 @@ It is part of the viewer, not an overlay on top of it:
 Scrubbing back rebuilds the map from the start. Mesh rebuilds are confined
 to the 32×32-cell chunks that changed.
 
+## Saving the map
+
+A map the drones built can be saved as a scene package (`smartscene-v1`) and
+opened again like any other world:
+
+```bash
+argusnet-rs sim --config runs/demo-config.json --world-knowledge none --export-scene runs/demo-map
+argusnet-viewer --scene runs/demo-map
+```
+
+In the viewer, **Save map as scene** in the map readout saves the map at the
+cursor, live or replayed, to `./argusnet-maps/self-built-t<seconds>s`.
+
+The package is what `argusnet build-scene` writes, and the Python manifest
+validator accepts it:
+
+| Path | Contents |
+|---|---|
+| `terrain/terrain-base.glb` | The measured ground, as one surface with a skirt. |
+| `overlays/buildings.glb` | The believed structures, when there are any. |
+| `metadata/belief_map.json` | The map itself: the grid layout and one row per known cell. |
+| `metadata/environment.json`, `metadata/style.json` | The bounds, the measured height range and the styles. |
+| `replay/replay.json` | The run that built the map (CLI export only). |
+| `scene_manifest.json` | `build.source_kind = "self-built"`, with the run's provenance. |
+
+Opening the CLI's package therefore shows the run on the timeline, with the
+map growing from nothing. The saved end state is in the Layers panel as
+"saved map". The viewer's chunks and the saved meshes come from the same
+code (`argusnet_sim::belief_mesh`), so the saved model is the one the viewer
+drew.
+
+The export refuses a run that built no map (`--world-knowledge prior`), a
+map with no measured ground, and a directory that is not empty. The CLI
+refuses before the run starts.
+
 ## Evidence
 
 Release build, 4 workers, seed 7, 120 s at dt 0.25 s:
 
 | Scenario | Known at 1 s / 10 s / 30 s / 60 s / 120 s | Ground RMSE at 120 s (max) | Structures at 120 s: found / right | Contacts | Tick p50 (prior → none) | Replay (prior → none) |
 |---|---|---|---|---|---|---|
-| Demo: `small` map, 4 drones, target tracking | 8% / 60% / 78% / 82% / 86% | 0.98 m | 88% / 100% | 0 | 0.26 → 3.4 ms | 9.4 → 11.9 MB |
-| Regional: 16 drones, scan/map/inspect, 178,848 cells | 1% / 9% / 27% / 45% / 74% | 0.28 m (2.2 m) | 13% / 100% | 0 | 0.60 → 9.8 ms | 5.8 → 21.3 MB |
+| Demo: `small` map, 4 drones, target tracking | 8% / 61% / 78% / 83% / 87% | 0.98 m | 100% / 100% | 0 | 0.26 → 3.4 ms | 9.4 → 11.9 MB |
+| Regional: 16 drones, scan/map/inspect, 178,848 cells | 1% / 9% / 27% / 45% / 74% | 0.28 m (2.2 m) | 44% / 100% | 0 | 0.60 → 9.8 ms | 5.8 → 21.3 MB |
+
+Believed roofs on the demo map are 137.5–138.1 m, against a true 137.2 m; the
+spread is the 0.3 m range noise.
 
 The regional recall is a coverage figure, not a mapping error. The scan lanes
 were planned around the large building (432 × 252 m) by the bundle builder,
-which still uses the true obstacle layer (see below). No drone ever flies over
-it, and at working altitude the 400 m scan range does not reach its roof.
-Everything that has been seen is mapped right.
+which still uses the true obstacle layer (see below). No drone flies over it,
+so only the parts of its roof and walls within scan range of the lanes are
+seen. Everything that has been seen is mapped right.
 
 A range return reports the nearer of the terrain crossing and the first
-building or wall face. An earlier cut used the visibility test, which checks
-terrain first, and so missed nearly every building.
+building or wall surface, in 3D (`Obstacle::surface_hit_t`). Two earlier
+cuts got this wrong:
+
+- The first used the visibility test, which checks terrain first, and so
+  missed nearly every building.
+- The second used `first_hit_t`, which reports where a ray enters the
+  footprint in plan view. That is right for "is the line blocked", but a ray
+  coming down onto a roof enters the footprint above it. Roofs came out up
+  to 150 m high (291 m against a true 137 m), and roof cells that only a
+  steep ray reaches were missed. Saving the map as a model showed it.
 
 The worst ground errors are steep cells, where a 10 m cell's mean return
 differs from the height at its centre. Over the regional run, stage 6 (the
@@ -184,6 +230,8 @@ Tests (`rust/argusnet-sim/tests/world_knowledge.rs`):
 - reset equals a fresh run;
 - the replay rows rebuild the map, one row per known cell and matching
   structure counts;
+- the map saves as a scene package that carries its replay, and a prior run
+  has nothing to save;
 - a run without stage 8, a bad config, or a run already started is refused.
 
 ## What still knows more than it should

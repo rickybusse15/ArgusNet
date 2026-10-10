@@ -376,6 +376,34 @@ impl Obstacle {
             .map(|(start, _)| *start)
     }
 
+    /// Parameter along `origin -> target` at which the ray first meets the
+    /// solid's surface in 3D: its wall, its roof or its floor.
+    ///
+    /// [`Self::first_hit_t`] answers where the ray enters the footprint and
+    /// keeps it if the segment overlaps the solid's height range anywhere,
+    /// which is what the blocking test needs. A ray coming down onto a roof
+    /// enters the footprint above it, so that is not where it lands; here
+    /// each footprint interval is cut to the part between the base and the
+    /// top first.
+    pub fn surface_hit_t(&self, origin: [f64; 3], target: [f64; 3]) -> Option<f64> {
+        let dz = target[2] - origin[2];
+        let mut intervals = self.inside_intervals(origin, target);
+        intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+        intervals.into_iter().find_map(|(start, end)| {
+            let (lo, hi) = if dz.abs() <= f64::EPSILON {
+                if origin[2] < self.base_z_m || origin[2] > self.top_z_m {
+                    return None;
+                }
+                (start, end)
+            } else {
+                let at_base = (self.base_z_m - origin[2]) / dz;
+                let at_top = (self.top_z_m - origin[2]) / dz;
+                (start.max(at_base.min(at_top)), end.min(at_base.max(at_top)))
+            };
+            (lo <= hi).then_some(lo)
+        })
+    }
+
     /// Nearest point outside the footprint, at least `margin_m` clear of it.
     ///
     /// Returns the input unchanged when it is already outside.
@@ -850,6 +878,35 @@ impl ObstacleMetadata {
 #[cfg(test)]
 mod polygon_tests {
     use super::*;
+
+    #[test]
+    fn a_ray_coming_down_lands_on_the_roof_not_where_it_crosses_the_footprint() {
+        let solid = Obstacle::polygon_prism(
+            "b",
+            BlockerType::Building,
+            vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            0.0,
+            20.0,
+        )
+        .unwrap();
+        // From (-10, 5, 60) down to (20, 5, -30): it crosses x = 0 at z = 30,
+        // above the roof, and meets the roof (z = 20) at x = 3.33.
+        let (from, to) = ([-10.0, 5.0, 60.0], [20.0, 5.0, -30.0]);
+        let legacy = solid.first_hit_t(from, to).unwrap();
+        assert!((legacy - 1.0 / 3.0).abs() < 1e-9);
+        let t = solid.surface_hit_t(from, to).unwrap();
+        let z = from[2] + (to[2] - from[2]) * t;
+        assert!((z - 20.0).abs() < 1e-9, "{z}");
+        // Level with the wall, the wall is hit where the footprint starts.
+        let t = solid
+            .surface_hit_t([-10.0, 5.0, 5.0], [20.0, 5.0, 5.0])
+            .unwrap();
+        assert!((t - 1.0 / 3.0).abs() < 1e-9);
+        // Passing over the top misses.
+        assert!(solid
+            .surface_hit_t([-10.0, 5.0, 30.0], [20.0, 5.0, 25.0])
+            .is_none());
+    }
 
     fn square() -> Vec<[f64; 2]> {
         vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]

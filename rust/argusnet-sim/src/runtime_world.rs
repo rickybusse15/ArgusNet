@@ -179,7 +179,7 @@ impl SharedVisibility {
 impl SharedVisibility {
     /// The first surface a ray from `from` toward `to` meets: `terrain`,
     /// `building` or `wall`, and the point. The nearer of the terrain crossing
-    /// and the first structure face wins. (`los` answers a different question,
+    /// and the first structure face (wall or roof, in 3D) wins. (`los` answers a different question,
     /// whether anything blocks, and checks terrain first.) Vegetation lets the
     /// ray through. The ray is cut at the edge of the terrain first, so a ray
     /// that would leave the world still reports what it meets before the
@@ -210,7 +210,7 @@ impl SharedVisibility {
             .into_iter()
             .filter(|o| matches!(o.blocker_type.as_str(), "building" | "wall"))
             .filter_map(|o| {
-                o.first_hit_t(from, end)
+                o.surface_hit_t(from, end)
                     .map(|t| (t, o.blocker_type.as_str().to_string()))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0))

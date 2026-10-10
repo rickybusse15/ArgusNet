@@ -133,6 +133,12 @@ struct SimArgs {
     /// map it themselves with range scanners and plan only on that map).
     #[arg(long, value_enum, default_value = "prior")]
     world_knowledge: WorldKnowledgeArg,
+    /// Save the map the platforms built as a scene package in this (new or
+    /// empty) directory, when the run ends: the measured ground and the
+    /// believed structures as GLB, and the map itself. `argusnet-viewer
+    /// --scene DIR` opens it. Needs `--world-knowledge none`.
+    #[arg(long)]
+    export_scene: Option<PathBuf>,
     /// How battery energy is charged (D-3): `legacy` charges motion only, as
     /// the reference does; `physical_v1` also charges hover power for the part
     /// of each tick not spent moving.
@@ -417,6 +423,23 @@ fn build(args: BuildArgs) -> ExitCode {
 
 fn sim(args: SimArgs) -> ExitCode {
     let started = Instant::now();
+    if let Some(dir) = &args.export_scene {
+        if matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
+            return fail(
+                EXIT_INVALID,
+                "--export-scene saves the map the platforms built; it needs --world-knowledge none",
+            );
+        }
+        if std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some()) {
+            return fail(
+                EXIT_INVALID,
+                format!(
+                    "{} is not empty; export into a new directory",
+                    dir.display()
+                ),
+            );
+        }
+    }
     let mut resolved_config = None;
     let text = match (&args.bundle, &args.config) {
         (Some(path), _) => match std::fs::read_to_string(path) {
@@ -671,6 +694,29 @@ fn sim(args: SimArgs) -> ExitCode {
         }
     }
     let replay_write_ms = replay_started.elapsed().as_secs_f64() * 1e3;
+    if let Some(dir) = &args.export_scene {
+        let provenance = serde_json::json!({
+            "producer": "argusnet-rs sim",
+            "scenario_name": &bundle.scenario_name,
+            "seed": bundle.seed,
+            "ticks": replay.frames.len(),
+            "replay": args.replay.as_ref().map(|path| path.display().to_string()),
+        });
+        let scene_id = format!("{}-self-built", bundle.scenario_name);
+        match argusnet_sim::scene_export::export_replay_scene(dir, &scene_id, &replay, provenance) {
+            Ok(export) => {
+                if !args.quiet {
+                    println!(
+                        "map ({} cells known, {} structure) -> {}",
+                        export.known_cells,
+                        export.structure_cells,
+                        export.root.display()
+                    );
+                }
+            }
+            Err(error) => return fail(EXIT_FAULT, format!("exporting the map: {error}")),
+        }
+    }
     if let Some(recorder) = &recorder {
         let summary = serde_json::json!({
             "journal_records": recorder.cursor(),

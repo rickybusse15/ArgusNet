@@ -1221,10 +1221,12 @@ pub(super) fn section_layers(
                 .style_for(&layer.style_id)
                 .map(|style| format!("{} ({})", layer.id, style.semantic_kind))
                 .unwrap_or_else(|| layer.id.clone());
-            let style_name = if self_built {
-                format!("{style_name} · truth")
-            } else {
-                style_name
+            // A scene the drones built themselves (a saved map) is not
+            // truth: it is the map this run ends with.
+            let style_name = match (self_built, scene_package.source_kind()) {
+                (true, Some("self-built")) => format!("{style_name} · saved map"),
+                (true, _) => format!("{style_name} · truth"),
+                (false, _) => style_name,
             };
             let entry = layer_visibility
                 .base_layers
