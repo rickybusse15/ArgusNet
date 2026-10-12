@@ -35,8 +35,11 @@ Two things the dark ground had hidden, found by the GPU probes once it was lit:
   terrain with a partial weight, and warm sunlit ground pulled every class
   toward it (`belief_probes`: unknown hatch blue over red fell from at least
   1.21 to 1.02). Under the overlay the terrain now shows as its luminance at
-  70% (`BELIEF_UNDERLAY`): relief still reads, the colour cannot shift a class.
-  The smallest blue-over-red ratio is back to 1.23.
+  35% (`BELIEF_UNDERLAY`): relief still reads, the colour cannot shift a class.
+  The smallest blue-over-red ratio is 1.34, and the hatch's stripe contrast
+  (`spread`) at least 0.059, against the probe's 0.02 floor. The first cut used
+  70%, which left the stripes at 0.021 here and 0.018 on an Apple M5 (Metal),
+  failing the probe there; fixed after merge.
 
 ## Mean frame value (0-255), G2 fixtures, Standard tier, 650 x 480
 
