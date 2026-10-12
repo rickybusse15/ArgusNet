@@ -143,20 +143,14 @@ def paired(
 ) -> dict[str, Any]:
     """The paired difference ``variant - baseline`` over seeds both measured."""
     seeds = sorted(s for s in baseline if s in variant)
-    pairs = [
-        (baseline[s], variant[s])
-        for s in seeds
-        if baseline[s] is not None
-        and variant[s] is not None
-        and math.isfinite(baseline[s])  # type: ignore[arg-type]
-        and math.isfinite(variant[s])  # type: ignore[arg-type]
-    ]
+    pairs: list[tuple[float, float]] = []
+    for s in seeds:
+        b, v = baseline[s], variant[s]
+        if b is not None and v is not None and math.isfinite(b) and math.isfinite(v):
+            pairs.append((b, v))
     # A difference within rounding of the values is a tie: summing the same
     # quantities in another order must not read as a change.
-    diffs = [
-        0.0 if abs(v - b) <= _ROUNDING * max(1.0, abs(b), abs(v)) else v - b  # type: ignore[operator]
-        for b, v in pairs
-    ]
+    diffs = [0.0 if abs(v - b) <= _ROUNDING * max(1.0, abs(b), abs(v)) else v - b for b, v in pairs]
     n = len(diffs)
     out: dict[str, Any] = {"n_pairs": n, "mean_diff": None, "sd_diff": None, "se": None}
     out["ci95"] = None
