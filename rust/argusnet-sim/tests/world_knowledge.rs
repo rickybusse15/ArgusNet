@@ -281,6 +281,51 @@ fn a_checkpoint_does_not_cross_between_pursuit_sources() {
 }
 
 #[test]
+fn search_lanes_become_explorers_and_resume_exactly() {
+    let bundle = bundle("scenario_bundle_scan_safety.json");
+    let explore = no_prior(&bundle);
+    assert!(explore.controllers().explorer_count() > 0);
+    let mut lanes = assemble(&bundle).unwrap();
+    lanes
+        .set_world_knowledge(
+            WorldKnowledge::NoPrior,
+            ExplorationConfig {
+                explore: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(lanes.controllers().explorer_count(), 0);
+    let explored = frames(no_prior(&bundle));
+    assert_ne!(explored, frames(lanes));
+    for frame in &explored {
+        let contacts = frame.get("world_contacts").and_then(|c| c.as_array());
+        assert!(
+            contacts.is_none_or(|c| c.is_empty()),
+            "an explorer hit the world"
+        );
+    }
+
+    // A checkpoint taken mid-flight resumes exactly: goals and positions are
+    // checkpointed, claims are rebuilt.
+    let at = 40usize;
+    let mut original = no_prior(&bundle);
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let checkpoint = original.sim.checkpoint().unwrap();
+    let mut resumed = no_prior(&bundle);
+    resumed.restore(&checkpoint).unwrap();
+    let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
+        .map(|_| {
+            resumed.step().unwrap();
+            serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(rest, explored[at..]);
+}
+
+#[test]
 fn a_run_without_stage_eight_or_with_a_bad_config_is_refused() {
     let mut bundle = bundle("scenario_bundle_tt.json");
     let config = ExplorationConfig {

@@ -503,6 +503,12 @@ impl MappingStage {
     }
 
     /// The self-built map, in a run without a prior one.
+    /// The platforms' own map as published this tick, in a no-prior run: what
+    /// the scan mission measures its progress on. `None` in a prior run.
+    pub fn belief_snapshot(&self) -> Option<std::sync::Arc<crate::belief_world::BeliefSnapshot>> {
+        self.belief.as_ref().map(|belief| belief.handle.current())
+    }
+
     pub fn belief_grid(&self) -> Option<&crate::belief_world::BeliefGrid> {
         self.belief.as_ref().map(|belief| &belief.grid)
     }

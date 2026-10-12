@@ -1092,6 +1092,7 @@ pub fn assemble_with(
             .map(|weather| Box::new(weather) as Box<dyn crate::trajectory::WeatherSampler + Send>),
         map_bounds_m: Some(bounds_xy(bundle.map_bounds_m)),
         pursuit: Some(Box::new(TablePursuit(Arc::clone(&truth)))),
+        belief: None,
     });
     sim.install(Stage::SampleControllersAndBattery, Box::new(stage_one))
         .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;
@@ -1697,10 +1698,16 @@ impl AssembledRun {
             handle.clone(),
             FOLLOW_LOS_CLEARANCE_M,
         ));
+        if config.explore {
+            environment.belief = Some(handle.clone());
+        }
         if config.pursuit == crate::belief_world::PursuitSource::Tracks {
             environment.pursuit = Some(Box::new(crate::pursuit::TrackPursuit::new(
                 self.truth.initial_positions(),
             )));
+        }
+        if config.explore {
+            controllers.explore_search_lanes();
         }
         controllers.set_physical_guard(guard.clone());
 
@@ -2102,7 +2109,11 @@ impl AssembledRun {
         };
         frame.scan_mission_state = Some(ReplayScanMissionState {
             phase: state.phase().as_str().to_string(),
-            scan_coverage_fraction: stats.coverage_fraction,
+            // What the scanning gate reads: the platforms' own map in a run
+            // without a prior one, the footprint bookkeeping otherwise.
+            scan_coverage_fraction: mapping
+                .belief_snapshot()
+                .map_or(stats.coverage_fraction, |belief| belief.known_fraction()),
             scan_coverage_threshold: self.report.scan_coverage_threshold.unwrap_or(0.0),
             localization_estimates: mapping
                 .last_estimates()

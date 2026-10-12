@@ -83,11 +83,21 @@ pub struct ExplorationConfig {
     /// keeps a platform.
     pub contact_clearance_m: f64,
     pub scan: RangeScanConfig,
+    /// Whether search drones explore the frontier of the map
+    /// ([`crate::frontier::FrontierExplorer`]) instead of flying the lanes
+    /// planned before the run. The scan mission's progress is the map's known
+    /// fraction either way.
+    #[serde(default = "default_explore")]
+    pub explore: bool,
     /// Where follow controllers learn a target's position: the run's own
     /// fused tracks (the default), or the legacy truth oracle, kept to
     /// measure what the truth was worth.
     #[serde(default)]
     pub pursuit: PursuitSource,
+}
+
+fn default_explore() -> bool {
+    true
 }
 
 /// The follow controllers' source of target positions in a no-prior run.
@@ -111,6 +121,7 @@ impl Default for ExplorationConfig {
             occupied_probability: 0.75,
             contact_clearance_m: 1.0,
             scan: RangeScanConfig::default(),
+            explore: true,
             pursuit: PursuitSource::default(),
         }
     }
@@ -694,6 +705,118 @@ impl BeliefSnapshot {
         }
     }
 
+    pub fn resolution_m(&self) -> f64 {
+        self.resolution_m
+    }
+
+    /// Whether cell `(i, j)` has been measured: ground or structure.
+    fn known(&self, i: usize, j: usize) -> bool {
+        let c = j * self.nx + i;
+        self.ground[c].is_finite() || self.structure_top[c].is_finite()
+    }
+
+    /// The share of the block holding cell `(bi, bj)` that is unmeasured.
+    fn block_unknown_share(&self, bi: usize, bj: usize) -> f64 {
+        let (i0, j0) = (bi * BLOCK_CELLS, bj * BLOCK_CELLS);
+        let (i1, j1) = (
+            (i0 + BLOCK_CELLS).min(self.nx),
+            (j0 + BLOCK_CELLS).min(self.ny),
+        );
+        let total = (i1 - i0) * (j1 - j0);
+        let unknown = (j0..j1)
+            .flat_map(|j| (i0..i1).map(move |i| (i, j)))
+            .filter(|&(i, j)| !self.known(i, j))
+            .count();
+        unknown as f64 / total.max(1) as f64
+    }
+
+    /// Whether the block holding `(x, y)` is still mostly unmeasured (at
+    /// least `share` of it). An explorer keeps its goal while it is.
+    pub fn is_unexplored(&self, x_m: f64, y_m: f64, share: f64) -> bool {
+        let (i, j) = self.ij(x_m, y_m);
+        self.block_unknown_share(i / BLOCK_CELLS, j / BLOCK_CELLS) >= share
+    }
+
+    /// The centre of every block at least `share` unmeasured, in block order:
+    /// where an explorer can go to map something new.
+    pub fn unexplored_centres(&self, share: f64) -> Vec<[f64; 2]> {
+        let bny = self.ny.div_ceil(BLOCK_CELLS);
+        let block_m = BLOCK_CELLS as f64 * self.resolution_m;
+        let mut out = Vec::new();
+        for bj in 0..bny {
+            for bi in 0..self.bnx {
+                if self.block_unknown_share(bi, bj) >= share {
+                    let cx = self.x_min_m + (bi as f64 + 0.5) * block_m;
+                    let cy = self.y_min_m + (bj as f64 + 0.5) * block_m;
+                    let x_max = self.x_min_m + self.nx as f64 * self.resolution_m;
+                    let y_max = self.y_min_m + self.ny as f64 * self.resolution_m;
+                    out.push([
+                        cx.min(x_max - 0.5 * self.resolution_m),
+                        cy.min(y_max - 0.5 * self.resolution_m),
+                    ]);
+                }
+            }
+        }
+        out
+    }
+
+    /// The share of the grid's cells that have been measured.
+    pub fn known_fraction(&self) -> f64 {
+        let known = (0..self.ny)
+            .flat_map(|j| (0..self.nx).map(move |i| (i, j)))
+            .filter(|&(i, j)| self.known(i, j))
+            .count();
+        known as f64 / (self.nx * self.ny).max(1) as f64
+    }
+
+    /// The share of the grid in *unexplored blocks that are enclosed*: blocks
+    /// at least `share` unmeasured that are not connected (4-neighbour)
+    /// through such blocks to the grid's edge. These are the holes inside the
+    /// map that an explorer would go and fill, the belief's equivalent of the
+    /// footprint grid's enclosed gaps. Single unmeasured cells, which the
+    /// scanner's ring gaps leave scattered through measured ground, are not
+    /// holes: counted cell by cell they hold a scan open forever.
+    pub fn enclosed_unexplored_fraction(&self, share: f64) -> f64 {
+        let (bnx, bny) = (self.bnx, self.ny.div_ceil(BLOCK_CELLS));
+        let unexplored: Vec<bool> = (0..bny)
+            .flat_map(|bj| (0..bnx).map(move |bi| (bi, bj)))
+            .map(|(bi, bj)| self.block_unknown_share(bi, bj) >= share)
+            .collect();
+        let mut open = vec![false; bnx * bny];
+        let mut stack: Vec<(usize, usize)> = Vec::new();
+        for bi in 0..bnx {
+            stack.push((bi, 0));
+            stack.push((bi, bny - 1));
+        }
+        for bj in 0..bny {
+            stack.push((0, bj));
+            stack.push((bnx - 1, bj));
+        }
+        while let Some((bi, bj)) = stack.pop() {
+            let b = bj * bnx + bi;
+            if open[b] || !unexplored[b] {
+                continue;
+            }
+            open[b] = true;
+            if bi > 0 {
+                stack.push((bi - 1, bj));
+            }
+            if bi + 1 < bnx {
+                stack.push((bi + 1, bj));
+            }
+            if bj > 0 {
+                stack.push((bi, bj - 1));
+            }
+            if bj + 1 < bny {
+                stack.push((bi, bj + 1));
+            }
+        }
+        let enclosed = (0..bnx * bny)
+            .filter(|&b| unexplored[b] && !open[b])
+            .count();
+        (enclosed * BLOCK_CELLS * BLOCK_CELLS) as f64 / (self.nx * self.ny).max(1) as f64
+    }
+
     pub fn is_seen(&self, x_m: f64, y_m: f64) -> bool {
         let (i, j) = self.ij(x_m, y_m);
         self.ground[j * self.nx + i].is_finite()
@@ -985,6 +1108,50 @@ mod tests {
             point_m: [x, y, z],
             class: ReturnClass::Ground,
         }
+    }
+
+    #[test]
+    fn unexplored_blocks_known_share_and_enclosed_holes() {
+        let config = ExplorationConfig::default();
+        let mut belief = grid();
+        // Measure the 20 x 20 grid except a 3 x 3 hole at cells (8..11, 8..11)
+        // and the whole top-right 5 x 5 block (cells 15..20, 15..20).
+        let mut returns = Vec::new();
+        for j in 0..20 {
+            for i in 0..20 {
+                let hole = (8..11).contains(&i) && (8..11).contains(&j);
+                let corner = i >= 15 && j >= 15;
+                if !hole && !corner {
+                    returns.push(ground(i as f64 * 10.0 + 5.0, j as f64 * 10.0 + 5.0, 50.0));
+                }
+            }
+        }
+        belief.integrate(&scan(returns), 1);
+        let snapshot = belief.snapshot(&config);
+        assert!((snapshot.known_fraction() - (400.0 - 9.0 - 25.0) / 400.0).abs() < 1e-12);
+        // The 3 x 3 hole spans four blocks and fills none of them, so it is
+        // speckle, not a hole; the corner block touches the edge.
+        assert_eq!(snapshot.enclosed_unexplored_fraction(0.5), 0.0);
+        // Only the corner block is mostly unmeasured (the hole spans blocks).
+        let centres = snapshot.unexplored_centres(0.5);
+        assert_eq!(centres, vec![[175.0, 175.0]]);
+        assert!(snapshot.is_unexplored(171.0, 199.0, 0.5));
+        assert!(!snapshot.is_unexplored(95.0, 95.0, 0.5));
+    }
+
+    #[test]
+    fn a_whole_unmeasured_block_inside_the_map_is_a_hole() {
+        let mut belief = grid();
+        // Everything but block (1, 1): cells 5..10 x 5..10.
+        let returns = (0..20)
+            .flat_map(|j| (0..20).map(move |i| (i, j)))
+            .filter(|&(i, j)| !((5..10).contains(&i) && (5..10).contains(&j)))
+            .map(|(i, j)| ground(i as f64 * 10.0 + 5.0, j as f64 * 10.0 + 5.0, 50.0))
+            .collect();
+        belief.integrate(&scan(returns), 1);
+        let snapshot = belief.snapshot(&ExplorationConfig::default());
+        assert!((snapshot.enclosed_unexplored_fraction(0.5) - 25.0 / 400.0).abs() < 1e-12);
+        assert_eq!(snapshot.unexplored_centres(0.5), vec![[75.0, 75.0]]);
     }
 
     #[test]

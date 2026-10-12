@@ -172,7 +172,9 @@ led a drone somewhere physics had to correct. See
 `docs/migration/UNKNOWN_WORLD.md`.
 
 Follow drones in such a run chase the run's own fused tracks, not the targets'
-true positions. Add `--pursuit truth` to compare against the old behaviour.
+true positions, and search drones fly to the blank parts of the map rather than
+along pre-planned lanes. `--pursuit truth` and `--explore lanes` bring back the
+old behaviour for comparison.
 
 To keep the map, save it as a scene package and open it like any other world:
 

@@ -138,6 +138,11 @@ struct SimArgs {
     /// or `truth` (the legacy oracle, to measure what truth was worth).
     #[arg(long, value_enum)]
     pursuit: Option<PursuitArg>,
+    /// In a `--world-knowledge none` run, what search drones fly: `frontier`
+    /// (to the edge of their own map, the default) or `lanes` (the lanes
+    /// planned before the run).
+    #[arg(long, value_enum)]
+    explore: Option<ExploreArg>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -214,6 +219,13 @@ pub(crate) const EXIT_CRASHED: i32 = 4;
 const EXIT_INVALID: u8 = 2;
 const EXIT_UNSUPPORTED: u8 = 3;
 
+/// `--explore`'s values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ExploreArg {
+    Frontier,
+    Lanes,
+}
+
 /// `--pursuit`'s values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum PursuitArg {
@@ -261,15 +273,22 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             WorldKnowledgeArg::Prior => argusnet_sim::belief_world::WorldKnowledge::Prior,
             WorldKnowledgeArg::None => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
         },
-        exploration: args
-            .pursuit
-            .map(|pursuit| argusnet_sim::belief_world::ExplorationConfig {
-                pursuit: match pursuit {
-                    PursuitArg::Tracks => argusnet_sim::belief_world::PursuitSource::Tracks,
-                    PursuitArg::Truth => argusnet_sim::belief_world::PursuitSource::Truth,
+        exploration: (args.pursuit.is_some() || args.explore.is_some()).then(|| {
+            let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
+            argusnet_sim::belief_world::ExplorationConfig {
+                pursuit: match args.pursuit {
+                    Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
+                    Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
+                    None => defaults.pursuit,
                 },
-                ..Default::default()
-            }),
+                explore: match args.explore {
+                    Some(ExploreArg::Frontier) => true,
+                    Some(ExploreArg::Lanes) => false,
+                    None => defaults.explore,
+                },
+                ..defaults
+            }
+        }),
     })
 }
 
@@ -448,6 +467,13 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--pursuit chooses how a --world-knowledge none run pursues targets; \
              a prior run always pursues the true targets",
+        );
+    }
+    if args.explore.is_some() && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
+        return fail(
+            EXIT_INVALID,
+            "--explore chooses what search drones fly in a --world-knowledge none run; \
+             a prior run always flies its lanes",
         );
     }
     if let Some(dir) = &args.export_scene {
