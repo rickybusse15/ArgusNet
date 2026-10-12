@@ -104,6 +104,12 @@ is measured against.
 
 **Acceptance:** shorter makespan and less distance flown on scan-map-inspect,
 with `mission_completion_rate` and `energy_reserve_min` within their envelopes.
+The policy is judged with the PhysicalV1 energy profile, where hover costs
+energy. `energy_reserve_min` is estimated from distance alone and cannot see
+hover during dwell or a team waiting at a POI. So acceptance also requires
+`battery_remaining_min`, which reads the battery ledger and includes hover. It
+gets an envelope of its own, declared before the policy's first acceptance
+run.
 
 ### P2: per-drone return home and reserve feasibility (F5)
 
