@@ -27,6 +27,11 @@
 //! all of it. After a reset the run is held again, so a reset never sets a run
 //! going on its own.
 //!
+//! A run with its mission lane at its own rate (B2.4, `scheduled_v1`) is
+//! stepped through a [`PhasedLaneExecutor`] at that rate
+//! ([`SimWorker::spawn_with_rate`]); every other run is stepped as the CLI's
+//! legacy run is, one tick at a time.
+//!
 //! World preparation runs on the worker thread too. Closing the worker while it
 //! loads returns at once; the half-built world is discarded when the build
 //! finishes, and never published.
@@ -40,6 +45,7 @@ use std::time::{Duration, Instant};
 use crate::command::{AckStatus, CommandAck, CommandEnvelope, CommandKind, RejectReason};
 use crate::replay::ReplayFrame;
 use crate::scenario::{AssembledRun, RunError};
+use crate::scheduler::{ExecutorError, PhasedLaneExecutor, Schedule};
 use crate::simulation::TickError;
 use crate::snapshot::RuntimeSnapshot;
 
@@ -99,6 +105,23 @@ enum Control {
     Stop,
 }
 
+/// The lanes executor that steps `run` with its mission lane at
+/// `mission_rate` (B2.4), from the run's current tick. Refused when the run's
+/// timestep is not a whole number of nanoseconds, or the rate is invalid: a
+/// front end calls this before it opens, so such a run never starts.
+pub fn scheduled_executor(
+    run: &AssembledRun,
+    mission_rate: Schedule,
+) -> Result<PhasedLaneExecutor, String> {
+    PhasedLaneExecutor::new::<RunError>(run.dt_s(), run.sim.tick())
+        .and_then(|executor| {
+            executor
+                .with_mission_rate(mission_rate)
+                .map_err(ExecutorError::Time)
+        })
+        .map_err(|error| error.to_string())
+}
+
 struct Shared {
     status: Mutex<WorkerStatus>,
     latest: Mutex<Option<Arc<RuntimeSnapshot>>>,
@@ -129,6 +152,30 @@ impl SimWorker {
     where
         F: FnOnce() -> Result<AssembledRun, String> + Send + 'static,
     {
+        Self::spawn_inner(build, pacing, capacity, None)
+    }
+
+    /// [`Self::spawn`], with the mission lane at `mission_rate` (B2.4): the
+    /// run is stepped through a [`PhasedLaneExecutor`] at that rate. `build`
+    /// must declare the same rate on the run, as
+    /// [`crate::run_options::RunOptions::apply`] does. `None` is
+    /// [`Self::spawn`].
+    pub fn spawn_with_rate<F>(build: F, pacing: Pacing, mission_rate: Option<Schedule>) -> Self
+    where
+        F: FnOnce() -> Result<AssembledRun, String> + Send + 'static,
+    {
+        Self::spawn_inner(build, pacing, DEFAULT_COMMAND_CAPACITY, mission_rate)
+    }
+
+    fn spawn_inner<F>(
+        build: F,
+        pacing: Pacing,
+        capacity: usize,
+        mission_rate: Option<Schedule>,
+    ) -> Self
+    where
+        F: FnOnce() -> Result<AssembledRun, String> + Send + 'static,
+    {
         let capacity = capacity.max(1);
         let (controls, control_rx) = mpsc::sync_channel(capacity);
         let (ack_tx, acks) = mpsc::channel();
@@ -148,8 +195,14 @@ impl SimWorker {
         let handle = std::thread::Builder::new()
             .name("argusnet-sim-worker".into())
             .spawn(move || {
-                let run = match build() {
-                    Ok(run) => run,
+                let built = build().and_then(|run| {
+                    let executor = mission_rate
+                        .map(|rate| scheduled_executor(&run, rate))
+                        .transpose()?;
+                    Ok((run, executor))
+                });
+                let (run, executor) = match built {
+                    Ok(built) => built,
                     Err(error) => {
                         thread_shared.status.lock().expect("status").phase =
                             WorkerPhase::Failed(error);
@@ -164,6 +217,7 @@ impl SimWorker {
                 }
                 Loop {
                     run,
+                    executor,
                     pacing,
                     controls: control_rx,
                     acks: ack_tx,
@@ -261,6 +315,9 @@ impl Drop for SimWorker {
 
 struct Loop {
     run: AssembledRun,
+    /// The lanes executor of a run with a lane at its own rate; `None` steps
+    /// the run one legacy tick at a time.
+    executor: Option<PhasedLaneExecutor>,
     pacing: Pacing,
     controls: Receiver<Control>,
     acks: Sender<CommandAck>,
@@ -326,6 +383,18 @@ impl Loop {
         }
     }
 
+    /// One boundary of the run: through the lanes executor when the run has
+    /// one, so a lane at its own rate sits out the boundaries it is not due.
+    fn step(&mut self) -> Result<Arc<RuntimeSnapshot>, RunError> {
+        match self.executor.as_mut() {
+            None => self.run.step(),
+            Some(executor) => executor.step(&mut self.run).map_err(|error| match error {
+                ExecutorError::Tick(error) => error,
+                other => RunError::Invariant(other.to_string()),
+            }),
+        }
+    }
+
     fn phase(&self) -> WorkerPhase {
         self.shared.status.lock().expect("status").phase.clone()
     }
@@ -355,7 +424,7 @@ impl Loop {
         );
         let _ = self.run.sim.apply_command(pause);
         // Stage 0 applies it; the tick then stops at the pause.
-        match self.run.step() {
+        match self.step() {
             Err(RunError::Tick(TickError::Paused)) | Ok(_) => {}
             Err(error) => {
                 self.set_phase(WorkerPhase::Faulted(error.to_string()));
@@ -410,6 +479,9 @@ impl Loop {
             None => {
                 // Commands waiting on the old epoch are cancelled by the reset.
                 self.run.reset();
+                if let Some(executor) = self.executor.as_mut() {
+                    executor.reset();
+                }
                 self.flush_pending();
                 *self.shared.latest.lock().expect("latest") = None;
                 self.hold();
@@ -431,7 +503,7 @@ impl Loop {
     /// paused.
     fn advance(&mut self) {
         let epoch = self.run.sim.epoch();
-        match self.run.step() {
+        match self.step() {
             Ok(snapshot) => {
                 if self.run.sim.epoch() == epoch {
                     if let Some(frame) = self.run.last_frame() {
@@ -614,6 +686,117 @@ mod tests {
         assert!(acks
             .iter()
             .any(|a| a.command_id == 1 && a.status == AckStatus::Applied));
+    }
+
+    /// Every frame of a finished worker run, collected after it completes.
+    fn run_to_completion(worker: &SimWorker) -> Vec<String> {
+        let mut frames = Vec::new();
+        loop {
+            let completed = worker.status().phase == WorkerPhase::Completed;
+            frames.extend(
+                worker
+                    .frames()
+                    .into_iter()
+                    .map(|frame| serde_json::to_string(&frame.frame).unwrap()),
+            );
+            if completed {
+                return frames;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// B2.4 in the worker: a run with its mission lane at its own rate is
+    /// stepped through the lanes executor at that rate, so its frames are the
+    /// CLI's (`--executor lanes --mission-rate`), and a reset starts the
+    /// lane's deadlines over with the run.
+    #[test]
+    fn a_lane_at_its_own_rate_runs_as_the_clis_scheduled_run() {
+        use crate::run_options::RunOptions;
+        use crate::scheduler::parse_rate;
+
+        let path = format!(
+            "{}/../../tests/fixtures/scenario_bundle_scan.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bundle =
+            ScenarioBundle::from_json(&std::fs::read_to_string(&path).expect("fixture")).unwrap();
+        let rate = parse_rate("1/7").expect("rate");
+        let options = RunOptions {
+            mission_rate: Some(rate),
+            ..RunOptions::default()
+        };
+        let build = |bundle: &ScenarioBundle, options: &RunOptions| {
+            let mut run = assemble(bundle).map_err(|e| e.to_string())?;
+            options.apply(&mut run, bundle)?;
+            Ok::<_, String>(run)
+        };
+
+        // What `argusnet-rs sim --executor lanes --mission-rate 1/7` steps.
+        let mut direct = build(&bundle, &options).unwrap();
+        let mut executor = PhasedLaneExecutor::new::<RunError>(bundle.dt_s, 0)
+            .unwrap()
+            .with_mission_rate(rate)
+            .unwrap();
+        loop {
+            match executor.step(&mut direct) {
+                Ok(_) => {}
+                Err(ExecutorError::Tick(RunError::Tick(TickError::Completed { .. }))) => break,
+                Err(error) => panic!("{error}"),
+            }
+        }
+        let want: Vec<String> = direct
+            .run_to_replay()
+            .unwrap()
+            .frames
+            .iter()
+            .map(|frame| serde_json::to_string(frame).unwrap())
+            .collect();
+        let legacy: Vec<String> = assemble(&bundle)
+            .unwrap()
+            .run_to_replay()
+            .unwrap()
+            .frames
+            .iter()
+            .map(|frame| serde_json::to_string(frame).unwrap())
+            .collect();
+        assert_ne!(want, legacy, "the rate changes the run");
+
+        let (worker_bundle, worker_options) = (bundle.clone(), options.clone());
+        let worker = SimWorker::spawn_with_rate(
+            move || build(&worker_bundle, &worker_options),
+            Pacing::Unpaced,
+            Some(rate),
+        );
+        command(&worker, 1, CommandKind::Resume);
+        assert_eq!(run_to_completion(&worker), want);
+
+        // A reset runs it again from the lane's first deadline.
+        command(&worker, 2, CommandKind::Reset);
+        wait_for(&worker, |s| s.epoch == 1 && s.phase == WorkerPhase::Paused);
+        command(&worker, 3, CommandKind::Resume);
+        assert_eq!(run_to_completion(&worker), want);
+    }
+
+    /// A mission rate the run's timestep cannot be scheduled at is refused
+    /// by the check a front end makes before it opens, and the worker built
+    /// from it fails with the same reason rather than running unscheduled.
+    #[test]
+    fn a_rate_on_an_inexact_timestep_is_refused_before_the_run_starts() {
+        let mut inexact = bundle();
+        inexact.dt_s = 1.0 / 3.0;
+        let run = assemble(&inexact).expect("an inexact timestep still assembles");
+        let rate = crate::scheduler::parse_rate("1/1").unwrap();
+        let refused = scheduled_executor(&run, rate).expect_err("refused");
+        assert!(refused.contains("whole number of nanoseconds"), "{refused}");
+
+        let worker = SimWorker::spawn_with_rate(
+            move || assemble(&inexact).map_err(|e| e.to_string()),
+            Pacing::Unpaced,
+            Some(rate),
+        );
+        let status = wait_for(&worker, |s| matches!(s.phase, WorkerPhase::Failed(_)));
+        assert_eq!(status.phase, WorkerPhase::Failed(refused));
     }
 
     #[test]

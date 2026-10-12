@@ -78,7 +78,8 @@ and `provenance.checkpoint_format` 5. Without the flag, `--executor lanes` is th
 for byte. Refused without `--executor lanes`. A `--run-dir` records the rate
 in `run.json`, so `--recover` continues at it (a different `--mission-rate`
 is refused). Its checkpoints carry the rate (format 5) and `--resume` them
-only with the same `--mission-rate`.
+only with the same `--mission-rate`. The viewer's `--run` takes the same flag
+and runs the same scheduled run.
 Design and evidence:
 [SCHEDULER_LEGACY_MAPPING.md](SCHEDULER_LEGACY_MAPPING.md) (B2.4).
 

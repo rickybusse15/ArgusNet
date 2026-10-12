@@ -128,9 +128,14 @@ pub fn run_sim(
 ) -> Result<()> {
     // Refuse a run that cannot start before opening a window: an unreadable
     // scenario, an unsupported delivery profile, an impossible fault
-    // manifest. The worker would only report the same refusal in the strip.
+    // manifest, a mission rate the run's timestep cannot be scheduled at.
+    // The worker would only report the same refusal in the strip.
     let probe = crate::sim_session::load_run(&run_path, &options)
         .map_err(|error| anyhow::anyhow!(error))?;
+    if let Some(rate) = options.mission_rate {
+        argusnet_sim::worker::scheduled_executor(&probe, rate)
+            .map_err(|error| anyhow::anyhow!(error))?;
+    }
     let run_meta = probe.replay_extra_meta().clone();
     let stamp = || {
         format!(

@@ -107,8 +107,13 @@ pub struct SimSession {
 impl SimSession {
     pub fn start(source: PathBuf, options: RunOptions, pacing: Pacing) -> Self {
         let path = source.clone();
+        let mission_rate = options.mission_rate;
         Self {
-            worker: SimWorker::spawn(move || load_run(&path, &options), pacing),
+            worker: SimWorker::spawn_with_rate(
+                move || load_run(&path, &options),
+                pacing,
+                mission_rate,
+            ),
             source,
             next_id: 1,
             pending: BTreeMap::new(),
@@ -648,6 +653,29 @@ mod tests {
             frames_of(load_run_legacy(&path).unwrap()),
             "the options changed the run"
         );
+    }
+
+    /// `--mission-rate` reaches the viewer's run as the CLI's: declared on
+    /// the run and recorded in its replay (the session's worker steps it at
+    /// that rate; `worker::tests` compares the frames with the CLI's).
+    #[test]
+    fn a_mission_rate_is_declared_and_recorded() {
+        let options = RunOptions {
+            mission_rate: Some(argusnet_sim::scheduler::parse_rate("1/7").unwrap()),
+            ..RunOptions::default()
+        };
+        assert!(!options.is_legacy());
+        let run = load_run(&fixture("scenario_bundle_scan.json"), &options).expect("loads");
+        assert_eq!(
+            run.sim
+                .lane_rates()
+                .get(&argusnet_sim::stage::Stage::EvaluateMissionTransitions)
+                .map(String::as_str),
+            Some("1/7")
+        );
+        let meta = run.replay_extra_meta();
+        assert_eq!(meta["execution_model"], "scheduled_v1");
+        assert_eq!(meta["lane_rates"]["mission"], "1/7 Hz");
     }
 
     #[test]

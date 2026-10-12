@@ -145,6 +145,11 @@ cargo run -p argusnet-viewer -- --scene runs/demo.smartscene --run runs/demo-con
 An option the run cannot support (for example, a delay longer than the fusion
 lag) is refused before the window opens. Reset keeps the options.
 
+`--mission-rate NUM/DEN` runs the mission lane at its own rate (B2.4,
+`scheduled_v1`): the viewer's run is then the CLI's `--executor lanes
+--mission-rate NUM/DEN` run, frame for frame, and a reset starts the lane's
+deadlines over.
+
 Each control shows as pending until the run confirms it took effect, and a
 refusal says why (for example, Run on a finished run). The timeline holds
 every tick so far; scrubbing it reviews history without rewinding the run.

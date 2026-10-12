@@ -2,6 +2,13 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `argusnet-viewer --run ... --mission-rate NUM/DEN` runs the viewer's
+  in-process run with the mission lane at its own rate: `SimWorker` steps it
+  through the lanes executor (`SimWorker::spawn_with_rate`), so its frames are
+  the CLI's `--executor lanes --mission-rate` run's. The rate is a run option
+  (`RunOptions::mission_rate`): `apply` declares it on the run and records
+  `scheduled_v1` in the replay, for the CLI and the viewer alike.
+
 - `argusnet-rs sim --executor lanes --mission-rate NUM/DEN` runs the mission
   stage at its own rate in Hz instead of every tick (B2.4, the first lane off
   the legacy rate). A boundary it sits out is in the trace as skipped, with the

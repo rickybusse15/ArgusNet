@@ -25,7 +25,9 @@ use std::time::Instant;
 
 use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
 use argusnet_sim::scenario::{assemble_with, BundleError, RunError, ScenarioBundle};
-use argusnet_sim::scheduler::{ExecutorError, LegacyLaneExecutor, PhasedLaneExecutor, Schedule};
+use argusnet_sim::scheduler::{
+    parse_rate, ExecutorError, LegacyLaneExecutor, PhasedLaneExecutor, Schedule,
+};
 
 mod rundir;
 use argusnet_sim::simulation::TickError;
@@ -310,29 +312,12 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 ..defaults
             }
         }),
+        // Resolved by `sim`: a recovered run takes it from its run directory.
+        mission_rate: None,
     })
 }
 
 /// `NODE_ID=SECONDS` for `--source-delay`.
-/// A rational rate as `NUM/DEN`, as [`parse_rate`] reads it back.
-fn rate_text(schedule: Schedule) -> String {
-    match schedule {
-        Schedule::Rational { hz_num, hz_den } => format!("{hz_num}/{hz_den}"),
-        other => argusnet_sim::scheduler::describe(other),
-    }
-}
-
-/// `NUM/DEN` Hz (or `NUM`, for `NUM/1`), validated as a schedule.
-fn parse_rate(text: &str) -> Result<Schedule, String> {
-    let (num, den) = text.split_once('/').unwrap_or((text, "1"));
-    let parse = |part: &str| {
-        part.trim()
-            .parse::<std::num::NonZeroU64>()
-            .map_err(|_| format!("{text:?} is not NUM/DEN Hz with positive whole numbers"))
-    };
-    Schedule::rational(parse(num)?, parse(den)?).map_err(|error| error.to_string())
-}
-
 fn parse_source_delay(text: &str) -> Result<(String, f64), String> {
     let (id, seconds) = text
         .split_once('=')
@@ -609,7 +594,10 @@ fn sim(args: SimArgs) -> ExitCode {
         Err(error) => return fail(EXIT_INVALID, error),
     };
     let options = match run_options(&args) {
-        Ok(options) => options,
+        Ok(options) => argusnet_sim::run_options::RunOptions {
+            mission_rate,
+            ..options
+        },
         Err(error) => return fail(EXIT_UNSUPPORTED, error),
     };
     // Refused before anything runs (B4, F2: an unsupported delivery profile
@@ -617,14 +605,8 @@ fn sim(args: SimArgs) -> ExitCode {
     if let Err(error) = options.apply(&mut run, &bundle) {
         return fail(EXIT_UNSUPPORTED, error);
     }
-    // Declared before any restore: a checkpoint resumes only under the rates
-    // it was taken with.
-    if let Some(rate) = mission_rate {
-        run.sim.declare_lane_rate(
-            argusnet_sim::stage::Stage::EvaluateMissionTransitions,
-            rate_text(rate),
-        );
-    }
+    // `apply` declared the mission rate, before any restore: a checkpoint
+    // resumes only under the rates it was taken with.
     // P4.9: "emit resolved config/version/provenance". No clock and no host,
     // so a replay's bytes depend only on what was run.
     run.extend_replay_meta([(
@@ -668,7 +650,7 @@ fn sim(args: SimArgs) -> ExitCode {
     let mut recorder = match (&args.run_dir, &args.recover) {
         (Some(path), _) => {
             let dir = RunDir::new(path);
-            let recorded_rate = mission_rate.map(rate_text);
+            let recorded_rate = mission_rate.map(argusnet_sim::scheduler::rate_text);
             if let Err(error) = dir.create_with(&text, recorded_rate.as_deref()) {
                 return fail(EXIT_INVALID, error);
             }
@@ -752,20 +734,6 @@ fn sim(args: SimArgs) -> ExitCode {
             Err(error) => return fail(EXIT_INVALID, error),
         },
     };
-    if let Some(rate) = mission_rate {
-        // Additive: a run at the legacy rates carries neither key, so its
-        // replay is byte for byte what it was.
-        run.extend_replay_meta([
-            (
-                "execution_model".to_string(),
-                serde_json::json!("scheduled_v1"),
-            ),
-            (
-                "lane_rates".to_string(),
-                serde_json::json!({ "mission": argusnet_sim::scheduler::describe(rate) }),
-            ),
-        ]);
-    }
     loop {
         if reset_pending == Some(run.sim.tick()) {
             reset_pending = None;
