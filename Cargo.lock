@@ -385,6 +385,7 @@ dependencies = [
  "argusnet-sensing",
  "argusnet-types",
  "argusnet-world",
+ "chrono",
  "libm",
  "rand_chacha",
  "rand_core 0.10.1",
