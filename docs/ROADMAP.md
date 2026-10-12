@@ -21,8 +21,10 @@ engineering migration, with detailed [work packages](migration/DELIVERY_PLAN.md)
 [acceptance gates](migration/VERIFICATION_AND_ROLLOUT.md). Rust world/safety/fusion
 authority is active, and localization, sensing, mapping and planning libraries
 exist. Rust now includes mission state, TickWorld, populated snapshots and several
-composed stage bodies; complete mission/CLI qualification remains open. Python
-still owns the existing production simulation entry path. See the checkout-grounded
+composed stage bodies, and `argusnet-rs` runs every canonical scenario with no
+Python, qualified over 30 seeds plus a held-out set (A3.2). The Python simulation
+remains the reference the Rust replays are checked against, and the viewer still
+uses Python to build scene packages. See the checkout-grounded
 [ownership inventory](STATE_OWNERSHIP.md). Migration phase numbers do not
 correspond to the product phases below.
 

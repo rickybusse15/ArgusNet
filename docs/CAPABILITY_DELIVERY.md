@@ -1,7 +1,9 @@
 # Capability delivery and viewer integration
 
-Status: planned extensions, adopted for the next delivery sequence. Existing
-modules are starting points, not evidence that these end-to-end features ship.
+Status (2026-10-12): F1, F3 and F4 have shipped as replay and mission slices, and
+F2 has its first slice; F5–F7 are planned (see [migration status](migration/STATUS.md)
+for each slice's evidence). For the planned ones, existing modules are starting
+points, not evidence that these end-to-end features ship.
 This document translates the [roadmap](ROADMAP.md) and
 [source review](NEXT_REFACTOR_REVIEW.md) into feature acceptance criteria.
 Migration P2/P4/P5/P6 identifiers retain their existing meaning; F1–F7 below are

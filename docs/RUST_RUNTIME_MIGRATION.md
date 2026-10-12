@@ -16,9 +16,13 @@ audit of every assembled stateful stage, and an `argusnet-rs` CLI that builds
 and runs all seven canonical scenarios with no Python (six within every
 declared envelope; see [migration status](migration/STATUS.md)), owned
 subsystem state in every stage (A1.2) and a production constructor that
-rejects a missing required stage by name (A1.3). Still open: reset equal to
-fresh and full restore, a durable event journal, multi-seed qualification and the viewer
-worker. No scheduler or aircraft qualification is claimed.
+rejects a missing required stage by name (A1.3). Reset equal to fresh and full
+restore (A2), a durable event journal with crash recovery (A4.1), 30-seed
+statistical qualification (A3.2) and the viewer's in-process simulation worker
+(D1.1, D1.2) are merged too. Still open: the independent scheduler (P4.10:
+scheduler not yet wired into `Simulation`, pending-job restore), cross-platform
+determinism (A3.3) and the Python-free scene build (D2/D5). No scheduler or
+aircraft qualification is claimed.
 
 The [Rust-only runtime target](RUST_RUNTIME_ARCHITECTURE.md) now specifies
 independent sensor/task deadlines, one session owner, timestamped measurements,

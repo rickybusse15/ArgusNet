@@ -1,6 +1,6 @@
 # ADR-009: Independently scheduled Rust runtime
 
-**Status:** accepted design; implementation planned
+**Status:** accepted design; implementation in progress (P4.10a scheduler types and lane executors, P4.10b first delivery slice; see [migration status](../migration/STATUS.md))
 **Date:** 2026-09-23
 **Extends:** ADR-005, ADR-007 and ADR-008; retains ADR-006
 

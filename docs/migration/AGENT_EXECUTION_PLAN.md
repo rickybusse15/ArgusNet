@@ -176,6 +176,10 @@ refactor)** because both edit `simulation.rs`/`stage.rs`.
 
 ## 1. Verified starting state
 
+> This section is the snapshot the plan started from (2026-10-03). It is not
+> kept current: [STATUS.md](STATUS.md) is the live record of what has merged
+> and what is open.
+
 Read from the repository on 2026-10-03 unless marked *unverified*.
 
 ### 1.1 What exists

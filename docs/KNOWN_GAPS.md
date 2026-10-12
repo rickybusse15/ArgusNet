@@ -1,14 +1,16 @@
 # Known Gaps — ArgusNet
 
-## Scheduled-runtime status (reviewed 2026-09-23)
+## Scheduled-runtime status (reviewed 2026-10-12)
 
 | Capability | Status | Remaining evidence |
 | --- | --- | --- |
 | Rust stage composition, direct fusion and replay writer | Partial | 2026-10-03: `argusnet-rs` builds and runs all seven canonical scenarios with no Python, six within every envelope (#122). Owned subsystem state (A1.2) and a production constructor that rejects missing stages (A1.3, `tests/production.rs`) are done. Acceptance scores against a stored reference (D-10). Multi-seed and held-out qualification done (A3.2, `docs/performance/a32-qualification-2026-10-03.md`): everything passes except `covariance_reduction_mean`, whose sampling noise is of the order of its envelope. D-12 judges it by its median (envelope unchanged); the confirmation run on 30 fresh seeds passes 7/7 (`docs/performance/d12-confirmation-2026-10-04.md`) |
 | Command recovery and format-2 control checkpoints | Implemented in reviewed `ec9c2f7` | Not full causal checkpointing or proof of remote release |
 | Subsystem-wide reset/restore | **Implemented** (A2, 2026-10-03) | `AssembledRun::reset` reloads the run as assembled; checkpoint format 4 binds to the scenario's content hash and refuses another scenario before mutating. Evidence: `scripts/replay_hashes.py --lifecycle` (all 7 canonical scenarios × seeds 7, 42: reset at a seeded tick replays byte-identical to fresh; resume from an on-disk checkpoint equals the uninterrupted frames), `tests/assembled_resume.rs` (`a_reset_assembled_run_is_a_fresh_run`, `a_checkpoint_from_a_different_scenario_is_refused_before_anything_changes`, `truncated_or_corrupt_checkpoint_text_fails_cleanly`, per-phase resume). Not covered: pending scheduler jobs (P4.10) |
-| Independent/rational task and sensor rates | Planned P4.10 | Stable event order, physical sampling support and actual elapsed-time updates |
-| Bounded causal jobs and complete scheduler history | Planned P4.10 | Deterministic application, stale result checks and restore during pending work |
+| Independent/rational task and sensor rates | **Partial** (P4.10a) | Scheduler types (integer `SimTime`, rational schedules, phase order, `EventQueue`) and the legacy-order compound-lane and phased-lane executors are merged and replay byte-identical (B2.1–B2.3). Not yet: the scheduler wired into `Simulation`, stages 1–6 off the compound lane, real per-sensor rates |
+| Timestamped measurement delivery | **Partial** (P4.10b, #196, #199) | Delivery envelopes with acquisition/availability/receipt ticks, seeded per-source delay and jitter, fusion at a fixed lag, explicit drops; track error scored at evidence time with present error and evidence age reported (`docs/migration/DELIVERY_TIMING.md`). Not yet: buffered mapping inputs, per-source capture schedules, clock quality, evidence age on the track itself, delayed-measurement smoothing |
+| Bounded causal jobs and complete scheduler history | Planned P4.10d–f | Deterministic application, stale result checks and restore during pending work |
+| Starting with no world knowledge | **First slice** (#201–#208) | `--world-knowledge none`: range scanners, a checkpointed belief grid, stages 1, 3 and 4 planning on it, a physics guard; the map exports as a scene package. Still reading truth: target pursuit, the bundle builder's lane and POI planning, scan progress from footprint coverage; no frontier exploration (`docs/migration/UNKNOWN_WORLD.md`) |
 | Operate/Plan/Review visual redesign and freshness | Planned/partial foundations | P2/P5 acceptance; current replay controls remain distinct |
 | Qualified hardware adapters and deadlines | Planned S3–S7 | Actual SIL/HIL and device/clock/fault evidence; telemetry viewing grants no control |
 
@@ -181,8 +183,9 @@ and checkpoint foundations require the corrections in the
 Operate/Plan/Review, acknowledged runtime controls and complete world-aware live
 state remain staged work. Existing V2 live rendering is not evidence of P5.3.
 
-F1 scorecards, F2 failure schedules, F3 explanations, F4 comparisons, F5 continuous
-reserve replanning, F6 persistent memory and F7 evidence-based adaptive inspection
-are planned extensions of existing modules. See [their acceptance matrix](CAPABILITY_DELIVERY.md).
+F1 scorecards, F3 explanations and F4 comparisons have shipped as replay and
+mission slices, and F2 failure schedules has its first slice (sensor outages, link
+delays, source restarts). F5 continuous reserve replanning, F6 persistent memory
+and F7 evidence-based adaptive inspection are planned extensions of existing modules. See [their acceptance matrix](CAPABILITY_DELIVERY.md).
 Energy-aware assignment, benchmark aggregation and POI dwell already exist; they
 must not be counted as completion of these richer features.
