@@ -173,7 +173,9 @@ def mesh_from_height_grid(
             b = a + 1
             c = (row + 1) * cols + col
             d = c + 1
-            indices.extend([a, c, b, b, c, d])
+            # Counter-clockwise seen from above: each triangle faces up, the
+            # way its normals point.
+            indices.extend([a, b, c, b, d, c])
     return SimpleMesh(
         positions=positions,
         normals=normals,

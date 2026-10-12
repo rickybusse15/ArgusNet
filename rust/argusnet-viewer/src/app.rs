@@ -42,6 +42,13 @@ use crate::state::{
 use crate::terrain_material::{is_terrain_layer, TerrainLayerRoot, TerrainMaterialPlugin};
 use crate::ui::viewer_ui_system;
 
+/// Both 3-D cameras' exposure: EV100 12, Bevy's `Exposure::OVERCAST`, which
+/// matches the 12 000 lux key light. The terrain faces up and is lit by that
+/// sun (`docs/KNOWN_GAPS.md`); until it did, the ground was lit by the ambient
+/// term alone and the camera was opened three stops (EV100 9) to make up for
+/// it, which washed every sunlit surface out to white.
+const SCENE_EXPOSURE: Exposure = Exposure { ev100: 12.0 };
+
 /// Marker component on the persistent GPU line-list mesh used to render the
 /// LiDAR reconstruction point cloud.  Rebuilt only when the cloud is dirty.
 #[derive(Component)]
@@ -781,12 +788,7 @@ fn setup_world(
         // rather than merely pale. Bloom, which used to put it there, is now
         // the high quality tier's alone (§15: off by default).
         Hdr,
-        // Slightly more exposure than Bevy's default (EV100 9.7), to offset the
-        // midtones AcesFitted pulls down. EV100 is inverse: a *higher* number
-        // stops the camera down, so `Exposure::OVERCAST` (12) — despite matching
-        // this scene's 12 000 lux key light by name — renders it about two stops
-        // darker and crushes the terrain to black.
-        Exposure { ev100: 9.0 },
+        SCENE_EXPOSURE,
         // Depth cueing (`DistanceFog`) and bloom are the quality tier's: see
         // `crate::quality::apply_quality_tier_system`, which adds them to this
         // camera, and `sync_fog_to_camera_system`, which sizes the fog.
@@ -830,6 +832,10 @@ fn setup_world(
             ..default()
         }),
         Transform::from_translation(recon_eye).looking_at(recon_focus, Vec3::Z),
+        // Exposed and tonemapped as the main camera is: the believed terrain
+        // in this pane is the same ground under the same sun.
+        Tonemapping::AcesFitted,
+        SCENE_EXPOSURE,
         RenderLayers::layer(RECON_LAYER),
     ));
 

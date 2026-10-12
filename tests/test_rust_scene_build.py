@@ -4,9 +4,8 @@ The viewer builds scene packages in Rust (`argusnet_sim::scene_build`), so a
 prior-world run needs no Python interpreter. This checks the Rust package
 against the Python one for the same replay: the same manifest, styles and
 environment, and per layer the same vertices, normals and colours (to float
-rounding) and the same triangles in the same order and winding. The winding
-includes the terrain's downward-facing triangles (`docs/KNOWN_GAPS.md`): the
-viewer's lighting is tuned against them, so the Rust builder keeps them.
+rounding) and the same triangles in the same order and winding, every one
+facing the way its normals point (the terrain faces up).
 """
 
 from __future__ import annotations
@@ -136,6 +135,21 @@ def test_the_rust_scene_package_matches_the_python_one(tmp_path: Path) -> None:
                 err_msg=f"{layer['id']} {attribute}",
             )
         np.testing.assert_array_equal(rust_indices, python_indices, err_msg=layer["id"])
+        _assert_faces_follow_normals(python_mesh, python_indices, layer["id"])
+
+
+def _assert_faces_follow_normals(
+    mesh: dict[str, np.ndarray], indices: np.ndarray, name: str
+) -> None:
+    """Every triangle is wound counter-clockwise from the side its normals point to."""
+    triangles = indices.reshape(-1, 3)
+    corners = mesh["POSITION"].astype(np.float64)[triangles]
+    face = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    vertex = mesh["NORMAL"].astype(np.float64)[triangles].sum(axis=1)
+    facing = np.einsum("ij,ij->i", face, vertex)
+    # Degenerate triangles (zero area) face nowhere; none may face backwards.
+    backwards = int(np.count_nonzero(facing < 0.0))
+    assert backwards == 0, f"{name}: {backwards} of {len(triangles)} triangles face backwards"
 
 
 def test_build_scene_refuses_a_replay_without_terrain(tmp_path: Path) -> None:

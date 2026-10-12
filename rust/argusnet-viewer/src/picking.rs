@@ -10,11 +10,12 @@
 //! * **occluders**: the meshes of the scene's base layers (terrain,
 //!   buildings), tagged [`PickOccluder`] when they spawn.
 //!
-//! Occluders block from both faces. The committed terrain is wound facing
-//! down while its normals face up, and draws correctly only because its
-//! material is double-sided; with the ray cast's default back-face culling,
-//! a ray from above passed straight through it. Casting both faces matches
-//! how the layers are drawn.
+//! Occluders block from both faces. Scene packages built before 2026-10-12
+//! wind the terrain facing down while its normals face up, and draw only
+//! because the material is double-sided; with the ray cast's default
+//! back-face culling, a ray from above passed straight through such ground.
+//! The writers wind it facing up now, but older packages still load, and
+//! casting both faces matches how every layer is drawn.
 //!
 //! So a platform behind a hill is not picked through it, and the nearer of two
 //! platforms on one ray is the one picked. Everything else is invisible to the
@@ -744,7 +745,7 @@ mod tests {
     }
 
     /// A base-layer mesh is tagged an occluder that blocks from both faces:
-    /// a ground plane wound facing down, as the committed terrain is, still
+    /// a ground plane wound facing down, as older packages' terrain is, still
     /// hides what is under it from a ray coming down.
     #[test]
     fn base_layer_meshes_occlude_from_either_face() {

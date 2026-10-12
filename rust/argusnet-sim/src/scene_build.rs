@@ -19,13 +19,11 @@
 //!   `scene_manifest.json` carry the same fields, with `source_kind:
 //!   "synthetic"` so the viewer treats the scene as one it can rebuild.
 //!
-//! The winding is the Python writer's too, on purpose. Its terrain triangles
-//! are wound clockwise seen from above, so they face down while their normals
-//! face up (`docs/KNOWN_GAPS.md`), and the viewer's lighting has been tuned
-//! against that: wound the other way, the same terrain renders pale and the
-//! vegetation casts dark shadows on it. Fixing the winding is a visual change
-//! to every scene, with the lighting retuned alongside it, so it is not made
-//! here; this builder is a drop-in for the Python one.
+//! Every triangle is wound counter-clockwise seen from its outside, so it
+//! faces the way its normals point: the terrain faces up. The Python writer
+//! winds the same way, triangle for triangle (until October 2026 both wound
+//! the terrain facing down, and the viewer's exposure was set to make up for
+//! the unlit ground that gave; see `docs/KNOWN_GAPS.md`).
 
 use std::path::{Path, PathBuf};
 
@@ -246,8 +244,8 @@ fn shade_terrain(grid: &HeightGrid, normals: &[[f32; 3]]) -> Vec<[f32; 4]> {
     out
 }
 
-/// The terrain as one mesh, wound as the Python builder winds it (see the
-/// module docs).
+/// The terrain as one mesh, every triangle facing up (counter-clockwise seen
+/// from above), as the Python builder winds it.
 pub fn terrain_mesh(grid: &HeightGrid) -> MeshData {
     let (rows, cols) = (grid.rows(), grid.cols());
     let normals = grid.normals();
@@ -270,7 +268,7 @@ pub fn terrain_mesh(grid: &HeightGrid) -> MeshData {
             let b = a + 1;
             let c = a + cols as u32;
             let d = c + 1;
-            indices.extend_from_slice(&[a, c, b, b, c, d]);
+            indices.extend_from_slice(&[a, b, c, b, d, c]);
         }
     }
     MeshData {
@@ -889,16 +887,23 @@ mod tests {
     }
 
     #[test]
-    fn the_terrain_samples_and_winds_like_the_python_builder() {
+    fn the_terrain_samples_like_the_python_builder_and_faces_up() {
         let grid = HeightGrid::from_viewer_mesh(&meta()["terrain"]["viewer_mesh"]).unwrap();
         assert_eq!(grid.height_at(50.0, 10.0), 5.0);
         assert_eq!(grid.height_at(-50.0, 10.0), 0.0);
         let mesh = terrain_mesh(&grid);
         assert_eq!(mesh.positions.len(), 9);
         assert_eq!(mesh.indices.len(), 2 * 2 * 6);
-        // `[a, c, b, b, c, d]` per quad, c being the next row.
-        assert_eq!(&mesh.indices[..6], &[0, 3, 1, 1, 3, 4]);
+        // `[a, b, c, b, d, c]` per quad, c being the next row.
+        assert_eq!(&mesh.indices[..6], &[0, 1, 3, 1, 4, 3]);
         assert!(mesh.normals.iter().all(|n| n[2] > 0.0));
+        // Every triangle is counter-clockwise seen from above: it faces up,
+        // the way its normals point.
+        for triangle in mesh.indices.chunks(3) {
+            let [a, b, c] = [0, 1, 2].map(|i| mesh.positions[triangle[i] as usize]);
+            let cross_z = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            assert!(cross_z > 0.0, "{triangle:?} faces down");
+        }
     }
 
     #[test]
