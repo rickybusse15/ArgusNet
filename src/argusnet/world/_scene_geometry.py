@@ -323,7 +323,9 @@ def mesh_from_polyline(
                     float(height_at(float(point[0]), float(point[1]))) + z_offset_m,
                 ]
             )
-        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3])
+        # Counter-clockwise from above, so the strip faces up: a translucent
+        # layer is single-sided and would cull a downward-wound strip.
+        indices.extend([base, base + 2, base + 1, base, base + 3, base + 2])
     if not indices:
         return merge_meshes(())
     position_array = np.asarray(positions, dtype=np.float32)

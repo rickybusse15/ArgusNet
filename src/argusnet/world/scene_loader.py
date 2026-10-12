@@ -721,6 +721,8 @@ def build_scene_from_gis(
                     semantic_kind=str(style[style_id]["semantic_kind"]),
                     mesh=merge_meshes(meshes),
                     style_id=style_id,
+                    # One node per feature, so blended features sort apart.
+                    parts=tuple(meshes),
                 )
             )
 

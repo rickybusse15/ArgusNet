@@ -11,7 +11,8 @@
   object is its own glTF mesh and node (the viewer sorts them back to front),
   and translucent materials are single-sided with clockwise footprints'
   walls reversed to face out, so a building's far wall never draws over its
-  near one. A GPU probe checks the roof of a built building against the same
+  near one. GIS scenes split per feature too, and road and water strips are
+  wound to face up. A GPU probe checks the roof of a built building against the same
   building drawn opaque.
 
 - Plans: [PLANNING_EFFICIENCY_PLAN.md](PLANNING_EFFICIENCY_PLAN.md) (fleet-wide

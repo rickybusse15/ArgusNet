@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from argusnet.world._glb import SimpleMesh, write_glb
+from argusnet.world._scene_geometry import mesh_from_polyline
 
 
 def _material(path: Path) -> dict:
@@ -48,3 +49,18 @@ def test_each_part_is_its_own_node(tmp_path: Path) -> None:
     assert len(document["meshes"]) == 2
     assert [node["name"] for node in document["nodes"]] == ["buildings-0", "buildings-1"]
     assert document["scenes"][0]["nodes"] == [0, 1]
+
+
+def test_a_line_strip_faces_up() -> None:
+    # Translucent layers are single-sided, so a strip wound downward (as
+    # water and roads once were) would be culled from every camera above it.
+    strip = mesh_from_polyline(
+        np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]),
+        height_at=lambda x, y: 0.0,
+        color_rgba=(0.2, 0.4, 0.9, 0.85),
+        width_m=4.0,
+    )
+    corners = strip.positions.astype(np.float64)[strip.indices.reshape(-1, 3)]
+    up = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])[:, 2]
+    assert (up > 0.0).all()
+    assert (strip.normals[:, 2] > 0.0).all()

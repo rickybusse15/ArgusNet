@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -262,7 +263,23 @@ class SceneCompilationTest(unittest.TestCase):
                                         ]
                                     ],
                                 },
-                            }
+                            },
+                            {
+                                "type": "Feature",
+                                "properties": {"height_m": 12.0},
+                                "geometry": {
+                                    "type": "Polygon",
+                                    "coordinates": [
+                                        [
+                                            [500110.0, 3799970.0],
+                                            [500150.0, 3799970.0],
+                                            [500150.0, 3799930.0],
+                                            [500110.0, 3799930.0],
+                                            [500110.0, 3799970.0],
+                                        ]
+                                    ],
+                                },
+                            },
                         ],
                     }
                 ),
@@ -281,6 +298,11 @@ class SceneCompilationTest(unittest.TestCase):
                 any(layer["style_id"] == "landcover-forest" for layer in manifest["layers"])
             )
             self.assertTrue(any(layer["style_id"] == "buildings" for layer in manifest["layers"]))
+            # Each imported building is its own node, so blended ones sort apart.
+            buildings_glb = (output_path / "overlays" / "buildings.glb").read_bytes()
+            (json_length,) = struct.unpack_from("<I", buildings_glb, 12)
+            gltf = json.loads(buildings_glb[20 : 20 + json_length])
+            self.assertEqual(2, len(gltf["nodes"]))
 
             environment_document = json.loads(
                 (output_path / "metadata" / "environment.json").read_text(encoding="utf-8")
