@@ -9,6 +9,7 @@ name = "argusnet_sim"
 path = "src/lib.rs"
 
 [dependencies]
+chrono = { workspace = true }
 argusnet-core = { path = "../argusnet-core" }
 argusnet-localization = { path = "../argusnet-localization" }
 argusnet-mapping = { path = "../argusnet-mapping" }

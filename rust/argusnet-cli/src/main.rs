@@ -53,6 +53,9 @@ enum Command {
     Sim(SimArgs),
     /// Build the scenario bundle an `argusnet.scenario-config` describes.
     Build(BuildArgs),
+    /// Build a scene package (`smartscene-v1`) from a replay, as
+    /// `argusnet build-scene` does, with no Python.
+    BuildScene(BuildSceneArgs),
     /// Run captured `IngestFrameRequest`s through the in-process fusion engine
     /// and write its `IngestFrameResponse`s -- the direct-fusion parity check
     /// against `argusnetd` (P4.9c).
@@ -60,6 +63,16 @@ enum Command {
     Fuse(FuseArgs),
     /// Print the runtime, bundle and checkpoint format versions.
     Version,
+}
+
+#[derive(clap::Args)]
+struct BuildSceneArgs {
+    /// The replay whose `meta` describes the world (terrain, obstacles).
+    #[arg(long)]
+    replay: PathBuf,
+    /// A new or empty directory for the package.
+    #[arg(long)]
+    output: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -862,11 +875,40 @@ fn stage_table(
     table
 }
 
+fn build_scene(args: BuildSceneArgs) -> ExitCode {
+    let text = match std::fs::read_to_string(&args.replay) {
+        Ok(text) => text,
+        Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", args.replay.display())),
+    };
+    let replay: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(replay) => replay,
+        Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", args.replay.display())),
+    };
+    let meta = replay.get("meta").cloned().unwrap_or_default();
+    let provenance = serde_json::json!({
+        "replay_source": args.replay.display().to_string(),
+        "environment_bundle": null,
+    });
+    match argusnet_sim::scene_build::build_scene(&args.output, &meta, Some(&text), provenance) {
+        Ok(built) => {
+            println!(
+                "scene ({}; {} triangles) -> {}",
+                built.layers.join(", "),
+                built.triangles,
+                built.root.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(EXIT_INVALID, format!("building the scene: {error}")),
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Sim(args) => sim(args),
         Command::Build(args) => build(args),
+        Command::BuildScene(args) => build_scene(args),
         Command::Fuse(args) => fuse(args),
         Command::Version => {
             println!(

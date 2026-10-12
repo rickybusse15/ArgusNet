@@ -55,5 +55,5 @@ scripts/ci-local.sh                 # every CI job locally (ruff, mypy, pytest, 
 | Terrain/obstacles | `src/argusnet/world/terrain.py`, `environment.py`, `obstacles.py`, `visibility.py` |
 | Tracking/filtering | `rust/argusnet-core/src/lib.rs` |
 | gRPC service | `proto/argusnet/v1/world_model.proto`, `src/argusnet/adapters/argusnet_grpc.py`, `rust/argusnet-server/` |
-| Scene packaging | `src/argusnet/world/scene_loader.py`, `_glb.py` |
+| Scene packaging | `rust/argusnet-sim/src/scene_build.rs` (Rust, used by the viewer and `argusnet-rs build-scene`), `src/argusnet/world/scene_loader.py`, `_glb.py` (Python reference) |
 | Viewer | `rust/argusnet-viewer/src/` |
