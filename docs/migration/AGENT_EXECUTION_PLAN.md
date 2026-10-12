@@ -209,7 +209,7 @@ Read from the repository on 2026-10-03 unless marked *unverified*.
 | Scheduler / parallel execution | **None**: no `scheduled_v1`, no integer-time scheduler, no per-stage timers, no worker pool in the sim crate |
 | Guardrails G0, G2, G3 | open |
 | Viewer P2.5 shell, P2.6 acceptance | not started (no PR seen) |
-| Viewer P5 | not started; viewer still launches simulation through the legacy subprocess path (*unverified; confirm in `live.rs`/`app.rs` before D5*) |
+| Viewer P5 | D1, D2 and D5's viewer part done: `--run` and Tools → Scenario run the Rust simulation in process and scenes are built in Rust; the viewer starts no process (`app::scenario_run_tests::the_viewer_starts_no_processes`) |
 | F1–F7, S1/S2 contracts | not started except what pre-exists: `src/argusnet/evaluation/{scorecard,reports,benchmarks}.py` are the F1/F4 starting points |
 | Hardware S3–S8 | planning docs only; no hardware profile frozen |
 | Open question from `STATUS.md` | confirm P4.8d.4 ("world-backed stage 1 + Python-vs-Rust stage-1 parity") was closed by P4.8e.x |

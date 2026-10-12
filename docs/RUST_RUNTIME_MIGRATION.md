@@ -21,7 +21,7 @@ restore (A2), a durable event journal with crash recovery (A4.1), 30-seed
 statistical qualification (A3.2) and the viewer's in-process simulation worker
 (D1.1, D1.2) are merged too. Still open: the independent scheduler (P4.10:
 scheduler not yet wired into `Simulation`, pending-job restore), cross-platform
-determinism (A3.3) and the Python-free scene build (D2/D5). No scheduler or
+determinism (A3.3) and the rest of D5 on the Python side (daemon auto-build on import). The viewer itself runs and builds scenes with no Python (D2, D5). No scheduler or
 aircraft qualification is claimed.
 
 The [Rust-only runtime target](RUST_RUNTIME_ARCHITECTURE.md) now specifies
@@ -199,9 +199,10 @@ performance case: Phase 0 measured it at 5.9% of tick time.
 
 ### Phase 5 dependencies to keep explicit
 
-The viewer still contains `simulation_python`, `spawn_simulation_child` and
-`spawn_build_scene_child`. Remove them only when Rust scenario/world construction
-and simulation are usable as libraries. Generate terrain meshes from the world
+`simulation_python`, `spawn_simulation_child` and `spawn_build_scene_child`
+are gone (D2, D5): the viewer builds scenes and runs Tools → Scenario
+simulations through `argusnet_sim` as a library, and a test fails if any viewer
+source starts a process. Generate terrain meshes from the world
 crate with LOD; replay JSON and `.smartscene` become export/interchange artifacts.
 Live mode also needs additive world/zone metadata and real mission status.
 Fixed-step simulation, snapshot rewind and rendering must have independent clocks.
