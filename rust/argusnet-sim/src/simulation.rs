@@ -345,6 +345,21 @@ pub trait StageHandler: std::any::Any + fmt::Debug + Send {
         })
     }
 
+    /// For a stage at its own rate: check that `state`, as checkpointed at
+    /// `tick`, agrees with the `lag` boundaries the simulation recorded it as
+    /// sitting out. A stage that keeps what it skipped (mapping, B2.5) holds
+    /// exactly those boundaries; one that keeps nothing has nothing to check.
+    /// Called with [`StageHandler::check_state`], before anything is mutated.
+    fn check_lag(
+        &self,
+        state: &serde_json::Value,
+        lag: u64,
+        tick: u64,
+    ) -> Result<(), StageStateError> {
+        let _ = (state, lag, tick);
+        Ok(())
+    }
+
     /// Take back what [`StageHandler::checkpoint_state`] produced.
     ///
     /// Only called after [`StageHandler::check_state`] accepted the same
@@ -1697,6 +1712,22 @@ impl Simulation {
                 });
             }
             stage_lag.insert(stage, *lag);
+        }
+        // A stage that keeps what it skipped must hold exactly the skipped
+        // boundaries the lag says, no more and no fewer.
+        for (stage, handler) in &self.handlers {
+            if !self.lane_rates.contains_key(stage) {
+                continue;
+            }
+            if let Some(state) = checkpoint.stage_states.get(&stage.to_string()) {
+                let lag = stage_lag.get(stage).copied().unwrap_or(0);
+                handler
+                    .check_lag(state, lag, checkpoint.tick)
+                    .map_err(|error| RestoreError::StageState {
+                        stage: stage.to_string(),
+                        detail: error.to_string(),
+                    })?;
+            }
         }
         let restored_queue = CommandQueue::from_checkpoint(
             &checkpoint.pending_commands,

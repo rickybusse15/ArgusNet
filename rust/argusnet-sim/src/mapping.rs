@@ -847,6 +847,31 @@ impl StageHandler for MappingStage {
         Ok(())
     }
 
+    /// The kept boundaries must be exactly the `lag` before `tick`, in order:
+    /// a queue with one missing or repeated would lose or replay evidence.
+    fn check_lag(
+        &self,
+        state: &serde_json::Value,
+        lag: u64,
+        tick: u64,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let kept: Vec<u64> = decoded
+            .pending
+            .iter()
+            .map(|boundary| boundary.tick)
+            .collect();
+        let expected: Vec<u64> = (tick.saturating_sub(lag)..tick).collect();
+        if kept != expected {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: format!(
+                    "the kept boundaries {kept:?} are not the {lag} sat out before tick {tick}"
+                ),
+            });
+        }
+        Ok(())
+    }
+
     /// The lane sits this boundary out (B2.5): keep what it would have
     /// integrated -- the platforms' positions and the scans stage 6 handed
     /// over -- for its next run, and clear this tick's outputs (coverage
@@ -2138,6 +2163,55 @@ mod tests {
             lanes.step(&mut resumed).expect("tick");
         }
         assert_eq!(mapping_state(&resumed), mapping_state(&straight));
+    }
+
+    /// A checkpoint whose kept boundaries disagree with the recorded lag --
+    /// one dropped, one repeated -- is refused, and the run is untouched.
+    #[test]
+    fn kept_boundaries_must_match_the_recorded_lag() {
+        let mut sim = buffered_rig();
+        sim.declare_lane_rate(Stage::UpdateMappingAndLocalization, "1/3");
+        let mut lanes = executor(Some("1/3"), 0);
+        for k in 0..6 {
+            feed(&mut sim, k);
+            lanes.step(&mut sim).expect("tick");
+        }
+        let checkpoint = sim.checkpoint().expect("checkpoint");
+        let name = Stage::UpdateMappingAndLocalization.to_string();
+        assert_eq!(checkpoint.stage_lag.get(&name), Some(&2));
+
+        let damaged = |edit: &dyn Fn(&mut Vec<serde_json::Value>)| {
+            let mut copy = checkpoint.clone();
+            let pending = copy
+                .stage_states
+                .get_mut(&name)
+                .and_then(|state| state.get_mut("pending"))
+                .and_then(serde_json::Value::as_array_mut)
+                .expect("two kept boundaries");
+            edit(pending);
+            copy
+        };
+        let mut fresh = buffered_rig();
+        fresh.declare_lane_rate(Stage::UpdateMappingAndLocalization, "1/3");
+        let dropped = damaged(&|pending| {
+            pending.remove(0);
+        });
+        assert!(
+            fresh.restore(&dropped).is_err(),
+            "a dropped boundary was accepted"
+        );
+        let repeated = damaged(&|pending| {
+            let first = pending[0].clone();
+            pending.insert(0, first);
+        });
+        assert!(
+            fresh.restore(&repeated).is_err(),
+            "a repeated boundary was accepted"
+        );
+        assert_eq!(fresh.tick(), 0, "a refused restore changed the run");
+        fresh
+            .restore(&checkpoint)
+            .expect("the undamaged checkpoint restores");
     }
 
     fn zone(id: &str, zone_type: &str, x: f64, y: f64, radius_m: f64) -> InspectionZone {
