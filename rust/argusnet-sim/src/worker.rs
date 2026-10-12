@@ -105,6 +105,23 @@ enum Control {
     Stop,
 }
 
+/// The lanes executor that steps `run` with its mission lane at
+/// `mission_rate` (B2.4), from the run's current tick. Refused when the run's
+/// timestep is not a whole number of nanoseconds, or the rate is invalid: a
+/// front end calls this before it opens, so such a run never starts.
+pub fn scheduled_executor(
+    run: &AssembledRun,
+    mission_rate: Schedule,
+) -> Result<PhasedLaneExecutor, String> {
+    PhasedLaneExecutor::new::<RunError>(run.dt_s(), run.sim.tick())
+        .and_then(|executor| {
+            executor
+                .with_mission_rate(mission_rate)
+                .map_err(ExecutorError::Time)
+        })
+        .map_err(|error| error.to_string())
+}
+
 struct Shared {
     status: Mutex<WorkerStatus>,
     latest: Mutex<Option<Arc<RuntimeSnapshot>>>,
@@ -179,18 +196,9 @@ impl SimWorker {
             .name("argusnet-sim-worker".into())
             .spawn(move || {
                 let built = build().and_then(|run| {
-                    let executor = match mission_rate {
-                        None => None,
-                        Some(rate) => Some(
-                            PhasedLaneExecutor::new::<RunError>(run.dt_s(), run.sim.tick())
-                                .and_then(|executor| {
-                                    executor
-                                        .with_mission_rate(rate)
-                                        .map_err(ExecutorError::Time)
-                                })
-                                .map_err(|error| error.to_string())?,
-                        ),
-                    };
+                    let executor = mission_rate
+                        .map(|rate| scheduled_executor(&run, rate))
+                        .transpose()?;
                     Ok((run, executor))
                 });
                 let (run, executor) = match built {
@@ -768,6 +776,27 @@ mod tests {
         wait_for(&worker, |s| s.epoch == 1 && s.phase == WorkerPhase::Paused);
         command(&worker, 3, CommandKind::Resume);
         assert_eq!(run_to_completion(&worker), want);
+    }
+
+    /// A mission rate the run's timestep cannot be scheduled at is refused
+    /// by the check a front end makes before it opens, and the worker built
+    /// from it fails with the same reason rather than running unscheduled.
+    #[test]
+    fn a_rate_on_an_inexact_timestep_is_refused_before_the_run_starts() {
+        let mut inexact = bundle();
+        inexact.dt_s = 1.0 / 3.0;
+        let run = assemble(&inexact).expect("an inexact timestep still assembles");
+        let rate = crate::scheduler::parse_rate("1/1").unwrap();
+        let refused = scheduled_executor(&run, rate).expect_err("refused");
+        assert!(refused.contains("whole number of nanoseconds"), "{refused}");
+
+        let worker = SimWorker::spawn_with_rate(
+            move || assemble(&inexact).map_err(|e| e.to_string()),
+            Pacing::Unpaced,
+            Some(rate),
+        );
+        let status = wait_for(&worker, |s| matches!(s.phase, WorkerPhase::Failed(_)));
+        assert_eq!(status.phase, WorkerPhase::Failed(refused));
     }
 
     #[test]
