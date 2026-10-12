@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — The terrain faces up, and the sun lights it
+
+- Scene terrain was wound facing down, so the viewer lit it as a back face:
+  no sunlight, only ambient, with the camera opened three stops to compensate.
+  Sunlit surfaces washed out to white as a result, including the drones'
+  self-built map. Both scene writers (Python and `argusnet-rs build-scene`)
+  now wind the terrain facing up, the committed `scene.smartscene` terrain is
+  rewritten to match, and the viewer's cameras use EV100 12, matching the
+  12 000 lux sun. Terrain shows its relief, buildings show lit and shaded
+  faces, and the self-built map is no longer pale. Renders:
+  `docs/performance/terrain-winding-2026-10-12/`.
+- Sensor volumes and zone walls are additive light, as documented: the
+  hologram shader returned its weight as alpha, so under `AlphaMode::Add` they
+  covered 85% of the ground behind them. Marker glyphs keep covering what is
+  behind them, so they read over sunlit ground.
+- The belief overlay is drawn over the terrain's brightness, not its colour,
+  so sunlit ground no longer pulls the classes toward its hue.
+
 ## Unreleased — Tools → Scenario runs without Python
 
 - The viewer's Tools → Scenario run now runs the Rust simulation on a thread

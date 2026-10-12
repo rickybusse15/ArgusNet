@@ -41,13 +41,14 @@ If an occluder is nearest, nothing is picked. Everything else is invisible to
 the ray: sensor volumes, trails, zone walls, rings and the sky. All of those
 are `PresentationOnly`, and no interaction mode selects them yet.
 
-**Occluders block from both faces.** Every triangle of the committed
-terrain is wound facing down while its normals face up. It draws correctly
-only because its material is double-sided. With the ray cast's default
-back-face culling, a ray from above passed straight through the ground: the
-first click probe picked a node buried 250 m under it. Occluders now carry
-`RayCastBackfaces`, which matches how they are drawn. The winding itself is
-a scene-writer defect, recorded in `KNOWN_GAPS.md`.
+**Occluders block from both faces.** Scene packages built before
+2026-10-12 wind every terrain triangle facing down while its normals face up.
+They draw only because the material is double-sided. With the ray cast's
+default back-face culling, a ray from above passed straight through such
+ground: the first click probe picked a node buried 250 m under it. Occluders
+carry `RayCastBackfaces`, which matches how they are drawn. The writers now
+wind the terrain facing up (`KNOWN_GAPS.md`), but older packages still load,
+so both faces are still cast.
 
 **Pick proxies.** A drone glyph is a body and two thin arms. It is picked by
 its bounding box (a `SimplifiedMesh`): the whole symbol, gaps between the
