@@ -156,7 +156,8 @@ motion over the evidence age.
 **Projecting tracks to the frame time was tried and rejected.** Each track was
 predicted forward over the lag with the tracker's own IMM filter. That made the
 present error worse: a mean of 47.7 m against 41.8 m without projection, at
-1.5 s lag. There are two reasons:
+1.5 s lag. (These are mean errors over tracks and frames; the table above gives
+the RMSE, which is 47.6 m without projection at the same lag.) There are two reasons:
 
 - The filter's velocity is poor for these targets. Its mean error is 18.6 m/s
   in the legacy run, against target speeds of about 17 m/s.

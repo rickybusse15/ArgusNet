@@ -2,7 +2,7 @@
 
 ## Project
 
-Civilian 3D world-modeling platform. Current entry path: Python simulation + Rust world/safety/fusion + Bevy viewer. Target: Rust-only production execution with independently scheduled subsystems; Python remains optional offline tooling.
+Civilian 3D world-modeling platform. Current entry paths: the Rust CLI `argusnet-rs sim` (assembled eleven-stage run, no Python) and the Python simulation it is checked against; Rust world/safety/fusion; the Bevy viewer, which can run the Rust simulation in-process (`--run`). Target: Rust-only production execution with independently scheduled subsystems; Python remains optional offline tooling.
 
 Read `docs/RUST_RUNTIME_ARCHITECTURE.md` and ADR-009 for the target, and
 `docs/STATE_OWNERSHIP.md` for implemented versus planned behavior. Preserve the
@@ -26,6 +26,8 @@ pip install -e .                    # Python + native world library (requires Ru
 argusnet sim --duration-s 60        # Run simulation
 cargo test                          # Rust tests
 python3 -m pytest tests/ -q         # Python tests
+cargo run --release -p argusnet-cli -- sim --config <cfg> --replay out.json   # Rust run (argusnet-rs)
+scripts/ci-local.sh                 # every CI job locally (ruff, mypy, pytest, cargo, clippy, viewer); use before a PR
 ```
 
 ## Key conventions
