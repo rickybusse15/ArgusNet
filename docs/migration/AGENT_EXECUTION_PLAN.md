@@ -206,7 +206,7 @@ Read from the repository on 2026-10-03 unless marked *unverified*.
 | Production ownership | `Arc<Mutex<Shared>>` link handles remain in ten files: `battery.rs`, `controller.rs`, `overrides.rs`, `deconflict.rs`, `safety.rs`, `vio.rs`, `observe.rs`, `fusion.rs`, `mapping.rs`, `mission.rs` (`grep -rl 'Arc<Mutex' rust/argusnet-sim/src`); the architecture says to replace them with owned state |
 | Production-constructor check | No code found that rejects a missing required stage (grep for "required"/"production" in `argusnet-sim/src` found none) — *verify before A1.3* |
 | Reset/restore completeness | Partial per `KNOWN_GAPS.md`; `CAUSAL_STATE.md` audit exists for stateful stages |
-| Scheduler / parallel execution | **None**: no `scheduled_v1`, no integer-time scheduler, no per-stage timers, no worker pool in the sim crate |
+| Scheduler / parallel execution | Partial: integer-time scheduler and phased lane executors (B2.1–B2.3), per-stage timers (B0), fork-join workers (B3), timestamped delivery (B4 first slice), the mission lane at its own rate under `scheduled_v1` (B2.4). No background job pool (B5) and no pending-job restore (B6) |
 | Guardrails G0, G2, G3 | open |
 | Viewer P2.5 shell, P2.6 acceptance | not started (no PR seen) |
 | Viewer P5 | D1, D2 and D5's viewer part done: `--run` and Tools → Scenario run the Rust simulation in process and scenes are built in Rust; the viewer starts no process (`app::scenario_run_tests::the_viewer_starts_no_processes`) |

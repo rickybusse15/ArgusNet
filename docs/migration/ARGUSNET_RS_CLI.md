@@ -67,6 +67,16 @@ source's queue. Every dropped envelope is a rejected observation with a
 `--fusion-lag-s` the run is the legacy run, byte for byte. Design and
 evidence: [DELIVERY_TIMING.md](DELIVERY_TIMING.md).
 
+## A lane at its own rate (B2.4, `scheduled_v1`)
+
+`--executor lanes --mission-rate NUM/DEN` runs the mission lane (stage 9) at
+`NUM/DEN` Hz instead of every tick: at the first tick at or after each of its
+deadlines, sitting out the rest, with its next run given the time since it last
+ran. The replay records `meta.execution_model: "scheduled_v1"` and
+`meta.lane_rates`. Without the flag, `--executor lanes` is the legacy run, byte
+for byte. Refused without `--executor lanes`. Design and evidence:
+[SCHEDULER_LEGACY_MAPPING.md](SCHEDULER_LEGACY_MAPPING.md) (B2.4).
+
 ## Scheduled faults (F2)
 
 `--faults MANIFEST` applies an `argusnet.fault-manifest`: sensor outages,

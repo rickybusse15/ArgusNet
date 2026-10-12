@@ -91,7 +91,59 @@ Evidence: `argusnet-rs sim --executor lanes` reproduces the legacy replays byte
 for byte (`scripts/replay_hashes.py --executor lanes --check`, 14/14) and
 passes `--lifecycle`.
 
+## B2.4: the mission lane at its own rate
+
+The first lane off the legacy rate, and the first `scheduled_v1` behaviour.
+`PhasedLaneExecutor::with_mission_rate(schedule)` gives the mission lane
+(stage 9) its own `Schedule`; every other lane still runs every boundary, and
+without a rate nothing changes.
+
+- **When it runs.** At the first legacy boundary at or after each of its
+  deadlines. A deadline between two boundaries is served by the later one;
+  several deadlines inside one boundary interval are served by one run. The
+  next occurrence is computed from the schedule's `n`th deadline, never by
+  accumulating, so the lane cannot drift (a million 10 Hz boundaries at 3 Hz:
+  exactly 300 000 runs, each on the first boundary at or after its deadline).
+- **When it does not.** The executor queues a `NotDue` part in the lane's
+  phase, and `Simulation::skip_through` records the stage as `Skipped`, with
+  the reason (`not due: lane at 1/1 Hz (scheduled_v1)`), in the trace. A stage
+  is never left out silently. Its handler clears what the last run left as
+  this tick's output (`StageHandler::not_due`): the driver's decisions and
+  override commands, the bare mission stage's events and inputs. The default
+  `not_due` **refuses**, so a stage that has not said what its per-tick output
+  is faults the run rather than repeating stale output.
+- **Elapsed time.** A stage that sat out `k` boundaries is given
+  `(k + 1) * dt` as its `dt_s` on its next run: mission's one use of it,
+  inspect dwell, accumulates the time that actually passed. With `k = 0` this
+  is the timestep, bit for bit.
+- **Time.** The lane runs at a legacy boundary, so it reads that boundary's
+  legacy float time, like every other lane; no lane mixes the two derivations.
+- **Checkpoint.** `SimulationCheckpoint.stage_lag` carries each stage's
+  boundaries since it last ran (absent when empty, so legacy checkpoints are
+  unchanged). The executor derives its next occurrence from the tick it starts
+  at, so a resumed run serves the same boundaries as an uninterrupted one.
+  This is the baseline P4.10e builds on: there is still no work pending across
+  a boundary.
+- **Label.** `argusnet-rs sim --executor lanes --mission-rate NUM/DEN` records
+  `meta.execution_model: "scheduled_v1"` and `meta.lane_rates` in the replay
+  (additive; absent at the legacy rate).
+
+Why mission first: its inputs are cumulative (the map and the fleet), so a
+boundary it sits out loses no evidence. Fusion cannot sit one out without
+breaking the replay's one-fusion-frame-per-tick invariant, and mapping would
+drop evidence until P4.10b buffers its inputs.
+
+Evidence: with no rate, `--executor lanes` reproduces the legacy replays byte
+for byte (`scripts/replay_hashes.py --executor lanes --check`, 14/14) and
+passes `--lifecycle`. Tests: `tests/lane_rates.rs` (deadlines, elapsed time,
+the trace, resume equal to uninterrupted, refusal of an undeclared stage) and
+`scheduler::lanes` (no drift, resume derivation, not-due parts).
+`scripts/run_phase_acceptance.py --rust-arg ...` judges a `scheduled_v1` run
+against the same envelopes, unwidened; the result at 1 Hz is in
+[`../performance/b24-mission-rate-2026-10-12.md`](../performance/b24-mission-rate-2026-10-12.md).
+
 ## Not decided here
 
-Rates other than the legacy rate, per-subsystem elapsed time, fork-join (B3)
-and background jobs (B5) follow the extraction of the lanes they touch.
+Rates for the other lanes, `nanos / 1e9` time for a lane at its own rate,
+per-sensor rates, fork-join (B3) and background jobs (B5) follow the
+extraction of the lanes they touch.
