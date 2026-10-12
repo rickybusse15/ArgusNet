@@ -74,7 +74,11 @@ evidence: [DELIVERY_TIMING.md](DELIVERY_TIMING.md).
 deadlines, sitting out the rest, with its next run given the time since it last
 ran. The replay records `meta.execution_model: "scheduled_v1"` and
 `meta.lane_rates`. Without the flag, `--executor lanes` is the legacy run, byte
-for byte. Refused without `--executor lanes`. Design and evidence:
+for byte. Refused without `--executor lanes`. A `--run-dir` records the rate
+in `run.json`, so `--recover` continues at it (a different `--mission-rate`
+is refused), and a checkpoint taken while the lane was sitting out boundaries
+is checkpoint format 5 and needs the same `--mission-rate` to `--resume`.
+Design and evidence:
 [SCHEDULER_LEGACY_MAPPING.md](SCHEDULER_LEGACY_MAPPING.md) (B2.4).
 
 ## Scheduled faults (F2)

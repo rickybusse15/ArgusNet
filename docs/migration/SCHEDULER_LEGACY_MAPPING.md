@@ -122,6 +122,12 @@ without a rate nothing changes.
   boundaries since it last ran (absent when empty, so legacy checkpoints are
   unchanged). The executor derives its next occurrence from the tick it starts
   at, so a resumed run serves the same boundaries as an uninterrupted one.
+  A checkpoint with lag is format 5 (`FORMAT_VERSION_STAGE_LAG`), so a reader
+  that predates the field refuses it; every other checkpoint stays format 4,
+  so legacy replays and their recorded `checkpoint_format` do not change. A
+  lag larger than the checkpoint's tick is refused as damage. A run directory
+  records the rate in `run.json`, so `--recover` continues the scheduled run,
+  and `--resume` of a checkpoint with lag needs the same `--mission-rate`.
   This is the baseline P4.10e builds on: there is still no work pending across
   a boundary.
 - **Label.** `argusnet-rs sim --executor lanes --mission-rate NUM/DEN` records

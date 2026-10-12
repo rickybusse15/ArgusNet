@@ -314,6 +314,14 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
 }
 
 /// `NODE_ID=SECONDS` for `--source-delay`.
+/// A rational rate as `NUM/DEN`, as [`parse_rate`] reads it back.
+fn rate_text(schedule: Schedule) -> String {
+    match schedule {
+        Schedule::Rational { hz_num, hz_den } => format!("{hz_num}/{hz_den}"),
+        other => argusnet_sim::scheduler::describe(other),
+    }
+}
+
 /// `NUM/DEN` Hz (or `NUM`, for `NUM/1`), validated as a schedule.
 fn parse_rate(text: &str) -> Result<Schedule, String> {
     let (num, den) = text.split_once('/').unwrap_or((text, "1"));
@@ -500,6 +508,9 @@ fn sim(args: SimArgs) -> ExitCode {
             "--mission-rate runs the mission lane at its own rate; it needs --executor lanes",
         );
     }
+    // A recovered run takes the scheduler options its run directory recorded.
+    let mut executor_kind = args.executor;
+    let mut mission_rate = args.mission_rate;
     if args.pursuit.is_some() && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
         return fail(
             EXIT_INVALID,
@@ -555,8 +566,29 @@ fn sim(args: SimArgs) -> ExitCode {
                     println!("{}: already complete; nothing to recover", path.display());
                     return ExitCode::SUCCESS;
                 }
-                match dir.bundle_text() {
-                    Ok(text) => text,
+                match dir.recorded() {
+                    Ok((text, recorded)) => {
+                        let recorded = match recorded.as_deref().map(parse_rate).transpose() {
+                            Ok(recorded) => recorded,
+                            Err(error) => {
+                                return fail(
+                                    EXIT_INVALID,
+                                    format!("{}: run.json's mission rate: {error}", path.display()),
+                                )
+                            }
+                        };
+                        if args.mission_rate.is_some() && args.mission_rate != recorded {
+                            return fail(
+                                EXIT_INVALID,
+                                "--mission-rate differs from the rate this run was recorded with",
+                            );
+                        }
+                        if recorded.is_some() {
+                            executor_kind = Executor::Lanes;
+                        }
+                        mission_rate = recorded;
+                        text
+                    }
                     Err(error) => return fail(EXIT_INVALID, error),
                 }
             }
@@ -614,6 +646,13 @@ fn sim(args: SimArgs) -> ExitCode {
             Ok(checkpoint) => checkpoint,
             Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
         };
+        if !checkpoint.stage_lag.is_empty() && mission_rate.is_none() {
+            return fail(
+                EXIT_INVALID,
+                "cannot resume: the checkpoint is from a run with a lane at its own rate; \
+                 pass the same --executor lanes --mission-rate",
+            );
+        }
         if let Err(error) = run.restore(&checkpoint) {
             return fail(EXIT_INVALID, format!("cannot resume: {error}"));
         }
@@ -622,7 +661,8 @@ fn sim(args: SimArgs) -> ExitCode {
     let mut recorder = match (&args.run_dir, &args.recover) {
         (Some(path), _) => {
             let dir = RunDir::new(path);
-            if let Err(error) = dir.create(&text) {
+            let recorded_rate = mission_rate.map(rate_text);
+            if let Err(error) = dir.create_with(&text, recorded_rate.as_deref()) {
                 return fail(EXIT_INVALID, error);
             }
             match Recorder::start(
@@ -686,7 +726,7 @@ fn sim(args: SimArgs) -> ExitCode {
 
     let mut tick_ms: Vec<f64> = Vec::new();
     let mut reset_pending = args.reset_at;
-    let mut executor = match args.executor {
+    let mut executor = match executor_kind {
         Executor::Legacy => None,
         Executor::Scheduled => {
             match LegacyLaneExecutor::new::<RunError>(bundle.dt_s, run.sim.tick()) {
@@ -695,7 +735,7 @@ fn sim(args: SimArgs) -> ExitCode {
             }
         }
         Executor::Lanes => match PhasedLaneExecutor::new::<RunError>(bundle.dt_s, run.sim.tick()) {
-            Ok(executor) => match args.mission_rate {
+            Ok(executor) => match mission_rate {
                 None => Some(Driver::Lanes(executor)),
                 Some(rate) => match executor.with_mission_rate(rate) {
                     Ok(executor) => Some(Driver::Lanes(executor)),
@@ -705,7 +745,7 @@ fn sim(args: SimArgs) -> ExitCode {
             Err(error) => return fail(EXIT_INVALID, error),
         },
     };
-    if let Some(rate) = args.mission_rate {
+    if let Some(rate) = mission_rate {
         // Additive: a run at the legacy rates carries neither key, so its
         // replay is byte for byte what it was.
         run.extend_replay_meta([

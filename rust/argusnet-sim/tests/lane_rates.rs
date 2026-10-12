@@ -186,3 +186,37 @@ fn a_stage_that_has_not_declared_how_to_sit_out_a_boundary_faults_the_run() {
         }))
     ));
 }
+
+#[test]
+fn a_checkpoint_with_lag_is_format_5_and_a_damaged_lag_is_refused() {
+    let mut sim = simulation();
+    clocked(&mut sim);
+    let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
+        .unwrap()
+        .with_mission_rate(hz(3, 1))
+        .unwrap();
+    for _ in 0..9 {
+        executor.step(&mut sim).expect("tick");
+    }
+    let checkpoint = sim.checkpoint().unwrap();
+    assert_eq!(
+        checkpoint.header.format_version,
+        argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+    );
+
+    // A reader that predates the field would read format 4: a format-4
+    // header carrying lag is refused, not half-read.
+    let mut as_four = checkpoint.clone();
+    as_four.header.format_version = argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION;
+    let mut fresh = simulation();
+    clocked(&mut fresh);
+    assert!(fresh.restore(&as_four).is_err());
+
+    // More boundaries behind than the run has had is damage.
+    let mut damaged = checkpoint.clone();
+    damaged
+        .stage_lag
+        .insert("evaluate_mission_transitions".to_string(), u64::MAX);
+    assert!(fresh.restore(&damaged).is_err());
+    assert!(fresh.restore(&checkpoint).is_ok());
+}

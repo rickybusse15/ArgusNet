@@ -34,6 +34,12 @@ struct RunConfig {
     bundle_fnv1a: String,
     /// The bundle exactly as it was run.
     bundle: String,
+    /// `NUM/DEN` Hz when the mission lane ran at its own rate
+    /// (`--mission-rate`, B2.4), so recovery continues the same run. Such a
+    /// run records checkpoint format 5, which a build without the field
+    /// refuses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mission_rate: Option<String>,
 }
 
 pub struct RunDir {
@@ -65,7 +71,13 @@ impl RunDir {
     }
 
     /// Start a run here: the directory must be new or empty.
+    #[cfg(test)]
     pub fn create(&self, bundle_text: &str) -> Result<(), String> {
+        self.create_with(bundle_text, None)
+    }
+
+    /// [`Self::create`], recording the mission lane's own rate if it has one.
+    pub fn create_with(&self, bundle_text: &str, mission_rate: Option<&str>) -> Result<(), String> {
         std::fs::create_dir_all(&self.path).map_err(|e| e.to_string())?;
         let occupied = std::fs::read_dir(&self.path)
             .map_err(|e| e.to_string())?
@@ -80,16 +92,28 @@ impl RunDir {
         let config = RunConfig {
             format: RUN_FORMAT.to_string(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
-            checkpoint_format: argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION,
+            checkpoint_format: if mission_rate.is_some() {
+                argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+            } else {
+                argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
+            },
             bundle_fnv1a: format!("{:016x}", fnv1a(bundle_text.as_bytes())),
             bundle: bundle_text.to_string(),
+            mission_rate: mission_rate.map(str::to_string),
         };
         let json = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
         write_atomic(&self.file("run.json"), &json).map_err(|e| e.to_string())
     }
 
     /// The bundle text the run was started with, checked.
+    #[cfg(test)]
     pub fn bundle_text(&self) -> Result<String, String> {
+        self.recorded().map(|(bundle, _)| bundle)
+    }
+
+    /// The bundle text and the mission lane's own rate the run was started
+    /// with, checked.
+    pub fn recorded(&self) -> Result<(String, Option<String>), String> {
         let incomplete = |detail: String| {
             format!(
                 "{}: incomplete run artifact, cannot recover: {detail}",
@@ -109,7 +133,11 @@ impl RunDir {
         // Recorded for the recovery that reads it back: a run whose checkpoints
         // this build cannot read is refused here, by name, rather than failing
         // later on the checkpoint's own header.
-        let checkpoint_format = argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION;
+        let checkpoint_format = if config.mission_rate.is_some() {
+            argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+        } else {
+            argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
+        };
         if config.checkpoint_format != checkpoint_format {
             return Err(incomplete(format!(
                 "run.json records checkpoint format {}, this build reads {checkpoint_format}",
@@ -121,7 +149,7 @@ impl RunDir {
                 "run.json's bundle does not match its hash".to_string(),
             ));
         }
-        Ok(config.bundle)
+        Ok((config.bundle, config.mission_rate))
     }
 
     pub fn is_complete(&self) -> bool {

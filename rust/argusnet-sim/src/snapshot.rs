@@ -123,6 +123,11 @@ impl CheckpointHeader {
     /// `scenario_hash`. A format-3 checkpoint is refused with a versioned
     /// error rather than restored without a scenario check.
     pub const FORMAT_VERSION: u32 = 4;
+    /// Format 4 plus `stage_lag` (B2.4): written only by a run whose lane at
+    /// its own rate was sitting out a boundary, so a reader that predates the
+    /// field refuses it instead of resuming without it. Every other
+    /// checkpoint stays format 4.
+    pub const FORMAT_VERSION_STAGE_LAG: u32 = 5;
     /// Version 2 changes command-boundary recovery and single-step semantics.
     /// Old checkpoints must not silently resume under a different control contract.
     pub const RUNTIME_ALGORITHM_VERSION: u32 = 2;
@@ -266,10 +271,18 @@ impl SimulationCheckpoint {
         config_hash: u64,
         scenario_hash: u64,
     ) -> Result<(), RestoreError> {
-        if self.header.format_version != CheckpointHeader::FORMAT_VERSION {
+        let expected = if self.stage_lag.is_empty() {
+            CheckpointHeader::FORMAT_VERSION
+        } else {
+            CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+        };
+        let readable = self.header.format_version == expected
+            || (self.header.format_version == CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+                && self.stage_lag.is_empty());
+        if !readable {
             return Err(RestoreError::FormatVersion {
                 found: self.header.format_version,
-                expected: CheckpointHeader::FORMAT_VERSION,
+                expected,
             });
         }
         if self.header.runtime_algorithm_version != CheckpointHeader::RUNTIME_ALGORITHM_VERSION {

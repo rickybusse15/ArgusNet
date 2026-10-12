@@ -1502,7 +1502,11 @@ impl Simulation {
         }
         Ok(SimulationCheckpoint {
             header: CheckpointHeader {
-                format_version: CheckpointHeader::FORMAT_VERSION,
+                format_version: if self.stage_lag.is_empty() {
+                    CheckpointHeader::FORMAT_VERSION
+                } else {
+                    CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+                },
                 runtime_algorithm_version: CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
                 seed_version: CheckpointHeader::SEED_VERSION,
                 run_id: self.config.run_id().to_string(),
@@ -1592,6 +1596,15 @@ impl Simulation {
                 .ok_or_else(|| RestoreError::InvalidState {
                     detail: format!("lag recorded for an unknown stage {name}"),
                 })?;
+            // A stage cannot have sat out more boundaries than the run has had.
+            if *lag > checkpoint.tick {
+                return Err(RestoreError::InvalidState {
+                    detail: format!(
+                        "stage {name} is recorded as {lag} boundaries behind at tick {}",
+                        checkpoint.tick
+                    ),
+                });
+            }
             stage_lag.insert(stage, *lag);
         }
         let restored_queue = CommandQueue::from_checkpoint(

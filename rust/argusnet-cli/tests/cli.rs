@@ -564,6 +564,120 @@ fn a_crashed_run_recovers_to_the_uninterrupted_journal() {
     assert!(output.status.success());
 }
 
+/// B2.4: a run with the mission lane at its own rate recovers as that run,
+/// not as the legacy one: its run directory records the rate.
+#[test]
+fn a_crashed_scheduled_run_recovers_with_its_mission_rate() {
+    let rate = ["--executor", "lanes", "--mission-rate", "3/7"];
+    let whole = run_dir("journal-scheduled-whole");
+    let output = record("scenario_bundle_scan.json", &whole, &rate);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let crashed = run_dir("journal-scheduled-crashed");
+    let with_crash: Vec<&str> = rate
+        .iter()
+        .copied()
+        .chain(["--crash-after", "60"])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &crashed, &with_crash);
+    assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run["mission_rate"], "3/7");
+    assert_eq!(run["checkpoint_format"], 5);
+
+    // Recovered with no scheduler flags at all: the run directory supplies them.
+    let output = recover(&crashed);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        std::fs::read(whole.join("journal.jsonl")).unwrap(),
+        "the recovered scheduled journal is not the uninterrupted one"
+    );
+
+    // A different rate is refused rather than mixed in.
+    let other = run_dir("journal-scheduled-other");
+    let with_crash: Vec<&str> = rate
+        .iter()
+        .copied()
+        .chain(["--crash-after", "60"])
+        .collect();
+    assert_eq!(
+        record("scenario_bundle_scan.json", &other, &with_crash)
+            .status
+            .code(),
+        Some(4)
+    );
+    let output = binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(&other)
+        .args(["--executor", "lanes", "--mission-rate", "1/1"])
+        .output()
+        .expect("runs");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("differs"));
+}
+
+/// A checkpoint taken while the mission lane was sitting out boundaries
+/// carries that lag; resuming it without the rate is refused.
+#[test]
+fn a_checkpoint_with_lane_lag_needs_its_rate_to_resume() {
+    let checkpoint = scratch("lag-checkpoint.json");
+    let output = binary()
+        .args(["sim", "--quiet", "--bundle"])
+        .arg(fixture("scenario_bundle_scan.json"))
+        .args(["--executor", "lanes", "--mission-rate", "1/7"])
+        .args(["--checkpoint-at", "10", "--checkpoint"])
+        .arg(&checkpoint)
+        .output()
+        .expect("runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&checkpoint).unwrap()).unwrap();
+    assert_eq!(written["header"]["format_version"], 5);
+    assert!(
+        written["stage_lag"]["evaluate_mission_transitions"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+
+    let output = binary()
+        .args(["sim", "--quiet", "--bundle"])
+        .arg(fixture("scenario_bundle_scan.json"))
+        .arg("--resume")
+        .arg(&checkpoint)
+        .output()
+        .expect("runs");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--mission-rate"));
+
+    let output = binary()
+        .args(["sim", "--quiet", "--bundle"])
+        .arg(fixture("scenario_bundle_scan.json"))
+        .args(["--executor", "lanes", "--mission-rate", "1/7", "--resume"])
+        .arg(&checkpoint)
+        .output()
+        .expect("runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn a_run_directory_is_never_reused() {
     let dir = run_dir("journal-reuse");
