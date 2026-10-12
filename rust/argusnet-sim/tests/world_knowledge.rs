@@ -8,9 +8,12 @@
 
 use std::collections::BTreeMap;
 
-use argusnet_sim::belief_world::{BeliefCellUpdate, ExplorationConfig, WorldKnowledge};
+use argusnet_sim::belief_world::{
+    BeliefCellUpdate, ExplorationConfig, PursuitSource, WorldKnowledge,
+};
 use argusnet_sim::scenario::{assemble, AssembledRun, ScenarioBundle};
 use argusnet_sim::snapshot::SimulationCheckpoint;
+use argusnet_sim::stage::Stage;
 
 fn bundle(name: &str) -> ScenarioBundle {
     let path = format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -206,6 +209,75 @@ fn the_built_map_saves_as_a_scene_package_with_the_run_that_built_it() {
             .unwrap_err();
     assert!(error.contains("built no map"), "{error}");
     assert!(!dir.exists());
+}
+
+fn with_pursuit(bundle: &ScenarioBundle, pursuit: PursuitSource) -> AssembledRun {
+    let mut run = assemble(bundle).unwrap();
+    let config = ExplorationConfig {
+        pursuit,
+        ..Default::default()
+    };
+    run.set_world_knowledge(WorldKnowledge::NoPrior, config)
+        .unwrap();
+    run
+}
+
+fn stage_one_notes(run: &AssembledRun) -> Vec<String> {
+    run.sim
+        .trace()
+        .records()
+        .iter()
+        .filter(|record| record.stage == Stage::SampleControllersAndBattery)
+        .flat_map(|record| record.notes.clone())
+        .collect()
+}
+
+#[test]
+fn follow_drones_pursue_the_fused_tracks_and_never_read_truth() {
+    let bundle = bundle("scenario_bundle_tt.json");
+    let mut run = no_prior(&bundle);
+    let mut notes = Vec::new();
+    for _ in 0..bundle.steps {
+        run.step().unwrap();
+        notes.extend(stage_one_notes(&run));
+    }
+    assert!(
+        notes.iter().all(|note| !note.contains("legacy pursuit")),
+        "stage 1 read truth: {notes:?}"
+    );
+    let track_reads: u64 = notes
+        .iter()
+        .filter_map(|note| note.strip_prefix("pursuit read "))
+        .filter_map(|rest| rest.split(' ').next()?.parse::<u64>().ok())
+        .sum();
+    assert!(track_reads > 0, "no pursuit read a fused track: {notes:?}");
+
+    // The legacy oracle is still there when asked for, and it differs.
+    let mut truth = with_pursuit(&bundle, PursuitSource::Truth);
+    let mut truth_notes = Vec::new();
+    for _ in 0..bundle.steps {
+        truth.step().unwrap();
+        truth_notes.extend(stage_one_notes(&truth));
+    }
+    assert!(truth_notes
+        .iter()
+        .any(|note| note.contains("legacy pursuit")));
+    assert_ne!(
+        frames(no_prior(&bundle)),
+        frames(with_pursuit(&bundle, PursuitSource::Truth))
+    );
+}
+
+#[test]
+fn a_checkpoint_does_not_cross_between_pursuit_sources() {
+    let bundle = bundle("scenario_bundle_tt.json");
+    let mut tracks = no_prior(&bundle);
+    for _ in 0..30 {
+        tracks.step().unwrap();
+    }
+    let checkpoint = tracks.sim.checkpoint().unwrap();
+    let mut truth = with_pursuit(&bundle, PursuitSource::Truth);
+    assert!(truth.restore(&checkpoint).is_err());
 }
 
 #[test]
