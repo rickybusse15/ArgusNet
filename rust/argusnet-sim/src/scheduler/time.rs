@@ -53,6 +53,12 @@ pub enum TimeError {
     IndistinctDeadlines { hz_num: u64, hz_den: u64 },
     /// A one-shot schedule asked for an occurrence after its only one.
     NoSuchOccurrence { n: u64 },
+    /// A lane that buffers the boundaries it sits out (mapping, B2.5) would
+    /// sit out more than `limit` boundaries in a row at this rate: its
+    /// backlog, kept in memory and in every checkpoint, would be unbounded in
+    /// practice. `boundaries` is how many (`u64::MAX` for a one-shot rate,
+    /// which never runs again).
+    BacklogTooLong { boundaries: u64, limit: u64 },
 }
 
 impl fmt::Display for TimeError {
@@ -66,6 +72,11 @@ impl fmt::Display for TimeError {
             TimeError::NoSuchOccurrence { n } => {
                 write!(formatter, "a one-shot schedule has no occurrence {n}")
             }
+            TimeError::BacklogTooLong { boundaries, limit } => write!(
+                formatter,
+                "at this rate the lane would sit out up to {boundaries} ticks in a row and \
+                 buffer every one; at most {limit} are allowed"
+            ),
         }
     }
 }

@@ -147,7 +147,8 @@ struct SimArgs {
     /// when it next runs, so coverage and the self-built map catch up exactly;
     /// between its runs the rest of the tick reads the map as it last left
     /// it. Localization runs at this rate. Recorded like `--mission-rate`.
-    /// Needs `--executor lanes`.
+    /// A rate that would leave it idle for more than 1024 ticks in a row is
+    /// refused, since it buffers every one. Needs `--executor lanes`.
     #[arg(long, value_parser = parse_rate)]
     mapping_rate: Option<Schedule>,
     /// Workers for the stages that fork work inside a phase (B3): currently

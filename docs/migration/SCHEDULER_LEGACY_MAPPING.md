@@ -183,6 +183,12 @@ nothing:
   estimates stay current (the mission reads them every tick). Per-tick
   outputs are cleared on a skipped boundary (coverage deltas, inspection
   events, fused scans), so a boundary that did not run reports none.
+- **Bounded.** A mapping rate that would leave the lane idle for more than
+  `MAX_BUFFERED_BOUNDARIES` (1024) ticks in a row is refused at
+  configuration (`TimeError::BacklogTooLong`), since everything it keeps is
+  held in memory and written into every checkpoint. 1024 ticks is over 17
+  minutes at the 1 s canonical timestep. The mission lane buffers nothing and
+  has no such cap.
 - **Checkpointed.** The kept boundaries are part of stage 8's checkpoint
   (`pending`, absent when empty, so legacy checkpoints are unchanged), and a
   resumed run integrates them as the uninterrupted one does

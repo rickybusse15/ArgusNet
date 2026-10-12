@@ -148,6 +148,13 @@ impl LaneRates {
     }
 }
 
+/// The most boundaries in a row a buffering lane (mapping) may sit out. What
+/// it keeps per boundary is the platforms' positions and their scans, held in
+/// memory and written into every checkpoint, so a rate that leaves it idle for
+/// hours of ticks would grow without bound in practice. 1024 boundaries is
+/// over 17 minutes at the 1 s canonical timestep and about 20 s at 50 Hz.
+pub const MAX_BUFFERED_BOUNDARIES: u64 = 1024;
+
 /// A lane's own rate and its next occurrence.
 #[derive(Debug, Clone, Copy)]
 struct LaneRate {
@@ -225,9 +232,33 @@ impl PhasedLaneExecutor {
         debug_assert!(RATED_LANES.contains(&stage));
         let lane = lane_of(stage).expect("a rated lane is one of LANES_V1");
         schedule.validate()?;
+        if stage == Stage::UpdateMappingAndLocalization {
+            let boundaries = self.longest_gap(schedule)?;
+            if boundaries > MAX_BUFFERED_BOUNDARIES {
+                return Err(TimeError::BacklogTooLong {
+                    boundaries,
+                    limit: MAX_BUFFERED_BOUNDARIES,
+                });
+            }
+        }
         let next = self.occurrences_before(schedule, self.next)?;
         self.rates[lane] = Some(LaneRate { schedule, next });
         Ok(self)
+    }
+
+    /// The most boundaries in a row a lane at `schedule` sits out: the
+    /// boundaries strictly between two consecutive runs, at most one less
+    /// than its period over the boundaries', rounded up.
+    fn longest_gap(&self, schedule: Schedule) -> Result<u64, TimeError> {
+        let boundary_ns = self.boundaries.nth_deadline(self.epoch, 1)?.as_nanos() as u128;
+        let lane_ns: u128 = match schedule {
+            Schedule::Period(period) => period.get() as u128,
+            Schedule::Rational { hz_num, hz_den } => {
+                (hz_den.get() as u128 * 1_000_000_000).div_ceil(hz_num.get() as u128)
+            }
+            Schedule::Once(_) => return Ok(u64::MAX),
+        };
+        Ok(u64::try_from(lane_ns.div_ceil(boundary_ns)).unwrap_or(u64::MAX))
     }
 
     /// The mission lane's own rate, if it has one.
@@ -673,5 +704,33 @@ mod tests {
             "{:?}",
             run.log
         );
+    }
+
+    /// A mapping rate that would leave the lane idle for more than
+    /// `MAX_BUFFERED_BOUNDARIES` ticks in a row is refused: it buffers every
+    /// tick it sits out. The mission lane buffers nothing, so it has no cap.
+    #[test]
+    fn a_mapping_rate_that_would_buffer_without_bound_is_refused() {
+        let executor = || PhasedLaneExecutor::new::<()>(1.0, 0).unwrap();
+        assert!(executor()
+            .with_mapping_rate(hz(1, MAX_BUFFERED_BOUNDARIES))
+            .is_ok());
+        assert_eq!(
+            executor()
+                .with_mapping_rate(hz(1, MAX_BUFFERED_BOUNDARIES + 1))
+                .unwrap_err(),
+            TimeError::BacklogTooLong {
+                boundaries: MAX_BUFFERED_BOUNDARIES + 1,
+                limit: MAX_BUFFERED_BOUNDARIES,
+            }
+        );
+        // At 50 Hz boundaries a day-long period is millions of ticks.
+        assert!(matches!(
+            PhasedLaneExecutor::new::<()>(0.02, 0)
+                .unwrap()
+                .with_mapping_rate(hz(1, 86_400)),
+            Err(TimeError::BacklogTooLong { .. })
+        ));
+        assert!(executor().with_mission_rate(hz(1, 86_400)).is_ok());
     }
 }
