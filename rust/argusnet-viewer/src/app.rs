@@ -3280,6 +3280,8 @@ mod scenario_run_tests {
         assert_eq!(progress.fraction(), 1.0);
         assert_eq!(replay["frames"].as_array().unwrap().len() as u64, ticks);
         assert_eq!(replay["meta"]["provenance"]["runtime"], "argusnet-viewer");
+        // A replay the scene builder will take.
+        argusnet_sim::scene_build::validate_replay_document(&replay).unwrap();
     }
 
     /// D5: the viewer runs and builds everything in process. No source file
