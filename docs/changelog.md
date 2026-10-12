@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Follow drones chase their own tracks
+
+- In a `--world-knowledge none` run, follow drones now steer off the run's own
+  fused tracks instead of the targets' true positions. Before the first track
+  they head for where the target was when they were tasked; when a track is
+  dropped they go to where it was last believed to be. `--pursuit truth` brings
+  back the old behaviour for comparison.
+- Over five seeds tracking accuracy is unchanged, follow drones sit closer to
+  their targets on average, and they map 5–7 points more of the world. Their
+  worst moments are worse: when a track wanders off a manoeuvring target, the
+  drone follows it.
+
 ## Unreleased — Save the drones' map as a 3D world
 
 - `argusnet-rs sim --world-knowledge none --export-scene DIR` saves the map

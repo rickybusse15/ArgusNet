@@ -171,6 +171,9 @@ how far its ground is from the truth. `world_contacts` lists any time the map
 led a drone somewhere physics had to correct. See
 `docs/migration/UNKNOWN_WORLD.md`.
 
+Follow drones in such a run chase the run's own fused tracks, not the targets'
+true positions. Add `--pursuit truth` to compare against the old behaviour.
+
 To keep the map, save it as a scene package and open it like any other world:
 
 ```bash

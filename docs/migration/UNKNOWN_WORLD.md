@@ -232,18 +232,60 @@ Tests (`rust/argusnet-sim/tests/world_knowledge.rs`):
   structure counts;
 - the map saves as a scene package that carries its replay, and a prior run
   has nothing to save;
+- follow drones pursue fused tracks and stage 1 never reads truth, while
+  `--pursuit truth` keeps the legacy oracle and differs;
+- a checkpoint does not cross between pursuit sources;
 - a run without stage 8, a bad config, or a run already started is refused.
+
+## Pursuit from fused tracks
+
+Follow controllers in a no-prior run steer off the run's own fused tracks, not
+the targets' true trajectories (`pursuit.rs`, `TrackPursuit`). A track's id is
+its target's id, so each follow drone looks up its target's latest track:
+
+- **A track exists.** The estimate is extrapolated at the track's velocity from
+  the track's timestamp to the time asked, for at most 3 s. Past that it is held
+  where the extrapolation stopped, with zero velocity. Tracks arrive late by the
+  fusion lag (B4), so extrapolation is the usual case.
+- **The tracker dropped the track.** The last estimate is kept, so the drone
+  goes to where the target was last believed to be.
+- **No track yet.** The drone uses a tasking cue: the target's position at the
+  start of the run, held still. This is the operator's report a follow
+  drone is launched with, and it is the only truth the oracle uses.
+
+The run driver hands each committed tick's tracks to the oracle between ticks
+(`AssembledRun::commit_tick`), so its checkpoint holds them and a resumed run
+pursues exactly what an uninterrupted one would. The stage notes say where each
+answer came from ("pursuit read N fused-track estimates and M tasking cues (no
+truth)"). `--pursuit truth` keeps the legacy oracle, to measure what truth was
+worth. A prior run always pursues truth, as before.
+
+The demo scenario has two follow drones (east on Lynx, west on Fox). The table
+compares the two oracles over five seeds (7, 42, 137, 9999, 31415): the mean of
+the per-seed difference, tracks minus truth, ± its standard deviation.
+
+| | No fusion lag | 1.5 s fusion lag |
+|---|---|---|
+| Track RMSE at evidence time | −1.0 ± 4.5 m (truth 17.3 m) | −1.9 ± 3.6 m (truth 17.4 m) |
+| Follow drone to target, median | −18.9 ± 1.5 m (truth 54.0 m) | −4.1 ± 0.9 m (truth 54.0 m) |
+| Follow drone to target, 90th percentile | +12.8 ± 7.0 m (truth 74.6 m) | +53.3 ± 9.9 m (truth 74.6 m) |
+| Bearings from the follow drones | −84 ± 134 (truth 1,284) | −106 ± 87 (truth 1,263) |
+| Map known at 120 s | +5 ± 2 points | +7 ± 2 points |
+| Contacts | 0 | 0 |
+
+Tracking accuracy does not change measurably. With truth, a follow drone holds
+its standoff from the real target. With tracks, it holds it from the estimate,
+so it sits closer on average but follows the track's own error in its worst
+moments. At 1.5 s lag a track can be 170–230 m off a manoeuvring target for a
+few seconds, and the drone goes with it. Turning the extrapolation off made
+following worse (at 1.5 s lag, mean distance 86 m against 71 m) and raised the
+evidence-time RMSE to 22.4 m, so it stays on.
 
 ## What still knows more than it should
 
-This slice removes the terrain and obstacle prior from planning. Three other
-sources of prior knowledge remain, and are named here so they are not
-mistaken for done:
+The terrain and obstacle prior is gone from planning, and so is target truth
+from pursuit. These remain, named so they are not mistaken for done:
 
-- **Target pursuit reads truth.** Follow controllers get target positions from
-  `TablePursuit`, the truth table, in prior and no-prior runs alike. The stage
-  notes say so every tick ("legacy pursuit read N true target states"). The
-  fix is a pursuit oracle over the previous tick's fused tracks.
 - **The bundle builder used the true world.** Search lanes were pushed out of
   true obstacles, follow routes planned around them, and POIs placed at true
   heights, all before the run starts. In a no-prior run these are mission
@@ -257,6 +299,13 @@ mistaken for done:
   belief's known fraction, so a scan mission completes on the old measure.
   The natural next step is to drive the scan phase from the belief, and send
   idle platforms to frontier cells (known ground bordering unknown).
+- **Follow targets are checked against the truth table at setup.** Assembly
+  confirms each follow target exists (`scenario.rs`, `operational`). It is a
+  bundle validity check, not a position read, but it is a truth read.
+- **Localization particles start at the true position.** Stage 8's particle
+  localizer centres its draws on each platform's true position. That is ego
+  truth plus noise, the localizer's own model, and it is separate from the
+  world map. It matters once positioning is degraded (F2).
 
 The structure classes are exact, and vegetation returns are dropped. A
 segmentation error model and canopy handling come later.

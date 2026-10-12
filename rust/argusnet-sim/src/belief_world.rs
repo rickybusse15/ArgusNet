@@ -83,6 +83,22 @@ pub struct ExplorationConfig {
     /// keeps a platform.
     pub contact_clearance_m: f64,
     pub scan: RangeScanConfig,
+    /// Where follow controllers learn a target's position: the run's own
+    /// fused tracks (the default), or the legacy truth oracle, kept to
+    /// measure what the truth was worth.
+    #[serde(default)]
+    pub pursuit: PursuitSource,
+}
+
+/// The follow controllers' source of target positions in a no-prior run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PursuitSource {
+    /// The run's own fused tracks ([`crate::pursuit::TrackPursuit`]).
+    #[default]
+    Tracks,
+    /// The targets' true trajectories, as in a prior run.
+    Truth,
 }
 
 impl Default for ExplorationConfig {
@@ -95,6 +111,7 @@ impl Default for ExplorationConfig {
             occupied_probability: 0.75,
             contact_clearance_m: 1.0,
             scan: RangeScanConfig::default(),
+            pursuit: PursuitSource::default(),
         }
     }
 }

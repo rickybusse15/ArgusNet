@@ -25,6 +25,7 @@ pub mod observation_follow;
 pub mod observe;
 pub mod overrides;
 pub mod particles;
+pub mod pursuit;
 pub mod range_scan;
 pub mod replay;
 pub mod run_options;

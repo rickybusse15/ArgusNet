@@ -584,6 +584,22 @@ impl TruthTable {
         self.samples.contains_key(target_id)
     }
 
+    /// Each target's position at its earliest sample, in bundle order: the
+    /// tasking cue a follow drone starts from when it pursues fused tracks.
+    pub fn initial_positions(&self) -> Vec<(String, [f64; 3])> {
+        self.order
+            .iter()
+            .filter_map(|id| {
+                let earliest = self
+                    .samples
+                    .get(id)?
+                    .iter()
+                    .min_by(|a, b| f64::from_bits(*a.0).total_cmp(&f64::from_bits(*b.0)))?;
+                Some((id.clone(), earliest.1 .0))
+            })
+            .collect()
+    }
+
     pub fn state(&self, target_id: &str, t: f64) -> Option<([f64; 3], [f64; 3])> {
         self.samples.get(target_id)?.get(&t.to_bits()).copied()
     }
@@ -1681,6 +1697,11 @@ impl AssembledRun {
             handle.clone(),
             FOLLOW_LOS_CLEARANCE_M,
         ));
+        if config.pursuit == crate::belief_world::PursuitSource::Tracks {
+            environment.pursuit = Some(Box::new(crate::pursuit::TrackPursuit::new(
+                self.truth.initial_positions(),
+            )));
+        }
         controllers.set_physical_guard(guard.clone());
 
         let deconflict = self
@@ -1884,6 +1905,14 @@ impl AssembledRun {
     /// Commit the open tick and record its replay frame.
     pub fn commit_tick(&mut self, open: AssembledTick) -> Result<Arc<RuntimeSnapshot>, RunError> {
         let snapshot = self.sim.commit_tick(open.tick).map_err(RunError::Tick)?;
+        // The tick's fused tracks go to stage 1's pursuit oracle now, between
+        // ticks, so a checkpoint taken here holds what the next tick pursues.
+        if let Some(frame) = self.fusion().frame() {
+            self.sim
+                .stage_mut::<ControllerStage>(Stage::SampleControllersAndBattery)
+                .expect("assembly installs stage 1")
+                .observe_tracks(&frame.tracks);
+        }
         self.record_frame(snapshot, open.timestamp_s, open.truths)
     }
 

@@ -71,6 +71,37 @@ pub trait PursuitOracle: Send {
     /// Position and velocity of `target_id` at `timestamp_s`, or `None` for a
     /// target the oracle does not know.
     fn target_state(&self, target_id: &str, timestamp_s: f64) -> Option<([f64; 3], [f64; 3])>;
+
+    /// A committed tick's fused tracks, handed over by the run driver after
+    /// the tick (fusion runs after stage 1), so the next tick pursues them.
+    /// Given between ticks rather than read from the world inside stage 1,
+    /// so the oracle's state at a checkpoint already holds them. The legacy
+    /// truth oracle ignores them.
+    fn observe_tracks(&mut self, _tracks: &[argusnet_types::TrackState]) {}
+
+    /// Whether answers are true target states. The stage note counts truth
+    /// reads as such; an oracle that does not read truth writes its own note.
+    fn reads_truth(&self) -> bool {
+        true
+    }
+
+    /// The oracle's note for this tick, if it has one; clears its counts.
+    fn take_note(&mut self) -> Option<String> {
+        None
+    }
+
+    /// Back to the state at construction.
+    fn reset(&mut self) {}
+
+    /// Oracle state for stage 1's checkpoint; `None` keeps the checkpoint
+    /// exactly as it was before oracles had state.
+    fn checkpoint(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    fn restore(&mut self, _state: &serde_json::Value) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// The world the controllers are lent each tick.
@@ -253,6 +284,10 @@ struct StageOneState {
     controllers: Vec<(String, ControllerState)>,
     /// The battery stage's own checkpoint, when one is chained.
     battery: Option<serde_json::Value>,
+    /// The pursuit oracle's state, when it has any (fused-track pursuit).
+    /// Absent from every legacy checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pursuit: Option<serde_json::Value>,
 }
 
 fn controller_state(controller: &PlatformController) -> ControllerState {
@@ -330,6 +365,21 @@ impl ControllerStage {
     /// The installed environment, to change what the controllers read.
     pub fn environment_mut(&mut self) -> Option<&mut ControllerEnvironment> {
         self.state.environment.as_mut()
+    }
+
+    /// Hand a committed tick's fused tracks to the pursuit oracle. See
+    /// [`PursuitOracle::observe_tracks`].
+    pub fn observe_tracks(&mut self, tracks: &[argusnet_types::TrackState]) {
+        if let Some(pursuit) = self.pursuit_mut() {
+            pursuit.observe_tracks(tracks);
+        }
+    }
+
+    fn pursuit_mut(&mut self) -> Option<&mut Box<dyn PursuitOracle>> {
+        self.state
+            .environment
+            .as_mut()
+            .and_then(|environment| environment.pursuit.as_mut())
     }
 
     /// Keep sampled positions out of the true ground and structures.
@@ -620,14 +670,14 @@ impl ControllerStage {
         let guard = self.guard.as_ref();
         let State {
             controllers,
-            environment,
+            environment: environment_slot,
             nominal,
         } = &mut self.state;
         nominal.clear();
         if controllers.is_empty() {
             return Ok(false);
         }
-        let environment = environment.as_ref().ok_or_else(|| {
+        let environment = environment_slot.as_ref().ok_or_else(|| {
             StageError::Invariant("controllers are installed but no environment is".into())
         })?;
         let log = SampleLog::default();
@@ -650,10 +700,21 @@ impl ControllerStage {
             platform.timestamp_s = timestamp_s;
         }
         let reads = log.pursuit_reads.get();
-        if reads > 0 {
-            context.note(format!(
-                "legacy pursuit read {reads} true target states (truth-fed follow controllers)"
-            ));
+        let pursuit = environment_slot
+            .as_mut()
+            .and_then(|environment| environment.pursuit.as_mut());
+        match pursuit {
+            Some(pursuit) if !pursuit.reads_truth() => {
+                if let Some(note) = pursuit.take_note() {
+                    context.note(note);
+                }
+            }
+            _ if reads > 0 => {
+                context.note(format!(
+                    "legacy pursuit read {reads} true target states (truth-fed follow controllers)"
+                ));
+            }
+            _ => {}
         }
         Ok(true)
     }
@@ -682,6 +743,9 @@ impl StageHandler for ControllerStage {
         if let Some(battery) = self.battery.as_mut() {
             battery.reset();
         }
+        if let Some(pursuit) = self.pursuit_mut() {
+            pursuit.reset();
+        }
     }
 
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
@@ -696,6 +760,12 @@ impl StageHandler for ControllerStage {
                 .battery
                 .as_ref()
                 .and_then(StageHandler::checkpoint_state),
+            pursuit: self
+                .state
+                .environment
+                .as_ref()
+                .and_then(|environment| environment.pursuit.as_ref())
+                .and_then(|pursuit| pursuit.checkpoint()),
         };
         Some(serde_json::to_value(state).expect("stage 1 state serialises"))
     }
@@ -727,6 +797,19 @@ impl StageHandler for ControllerStage {
                     });
                 }
             }
+        }
+        let has_pursuit_state = self
+            .state
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.pursuit.as_ref())
+            .is_some_and(|pursuit| pursuit.checkpoint().is_some());
+        if has_pursuit_state != decoded.pursuit.is_some() {
+            return Err(StageStateError::Malformed {
+                detail: "the checkpoint and this run disagree on how follow controllers pursue \
+                         (truth or fused tracks)"
+                    .into(),
+            });
         }
         match (&self.battery, &decoded.battery) {
             (Some(battery), Some(saved)) => battery.check_state(saved),
@@ -767,6 +850,11 @@ impl StageHandler for ControllerStage {
         }
         if let (Some(battery), Some(saved)) = (self.battery.as_mut(), decoded.battery.as_ref()) {
             battery.restore_state(saved)?;
+        }
+        if let (Some(pursuit), Some(saved)) = (self.pursuit_mut(), decoded.pursuit.as_ref()) {
+            pursuit
+                .restore(saved)
+                .map_err(|detail| StageStateError::Malformed { detail })?;
         }
         Ok(())
     }

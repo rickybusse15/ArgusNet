@@ -133,6 +133,11 @@ struct SimArgs {
     /// map it themselves with range scanners and plan only on that map).
     #[arg(long, value_enum, default_value = "prior")]
     world_knowledge: WorldKnowledgeArg,
+    /// In a `--world-knowledge none` run, where follow controllers learn a
+    /// target's position: `tracks` (the run's own fused tracks, the default)
+    /// or `truth` (the legacy oracle, to measure what truth was worth).
+    #[arg(long, value_enum)]
+    pursuit: Option<PursuitArg>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -209,6 +214,13 @@ pub(crate) const EXIT_CRASHED: i32 = 4;
 const EXIT_INVALID: u8 = 2;
 const EXIT_UNSUPPORTED: u8 = 3;
 
+/// `--pursuit`'s values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum PursuitArg {
+    Tracks,
+    Truth,
+}
+
 /// `--world-knowledge`'s values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum WorldKnowledgeArg {
@@ -249,7 +261,15 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             WorldKnowledgeArg::Prior => argusnet_sim::belief_world::WorldKnowledge::Prior,
             WorldKnowledgeArg::None => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
         },
-        exploration: None,
+        exploration: args
+            .pursuit
+            .map(|pursuit| argusnet_sim::belief_world::ExplorationConfig {
+                pursuit: match pursuit {
+                    PursuitArg::Tracks => argusnet_sim::belief_world::PursuitSource::Tracks,
+                    PursuitArg::Truth => argusnet_sim::belief_world::PursuitSource::Truth,
+                },
+                ..Default::default()
+            }),
     })
 }
 
@@ -423,6 +443,13 @@ fn build(args: BuildArgs) -> ExitCode {
 
 fn sim(args: SimArgs) -> ExitCode {
     let started = Instant::now();
+    if args.pursuit.is_some() && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
+        return fail(
+            EXIT_INVALID,
+            "--pursuit chooses how a --world-knowledge none run pursues targets; \
+             a prior run always pursues the true targets",
+        );
+    }
     if let Some(dir) = &args.export_scene {
         if matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
             return fail(
