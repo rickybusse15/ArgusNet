@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -45,10 +47,12 @@ use crate::ui::viewer_ui_system;
 #[derive(Component)]
 struct ReconstructionMeshMarker;
 
-/// Active simulation subprocess — inserted as a resource while running.
+/// A Tools → Scenario run in progress -- inserted as a resource while it
+/// runs. The Rust simulation runs on its own thread (D5): no Python child.
 #[derive(Resource)]
 struct SimulationProcess {
-    child: Child,
+    worker: Option<JoinHandle<Result<(), String>>>,
+    progress: Arc<RunProgress>,
     phase: SimPhase,
     replay_path: PathBuf,
     next_scene_root: PathBuf,
@@ -2197,7 +2201,8 @@ fn draw_egress_paths_system(
     }
 }
 
-/// Spawns a Python simulation subprocess when the user clicks "Run Simulation".
+/// Starts the Rust simulation on its own thread when the user clicks "Run
+/// Simulation" (D5).
 // Re-simulation is a three-stage pipeline: simulate replay, rebuild a synthetic scene
 // package, then hot-swap the viewer resources/entities to the rebuilt package.
 fn spawn_simulation_system(
@@ -2227,101 +2232,135 @@ fn spawn_simulation_system(
         working_scene_root.revision.saturating_add(1)
     ));
     let next_scene_root = working_scene_root.next_scene_root();
-    let python = simulation_python();
-    let child = spawn_simulation_child(&python, &sim_runner, &replay_path);
-
-    match child {
-        Ok(child) => {
+    let config = match scenario_config(&sim_runner) {
+        Ok(config) => config,
+        Err(err) => {
+            sim_runner.fail(format!("Cannot run this scenario: {err}"));
+            return;
+        }
+    };
+    let progress = Arc::new(RunProgress::default());
+    let worker = {
+        let progress = Arc::clone(&progress);
+        let replay_path = replay_path.clone();
+        std::thread::Builder::new()
+            .name("argusnet-scenario-run".into())
+            .spawn(move || simulate_to_replay(&config, &replay_path, &progress))
+    };
+    match worker {
+        Ok(worker) => {
             commands.insert_resource(SimulationProcess {
-                child,
+                worker: Some(worker),
+                progress,
                 phase: SimPhase::Simulating,
                 replay_path,
                 next_scene_root,
             });
         }
         Err(err) => {
-            sim_runner.fail(format!("Failed to spawn simulation: {err}"));
+            sim_runner.fail(format!("Failed to start simulation: {err}"));
         }
     }
 }
 
-fn simulation_python() -> String {
-    if let Ok(p) = std::env::var("ARGUSNET_PYTHON") {
-        return p;
-    }
-    // Legacy env var name kept for backward compatibility.
-    if let Ok(p) = std::env::var("SMART_TRACKER_PYTHON") {
-        return p;
-    }
-    // Probe common conda/miniforge installations before falling back to system python3.
-    let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = [
-        format!("{}/miniforge3/bin/python3", home),
-        format!("{}/mambaforge/bin/python3", home),
-        format!("{}/miniconda3/bin/python3", home),
-        format!("{}/anaconda3/bin/python3", home),
-        format!("{}/opt/miniconda3/bin/python3", home),
-    ];
-    for candidate in &candidates {
-        if std::path::Path::new(candidate).exists() {
-            return candidate.clone();
-        }
-    }
-    "python3".to_string()
+/// How far a Tools → Scenario run has got: ticks run of the ticks it has.
+/// The total is 0 until the scenario is built.
+#[derive(Default)]
+struct RunProgress {
+    ticks: AtomicU64,
+    total: AtomicU64,
 }
 
-fn spawn_simulation_child(
-    python: &str,
-    sim_runner: &SimulationRunner,
-    replay_path: &Path,
-) -> Result<Child> {
-    let mut args = vec![
-        "-m".to_string(),
-        "argusnet".to_string(),
-        "sim".to_string(),
-        "--map-preset".to_string(),
-        sim_runner.map_preset.clone(),
-        "--terrain-preset".to_string(),
-        sim_runner.terrain_preset.clone(),
-        "--platform-preset".to_string(),
-        sim_runner.platform_preset.clone(),
-        "--mission-mode".to_string(),
-        sim_runner.mission_mode.clone(),
-        "--drone-count".to_string(),
-        sim_runner.drone_count.to_string(),
-        "--ground-stations".to_string(),
-        sim_runner.ground_stations.to_string(),
-        "--duration-s".to_string(),
-        sim_runner.duration_s.to_string(),
-        "--seed".to_string(),
-        sim_runner.seed.to_string(),
-        "--replay".to_string(),
-        replay_path.to_string_lossy().into_owned(),
-    ];
-    if sim_runner.clean_terrain {
-        args.push("--clean-terrain".to_string());
+impl RunProgress {
+    fn fraction(&self) -> f32 {
+        let total = self.total.load(Ordering::Relaxed);
+        if total == 0 {
+            return 0.0;
+        }
+        (self.ticks.load(Ordering::Relaxed) as f64 / total as f64).clamp(0.0, 1.0) as f32
     }
-    if sim_runner.mission_mode == "scan_map_inspect" {
-        args.push("--scan-threshold".to_string());
-        args.push(format!("{:.2}", sim_runner.scan_coverage_threshold));
-        args.push("--poi-count".to_string());
-        args.push(sim_runner.poi_count.to_string());
+}
+
+/// The `argusnet.scenario-config` the Tools → Scenario panel describes: the
+/// options `python -m argusnet sim` was given, flag for flag, so the run is
+/// the one that command made. Values the panel holds as `f32` go through
+/// their decimal text, as they did on the command line.
+fn scenario_config(
+    runner: &SimulationRunner,
+) -> Result<argusnet_sim::builder::ScenarioConfig, String> {
+    use argusnet_sim::builder::{ScenarioConfig, CONFIG_FORMAT, CONFIG_VERSION};
+    let decimal = |text: String| text.parse::<f64>().map_err(|error| error.to_string());
+    let seed = u32::try_from(runner.seed)
+        .map_err(|_| format!("seed {} is outside 0..={}", runner.seed, u32::MAX))?;
+    let mut options = serde_json::json!({
+        "map_preset": runner.map_preset,
+        "terrain_preset": runner.terrain_preset,
+        "platform_preset": runner.platform_preset,
+        "mission_mode": runner.mission_mode,
+        "drone_count": runner.drone_count,
+        "ground_station_count": runner.ground_stations,
+        "clean_terrain": runner.clean_terrain,
+    });
+    if runner.mission_mode == "scan_map_inspect" {
+        options["scan_coverage_threshold"] =
+            decimal(format!("{:.2}", runner.scan_coverage_threshold))?.into();
+        options["poi_count"] = runner.poi_count.into();
     } else {
-        // target_tracking: pass target-centric args
-        args.push("--target-motion".to_string());
-        args.push(sim_runner.target_motion.clone());
-        args.push("--drone-mode".to_string());
-        args.push(sim_runner.drone_mode.clone());
-        args.push("--target-count".to_string());
-        args.push(sim_runner.target_count.to_string());
+        options["target_motion_preset"] = runner.target_motion.clone().into();
+        options["drone_mode_preset"] = runner.drone_mode.clone().into();
+        options["target_count"] = runner.target_count.into();
     }
+    let config = serde_json::json!({
+        "format": CONFIG_FORMAT,
+        "version": CONFIG_VERSION,
+        "seed": seed,
+        "duration_s": decimal(runner.duration_s.to_string())?,
+        "options": options,
+    });
+    ScenarioConfig::from_json(&config.to_string()).map_err(|error| error.to_string())
+}
 
-    std::process::Command::new(python)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to spawn argusnet sim")
+/// Build `config`, run it to completion and write its replay to
+/// `replay_path`: what `argusnet-rs sim --config <config> --replay <path>`
+/// does, on this thread.
+fn simulate_to_replay(
+    config: &argusnet_sim::builder::ScenarioConfig,
+    replay_path: &Path,
+    progress: &RunProgress,
+) -> Result<(), String> {
+    use argusnet_sim::scenario::{assemble, RunError, ScenarioBundle};
+    use argusnet_sim::simulation::TickError;
+    let built = argusnet_sim::builder::build_bundle(config).map_err(|error| error.to_string())?;
+    let bundle =
+        ScenarioBundle::from_json(&built.to_string()).map_err(|error| error.to_string())?;
+    let mut run = assemble(&bundle).map_err(|error| error.to_string())?;
+    // The CLI's defaults: a prior world, no delivery lag, no faults.
+    argusnet_sim::run_options::RunOptions::default().apply(&mut run, &bundle)?;
+    run.extend_replay_meta([(
+        "provenance".to_string(),
+        serde_json::json!({
+            "runtime": "argusnet-viewer",
+            "version": env!("CARGO_PKG_VERSION"),
+            "bundle_format": bundle.format,
+            "bundle_version": bundle.version,
+            "input": "config",
+            "config": serde_json::to_value(config).ok(),
+        }),
+    )]);
+    progress.total.store(bundle.steps, Ordering::Relaxed);
+    loop {
+        match run.step() {
+            Ok(_) => {
+                progress.ticks.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(RunError::Tick(TickError::Completed { .. })) => break,
+            Err(error @ RunError::Tick(_)) => return Err(error.to_string()),
+            Err(error) => return Err(format!("tick {}: {error}", run.sim.tick())),
+        }
+    }
+    let replay = run.run_to_replay().map_err(|error| error.to_string())?;
+    let json = argusnet_sim::replay::to_json(&replay).map_err(|error| error.to_string())?;
+    fs::write(replay_path, json).map_err(|error| format!("{}: {error}", replay_path.display()))
 }
 
 /// Build the scene package for `replay_path` into `output_root`, replacing
@@ -2346,25 +2385,7 @@ fn build_scene_from_replay_file(replay_path: &Path, output_root: &Path) -> Resul
     Ok(())
 }
 
-fn read_process_error(child: &mut Child, fallback: &str) -> String {
-    let stderr_msg = child
-        .stderr
-        .take()
-        .and_then(|mut stderr| {
-            use std::io::Read;
-            let mut buf = String::new();
-            stderr.read_to_string(&mut buf).ok()?;
-            Some(buf)
-        })
-        .unwrap_or_else(|| fallback.to_string());
-    if stderr_msg.len() > 280 {
-        format!("...{}", &stderr_msg[stderr_msg.len() - 280..])
-    } else {
-        stderr_msg
-    }
-}
-
-/// Polls the running simulation subprocess and rebuilds/reloads the scene when done.
+/// Polls the running simulation and rebuilds/reloads the scene when it is done.
 #[allow(clippy::too_many_arguments)]
 fn poll_simulation_system(
     mut commands: Commands,
@@ -2386,84 +2407,53 @@ fn poll_simulation_system(
         return;
     };
 
-    match process.child.try_wait() {
-        Ok(Some(status)) => {
-            if status.success() {
-                // The scene is built in process from the replay the
-                // simulation wrote (`argusnet_sim::scene_build`, D2): no
-                // second Python child.
-                let ready = match process.phase {
-                    SimPhase::Simulating => {
-                        sim_runner.set_phase(SimPhase::BuildingScene, 0.55);
-                        match build_scene_from_replay_file(
-                            &process.replay_path,
-                            &process.next_scene_root,
-                        ) {
-                            Ok(()) => true,
-                            Err(err) => {
-                                sim_runner.fail(format!("Failed to build rebuilt scene: {err}"));
-                                commands.remove_resource::<SimulationProcess>();
-                                false
-                            }
-                        }
-                    }
-                    _ => {
-                        sim_runner.fail("Simulation entered an unexpected process phase.");
-                        commands.remove_resource::<SimulationProcess>();
-                        false
-                    }
-                };
-                if ready {
-                    sim_runner.set_phase(SimPhase::ReloadingScene, 0.92);
-                    let reload_result = reload_rebuilt_scene(
-                        &mut commands,
-                        asset_server.as_ref(),
-                        &mut camera_query,
-                        &mut working_scene_root,
-                        &mut scene_package,
-                        &mut replay_state,
-                        &mut mission_zones,
-                        &mut layer_visibility,
-                        &mut layer_entities,
-                        &mut selection,
-                        &mut frame_metrics,
-                        &process.next_scene_root,
-                    );
-                    match reload_result {
-                        Ok(()) => {
-                            reconstruction.reset();
-                            sim_runner.finish();
-                        }
-                        Err(err) => sim_runner.fail(err.to_string()),
-                    }
-                    commands.remove_resource::<SimulationProcess>();
-                }
-            } else {
-                let message = match process.phase {
-                    SimPhase::Simulating => "Simulation failed",
-                    SimPhase::BuildingScene => "Scene build failed",
-                    _ => "Process failed",
-                };
-                sim_runner.fail(read_process_error(&mut process.child, message));
-                commands.remove_resource::<SimulationProcess>();
-            }
+    if !process.worker.as_ref().is_some_and(JoinHandle::is_finished) {
+        if process.phase == SimPhase::Simulating {
+            sim_runner.set_phase(SimPhase::Simulating, 0.48 * process.progress.fraction());
         }
-        Ok(None) => match process.phase {
-            SimPhase::Simulating => {
-                let next_progress = (sim_runner.progress + 0.01).clamp(0.0, 0.48);
-                sim_runner.set_phase(SimPhase::Simulating, next_progress);
-            }
-            SimPhase::BuildingScene => {
-                let next_progress = (sim_runner.progress + 0.01).clamp(0.55, 0.88);
-                sim_runner.set_phase(SimPhase::BuildingScene, next_progress);
-            }
-            _ => {}
-        },
-        Err(err) => {
-            sim_runner.fail(format!("Process error: {err}"));
-            commands.remove_resource::<SimulationProcess>();
-        }
+        return;
     }
+    let outcome = match process.worker.take().map(JoinHandle::join) {
+        Some(Ok(outcome)) => outcome,
+        Some(Err(_)) => Err("the simulation thread panicked".to_string()),
+        None => Err("the simulation is not running".to_string()),
+    };
+    if let Err(err) = outcome {
+        sim_runner.fail(format!("Simulation failed: {err}"));
+        commands.remove_resource::<SimulationProcess>();
+        return;
+    }
+    // The scene is built in process from the replay the simulation wrote
+    // (`argusnet_sim::scene_build`, D2).
+    sim_runner.set_phase(SimPhase::BuildingScene, 0.55);
+    if let Err(err) = build_scene_from_replay_file(&process.replay_path, &process.next_scene_root) {
+        sim_runner.fail(format!("Failed to build rebuilt scene: {err}"));
+        commands.remove_resource::<SimulationProcess>();
+        return;
+    }
+    sim_runner.set_phase(SimPhase::ReloadingScene, 0.92);
+    let reload_result = reload_rebuilt_scene(
+        &mut commands,
+        asset_server.as_ref(),
+        &mut camera_query,
+        &mut working_scene_root,
+        &mut scene_package,
+        &mut replay_state,
+        &mut mission_zones,
+        &mut layer_visibility,
+        &mut layer_entities,
+        &mut selection,
+        &mut frame_metrics,
+        &process.next_scene_root,
+    );
+    match reload_result {
+        Ok(()) => {
+            reconstruction.reset();
+            sim_runner.finish();
+        }
+        Err(err) => sim_runner.fail(err.to_string()),
+    }
+    commands.remove_resource::<SimulationProcess>();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3184,6 +3174,134 @@ mod overlay_gating_tests {
             ..Default::default()
         });
         assert!(run_condition(poi_markers_enabled, &mut world));
+    }
+}
+
+#[cfg(test)]
+mod scenario_run_tests {
+    use super::*;
+    use argusnet_sim::builder::ScenarioConfig;
+
+    fn config(json: serde_json::Value) -> ScenarioConfig {
+        ScenarioConfig::from_json(&json.to_string()).unwrap()
+    }
+
+    #[test]
+    fn the_panel_describes_the_run_python_was_asked_for() {
+        let runner = SimulationRunner {
+            scan_coverage_threshold: 0.7,
+            duration_s: 90.5,
+            ..Default::default()
+        };
+        // `python -m argusnet sim` was given the scan flags only; the target
+        // options keep their defaults.
+        assert_eq!(
+            scenario_config(&runner).unwrap(),
+            config(serde_json::json!({
+                "format": "argusnet.scenario-config",
+                "version": 1,
+                "seed": 7,
+                "duration_s": 90.5,
+                "options": {
+                    "map_preset": "regional",
+                    "terrain_preset": "military_compound",
+                    "platform_preset": "baseline",
+                    "mission_mode": "scan_map_inspect",
+                    "drone_count": 4,
+                    "ground_station_count": 7,
+                    "clean_terrain": false,
+                    "scan_coverage_threshold": 0.7,
+                    "poi_count": 3
+                }
+            }))
+        );
+        // The threshold goes through the `{:.2}` text the flag carried.
+        assert_eq!(
+            scenario_config(&SimulationRunner {
+                scan_coverage_threshold: 0.678,
+                ..Default::default()
+            })
+            .unwrap()
+            .options
+            .scan_coverage_threshold,
+            0.68
+        );
+    }
+
+    #[test]
+    fn a_tracking_run_carries_the_target_options_and_not_the_scan_ones() {
+        let runner = SimulationRunner {
+            mission_mode: "target_tracking".into(),
+            target_motion: "racetrack".into(),
+            drone_mode: "search".into(),
+            target_count: 3,
+            scan_coverage_threshold: 0.4,
+            poi_count: 9,
+            ..Default::default()
+        };
+        let options = scenario_config(&runner).unwrap().options;
+        assert_eq!(options.target_motion_preset, "racetrack");
+        assert_eq!(options.drone_mode_preset, "search");
+        assert_eq!(options.target_count, 3);
+        assert_eq!(options.scan_coverage_threshold, 0.7);
+        assert_eq!(options.poi_count, 3);
+    }
+
+    #[test]
+    fn a_seed_the_simulation_cannot_take_is_refused() {
+        let runner = SimulationRunner {
+            seed: -1,
+            ..Default::default()
+        };
+        assert!(scenario_config(&runner).unwrap_err().contains("seed -1"));
+    }
+
+    #[test]
+    fn the_run_writes_a_replay_of_every_tick_and_reports_its_progress() {
+        let runner = SimulationRunner {
+            map_preset: "small".into(),
+            terrain_preset: "default".into(),
+            drone_count: 1,
+            ground_stations: 2,
+            duration_s: 2.0,
+            ..Default::default()
+        };
+        let config = scenario_config(&runner).unwrap();
+        let path =
+            std::env::temp_dir().join(format!("argusnet-scenario-run-{}.json", std::process::id()));
+        let progress = RunProgress::default();
+        assert_eq!(progress.fraction(), 0.0);
+        simulate_to_replay(&config, &path, &progress).unwrap();
+        let replay: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let _ = fs::remove_file(&path);
+        let ticks = progress.ticks.load(Ordering::Relaxed);
+        assert_eq!(ticks, progress.total.load(Ordering::Relaxed));
+        assert_eq!(progress.fraction(), 1.0);
+        assert_eq!(replay["frames"].as_array().unwrap().len() as u64, ticks);
+        assert_eq!(replay["meta"]["provenance"]["runtime"], "argusnet-viewer");
+    }
+
+    /// D5: the viewer runs and builds everything in process. No source file
+    /// starts a process (Python, Cargo or anything else).
+    #[test]
+    fn the_viewer_starts_no_processes() {
+        let needle = ["process::", "Command"].concat();
+        let mut pending = vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut offenders = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs")
+                    && fs::read_to_string(&path).unwrap().contains(&needle)
+                {
+                    offenders.push(path);
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "{offenders:?} start processes");
     }
 }
 

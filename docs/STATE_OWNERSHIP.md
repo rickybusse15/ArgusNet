@@ -21,7 +21,7 @@ restore (A2), a durable event journal with crash recovery (A4.1), 30-seed
 statistical qualification (A3.2) and the viewer's in-process simulation worker
 (D1.1, D1.2) are merged too. Still open: the independent scheduler (P4.10:
 scheduler not yet wired into `Simulation`, pending-job restore), cross-platform
-determinism (A3.3) and the Python-free scene build (D2/D5). No scheduler or
+determinism (A3.3) and the rest of D5 on the Python side (daemon auto-build on import). The viewer itself runs and builds scenes with no Python (D2, D5). No scheduler or
 aircraft qualification is claimed.
 
 The [Rust-only runtime target](RUST_RUNTIME_ARCHITECTURE.md) now specifies
@@ -68,8 +68,8 @@ Rust mission acceptance must still be checked separately.
 | Fusion | `argusnet-core` | `argusnet-server`, Python gRPC client | Direct Rust simulation call pending |
 | Localization / sensing | `argusnet-localization`, `argusnet-sensing`; deterministic streams in `argusnet-sim` | Port fixtures exist; Python still runs mission orchestration | No broad runtime deletion |
 | Mapping / planning | `argusnet-mapping`, `argusnet-planning` | Native scoring active; other ports await composed tick; belief query facade is not a revisioned mutable owner | Python mission consumers remain |
-| Simulation | `argusnet-sim`: assembled eleven-stage production run (`ProductionBuilder`), `argusnet-rs sim` | Runs every canonical scenario with no Python; the Python tick remains the reference the replays are checked against | Python simulation still ships and is still what the viewer's Tools → Scenario launches |
-| Replay / viewer | `argusnet-replay`, `argusnet-viewer` | Replay, V2 live presentation, and `--run` (D1.2): the Rust run in-process on a worker thread | Scenes are built in Rust (`argusnet_sim::scene_build`, D2); the Tools → Scenario simulation still spawns `python -m argusnet sim` (D5 open) |
+| Simulation | `argusnet-sim`: assembled eleven-stage production run (`ProductionBuilder`), `argusnet-rs sim` | Runs every canonical scenario with no Python; the Python tick remains the reference the replays are checked against | Python simulation still ships as the reference; the viewer no longer launches it |
+| Replay / viewer | `argusnet-replay`, `argusnet-viewer` | Replay, V2 live presentation, and `--run` (D1.2): the Rust run in-process on a worker thread | Scenes are built in Rust (`argusnet_sim::scene_build`, D2) and the Tools → Scenario simulation runs in Rust on a viewer thread (D5): the viewer starts no process |
 
 Evidence: [integration record](migration/P4_INTEGRATION.md),
 [source review](NEXT_REFACTOR_REVIEW.md), and the referenced crates. Historical

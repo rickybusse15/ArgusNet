@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Tools → Scenario runs without Python
+
+- The viewer's Tools → Scenario run now runs the Rust simulation on a thread
+  in the viewer (D5) instead of starting `python -m argusnet sim`. The panel's
+  options become an `argusnet.scenario-config`, flag for flag what the Python
+  command was given, so the run is the one `argusnet-rs sim --config` makes.
+  The progress bar follows the ticks actually run. `ARGUSNET_PYTHON` and
+  `SMART_TRACKER_PYTHON` are no longer read: the viewer starts no process.
+
 ## Unreleased — Scenes without Python
 
 - `argusnet-rs build-scene --replay R --output DIR` builds the same scene
