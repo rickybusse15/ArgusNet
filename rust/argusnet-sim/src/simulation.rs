@@ -1719,14 +1719,26 @@ impl Simulation {
             if !self.lane_rates.contains_key(stage) {
                 continue;
             }
-            if let Some(state) = checkpoint.stage_states.get(&stage.to_string()) {
-                let lag = stage_lag.get(stage).copied().unwrap_or(0);
-                handler
-                    .check_lag(state, lag, checkpoint.tick)
-                    .map_err(|error| RestoreError::StageState {
+            match checkpoint.stage_states.get(&stage.to_string()) {
+                Some(state) => {
+                    let lag = stage_lag.get(stage).copied().unwrap_or(0);
+                    handler
+                        .check_lag(state, lag, checkpoint.tick)
+                        .map_err(|error| RestoreError::StageState {
+                            stage: stage.to_string(),
+                            detail: error.to_string(),
+                        })?;
+                }
+                // A rated stage that holds state must have it in the
+                // checkpoint: restoring would otherwise reset it while keeping
+                // its lag, losing what it built and what it kept.
+                None if handler.checkpoint_state().is_some() => {
+                    return Err(RestoreError::StageState {
                         stage: stage.to_string(),
-                        detail: error.to_string(),
-                    })?;
+                        detail: "a stage at its own rate has no state in the checkpoint".into(),
+                    });
+                }
+                None => {}
             }
         }
         let restored_queue = CommandQueue::from_checkpoint(

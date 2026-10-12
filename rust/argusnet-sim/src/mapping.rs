@@ -2166,7 +2166,8 @@ mod tests {
     }
 
     /// A checkpoint whose kept boundaries disagree with the recorded lag --
-    /// one dropped, one repeated -- is refused, and the run is untouched.
+    /// one dropped, one repeated, or the mapping state missing altogether --
+    /// is refused, and the run is untouched.
     #[test]
     fn kept_boundaries_must_match_the_recorded_lag() {
         let mut sim = buffered_rig();
@@ -2207,6 +2208,12 @@ mod tests {
         assert!(
             fresh.restore(&repeated).is_err(),
             "a repeated boundary was accepted"
+        );
+        let mut missing = checkpoint.clone();
+        missing.stage_states.remove(&name);
+        assert!(
+            fresh.restore(&missing).is_err(),
+            "a missing mapping state was accepted"
         );
         assert_eq!(fresh.tick(), 0, "a refused restore changed the run");
         fresh
