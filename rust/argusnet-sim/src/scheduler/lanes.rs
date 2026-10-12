@@ -328,6 +328,27 @@ impl PhasedLaneExecutor {
 }
 
 /// A schedule as a reader would write it: `3/1 Hz`, `every 250000000 ns`.
+/// A rate as `NUM/DEN` (what `--mission-rate` takes, and what a run directory
+/// and a checkpoint record); other schedules as [`describe`] says them.
+pub fn rate_text(schedule: Schedule) -> String {
+    match schedule {
+        Schedule::Rational { hz_num, hz_den } => format!("{hz_num}/{hz_den}"),
+        other => describe(other),
+    }
+}
+
+/// `NUM/DEN` Hz (or `NUM`, for `NUM/1`), validated as a schedule: the text
+/// `--mission-rate` takes and [`rate_text`] writes.
+pub fn parse_rate(text: &str) -> Result<Schedule, String> {
+    let (num, den) = text.split_once('/').unwrap_or((text, "1"));
+    let parse = |part: &str| {
+        part.trim()
+            .parse::<std::num::NonZeroU64>()
+            .map_err(|_| format!("{text:?} is not NUM/DEN Hz with positive whole numbers"))
+    };
+    Schedule::rational(parse(num)?, parse(den)?).map_err(|error| error.to_string())
+}
+
 pub fn describe(schedule: Schedule) -> String {
     match schedule {
         Schedule::Rational { hz_num, hz_den } => format!("{hz_num}/{hz_den} Hz"),

@@ -147,6 +147,10 @@ struct RunOptionArgs {
     /// the world themselves and the view shows the map they build.
     #[arg(long, value_parser = ["prior", "none"], default_value = "prior", requires = "run")]
     world_knowledge: String,
+    /// Run the mission lane at `NUM/DEN` Hz instead of every tick (B2.4,
+    /// `scheduled_v1`), as `argusnet-rs sim --executor lanes --mission-rate`.
+    #[arg(long, value_parser = argusnet_sim::scheduler::parse_rate, requires = "run")]
+    mission_rate: Option<argusnet_sim::scheduler::Schedule>,
 }
 
 impl RunOptionArgs {
@@ -175,6 +179,7 @@ impl RunOptionArgs {
                 _ => argusnet_sim::belief_world::WorldKnowledge::Prior,
             },
             exploration: None,
+            mission_rate: self.mission_rate,
         })
     }
 }
