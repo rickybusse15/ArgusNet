@@ -98,30 +98,19 @@ def _accessor_bounds(array: np.ndarray) -> tuple[list[float], list[float]]:
     return minimum.astype(float).tolist(), maximum.astype(float).tolist()
 
 
-def write_glb(path: str | Path, mesh: SimpleMesh, *, name: str) -> None:
+def write_glb(path: str | Path, mesh: SimpleMesh | Sequence[SimpleMesh], *, name: str) -> None:
+    """Write one mesh, or one node per part of ``mesh`` when it is a sequence.
+
+    Parts share one material; a viewer draws each node as its own object, so
+    translucent parts (one per building) are depth-sorted against each other.
+    A translucent file gets ``alphaMode: BLEND`` -- glTF ignores vertex alpha
+    otherwise, and BLEND is its only translucent mode, with straight colours
+    -- and is single-sided: its parts are closed solids, so culling their back
+    faces keeps a far wall from blending over a near one.
+    """
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    position_bytes = np.ascontiguousarray(mesh.positions.astype(np.float32)).tobytes(order="C")
-    normal_bytes = np.ascontiguousarray(mesh.normals.astype(np.float32)).tobytes(order="C")
-    color_bytes = np.ascontiguousarray(np.clip(mesh.colors, 0.0, 1.0).astype(np.float32)).tobytes(
-        order="C"
-    )
-    index_bytes = np.ascontiguousarray(mesh.indices.astype(np.uint32)).tobytes(order="C")
-
-    # glTF ignores vertex alpha unless the material blends (OPAQUE is the
-    # default); BLEND is its only translucent mode, with straight colours.
-    material: dict[str, object] = {
-        "name": f"{name}-material",
-        "pbrMetallicRoughness": {
-            "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
-            "metallicFactor": 0.0,
-            "roughnessFactor": 1.0,
-        },
-        "doubleSided": True,
-    }
-    if bool(np.any(mesh.colors[:, 3] < 1.0)):
-        material["alphaMode"] = "BLEND"
+    parts: list[SimpleMesh] = [mesh] if isinstance(mesh, SimpleMesh) else list(mesh)
 
     chunks: list[bytes] = []
     buffer_views = []
@@ -144,65 +133,70 @@ def write_glb(path: str | Path, mesh: SimpleMesh, *, name: str) -> None:
         )
         return len(buffer_views) - 1, len(payload)
 
-    position_view, _ = add_view(position_bytes, target=34962)
-    position_min, position_max = _accessor_bounds(mesh.positions)
-    accessors.append(
-        {
-            "bufferView": position_view,
-            "componentType": 5126,
-            "count": mesh.vertex_count,
-            "type": "VEC3",
-            "min": position_min,
-            "max": position_max,
-        }
-    )
-    position_accessor = len(accessors) - 1
-
-    normal_view, _ = add_view(normal_bytes, target=34962)
-    accessors.append(
-        {
-            "bufferView": normal_view,
-            "componentType": 5126,
-            "count": mesh.vertex_count,
-            "type": "VEC3",
-        }
-    )
-    normal_accessor = len(accessors) - 1
-
-    color_view, _ = add_view(color_bytes, target=34962)
-    accessors.append(
-        {
-            "bufferView": color_view,
-            "componentType": 5126,
-            "count": mesh.vertex_count,
-            "type": "VEC4",
-        }
-    )
-    color_accessor = len(accessors) - 1
-
-    index_view, _ = add_view(index_bytes, target=34963)
-    accessors.append(
-        {
-            "bufferView": index_view,
-            "componentType": 5125,
-            "count": int(mesh.indices.shape[0]),
-            "type": "SCALAR",
-        }
-    )
-    index_accessor = len(accessors) - 1
-
-    gltf = {
-        "asset": {"version": "2.0", "generator": "argusnet.world.scene"},
-        "scene": 0,
-        "scenes": [{"nodes": [0], "name": name}],
-        "nodes": [{"mesh": 0, "name": name}],
-        "buffers": [{"byteLength": offset}],
-        "bufferViews": buffer_views,
-        "accessors": accessors,
-        "materials": [material],
-        "meshes": [
+    meshes = []
+    nodes = []
+    for index, part in enumerate(parts):
+        position_view, _ = add_view(
+            np.ascontiguousarray(part.positions.astype(np.float32)).tobytes(order="C"),
+            target=34962,
+        )
+        position_min, position_max = _accessor_bounds(part.positions)
+        accessors.append(
             {
-                "name": name,
+                "bufferView": position_view,
+                "componentType": 5126,
+                "count": part.vertex_count,
+                "type": "VEC3",
+                "min": position_min,
+                "max": position_max,
+            }
+        )
+        position_accessor = len(accessors) - 1
+        normal_view, _ = add_view(
+            np.ascontiguousarray(part.normals.astype(np.float32)).tobytes(order="C"),
+            target=34962,
+        )
+        accessors.append(
+            {
+                "bufferView": normal_view,
+                "componentType": 5126,
+                "count": part.vertex_count,
+                "type": "VEC3",
+            }
+        )
+        normal_accessor = len(accessors) - 1
+        color_view, _ = add_view(
+            np.ascontiguousarray(np.clip(part.colors, 0.0, 1.0).astype(np.float32)).tobytes(
+                order="C"
+            ),
+            target=34962,
+        )
+        accessors.append(
+            {
+                "bufferView": color_view,
+                "componentType": 5126,
+                "count": part.vertex_count,
+                "type": "VEC4",
+            }
+        )
+        color_accessor = len(accessors) - 1
+        index_view, _ = add_view(
+            np.ascontiguousarray(part.indices.astype(np.uint32)).tobytes(order="C"),
+            target=34963,
+        )
+        accessors.append(
+            {
+                "bufferView": index_view,
+                "componentType": 5125,
+                "count": int(part.indices.shape[0]),
+                "type": "SCALAR",
+            }
+        )
+        index_accessor = len(accessors) - 1
+        part_name = name if len(parts) == 1 else f"{name}-{index}"
+        meshes.append(
+            {
+                "name": part_name,
                 "primitives": [
                     {
                         "attributes": {
@@ -216,7 +210,32 @@ def write_glb(path: str | Path, mesh: SimpleMesh, *, name: str) -> None:
                     }
                 ],
             }
-        ],
+        )
+        nodes.append({"mesh": index, "name": part_name})
+
+    translucent = any(bool(np.any(part.colors[:, 3] < 1.0)) for part in parts)
+    material: dict[str, object] = {
+        "name": f"{name}-material",
+        "pbrMetallicRoughness": {
+            "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+            "metallicFactor": 0.0,
+            "roughnessFactor": 1.0,
+        },
+        "doubleSided": not translucent,
+    }
+    if translucent:
+        material["alphaMode"] = "BLEND"
+
+    gltf = {
+        "asset": {"version": "2.0", "generator": "argusnet.world.scene"},
+        "scene": 0,
+        "scenes": [{"nodes": list(range(len(parts))), "name": name}],
+        "nodes": nodes,
+        "buffers": [{"byteLength": offset}],
+        "bufferViews": buffer_views,
+        "accessors": accessors,
+        "materials": [material],
+        "meshes": meshes,
     }
 
     json_chunk = _byte_align(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), pad=b" ")

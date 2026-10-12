@@ -459,6 +459,7 @@ def _build_obstacle_meshes(
             semantic_kind=str(style[layer_id]["semantic_kind"]),
             mesh=merge_meshes(meshes),
             style_id=layer_id,
+            parts=tuple(meshes),
         )
         for layer_id, meshes in grouped.items()
     ]

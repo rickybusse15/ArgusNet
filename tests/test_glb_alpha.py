@@ -35,3 +35,16 @@ def test_a_translucent_mesh_blends_and_an_opaque_one_does_not(tmp_path: Path) ->
     write_glb(tmp_path / "opaque.glb", _triangle(1.0), name="terrain-base")
     assert _material(tmp_path / "blend.glb")["alphaMode"] == "BLEND"
     assert "alphaMode" not in _material(tmp_path / "opaque.glb")
+    # Blended faces are culled from behind; opaque meshes keep both faces.
+    assert _material(tmp_path / "blend.glb")["doubleSided"] is False
+    assert _material(tmp_path / "opaque.glb")["doubleSided"] is True
+
+
+def test_each_part_is_its_own_node(tmp_path: Path) -> None:
+    write_glb(tmp_path / "parts.glb", [_triangle(0.45), _triangle(0.45)], name="buildings")
+    data = (tmp_path / "parts.glb").read_bytes()
+    (json_length,) = struct.unpack_from("<I", data, 12)
+    document = json.loads(data[20 : 20 + json_length])
+    assert len(document["meshes"]) == 2
+    assert [node["name"] for node in document["nodes"]] == ["buildings-0", "buildings-1"]
+    assert document["scenes"][0]["nodes"] == [0, 1]

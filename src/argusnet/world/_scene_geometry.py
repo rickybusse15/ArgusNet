@@ -17,6 +17,9 @@ class SceneLayerMesh:
     semantic_kind: str
     mesh: SimpleMesh
     style_id: str | None = None
+    # One mesh per object (building, wall, stand), written as separate glTF
+    # nodes so the viewer depth-sorts them; empty writes `mesh` whole.
+    parts: tuple[SimpleMesh, ...] = ()
 
 
 def normalize(vector: np.ndarray) -> np.ndarray:
@@ -358,12 +361,15 @@ def mesh_from_extrusion(
             indices=roof_indices,
         )
 
+    # Outward for a counter-clockwise footprint, so a clockwise one is walked
+    # backwards: outward walls let a translucent layer cull back faces.
+    ccw = footprint[::-1] if polygon_area(footprint) < 0.0 else footprint
     wall_positions: list[list[float]] = []
     wall_indices: list[int] = []
-    for index in range(len(footprint)):
-        next_index = (index + 1) % len(footprint)
-        start = footprint[index]
-        end = footprint[next_index]
+    for index in range(len(ccw)):
+        next_index = (index + 1) % len(ccw)
+        start = ccw[index]
+        end = ccw[next_index]
         base = len(wall_positions)
         wall_positions.extend(
             [
@@ -499,7 +505,8 @@ def write_scene_layers(
         relative_path = (
             Path("terrain") if semantic_kind == "terrain" else Path("overlays")
         ) / f"{layer_id}.glb"
-        write_glb(output_dir / relative_path, mesh, name=layer_id)
+        parts = [part for part in layer.parts if part.vertex_count and part.indices.size]
+        write_glb(output_dir / relative_path, parts or mesh, name=layer_id)
         manifest_layers.append(
             {
                 "id": layer_id,

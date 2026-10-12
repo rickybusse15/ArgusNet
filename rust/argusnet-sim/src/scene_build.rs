@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::belief_mesh::MeshData;
-use crate::scene_export::write_glb;
+use crate::scene_export::write_glb_parts;
 
 /// The top of an obstacle is at least this far above the highest terrain
 /// under it (`GROUND_CONTACT_TOP_PAD_M`).
@@ -409,8 +409,13 @@ pub fn extrusion_mesh(
         mesh.indices.extend(roof);
     }
     // `[sb, eb, et]` per edge, as the Python builder writes it: outward for
-    // a counter-clockwise footprint.
-    let ccw = footprint;
+    // a counter-clockwise footprint, so a clockwise one is walked backwards.
+    // Outward walls are what lets a translucent layer cull back faces.
+    let ccw: Vec<[f64; 2]> = if polygon_area(footprint) < 0.0 {
+        footprint.iter().rev().copied().collect()
+    } else {
+        footprint.to_vec()
+    };
     let wall_start = mesh.positions.len();
     let mut wall_positions = Vec::new();
     let mut wall_indices = Vec::new();
@@ -433,19 +438,6 @@ pub fn extrusion_mesh(
     mesh.indices
         .extend(wall_indices.into_iter().map(|i| i + wall_start as u32));
     mesh
-}
-
-fn merge(meshes: Vec<MeshData>) -> MeshData {
-    let mut out = MeshData::default();
-    for mesh in meshes {
-        let offset = out.positions.len() as u32;
-        out.positions.extend(mesh.positions);
-        out.normals.extend(mesh.normals);
-        out.colours.extend(mesh.colours);
-        out.indices
-            .extend(mesh.indices.into_iter().map(|i| i + offset));
-    }
-    out
 }
 
 /// A style entry from `_scene_style.default_style`, for the ids a built scene
@@ -527,7 +519,7 @@ fn solid_elevations(object: &Value, min_terrain: f64, max_terrain: f64) -> (f64,
 pub fn obstacle_layers(
     objects: &[Value],
     grid: &HeightGrid,
-) -> Result<Vec<(String, MeshData)>, String> {
+) -> Result<Vec<(String, Vec<MeshData>)>, String> {
     let mut layers: Vec<(String, Vec<MeshData>)> = Vec::new();
     for object in objects {
         let blocker = object
@@ -587,10 +579,12 @@ pub fn obstacle_layers(
             None => layers.push((layer.to_string(), vec![mesh])),
         }
     }
-    Ok(layers
-        .into_iter()
-        .map(|(id, meshes)| (id, merge(meshes)))
-        .collect())
+    // One part per obstacle, kept apart: each is written as its own glTF
+    // node, so the viewer depth-sorts translucent buildings one by one.
+    for (_, meshes) in &mut layers {
+        meshes.retain(|mesh| !mesh.is_empty());
+    }
+    Ok(layers)
 }
 
 /// `_normalize_scene_id`.
@@ -734,7 +728,7 @@ pub fn build_scene(
         "z_datum": "local",
     });
 
-    let mut layers = vec![("terrain-base".to_string(), terrain_mesh(&grid))];
+    let mut layers = vec![("terrain-base".to_string(), vec![terrain_mesh(&grid)])];
     layers.extend(obstacle_layers(&objects, &grid)?);
 
     let mkdir = |path: PathBuf| {
@@ -744,8 +738,9 @@ pub fn build_scene(
     let mut manifest_layers = Vec::new();
     let mut written = Vec::new();
     let mut triangles = 0;
-    for (id, mesh) in &layers {
-        if mesh.is_empty() {
+    for (id, parts) in &layers {
+        let parts: Vec<&MeshData> = parts.iter().filter(|mesh| !mesh.is_empty()).collect();
+        if parts.is_empty() {
             continue;
         }
         let terrain_layer = id == "terrain-base";
@@ -754,7 +749,7 @@ pub fn build_scene(
             if terrain_layer { "terrain" } else { "overlays" }
         );
         mkdir(dir.join(if terrain_layer { "terrain" } else { "overlays" }))?;
-        write_glb(&dir.join(&relative), mesh, id)?;
+        write_glb_parts(&dir.join(&relative), &parts, id)?;
         let semantic_kind = style(id).expect("a known style id")["semantic_kind"].clone();
         manifest_layers.push(json!({
             "id": id,
@@ -764,7 +759,10 @@ pub fn build_scene(
             "style_id": id,
         }));
         written.push(id.clone());
-        triangles += mesh.indices.len() / 3;
+        triangles += parts
+            .iter()
+            .map(|mesh| mesh.indices.len() / 3)
+            .sum::<usize>();
     }
 
     let replay_path = match replay_json {
@@ -922,13 +920,47 @@ mod tests {
     }
 
     #[test]
+    fn a_clockwise_footprint_still_gets_outward_walls() {
+        // Translucent layers cull back faces, so a wall facing in would vanish
+        // from outside.
+        let cw = [[0.0, 0.0], [0.0, 10.0], [10.0, 10.0], [10.0, 0.0]];
+        let mesh = extrusion_mesh(&cw, 0.0, 5.0, [1.0, 1.0, 1.0, 0.5]);
+        let mut walls = 0;
+        for triangle in mesh.indices.chunks(3) {
+            let [a, b, c] = [0, 1, 2].map(|i| mesh.positions[triangle[i] as usize]);
+            let (u, v) = (
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            );
+            let face = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            if face[2].abs() > 1e-6 {
+                continue;
+            }
+            walls += 1;
+            let centre = [
+                (a[0] + b[0] + c[0]) / 3.0 - 5.0,
+                (a[1] + b[1] + c[1]) / 3.0 - 5.0,
+            ];
+            assert!(
+                face[0] * centre[0] + face[1] * centre[1] > 0.0,
+                "{triangle:?} faces in"
+            );
+        }
+        assert_eq!(walls, 8);
+    }
+
+    #[test]
     fn obstacles_reach_the_ground_and_clear_it_and_ccw_walls_face_out() {
         let meta = meta();
         let grid = HeightGrid::from_viewer_mesh(&meta["terrain"]["viewer_mesh"]).unwrap();
         let layers = obstacle_layers(meta["occluding_objects"].as_array().unwrap(), &grid).unwrap();
         let ids: Vec<&str> = layers.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(ids, ["buildings", "vegetation"]);
-        let building = &layers[0].1;
+        let building = &layers[0].1[0];
         let zs: Vec<f32> = building.positions.iter().map(|p| p[2]).collect();
         let (lo, hi) = (
             zs.iter().copied().fold(f32::MAX, f32::min),
@@ -945,7 +977,7 @@ mod tests {
                 "a wall faces in at {p:?}"
             );
         }
-        let vegetation = &layers[1].1;
+        let vegetation = &layers[1].1[0];
         let top = vegetation
             .positions
             .iter()

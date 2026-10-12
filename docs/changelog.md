@@ -7,8 +7,12 @@
   colours, but their material had no `alphaMode`, so glTF's default `OPAQUE`
   drew them solid. Both GLB writers (`scene_export.rs`, `_glb.py`) now write
   `alphaMode: BLEND` for a mesh with any translucent colour, and leave opaque
-  meshes as they were. A GPU probe checks the roof of a built building against
-  the same building drawn opaque.
+  meshes as they were. Blending draws without depth writes, so each overlay
+  object is its own glTF mesh and node (the viewer sorts them back to front),
+  and translucent materials are single-sided with clockwise footprints'
+  walls reversed to face out, so a building's far wall never draws over its
+  near one. A GPU probe checks the roof of a built building against the same
+  building drawn opaque.
 
 - Plans: [PLANNING_EFFICIENCY_PLAN.md](PLANNING_EFFICIENCY_PLAN.md) (fleet-wide
   allocation, reserve-feasible return home, runtime obstacle-aware routing,
