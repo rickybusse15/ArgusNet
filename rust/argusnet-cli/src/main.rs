@@ -242,7 +242,9 @@ enum Executor {
 /// The scheduler driving the run, if any.
 enum Driver {
     Compound(LegacyLaneExecutor),
-    Lanes(PhasedLaneExecutor),
+    // Boxed: the lanes executor carries a rate per lane, and the enum
+    // would otherwise be sized for it whichever driver runs.
+    Lanes(Box<PhasedLaneExecutor>),
 }
 
 const EXIT_FAULT: u8 = 1;
@@ -734,7 +736,7 @@ fn sim(args: SimArgs) -> ExitCode {
         }
         Executor::Lanes => match PhasedLaneExecutor::new::<RunError>(bundle.dt_s, run.sim.tick()) {
             Ok(executor) => match lane_rates.apply(executor) {
-                Ok(executor) => Some(Driver::Lanes(executor)),
+                Ok(executor) => Some(Driver::Lanes(Box::new(executor))),
                 Err(error) => return fail(EXIT_INVALID, error),
             },
             Err(error) => return fail(EXIT_INVALID, error),
