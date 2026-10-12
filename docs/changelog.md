@@ -2,6 +2,14 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Plans: [PLANNING_EFFICIENCY_PLAN.md](PLANNING_EFFICIENCY_PLAN.md) (fleet-wide
+  allocation, reserve-feasible return home, runtime obstacle-aware routing,
+  rebalancing coverage, coordination over delayed links) and
+  [WORLD_REALISM_PLAN.md](WORLD_REALISM_PLAN.md) (buildings with roofs from
+  real data, individual trees, power lines with catenary wires and clearance,
+  instanced and LOD rendering, real-world ingestion). Proposed; nothing
+  implemented.
+
 - `argusnet-viewer --run ... --mission-rate NUM/DEN` runs the viewer's
   in-process run with the mission lane at its own rate: `SimWorker` steps it
   through the lanes executor (`SimWorker::spawn_with_rate`), so its frames are
