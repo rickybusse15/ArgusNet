@@ -30,6 +30,6 @@ mod queue;
 mod time;
 
 pub use executor::{ExecutorError, LaneTask, LegacyLaneExecutor, LEGACY_LANE};
-pub use lanes::{Lane, LanePart, PhasedLaneExecutor, PhasedTick, LANES_V1};
+pub use lanes::{describe, Lane, LanePart, PhasedLaneExecutor, PhasedTick, LANES_V1};
 pub use queue::{EventKey, EventQueue, Phase, Scheduled, SourceId};
 pub use time::{Schedule, SimTime, TimeError, NANOS_PER_SECOND};

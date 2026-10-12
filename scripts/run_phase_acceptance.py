@@ -196,17 +196,26 @@ def live_reference(config, seed: int, work: Path) -> dict:
     }
 
 
-def run_seed(config, seed: int, work: Path, duration_s: float | None, stored: dict | None) -> dict:
+def run_seed(
+    config,
+    seed: int,
+    work: Path,
+    duration_s: float | None,
+    stored: dict | None,
+    rust_args: tuple[str, ...] = (),
+) -> dict:
     if duration_s is not None:
         config = dataclasses.replace(config, duration_s=duration_s)
     try:
-        return _run_seed(config, seed, work, stored)
+        return _run_seed(config, seed, work, stored, rust_args)
     finally:
         # Replays are large; thousands of runs would fill the disk.
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _run_seed(config, seed: int, work: Path, stored: dict | None) -> dict:
+def _run_seed(
+    config, seed: int, work: Path, stored: dict | None, rust_args: tuple[str, ...] = ()
+) -> dict:
     reference = stored if stored is not None else live_reference(config, seed, work)
 
     exported = work / "config.json"
@@ -225,6 +234,7 @@ def _run_seed(config, seed: int, work: Path, stored: dict | None) -> dict:
             str(rust_replay_path),
             "--timing-json",
             str(timing_path),
+            *rust_args,
         ],
         capture_output=True,
         text=True,
@@ -419,6 +429,13 @@ def main() -> int:
         action="store_true",
         help="with --reference live: write what was computed to --reference-file",
     )
+    parser.add_argument(
+        "--rust-arg",
+        action="append",
+        default=[],
+        help="an extra argusnet-rs sim argument, repeatable (e.g. --rust-arg=--executor "
+        "--rust-arg=lanes): a declared behaviour change judged against the same envelopes",
+    )
     args = parser.parse_args()
     if args.record_reference and args.reference != "live":
         parser.error("--record-reference needs --reference live")
@@ -465,7 +482,9 @@ def main() -> int:
         def submit(pool, config, seed, stored):
             work = Path(scratch) / config.name / str(seed)
             work.mkdir(parents=True)
-            return pool.submit(run_seed, config, seed, work, args.duration_s, stored)
+            return pool.submit(
+                run_seed, config, seed, work, args.duration_s, stored, tuple(args.rust_arg)
+            )
 
         executor = (
             concurrent.futures.ProcessPoolExecutor(max_workers=args.jobs)
@@ -522,6 +541,7 @@ def main() -> int:
         "_source": "scripts/run_phase_acceptance.py",
         "machine": {"platform": platform.platform(), "python": platform.python_version()},
         "seed_set": None if args.seeds else args.seed_set,
+        "rust_args": args.rust_arg,
         "seeds": seeds,
         "jobs": args.jobs,
         "duration_override_s": args.duration_s,

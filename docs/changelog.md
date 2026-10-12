@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — The mission lane at its own rate (`scheduled_v1`)
+
+- `argusnet-rs sim --executor lanes --mission-rate NUM/DEN` runs the mission
+  stage at its own rate in Hz instead of every tick (B2.4, the first lane off
+  the legacy rate). A boundary it sits out is in the trace as skipped, with the
+  reason; its next run is given the time since it last ran; a checkpoint
+  carries the lag, so a resumed run matches an uninterrupted one. The replay
+  records `meta.execution_model: "scheduled_v1"` and `meta.lane_rates`.
+  Without the flag the run is the legacy run, byte for byte.
+- `scripts/run_phase_acceptance.py --rust-arg ...` passes extra arguments to
+  `argusnet-rs`, so a declared behaviour change is judged against the same
+  envelopes.
+
 ## Unreleased — The terrain faces up, and the sun lights it
 
 - Scene terrain was wound facing down, so the viewer lit it as a back face:

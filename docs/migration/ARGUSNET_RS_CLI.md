@@ -67,6 +67,21 @@ source's queue. Every dropped envelope is a rejected observation with a
 `--fusion-lag-s` the run is the legacy run, byte for byte. Design and
 evidence: [DELIVERY_TIMING.md](DELIVERY_TIMING.md).
 
+## A lane at its own rate (B2.4, `scheduled_v1`)
+
+`--executor lanes --mission-rate NUM/DEN` runs the mission lane (stage 9) at
+`NUM/DEN` Hz instead of every tick: at the first tick at or after each of its
+deadlines, sitting out the rest, with its next run given the time since it last
+ran. Inspect dwell is still credited at every boundary, where the drone was.
+The replay records `meta.execution_model: "scheduled_v1"`, `meta.lane_rates`
+and `provenance.checkpoint_format` 5. Without the flag, `--executor lanes` is the legacy run, byte
+for byte. Refused without `--executor lanes`. A `--run-dir` records the rate
+in `run.json`, so `--recover` continues at it (a different `--mission-rate`
+is refused). Its checkpoints carry the rate (format 5) and `--resume` them
+only with the same `--mission-rate`.
+Design and evidence:
+[SCHEDULER_LEGACY_MAPPING.md](SCHEDULER_LEGACY_MAPPING.md) (B2.4).
+
 ## Scheduled faults (F2)
 
 `--faults MANIFEST` applies an `argusnet.fault-manifest`: sensor outages,

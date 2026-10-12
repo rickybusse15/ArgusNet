@@ -725,6 +725,16 @@ impl PhasedTick for AssembledRun {
     fn run_through(&mut self, open: &mut AssembledTick, last: Stage) -> Result<(), RunError> {
         AssembledRun::run_through(self, open, last)
     }
+    fn skip_through(
+        &mut self,
+        open: &mut AssembledTick,
+        last: Stage,
+        reason: &str,
+    ) -> Result<(), RunError> {
+        self.sim
+            .skip_through(&mut open.tick, last, reason)
+            .map_err(RunError::Tick)
+    }
     fn commit(&mut self, open: AssembledTick) -> Result<Arc<RuntimeSnapshot>, RunError> {
         self.commit_tick(open)
     }

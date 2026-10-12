@@ -579,6 +579,20 @@ impl MissionDriverStage {
     }
 }
 
+/// `mobile_states`: flown positions, fleet order.
+fn mobile_positions(context: &TickContext<'_>) -> Vec<(String, [f64; 3])> {
+    context
+        .world
+        .mobile_platforms()
+        .map(|p| {
+            (
+                p.node_id.clone(),
+                [p.position.x, p.position.y, p.position.z],
+            )
+        })
+        .collect()
+}
+
 impl StageHandler for MissionDriverStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let timestamp_s = context.timestamp_s;
@@ -599,17 +613,7 @@ impl StageHandler for MissionDriverStage {
                 StageError::Invariant("stage 9 needs stage 8's map installed".to_string())
             })?;
         let phase = self.machine.phase();
-        // `mobile_states`: flown positions, fleet order.
-        let mobile: Vec<(String, [f64; 3])> = context
-            .world
-            .mobile_platforms()
-            .map(|p| {
-                (
-                    p.node_id.clone(),
-                    [p.position.x, p.position.y, p.position.z],
-                )
-            })
-            .collect();
+        let mobile = mobile_positions(context);
 
         // Coordinator election, once, on the first scanning tick that has a
         // fleet. The reference reads the batteries as stage 1 left them.
@@ -645,7 +649,15 @@ impl StageHandler for MissionDriverStage {
         }
 
         if phase == MissionPhase::Inspecting {
-            self.inspect(timestamp_s, context.dt_s, &mobile, battery, mapping);
+            // Dwell is credited per boundary: the boundaries this lane sat
+            // out were credited in `not_due`, each at the position then.
+            self.inspect(
+                timestamp_s,
+                context.boundary_dt_s,
+                &mobile,
+                battery,
+                mapping,
+            );
         }
 
         let home_distances_m = mobile
@@ -845,6 +857,26 @@ impl StageHandler for MissionDriverStage {
         Ok(())
     }
 
+    fn not_due(&mut self, context: &mut TickContext<'_>) -> Result<(), StageError> {
+        // This tick's outputs: the decisions it records and the override
+        // commands stage 2 takes next tick. A boundary it sat out made none.
+        // The machine's events are taken where they are made, in `run`.
+        self.override_commands.clear();
+        self.decisions.clear();
+        // Dwell is residence, so it is credited at every boundary, where each
+        // drone is then, to the POI it holds then. Credited in bulk at the
+        // next run it would count a drone that arrived or left in between for
+        // the whole interval, and a POI assigned at that run for time before
+        // it was assigned. Assignment and completion wait for the lane's run.
+        if self.machine.phase() == MissionPhase::Inspecting {
+            for (id, position) in mobile_positions(context) {
+                self.pois
+                    .accumulate_dwell(&id, position, context.boundary_dt_s);
+            }
+        }
+        Ok(())
+    }
+
     fn reset(&mut self) {
         self.machine.reset_machine();
         self.pois = PoiManager::new(self.initial_pois.clone());
@@ -865,6 +897,14 @@ mod tests {
     /// A one-drone run with stage 8 and this driver installed, and
     /// localization replayed so only the gate under test decides the phase.
     fn gate_rig(replay: Vec<RecordedLocalization>) -> crate::simulation::Simulation {
+        gate_rig_with(replay, Vec::new())
+    }
+
+    /// [`gate_rig`], with inspection POIs.
+    fn gate_rig_with(
+        replay: Vec<RecordedLocalization>,
+        pois: Vec<InspectionPoi>,
+    ) -> crate::simulation::Simulation {
         use crate::config::SimulationConfig;
         use crate::stage::Stage;
         use argusnet_types::{NodeState, Vector3};
@@ -906,7 +946,7 @@ mod tests {
                 },
                 ..MissionDriverConfig::default()
             },
-            Vec::new(),
+            pois,
             BTreeMap::new(),
         );
         stage.load_localization_replay(replay);
@@ -994,6 +1034,87 @@ mod tests {
                 "after flying hole cell ({x}, {y})"
             );
         }
+    }
+
+    /// B2.4: a mission lane below the base rate credits dwell boundary by
+    /// boundary, where the drone was at each, not the whole interval at the
+    /// drone's position when the lane next runs.
+    #[test]
+    fn a_lane_that_sits_out_boundaries_credits_dwell_where_the_drone_was() {
+        use crate::stage::Stage;
+
+        // Every cell flown, hole last, as in the gate test: Inspecting after
+        // the third hole cell. One POI at (475, 475), far from all of them.
+        let cells: Vec<(f64, f64)> = (0..10)
+            .flat_map(|i| (0..10).map(move |j| (25.0 + 50.0 * i as f64, 25.0 + 50.0 * j as f64)))
+            .collect();
+        let mut sim = gate_rig_with(
+            converged(cells.len() + 8),
+            vec![InspectionPoi {
+                poi_id: "poi-00".into(),
+                name: "poi-00".into(),
+                position: [475.0, 475.0, 40.0],
+                priority: 1,
+                required_dwell_s: 3.0,
+            }],
+        );
+        let fly = |sim: &mut crate::simulation::Simulation, (x, y): (f64, f64)| {
+            let drone = sim.world_mut().platform_mut("drone-1").expect("drone");
+            drone.position.x = x;
+            drone.position.y = y;
+        };
+        // Lower-left first, so the last cells flown are well away from the POI.
+        for cell in cells.iter().rev() {
+            fly(&mut sim, *cell);
+            sim.step().expect("tick");
+        }
+        // One more run, away from the POI: Inspecting, so it is assigned.
+        fly(&mut sim, (25.0, 25.0));
+        sim.step().expect("tick");
+        assert_eq!(machine(&sim).phase(), MissionPhase::Inspecting);
+        let status =
+            |sim: &crate::simulation::Simulation| installed_driver(sim).pois.statuses()[0].clone();
+        assert_eq!(
+            installed_driver(&sim).pois.assignment_for("drone-1"),
+            Some("poi-00")
+        );
+        assert_eq!(status(&sim).state, PoiState::Active);
+
+        // Stage 9 sits out three boundaries -- away, away, at the POI -- then
+        // runs at the POI. 1 s boundaries: 2 s of dwell, short of the 3 s
+        // required, not the 4 s since it last ran.
+        sim.declare_lane_rate(Stage::EvaluateMissionTransitions, "1/4");
+        let boundary = |sim: &mut crate::simulation::Simulation, at: (f64, f64), due: bool| {
+            fly(sim, at);
+            let mut open = match sim.begin_tick().expect("begin") {
+                crate::simulation::TickStart::Open(open) => open,
+                crate::simulation::TickStart::Committed(_) => panic!("reset"),
+            };
+            sim.run_through(&mut open, Stage::UpdateMappingAndLocalization)
+                .expect("stages 1-8");
+            if due {
+                sim.run_through(&mut open, Stage::EvaluateMissionTransitions)
+                    .expect("stage 9");
+            } else {
+                sim.skip_through(&mut open, Stage::EvaluateMissionTransitions, "not due")
+                    .expect("stage 9 sits out");
+            }
+            sim.commit_tick(open).expect("commit");
+        };
+        boundary(&mut sim, (25.0, 25.0), false);
+        boundary(&mut sim, (25.0, 75.0), false);
+        boundary(&mut sim, (475.0, 475.0), false);
+        boundary(&mut sim, (475.0, 475.0), true);
+        assert_eq!(
+            status(&sim).state,
+            PoiState::Active,
+            "the boundaries away from the POI were credited"
+        );
+        // The third second at the POI completes it, with exactly that dwell.
+        boundary(&mut sim, (475.0, 475.0), true);
+        let done = status(&sim);
+        assert_eq!(done.state, PoiState::Complete);
+        assert_eq!(done.dwell_accumulated_s, 3.0);
     }
 
     /// A timed-out localizer latches in the machine, from the replay too.
