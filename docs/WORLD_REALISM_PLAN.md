@@ -100,9 +100,13 @@ C8 (P2.6) and D2 (P5.1).
   
   Data comes from OSM (`power=line|minor_line|tower|pole`, `cables`,
   `voltage`) or is generated along roads, seeded.
-- **Collision and clearance.** Distance from a point to the catenary,
-  approximated as a polyline of capsules, with a clearance buffer that depends
-  on voltage. Add a `structure_clearance` violation to the safety engine; today
+- **Collision and clearance.** The catenary is approximated as a chain of
+  capsules, with a clearance buffer that depends on voltage. The test is
+  **swept**: the segment a drone flies between two ticks is checked against
+  every capsule, not just its position at each tick. Otherwise a drone moving
+  more than a capsule's width per tick passes through a wire unseen. A test
+  covers a wire crossed between ticks, for both physical collision and
+  clearance. Add a `structure_clearance` violation to the safety engine; today
   `ConstraintViolation` has no structure clearance at all. Deconfliction and the
   planner treat the corridor as a hard keep-out with vertical clearance.
 - **Sensing.** Wires do not occlude. Their weakness is that sensors barely see
@@ -147,7 +151,7 @@ C8 (P2.6) and D2 (P5.1).
 | R1 buildings | R0 | medium | no (opt-in kind; new scenario) |
 | R2 vegetation | R0 | medium | no (opt-in kind) |
 | R3 power lines | R0, planning P3 | medium–large | no (opt-in kind) |
-| R4 viewer | R1, R2 | medium | no |
+| R4 viewer | R1, R2, R3 (its probes cover wires and towers) | medium | no |
 | R5 ingestion | R1–R3 | medium | no (new scenario only) |
 
 R0 and R1 come first: real buildings matter to every mission, and making the

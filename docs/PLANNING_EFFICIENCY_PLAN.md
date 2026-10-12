@@ -63,8 +63,13 @@ metrics: `ReplayPoiStatus` holds one `assigned_drone_id`, while
 `PoiManager::request_team_assign` keeps a second drone only in its internal
 map. So P0 starts with an additive per-drone **assignment event history** in
 the replay. It covers assignments, team joins, handoffs, releases and
-reassignments, each with a time, the drone, the task and the reason, taken
-from the driver's `Decision` records. Every metric below is derived from that
+reassignments, each with a time, the drone, the task and the reason. It is
+seeded at tick 0 with the tasks `builder/scenario.rs` hands out when the
+scenario is built: scan strips, search lanes, follow and pursuit targets.
+From then on it records every change, from the driver's `Decision` records
+and from the controllers that switch a drone's task (frontier goals, egress).
+A drone flying its scan strip is working, not idle. Every metric below is
+derived from that
 history, never from POI status. Otherwise, once P1 turns on teams, a drone
 helping on a POI would count as idle, and handoff and thrash counts would
 leave it out.
