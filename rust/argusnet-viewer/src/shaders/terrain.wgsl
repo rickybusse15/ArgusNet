@@ -71,9 +71,11 @@ const BELIEF_AMBIENT: f32 = 0.55;
 const BELIEF_EXPOSURE: f32 = 0.6;
 // How bright the terrain under the overlay stays, as a fraction of its lit
 // luminance. Under the overlay the ground is drawn grey, so its colour cannot
-// shift a class's, and a little darker, so the classes stay saturated over
-// sunlit ground; relief still reads through.
-const BELIEF_UNDERLAY: f32 = 0.7;
+// shift a class's, and dark, about where the unlit ground sat before the
+// terrain faced the sun: the classes stay saturated, the hatch's stripes keep
+// their contrast (0.7 left them at the probe's 0.02 floor on some GPUs), and
+// relief still reads through.
+const BELIEF_UNDERLAY: f32 = 0.35;
 const CLASS_UNCERTAIN: u32 = 4u;
 const CLASS_SAFE: u32 = 5u;
 
