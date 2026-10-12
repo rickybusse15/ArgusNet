@@ -40,10 +40,13 @@ idle time or duplicated coverage.
    the same way `energy_profile` and `execution_model` are. The reference
    policy stays byte for byte: all 14 legacy replays identical, `--lifecycle`
    equal (AGENT_EXECUTION_PLAN §12.3).
-3. **Judged on the D-12 seed set.** Each policy is run through
-   `run_phase_acceptance.py --rust-arg ...` on the 30 confirmation seeds. It
-   must not regress any envelope, and it must show its efficiency gain with
-   variance.
+3. **Developed on one seed set, judged on another.** A policy is developed
+   and tuned on the A3.2 qualification seeds, run through
+   `run_phase_acceptance.py --rust-arg ...`. The final decision for each policy
+   is made once, on a fresh held-out seed set declared before the run and never
+   used for tuning. The D-12 confirmation set is not reused for this, since it
+   was itself a one-time fresh test. The policy must not regress any envelope,
+   and must show its efficiency gain with variance.
 4. **Promote by decision.** A policy becomes the default only through a recorded
    decision (D-n) and a fixture-rebaseline commit, never as a side effect.
 5. **Deterministic.** Every solver iterates in a fixed order and breaks ties by
@@ -55,8 +58,19 @@ idle time or duplicated coverage.
 
 ### P0: efficiency metrics (behaviour-neutral)
 
-These are computed from the replay, in Rust (`argusnet-sim` evaluation) and
-mirrored in the Python scorecard:
+**First, record every assignment.** Today the replay cannot support these
+metrics: `ReplayPoiStatus` holds one `assigned_drone_id`, while
+`PoiManager::request_team_assign` keeps a second drone only in its internal
+map. So P0 starts with an additive per-drone **assignment event history** in
+the replay. It covers assignments, team joins, handoffs, releases and
+reassignments, each with a time, the drone, the task and the reason, taken
+from the driver's `Decision` records. Every metric below is derived from that
+history, never from POI status. Otherwise, once P1 turns on teams, a drone
+helping on a POI would count as idle, and handoff and thrash counts would
+leave it out.
+
+The metrics are computed from the replay, in Rust (`argusnet-sim`
+evaluation) and mirrored in the Python scorecard:
 
 - **Time:** mission makespan, time to reach scan coverage, and per-POI time
   from assignment to completion.
@@ -66,7 +80,7 @@ mirrored in the Python scorecard:
   within N seconds).
 
 Reported by phase acceptance, for reporting only (no envelope), on the
-canonical and confirmation seeds. This baseline is what every later phase
+canonical and qualification seeds. This baseline is what every later phase
 is measured against.
 
 ### P1: fleet-wide POI allocation (`efficient_v1`)
