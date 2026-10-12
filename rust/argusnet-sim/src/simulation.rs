@@ -63,6 +63,12 @@ pub struct TickContext<'a> {
     /// carried here because a stage that reached for its own copy would be one
     /// more place the two could disagree.
     pub dt_s: f64,
+    /// This boundary's own interval: the timestep. It differs from `dt_s`
+    /// only for a stage that sat out boundaries (B2.4), where `dt_s` is the
+    /// time since it last ran. A quantity a stage integrates per boundary --
+    /// dwell, say -- uses this, and is integrated in
+    /// [`StageHandler::not_due`] on the boundaries the stage sits out.
+    pub boundary_dt_s: f64,
     /// Base seed. Stages derive their own per-key streams from it; see
     /// [`crate::deterministic`].
     pub seed: u32,
@@ -304,11 +310,14 @@ pub trait StageHandler: std::any::Any + fmt::Debug + Send {
     /// This boundary the stage is not due (B2.4: its lane runs at its own
     /// rate) and does not run. Clear whatever the last run left as *this
     /// tick's* output -- events, decisions, commands for a later stage -- so
-    /// a boundary it did not run reports none.
+    /// a boundary it did not run reports none. Anything the stage integrates
+    /// per boundary is integrated here, from `context` (the tick as the
+    /// stages before it left it), so the boundaries it sat out are counted
+    /// one by one rather than in bulk at its next run.
     ///
     /// The default refuses: only a handler that has said what its per-tick
     /// outputs are may be skipped. One that never ran is fine to skip.
-    fn not_due(&mut self) -> Result<(), StageError> {
+    fn not_due(&mut self, _context: &mut TickContext<'_>) -> Result<(), StageError> {
         Err(StageError::Invariant(
             "this stage has not declared how to sit out a boundary".to_string(),
         ))
@@ -1188,14 +1197,16 @@ impl Simulation {
             // A stage that sat out boundaries (its lane at its own rate) is
             // given the time since it last ran. With no lag this is the
             // timestep itself, bit for bit.
+            let boundary_dt_s = self.config.timestep().seconds();
             let dt_s = match self.stage_lag.remove(&stage) {
-                None => self.config.timestep().seconds(),
-                Some(lag) => self.config.timestep().seconds() * (lag + 1) as f64,
+                None => boundary_dt_s,
+                Some(lag) => boundary_dt_s * (lag + 1) as f64,
             };
             let mut context = TickContext {
                 tick,
                 timestamp_s: self.clock.timestamp_s(),
                 dt_s,
+                boundary_dt_s,
                 seed: self.config.seed(),
                 seed_time_key: self.clock.seed_time_key(),
                 world: &mut self.world,
@@ -1306,8 +1317,32 @@ impl Simulation {
         while open.next <= last.order() as usize {
             let stage = Stage::PIPELINE[open.next];
             open.next += 1;
-            let declined = match self.handlers.get_mut(&stage) {
-                Some(handler) => handler.not_due().err(),
+            // Taken out, so the others can be lent: what it integrates per
+            // boundary it reads from the tick as the stages before it left it.
+            let declined = match self.handlers.remove(&stage) {
+                Some(mut handler) => {
+                    let mut notes = Vec::new();
+                    let boundary_dt_s = self.config.timestep().seconds();
+                    let mut context = TickContext {
+                        tick,
+                        timestamp_s: self.clock.timestamp_s(),
+                        // It does not run, so nothing is owed since it last did.
+                        dt_s: boundary_dt_s,
+                        boundary_dt_s,
+                        seed: self.config.seed(),
+                        seed_time_key: self.clock.seed_time_key(),
+                        world: &mut self.world,
+                        truth: stage.may_read_truth().then_some(self.truth.as_slice()),
+                        stages: StageViews {
+                            handlers: &self.handlers,
+                            truth_visible: stage.may_read_truth(),
+                        },
+                        notes: &mut notes,
+                    };
+                    let declined = handler.not_due(&mut context).err();
+                    self.handlers.insert(stage, handler);
+                    declined
+                }
                 None => None,
             };
             if let Some(error) = declined {

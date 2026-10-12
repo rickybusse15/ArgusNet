@@ -534,7 +534,7 @@ impl MissionStage {
 }
 
 impl StageHandler for MissionStage {
-    fn not_due(&mut self) -> Result<(), StageError> {
+    fn not_due(&mut self, _context: &mut TickContext<'_>) -> Result<(), StageError> {
         // This tick's events, and the inputs stage 8 handed it for this tick:
         // the next run is handed its own.
         self.events.clear();

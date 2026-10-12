@@ -34,7 +34,7 @@ impl StageHandler for ClockStage {
         self.ran.push((context.tick, context.dt_s));
         Ok(StageOutcome::Ran)
     }
-    fn not_due(&mut self) -> Result<(), StageError> {
+    fn not_due(&mut self, _context: &mut TickContext<'_>) -> Result<(), StageError> {
         Ok(())
     }
 }

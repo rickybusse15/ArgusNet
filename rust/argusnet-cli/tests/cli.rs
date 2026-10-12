@@ -54,6 +54,7 @@ fn sim_writes_the_runtimes_replay() {
         .expect("provenance");
     assert_eq!(provenance["runtime"], "argusnet-rs");
     assert_eq!(provenance["input"], "bundle");
+    assert_eq!(provenance["checkpoint_format"], 4);
     assert_eq!(written.frames.len() as u64, bundle.steps);
     assert_eq!(written, direct, "the binary's replay is not the runtime's");
 }
@@ -138,7 +139,12 @@ fn version_names_every_format() {
     let output = binary().arg("version").output().unwrap();
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
-    for needle in ["argusnet-rs", "scenario bundle", "checkpoint format"] {
+    for needle in [
+        "argusnet-rs",
+        "scenario bundle",
+        "checkpoint format",
+        "with lane rates",
+    ] {
         assert!(text.contains(needle), "{needle} missing from: {text}");
     }
 }
@@ -631,12 +637,15 @@ fn a_crashed_scheduled_run_recovers_with_its_mission_rate() {
 #[test]
 fn a_checkpoint_with_lane_lag_needs_its_rate_to_resume() {
     let checkpoint = scratch("lag-checkpoint.json");
+    let replay = scratch("lag-replay.json");
     let output = binary()
         .args(["sim", "--quiet", "--bundle"])
         .arg(fixture("scenario_bundle_scan.json"))
         .args(["--executor", "lanes", "--mission-rate", "1/7"])
         .args(["--checkpoint-at", "10", "--checkpoint"])
         .arg(&checkpoint)
+        .arg("--replay")
+        .arg(&replay)
         .output()
         .expect("runs");
     assert!(
@@ -647,6 +656,12 @@ fn a_checkpoint_with_lane_lag_needs_its_rate_to_resume() {
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&checkpoint).unwrap()).unwrap();
     assert_eq!(written["header"]["format_version"], 5);
+    // The replay names the format its checkpoints are written in.
+    let mut meta = read_replay(&replay).meta.scenario;
+    assert_eq!(
+        meta.remove("provenance").expect("provenance")["checkpoint_format"],
+        5
+    );
     assert!(
         written["stage_lag"]["evaluate_mission_transitions"]
             .as_u64()

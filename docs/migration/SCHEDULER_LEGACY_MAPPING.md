@@ -113,9 +113,15 @@ without a rate nothing changes.
   `not_due` **refuses**, so a stage that has not said what its per-tick output
   is faults the run rather than repeating stale output.
 - **Elapsed time.** A stage that sat out `k` boundaries is given
-  `(k + 1) * dt` as its `dt_s` on its next run: mission's one use of it,
-  inspect dwell, accumulates the time that actually passed. With `k = 0` this
-  is the timestep, bit for bit.
+  `(k + 1) * dt` as its `dt_s` on its next run. With `k = 0` this is the
+  timestep, bit for bit. A quantity integrated per boundary is not credited
+  from it in bulk: `not_due` is handed the tick as the stages before it left
+  it, and `TickContext::boundary_dt_s` is the boundary's own interval.
+  Inspect dwell is residence, so the driver credits it at every boundary,
+  sat out or run, where each drone is then, to the POI it holds then; a drone
+  that arrived or left between runs, or a POI assigned at the next run, is
+  credited only for the boundaries it was actually there. Assignment and
+  completion wait for the lane's run.
 - **Time.** The lane runs at a legacy boundary, so it reads that boundary's
   legacy float time, like every other lane; no lane mixes the two derivations.
 - **Checkpoint.** `SimulationCheckpoint.stage_lag` carries each stage's
@@ -130,7 +136,7 @@ without a rate nothing changes.
   checkpoint with rates or lag is format 5 (`FORMAT_VERSION_STAGE_LAG`), so a
   reader that predates the fields refuses it; every other checkpoint stays
   format 4, so legacy replays and their recorded `checkpoint_format` do not
-  change. A run directory records the rate in `run.json`, so `--recover`
+  change; a scheduled run's replay records 5, and `version` names both. A run directory records the rate in `run.json`, so `--recover`
   continues the scheduled run; `--resume` needs the same `--mission-rate`.
 - **Deadlines are used up by commits.** A boundary that does not commit
   (paused, failed, reset) consumes no occurrence: the executor moves the lane
