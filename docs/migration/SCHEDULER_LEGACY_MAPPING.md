@@ -161,6 +161,41 @@ the trace, resume equal to uninterrupted, refusal of an undeclared stage) and
 against the same envelopes, unwidened; the result at 1 Hz is in
 [`../performance/b24-mission-rate-2026-10-12.md`](../performance/b24-mission-rate-2026-10-12.md).
 
+## B2.5: the mapping lane at its own rate, inputs buffered
+
+`--mapping-rate NUM/DEN` runs stage 8 at its own rate, like the mission lane
+(both can be set). Mapping is the first lane whose inputs are *not*
+cumulative: every boundary brings the platforms' footprints, zone entries and
+the range scans of a run with no prior map. So a boundary it sits out loses
+nothing:
+
+- **Buffered.** `MappingStage::not_due` keeps the boundary: its tick, its
+  timestamp, the mobile platforms' positions and the scans stage 6 handed
+  over. The next run integrates every kept boundary in order, each at its own
+  tick and timestamp, before its own: coverage counts, newly covered cells,
+  zone inspection (entry, exit and coverage events, stamped with their own
+  times) and the self-built map. At every boundary the lane runs, stage 8's
+  state equals the every-boundary run's exactly
+  (`mapping::tests::a_mapping_lane_at_its_own_rate_catches_up_exactly`).
+- **Between runs** the rest of the tick reads the map as the lane last left
+  it: the mission's coverage gate and the planners' belief see it late, by up
+  to one lane period. Localization runs at the lane's rate, and its last
+  estimates stay current (the mission reads them every tick). Per-tick
+  outputs are cleared on a skipped boundary (coverage deltas, inspection
+  events, fused scans), so a boundary that did not run reports none.
+- **Checkpointed.** The kept boundaries are part of stage 8's checkpoint
+  (`pending`, absent when empty, so legacy checkpoints are unchanged), and a
+  resumed run integrates them as the uninterrupted one does
+  (`mapping::tests::pending_boundaries_survive_a_checkpoint`; the CLI recovers
+  a crash whose last checkpoint holds a pending boundary to the uninterrupted
+  journal byte for byte).
+- **One executor.** `PhasedLaneExecutor` keeps a rate per lane
+  (`RATED_LANES`: mapping and mission), and `LaneRates` carries them through
+  `RunOptions`, the run directory, the worker and the viewer.
+  `meta.lane_rates` records each rated lane by name.
+
+Fusion stays every boundary: the replay holds one fusion frame per tick.
+
 ## Not decided here
 
 Rates for the other lanes, `nanos / 1e9` time for a lane at its own rate,

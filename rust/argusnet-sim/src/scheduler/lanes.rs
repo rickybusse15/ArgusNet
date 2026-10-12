@@ -102,7 +102,53 @@ pub const LANES_V1: [Lane; 5] = [
     },
 ];
 
-/// The mission lane's own rate (B2.4) and its next occurrence.
+/// The stages whose lanes may run at their own rate, and why each may:
+/// mission (B2.4) because its inputs are cumulative (the map, the fleet) and
+/// its one use of elapsed time is given the time since it last ran; mapping
+/// (B2.5) because it keeps what each boundary it sits out would have
+/// integrated and integrates it, in order, when it next runs.
+pub const RATED_LANES: [Stage; 2] = [
+    Stage::UpdateMappingAndLocalization,
+    Stage::EvaluateMissionTransitions,
+];
+
+/// The lanes' own rates as a run is configured with them (B2.4, B2.5). All
+/// `None` is the legacy run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LaneRates {
+    /// The mapping lane (stage 8).
+    pub mapping: Option<Schedule>,
+    /// The mission lane (stage 9).
+    pub mission: Option<Schedule>,
+}
+
+impl LaneRates {
+    /// No lane has its own rate: the legacy run.
+    pub fn is_empty(&self) -> bool {
+        self.mapping.is_none() && self.mission.is_none()
+    }
+
+    /// Each rated lane as `(stage, name, rate)`, in pipeline order. The name
+    /// is the key the replay's `meta.lane_rates` records it under.
+    pub fn rated(&self) -> impl Iterator<Item = (Stage, &'static str, Schedule)> {
+        [
+            (Stage::UpdateMappingAndLocalization, "mapping", self.mapping),
+            (Stage::EvaluateMissionTransitions, "mission", self.mission),
+        ]
+        .into_iter()
+        .filter_map(|(stage, name, rate)| rate.map(|rate| (stage, name, rate)))
+    }
+
+    /// `executor` with these lanes at their rates.
+    pub fn apply(&self, mut executor: PhasedLaneExecutor) -> Result<PhasedLaneExecutor, TimeError> {
+        for (stage, _, rate) in self.rated() {
+            executor = executor.with_rate(stage, rate)?;
+        }
+        Ok(executor)
+    }
+}
+
+/// A lane's own rate and its next occurrence.
 #[derive(Debug, Clone, Copy)]
 struct LaneRate {
     schedule: Schedule,
@@ -127,12 +173,17 @@ pub struct PhasedLaneExecutor {
     next: u64,
     /// The keys of the tasks the last boundary ran, in the order they ran.
     ran: Vec<EventKey>,
-    /// The mission lane's own rate; `None` runs it every boundary.
-    mission: Option<LaneRate>,
-    /// The occurrence the mission lane moves on to once the boundary in
-    /// flight commits. A boundary that does not commit (paused, failed,
-    /// reset) consumes nothing.
-    mission_after_commit: Option<u64>,
+    /// Each [`LANES_V1`] lane's own rate; `None` runs it every boundary.
+    rates: [Option<LaneRate>; LANES_V1.len()],
+    /// The occurrence each rated lane moves on to once the boundary in flight
+    /// commits. A boundary that does not commit (paused, failed, reset)
+    /// consumes nothing.
+    after_commit: [Option<u64>; LANES_V1.len()],
+}
+
+/// The [`LANES_V1`] index of the lane whose last stage is `stage`.
+fn lane_of(stage: Stage) -> Option<usize> {
+    LANES_V1.iter().position(|lane| lane.last == Some(stage))
 }
 
 impl PhasedLaneExecutor {
@@ -146,8 +197,8 @@ impl PhasedLaneExecutor {
             epoch: SimTime::EPOCH,
             next: first,
             ran: Vec::new(),
-            mission: None,
-            mission_after_commit: None,
+            rates: [None; LANES_V1.len()],
+            after_commit: [None; LANES_V1.len()],
         })
     }
 
@@ -158,16 +209,49 @@ impl PhasedLaneExecutor {
     /// dwell) is given the time since it last ran. The occurrences before the
     /// start boundary count as served, so a resumed run picks up where an
     /// uninterrupted one would be.
-    pub fn with_mission_rate(mut self, schedule: Schedule) -> Result<Self, TimeError> {
+    pub fn with_mission_rate(self, schedule: Schedule) -> Result<Self, TimeError> {
+        self.with_rate(Stage::EvaluateMissionTransitions, schedule)
+    }
+
+    /// The mapping lane (stage 8) at its own rate (B2.5): it keeps what each
+    /// boundary it sits out would have integrated -- positions, scans -- and
+    /// integrates it in order when it next runs, so coverage and the
+    /// self-built map are the legacy run's whenever it has run.
+    pub fn with_mapping_rate(self, schedule: Schedule) -> Result<Self, TimeError> {
+        self.with_rate(Stage::UpdateMappingAndLocalization, schedule)
+    }
+
+    fn with_rate(mut self, stage: Stage, schedule: Schedule) -> Result<Self, TimeError> {
+        debug_assert!(RATED_LANES.contains(&stage));
+        let lane = lane_of(stage).expect("a rated lane is one of LANES_V1");
         schedule.validate()?;
         let next = self.occurrences_before(schedule, self.next)?;
-        self.mission = Some(LaneRate { schedule, next });
+        self.rates[lane] = Some(LaneRate { schedule, next });
         Ok(self)
     }
 
     /// The mission lane's own rate, if it has one.
     pub fn mission_rate(&self) -> Option<Schedule> {
-        self.mission.map(|rate| rate.schedule)
+        self.rate_of(Stage::EvaluateMissionTransitions)
+    }
+
+    /// The own rate of the lane whose last stage is `stage`, if it has one.
+    pub fn rate_of(&self, stage: Stage) -> Option<Schedule> {
+        lane_of(stage)
+            .and_then(|lane| self.rates[lane])
+            .map(|rate| rate.schedule)
+    }
+
+    /// Every rated lane's next occurrence, recomputed for a run that is at
+    /// boundary `self.next` (after a reset committed by stage 0).
+    fn rewind_rates(&mut self) -> Result<(), TimeError> {
+        for lane in 0..LANES_V1.len() {
+            if let Some(rate) = self.rates[lane] {
+                let next = self.occurrences_before(rate.schedule, self.next)?;
+                self.rates[lane] = Some(LaneRate { next, ..rate });
+            }
+        }
+        Ok(())
     }
 
     /// How many of `schedule`'s occurrences boundaries before `n` served:
@@ -180,12 +264,12 @@ impl PhasedLaneExecutor {
         schedule.first_at_or_after(self.epoch, previous.checked_add_nanos(1)?)
     }
 
-    /// Whether the mission lane runs at the boundary whose deadline is
-    /// `deadline`, and if so the occurrence it moves on to once that boundary
-    /// commits (every occurrence the boundary serves). Nothing is consumed
-    /// here: a boundary that never commits must not use up a deadline.
-    fn mission_due(&self, deadline: SimTime) -> Result<(bool, Option<u64>), TimeError> {
-        let Some(rate) = self.mission.as_ref() else {
+    /// Whether `lane` runs at the boundary whose deadline is `deadline`, and
+    /// if so the occurrence it moves on to once that boundary commits (every
+    /// occurrence the boundary serves). Nothing is consumed here: a boundary
+    /// that never commits must not use up a deadline.
+    fn lane_due(&self, lane: usize, deadline: SimTime) -> Result<(bool, Option<u64>), TimeError> {
+        let Some(rate) = self.rates[lane].as_ref() else {
             return Ok((true, None));
         };
         if rate.schedule.nth_deadline(self.epoch, rate.next)? > deadline {
@@ -212,15 +296,14 @@ impl PhasedLaneExecutor {
             .boundaries
             .nth_deadline(self.epoch, n)
             .map_err(ExecutorError::Time)?;
-        let (mission_due, mission_after) =
-            self.mission_due(deadline).map_err(ExecutorError::Time)?;
-        self.mission_after_commit = mission_after;
-        for lane in LANES_V1 {
+        for (index, lane) in LANES_V1.iter().enumerate() {
+            let (due, after) = self
+                .lane_due(index, deadline)
+                .map_err(ExecutorError::Time)?;
+            self.after_commit[index] = after;
             let part = match lane.last {
                 Some(last) if lane.source == LEGACY_LANE => LanePart::Open { n, last },
-                Some(last) if lane.phase == Phase::MissionPlanning && !mission_due => {
-                    LanePart::NotDue { n, last }
-                }
+                Some(last) if !due => LanePart::NotDue { n, last },
                 Some(last) => LanePart::Run { n, last },
                 None => LanePart::Commit { n },
             };
@@ -230,7 +313,7 @@ impl PhasedLaneExecutor {
         }
         self.ran.clear();
         let outcome = self.drain(run, n);
-        self.mission_after_commit = None;
+        self.after_commit = [None; LANES_V1.len()];
         if outcome.is_err() {
             // The tick failed: whatever of it is still queued never runs.
             self.queue.reset(self.epoch);
@@ -258,12 +341,7 @@ impl PhasedLaneExecutor {
                         // of this boundary belongs to the old epoch.
                         self.queue.reset(self.epoch);
                         self.next = run.current_tick();
-                        if let Some(rate) = self.mission {
-                            let next = self
-                                .occurrences_before(rate.schedule, self.next)
-                                .map_err(ExecutorError::Time)?;
-                            self.mission = Some(LaneRate { next, ..rate });
-                        }
+                        self.rewind_rates().map_err(ExecutorError::Time)?;
                         return Ok(output);
                     }
                 },
@@ -279,7 +357,7 @@ impl PhasedLaneExecutor {
                         scheduled: n,
                         ran: run.current_tick(),
                     })?;
-                    let reason = match self.mission.map(|rate| rate.schedule) {
+                    let reason = match self.rate_of(last) {
                         Some(schedule) => {
                             format!("not due: lane at {} (scheduled_v1)", describe(schedule))
                         }
@@ -295,10 +373,10 @@ impl PhasedLaneExecutor {
                     })?;
                     let output = run.commit(opened).map_err(ExecutorError::Tick)?;
                     self.next = n + 1;
-                    if let (Some(rate), Some(after)) =
-                        (self.mission.as_mut(), self.mission_after_commit.take())
-                    {
-                        rate.next = after;
+                    for (rate, after) in self.rates.iter_mut().zip(&mut self.after_commit) {
+                        if let (Some(rate), Some(after)) = (rate.as_mut(), after.take()) {
+                            rate.next = after;
+                        }
                     }
                     return Ok(output);
                 }
@@ -320,7 +398,7 @@ impl PhasedLaneExecutor {
     pub fn reset(&mut self) -> usize {
         self.next = 0;
         self.ran.clear();
-        if let Some(rate) = self.mission.as_mut() {
+        for rate in self.rates.iter_mut().flatten() {
             rate.next = 0;
         }
         self.queue.reset(self.epoch)
@@ -490,8 +568,9 @@ mod tests {
         (first..first + count)
             .filter(|&n| {
                 let deadline = executor.boundaries.nth_deadline(executor.epoch, n).unwrap();
-                let (due, after) = executor.mission_due(deadline).unwrap();
-                if let (Some(rate), Some(after)) = (executor.mission.as_mut(), after) {
+                let lane = lane_of(Stage::EvaluateMissionTransitions).unwrap();
+                let (due, after) = executor.lane_due(lane, deadline).unwrap();
+                if let (Some(rate), Some(after)) = (executor.rates[lane].as_mut(), after) {
                     rate.next = after;
                 }
                 due

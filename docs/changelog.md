@@ -2,6 +2,13 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `--mapping-rate NUM/DEN` (`argusnet-rs sim --executor lanes`, and the
+  viewer's `--run`) runs the mapping lane at its own rate (B2.5). The ticks it
+  sits out are kept -- positions, scans -- and integrated in order when it
+  next runs, so coverage, zone inspection and the self-built map equal the
+  every-tick run's whenever it has run; a checkpoint carries the kept ticks.
+  The replay's `meta.lane_rates` records it as `mapping`.
+
 - `argusnet-viewer --run ... --mission-rate NUM/DEN` runs the viewer's
   in-process run with the mission lane at its own rate: `SimWorker` steps it
   through the lanes executor (`SimWorker::spawn_with_rate`), so its frames are

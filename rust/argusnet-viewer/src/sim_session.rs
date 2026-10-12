@@ -107,13 +107,9 @@ pub struct SimSession {
 impl SimSession {
     pub fn start(source: PathBuf, options: RunOptions, pacing: Pacing) -> Self {
         let path = source.clone();
-        let mission_rate = options.mission_rate;
+        let rates = options.lane_rates;
         Self {
-            worker: SimWorker::spawn_with_rate(
-                move || load_run(&path, &options),
-                pacing,
-                mission_rate,
-            ),
+            worker: SimWorker::spawn_with_rates(move || load_run(&path, &options), pacing, rates),
             source,
             next_id: 1,
             pending: BTreeMap::new(),
@@ -655,13 +651,17 @@ mod tests {
         );
     }
 
-    /// `--mission-rate` reaches the viewer's run as the CLI's: declared on
-    /// the run and recorded in its replay (the session's worker steps it at
-    /// that rate; `worker::tests` compares the frames with the CLI's).
+    /// `--mission-rate` and `--mapping-rate` reach the viewer's run as the
+    /// CLI's: declared on the run and recorded in its replay (the session's
+    /// worker steps it at those rates; `worker::tests` compares the frames
+    /// with the CLI's).
     #[test]
-    fn a_mission_rate_is_declared_and_recorded() {
+    fn lane_rates_are_declared_and_recorded() {
         let options = RunOptions {
-            mission_rate: Some(argusnet_sim::scheduler::parse_rate("1/7").unwrap()),
+            lane_rates: argusnet_sim::scheduler::LaneRates {
+                mapping: Some(argusnet_sim::scheduler::parse_rate("1/3").unwrap()),
+                mission: Some(argusnet_sim::scheduler::parse_rate("1/7").unwrap()),
+            },
             ..RunOptions::default()
         };
         assert!(!options.is_legacy());
@@ -676,6 +676,14 @@ mod tests {
         let meta = run.replay_extra_meta();
         assert_eq!(meta["execution_model"], "scheduled_v1");
         assert_eq!(meta["lane_rates"]["mission"], "1/7 Hz");
+        assert_eq!(
+            run.sim
+                .lane_rates()
+                .get(&argusnet_sim::stage::Stage::UpdateMappingAndLocalization)
+                .map(String::as_str),
+            Some("1/3")
+        );
+        assert_eq!(meta["lane_rates"]["mapping"], "1/3 Hz");
     }
 
     #[test]

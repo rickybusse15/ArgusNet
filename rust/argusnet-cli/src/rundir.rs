@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use argusnet_sim::config::fnv1a;
 use argusnet_sim::journal::{JournalError, JournalWriter};
 use argusnet_sim::scenario::AssembledRun;
+use argusnet_sim::scheduler::{parse_rate, rate_text, LaneRates};
 use argusnet_sim::snapshot::SimulationCheckpoint;
 
 pub const RUN_FORMAT: &str = "argusnet-run/1";
@@ -40,6 +41,9 @@ struct RunConfig {
     /// refuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mission_rate: Option<String>,
+    /// The same for the mapping lane (`--mapping-rate`, B2.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mapping_rate: Option<String>,
 }
 
 pub struct RunDir {
@@ -73,11 +77,11 @@ impl RunDir {
     /// Start a run here: the directory must be new or empty.
     #[cfg(test)]
     pub fn create(&self, bundle_text: &str) -> Result<(), String> {
-        self.create_with(bundle_text, None)
+        self.create_with(bundle_text, &LaneRates::default())
     }
 
-    /// [`Self::create`], recording the mission lane's own rate if it has one.
-    pub fn create_with(&self, bundle_text: &str, mission_rate: Option<&str>) -> Result<(), String> {
+    /// [`Self::create`], recording the lanes' own rates if they have any.
+    pub fn create_with(&self, bundle_text: &str, rates: &LaneRates) -> Result<(), String> {
         std::fs::create_dir_all(&self.path).map_err(|e| e.to_string())?;
         let occupied = std::fs::read_dir(&self.path)
             .map_err(|e| e.to_string())?
@@ -92,14 +96,15 @@ impl RunDir {
         let config = RunConfig {
             format: RUN_FORMAT.to_string(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
-            checkpoint_format: if mission_rate.is_some() {
+            checkpoint_format: if !rates.is_empty() {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
             } else {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
             },
             bundle_fnv1a: format!("{:016x}", fnv1a(bundle_text.as_bytes())),
             bundle: bundle_text.to_string(),
-            mission_rate: mission_rate.map(str::to_string),
+            mission_rate: rates.mission.map(rate_text),
+            mapping_rate: rates.mapping.map(rate_text),
         };
         let json = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
         write_atomic(&self.file("run.json"), &json).map_err(|e| e.to_string())
@@ -111,9 +116,9 @@ impl RunDir {
         self.recorded().map(|(bundle, _)| bundle)
     }
 
-    /// The bundle text and the mission lane's own rate the run was started
-    /// with, checked.
-    pub fn recorded(&self) -> Result<(String, Option<String>), String> {
+    /// The bundle text and the lanes' own rates the run was started with,
+    /// checked.
+    pub fn recorded(&self) -> Result<(String, LaneRates), String> {
         let incomplete = |detail: String| {
             format!(
                 "{}: incomplete run artifact, cannot recover: {detail}",
@@ -133,7 +138,7 @@ impl RunDir {
         // Recorded for the recovery that reads it back: a run whose checkpoints
         // this build cannot read is refused here, by name, rather than failing
         // later on the checkpoint's own header.
-        let checkpoint_format = if config.mission_rate.is_some() {
+        let checkpoint_format = if config.mission_rate.is_some() || config.mapping_rate.is_some() {
             argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
         } else {
             argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
@@ -149,7 +154,17 @@ impl RunDir {
                 "run.json's bundle does not match its hash".to_string(),
             ));
         }
-        Ok((config.bundle, config.mission_rate))
+        let rate = |text: Option<String>, flag: &str| {
+            text.as_deref()
+                .map(parse_rate)
+                .transpose()
+                .map_err(|error| incomplete(format!("run.json's {flag}: {error}")))
+        };
+        let rates = LaneRates {
+            mapping: rate(config.mapping_rate, "mapping rate")?,
+            mission: rate(config.mission_rate, "mission rate")?,
+        };
+        Ok((config.bundle, rates))
     }
 
     pub fn is_complete(&self) -> bool {

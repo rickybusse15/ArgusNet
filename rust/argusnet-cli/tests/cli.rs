@@ -632,6 +632,85 @@ fn a_crashed_scheduled_run_recovers_with_its_mission_rate() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("differs"));
 }
 
+/// B2.5: a run with its mapping lane at its own rate records the rate and,
+/// crashed, recovers to the uninterrupted journal byte for byte -- including
+/// when its last checkpoint holds boundaries the mapping lane had not yet
+/// integrated.
+#[test]
+fn a_crashed_run_with_a_mapping_rate_recovers_with_it() {
+    // Every 3 s against 1 s ticks: the checkpoint at tick 50 comes after the
+    // lane ran at tick 48, with tick 49 still to integrate.
+    let rates = [
+        "--executor",
+        "lanes",
+        "--mapping-rate",
+        "1/3",
+        "--mission-rate",
+        "3/7",
+    ];
+    let whole = run_dir("journal-mapping-whole");
+    let replay = scratch("journal-mapping-whole-replay.json");
+    let with_replay: Vec<&str> = rates
+        .iter()
+        .copied()
+        .chain(["--replay", replay.to_str().unwrap()])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &whole, &with_replay);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let meta = serde_json::to_value(&read_replay(&replay).meta).unwrap();
+    assert_eq!(meta["lane_rates"]["mapping"], "1/3 Hz");
+    assert_eq!(meta["lane_rates"]["mission"], "3/7 Hz");
+
+    let crashed = run_dir("journal-mapping-crashed");
+    let with_crash: Vec<&str> = rates
+        .iter()
+        .copied()
+        .chain(["--crash-after", "61"])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &crashed, &with_crash);
+    assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run["mapping_rate"], "1/3");
+    let checkpoint: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("checkpoint.json")).unwrap())
+            .unwrap();
+    assert!(
+        checkpoint["stage_states"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|state| state.get("pending").is_some()),
+        "the last checkpoint holds boundaries the mapping lane had not integrated"
+    );
+
+    // A different rate is refused before anything is touched.
+    let output = binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(&crashed)
+        .args(["--executor", "lanes", "--mapping-rate", "1/1"])
+        .output()
+        .expect("runs");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("differs"));
+
+    let output = recover(&crashed);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        std::fs::read(whole.join("journal.jsonl")).unwrap(),
+        "the recovered journal is not the uninterrupted one"
+    );
+}
+
 /// A checkpoint taken while the mission lane was sitting out boundaries
 /// carries that lag; resuming it without the rate is refused.
 #[test]
