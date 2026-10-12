@@ -615,6 +615,77 @@ pub fn normalize_scene_id(candidate: &str) -> String {
 /// new or empty. `replay_json`, when given, is packaged as
 /// `replay/replay.json` and named in the manifest. `provenance` is merged into
 /// the manifest's `build`.
+/// The replay major version this reader accepts.
+pub const SUPPORTED_REPLAY_SCHEMA_MAJOR: &str = "2";
+
+/// The structural checks Python's `validate_replay_document` makes before a
+/// replay is packaged: a non-empty `frames` list, a `meta` object, a
+/// supported `meta.schema_version` major, a finite positive `meta.dt_s`, and
+/// a `meta.frame_count` (when given) equal to the number of frames. The
+/// JSON-schema pass Python also runs is not repeated here.
+pub fn validate_replay_document(document: &Value) -> Result<(), String> {
+    let mut errors: Vec<String> = Vec::new();
+    let frames = document.get("frames").and_then(Value::as_array);
+    if frames.is_none_or(|frames| frames.is_empty()) {
+        errors.push("Replay document must contain a non-empty frames list.".into());
+    }
+    match document.get("meta").and_then(Value::as_object) {
+        None => errors.push("Replay document must contain a meta object.".into()),
+        Some(meta) => {
+            if let Some(declared) = meta.get("schema_version").filter(|v| !v.is_null()) {
+                let supported = declared
+                    .as_str()
+                    .is_some_and(|v| v.split('.').next() == Some(SUPPORTED_REPLAY_SCHEMA_MAJOR));
+                if !supported {
+                    errors.push(format!(
+                        "Replay document meta.schema_version {declared} is not supported; \
+                         this reader reads {SUPPORTED_REPLAY_SCHEMA_MAJOR}.x."
+                    ));
+                }
+            }
+            let dt_ok = meta
+                .get("dt_s")
+                .and_then(Value::as_f64)
+                .is_some_and(|dt| dt.is_finite() && dt > 0.0);
+            if !dt_ok {
+                errors.push(
+                    "Replay document meta.dt_s must be a finite value greater than 0.".into(),
+                );
+            }
+            // Present means a non-negative integer (1.0 counts, as the
+            // schema's `integer` does); null, text and fractions are refused.
+            if let Some(count) = meta.get("frame_count") {
+                let declared = count.as_u64().or_else(|| {
+                    count
+                        .as_f64()
+                        .filter(|c| *c >= 0.0 && c.fract() == 0.0)
+                        .map(|c| c as u64)
+                });
+                match (declared, frames) {
+                    (None, _) => errors.push(format!(
+                        "Replay document meta.frame_count {count} is not a non-negative integer."
+                    )),
+                    (Some(declared), Some(frames)) if declared as usize != frames.len() => errors
+                        .push(
+                            "Replay document meta.frame_count must match the number of frames."
+                                .into(),
+                        ),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Replay document validation failed with {} error(s): {}",
+            errors.len(),
+            errors.join("; ")
+        ))
+    }
+}
+
 pub fn build_scene(
     dir: &Path,
     meta: &Value,
@@ -631,6 +702,10 @@ pub fn build_scene(
             "{} is not empty; build into a new directory",
             dir.display()
         ));
+    }
+    if let Some(text) = replay_json {
+        let document: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        validate_replay_document(&document)?;
     }
     let terrain = meta
         .get("terrain")
@@ -883,7 +958,7 @@ mod tests {
         let built = build_scene(
             &dir,
             &meta(),
-            Some("{\"frames\":[]}"),
+            Some(r#"{"meta":{"schema_version":"2.0","dt_s":0.5,"frame_count":1},"frames":[{}]}"#),
             json!({"replay_source": "test"}),
         )
         .unwrap();
@@ -935,5 +1010,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         // A replay without a terrain mesh is refused.
         assert!(build_scene(&dir, &json!({}), None, json!({})).is_err());
+        // So is one that breaks the replay contract, before anything is written.
+        let error = build_scene(
+            &dir,
+            &meta(),
+            Some(r#"{"meta":{"dt_s":0.5},"frames":[]}"#),
+            json!({}),
+        )
+        .unwrap_err();
+        assert!(error.contains("non-empty frames"), "{error}");
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn replays_are_held_to_the_python_readers_contract() {
+        let ok = json!({"meta": {"schema_version": "2.3", "dt_s": 0.25, "frame_count": 2}, "frames": [{}, {}]});
+        assert_eq!(validate_replay_document(&ok), Ok(()));
+        // No version, no frame count: both optional.
+        assert_eq!(
+            validate_replay_document(&json!({"meta": {"dt_s": 1}, "frames": [{}]})),
+            Ok(())
+        );
+        // An integral float is an integer count, as the schema reads it.
+        assert_eq!(
+            validate_replay_document(
+                &json!({"meta": {"dt_s": 1, "frame_count": 1.0}, "frames": [{}]})
+            ),
+            Ok(())
+        );
+        for (document, expected) in [
+            (
+                json!({"meta": {"dt_s": 1.0}, "frames": []}),
+                "non-empty frames",
+            ),
+            (json!({"frames": [{}]}), "meta object"),
+            (
+                json!({"meta": {"schema_version": "3.0", "dt_s": 1.0}, "frames": [{}]}),
+                "not supported",
+            ),
+            (
+                json!({"meta": {"schema_version": 2, "dt_s": 1.0}, "frames": [{}]}),
+                "not supported",
+            ),
+            (json!({"meta": {"dt_s": 0.0}, "frames": [{}]}), "dt_s"),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": 3}, "frames": [{}]}),
+                "frame_count",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": "1"}, "frames": [{}]}),
+                "non-negative integer",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": 1.5}, "frames": [{}]}),
+                "non-negative integer",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": null}, "frames": [{}]}),
+                "non-negative integer",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": -1}, "frames": [{}]}),
+                "non-negative integer",
+            ),
+        ] {
+            let error = validate_replay_document(&document).unwrap_err();
+            assert!(error.contains(expected), "{document}: {error}");
+        }
     }
 }

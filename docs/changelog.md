@@ -14,6 +14,9 @@
 - `argusnet-rs build-scene --replay R --output DIR` builds the same scene
   package as `argusnet build-scene`, in Rust. Over the same replay the two
   packages match vertex for vertex, and the viewer draws them identically.
+  Like the Python builder it first checks the replay (non-empty frames, a
+  supported `schema_version`, a positive `dt_s`, a matching `frame_count`) and
+  writes nothing for a replay that fails.
 - `argusnet-viewer --run <scenario>` no longer needs `--scene` for a run with a
   prior world: it builds the scene from the run itself, in process. After a
   Tools → Scenario run the viewer builds the new scene the same way instead of

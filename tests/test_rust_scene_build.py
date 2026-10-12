@@ -141,7 +141,7 @@ def test_the_rust_scene_package_matches_the_python_one(tmp_path: Path) -> None:
 def test_build_scene_refuses_a_replay_without_terrain(tmp_path: Path) -> None:
     binary = _argusnet_rs()
     replay_path = tmp_path / "replay.json"
-    replay_path.write_text(json.dumps({"meta": {}, "frames": []}), encoding="utf-8")
+    replay_path.write_text(json.dumps({"meta": {"dt_s": 0.5}, "frames": [{}]}), encoding="utf-8")
     result = subprocess.run(
         [str(binary), "build-scene", "--replay", str(replay_path), "--output", str(tmp_path / "o")],
         capture_output=True,
@@ -149,3 +149,28 @@ def test_build_scene_refuses_a_replay_without_terrain(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "terrain.viewer_mesh" in result.stderr
+
+
+@pytest.mark.parametrize("frame_count", ["wrong", "2", 1.5, None])
+def test_build_scene_refuses_a_replay_python_would_reject(
+    tmp_path: Path, frame_count: object
+) -> None:
+    """The replay contract is checked before packaging, as Python checks it."""
+    binary = _argusnet_rs()
+    replay = _replay_with_obstacles()
+    replay["meta"]["frame_count"] = (
+        len(replay["frames"]) + 1 if frame_count == "wrong" else frame_count
+    )
+    with pytest.raises(ValueError, match="frame_count"):
+        build_scene_from_replay(replay, tmp_path / "python")
+    replay_path = tmp_path / "replay.json"
+    replay_path.write_text(json.dumps(replay), encoding="utf-8")
+    output = tmp_path / "rust"
+    result = subprocess.run(
+        [str(binary), "build-scene", "--replay", str(replay_path), "--output", str(output)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "frame_count" in result.stderr
+    assert not output.exists()

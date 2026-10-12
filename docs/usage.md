@@ -158,8 +158,10 @@ argusnet-rs build-scene --replay runs/demo.json --output runs/demo.smartscene
 
 The package is the one `argusnet build-scene` writes: terrain, buildings,
 walls and vegetation as GLB models, the styles, the environment metadata and
-the replay. `argusnet-viewer --run <scenario>` builds one itself when no
-`--scene` is given.
+the replay. A replay that breaks the replay contract (no frames, an
+unsupported `schema_version`, a `frame_count` that does not match) is refused,
+as Python refuses it. `argusnet-viewer --run <scenario>` builds one itself
+when no `--scene` is given.
 
 ### Start from no world knowledge
 
