@@ -250,6 +250,12 @@ pub struct SimulationCheckpoint {
     /// Format 3. A handler whose state is absent here is reset on restore
     /// rather than left holding whatever the restoring object had.
     pub stage_states: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Boundaries each stage has been not due for since it last ran, keyed
+    /// by stage name (B2.4: a lane at its own rate). The stage's next run is
+    /// given the time those boundaries spanned. Empty, and so absent, for a
+    /// run where every stage runs every boundary.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub stage_lag: std::collections::BTreeMap<String, u64>,
 }
 
 impl SimulationCheckpoint {
@@ -438,6 +444,7 @@ mod tests {
             paused: false,
             speed: 1.0,
             stage_states: Default::default(),
+            stage_lag: Default::default(),
         }
     }
 

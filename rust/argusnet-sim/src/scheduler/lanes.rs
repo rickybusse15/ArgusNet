@@ -16,7 +16,7 @@ use std::num::NonZeroU64;
 
 use super::executor::{exact_nanos, ExecutorError, LEGACY_LANE};
 use super::queue::{EventKey, EventQueue, Phase, SourceId};
-use super::time::{Schedule, SimTime};
+use super::time::{Schedule, SimTime, TimeError};
 use crate::stage::Stage;
 
 /// A tick that can be run in parts: opened, its stages run up to a point, and
@@ -36,6 +36,14 @@ pub trait PhasedTick {
     fn begin(&mut self) -> Result<Result<Self::Open, Self::Output>, Self::Error>;
     /// Run the open tick's stages up to and including `last`.
     fn run_through(&mut self, open: &mut Self::Open, last: Stage) -> Result<(), Self::Error>;
+    /// Record the open tick's stages up to and including `last` as not due
+    /// this boundary, without running them (B2.4).
+    fn skip_through(
+        &mut self,
+        open: &mut Self::Open,
+        last: Stage,
+        reason: &str,
+    ) -> Result<(), Self::Error>;
     /// Stage 10.
     fn commit(&mut self, open: Self::Open) -> Result<Self::Output, Self::Error>;
 }
@@ -48,6 +56,9 @@ pub enum LanePart {
     Open { n: u64, last: Stage },
     /// Run legacy tick `n`'s stages through `last`.
     Run { n: u64, last: Stage },
+    /// Legacy tick `n`'s stages through `last` are not due this boundary:
+    /// their lane runs at its own rate (B2.4). Recorded, not run.
+    NotDue { n: u64, last: Stage },
     /// Commit legacy tick `n`.
     Commit { n: u64 },
 }
@@ -91,7 +102,22 @@ pub const LANES_V1: [Lane; 5] = [
     },
 ];
 
+/// The mission lane's own rate (B2.4) and its next occurrence.
+#[derive(Debug, Clone, Copy)]
+struct LaneRate {
+    schedule: Schedule,
+    /// The next occurrence index not yet served by a boundary.
+    next: u64,
+}
+
 /// `legacy_stages_v1` driven as [`LANES_V1`] from the scheduler's queue.
+///
+/// Every lane runs every legacy boundary unless it is given its own rate
+/// ([`Self::with_mission_rate`]). A lane at its own rate runs at the first
+/// boundary at or after each of its deadlines -- a deadline between two
+/// boundaries is served by the later one -- and sits out the rest, recorded
+/// as not due. That is `scheduled_v1`: a declared behaviour change, never the
+/// default.
 #[derive(Debug)]
 pub struct PhasedLaneExecutor {
     queue: EventQueue<LanePart>,
@@ -101,6 +127,8 @@ pub struct PhasedLaneExecutor {
     next: u64,
     /// The keys of the tasks the last boundary ran, in the order they ran.
     ran: Vec<EventKey>,
+    /// The mission lane's own rate; `None` runs it every boundary.
+    mission: Option<LaneRate>,
 }
 
 impl PhasedLaneExecutor {
@@ -114,7 +142,52 @@ impl PhasedLaneExecutor {
             epoch: SimTime::EPOCH,
             next: first,
             ran: Vec::new(),
+            mission: None,
         })
+    }
+
+    /// The mission lane (stage 9) at its own rate, from the boundary this
+    /// executor starts at. Mission is the first lane allowed off the legacy
+    /// rate: its inputs are cumulative (the map, the fleet), so a boundary it
+    /// sits out loses no evidence, and its one use of elapsed time (inspect
+    /// dwell) is given the time since it last ran. The occurrences before the
+    /// start boundary count as served, so a resumed run picks up where an
+    /// uninterrupted one would be.
+    pub fn with_mission_rate(mut self, schedule: Schedule) -> Result<Self, TimeError> {
+        schedule.validate()?;
+        let next = self.occurrences_before(schedule, self.next)?;
+        self.mission = Some(LaneRate { schedule, next });
+        Ok(self)
+    }
+
+    /// The mission lane's own rate, if it has one.
+    pub fn mission_rate(&self) -> Option<Schedule> {
+        self.mission.map(|rate| rate.schedule)
+    }
+
+    /// How many of `schedule`'s occurrences boundaries before `n` served:
+    /// the first occurrence after boundary `n - 1`.
+    fn occurrences_before(&self, schedule: Schedule, n: u64) -> Result<u64, TimeError> {
+        if n == 0 {
+            return Ok(0);
+        }
+        let previous = self.boundaries.nth_deadline(self.epoch, n - 1)?;
+        schedule.first_at_or_after(self.epoch, previous.checked_add_nanos(1)?)
+    }
+
+    /// Whether the mission lane runs at the boundary whose deadline is
+    /// `deadline`, consuming every occurrence it serves.
+    fn mission_due(&mut self, deadline: SimTime) -> Result<bool, TimeError> {
+        let Some(rate) = self.mission.as_mut() else {
+            return Ok(true);
+        };
+        if rate.schedule.nth_deadline(self.epoch, rate.next)? > deadline {
+            return Ok(false);
+        }
+        rate.next = rate
+            .schedule
+            .first_at_or_after(self.epoch, deadline.checked_add_nanos(1)?)?;
+        Ok(true)
     }
 
     /// Run the next legacy boundary's lanes, in queue order, and return what
@@ -132,9 +205,13 @@ impl PhasedLaneExecutor {
             .boundaries
             .nth_deadline(self.epoch, n)
             .map_err(ExecutorError::Time)?;
+        let mission_due = self.mission_due(deadline).map_err(ExecutorError::Time)?;
         for lane in LANES_V1 {
             let part = match lane.last {
                 Some(last) if lane.source == LEGACY_LANE => LanePart::Open { n, last },
+                Some(last) if lane.phase == Phase::MissionPlanning && !mission_due => {
+                    LanePart::NotDue { n, last }
+                }
                 Some(last) => LanePart::Run { n, last },
                 None => LanePart::Commit { n },
             };
@@ -171,6 +248,12 @@ impl PhasedLaneExecutor {
                         // of this boundary belongs to the old epoch.
                         self.queue.reset(self.epoch);
                         self.next = run.current_tick();
+                        if let Some(rate) = self.mission {
+                            let next = self
+                                .occurrences_before(rate.schedule, self.next)
+                                .map_err(ExecutorError::Time)?;
+                            self.mission = Some(LaneRate { next, ..rate });
+                        }
                         return Ok(output);
                     }
                 },
@@ -180,6 +263,20 @@ impl PhasedLaneExecutor {
                         ran: run.current_tick(),
                     })?;
                     run.run_through(opened, last).map_err(ExecutorError::Tick)?;
+                }
+                LanePart::NotDue { last, .. } => {
+                    let opened = open.as_mut().ok_or(ExecutorError::OutOfStep {
+                        scheduled: n,
+                        ran: run.current_tick(),
+                    })?;
+                    let reason = match self.mission.map(|rate| rate.schedule) {
+                        Some(schedule) => {
+                            format!("not due: lane at {} (scheduled_v1)", describe(schedule))
+                        }
+                        None => "not due (scheduled_v1)".to_string(),
+                    };
+                    run.skip_through(opened, last, &reason)
+                        .map_err(ExecutorError::Tick)?;
                 }
                 LanePart::Commit { .. } => {
                     let opened = open.take().ok_or(ExecutorError::OutOfStep {
@@ -208,7 +305,19 @@ impl PhasedLaneExecutor {
     pub fn reset(&mut self) -> usize {
         self.next = 0;
         self.ran.clear();
+        if let Some(rate) = self.mission.as_mut() {
+            rate.next = 0;
+        }
         self.queue.reset(self.epoch)
+    }
+}
+
+/// A schedule as a reader would write it: `3/1 Hz`, `every 250000000 ns`.
+pub fn describe(schedule: Schedule) -> String {
+    match schedule {
+        Schedule::Rational { hz_num, hz_den } => format!("{hz_num}/{hz_den} Hz"),
+        Schedule::Period(period) => format!("every {period} ns"),
+        Schedule::Once(at) => format!("once at {} ns", at.as_nanos()),
     }
 }
 
@@ -242,6 +351,16 @@ mod tests {
             if self.fail_at == Some(last) {
                 return Err(format!("failed at {}", last.order()));
             }
+            Ok(())
+        }
+        fn skip_through(
+            &mut self,
+            open: &mut u64,
+            last: Stage,
+            reason: &str,
+        ) -> Result<(), String> {
+            self.log
+                .push(format!("skip {open} through {} ({reason})", last.order()));
             Ok(())
         }
         fn commit(&mut self, open: u64) -> Result<u64, String> {
@@ -319,5 +438,94 @@ mod tests {
             })
         );
         assert!(run.log.is_empty());
+    }
+
+    fn hz(num: u64, den: u64) -> Schedule {
+        Schedule::rational(NonZeroU64::new(num).unwrap(), NonZeroU64::new(den).unwrap()).unwrap()
+    }
+
+    /// Which of the first `count` boundaries the mission lane runs at.
+    fn due_boundaries(executor: &mut PhasedLaneExecutor, first: u64, count: u64) -> Vec<u64> {
+        (first..first + count)
+            .filter(|&n| {
+                let deadline = executor.boundaries.nth_deadline(executor.epoch, n).unwrap();
+                executor.mission_due(deadline).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_lane_rate_never_drifts_against_the_boundaries() {
+        // 3 Hz against 10 Hz boundaries, a million boundaries (100 000 s):
+        // exactly one run per deadline, every one on the first boundary at
+        // or after it.
+        let mut executor = PhasedLaneExecutor::new::<String>(0.1, 0)
+            .unwrap()
+            .with_mission_rate(hz(3, 1))
+            .unwrap();
+        let schedule = hz(3, 1);
+        let runs = due_boundaries(&mut executor, 0, 1_000_000);
+        assert_eq!(runs.len(), 300_000);
+        for (k, n) in runs.iter().enumerate() {
+            let deadline = schedule.nth_deadline(SimTime::EPOCH, k as u64).unwrap();
+            let boundary = executor
+                .boundaries
+                .nth_deadline(SimTime::EPOCH, *n)
+                .unwrap();
+            let before = executor
+                .boundaries
+                .nth_deadline(SimTime::EPOCH, n.saturating_sub(1))
+                .unwrap();
+            assert!(
+                boundary >= deadline && (*n == 0 || before < deadline),
+                "deadline {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_executor_started_mid_run_serves_the_same_boundaries() {
+        let mut straight = PhasedLaneExecutor::new::<String>(0.25, 0)
+            .unwrap()
+            .with_mission_rate(hz(2, 5))
+            .unwrap();
+        let all = due_boundaries(&mut straight, 0, 200);
+        for start in [1, 9, 10, 11, 57] {
+            let mut resumed = PhasedLaneExecutor::new::<String>(0.25, start)
+                .unwrap()
+                .with_mission_rate(hz(2, 5))
+                .unwrap();
+            let later: Vec<u64> = all.iter().copied().filter(|n| *n >= start).collect();
+            assert_eq!(
+                due_boundaries(&mut resumed, start, 200 - start),
+                later,
+                "from {start}"
+            );
+        }
+        // 2/5 Hz at 0.25 s boundaries: every tenth.
+        assert_eq!(&all[..4], [0, 10, 20, 30]);
+    }
+
+    #[test]
+    fn a_lane_not_due_is_recorded_not_run() {
+        let mut run = Recorder::default();
+        let mut executor = PhasedLaneExecutor::new::<String>(0.5, 0)
+            .unwrap()
+            .with_mission_rate(hz(1, 1))
+            .unwrap();
+        executor.step(&mut run).unwrap();
+        run.log.clear();
+        executor.step(&mut run).unwrap();
+        assert!(
+            run.log
+                .iter()
+                .any(|line| line == "skip 1 through 9 (not due: lane at 1/1 Hz (scheduled_v1))"),
+            "{:?}",
+            run.log
+        );
+        assert!(!run
+            .log
+            .iter()
+            .any(|line| line.starts_with("run 1 through 9")));
     }
 }

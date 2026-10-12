@@ -301,6 +301,19 @@ pub trait StageHandler: std::any::Any + fmt::Debug + Send {
     /// asserts that this handler holds no state that survives a tick.
     fn reset(&mut self) {}
 
+    /// This boundary the stage is not due (B2.4: its lane runs at its own
+    /// rate) and does not run. Clear whatever the last run left as *this
+    /// tick's* output -- events, decisions, commands for a later stage -- so
+    /// a boundary it did not run reports none.
+    ///
+    /// The default refuses: only a handler that has said what its per-tick
+    /// outputs are may be skipped. One that never ran is fine to skip.
+    fn not_due(&mut self) -> Result<(), StageError> {
+        Err(StageError::Invariant(
+            "this stage has not declared how to sit out a boundary".to_string(),
+        ))
+    }
+
     /// Causal state this handler needs back in order to resume identically.
     ///
     /// `None` means "I hold nothing that affects a future decision". §6: what
@@ -426,6 +439,14 @@ impl crate::scheduler::PhasedTick for Simulation {
     fn run_through(&mut self, open: &mut OpenTick, last: Stage) -> Result<(), TickError> {
         Simulation::run_through(self, open, last)
     }
+    fn skip_through(
+        &mut self,
+        open: &mut OpenTick,
+        last: Stage,
+        reason: &str,
+    ) -> Result<(), TickError> {
+        Simulation::skip_through(self, open, last, reason)
+    }
     fn commit(&mut self, open: OpenTick) -> Result<Arc<RuntimeSnapshot>, TickError> {
         self.commit_tick(open)
     }
@@ -514,6 +535,9 @@ pub struct Simulation {
     handoffs: Vec<Handoff>,
     /// What [`ProductionBuilder::scenario_hash`] recorded; `0` for a bare run.
     scenario_hash: u64,
+    /// Boundaries each stage has been not due for since it last ran (B2.4).
+    /// Empty unless a lane runs at its own rate.
+    stage_lag: BTreeMap<Stage, u64>,
 }
 
 impl fmt::Debug for Simulation {
@@ -571,6 +595,7 @@ impl Simulation {
             stage_timings: None,
             handoffs: Vec::new(),
             scenario_hash: 0,
+            stage_lag: BTreeMap::new(),
         })
     }
 
@@ -1155,10 +1180,17 @@ impl Simulation {
             let started = self.timer();
             // Taken out for its run, so the others can be lent.
             let mut handler = self.handlers.remove(&stage);
+            // A stage that sat out boundaries (its lane at its own rate) is
+            // given the time since it last ran. With no lag this is the
+            // timestep itself, bit for bit.
+            let dt_s = match self.stage_lag.remove(&stage) {
+                None => self.config.timestep().seconds(),
+                Some(lag) => self.config.timestep().seconds() * (lag + 1) as f64,
+            };
             let mut context = TickContext {
                 tick,
                 timestamp_s: self.clock.timestamp_s(),
-                dt_s: self.config.timestep().seconds(),
+                dt_s,
                 seed: self.config.seed(),
                 seed_time_key: self.clock.seed_time_key(),
                 world: &mut self.world,
@@ -1210,6 +1242,71 @@ impl Simulation {
                     return Err(TickError::Stage { tick, stage, error });
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Record the open tick's stages up to and including `last` as not due
+    /// this boundary (B2.4: a lane at its own rate), without running them.
+    /// Each handler clears its per-tick output ([`StageHandler::not_due`]);
+    /// one that cannot faults the run, as a failed stage does. The trace
+    /// shows every one as skipped, with `reason`: a stage is never left out
+    /// silently.
+    pub fn skip_through(
+        &mut self,
+        open: &mut OpenTick,
+        last: Stage,
+        reason: &str,
+    ) -> Result<(), TickError> {
+        if matches!(last, Stage::ApplyCommands | Stage::CommitSnapshot) {
+            return Err(TickError::OutOfOrder {
+                detail: format!("stage {last} is the tick's boundary, not a stage to skip"),
+            });
+        }
+        if open.epoch != self.epoch || open.tick != self.clock.tick() {
+            return Err(TickError::OutOfOrder {
+                detail: "the open tick is not this run's current tick".into(),
+            });
+        }
+        if (last.order() as usize) < open.next {
+            return Err(TickError::OutOfOrder {
+                detail: format!("stage {last} has already run this tick"),
+            });
+        }
+        let tick = open.tick;
+        while open.next <= last.order() as usize {
+            let stage = Stage::PIPELINE[open.next];
+            open.next += 1;
+            let declined = match self.handlers.get_mut(&stage) {
+                Some(handler) => handler.not_due().err(),
+                None => None,
+            };
+            if let Some(error) = declined {
+                self.trace.record(StageRecord {
+                    tick,
+                    order: stage.order(),
+                    stage,
+                    outcome: StageOutcome::Failed {
+                        detail: error.to_string(),
+                    },
+                    notes: Vec::new(),
+                });
+                self.state = RunState::Faulted {
+                    at_tick: tick,
+                    stage,
+                };
+                return Err(TickError::Stage { tick, stage, error });
+            }
+            *self.stage_lag.entry(stage).or_insert(0) += 1;
+            self.trace.record(StageRecord {
+                tick,
+                order: stage.order(),
+                stage,
+                outcome: StageOutcome::Skipped {
+                    reason: reason.to_string(),
+                },
+                notes: Vec::new(),
+            });
         }
         Ok(())
     }
@@ -1362,6 +1459,7 @@ impl Simulation {
         self.clock.reset();
         self.epoch += 1;
         self.state = RunState::Ready;
+        self.stage_lag.clear();
         for pending in self.queue.drain_due(u64::MAX) {
             self.cancel(
                 pending.command_id,
@@ -1432,6 +1530,11 @@ impl Simulation {
                         .map(|state| (stage.to_string(), state))
                 })
                 .collect(),
+            stage_lag: self
+                .stage_lag
+                .iter()
+                .map(|(stage, lag)| (stage.to_string(), *lag))
+                .collect(),
         })
     }
 
@@ -1481,6 +1584,16 @@ impl Simulation {
                     detail: error.to_string(),
                 })?;
         }
+        let mut stage_lag = BTreeMap::new();
+        for (name, lag) in &checkpoint.stage_lag {
+            let stage = Stage::PIPELINE
+                .into_iter()
+                .find(|stage| stage.to_string() == *name)
+                .ok_or_else(|| RestoreError::InvalidState {
+                    detail: format!("lag recorded for an unknown stage {name}"),
+                })?;
+            stage_lag.insert(stage, *lag);
+        }
         let restored_queue = CommandQueue::from_checkpoint(
             &checkpoint.pending_commands,
             &checkpoint.command_history,
@@ -1498,6 +1611,7 @@ impl Simulation {
         self.paused = checkpoint.paused;
         self.speed = checkpoint.speed;
         self.single_step = false;
+        self.stage_lag = stage_lag;
         for (stage, handler) in self.handlers.iter_mut() {
             match checkpoint.stage_states.get(&stage.to_string()) {
                 // `check_state` accepted this value above, so a refusal now

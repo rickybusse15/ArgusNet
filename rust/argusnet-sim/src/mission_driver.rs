@@ -845,6 +845,15 @@ impl StageHandler for MissionDriverStage {
         Ok(())
     }
 
+    fn not_due(&mut self) -> Result<(), StageError> {
+        // This tick's outputs: the decisions it records and the override
+        // commands stage 2 takes next tick. A boundary it sat out made none.
+        // The machine's events are taken where they are made, in `run`.
+        self.override_commands.clear();
+        self.decisions.clear();
+        Ok(())
+    }
+
     fn reset(&mut self) {
         self.machine.reset_machine();
         self.pois = PoiManager::new(self.initial_pois.clone());

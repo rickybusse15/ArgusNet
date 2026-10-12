@@ -534,6 +534,14 @@ impl MissionStage {
 }
 
 impl StageHandler for MissionStage {
+    fn not_due(&mut self) -> Result<(), StageError> {
+        // This tick's events, and the inputs stage 8 handed it for this tick:
+        // the next run is handed its own.
+        self.events.clear();
+        self.pending = None;
+        Ok(())
+    }
+
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         self.events.clear();
         if !self.enabled {
