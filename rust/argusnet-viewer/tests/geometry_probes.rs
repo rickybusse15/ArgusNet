@@ -432,3 +432,83 @@ fn the_zone_outline_is_a_diagnostic() {
         "the outline did not appear with the diagnostic glyphs: {diffs:?}"
     );
 }
+
+/// A scene built in Rust (`scene_build`): flat terrain at 0 m and one 40 m
+/// building, 200 m square, at the centre.
+fn built_scene(name: &str) -> PathBuf {
+    let root = scratch(name).join("scene");
+    let meta = serde_json::json!({
+        "scenario_name": "alpha-probe",
+        "environment_bounds_m": {"x_min_m": -1000.0, "x_max_m": 1000.0, "y_min_m": -1000.0, "y_max_m": 1000.0},
+        "terrain": {"viewer_mesh": {
+            "x_min_m": -1000.0, "x_max_m": 1000.0, "y_min_m": -1000.0, "y_max_m": 1000.0,
+            "rows": 2, "cols": 2, "heights_m": [[0.0, 0.0], [0.0, 0.0]],
+        }},
+        "occluding_objects": [
+            {"blocker_type": "building",
+             "footprint_xy_m": [[-100.0, -100.0], [100.0, -100.0], [100.0, 100.0], [-100.0, 100.0]],
+             "base_elevation_m": 0.0, "top_elevation_m": 40.0},
+        ],
+    });
+    let replay = serde_json::json!({
+        "meta": {"dt_s": DT},
+        "frames": (0..4).map(|f| serde_json::json!({
+            "timestamp_s": f as f64 * DT, "tracks": [], "truths": [], "nodes": [],
+        })).collect::<Vec<_>>(),
+    });
+    argusnet_sim::scene_build::build_scene(
+        &root,
+        &meta,
+        Some(&replay.to_string()),
+        serde_json::json!({}),
+    )
+    .expect("scene builds");
+    root
+}
+
+/// R0: the overlay GLBs blend, so a building drawn at its styled opacity
+/// (0.45) shows the ground through it. The same building with the GLB's
+/// `alphaMode` removed -- glTF's default, `OPAQUE`, which is how every overlay
+/// was drawn before -- hides it: the roof pixels differ.
+#[test]
+fn a_building_is_drawn_at_its_styled_opacity() {
+    if !gpu_tests() {
+        return;
+    }
+    let blended = built_scene("alpha-blend");
+    let opaque = built_scene("alpha-opaque");
+    let glb = opaque.join("overlays/buildings.glb");
+    let bytes = std::fs::read(&glb).unwrap();
+    let needle = br#""alphaMode":"BLEND","#;
+    let at = bytes
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .expect("the built building layer blends");
+    let mut patched = bytes.clone();
+    // Same length, so the GLB's chunk lengths stay valid: the key becomes
+    // whitespace, and the material falls back to OPAQUE.
+    patched[at..at + needle.len()].fill(b' ');
+    std::fs::write(&glb, patched).unwrap();
+
+    let roof = [[0.0, 0.0, 40.0], [40.0, -40.0, 40.0], [-40.0, 40.0, 40.0]];
+    let probe = |name: &str, scene: &Path| {
+        render(
+            name,
+            scene,
+            CameraPreset::TopDown,
+            None,
+            overlays(false, false, false),
+            &[],
+            &roof,
+        )
+    };
+    let blend = probe("alpha-blend", &blended);
+    let solid = probe("alpha-opaque", &opaque);
+    for (point, (b, s)) in roof.iter().zip(blend.iter().zip(&solid)) {
+        let d = difference(*b, *s);
+        assert!(
+            d > 0.08,
+            "at {point:?} the blended roof {b:?} is not distinguishable from the opaque {s:?} ({d})"
+        );
+    }
+}

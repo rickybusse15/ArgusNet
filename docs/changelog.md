@@ -2,6 +2,14 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Buildings, vegetation and walls are now drawn at their styled opacity
+  (WORLD_REALISM_PLAN R0). The overlay GLBs carried translucent vertex
+  colours, but their material had no `alphaMode`, so glTF's default `OPAQUE`
+  drew them solid. Both GLB writers (`scene_export.rs`, `_glb.py`) now write
+  `alphaMode: BLEND` for a mesh with any translucent colour, and leave opaque
+  meshes as they were. A GPU probe checks the roof of a built building against
+  the same building drawn opaque.
+
 - Plans: [PLANNING_EFFICIENCY_PLAN.md](PLANNING_EFFICIENCY_PLAN.md) (fleet-wide
   allocation, reserve-feasible return home, runtime obstacle-aware routing,
   rebalancing coverage, coordination over delayed links) and

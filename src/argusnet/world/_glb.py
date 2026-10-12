@@ -109,6 +109,20 @@ def write_glb(path: str | Path, mesh: SimpleMesh, *, name: str) -> None:
     )
     index_bytes = np.ascontiguousarray(mesh.indices.astype(np.uint32)).tobytes(order="C")
 
+    # glTF ignores vertex alpha unless the material blends (OPAQUE is the
+    # default); BLEND is its only translucent mode, with straight colours.
+    material: dict[str, object] = {
+        "name": f"{name}-material",
+        "pbrMetallicRoughness": {
+            "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+            "metallicFactor": 0.0,
+            "roughnessFactor": 1.0,
+        },
+        "doubleSided": True,
+    }
+    if bool(np.any(mesh.colors[:, 3] < 1.0)):
+        material["alphaMode"] = "BLEND"
+
     chunks: list[bytes] = []
     buffer_views = []
     accessors = []
@@ -185,17 +199,7 @@ def write_glb(path: str | Path, mesh: SimpleMesh, *, name: str) -> None:
         "buffers": [{"byteLength": offset}],
         "bufferViews": buffer_views,
         "accessors": accessors,
-        "materials": [
-            {
-                "name": f"{name}-material",
-                "pbrMetallicRoughness": {
-                    "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
-                    "metallicFactor": 0.0,
-                    "roughnessFactor": 1.0,
-                },
-                "doubleSided": True,
-            }
-        ],
+        "materials": [material],
         "meshes": [
             {
                 "name": name,

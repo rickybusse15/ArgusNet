@@ -18,7 +18,9 @@
 //!
 //! GLB files follow `argusnet/world/_glb.py`: one mesh, one primitive with
 //! `POSITION`, `NORMAL` and `COLOR_0` (linear RGBA floats), `u32` indices,
-//! one white double-sided material; metres, ENU, Z up.
+//! one white double-sided material; metres, ENU, Z up. A mesh with any
+//! translucent vertex colour gets `alphaMode: BLEND` (R0), so a layer's styled
+//! opacity reaches the viewer; an opaque one stays `OPAQUE` (the default).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -400,6 +402,17 @@ pub fn write_glb(path: &Path, mesh: &MeshData, name: &str) -> Result<(), String>
             bin.push(0);
         }
     }
+    // glTF ignores vertex alpha unless the material blends (`OPAQUE` is the
+    // default); `BLEND` is its only translucent mode, with straight colours.
+    let translucent = mesh.colours.iter().any(|c| c[3] < 1.0);
+    let mut material = json!({
+        "name": format!("{name}-material"),
+        "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 1.0},
+        "doubleSided": true,
+    });
+    if translucent {
+        material["alphaMode"] = json!("BLEND");
+    }
     let mut lo = [f32::INFINITY; 3];
     let mut hi = [f32::NEG_INFINITY; 3];
     for p in &mesh.positions {
@@ -421,11 +434,7 @@ pub fn write_glb(path: &Path, mesh: &MeshData, name: &str) -> Result<(), String>
             {"bufferView": 2, "componentType": 5126, "count": count, "type": "VEC4"},
             {"bufferView": 3, "componentType": 5125, "count": mesh.indices.len(), "type": "SCALAR"},
         ],
-        "materials": [{
-            "name": format!("{name}-material"),
-            "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 1.0},
-            "doubleSided": true,
-        }],
+        "materials": [material],
         "meshes": [{
             "name": name,
             "primitives": [{
@@ -526,5 +535,35 @@ mod tests {
         rows.apply(&[BeliefCellUpdate(1, 1, None, Some(2000), 90, 2)]);
         let dir = std::env::temp_dir().join("argusnet-export-empty-test");
         assert!(export_belief_scene(&dir, "x", layout(), &rows, json!({})).is_err());
+    }
+
+    /// The JSON chunk of a GLB file.
+    fn glb_json(path: &Path) -> Value {
+        let bytes = std::fs::read(path).unwrap();
+        let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        serde_json::from_slice(&bytes[20..20 + length]).unwrap()
+    }
+
+    fn triangle(alpha: f32) -> MeshData {
+        MeshData {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]; 3],
+            colours: vec![[0.9, 0.9, 0.9, alpha]; 3],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    /// R0: a translucent mesh blends, so its styled opacity reaches the
+    /// viewer; an opaque one stays glTF's default `OPAQUE`, byte for byte as
+    /// before.
+    #[test]
+    fn a_translucent_mesh_blends_and_an_opaque_one_does_not() {
+        let dir = std::env::temp_dir().join(format!("argusnet-glb-alpha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (blend, opaque) = (dir.join("blend.glb"), dir.join("opaque.glb"));
+        write_glb(&blend, &triangle(0.45), "buildings").unwrap();
+        write_glb(&opaque, &triangle(1.0), "terrain-base").unwrap();
+        assert_eq!(glb_json(&blend)["materials"][0]["alphaMode"], "BLEND");
+        assert!(glb_json(&opaque)["materials"][0].get("alphaMode").is_none());
     }
 }
