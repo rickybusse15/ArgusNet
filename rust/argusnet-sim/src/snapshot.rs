@@ -123,10 +123,10 @@ impl CheckpointHeader {
     /// `scenario_hash`. A format-3 checkpoint is refused with a versioned
     /// error rather than restored without a scenario check.
     pub const FORMAT_VERSION: u32 = 4;
-    /// Format 4 plus `stage_lag` (B2.4): written only by a run whose lane at
-    /// its own rate was sitting out a boundary, so a reader that predates the
-    /// field refuses it instead of resuming without it. Every other
-    /// checkpoint stays format 4.
+    /// Format 4 plus `stage_lag` and `lane_rates` (B2.4): written only by a
+    /// run with a lane at its own rate, so a reader that predates the fields
+    /// refuses it instead of resuming without them. Every other checkpoint
+    /// stays format 4.
     pub const FORMAT_VERSION_STAGE_LAG: u32 = 5;
     /// Version 2 changes command-boundary recovery and single-step semantics.
     /// Old checkpoints must not silently resume under a different control contract.
@@ -261,6 +261,12 @@ pub struct SimulationCheckpoint {
     /// run where every stage runs every boundary.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub stage_lag: std::collections::BTreeMap<String, u64>,
+    /// Each stage whose lane runs at its own rate, and that rate (`NUM/DEN`
+    /// Hz), keyed by stage name (B2.4). A run restoring this checkpoint must
+    /// have declared exactly these rates. Empty, and so absent, when every
+    /// lane runs every boundary.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub lane_rates: std::collections::BTreeMap<String, String>,
 }
 
 impl SimulationCheckpoint {
@@ -271,14 +277,15 @@ impl SimulationCheckpoint {
         config_hash: u64,
         scenario_hash: u64,
     ) -> Result<(), RestoreError> {
-        let expected = if self.stage_lag.is_empty() {
+        let expected = if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
             CheckpointHeader::FORMAT_VERSION
         } else {
             CheckpointHeader::FORMAT_VERSION_STAGE_LAG
         };
         let readable = self.header.format_version == expected
             || (self.header.format_version == CheckpointHeader::FORMAT_VERSION_STAGE_LAG
-                && self.stage_lag.is_empty());
+                && self.stage_lag.is_empty()
+                && self.lane_rates.is_empty());
         if !readable {
             return Err(RestoreError::FormatVersion {
                 found: self.header.format_version,
@@ -458,6 +465,7 @@ mod tests {
             speed: 1.0,
             stage_states: Default::default(),
             stage_lag: Default::default(),
+            lane_rates: Default::default(),
         }
     }
 

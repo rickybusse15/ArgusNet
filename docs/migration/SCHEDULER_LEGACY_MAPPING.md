@@ -122,12 +122,19 @@ without a rate nothing changes.
   boundaries since it last ran (absent when empty, so legacy checkpoints are
   unchanged). The executor derives its next occurrence from the tick it starts
   at, so a resumed run serves the same boundaries as an uninterrupted one.
-  A checkpoint with lag is format 5 (`FORMAT_VERSION_STAGE_LAG`), so a reader
-  that predates the field refuses it; every other checkpoint stays format 4,
-  so legacy replays and their recorded `checkpoint_format` do not change. A
-  lag larger than the checkpoint's tick is refused as damage. A run directory
-  records the rate in `run.json`, so `--recover` continues the scheduled run,
-  and `--resume` of a checkpoint with lag needs the same `--mission-rate`.
+  The driver declares each lane's own rate on the simulation
+  (`Simulation::declare_lane_rate`); only a declared stage may sit out a
+  boundary, and the checkpoint carries the declared rates (`lane_rates`). A
+  restore into a run that declared other rates, or none, is refused, as is
+  lag for an undeclared stage or more lag than the checkpoint's tick. A
+  checkpoint with rates or lag is format 5 (`FORMAT_VERSION_STAGE_LAG`), so a
+  reader that predates the fields refuses it; every other checkpoint stays
+  format 4, so legacy replays and their recorded `checkpoint_format` do not
+  change. A run directory records the rate in `run.json`, so `--recover`
+  continues the scheduled run; `--resume` needs the same `--mission-rate`.
+- **Deadlines are used up by commits.** A boundary that does not commit
+  (paused, failed, reset) consumes no occurrence: the executor moves the lane
+  to its next occurrence only when the boundary commits.
   This is the baseline P4.10e builds on: there is still no work pending across
   a boundary.
 - **Label.** `argusnet-rs sim --executor lanes --mission-rate NUM/DEN` records

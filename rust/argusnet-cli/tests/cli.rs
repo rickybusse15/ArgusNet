@@ -664,6 +664,16 @@ fn a_checkpoint_with_lane_lag_needs_its_rate_to_resume() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("--mission-rate"));
 
+    // Nor with another rate.
+    let output = binary()
+        .args(["sim", "--quiet", "--bundle"])
+        .arg(fixture("scenario_bundle_scan.json"))
+        .args(["--executor", "lanes", "--mission-rate", "3/7", "--resume"])
+        .arg(&checkpoint)
+        .output()
+        .expect("runs");
+    assert_eq!(output.status.code(), Some(2));
+
     let output = binary()
         .args(["sim", "--quiet", "--bundle"])
         .arg(fixture("scenario_bundle_scan.json"))

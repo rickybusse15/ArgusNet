@@ -538,6 +538,10 @@ pub struct Simulation {
     /// Boundaries each stage has been not due for since it last ran (B2.4).
     /// Empty unless a lane runs at its own rate.
     stage_lag: BTreeMap<Stage, u64>,
+    /// The stages whose lanes run at their own rate, and the rate (B2.4),
+    /// as the driver declared them. Only these may sit out a boundary, and a
+    /// checkpoint restores only into a run that declared the same.
+    lane_rates: BTreeMap<Stage, String>,
 }
 
 impl fmt::Debug for Simulation {
@@ -596,6 +600,7 @@ impl Simulation {
             handoffs: Vec::new(),
             scenario_hash: 0,
             stage_lag: BTreeMap::new(),
+            lane_rates: BTreeMap::new(),
         })
     }
 
@@ -1246,6 +1251,20 @@ impl Simulation {
         Ok(())
     }
 
+    /// Declare that `stage`'s lane runs at its own rate, `rate` (B2.4), as the
+    /// driver's executor schedules it. Only a declared stage may sit out a
+    /// boundary ([`Self::skip_through`]); the declaration goes into every
+    /// checkpoint, and [`Self::restore`] refuses one taken under other rates.
+    /// Declared before any tick runs or any restore, and kept across reset.
+    pub fn declare_lane_rate(&mut self, stage: Stage, rate: impl Into<String>) {
+        self.lane_rates.insert(stage, rate.into());
+    }
+
+    /// The lanes declared to run at their own rate.
+    pub fn lane_rates(&self) -> &BTreeMap<Stage, String> {
+        &self.lane_rates
+    }
+
     /// Record the open tick's stages up to and including `last` as not due
     /// this boundary (B2.4: a lane at its own rate), without running them.
     /// Each handler clears its per-tick output ([`StageHandler::not_due`]);
@@ -1271,6 +1290,16 @@ impl Simulation {
         if (last.order() as usize) < open.next {
             return Err(TickError::OutOfOrder {
                 detail: format!("stage {last} has already run this tick"),
+            });
+        }
+        if let Some(undeclared) = Stage::PIPELINE[open.next..=last.order() as usize]
+            .iter()
+            .find(|stage| !self.lane_rates.contains_key(stage))
+        {
+            return Err(TickError::OutOfOrder {
+                detail: format!(
+                    "stage {undeclared} has no lane rate declared, so it runs every boundary"
+                ),
             });
         }
         let tick = open.tick;
@@ -1502,7 +1531,7 @@ impl Simulation {
         }
         Ok(SimulationCheckpoint {
             header: CheckpointHeader {
-                format_version: if self.stage_lag.is_empty() {
+                format_version: if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
                     CheckpointHeader::FORMAT_VERSION
                 } else {
                     CheckpointHeader::FORMAT_VERSION_STAGE_LAG
@@ -1538,6 +1567,11 @@ impl Simulation {
                 .stage_lag
                 .iter()
                 .map(|(stage, lag)| (stage.to_string(), *lag))
+                .collect(),
+            lane_rates: self
+                .lane_rates
+                .iter()
+                .map(|(stage, rate)| (stage.to_string(), rate.clone()))
                 .collect(),
         })
     }
@@ -1588,6 +1622,22 @@ impl Simulation {
                     detail: error.to_string(),
                 })?;
         }
+        // The rates the checkpoint was taken under are the rates this run
+        // must be driven at: anything else would move future deadlines.
+        let declared: BTreeMap<String, String> = self
+            .lane_rates
+            .iter()
+            .map(|(stage, rate)| (stage.to_string(), rate.clone()))
+            .collect();
+        if declared != checkpoint.lane_rates {
+            return Err(RestoreError::InvalidState {
+                detail: format!(
+                    "the checkpoint was taken with lane rates {:?} and this run declares {:?} \
+                     (argusnet-rs: the same --executor lanes --mission-rate)",
+                    checkpoint.lane_rates, declared
+                ),
+            });
+        }
         let mut stage_lag = BTreeMap::new();
         for (name, lag) in &checkpoint.stage_lag {
             let stage = Stage::PIPELINE
@@ -1596,7 +1646,13 @@ impl Simulation {
                 .ok_or_else(|| RestoreError::InvalidState {
                     detail: format!("lag recorded for an unknown stage {name}"),
                 })?;
-            // A stage cannot have sat out more boundaries than the run has had.
+            // Only a stage with its own rate sits out boundaries, and not more
+            // of them than the run has had.
+            if !self.lane_rates.contains_key(&stage) {
+                return Err(RestoreError::InvalidState {
+                    detail: format!("lag recorded for stage {name}, which has no lane rate"),
+                });
+            }
             if *lag > checkpoint.tick {
                 return Err(RestoreError::InvalidState {
                     detail: format!(

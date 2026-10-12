@@ -617,6 +617,14 @@ fn sim(args: SimArgs) -> ExitCode {
     if let Err(error) = options.apply(&mut run, &bundle) {
         return fail(EXIT_UNSUPPORTED, error);
     }
+    // Declared before any restore: a checkpoint resumes only under the rates
+    // it was taken with.
+    if let Some(rate) = mission_rate {
+        run.sim.declare_lane_rate(
+            argusnet_sim::stage::Stage::EvaluateMissionTransitions,
+            rate_text(rate),
+        );
+    }
     // P4.9: "emit resolved config/version/provenance". No clock and no host,
     // so a replay's bytes depend only on what was run.
     run.extend_replay_meta([(
@@ -646,13 +654,6 @@ fn sim(args: SimArgs) -> ExitCode {
             Ok(checkpoint) => checkpoint,
             Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
         };
-        if !checkpoint.stage_lag.is_empty() && mission_rate.is_none() {
-            return fail(
-                EXIT_INVALID,
-                "cannot resume: the checkpoint is from a run with a lane at its own rate; \
-                 pass the same --executor lanes --mission-rate",
-            );
-        }
         if let Err(error) = run.restore(&checkpoint) {
             return fail(EXIT_INVALID, format!("cannot resume: {error}"));
         }

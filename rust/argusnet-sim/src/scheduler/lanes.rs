@@ -129,6 +129,10 @@ pub struct PhasedLaneExecutor {
     ran: Vec<EventKey>,
     /// The mission lane's own rate; `None` runs it every boundary.
     mission: Option<LaneRate>,
+    /// The occurrence the mission lane moves on to once the boundary in
+    /// flight commits. A boundary that does not commit (paused, failed,
+    /// reset) consumes nothing.
+    mission_after_commit: Option<u64>,
 }
 
 impl PhasedLaneExecutor {
@@ -143,6 +147,7 @@ impl PhasedLaneExecutor {
             next: first,
             ran: Vec::new(),
             mission: None,
+            mission_after_commit: None,
         })
     }
 
@@ -176,18 +181,20 @@ impl PhasedLaneExecutor {
     }
 
     /// Whether the mission lane runs at the boundary whose deadline is
-    /// `deadline`, consuming every occurrence it serves.
-    fn mission_due(&mut self, deadline: SimTime) -> Result<bool, TimeError> {
-        let Some(rate) = self.mission.as_mut() else {
-            return Ok(true);
+    /// `deadline`, and if so the occurrence it moves on to once that boundary
+    /// commits (every occurrence the boundary serves). Nothing is consumed
+    /// here: a boundary that never commits must not use up a deadline.
+    fn mission_due(&self, deadline: SimTime) -> Result<(bool, Option<u64>), TimeError> {
+        let Some(rate) = self.mission.as_ref() else {
+            return Ok((true, None));
         };
         if rate.schedule.nth_deadline(self.epoch, rate.next)? > deadline {
-            return Ok(false);
+            return Ok((false, None));
         }
-        rate.next = rate
+        let after = rate
             .schedule
             .first_at_or_after(self.epoch, deadline.checked_add_nanos(1)?)?;
-        Ok(true)
+        Ok((true, Some(after)))
     }
 
     /// Run the next legacy boundary's lanes, in queue order, and return what
@@ -205,7 +212,9 @@ impl PhasedLaneExecutor {
             .boundaries
             .nth_deadline(self.epoch, n)
             .map_err(ExecutorError::Time)?;
-        let mission_due = self.mission_due(deadline).map_err(ExecutorError::Time)?;
+        let (mission_due, mission_after) =
+            self.mission_due(deadline).map_err(ExecutorError::Time)?;
+        self.mission_after_commit = mission_after;
         for lane in LANES_V1 {
             let part = match lane.last {
                 Some(last) if lane.source == LEGACY_LANE => LanePart::Open { n, last },
@@ -221,6 +230,7 @@ impl PhasedLaneExecutor {
         }
         self.ran.clear();
         let outcome = self.drain(run, n);
+        self.mission_after_commit = None;
         if outcome.is_err() {
             // The tick failed: whatever of it is still queued never runs.
             self.queue.reset(self.epoch);
@@ -285,6 +295,11 @@ impl PhasedLaneExecutor {
                     })?;
                     let output = run.commit(opened).map_err(ExecutorError::Tick)?;
                     self.next = n + 1;
+                    if let (Some(rate), Some(after)) =
+                        (self.mission.as_mut(), self.mission_after_commit.take())
+                    {
+                        rate.next = after;
+                    }
                     return Ok(output);
                 }
             }
@@ -331,6 +346,8 @@ mod tests {
         tick: u64,
         log: Vec<String>,
         fail_at: Option<Stage>,
+        /// The next `begin` refuses, as a paused run does: no tick opens.
+        paused: bool,
     }
 
     impl PhasedTick for Recorder {
@@ -342,6 +359,9 @@ mod tests {
             self.tick
         }
         fn begin(&mut self) -> Result<Result<u64, u64>, String> {
+            if std::mem::take(&mut self.paused) {
+                return Err("paused".to_string());
+            }
             self.log.push(format!("begin {}", self.tick));
             Ok(Ok(self.tick))
         }
@@ -449,7 +469,11 @@ mod tests {
         (first..first + count)
             .filter(|&n| {
                 let deadline = executor.boundaries.nth_deadline(executor.epoch, n).unwrap();
-                executor.mission_due(deadline).unwrap()
+                let (due, after) = executor.mission_due(deadline).unwrap();
+                if let (Some(rate), Some(after)) = (executor.mission.as_mut(), after) {
+                    rate.next = after;
+                }
+                due
             })
             .collect()
     }
@@ -527,5 +551,27 @@ mod tests {
             .log
             .iter()
             .any(|line| line.starts_with("run 1 through 9")));
+    }
+
+    #[test]
+    fn a_boundary_that_never_opens_uses_up_no_deadline() {
+        // 1 Hz at 0.5 s boundaries: due at boundaries 0 and 2. A pause that
+        // stops boundary 2 from opening must leave it due when it does.
+        let mut run = Recorder::default();
+        let mut executor = PhasedLaneExecutor::new::<String>(0.5, 0)
+            .unwrap()
+            .with_mission_rate(hz(1, 1))
+            .unwrap();
+        executor.step(&mut run).unwrap();
+        executor.step(&mut run).unwrap();
+        run.paused = true;
+        assert!(executor.step(&mut run).is_err());
+        run.log.clear();
+        executor.step(&mut run).unwrap();
+        assert!(
+            run.log.iter().any(|line| line == "run 2 through 9"),
+            "{:?}",
+            run.log
+        );
     }
 }

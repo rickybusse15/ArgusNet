@@ -51,6 +51,12 @@ fn clocked(sim: &mut Simulation) {
     .expect("stage 9 is delegable");
 }
 
+/// [`clocked`], with stage 9 declared at its own rate.
+fn clocked_at(sim: &mut Simulation, rate: &str) {
+    clocked(sim);
+    sim.declare_lane_rate(Stage::EvaluateMissionTransitions, rate);
+}
+
 fn ran(sim: &Simulation) -> Vec<(u64, f64)> {
     sim.stage::<ClockStage>(Stage::EvaluateMissionTransitions)
         .expect("installed")
@@ -61,7 +67,7 @@ fn ran(sim: &Simulation) -> Vec<(u64, f64)> {
 #[test]
 fn a_lane_at_its_own_rate_runs_at_its_deadlines_with_the_time_since_it_last_ran() {
     let mut sim = simulation();
-    clocked(&mut sim);
+    clocked_at(&mut sim, "3/1");
     let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
         .unwrap()
         .with_mission_rate(hz(3, 1))
@@ -90,7 +96,7 @@ fn a_lane_at_its_own_rate_runs_at_its_deadlines_with_the_time_since_it_last_ran(
 #[test]
 fn a_resumed_run_sits_out_and_runs_the_same_boundaries_as_an_uninterrupted_one() {
     let mut straight = simulation();
-    clocked(&mut straight);
+    clocked_at(&mut straight, "3/1");
     let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
         .unwrap()
         .with_mission_rate(hz(3, 1))
@@ -102,7 +108,7 @@ fn a_resumed_run_sits_out_and_runs_the_same_boundaries_as_an_uninterrupted_one()
     // Stopped at tick 9: stage 9 last ran at tick 7 and sat out tick 8, so
     // the checkpoint has to say so.
     let mut first = simulation();
-    clocked(&mut first);
+    clocked_at(&mut first, "3/1");
     let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
         .unwrap()
         .with_mission_rate(hz(3, 1))
@@ -117,7 +123,7 @@ fn a_resumed_run_sits_out_and_runs_the_same_boundaries_as_an_uninterrupted_one()
     );
 
     let mut resumed = simulation();
-    clocked(&mut resumed);
+    clocked_at(&mut resumed, "3/1");
     resumed.restore(&checkpoint).expect("compatible");
     let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, resumed.tick())
         .unwrap()
@@ -172,6 +178,7 @@ fn a_stage_that_has_not_declared_how_to_sit_out_a_boundary_faults_the_run() {
     let mut sim = simulation();
     sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(Undeclared))
         .unwrap();
+    sim.declare_lane_rate(Stage::EvaluateMissionTransitions, "1/1");
     let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
         .unwrap()
         .with_mission_rate(hz(1, 1))
@@ -190,7 +197,7 @@ fn a_stage_that_has_not_declared_how_to_sit_out_a_boundary_faults_the_run() {
 #[test]
 fn a_checkpoint_with_lag_is_format_5_and_a_damaged_lag_is_refused() {
     let mut sim = simulation();
-    clocked(&mut sim);
+    clocked_at(&mut sim, "3/1");
     let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
         .unwrap()
         .with_mission_rate(hz(3, 1))
@@ -209,7 +216,7 @@ fn a_checkpoint_with_lag_is_format_5_and_a_damaged_lag_is_refused() {
     let mut as_four = checkpoint.clone();
     as_four.header.format_version = argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION;
     let mut fresh = simulation();
-    clocked(&mut fresh);
+    clocked_at(&mut fresh, "3/1");
     assert!(fresh.restore(&as_four).is_err());
 
     // More boundaries behind than the run has had is damage.
@@ -219,4 +226,63 @@ fn a_checkpoint_with_lag_is_format_5_and_a_damaged_lag_is_refused() {
         .insert("evaluate_mission_transitions".to_string(), u64::MAX);
     assert!(fresh.restore(&damaged).is_err());
     assert!(fresh.restore(&checkpoint).is_ok());
+}
+
+#[test]
+fn a_checkpoint_restores_only_under_the_lane_rates_it_was_taken_with() {
+    // Taken just after a due boundary (tick 7 ran, so no lag): the rate is
+    // still in the checkpoint.
+    let mut sim = simulation();
+    clocked_at(&mut sim, "3/1");
+    let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
+        .unwrap()
+        .with_mission_rate(hz(3, 1))
+        .unwrap();
+    for _ in 0..8 {
+        executor.step(&mut sim).expect("tick");
+    }
+    let checkpoint = sim.checkpoint().unwrap();
+    assert!(checkpoint.stage_lag.is_empty());
+    assert_eq!(checkpoint.lane_rates["evaluate_mission_transitions"], "3/1");
+    assert_eq!(
+        checkpoint.header.format_version,
+        argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+    );
+
+    let mut unscheduled = simulation();
+    clocked(&mut unscheduled);
+    assert!(
+        unscheduled.restore(&checkpoint).is_err(),
+        "no rate declared"
+    );
+    let mut other = simulation();
+    clocked_at(&mut other, "1/7");
+    assert!(other.restore(&checkpoint).is_err(), "another rate");
+    let mut same = simulation();
+    clocked_at(&mut same, "3/1");
+    assert!(same.restore(&checkpoint).is_ok());
+
+    // Lag on a stage that has no rate of its own is damage.
+    let mut damaged = checkpoint.clone();
+    damaged
+        .stage_lag
+        .insert("sample_controllers_and_battery".to_string(), 1);
+    let mut fresh = simulation();
+    clocked_at(&mut fresh, "3/1");
+    assert!(fresh.restore(&damaged).is_err());
+}
+
+#[test]
+fn only_a_stage_with_a_declared_rate_can_sit_out_a_boundary() {
+    let mut sim = simulation();
+    clocked(&mut sim);
+    let mut executor = PhasedLaneExecutor::new::<TickError>(0.1, 0)
+        .unwrap()
+        .with_mission_rate(hz(1, 1))
+        .unwrap();
+    executor.step(&mut sim).expect("tick 0 is due");
+    assert!(matches!(
+        executor.step(&mut sim),
+        Err(ExecutorError::Tick(TickError::OutOfOrder { .. }))
+    ));
 }
