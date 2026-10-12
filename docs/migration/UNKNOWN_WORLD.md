@@ -189,17 +189,22 @@ Release build, 4 workers, seed 7, 120 s at dt 0.25 s:
 
 | Scenario | Known at 1 s / 10 s / 30 s / 60 s / 120 s | Ground RMSE at 120 s (max) | Structures at 120 s: found / right | Contacts | Tick p50 (prior → none) | Replay (prior → none) |
 |---|---|---|---|---|---|---|
-| Demo: `small` map, 4 drones, target tracking | 8% / 61% / 78% / 83% / 87% | 0.98 m | 100% / 100% | 0 | 0.26 → 3.4 ms | 9.4 → 11.9 MB |
-| Regional: 16 drones, scan/map/inspect, 178,848 cells | 1% / 9% / 27% / 45% / 74% | 0.28 m (2.2 m) | 44% / 100% | 0 | 0.60 → 9.8 ms | 5.8 → 21.3 MB |
+| Demo: `small` map, 4 drones, target tracking | 8% / 62% / 84% / 89% / 90% | 0.90 m | 100% / 100% | 0 | 0.35 → 3.6 ms | 9.4 → 12.2 MB |
+| Regional: 16 drones, scan/map/inspect, 178,848 cells | 1% / 9% / 29% / 53% / 83% | 0.27 m (2.1 m) | 100% / 100% | 0 | 0.67 → 13.6 ms | 5.8 → 23.5 MB |
+
+These are the defaults: follow drones on fused tracks, and search drones
+exploring the frontier (both described below). With the regional run's
+pre-planned lanes instead (`--explore lanes`), the map reached 74% and found
+44% of the building, and the scan phase never finished. With exploration
+it finishes at 97.5 s and the mission moves on to inspection.
 
 Believed roofs on the demo map are 137.5–138.1 m, against a true 137.2 m; the
 spread is the 0.3 m range noise.
 
-The regional recall is a coverage figure, not a mapping error. The scan lanes
-were planned around the large building (432 × 252 m) by the bundle builder,
-which still uses the true obstacle layer (see below). No drone flies over it,
-so only the parts of its roof and walls within scan range of the lanes are
-seen. Everything that has been seen is mapped right.
+With lanes, the regional building was a coverage problem, not a mapping error.
+The bundle builder planned the lanes around the large building (432 × 252 m)
+using the true obstacle layer, so no drone flew over it. The explorers go
+where the map is blank, so they reach it.
 
 A range return reports the nearer of the terrain crossing and the first
 building or wall surface, in 3D (`Obstacle::surface_hit_t`). Two earlier
@@ -235,6 +240,9 @@ Tests (`rust/argusnet-sim/tests/world_knowledge.rs`):
 - follow drones pursue fused tracks and stage 1 never reads truth, while
   `--pursuit truth` keeps the legacy oracle and differs;
 - a checkpoint does not cross between pursuit sources;
+- search lanes become explorers (and stay lanes with `explore: false`), the
+  explorers make no contacts, and a run resumed mid-flight equals an
+  uninterrupted one;
 - a run without stage 8, a bad config, or a run already started is refused.
 
 ## Pursuit from fused tracks
@@ -281,24 +289,63 @@ few seconds, and the drone goes with it. Turning the extrapolation off made
 following worse (at 1.5 s lag, mean distance 86 m against 71 m) and raised the
 evidence-time RMSE to 22.4 m, so it stays on.
 
+## Exploring the frontier
+
+Search drones in a no-prior run do not fly the lanes the bundle builder planned
+before the run; they explore (`frontier.rs`, `FrontierExplorer`):
+
+- **Goal.** The nearest 50 m block of the map that is still at least half
+  unmeasured, at least 250 m away. Goals are spread out: a block within 400 m
+  (about a scanner footprint) of another explorer's goal counts 1 km further
+  away.
+- **Re-goal.** On arrival, or when the goal block has been mostly measured on
+  the way.
+- **Flight.** The lane's speed and height above ground, over the believed
+  terrain. Unmeasured ground stands in high, so a drone climbs over the blank
+  part of the map.
+- **Nothing left.** The drone flies back to where its lane would have it and
+  follows the lane from there.
+
+Search-then-follow drones keep their lanes until they engage. The demo's search
+drones are of that kind, so the demo does not change. `--explore lanes` keeps
+the lanes.
+
+**Scan progress is the map.** In a no-prior run the scan mission's gate reads
+the map's known fraction instead of the 50 m footprint bookkeeping, and
+`scan_mission_state.scan_coverage_fraction` in the replay reports the same
+figure. The gap condition counts *enclosed unexplored blocks*: blocks at
+least half unmeasured that measured ground cuts off from the grid's edge.
+Counting unmeasured cells one by one would hold the scan open forever,
+because the scanner's ring gaps leave single cells scattered through measured
+ground (8% of the regional grid at 120 s).
+
+Two goal rules were tried first and dropped:
+
+- **The nearest frontier cell** (measured, with an unmeasured neighbour)
+  stalled every explorer by 60 s. The cell under a hovering drone could sit in
+  a gap between the scanner's rings and stay a frontier forever.
+- **Frontier cells at least 100 m away** kept the drones moving, but hopping
+  along the edge added a thin strip each time. The map reached 64% against the
+  lanes' 74%.
+
+Listing the candidates scans the whole grid, so it is done once a tick and
+shared by the explorers. On the regional grid, stage 1 went from 42 ms to
+under 7 ms after that change, and the tick from 72 ms to 14 ms.
+
 ## What still knows more than it should
 
-The terrain and obstacle prior is gone from planning, and so is target truth
-from pursuit. These remain, named so they are not mistaken for done:
+The terrain and obstacle prior is gone from planning, target truth from
+pursuit, and footprint coverage from scan progress. These remain, named so
+they are not mistaken for done:
 
 - **The bundle builder used the true world.** Search lanes were pushed out of
   true obstacles, follow routes planned around them, and POIs placed at true
   heights, all before the run starts. In a no-prior run these are mission
   inputs the platforms did not earn. The builder needs a mode that leaves the
   lanes straight and lets the belief obstacles deflect them.
-- **Unseen buildings stay unknown.** Unknown ground already stands in high,
-  so planning stays safe. But a mapping mission should go and look, which is
-  frontier exploration again.
-- **Mission progress counts footprint coverage.** The scan mission's
-  `coverage_fraction` is still the 50 m footprint bookkeeping, not the
-  belief's known fraction, so a scan mission completes on the old measure.
-  The natural next step is to drive the scan phase from the belief, and send
-  idle platforms to frontier cells (known ground bordering unknown).
+- **The lanes still exist.** Explorers start from the builder's lanes and
+  return to them when nothing is left to map, and search-then-follow drones fly
+  them until they engage.
 - **Follow targets are checked against the truth table at setup.** Assembly
   confirms each follow target exists (`scenario.rs`, `operational`). It is a
   bundle validity check, not a position read, but it is a truth read.

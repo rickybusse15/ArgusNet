@@ -56,6 +56,7 @@ use crate::follow_path::{
     FollowPathContext, FollowPathController, FollowPathState, MissionZone, RoutePlanner,
     VisibilitySampler,
 };
+use crate::frontier::{ExplorerState, FrontierExplorer};
 use crate::motion::{BoundsXy, ObstacleSampler, TerrainSampler};
 use crate::observation_follow::{
     AcceptedByNodeTarget, EngagementState, ObservationTriggeredFollow,
@@ -120,6 +121,8 @@ pub struct ControllerEnvironment {
     pub weather: Option<Box<dyn WeatherSampler + Send>>,
     pub map_bounds_m: Option<BoundsXy>,
     pub pursuit: Option<Box<dyn PursuitOracle>>,
+    /// The platforms' own map, for explorers. `None` outside a no-prior run.
+    pub belief: Option<crate::belief_world::BeliefHandle>,
 }
 
 /// What a platform flies once it is airborne.
@@ -138,6 +141,9 @@ pub enum Operational {
     },
     /// Search until this node's sensor accepts its target, then follow.
     SearchThenFollow(ObservationTriggeredFollow<LoopedWaypointPath, FollowPathController>),
+    /// A search lane turned explorer: fly to the frontier of the platforms'
+    /// own map (a no-prior run; see [`crate::frontier`]).
+    Explore(FrontierExplorer),
 }
 
 /// The launch path's two tuning values; the rest of its weather context is
@@ -200,6 +206,7 @@ impl Operational {
     fn reset_to_constructed(&mut self) {
         match self {
             Operational::Search(_) => {}
+            Operational::Explore(explorer) => explorer.restore(ExplorerState::default()),
             Operational::Follow { controller, .. } => {
                 controller.restore_state(FollowPathState::default())
             }
@@ -215,6 +222,7 @@ impl Operational {
     fn state(&self) -> OperationalState {
         match self {
             Operational::Search(_) => OperationalState::Search,
+            Operational::Explore(explorer) => OperationalState::Explore(explorer.state().clone()),
             Operational::Follow { controller, .. } => {
                 OperationalState::Follow(controller.state().clone())
             }
@@ -229,6 +237,7 @@ impl Operational {
         matches!(
             (self, state),
             (Operational::Search(_), OperationalState::Search)
+                | (Operational::Explore(_), OperationalState::Explore(_))
                 | (Operational::Follow { .. }, OperationalState::Follow(_))
                 | (
                     Operational::SearchThenFollow(_),
@@ -239,6 +248,9 @@ impl Operational {
 
     fn restore(&mut self, state: OperationalState) {
         match (self, state) {
+            (Operational::Explore(explorer), OperationalState::Explore(saved)) => {
+                explorer.restore(saved)
+            }
             (Operational::Follow { controller, .. }, OperationalState::Follow(follow)) => {
                 controller.restore_state(follow)
             }
@@ -258,6 +270,7 @@ impl Operational {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum OperationalState {
     Search,
+    Explore(ExplorerState),
     Follow(FollowPathState),
     SearchThenFollow {
         engagement: EngagementState,
@@ -420,6 +433,42 @@ impl ControllerStage {
         engaged
     }
 
+    /// Turn every pure search lane into a frontier explorer that starts from
+    /// it. Search-then-follow controllers keep their lanes. Returns how many
+    /// were turned.
+    pub fn explore_search_lanes(&mut self) -> usize {
+        let mut turned = 0;
+        for (_, controller) in self.state.controllers.iter_mut() {
+            let operational = match controller {
+                PlatformController::Free(operational) => operational,
+                PlatformController::Launched { controller, .. } => controller.operational_mut(),
+                PlatformController::Static { .. } => continue,
+            };
+            if let Operational::Search(lane) = operational {
+                *operational = Operational::Explore(FrontierExplorer::new(lane.clone()));
+                turned += 1;
+            }
+        }
+        turned
+    }
+
+    /// How many controllers are frontier explorers.
+    pub fn explorer_count(&self) -> usize {
+        self.state
+            .controllers
+            .iter()
+            .filter(|(_, controller)| match controller {
+                PlatformController::Free(operational) => {
+                    matches!(operational, Operational::Explore(_))
+                }
+                PlatformController::Launched { controller, .. } => {
+                    matches!(controller.operational(), Operational::Explore(_))
+                }
+                PlatformController::Static { .. } => false,
+            })
+            .count()
+    }
+
     /// What the controllers have been lent, for diagnostics and wiring tests.
     /// `None` before an environment is installed.
     pub fn environment_summary(&self) -> Option<EnvironmentSummary> {
@@ -470,6 +519,13 @@ impl ObstacleSampler for NoObstacles {
 struct SampleLog {
     pursuit_reads: Cell<u64>,
     failure: std::cell::RefCell<Option<String>>,
+    /// This tick's map, for explorers: one snapshot for the whole stage.
+    belief: Option<std::sync::Arc<crate::belief_world::BeliefSnapshot>>,
+    /// The explorers' goals: gathered before sampling, updated as each
+    /// explorer re-goals, so later explorers avoid earlier ones' choices.
+    claims: std::cell::RefCell<Vec<[f64; 2]>>,
+    /// The snapshot's frontier cells, listed once a tick when first needed.
+    frontier: std::cell::OnceCell<Vec<[f64; 2]>>,
 }
 
 impl SampleLog {
@@ -528,6 +584,14 @@ fn sample_operational(
         .map(|obstacles| obstacles as &dyn ObstacleSampler);
     match operational {
         Operational::Search(path) => path.sample(timestamp_s, terrain, obstacles),
+        Operational::Explore(explorer) => explorer.sample(
+            timestamp_s,
+            terrain,
+            obstacles,
+            log.belief.as_deref(),
+            &log.frontier,
+            &mut log.claims.borrow_mut(),
+        ),
         Operational::Follow {
             target_id,
             controller,
@@ -680,7 +744,22 @@ impl ControllerStage {
         let environment = environment_slot.as_ref().ok_or_else(|| {
             StageError::Invariant("controllers are installed but no environment is".into())
         })?;
-        let log = SampleLog::default();
+        let claims = controllers
+            .iter()
+            .filter_map(|(_, controller)| match controller {
+                PlatformController::Free(Operational::Explore(explorer)) => explorer.goal(),
+                PlatformController::Launched { controller, .. } => match controller.operational() {
+                    Operational::Explore(explorer) => explorer.goal(),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let log = SampleLog {
+            belief: environment.belief.as_ref().map(|handle| handle.current()),
+            claims: std::cell::RefCell::new(claims),
+            ..SampleLog::default()
+        };
         let timestamp_s = context.timestamp_s;
         for (node_id, controller) in controllers.iter_mut() {
             let (position, velocity) = sample_platform(controller, timestamp_s, environment, &log);

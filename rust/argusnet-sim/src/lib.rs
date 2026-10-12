@@ -14,6 +14,7 @@ pub mod delivery;
 pub mod deterministic;
 pub mod faults;
 pub mod follow_path;
+pub mod frontier;
 pub mod fusion;
 pub mod journal;
 pub mod mapping;

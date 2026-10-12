@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Search drones explore the edge of their own map
+
+- In a `--world-knowledge none` run, search drones now fly toward the nearest
+  part of the map that is still mostly blank, spread out so they map different
+  ground, instead of flying lanes planned before the run. `--explore lanes`
+  keeps the old lanes.
+- The scan mission measures its progress on the drones' own map. On the
+  regional scenario the map reaches 83% at 120 s (74% with lanes), the large
+  building is fully mapped (44% with lanes), and the scan phase finishes at
+  97.5 s and moves on to inspection. With lanes it never finished.
+
 ## Unreleased — Follow drones chase their own tracks
 
 - In a `--world-knowledge none` run, follow drones now steer off the run's own

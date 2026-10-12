@@ -265,6 +265,7 @@ impl Rig {
                 y_max_m: 2000.0,
             }),
             pursuit: Some(Box::new(AnalyticPursuit)),
+            belief: None,
         });
         let stations = [
             ("gs-0", station(0.0, -400.0)),
