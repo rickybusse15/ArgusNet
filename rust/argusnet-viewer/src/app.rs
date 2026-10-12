@@ -104,9 +104,10 @@ pub fn run_live(
 
 /// Open `scene_path` and drive an in-process simulation of `run_path` (a
 /// scenario config or bundle) in it (D1): the run ticks on its own thread and
-/// the viewer presents its frames as they commit. Without a scene, the viewer
-/// opens on the run's map bounds with no world drawn: what appears is what
-/// the run reveals.
+/// the viewer presents its frames as they commit. Without a scene, a run with
+/// a prior world gets one built in process from its own metadata
+/// (`argusnet_sim::scene_build`); a run with no prior world opens on the
+/// map's bounds with nothing drawn, and what appears is what the run reveals.
 pub fn run_sim(
     scene_path: Option<std::path::PathBuf>,
     run_path: std::path::PathBuf,
@@ -120,20 +121,53 @@ pub fn run_sim(
     let probe = crate::sim_session::load_run(&run_path, &options)
         .map_err(|error| anyhow::anyhow!(error))?;
     let run_meta = probe.replay_extra_meta().clone();
-    // No scene: the world is only what the run reveals. The viewer gets a
-    // package with the map's bounds and nothing in it.
-    let scene_path = match scene_path {
+    let stamp = || {
+        format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos())
+        )
+    };
+    let no_prior = run_meta
+        .get("world_knowledge")
+        .and_then(|knowledge| knowledge.get("knowledge"))
+        .and_then(|knowledge| knowledge.as_str())
+        == Some("none");
+    // No scene for a run with a prior world: build one in process from the
+    // run's own metadata (terrain mesh, obstacles), as `argusnet build-scene`
+    // would from its replay, with no Python (D2). A run with no prior world
+    // gets a package with the map's bounds and nothing in it: the world is
+    // only what the run reveals.
+    let built = match (&scene_path, no_prior) {
+        (None, false) => {
+            let mut meta: serde_json::Map<String, serde_json::Value> =
+                run_meta.clone().into_iter().collect();
+            meta.entry("scenario_name")
+                .or_insert_with(|| serde_json::json!(probe.run_id()));
+            let dir = std::env::temp_dir().join(format!("argusnet-scene-{}", stamp()));
+            match argusnet_sim::scene_build::build_scene(
+                &dir,
+                &serde_json::Value::Object(meta),
+                None,
+                serde_json::json!({ "replay_source": run_path.display().to_string() }),
+            ) {
+                Ok(built) => Some(built.root),
+                Err(error) => {
+                    warn!("could not build a scene from the run ({error}); opening without one");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let scene_path = match scene_path.or(built) {
         Some(path) => path,
         None => {
             let bounds = probe.map_bounds_m();
             let floor = probe.launch_floor_m();
-            let dir = std::env::temp_dir().join(format!(
-                "argusnet-unmapped-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_or(0, |elapsed| elapsed.as_nanos())
-            ));
+            let dir = std::env::temp_dir().join(format!("argusnet-unmapped-{}", stamp()));
             crate::schema::write_unmapped_scene(
                 &dir,
                 probe.run_id(),
@@ -2290,30 +2324,26 @@ fn spawn_simulation_child(
         .context("failed to spawn argusnet sim")
 }
 
-fn spawn_build_scene_child(python: &str, replay_path: &Path, output_root: &Path) -> Result<Child> {
+/// Build the scene package for `replay_path` into `output_root`, replacing
+/// whatever is there: what `python -m argusnet build-scene` did, in Rust.
+fn build_scene_from_replay_file(replay_path: &Path, output_root: &Path) -> Result<()> {
+    let text = fs::read_to_string(replay_path)
+        .with_context(|| format!("reading {}", replay_path.display()))?;
+    let replay: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("parsing {}", replay_path.display()))?;
     if output_root.exists() {
         fs::remove_dir_all(output_root)
-            .with_context(|| format!("failed to clear {}", output_root.display()))?;
+            .with_context(|| format!("clearing {}", output_root.display()))?;
     }
-    if let Some(parent) = output_root.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-
-    std::process::Command::new(python)
-        .args([
-            "-m",
-            "argusnet",
-            "build-scene",
-            "--replay",
-            &replay_path.to_string_lossy(),
-            "--output",
-            &output_root.to_string_lossy(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to spawn argusnet build-scene")
+    let meta = replay.get("meta").cloned().unwrap_or_default();
+    argusnet_sim::scene_build::build_scene(
+        output_root,
+        &meta,
+        Some(&text),
+        serde_json::json!({ "replay_source": replay_path.display().to_string() }),
+    )
+    .map_err(|error| anyhow::anyhow!(error))?;
+    Ok(())
 }
 
 fn read_process_error(child: &mut Child, fallback: &str) -> String {
@@ -2359,54 +2389,54 @@ fn poll_simulation_system(
     match process.child.try_wait() {
         Ok(Some(status)) => {
             if status.success() {
-                match process.phase {
+                // The scene is built in process from the replay the
+                // simulation wrote (`argusnet_sim::scene_build`, D2): no
+                // second Python child.
+                let ready = match process.phase {
                     SimPhase::Simulating => {
-                        let python = simulation_python();
-                        match spawn_build_scene_child(
-                            &python,
+                        sim_runner.set_phase(SimPhase::BuildingScene, 0.55);
+                        match build_scene_from_replay_file(
                             &process.replay_path,
                             &process.next_scene_root,
                         ) {
-                            Ok(child) => {
-                                process.child = child;
-                                process.phase = SimPhase::BuildingScene;
-                                sim_runner.set_phase(SimPhase::BuildingScene, 0.55);
-                            }
+                            Ok(()) => true,
                             Err(err) => {
                                 sim_runner.fail(format!("Failed to build rebuilt scene: {err}"));
                                 commands.remove_resource::<SimulationProcess>();
+                                false
                             }
                         }
-                    }
-                    SimPhase::BuildingScene => {
-                        sim_runner.set_phase(SimPhase::ReloadingScene, 0.92);
-                        let reload_result = reload_rebuilt_scene(
-                            &mut commands,
-                            asset_server.as_ref(),
-                            &mut camera_query,
-                            &mut working_scene_root,
-                            &mut scene_package,
-                            &mut replay_state,
-                            &mut mission_zones,
-                            &mut layer_visibility,
-                            &mut layer_entities,
-                            &mut selection,
-                            &mut frame_metrics,
-                            &process.next_scene_root,
-                        );
-                        match reload_result {
-                            Ok(()) => {
-                                reconstruction.reset();
-                                sim_runner.finish();
-                            }
-                            Err(err) => sim_runner.fail(err.to_string()),
-                        }
-                        commands.remove_resource::<SimulationProcess>();
                     }
                     _ => {
                         sim_runner.fail("Simulation entered an unexpected process phase.");
                         commands.remove_resource::<SimulationProcess>();
+                        false
                     }
+                };
+                if ready {
+                    sim_runner.set_phase(SimPhase::ReloadingScene, 0.92);
+                    let reload_result = reload_rebuilt_scene(
+                        &mut commands,
+                        asset_server.as_ref(),
+                        &mut camera_query,
+                        &mut working_scene_root,
+                        &mut scene_package,
+                        &mut replay_state,
+                        &mut mission_zones,
+                        &mut layer_visibility,
+                        &mut layer_entities,
+                        &mut selection,
+                        &mut frame_metrics,
+                        &process.next_scene_root,
+                    );
+                    match reload_result {
+                        Ok(()) => {
+                            reconstruction.reset();
+                            sim_runner.finish();
+                        }
+                        Err(err) => sim_runner.fail(err.to_string()),
+                    }
+                    commands.remove_resource::<SimulationProcess>();
                 }
             } else {
                 let message = match process.phase {

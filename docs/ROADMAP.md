@@ -23,8 +23,8 @@ authority is active, and localization, sensing, mapping and planning libraries
 exist. Rust now includes mission state, TickWorld, populated snapshots and several
 composed stage bodies, and `argusnet-rs` runs every canonical scenario with no
 Python, qualified over 30 seeds plus a held-out set (A3.2). The Python simulation
-remains the reference the Rust replays are checked against, and the viewer still
-uses Python to build scene packages. See the checkout-grounded
+remains the reference the Rust replays are checked against. Scene packages are
+built in Rust; the viewer's Tools → Scenario simulation still runs Python. See the checkout-grounded
 [ownership inventory](STATE_OWNERSHIP.md). Migration phase numbers do not
 correspond to the product phases below.
 

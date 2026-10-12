@@ -33,6 +33,7 @@ pub mod run_options;
 pub mod runtime_world;
 pub mod safety;
 pub mod scenario;
+pub mod scene_build;
 pub mod scene_export;
 pub mod scheduler;
 pub mod simulation;

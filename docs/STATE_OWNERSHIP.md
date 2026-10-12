@@ -69,7 +69,7 @@ Rust mission acceptance must still be checked separately.
 | Localization / sensing | `argusnet-localization`, `argusnet-sensing`; deterministic streams in `argusnet-sim` | Port fixtures exist; Python still runs mission orchestration | No broad runtime deletion |
 | Mapping / planning | `argusnet-mapping`, `argusnet-planning` | Native scoring active; other ports await composed tick; belief query facade is not a revisioned mutable owner | Python mission consumers remain |
 | Simulation | `argusnet-sim`: assembled eleven-stage production run (`ProductionBuilder`), `argusnet-rs sim` | Runs every canonical scenario with no Python; the Python tick remains the reference the replays are checked against | Python simulation still ships and is still what the viewer's Tools → Scenario launches |
-| Replay / viewer | `argusnet-replay`, `argusnet-viewer` | Replay, V2 live presentation, and `--run` (D1.2): the Rust run in-process on a worker thread | Scene building still spawns Python (`spawn_build_scene_child`), except for `--world-knowledge none` runs, which need no scene (D2/D5 open) |
+| Replay / viewer | `argusnet-replay`, `argusnet-viewer` | Replay, V2 live presentation, and `--run` (D1.2): the Rust run in-process on a worker thread | Scenes are built in Rust (`argusnet_sim::scene_build`, D2); the Tools → Scenario simulation still spawns `python -m argusnet sim` (D5 open) |
 
 Evidence: [integration record](migration/P4_INTEGRATION.md),
 [source review](NEXT_REFACTOR_REVIEW.md), and the referenced crates. Historical

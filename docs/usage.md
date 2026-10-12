@@ -150,6 +150,17 @@ refusal says why (for example, Run on a finished run). The timeline holds
 every tick so far; scrubbing it reviews history without rewinding the run.
 Rewinding the run itself needs retained checkpoints and is shown disabled.
 
+### Build a scene package without Python
+
+```bash
+argusnet-rs build-scene --replay runs/demo.json --output runs/demo.smartscene
+```
+
+The package is the one `argusnet build-scene` writes: terrain, buildings,
+walls and vegetation as GLB models, the styles, the environment metadata and
+the replay. `argusnet-viewer --run <scenario>` builds one itself when no
+`--scene` is given.
+
 ### Start from no world knowledge
 
 By default the drones are given the true terrain and buildings. With
