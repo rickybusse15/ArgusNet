@@ -246,9 +246,9 @@ impl PhasedLaneExecutor {
         Ok(self)
     }
 
-    /// The most boundaries in a row a lane at `schedule` sits out: the
-    /// boundaries strictly between two consecutive runs, at most one less
-    /// than its period over the boundaries', rounded up.
+    /// The most boundaries in a row a lane at `schedule` sits out: those
+    /// strictly between two consecutive runs. Runs are at most its period
+    /// over the boundaries', rounded up, apart, so one fewer are skipped.
     fn longest_gap(&self, schedule: Schedule) -> Result<u64, TimeError> {
         let boundary_ns = self.boundaries.nth_deadline(self.epoch, 1)?.as_nanos() as u128;
         let lane_ns: u128 = match schedule {
@@ -258,7 +258,8 @@ impl PhasedLaneExecutor {
             }
             Schedule::Once(_) => return Ok(u64::MAX),
         };
-        Ok(u64::try_from(lane_ns.div_ceil(boundary_ns)).unwrap_or(u64::MAX))
+        let apart = lane_ns.div_ceil(boundary_ns);
+        Ok(u64::try_from(apart.saturating_sub(1)).unwrap_or(u64::MAX))
     }
 
     /// The mission lane's own rate, if it has one.
@@ -712,18 +713,24 @@ mod tests {
     #[test]
     fn a_mapping_rate_that_would_buffer_without_bound_is_refused() {
         let executor = || PhasedLaneExecutor::new::<()>(1.0, 0).unwrap();
+        // 1/1025 Hz at 1 s: runs at boundaries 0 and 1025, so 1 to 1024 --
+        // exactly the limit -- are skipped.
         assert!(executor()
-            .with_mapping_rate(hz(1, MAX_BUFFERED_BOUNDARIES))
+            .with_mapping_rate(hz(1, MAX_BUFFERED_BOUNDARIES + 1))
             .is_ok());
         assert_eq!(
             executor()
-                .with_mapping_rate(hz(1, MAX_BUFFERED_BOUNDARIES + 1))
+                .with_mapping_rate(hz(1, MAX_BUFFERED_BOUNDARIES + 2))
                 .unwrap_err(),
             TimeError::BacklogTooLong {
                 boundaries: MAX_BUFFERED_BOUNDARIES + 1,
                 limit: MAX_BUFFERED_BOUNDARIES,
             }
         );
+        // A rate that never skips a boundary has no backlog.
+        assert_eq!(executor().longest_gap(hz(2, 1)).unwrap(), 0);
+        assert_eq!(executor().longest_gap(hz(1, 1)).unwrap(), 0);
+        assert_eq!(executor().longest_gap(hz(2, 5)).unwrap(), 2);
         // At 50 Hz boundaries a day-long period is millions of ticks.
         assert!(matches!(
             PhasedLaneExecutor::new::<()>(0.02, 0)

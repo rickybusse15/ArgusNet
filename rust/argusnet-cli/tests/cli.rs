@@ -711,6 +711,22 @@ fn a_crashed_run_with_a_mapping_rate_recovers_with_it() {
     );
 }
 
+/// A mapping rate that would buffer more than the allowed run of skipped
+/// ticks is refused before anything is written, so the run directory is not
+/// left behind half made and the corrected command can use the same path.
+#[test]
+fn a_refused_mapping_rate_leaves_no_run_directory() {
+    let dir = run_dir("journal-mapping-refused");
+    let output = record(
+        "scenario_bundle_scan.json",
+        &dir,
+        &["--executor", "lanes", "--mapping-rate", "1/2000"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("at most 1024"));
+    assert!(!dir.exists(), "a refused rate created {}", dir.display());
+}
+
 /// A checkpoint taken while the mission lane was sitting out boundaries
 /// carries that lag; resuming it without the rate is refused.
 #[test]

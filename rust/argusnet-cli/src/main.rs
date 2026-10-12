@@ -597,6 +597,15 @@ fn sim(args: SimArgs) -> ExitCode {
         Ok(bundle) => bundle,
         Err(error) => return fail(EXIT_INVALID, error),
     };
+    // The lane rates are checked against the timestep before anything is
+    // written: a refused rate leaves no run directory behind.
+    if !lane_rates.is_empty() {
+        if let Err(error) = PhasedLaneExecutor::new::<RunError>(bundle.dt_s, 0)
+            .and_then(|executor| lane_rates.apply(executor).map_err(ExecutorError::Time))
+        {
+            return fail(EXIT_INVALID, error);
+        }
+    }
     let compute = match argusnet_sim::compute::ComputePool::new(args.workers) {
         Ok(pool) => std::sync::Arc::new(pool),
         Err(error) => return fail(EXIT_INVALID, error),
