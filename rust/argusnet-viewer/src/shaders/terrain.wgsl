@@ -69,6 +69,11 @@ const CLASS_OBSTACLE: u32 = 3u;
 const BELIEF_SUN: vec3<f32> = vec3<f32>(0.5726, 0.3436, 0.7444);
 const BELIEF_AMBIENT: f32 = 0.55;
 const BELIEF_EXPOSURE: f32 = 0.6;
+// How bright the terrain under the overlay stays, as a fraction of its lit
+// luminance. Under the overlay the ground is drawn grey, so its colour cannot
+// shift a class's, and a little darker, so the classes stay saturated over
+// sunlit ground; relief still reads through.
+const BELIEF_UNDERLAY: f32 = 0.7;
 const CLASS_UNCERTAIN: u32 = 4u;
 const CLASS_SAFE: u32 = 5u;
 
@@ -234,7 +239,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if overlay.a > 0.0 {
         let relief = BELIEF_AMBIENT + (1.0 - BELIEF_AMBIENT) * clamp(dot(normal, BELIEF_SUN), 0.0, 1.0);
         let shaded = overlay.rgb * relief * BELIEF_EXPOSURE;
-        out.color = vec4<f32>(mix(out.color.rgb, shaded, overlay.a), out.color.a);
+        // What shows between the stripes and under a partial weight is the
+        // lit terrain's brightness, not its hue: sunlit ground is warm, and
+        // its colour would otherwise pull every class toward it.
+        let under = vec3<f32>(BELIEF_UNDERLAY * dot(out.color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)));
+        out.color = vec4<f32>(mix(under, shaded, overlay.a), out.color.a);
     }
     return out;
 }

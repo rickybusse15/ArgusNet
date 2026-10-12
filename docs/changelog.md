@@ -11,6 +11,12 @@
   12 000 lux sun. Terrain shows its relief, buildings show lit and shaded
   faces, and the self-built map is no longer pale. Renders:
   `docs/performance/terrain-winding-2026-10-12/`.
+- Sensor volumes and zone walls are additive light, as documented: the
+  hologram shader returned its weight as alpha, so under `AlphaMode::Add` they
+  covered 85% of the ground behind them. Marker glyphs keep covering what is
+  behind them, so they read over sunlit ground.
+- The belief overlay is drawn over the terrain's brightness, not its colour,
+  so sunlit ground no longer pulls the classes toward its hue.
 
 ## Unreleased — Tools → Scenario runs without Python
 

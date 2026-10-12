@@ -63,7 +63,9 @@ pub struct HologramMaterial {
     pub color: Vec4,
     /// `x` is a world height below which nothing is drawn (P2.2): sensor
     /// volumes stop at the terrain's lowest point instead of hanging under
-    /// the map. [`HologramMaterial::NO_FLOOR`] for none.
+    /// the map. [`HologramMaterial::NO_FLOOR`] for none. `y` is 1 for a
+    /// marker glyph, which covers most of what is behind it so it reads over
+    /// sunlit ground; 0 for a volume or wall, which only adds light.
     #[uniform(1)]
     pub floor: Vec4,
 }
@@ -81,6 +83,15 @@ impl HologramMaterial {
         Self {
             color,
             floor: Vec4::new(floor_z, 0.0, 0.0, 0.0),
+        }
+    }
+
+    /// A marker glyph's material: it covers most of what is behind it, so a
+    /// marker keeps its colour over bright ground.
+    pub fn glyph(color: Vec4) -> Self {
+        Self {
+            color,
+            floor: Vec4::new(Self::NO_FLOOR, 1.0, 0.0, 0.0),
         }
     }
 }
@@ -290,7 +301,7 @@ fn presentation(
     let material = assets
         .materials
         .entry(key)
-        .or_insert_with(|| materials.add(HologramMaterial::new(linear)))
+        .or_insert_with(|| materials.add(HologramMaterial::glyph(linear)))
         .clone();
     let (mesh, pixels) = match marker.kind {
         MarkerKind::Node if marker.is_mobile == Some(true) => (assets.drone.clone(), NODE_GLYPH_PX),
