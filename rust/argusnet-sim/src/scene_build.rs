@@ -652,19 +652,25 @@ pub fn validate_replay_document(document: &Value) -> Result<(), String> {
                     "Replay document meta.dt_s must be a finite value greater than 0.".into(),
                 );
             }
-            let declared_count = meta.get("frame_count").and_then(|count| {
-                count.as_u64().or_else(|| {
+            // Present means a non-negative integer (1.0 counts, as the
+            // schema's `integer` does); null, text and fractions are refused.
+            if let Some(count) = meta.get("frame_count") {
+                let declared = count.as_u64().or_else(|| {
                     count
                         .as_f64()
-                        .filter(|c| c.fract() == 0.0)
+                        .filter(|c| *c >= 0.0 && c.fract() == 0.0)
                         .map(|c| c as u64)
-                })
-            });
-            if let (Some(frames), Some(count)) = (frames, declared_count) {
-                if count as usize != frames.len() {
-                    errors.push(
-                        "Replay document meta.frame_count must match the number of frames.".into(),
-                    );
+                });
+                match (declared, frames) {
+                    (None, _) => errors.push(format!(
+                        "Replay document meta.frame_count {count} is not a non-negative integer."
+                    )),
+                    (Some(declared), Some(frames)) if declared as usize != frames.len() => errors
+                        .push(
+                            "Replay document meta.frame_count must match the number of frames."
+                                .into(),
+                        ),
+                    _ => {}
                 }
             }
         }
@@ -1025,6 +1031,13 @@ mod tests {
             validate_replay_document(&json!({"meta": {"dt_s": 1}, "frames": [{}]})),
             Ok(())
         );
+        // An integral float is an integer count, as the schema reads it.
+        assert_eq!(
+            validate_replay_document(
+                &json!({"meta": {"dt_s": 1, "frame_count": 1.0}, "frames": [{}]})
+            ),
+            Ok(())
+        );
         for (document, expected) in [
             (
                 json!({"meta": {"dt_s": 1.0}, "frames": []}),
@@ -1043,6 +1056,22 @@ mod tests {
             (
                 json!({"meta": {"dt_s": 1.0, "frame_count": 3}, "frames": [{}]}),
                 "frame_count",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": "1"}, "frames": [{}]}),
+                "non-negative integer",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": 1.5}, "frames": [{}]}),
+                "non-negative integer",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": null}, "frames": [{}]}),
+                "non-negative integer",
+            ),
+            (
+                json!({"meta": {"dt_s": 1.0, "frame_count": -1}, "frames": [{}]}),
+                "non-negative integer",
             ),
         ] {
             let error = validate_replay_document(&document).unwrap_err();

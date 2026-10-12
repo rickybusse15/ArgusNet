@@ -151,11 +151,16 @@ def test_build_scene_refuses_a_replay_without_terrain(tmp_path: Path) -> None:
     assert "terrain.viewer_mesh" in result.stderr
 
 
-def test_build_scene_refuses_a_replay_python_would_reject(tmp_path: Path) -> None:
+@pytest.mark.parametrize("frame_count", ["wrong", "2", 1.5, None])
+def test_build_scene_refuses_a_replay_python_would_reject(
+    tmp_path: Path, frame_count: object
+) -> None:
     """The replay contract is checked before packaging, as Python checks it."""
     binary = _argusnet_rs()
     replay = _replay_with_obstacles()
-    replay["meta"]["frame_count"] = len(replay["frames"]) + 1
+    replay["meta"]["frame_count"] = (
+        len(replay["frames"]) + 1 if frame_count == "wrong" else frame_count
+    )
     with pytest.raises(ValueError, match="frame_count"):
         build_scene_from_replay(replay, tmp_path / "python")
     replay_path = tmp_path / "replay.json"
