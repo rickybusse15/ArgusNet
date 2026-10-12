@@ -84,6 +84,14 @@ evaluation) and mirrored in the Python scorecard:
 - **Reassignments:** handoffs, reassignments and thrash (an assignment changed
   within N seconds).
 
+**Make completion observable.** `mission_completion_rate` is currently
+vacuous for Rust scan-map-inspect replays. `evaluate_replay` reads a top-level
+`mission.required_objectives_*`, the Rust replay writer has none, and
+`metrics.py` then reports 1.0. P0 adds an additive objective summary to the
+replay (POIs required, completed, unmet) and derives the rate from it, with a
+test that a run leaving a POI unfinished scores below 1.0. Only after that
+can the metric gate any policy.
+
 Reported by phase acceptance, for reporting only (no envelope), on the
 canonical and qualification seeds. This baseline is what every later phase
 is measured against.

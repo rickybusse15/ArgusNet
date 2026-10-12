@@ -52,6 +52,11 @@ C8 (P2.6) and D2 (P5.1).
 
 ### R1: real buildings
 
+- **Georeferencing first.** OSM and GeoJSON come in external coordinate
+  systems (GeoJSON defaults to EPSG:4326), and the simulation works in local
+  meters. The first conversion therefore fixes, and records in the world
+  bundle, the source CRS, the projection and the local origin, and aligns them
+  with the terrain. R2, R3 and R5 reuse the same transform.
 - **Data in.** An offline tool in Python (allowed as tooling) converts OSM or
   GeoJSON footprints, `height`/`building:levels`, `roof:shape` and
   `roof:height` into a versioned **world bundle** section. When the data
@@ -139,7 +144,8 @@ C8 (P2.6) and D2 (P5.1).
 - One offline pipeline: DEM (GeoTIFF) + OSM (buildings, trees, power, roads,
   water, land use) + an optional LiDAR canopy and building-height model. It
   produces a content-hashed world bundle and its `.smartscene`.
-- Georeferencing: a fixed projection to local meters, recorded in the bundle.
+- Georeferencing: the transform R1 defined and recorded, applied to the DEM
+  and every layer, so the layers line up.
 - **One canonical real-world scenario** (a small town edge with a transmission
   line), used for parity, performance and visual probes.
 
