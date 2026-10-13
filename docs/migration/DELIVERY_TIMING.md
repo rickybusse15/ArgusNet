@@ -175,8 +175,13 @@ stay at their evidence time, labelled with it, and consumers can see
 `timestamp_s` says when a track's estimate is for, not when it last saw
 evidence: a track that coasts is predicted forward over ticks with no
 measurement. Each runtime track now records its last measurement time
-(`TrackState::evidence_time_s`, from the tracker's `last_update_time_s`, which
-the engine checkpoint already carried).
+(`TrackState::evidence_time_s`): the acquisition time of the newest
+observation behind its last update. Accepted observations may be stamped up
+to `max_timestamp_skew_s` from the frame that fuses them, so this can be
+earlier than the update itself; the tracker keeps the difference
+(`measurement_lag_s`) in its checkpoint only when it is not zero. Under JPDA,
+which weighs every cluster into every update, the newest accepted observation
+stands in.
 
 A replay writes it as each track's `evidence_time_s` only in a run whose
 tracks can be older than their frame: delivery modelled, or the fusion lane

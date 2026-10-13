@@ -839,6 +839,19 @@ impl IMMTrack3D {
     }
 }
 
+/// The newest acquisition time among `observations`, if any.
+fn latest_acquisition(observations: &[BearingObservation]) -> Option<f64> {
+    observations
+        .iter()
+        .map(|observation| observation.timestamp_s)
+        .reduce(f64::max)
+}
+
+/// For `skip_serializing_if`: a lag of exactly zero is the default.
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
+}
+
 /// Cholesky factorization with a symmetrize-and-jitter retry.
 ///
 /// The retry only runs when the plain factorization fails (a numerically
@@ -924,6 +937,12 @@ pub(crate) struct ManagedTrack {
     pub(crate) update_count: u32,
     pub(crate) stale_steps: u32,
     last_update_time_s: f64,
+    /// How far the last update's newest measurement was acquired before
+    /// `last_update_time_s` (accepted observations may be skewed from the
+    /// frame they are fused in). Zero when they agree, and then left out of
+    /// the checkpoint, so a checkpoint without skew is unchanged.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    measurement_lag_s: f64,
     update_history: Vec<bool>,
     quality_score: f64,
     /// Node IDs whose observations were fused in the most recent update.
@@ -954,6 +973,7 @@ impl ManagedTrack {
             update_count: 1,
             stale_steps: 0,
             last_update_time_s: timestamp_s,
+            measurement_lag_s: 0.0,
             update_history: vec![true],
             quality_score: 0.5,
             contributing_node_ids: std::sync::Arc::default(),
@@ -994,6 +1014,16 @@ impl ManagedTrack {
                 std::sync::Arc::new(node_ids.iter().map(|node_id| node_id.to_string()).collect());
         }
         Ok(())
+    }
+
+    /// Record when the measurements behind the last update were acquired:
+    /// the newest of them, never after the update itself. Called after
+    /// [`Self::new`] or a successful [`Self::update`]; `None` (no timestamped
+    /// measurement) leaves the update time as the evidence time.
+    pub(crate) fn record_measured_at(&mut self, measured_at_s: Option<f64>) {
+        self.measurement_lag_s = measured_at_s
+            .map(|measured| (self.last_update_time_s - measured).max(0.0))
+            .unwrap_or(0.0);
     }
 
     pub(crate) fn mark_missed(&mut self, timestamp_s: f64) {
@@ -1079,7 +1109,7 @@ impl ManagedTrack {
             Some(self.quality_score),
         );
         state.contributing_node_ids = std::sync::Arc::clone(&self.contributing_node_ids);
-        state.evidence_time_s = Some(self.last_update_time_s);
+        state.evidence_time_s = Some(self.last_update_time_s - self.measurement_lag_s);
         state
     }
 }
@@ -1380,17 +1410,17 @@ impl TrackingEngine {
                     ));
                     continue;
                 }
+                managed_track.record_measured_at(latest_acquisition(&deduped_cluster));
             } else {
-                self.tracks.insert(
+                let mut track = ManagedTrack::new(
                     track_id.clone(),
-                    ManagedTrack::new(
-                        track_id.clone(),
-                        timestamp_s,
-                        estimate.position,
-                        estimate.measurement_std_m,
-                        &self.config,
-                    ),
+                    timestamp_s,
+                    estimate.position,
+                    estimate.measurement_std_m,
+                    &self.config,
                 );
+                track.record_measured_at(latest_acquisition(&deduped_cluster));
+                self.tracks.insert(track_id.clone(), track);
             }
             updated_track_ids.push(track_id);
         }
@@ -1478,19 +1508,19 @@ impl TrackingEngine {
                             ));
                             continue;
                         }
+                        managed_track.record_measured_at(latest_acquisition(cluster));
                     }
                 }
                 TrackAssignment::NewTrack => {
-                    self.tracks.insert(
+                    let mut track = ManagedTrack::new(
                         track_id.clone(),
-                        ManagedTrack::new(
-                            track_id.clone(),
-                            timestamp_s,
-                            assignment.position,
-                            assignment.measurement_std_m,
-                            &self.config,
-                        ),
+                        timestamp_s,
+                        assignment.position,
+                        assignment.measurement_std_m,
+                        &self.config,
                     );
+                    track.record_measured_at(latest_acquisition(cluster));
+                    self.tracks.insert(track_id.clone(), track);
                 }
             }
 
@@ -1552,6 +1582,9 @@ impl TrackingEngine {
         for cluster in &valid_clusters {
             accepted_observations.extend(cluster.iter().cloned());
         }
+        // JPDA weighs every cluster into every update, so no single cluster's
+        // acquisition time is the track's: the newest accepted one stands in.
+        let measured_at_s = latest_acquisition(&accepted_observations);
 
         let mut updated_track_ids: SmallVec<[String; 8]> = SmallVec::new();
         for update in result.track_updates {
@@ -1563,6 +1596,7 @@ impl TrackingEngine {
                     .update(update.position, update.measurement_std_m, timestamp_s, &[])
                     .is_ok()
                 {
+                    track.record_measured_at(measured_at_s);
                     updated_track_ids.push(update.track_id);
                 }
             }
@@ -1570,16 +1604,15 @@ impl TrackingEngine {
 
         for candidate in result.new_tracks {
             let track_id = self.allocate_track_id();
-            self.tracks.insert(
+            let mut track = ManagedTrack::new(
                 track_id.clone(),
-                ManagedTrack::new(
-                    track_id.clone(),
-                    timestamp_s,
-                    candidate.position,
-                    candidate.measurement_std_m,
-                    &self.config,
-                ),
+                timestamp_s,
+                candidate.position,
+                candidate.measurement_std_m,
+                &self.config,
             );
+            track.record_measured_at(measured_at_s);
+            self.tracks.insert(track_id.clone(), track);
             updated_track_ids.push(track_id);
         }
 
@@ -1938,6 +1971,74 @@ mod tests {
 
         let estimate = fuse_bearing_cluster(&observations).unwrap();
         assert!((estimate.position - truth).norm() < 1.0e-6);
+    }
+
+    /// A track's evidence time is when its measurements were acquired, not
+    /// the frame that fused them: observations within the timestamp skew of
+    /// their frame keep their own time, through a checkpoint too.
+    #[test]
+    fn evidence_time_is_the_measurements_acquisition_time() {
+        let mut engine = TrackingEngine::new(TrackerConfig::default()).unwrap();
+        for (node_id, x) in [("ground-a", 0.0), ("ground-b", 100.0)] {
+            engine.nodes.insert(
+                node_id.to_string(),
+                NodeState {
+                    node_id: node_id.to_string(),
+                    position: vec3(x, 0.0, 0.0),
+                    velocity: Vector3::zeros(),
+                    is_mobile: false,
+                    timestamp_s: 0.0,
+                    health: 1.0,
+                    ..Default::default()
+                },
+            );
+        }
+        let truth = vec3(50.0, 15.0, 10.0);
+        let fuse = |engine: &mut TrackingEngine, frame_s: f64, acquired_s: f64| {
+            engine.ingest_frame(
+                frame_s,
+                Vec::new(),
+                vec![
+                    bearing(
+                        "ground-a",
+                        "asset-a",
+                        vec3(0.0, 0.0, 0.0),
+                        truth,
+                        acquired_s,
+                    ),
+                    bearing(
+                        "ground-b",
+                        "asset-a",
+                        vec3(100.0, 0.0, 0.0),
+                        truth,
+                        acquired_s,
+                    ),
+                ],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
+
+        // A new track from measurements 0.4 s older than their frame.
+        let frame = fuse(&mut engine, 1.0, 0.6);
+        assert_eq!(1, frame.tracks.len());
+        assert_eq!(1.0, frame.tracks[0].timestamp_s);
+        assert_eq!(Some(0.6), frame.tracks[0].evidence_time_s);
+
+        // Restored from a checkpoint, the lag survives.
+        let mut engine: TrackingEngine =
+            serde_json::from_str(&serde_json::to_string(&engine).unwrap()).unwrap();
+        let restored = engine.tracks.values().next().unwrap().snapshot();
+        assert_eq!(Some(0.6), restored.evidence_time_s);
+
+        // An update from measurements stamped at their frame: no lag, and
+        // none in the checkpoint either.
+        let frame = fuse(&mut engine, 2.0, 2.0);
+        assert_eq!(Some(2.0), frame.tracks[0].evidence_time_s);
+        assert!(!serde_json::to_string(&engine)
+            .unwrap()
+            .contains("measurement_lag_s"));
     }
 
     #[test]
