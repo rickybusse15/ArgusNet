@@ -31,7 +31,7 @@
 //! reads. So the driver keeps its own latch and rescores at step 2, and the
 //! event is informational.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use argusnet_planning::allocation::{min_cost_assignment, PlanningPolicy};
 use argusnet_planning::frontier::{find_gap_cells, CoverageView};
@@ -225,6 +225,10 @@ struct DriverCheckpoint {
     /// Absent for the reference policy, so its checkpoints are unchanged.
     #[serde(default, skip_serializing_if = "PlanningPolicy::is_reference")]
     policy: PlanningPolicy,
+    /// Drones sent home on their own reserve (P2). Absent when none, so
+    /// every other checkpoint is unchanged.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    homeward: BTreeSet<String>,
 }
 
 /// What stage 9 reports for a replay: POI statuses with their positions, and
@@ -288,6 +292,9 @@ pub struct MissionDriverStage {
     /// Who allocates POIs (P1). Scenario, like `config`: set before the
     /// first tick, kept by reset, and checked against a checkpoint's.
     policy: PlanningPolicy,
+    /// Drones sent home on their own reserve under efficient_v1 (P2): they
+    /// hold no POI and take none again.
+    homeward: BTreeSet<String>,
     replay: LocalizationReplay,
     /// Refreshed at the end of every run, and on reset and restore.
     report: DriverReport,
@@ -340,6 +347,7 @@ impl MissionDriverStage {
             initial_pois: pois,
             homes,
             redirected: BTreeMap::new(),
+            homeward: BTreeSet::new(),
             rescored: false,
             coordinator: None,
             config,
@@ -378,6 +386,72 @@ impl MissionDriverStage {
         self.policy
     }
 
+    /// Per-drone return home under efficient_v1 (P2). A drone whose battery
+    /// is at or below its reserve home, from where it is now (the battery's
+    /// own rule: `dynamic_reserve_wh` to its station), is routed home on its
+    /// own, whatever the mission is doing, and gives up any POI it holds
+    /// (`hand_off_safely`, run by the allocator). Once homeward it takes
+    /// nothing again. A drone with no station has nowhere to go and stays.
+    fn send_low_drones_home(
+        &mut self,
+        mobile: &[(String, [f64; 3])],
+        battery: &BatteryStage,
+        timestamp_s: f64,
+    ) {
+        let model = battery.model();
+        let wind = battery.wind_mps();
+        for (id, position) in mobile {
+            if self.homeward.contains(id) {
+                continue;
+            }
+            let Some(home) = self.homes.get(id).copied() else {
+                continue;
+            };
+            let Some(remaining_wh) = battery.remaining_wh(id) else {
+                continue;
+            };
+            let reserve_wh = model.dynamic_reserve_wh(
+                *position,
+                home,
+                wind,
+                argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
+            );
+            if remaining_wh > reserve_wh {
+                continue;
+            }
+            self.homeward.insert(id.clone());
+            self.override_commands.push(OverrideCommand::SetEgress(
+                id.clone(),
+                GotoHover::redirect(
+                    *position,
+                    [home[0], home[1]],
+                    home[2],
+                    timestamp_s,
+                    self.config.redirect_speed_mps,
+                ),
+            ));
+            self.decisions.push(Decision {
+                kind: "return_home",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason: "reserve_reached",
+                detail: format!(
+                    "{id} has {remaining_wh:.1} Wh, at or below the {reserve_wh:.1} Wh it needs \
+                     to get home from here: routed home on its own"
+                ),
+                inputs: serde_json::json!({
+                    "remaining_wh": remaining_wh,
+                    "reserve_wh": reserve_wh,
+                    "position_m": position,
+                    "poi": self.pois.assignment_for(id),
+                }),
+                command: Some("set_egress"),
+            });
+        }
+    }
+
     /// Safe handoff under efficient_v1 (P1). Every drone below the handoff
     /// threshold gives up the POI it holds. A lead's POI goes to a receiver
     /// that can afford the dwell still to do and the trip home above its
@@ -395,9 +469,20 @@ impl MissionDriverStage {
                 .map_or(1.0, |remaining| remaining / capacity_wh)
         };
         let threshold = self.config.handoff_low_fraction;
+        // A drone at its reserve is already homeward; say so, rather than
+        // that its battery is low, whatever its fraction.
+        let homeward = self.homeward.clone();
+        let giving_up = |id: &str| fraction_of(id) < threshold || homeward.contains(id);
+        let why = |id: &str| -> (bool, String) {
+            if homeward.contains(id) {
+                (true, format!("{id} at its reserve and heading home"))
+            } else {
+                (false, format!("{id} below {threshold} of capacity"))
+            }
+        };
         let mut low: Vec<&(String, [f64; 3])> = mobile
             .iter()
-            .filter(|(id, _)| fraction_of(id) < threshold && self.pois.assignment_for(id).is_some())
+            .filter(|(id, _)| giving_up(id) && self.pois.assignment_for(id).is_some())
             .collect();
         if low.is_empty() {
             return;
@@ -409,6 +494,7 @@ impl MissionDriverStage {
             low.into_iter().partition(|(id, _)| self.pois.leads(id));
         for (teammate, _) in teammates {
             let poi = self.pois.assignment_for(teammate).map(str::to_string);
+            let (at_reserve, cause) = why(teammate);
             self.pois.release(teammate);
             self.decisions.push(Decision {
                 kind: "poi_release",
@@ -416,12 +502,20 @@ impl MissionDriverStage {
                 subject: Some(teammate.clone()),
                 selected: poi.clone(),
                 candidates: Vec::new(),
-                reason: "low_battery_teammate",
+                reason: if at_reserve {
+                    "reserve_teammate"
+                } else {
+                    "low_battery_teammate"
+                },
                 detail: format!(
-                    "{teammate} below {threshold} of capacity leaves {}'s team",
+                    "{cause} leaves {}'s team",
                     poi.as_deref().unwrap_or("its POI")
                 ),
-                inputs: serde_json::json!({ "from_fraction": fraction_of(teammate), "poi": poi }),
+                inputs: serde_json::json!({
+                    "from_fraction": fraction_of(teammate),
+                    "at_reserve": at_reserve,
+                    "poi": poi,
+                }),
                 command: None,
             });
             self.stop_flying_to_poi(teammate);
@@ -433,7 +527,7 @@ impl MissionDriverStage {
         };
         let mut receivers: Vec<&(String, [f64; 3])> = mobile
             .iter()
-            .filter(|(id, _)| fraction_of(id) >= threshold)
+            .filter(|(id, _)| !giving_up(id))
             .filter(|(id, _)| match self.pois.assignment_for(id) {
                 None => true,
                 Some(_) => !self.pois.leads(id),
@@ -501,6 +595,7 @@ impl MissionDriverStage {
         for ((lead, _), receiver) in leads.iter().zip(chosen) {
             let poi = self.pois.assignment_for(lead).map(str::to_string);
             let fraction = fraction_of(lead);
+            let (at_reserve, cause) = why(lead);
             match receiver {
                 Some(column) => {
                     let to = &receivers[column].0;
@@ -512,14 +607,19 @@ impl MissionDriverStage {
                         subject: Some(lead.clone()),
                         selected: Some(to.clone()),
                         candidates: candidates.clone(),
-                        reason: "safe_handoff",
+                        reason: if at_reserve {
+                            "reserve_handoff"
+                        } else {
+                            "safe_handoff"
+                        },
                         detail: format!(
-                            "{lead} below {threshold} of capacity hands {} to {to}, the \
-                             cheapest drone that can afford the dwell left and the trip home",
+                            "{cause} hands {} to {to}, the cheapest drone that can afford \
+                             the dwell left and the trip home",
                             poi.as_deref().unwrap_or("its POI")
                         ),
                         inputs: serde_json::json!({
                             "from_fraction": fraction,
+                            "at_reserve": at_reserve,
                             "to_fraction": fraction_of(to),
                             "poi": poi,
                         }),
@@ -541,12 +641,13 @@ impl MissionDriverStage {
                         candidates: candidates.clone(),
                         reason: "no_affordable_receiver",
                         detail: format!(
-                            "{lead} below {threshold} of capacity gives up {}: no drone can \
+                            "{cause} gives up {}: no drone can \
                              afford the dwell left and the trip home, so it goes back to the pool",
                             poi.as_deref().unwrap_or("its POI")
                         ),
                         inputs: serde_json::json!({
                             "from_fraction": fraction,
+                            "at_reserve": at_reserve,
                             "poi": poi,
                             "released": released,
                         }),
@@ -595,7 +696,11 @@ impl MissionDriverStage {
         // given its POI up, or would be giving it up.
         let mut free: Vec<&(String, [f64; 3])> = mobile
             .iter()
-            .filter(|(id, _)| self.pois.assignment_for(id).is_none() && !low(id))
+            .filter(|(id, _)| {
+                self.pois.assignment_for(id).is_none()
+                    && !low(id)
+                    && !self.homeward.contains(id.as_str())
+            })
             .collect();
         free.sort_by(|a, b| a.0.cmp(&b.0));
         if free.is_empty() {
@@ -1116,6 +1221,9 @@ impl StageHandler for MissionDriverStage {
             });
         }
 
+        if self.policy == PlanningPolicy::EfficientV1 {
+            self.send_low_drones_home(&mobile, battery, timestamp_s);
+        }
         if phase == MissionPhase::Inspecting {
             // Dwell is credited per boundary: the boundaries this lane sat
             // out were credited in `not_due`, each at the position then.
@@ -1290,6 +1398,7 @@ impl StageHandler for MissionDriverStage {
             rescored: self.rescored,
             coordinator: self.coordinator.clone(),
             policy: self.policy,
+            homeward: self.homeward.clone(),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -1329,6 +1438,7 @@ impl StageHandler for MissionDriverStage {
         self.redirected = decoded.redirected;
         self.rescored = decoded.rescored;
         self.coordinator = decoded.coordinator;
+        self.homeward = decoded.homeward;
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -1337,7 +1447,8 @@ impl StageHandler for MissionDriverStage {
 
     fn not_due(&mut self, context: &mut TickContext<'_>) -> Result<(), StageError> {
         // This tick's outputs: the decisions it records and the override
-        // commands stage 2 takes next tick. A boundary it sat out made none.
+        // commands stage 2 takes next tick. A boundary it sat out made none,
+        // but for a return home under `efficient_v1` (below).
         // The machine's events are taken where they are made, in `run`.
         self.override_commands.clear();
         self.decisions.clear();
@@ -1346,11 +1457,21 @@ impl StageHandler for MissionDriverStage {
         // next run it would count a drone that arrived or left in between for
         // the whole interval, and a POI assigned at that run for time before
         // it was assigned. Assignment and completion wait for the lane's run.
+        let mobile = mobile_positions(context);
         if self.machine.phase() == MissionPhase::Inspecting {
-            for (id, position) in mobile_positions(context) {
+            for (id, position) in &mobile {
                 self.pois
-                    .accumulate_dwell(&id, position, context.boundary_dt_s);
+                    .accumulate_dwell(id, *position, context.boundary_dt_s);
             }
+        }
+        // A drone that reaches its reserve between the lane's runs turns for
+        // home at once, not at the next run: what it would fly meanwhile is
+        // the energy that gets it home. Its POI goes at the next run, which
+        // treats a homeward drone as giving it up.
+        if self.policy == PlanningPolicy::EfficientV1 {
+            let empty = BatteryStage::new();
+            let battery = stage_one_battery(context.stages).unwrap_or(&empty);
+            self.send_low_drones_home(&mobile, battery, context.timestamp_s);
         }
         Ok(())
     }
@@ -1361,6 +1482,7 @@ impl StageHandler for MissionDriverStage {
         self.redirected.clear();
         self.rescored = false;
         self.coordinator = None;
+        self.homeward.clear();
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -2107,6 +2229,91 @@ mod tests {
         assert_eq!(left.reason, "low_battery_teammate");
         assert!(stage.pois.leads("drone-a"), "the lead keeps it");
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
+    }
+
+    /// P2: a drone at its reserve home is routed home on its own, gives its
+    /// POI to a drone that can afford it, and takes nothing again. The
+    /// reference never does.
+    #[test]
+    fn efficient_v1_sends_a_drone_at_its_reserve_home() {
+        let homes: BTreeMap<String, [f64; 3]> = [
+            ("drone-a".to_string(), [0.0, 0.0, 40.0]),
+            ("drone-b".to_string(), [0.0, 0.0, 40.0]),
+        ]
+        .into_iter()
+        .collect();
+        let pois = || {
+            vec![InspectionPoi {
+                required_dwell_s: 60.0,
+                ..poi("poi-00", 900.0, 1)
+            }]
+        };
+        let (mut battery, mobile) = fleet(&[("drone-a", 900.0), ("drone-b", 300.0)]);
+        let mut stage =
+            MissionDriverStage::new(MissionDriverConfig::default(), pois(), homes.clone());
+        stage.set_policy(PlanningPolicy::EfficientV1).unwrap();
+        stage.inspect(0.0, 1.0, &mobile[..1], &battery, &empty_map());
+        assert!(stage.pois.leads("drone-a"));
+        stage.take_override_commands();
+
+        // drone-a down to its reserve: above the handoff threshold, but no
+        // more than it needs to fly the 900 m home.
+        let model = battery.model();
+        let reserve = model.dynamic_reserve_wh(
+            mobile[0].1,
+            homes["drone-a"],
+            battery.wind_mps(),
+            argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
+        );
+        assert!(battery.set_remaining_wh("drone-a", reserve));
+        stage.send_low_drones_home(&mobile, &battery, 1.0);
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        let home = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "return_home")
+            .expect("sent home");
+        assert_eq!(home.reason, "reserve_reached");
+        assert_eq!(home.subject.as_deref(), Some("drone-a"));
+        let commands = stage.take_override_commands();
+        assert!(commands
+            .iter()
+            .any(|c| matches!(c, OverrideCommand::SetEgress(id, _) if id == "drone-a")));
+        assert_eq!(stage.pois.assignment_for("drone-a"), None);
+        assert!(stage.pois.leads("drone-b"), "the POI went to drone-b");
+        let handoff = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_handoff")
+            .expect("handed on");
+        assert_eq!(handoff.reason, "reserve_handoff", "not a low battery");
+        assert!(
+            handoff.detail.contains("at its reserve"),
+            "{}",
+            handoff.detail
+        );
+        assert_eq!(handoff.inputs["at_reserve"], true);
+
+        // Never given anything again, and not sent home twice. (`run` clears
+        // a run's decisions; the steps are called directly here.)
+        stage.decisions.clear();
+        stage.send_low_drones_home(&mobile, &battery, 2.0);
+        stage.inspect(2.0, 1.0, &mobile, &battery, &empty_map());
+        assert!(stage.decisions().iter().all(|d| d.kind != "return_home"));
+        assert_eq!(stage.pois.assignment_for("drone-a"), None);
+
+        // Survives a checkpoint.
+        let state = stage.checkpoint_state().unwrap();
+        assert_eq!(state["homeward"], serde_json::json!(["drone-a"]));
+        let mut restored = MissionDriverStage::new(MissionDriverConfig::default(), pois(), homes);
+        restored.set_policy(PlanningPolicy::EfficientV1).unwrap();
+        restored.restore_state(&state).unwrap();
+        assert!(restored.homeward.contains("drone-a"));
+        let empty = efficient_driver(pois()).checkpoint_state().unwrap();
+        assert!(
+            empty.get("homeward").is_none(),
+            "absent when no drone is homeward"
+        );
     }
 
     /// A low lead whose teammate cannot afford the dwell left either: the

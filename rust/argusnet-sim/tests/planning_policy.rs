@@ -136,3 +136,48 @@ fn an_efficient_checkpoint_is_versioned_and_resumes_only_as_efficient() {
         CheckpointHeader::RUNTIME_ALGORITHM_VERSION
     );
 }
+
+/// P2 under a mission lane slower than the boundary: a drone that reaches its
+/// reserve on a boundary the lane sits out turns for home on that boundary.
+/// The egress the driver queues there reaches stage 2, which flies it from
+/// the next boundary on.
+#[test]
+fn a_drone_at_its_reserve_between_mission_runs_turns_for_home() {
+    use argusnet_sim::overrides::{MissionOverrideStage, OverrideSource};
+    use argusnet_sim::scheduler::{parse_rate, LaneRates, PhasedLaneExecutor};
+    use argusnet_sim::stage::Stage;
+    let bundle = bundle("scan");
+    let dt_ms = (bundle.dt_s * 1000.0).round() as u64;
+    let rates = LaneRates {
+        mission: Some(parse_rate(&format!("1000/{}", 10 * dt_ms)).unwrap()),
+        ..LaneRates::default()
+    };
+    let mut run = assemble(&bundle).expect("assembles");
+    let options = RunOptions {
+        planning_policy: PlanningPolicy::EfficientV1,
+        lane_rates: rates,
+        ..RunOptions::default()
+    };
+    options.apply(&mut run, &bundle).expect("applies");
+    let mut lanes = rates
+        .apply(PhasedLaneExecutor::new::<RunError>(bundle.dt_s, 0).expect("exact timestep"))
+        .expect("rates");
+    // The lane runs at boundaries 0, 10, 20, ...: stop after 11, so the
+    // next boundary is one it sits out.
+    for _ in 0..12 {
+        lanes.step(&mut run).expect("steps");
+    }
+    let source = |run: &AssembledRun| {
+        run.sim
+            .stage::<MissionOverrideStage>(Stage::ApplyMissionOverrides)
+            .expect("installed")
+            .applied_source("drone-east")
+    };
+    assert_ne!(source(&run), Some(OverrideSource::Egress));
+    assert!(run.battery_mut().set_remaining_wh("drone-east", 0.5));
+    lanes
+        .step(&mut run)
+        .expect("a boundary the mission lane sits out");
+    lanes.step(&mut run).expect("the next boundary");
+    assert_eq!(source(&run), Some(OverrideSource::Egress));
+}
