@@ -758,15 +758,20 @@ impl MissionDriverStage {
             .filter(|(id, _)| self.pois.assignment_for(id).is_none())
             .collect();
         let in_range = |poi: &argusnet_planning::poi::ActivePoi| {
-            let holders: Vec<&[f64; 3]> = mobile
+            let holders: Vec<&(String, [f64; 3])> = mobile
                 .iter()
                 .filter(|(id, _)| self.pois.assignment_for(id) == Some(poi.poi_id.as_str()))
-                .map(|(_, position)| position)
                 .collect();
             holders.len() == poi.members
-                && holders.iter().all(|position| {
-                    let (dx, dy) = (poi.position[0] - position[0], poi.position[1] - position[1]);
-                    (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
+                && holders.iter().all(|(id, position)| {
+                    // A holder about to hand the POI on leaves it this run,
+                    // and the newcomer would hover alone until its receiver
+                    // arrived.
+                    fraction_of(id) >= self.config.handoff_low_fraction && {
+                        let (dx, dy) =
+                            (poi.position[0] - position[0], poi.position[1] - position[1]);
+                        (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
+                    }
                 })
         };
         let mut active: Vec<_> = self
@@ -1992,6 +1997,27 @@ mod tests {
         stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
         assert_eq!(stage.pois.assignment_for("drone-a"), None);
         assert!(stage.pois.leads("drone-b"));
+    }
+
+    /// No drone joins a POI whose holder is about to hand it on: it would
+    /// hover alone until the receiver arrived.
+    #[test]
+    fn efficient_v1_never_teams_onto_a_poi_being_handed_on() {
+        // drone-b is kept free to receive it; drone-c, close by, is free too.
+        let (mut battery, mobile) =
+            fleet(&[("drone-a", 500.0), ("drone-b", 3_000.0), ("drone-c", 520.0)]);
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 60.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert!(stage
+            .decisions()
+            .iter()
+            .all(|d| d.kind != "team_assignment"));
     }
 
     /// P1 teams: a drone left free after allocation joins a POI being
