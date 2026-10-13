@@ -265,6 +265,25 @@ impl PoiManager {
         true
     }
 
+    /// Return the POI `drone_id` holds to the pool: every holder lets go
+    /// and the POI is pending again. The holders it released, by id.
+    pub fn release_poi(&mut self, drone_id: &str) -> Vec<String> {
+        let Some(index) = self.drone_assignment.get(drone_id).copied() else {
+            return Vec::new();
+        };
+        let mut released: Vec<String> = self
+            .drone_assignment
+            .iter()
+            .filter(|(_, &held)| held == index)
+            .map(|(id, _)| id.clone())
+            .collect();
+        released.sort();
+        self.drone_assignment.retain(|_, held| *held != index);
+        self.states[index] = PoiState::Pending;
+        self.assigned_drone[index] = None;
+        released
+    }
+
     /// [`Self::request_team_assign`] by index: add a free drone to the
     /// active POI at `index`, so both credit its dwell. The status keeps
     /// naming the drone that took it.
@@ -619,5 +638,28 @@ mod tests {
         assert_eq!(manager.statuses()[0].state, PoiState::Pending);
         assert_eq!(manager.statuses()[0].assigned_drone_id, None);
         assert_eq!(manager.pending_pois().len(), 1);
+    }
+
+    /// A whole team let go at once: every holder is free and the POI is
+    /// pending, whoever led it.
+    #[test]
+    fn releasing_a_poi_frees_every_holder() {
+        let mut manager = PoiManager::new(vec![poi("p0", 0.0, 10.0), poi("p1", 500.0, 10.0)]);
+        assert!(manager.assign_at("b", 0));
+        assert!(manager.team_assign_at("a", 0));
+        assert!(manager.assign_at("c", 1));
+        assert_eq!(
+            manager.release_poi("b"),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert_eq!(manager.assignment_for("a"), None);
+        assert_eq!(manager.statuses()[0].state, PoiState::Pending);
+        assert_eq!(manager.statuses()[0].assigned_drone_id, None);
+        assert_eq!(
+            manager.assignment_for("c"),
+            Some("p1"),
+            "other POIs keep theirs"
+        );
+        assert!(manager.release_poi("a").is_empty(), "it holds nothing now");
     }
 }

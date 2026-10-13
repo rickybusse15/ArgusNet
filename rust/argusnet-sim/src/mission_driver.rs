@@ -399,14 +399,34 @@ impl MissionDriverStage {
             return;
         }
         low.sort_by(|a, b| a.0.cmp(&b.0));
+        // Low teammates leave first, so a POI's members are the drones that
+        // stay when its handoff is costed; low leads need a receiver.
+        let (leads, teammates): (Vec<_>, Vec<_>) =
+            low.into_iter().partition(|(id, _)| self.pois.leads(id));
+        for (teammate, _) in teammates {
+            let poi = self.pois.assignment_for(teammate).map(str::to_string);
+            self.pois.release(teammate);
+            self.decisions.push(Decision {
+                kind: "poi_release",
+                status: DecisionStatus::Applied,
+                subject: Some(teammate.clone()),
+                selected: poi.clone(),
+                candidates: Vec::new(),
+                reason: "low_battery_teammate",
+                detail: format!(
+                    "{teammate} below {threshold} of capacity leaves {}'s team",
+                    poi.as_deref().unwrap_or("its POI")
+                ),
+                inputs: serde_json::json!({ "from_fraction": fraction_of(teammate), "poi": poi }),
+                command: None,
+            });
+            self.stop_flying_to_poi(teammate);
+        }
         let active = self.pois.active_pois();
         let poi_of = |id: &str| -> Option<&argusnet_planning::poi::ActivePoi> {
             let held = self.pois.assignment_for(id)?;
             active.iter().find(|poi| poi.poi_id == held)
         };
-        // Low teammates leave; low leads need a receiver.
-        let (leads, teammates): (Vec<_>, Vec<_>) =
-            low.into_iter().partition(|(id, _)| self.pois.leads(id));
         let mut receivers: Vec<&(String, [f64; 3])> = mobile
             .iter()
             .filter(|(id, _)| fraction_of(id) >= threshold)
@@ -492,7 +512,12 @@ impl MissionDriverStage {
                     });
                 }
                 None => {
-                    self.pois.release(lead);
+                    // The whole team lets go: a teammate left holding it is
+                    // one the solve found could not afford it either.
+                    let released = self.pois.release_poi(lead);
+                    for drone in &released {
+                        self.stop_flying_to_poi(drone);
+                    }
                     self.decisions.push(Decision {
                         kind: "poi_release",
                         status: DecisionStatus::Applied,
@@ -505,31 +530,16 @@ impl MissionDriverStage {
                              afford the dwell left and the trip home, so it goes back to the pool",
                             poi.as_deref().unwrap_or("its POI")
                         ),
-                        inputs: serde_json::json!({ "from_fraction": fraction, "poi": poi }),
+                        inputs: serde_json::json!({
+                            "from_fraction": fraction,
+                            "poi": poi,
+                            "released": released,
+                        }),
                         command: None,
                     });
                 }
             }
             self.stop_flying_to_poi(lead);
-        }
-        for (teammate, _) in teammates {
-            let poi = self.pois.assignment_for(teammate).map(str::to_string);
-            self.pois.release(teammate);
-            self.decisions.push(Decision {
-                kind: "poi_release",
-                status: DecisionStatus::Applied,
-                subject: Some(teammate.clone()),
-                selected: poi.clone(),
-                candidates: Vec::new(),
-                reason: "low_battery_teammate",
-                detail: format!(
-                    "{teammate} below {threshold} of capacity leaves {}'s team",
-                    poi.as_deref().unwrap_or("its POI")
-                ),
-                inputs: serde_json::json!({ "from_fraction": fraction_of(teammate), "poi": poi }),
-                command: None,
-            });
-            self.stop_flying_to_poi(teammate);
         }
     }
 
@@ -645,7 +655,10 @@ impl MissionDriverStage {
                         if arrive_s >= alone_s {
                             return None;
                         }
-                        let together_s = poi.remaining_dwell_s / (poi.members + 1) as f64;
+                        // The holders keep crediting while it travels; it
+                        // shares only what is left when it arrives.
+                        let left_s = poi.remaining_dwell_s - poi.members as f64 * arrive_s;
+                        let together_s = left_s.max(0.0) / (poi.members + 1) as f64;
                         let spent_wh = model.segment_cost_wh(*position, poi.position)
                             + model.hover_power_w * together_s / 3600.0;
                         (remaining_wh - spent_wh >= reserve_at(id, poi.position))
@@ -855,7 +868,10 @@ impl MissionDriverStage {
                         status: DecisionStatus::QueuedForNextTick,
                         subject: Some(id.clone()),
                         selected: Some(active.clone()),
-                        candidates: pending,
+                        candidates: joins
+                            .iter()
+                            .find(|join| &join.drone_id == id)
+                            .map_or(pending, |join| join.candidates.clone()),
                         reason: if joins.iter().any(|join| &join.drone_id == id) {
                             "fleet_team_join"
                         } else if efficient {
@@ -2011,6 +2027,70 @@ mod tests {
         assert_eq!(left.reason, "low_battery_teammate");
         assert!(stage.pois.leads("drone-a"), "the lead keeps it");
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
+    }
+
+    /// A low lead whose teammate cannot afford the dwell left either: the
+    /// whole team lets go and the POI goes back to the pool, rather than to
+    /// the teammate the solve just ruled out.
+    #[test]
+    fn efficient_v1_returns_a_team_no_one_can_afford_to_the_pool() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 510.0)]);
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 36_000.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        assert!(stage.pois.team_assign_at("drone-b", 0));
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        let released = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_release")
+            .expect("given up");
+        assert_eq!(released.reason, "no_affordable_receiver");
+        assert_eq!(
+            released.inputs["released"],
+            serde_json::json!(["drone-a", "drone-b"])
+        );
+        assert_eq!(stage.pois.assignment_for("drone-a"), None);
+        assert_eq!(stage.pois.assignment_for("drone-b"), None);
+        assert_eq!(stage.pois.pending_pois().len(), 1);
+    }
+
+    /// A low teammate leaves before the lead's handoff is costed, so the
+    /// receiver is charged for the dwell shared among the drones that stay.
+    #[test]
+    fn efficient_v1_costs_a_handoff_without_departing_teammates() {
+        let (mut battery, mobile) =
+            fleet(&[("drone-a", 500.0), ("drone-b", 510.0), ("drone-c", 505.0)]);
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 60.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        assert!(stage.pois.team_assign_at("drone-b", 0));
+        assert!(stage.pois.team_assign_at("drone-c", 0));
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        assert!(battery.set_remaining_wh("drone-c", 0.25 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        let kinds: Vec<(&str, &str)> = stage
+            .decisions()
+            .iter()
+            .filter(|d| d.kind != "poi_rescore")
+            .map(|d| (d.kind, d.reason))
+            .collect();
+        assert_eq!(
+            &kinds[..2],
+            &[
+                ("poi_release", "low_battery_teammate"),
+                ("poi_handoff", "safe_handoff")
+            ]
+        );
+        assert!(stage.pois.leads("drone-b"));
+        assert_eq!(stage.pois.active_pois()[0].members, 1);
     }
 
     /// A POI the drone could not reach, dwell at and keep its reserve after
