@@ -504,6 +504,10 @@ pub struct TrackState {
     /// Node IDs that contributed to the most recent update.
     #[serde(default)]
     pub contributing_node_ids: Vec<String>,
+    /// When the track last took a measurement (P4.10b); only timed runs
+    /// (delivery modelled or a fusion rate) write it.
+    #[serde(default)]
+    pub evidence_time_s: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -818,6 +822,8 @@ mod live_stream {
                 covariance,
                 mode_probability_cv,
                 contributing_node_ids: t.contributing_nodes,
+                // The wire does not carry it.
+                evidence_time_s: None,
             }
         }
     }

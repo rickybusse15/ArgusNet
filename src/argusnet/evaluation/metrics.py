@@ -78,6 +78,11 @@ class EvaluationReport:
     # Mean of (frame time - track time) over every scored track sample: how
     # old the evidence behind the published tracks is. 0 without delivery.
     track_evidence_age_mean_s: float | None = None
+    # Mean of (frame time - the track's last measurement time) over every
+    # track that records one (`evidence_time_s`, P4.10b): the evidence age
+    # above plus any coasting since. None when no track records it (a legacy
+    # replay).
+    track_measurement_age_mean_s: float | None = None
     covariance_reduction_mean: float | None = None
     # Tracks behind covariance_reduction_mean; 0 when it is None.
     covariance_reduction_tracks: int = 0
@@ -402,6 +407,21 @@ def compute_localisation_rmse(
     return mission_rmse, per_track
 
 
+def compute_track_measurement_age(frames: list[dict]) -> float | None:
+    """Mean of (frame time - the track's ``evidence_time_s``) over every track
+    that records it: how long ago the published tracks last took a
+    measurement. At least the evidence age (frame time - track time); the
+    difference is the time tracks spent coasting. None when no track records
+    an evidence time (the field is written only by timed runs, P4.10b)."""
+    ages = [
+        float(frame.get("timestamp_s", 0.0)) - float(track["evidence_time_s"])
+        for frame in frames
+        for track in _extract_tracks_from_frame(frame)
+        if track.get("evidence_time_s") is not None
+    ]
+    return float(np.mean(ages)) if ages else None
+
+
 def compute_track_evidence_age(frames: list[dict]) -> float | None:
     """Mean of (frame time - track time) over every track in every frame:
     how old the evidence behind the published tracks is. None without
@@ -604,6 +624,7 @@ def evaluate_replay(
         localisation_rmse_per_track=loc_per_track,
         present_error_rmse_m=present_rmse,
         track_evidence_age_mean_s=compute_track_evidence_age(frames),
+        track_measurement_age_mean_s=compute_track_measurement_age(frames),
         covariance_reduction_mean=cov_reduction,
         covariance_reduction_tracks=len(cov_reductions),
         # Reliability
@@ -1025,6 +1046,7 @@ def report_to_dict(report: EvaluationReport) -> dict:
         ),
         "present_error_rmse_m": _float_or_none(report.present_error_rmse_m),
         "track_evidence_age_mean_s": _float_or_none(report.track_evidence_age_mean_s),
+        "track_measurement_age_mean_s": _float_or_none(report.track_measurement_age_mean_s),
         "localisation_rmse_per_track": {
             k: float(v) for k, v in report.localisation_rmse_per_track.items()
         },
@@ -1106,6 +1128,7 @@ def report_from_dict(d: dict) -> EvaluationReport:
         localisation_rmse_per_track=dict(d.get("localisation_rmse_per_track") or {}),
         present_error_rmse_m=_optional_float(d.get("present_error_rmse_m")),
         track_evidence_age_mean_s=_optional_float(d.get("track_evidence_age_mean_s")),
+        track_measurement_age_mean_s=_optional_float(d.get("track_measurement_age_mean_s")),
         covariance_reduction_mean=(
             float(d["covariance_reduction_mean"])
             if d.get("covariance_reduction_mean") is not None

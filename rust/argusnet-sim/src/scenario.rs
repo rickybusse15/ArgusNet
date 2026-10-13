@@ -1960,6 +1960,16 @@ impl AssembledRun {
         self.record_frame(snapshot, open.timestamp_s, open.truths)
     }
 
+    /// Whether this run's tracks can be older than the frame that publishes
+    /// them: delivery is modelled (fusion runs a lag behind) or fusion runs at
+    /// its own rate (between its runs a frame republishes the last tracks).
+    /// Only such a run writes each track's `evidence_time_s`, so a legacy
+    /// replay is byte for byte what it was.
+    pub fn tracks_lag_their_frames(&self) -> bool {
+        self.fusion().delivery().is_some()
+            || self.sim.lane_rates().contains_key(&Stage::UpdateFusion)
+    }
+
     /// The committed tick's replay frame.
     fn record_frame(
         &mut self,
@@ -1983,6 +1993,11 @@ impl AssembledRun {
             &frame.metrics,
             &self.observe().generation_rejections(),
         );
+        if self.tracks_lag_their_frames() {
+            for (replay_track, track) in replay_frame.tracks.iter_mut().zip(&frame.tracks) {
+                replay_track.evidence_time_s = track.evidence_time_s;
+            }
+        }
         replay_frame.safety_events = frame
             .safety_events
             .iter()

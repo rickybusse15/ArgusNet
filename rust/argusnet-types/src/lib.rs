@@ -143,6 +143,11 @@ pub struct TrackState {
     /// Node IDs whose observations contributed to the most recent update.
     /// Shared with the owning track so per-frame snapshots don't deep-clone.
     pub contributing_node_ids: std::sync::Arc<Vec<String>>,
+    /// When the track last took a measurement: its evidence time. Behind
+    /// `timestamp_s` while the track coasts, and behind the frame time by the
+    /// fusion lag when delivery is modelled. `None` where the producer does
+    /// not know it (the gRPC wire does not carry it).
+    pub evidence_time_s: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -19,6 +19,7 @@ from argusnet.evaluation.metrics import (
     compute_time_to_reacquire,
     compute_track_continuity,
     compute_track_evidence_age,
+    compute_track_measurement_age,
     evaluate_replay,
     report_from_dict,
     report_to_dict,
@@ -290,6 +291,34 @@ class TestEvidenceTimeScoring:
         again = report_from_dict(report_to_dict(report))
         assert again.present_error_rmse_m == report.present_error_rmse_m
         assert again.track_evidence_age_mean_s == report.track_evidence_age_mean_s
+
+
+class TestMeasurementAge:
+    def test_a_coasting_track_is_older_than_its_evidence_age(self):
+        # Tracks 1 s behind their frames (the lag) whose last measurement
+        # was a further 0.5 s before their own time (coasting).
+        frames = _lagged_frames(2)
+        for frame in frames:
+            for track in frame["tracks"]:
+                track["evidence_time_s"] = track["timestamp_s"] - 0.5
+        assert compute_track_evidence_age(frames) == pytest.approx(1.0)
+        assert compute_track_measurement_age(frames) == pytest.approx(1.5)
+
+    def test_a_legacy_replay_has_no_measurement_age(self):
+        frames = _lagged_frames(0)
+        assert compute_track_measurement_age(frames) is None
+        report = evaluate_replay({"meta": {}, "frames": frames}, "s", "m", 0.0, 1)
+        assert report.track_measurement_age_mean_s is None
+
+    def test_the_report_carries_it_and_round_trips(self):
+        frames = _lagged_frames(2)
+        for frame in frames:
+            for track in frame["tracks"]:
+                track["evidence_time_s"] = track["timestamp_s"]
+        report = evaluate_replay({"meta": {}, "frames": frames}, "s", "m", 0.0, 1)
+        assert report.track_measurement_age_mean_s == pytest.approx(1.0)
+        again = report_from_dict(report_to_dict(report))
+        assert again.track_measurement_age_mean_s == report.track_measurement_age_mean_s
 
 
 class TestLocalisationRMSE:

@@ -48,6 +48,12 @@ METRICS: dict[str, tuple[str | None, str]] = {
         "Mean age in seconds of the evidence behind the published tracks (frame time minus "
         "track time). 0 when tracks are fused at frame time.",
     ),
+    "track_measurement_age_mean_s": (
+        "lower",
+        "Mean time in seconds since the published tracks last took a measurement (frame "
+        "time minus the track's evidence_time_s): the evidence age plus any coasting. "
+        "Reported only by runs that model delivery or run fusion at its own rate.",
+    ),
     "track_continuity_mean": (
         "higher",
         "Mean over targets of the fraction of steps in which the target has at least one "

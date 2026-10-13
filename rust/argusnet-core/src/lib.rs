@@ -834,6 +834,7 @@ impl IMMTrack3D {
             quality_score,
             mode_probability_cv: Some(self.mode_probabilities[0]),
             contributing_node_ids: std::sync::Arc::default(), // filled in by ManagedTrack::snapshot
+            evidence_time_s: None,                            // filled in by ManagedTrack::snapshot
         }
     }
 }
@@ -1078,6 +1079,7 @@ impl ManagedTrack {
             Some(self.quality_score),
         );
         state.contributing_node_ids = std::sync::Arc::clone(&self.contributing_node_ids);
+        state.evidence_time_s = Some(self.last_update_time_s);
         state
     }
 }

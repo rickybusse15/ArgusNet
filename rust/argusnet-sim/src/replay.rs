@@ -220,6 +220,12 @@ pub struct ReplayTrack {
     pub lifecycle_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f64>,
+    /// When the track last took a measurement (P4.10b). Written only by a
+    /// run whose tracks can be older than their frame (delivery modelled or a
+    /// fusion rate), so a legacy replay is byte for byte what it was; see
+    /// `AssembledRun::record_frame`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_time_s: Option<f64>,
 }
 
 impl From<&TrackState> for ReplayTrack {
@@ -243,6 +249,7 @@ impl From<&TrackState> for ReplayTrack {
             contributing_node_ids: track.contributing_node_ids.as_ref().clone(),
             lifecycle_state: track.lifecycle_state.clone(),
             quality_score: track.quality_score,
+            evidence_time_s: None,
         }
     }
 }
@@ -907,6 +914,7 @@ mod tests {
             quality_score: Some(0.8),
             mode_probability_cv: Some(0.6),
             contributing_node_ids: Arc::new(vec!["node-a".to_string()]),
+            evidence_time_s: None,
         }
     }
 

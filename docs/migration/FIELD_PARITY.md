@@ -257,7 +257,7 @@ landed separately in #53, corrected by #55.
 | `TrackState.confidence` | `derived` | An alias of `quality_score` (`quality_score.unwrap_or(0.0)`), never read back. |
 | `TrackState.contributing_nodes` | `carried` |  |
 | `TrackState.covariance_row_major` | `carried` |  |
-| `TrackState.last_seen_s` | `derived` | An alias of `timestamp_s`, never read back. |
+| `TrackState.last_seen_s` | `derived` | An alias of `timestamp_s`, never read back. The runtime's `evidence_time_s` (P4.10b, the last measurement time) is not carried; the wire leaves it `None`. |
 | `TrackState.lifecycle_state` | `carried` |  |
 | `TrackState.measurement_std_m` | `carried` |  |
 | `TrackState.mode_probability_cv` | `carried` | `Option<f64>` in the runtime type, a bare `double` on the wire. `0.0` means unset — the same convention `NodeState.max_range_m` uses. A genuine `Some(0.0)` is therefore indistinguishable from absent; the IMM filter cannot emit one. |

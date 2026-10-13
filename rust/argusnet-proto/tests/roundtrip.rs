@@ -155,6 +155,7 @@ fn track_round_trips_every_field() {
         quality_score: Some(0.875),
         mode_probability_cv: Some(0.375),
         contributing_node_ids: Arc::new(vec!["node-alpha".to_string(), "node-bravo".to_string()]),
+        evidence_time_s: None,
     };
     let restored = argusnet_proto::track_from_pb(argusnet_proto::track_to_pb(original.clone()))
         .expect("track round trip");
@@ -191,6 +192,7 @@ fn mode_probability_cv_round_trips_through_the_unset_sentinel() {
         quality_score: None,
         mode_probability_cv: None,
         contributing_node_ids: Arc::new(Vec::new()),
+        evidence_time_s: None,
     };
 
     let encoded = argusnet_proto::track_to_pb(original.clone());
@@ -312,6 +314,7 @@ fn track_wire_only_fields_are_constant_or_derived() {
         quality_score: Some(0.25),
         mode_probability_cv: Some(0.5),
         contributing_node_ids: Arc::new(Vec::new()),
+        evidence_time_s: None,
     };
     let encoded = argusnet_proto::track_to_pb(track.clone());
 
@@ -433,6 +436,7 @@ fn covariance_lengths_other_than_36_are_rejected() {
         quality_score: None,
         mode_probability_cv: Some(0.5),
         contributing_node_ids: Arc::new(Vec::new()),
+        evidence_time_s: None,
     });
     assert_eq!(template.covariance_row_major.len(), 36);
 
@@ -471,6 +475,7 @@ fn every_optional_payload_survives_being_absent() {
         quality_score: None,
         mode_probability_cv: None,
         contributing_node_ids: Arc::new(Vec::new()),
+        evidence_time_s: None,
     };
     let rejection = argusnet_types::ObservationRejection {
         node_id: "node-empty".to_string(),
@@ -661,6 +666,7 @@ fn owned_and_borrowed_encoders_agree_for_every_type() {
         quality_score: Some(0.25),
         mode_probability_cv: Some(0.75),
         contributing_node_ids: Arc::new(vec!["node-pair".to_string()]),
+        evidence_time_s: None,
     };
     assert_eq!(
         argusnet_proto::track_to_pb_ref(&track),

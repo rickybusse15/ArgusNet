@@ -170,13 +170,40 @@ model or faster evidence, not extrapolation. The published tracks therefore
 stay at their evidence time, labelled with it, and consumers can see
 `now - timestamp_s`.
 
+## Evidence time on the track
+
+`timestamp_s` says when a track's estimate is for, not when it last saw
+evidence: a track that coasts is predicted forward over ticks with no
+measurement. Each runtime track now records its last measurement time
+(`TrackState::evidence_time_s`, from the tracker's `last_update_time_s`, which
+the engine checkpoint already carried).
+
+A replay writes it as each track's `evidence_time_s` only in a run whose
+tracks can be older than their frame: delivery modelled, or the fusion lane
+at its own rate (`AssembledRun::tracks_lag_their_frames`). Legacy replays are
+byte for byte unchanged. For a track updated at the fusion horizon it equals
+`timestamp_s`; for a coasting one it is earlier. A frame published while the
+fusion lane sits out a boundary republishes the last tracks, and their
+evidence times say how old they are.
+
+The evaluation reports `track_measurement_age_mean_s`: the mean of frame time
+minus `evidence_time_s`. That is `track_evidence_age_mean_s` (frame time minus
+track time) plus the time tracks spent coasting. It is `null` for a replay
+that does not record evidence times. The viewer's track summary adds an
+"Age (s)" column when the frame's tracks record them.
+
+The gRPC wire does not carry it. `TrackState.last_seen_s` on the wire stays an
+alias of `timestamp_s` (FIELD_PARITY.md); giving it the evidence time would
+change what the Python client receives, which is a contract change of its own.
+
 ## Not in this slice (rest of P4.10b)
 
 - Buffered mapping inputs with batch-size and max-age triggers (no lost
   evidence when sensing outruns mapping).
 - Per-source capture schedules (rates other than the tick).
 - Clock quality and frame or calibration identity on the envelope.
-- Track source identity, and evidence age versus prediction age, on the
-  track.
+- Evidence time on the gRPC wire (`last_seen_s`). Source identity is already
+  on every track (`contributing_node_ids`), and the evidence time now is in the
+  replay (above).
 - Delayed-measurement smoothing, which would remove the lag's cost. It is a
   separate estimator capability.

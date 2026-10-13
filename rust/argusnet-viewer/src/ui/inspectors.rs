@@ -583,6 +583,12 @@ pub(super) fn section_track_summary(
         return;
     }
 
+    // Only a timed run (delivery modelled or a fusion rate) records when each
+    // track last took a measurement; the column appears only then.
+    let timed = frame
+        .tracks
+        .iter()
+        .any(|track| track.evidence_time_s.is_some());
     ui.collapsing(format!("Tracks ({})", frame.tracks.len()), |ui| {
         egui::Grid::new("track_summary_grid")
             .striped(true)
@@ -593,6 +599,10 @@ pub(super) fn section_track_summary(
                 ui.strong("Updates");
                 ui.strong("Stale");
                 ui.strong("Std (m)");
+                if timed {
+                    ui.strong("Age (s)")
+                        .on_hover_text("Time since the track last took a measurement");
+                }
                 ui.end_row();
 
                 for track in &frame.tracks {
@@ -623,6 +633,14 @@ pub(super) fn section_track_summary(
                     };
                     ui.colored_label(stale_color, format!("{}", track.stale_steps));
                     ui.label(format!("{:.2}", track.measurement_std_m));
+                    if timed {
+                        match track.evidence_time_s {
+                            Some(evidence) => {
+                                ui.label(format!("{:.2}", f64::from(frame.timestamp_s) - evidence))
+                            }
+                            None => ui.label("-"),
+                        };
+                    }
                     ui.end_row();
                 }
             });
