@@ -292,6 +292,73 @@ def mesh_from_polygon(
     )
 
 
+_Polygon = list[tuple[float, float]]
+
+
+def _polygon_area(polygon: _Polygon) -> float:
+    return 0.5 * sum(
+        x0 * y1 - x1 * y0
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1], strict=True)
+    )
+
+
+def _split_by_line(
+    polygon: _Polygon, a: tuple[float, float], b: tuple[float, float]
+) -> tuple[_Polygon, _Polygon]:
+    """Split a convex polygon by the line ``a -> b``: (right of it, left of it)."""
+
+    def side(point: tuple[float, float]) -> float:
+        return (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0])
+
+    left: _Polygon = []
+    right: _Polygon = []
+    for current, following in zip(polygon, polygon[1:] + polygon[:1], strict=True):
+        s0, s1 = side(current), side(following)
+        # A vertex on the line bounds both sides.
+        if s0 >= 0.0:
+            left.append(current)
+        if s0 <= 0.0:
+            right.append(current)
+        if (s0 > 0.0 and s1 < 0.0) or (s0 < 0.0 and s1 > 0.0):
+            t = s0 / (s0 - s1)
+            crossing = (
+                current[0] + t * (following[0] - current[0]),
+                current[1] + t * (following[1] - current[1]),
+            )
+            left.append(crossing)
+            right.append(crossing)
+    return right, left
+
+
+def _overlaps(first: _Polygon, second: _Polygon, tolerance_m: float = 1.0e-7) -> bool:
+    """Whether two convex polygons share interior (separating-axis test)."""
+    for polygon in (first, second):
+        for a, b in zip(polygon, polygon[1:] + polygon[:1], strict=True):
+            axis = (a[1] - b[1], b[0] - a[0])
+            length = math.hypot(*axis)
+            if length <= 1.0e-12:
+                continue
+            p1 = [(x * axis[0] + y * axis[1]) / length for x, y in first]
+            p2 = [(x * axis[0] + y * axis[1]) / length for x, y in second]
+            if max(p1) <= min(p2) + tolerance_m or max(p2) <= min(p1) + tolerance_m:
+                return False
+    return True
+
+
+def _convex_minus(polygon: _Polygon, cutter: _Polygon) -> list[_Polygon]:
+    """``polygon`` minus ``cutter`` (both convex, counter-clockwise), as convex pieces."""
+    pieces: list[_Polygon] = []
+    rest = polygon
+    for index, a in enumerate(cutter):
+        outside, inside = _split_by_line(rest, a, cutter[(index + 1) % len(cutter)])
+        if len(outside) >= 3 and _polygon_area(outside) > 1.0e-9:
+            pieces.append(outside)
+        if len(inside) < 3 or _polygon_area(inside) <= 1.0e-9:
+            return pieces
+        rest = inside
+    return pieces
+
+
 def mesh_from_polyline(
     points_xy: np.ndarray,
     *,
@@ -300,17 +367,15 @@ def mesh_from_polyline(
     width_m: float,
     z_offset_m: float = 0.5,
 ) -> SimpleMesh:
-    """A line as one joined strip, ``width_m`` wide, facing up.
+    """A line as a flat stroke ``width_m`` wide, facing up, covering each point once.
 
-    A translucent layer draws any overlap twice, so the strip avoids one:
-    segments share their joints, a bend is mitred, and a bend too sharp to
-    mitre is bevelled (a shared inner corner and one wedge on the outside).
-    Either pulls the inner corner back along both segments, and a segment can
-    give up at most its length to the joints at its two ends. A bend that
-    would need more -- a reversal, or sharp bends closer together than the
-    line is wide -- falls back to a butt join, the one case that can still
-    overlap; avoiding it needs polygon clipping. Every point is kept, so the
-    strip still samples the terrain at each one.
+    A translucent layer draws any overlap twice, and segment quads overlap at
+    every bend -- and wholesale where a line retraces or crosses itself. So the
+    stroke is built as the exact union of convex pieces: a quad per segment
+    and a bevel wedge on the outside of each bend, each piece minus every
+    earlier one (convex minus convex is a few convex pieces), fanned into
+    counter-clockwise triangles. Every point is kept, so the stroke samples
+    the terrain at each one.
     """
     if len(points_xy) < 2:
         return merge_meshes(())
@@ -322,81 +387,80 @@ def mesh_from_polyline(
             points.append(point)
     if len(points) < 2:
         return merge_meshes(())
+
+    def xy(point: np.ndarray) -> tuple[float, float]:
+        return (float(point[0]), float(point[1]))
+
     lefts = []
-    lengths = []
     for start, end in zip(points[:-1], points[1:], strict=True):
-        lengths.append(float(np.linalg.norm(end - start)))
-        direction = (end - start) / lengths[-1]
+        direction = (end - start) / float(np.linalg.norm(end - start))
         lefts.append(np.array([-direction[1], direction[0]]))
-    positions: list[list[float]] = []
-
-    def corner(xy: np.ndarray) -> int:
-        positions.append(
-            [
-                float(xy[0]),
-                float(xy[1]),
-                float(height_at(float(xy[0]), float(xy[1]))) + z_offset_m,
-            ]
-        )
-        return len(positions) - 1
-
-    def square(point: np.ndarray, left: np.ndarray) -> tuple[int, int]:
-        return corner(point - left * half_width), corner(point + left * half_width)
-
-    indices: list[int] = []
-
-    def upward(a: int, b: int, c: int) -> None:
-        pa, pb, pc = (np.asarray(positions[i][:2]) for i in (a, b, c))
-        u, v = pb - pa, pc - pa
-        indices.extend([a, b, c] if u[0] * v[1] - u[1] * v[0] > 0.0 else [a, c, b])
-
-    start_pair = square(points[0], lefts[0])
-    used_by_previous = 0.0
+    pieces: list[_Polygon] = []
     for index, left in enumerate(lefts):
-        end_point = points[index + 1]
-        if index + 1 == len(lefts):
-            end_pair = square(end_point, left)
-            next_start = end_pair
-        else:
+        start, end = points[index], points[index + 1]
+        offset = left * half_width
+        pieces.append([xy(start - offset), xy(end - offset), xy(end + offset), xy(start + offset)])
+        if index + 1 < len(lefts):
             following = lefts[index + 1]
-            miter = left + following
-            length = float(np.linalg.norm(miter))
-            # cos of half the turn; the inner corner pulls back
-            # `w/2 * tan(half the turn)` along both segments.
-            cos_half = float(np.dot(miter / length, left)) if length > 1.0e-9 else 0.0
-            sin_half = float(np.sqrt(max(1.0 - cos_half**2, 0.0)))
-            pull_back = half_width * sin_half / cos_half if cos_half > 1.0e-9 else np.inf
-            # What this segment has left after the previous joint's share,
-            # and the whole of the next one (its far joint decides later).
-            fits = (
-                pull_back + used_by_previous <= lengths[index] and pull_back <= lengths[index + 1]
-            )
-            used_by_previous = pull_back if fits else 0.0
-            if fits and cos_half >= 0.25:
-                # A mitre at most four half-widths long (turns up to ~151 deg).
-                offset = miter / length * (half_width / cos_half)
-                end_pair = (corner(end_point - offset), corner(end_point + offset))
-                next_start = end_pair
-            elif fits:
-                # Bevel: the inner corner is shared, the outer gap is a wedge.
-                turns_left = left[1] * following[0] - left[0] * following[1] < 0.0
-                side = 1.0 if turns_left else -1.0
-                inner = corner(end_point + side * miter / length * (half_width / cos_half))
-                outer_in = corner(end_point - side * left * half_width)
-                outer_out = corner(end_point - side * following * half_width)
-                if turns_left:
-                    end_pair, next_start = (outer_in, inner), (outer_out, inner)
-                else:
-                    end_pair, next_start = (inner, outer_in), (inner, outer_out)
-                upward(inner, outer_in, outer_out)
-            else:
-                end_pair = square(end_point, left)
-                next_start = square(end_point, following)
-        # `[s-o, e+o, s+o]`, `[s-o, e-o, e+o]`: counter-clockwise from above, so
-        # the strip faces up; a translucent layer is single-sided.
-        (right, left_start), (far_right, far_left) = start_pair, end_pair
-        indices.extend([right, far_left, left_start, right, far_right, far_left])
-        start_pair = next_start
+            # The outside of the bend: right of a left turn, left of a right one.
+            turn = following[0] * left[1] - following[1] * left[0]
+            if abs(turn) > 1.0e-9:
+                side = 1.0 if turn > 0.0 else -1.0
+                wedge = [
+                    xy(end),
+                    xy(end + side * left * half_width),
+                    xy(end + side * following * half_width),
+                ]
+                if _polygon_area(wedge) < 0.0:
+                    wedge.reverse()
+                pieces.append(wedge)
+    boxes = [
+        (min(x for x, _ in p), min(y for _, y in p), max(x for x, _ in p), max(y for _, y in p))
+        for p in pieces
+    ]
+    union: list[_Polygon] = []
+    for index, piece in enumerate(pieces):
+        fragments = [piece]
+        x0, y0, x1, y1 = boxes[index]
+        for earlier, (ex0, ey0, ex1, ey1) in zip(pieces[:index], boxes[:index], strict=True):
+            # Most pieces only touch their neighbours; cutting by a piece that
+            # merely touches would only shatter this one into slivers.
+            if ex0 >= x1 or ex1 <= x0 or ey0 >= y1 or ey1 <= y0:
+                continue
+            if not _overlaps(piece, earlier):
+                continue
+            fragments = [
+                part
+                for fragment in fragments
+                for part in (
+                    _convex_minus(fragment, earlier) if _overlaps(fragment, earlier) else [fragment]
+                )
+            ]
+        union.extend(fragments)
+
+    positions: list[list[float]] = []
+    indices: list[int] = []
+    for fragment in union:
+        # Splits can leave vertices a hair apart; float32 would merge them.
+        polygon: _Polygon = []
+        for point in fragment:
+            if not polygon or math.dist(point, polygon[-1]) > 1.0e-4:
+                polygon.append(point)
+        if len(polygon) > 1 and math.dist(polygon[0], polygon[-1]) <= 1.0e-4:
+            polygon.pop()
+        if len(polygon) < 3:
+            continue
+        base = len(positions)
+        for x, y in polygon:
+            positions.append([x, y, float(height_at(x, y)) + z_offset_m])
+        for corner in range(1, len(polygon) - 1):
+            # Collinear points from a split leave slivers that round to zero
+            # area (or flip) in float32; skip any under a square millimetre.
+            triangle = [polygon[0], polygon[corner], polygon[corner + 1]]
+            if _polygon_area(triangle) > 1.0e-6:
+                indices.extend([base, base + corner, base + corner + 1])
+    if not indices:
+        return merge_meshes(())
     position_array = np.asarray(positions, dtype=np.float32)
     index_array = np.asarray(indices, dtype=np.uint32)
     return SimpleMesh(

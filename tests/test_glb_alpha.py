@@ -67,25 +67,6 @@ def test_a_line_strip_faces_up() -> None:
     assert (strip.normals[:, 2] > 0.0).all()
 
 
-def test_a_bent_line_strip_does_not_overlap_itself() -> None:
-    # Translucent fragments do not write depth, so overlapping segment quads
-    # would draw a darker seam at every bend. The joined strip's triangles
-    # cover exactly its outline.
-    points = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [20.0, 12.0]])
-    strip = mesh_from_polyline(
-        points, height_at=lambda x, y: 0.0, color_rgba=(0.2, 0.4, 0.9, 0.85), width_m=4.0
-    )
-    assert strip.positions.shape[0] == 2 * len(points)
-    xy = strip.positions[:, :2].astype(np.float64)
-    corners = xy[strip.indices.reshape(-1, 3)]
-    u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
-    covered = 0.5 * (u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]).sum()
-    outline = np.concatenate([xy[0::2], xy[1::2][::-1]])
-    x, y = outline[:, 0], outline[:, 1]
-    outline_area = 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
-    assert covered == pytest.approx(outline_area, rel=1e-5)
-
-
 def test_a_line_that_doubles_back_keeps_every_triangle_facing_up() -> None:
     # A mitre at a reversal would swap the strip's sides and wind triangles
     # downward, which a single-sided translucent layer culls.
@@ -153,6 +134,9 @@ def test_bends_are_covered_once() -> None:
         ([[0.0, 0.0], [20.0, 0.0], [0.0, 15.0]], 4.0),
         ([[0.0, 0.0], [60.0, 0.0], [60.0 + 60.0 * np.cos(turn), 60.0 * np.sin(turn)]], 4.0),
         ([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [20.0, 12.0], [25.0, 4.0]], 4.0),
+        ([[0.0, 0.0], [10.0, 0.0], [1.0, 0.0]], 4.0),
+        ([[0.0, 0.0], [10.0, 0.0], [10.0, 1.0], [0.0, 1.0], [0.0, 2.0], [10.0, 2.0]], 4.0),
+        ([[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 10.0]], 3.0),
     ):
         strip = mesh_from_polyline(
             np.array(points),
@@ -187,3 +171,37 @@ def test_every_point_is_kept_for_the_terrain_and_hairpins() -> None:
         width_m=4.0,
     )
     assert hairpin.positions[:, 0].max() == pytest.approx(10.0)
+
+
+def test_random_lines_cover_each_point_once() -> None:
+    rng = np.random.default_rng(11)
+    for _ in range(40):
+        points = rng.uniform(-15.0, 15.0, size=(int(rng.integers(2, 6)), 2))
+        strip = mesh_from_polyline(
+            points,
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=float(rng.uniform(1.0, 6.0)),
+        )
+        assert _coverage(strip, step_m=0.4).max() == 1, points.tolist()
+
+
+def test_the_outside_of_a_bend_is_filled() -> None:
+    # A bevel wedge closes the gap between two segments' outer corners.
+    for points, outside in (
+        ([[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]], (21.0, -0.8)),
+        ([[0.0, 0.0], [20.0, 0.0], [20.0, -20.0]], (21.0, 0.8)),
+    ):
+        strip = mesh_from_polyline(
+            np.array(points), height_at=lambda x, y: 0.0, color_rgba=(1, 1, 1, 0.5), width_m=4.0
+        )
+        xy = strip.positions[:, :2].astype(np.float64)
+        p = np.array(outside)
+        hits = 0
+        for a, b, c in xy[strip.indices.reshape(-1, 3)]:
+            d = [
+                (q[0] - o[0]) * (p[1] - o[1]) - (q[1] - o[1]) * (p[0] - o[0])
+                for o, q in ((a, b), (b, c), (c, a))
+            ]
+            hits += all(v > 0 for v in d)
+        assert hits == 1, points
