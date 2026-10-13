@@ -635,29 +635,41 @@ impl ObserveStage {
             .is_none_or(|capture| capture.captures(node_id, tick))
     }
 
-    /// The checkpointed bias walks, from either checkpoint form, refusing one
-    /// taken under other capture rates.
+    /// The checkpointed bias walks, refusing a checkpoint taken under other
+    /// capture rates. The form is this run's: the wrapper when it has rates,
+    /// the plain map of bias walks when it has none. It is never guessed from
+    /// the keys, since a node may be called anything. A checkpoint of the
+    /// other form does not decode as this one, and is refused.
     fn decode_drifts(
         &self,
         state: &serde_json::Value,
     ) -> Result<BTreeMap<String, SensorState>, crate::simulation::StageStateError> {
-        let rates = self.capture.as_ref().map(CaptureRates::recorded);
-        let (drifts, recorded) = if state.get("capture_rates").is_some() {
-            let rated: RatedState = crate::simulation::decode_stage_state(state)?;
-            (rated.drifts, Some(rated.capture_rates))
-        } else {
-            (crate::simulation::decode_stage_state(state)?, None)
-        };
-        if recorded != rates {
-            return Err(crate::simulation::StageStateError::Malformed {
+        let mismatch = |recorded: Option<&BTreeMap<String, String>>| {
+            crate::simulation::StageStateError::Malformed {
                 detail: format!(
                     "the checkpoint's sensor capture rates ({}) are not this run's ({})",
-                    describe_rates(recorded.as_ref()),
-                    describe_rates(rates.as_ref())
+                    describe_rates(recorded),
+                    describe_rates(self.capture.as_ref().map(CaptureRates::recorded).as_ref())
                 ),
-            });
+            }
+        };
+        match &self.capture {
+            None => crate::simulation::decode_stage_state(state).map_err(|error| {
+                // Said plainly when it is the rated form that failed to decode.
+                match serde_json::from_value::<RatedState>(state.clone()) {
+                    Ok(rated) => mismatch(Some(&rated.capture_rates)),
+                    Err(_) => error,
+                }
+            }),
+            Some(capture) => {
+                let rated: RatedState =
+                    crate::simulation::decode_stage_state(state).map_err(|_| mismatch(None))?;
+                if rated.capture_rates != capture.recorded() {
+                    return Err(mismatch(Some(&rated.capture_rates)));
+                }
+                Ok(rated.drifts)
+            }
         }
-        Ok(drifts)
     }
 
     /// Scan with `scanner` from every mobile platform, every tick.
@@ -1621,6 +1633,31 @@ mod tests {
             .set_capture_rates(capture(&[("b", "1/2")], 1.0).unwrap())
             .unwrap_err();
         assert!(error.contains("no sensor"), "{error}");
+    }
+
+    /// The checkpoint's form follows the run's configuration, not its keys:
+    /// a sensor may be called `capture_rates` or `drifts`.
+    #[test]
+    fn a_sensor_may_be_called_anything() {
+        let spec = SensorSpec::default();
+        let stage = |rated: bool| {
+            let mut stage = ObserveStage::new();
+            stage.install_sensor("capture_rates", spec);
+            stage.install_sensor("drifts", spec);
+            if rated {
+                stage
+                    .set_capture_rates(capture(&[("drifts", "1/2")], 1.0).unwrap())
+                    .unwrap();
+            }
+            stage
+        };
+        for rated in [false, true] {
+            let state = stage(rated).checkpoint_state().unwrap();
+            stage(rated).check_state(&state).unwrap();
+            stage(rated).restore_state(&state).unwrap();
+            let error = stage(!rated).restore_state(&state).unwrap_err().to_string();
+            assert!(error.contains("capture rates"), "{error}");
+        }
     }
     use crate::fusion::FusionStage;
     use crate::simulation::Simulation;
