@@ -418,17 +418,20 @@ def mesh_from_polyline(
         (min(x for x, _ in p), min(y for _, y in p), max(x for x, _ in p), max(y for _, y in p))
         for p in pieces
     ]
-    # A uniform grid indexes the pieces, so each one is only tested against
-    # earlier pieces near it: linear in the line's length rather than
-    # quadratic. Cells the size of a typical piece keep a long diagonal
-    # segment from spanning a square of tiny cells.
+    # The union so far is kept as disjoint convex fragments, indexed in a
+    # uniform grid: each new piece is cut only by fragments near it, and a
+    # stretch the line retraces adds no fragments, so buckets stay bounded by
+    # the stroke's area rather than its length. Cells the size of a typical
+    # piece keep a long diagonal segment from spanning a square of tiny cells;
+    # the rare fragment spanning many cells sits on a short list instead.
     extents = sorted(max(x1 - x0, y1 - y0) for x0, y0, x1, y1 in boxes)
     cell_m = max(extents[len(extents) // 2], float(width_m), 1.0e-3)
     grid: dict[tuple[int, int], list[int]] = {}
-
-    # The rare piece spanning many cells (one long diagonal segment) is kept
-    # on a short list every piece checks, rather than filling a square of cells.
     large: list[int] = []
+
+    def bounds(polygon: _Polygon) -> tuple[float, float, float, float]:
+        xs, ys = [x for x, _ in polygon], [y for _, y in polygon]
+        return min(xs), min(ys), max(xs), max(ys)
 
     def cells(box: tuple[float, float, float, float]) -> list[tuple[int, int]] | None:
         x0, y0, x1, y1 = (math.floor(v / cell_m) for v in box)
@@ -437,38 +440,43 @@ def mesh_from_polyline(
         return [(i, j) for i in range(x0, x1 + 1) for j in range(y0, y1 + 1)]
 
     union: list[_Polygon] = []
+    union_boxes: list[tuple[float, float, float, float]] = []
     for index, piece in enumerate(pieces):
         fragments = [piece]
         x0, y0, x1, y1 = boxes[index]
         piece_cells = cells(boxes[index])
         if piece_cells is None:
-            nearby = list(range(index))
+            nearby: list[int] = list(range(len(union)))
         else:
             nearby = sorted(
                 {other for cell in piece_cells for other in grid.get(cell, ())}.union(large)
             )
         for other in nearby:
-            earlier = pieces[other]
-            ex0, ey0, ex1, ey1 = boxes[other]
-            # Most pieces only touch their neighbours; cutting by a piece that
-            # merely touches would only shatter this one into slivers.
+            ex0, ey0, ex1, ey1 = union_boxes[other]
+            # Most pieces only touch their neighbours; cutting by one that
+            # merely touches would only shatter this piece into slivers.
             if ex0 >= x1 or ex1 <= x0 or ey0 >= y1 or ey1 <= y0:
                 continue
-            if not _overlaps(piece, earlier):
-                continue
+            cutter = union[other]
             fragments = [
                 part
                 for fragment in fragments
                 for part in (
-                    _convex_minus(fragment, earlier) if _overlaps(fragment, earlier) else [fragment]
+                    _convex_minus(fragment, cutter) if _overlaps(fragment, cutter) else [fragment]
                 )
             ]
-        union.extend(fragments)
-        if piece_cells is None:
-            large.append(index)
-        else:
-            for cell in piece_cells:
-                grid.setdefault(cell, []).append(index)
+            if not fragments:
+                break  # already covered
+        for fragment in fragments:
+            fragment_box = bounds(fragment)
+            fragment_cells = cells(fragment_box)
+            if fragment_cells is None:
+                large.append(len(union))
+            else:
+                for cell in fragment_cells:
+                    grid.setdefault(cell, []).append(len(union))
+            union.append(fragment)
+            union_boxes.append(fragment_box)
 
     positions: list[list[float]] = []
     indices: list[int] = []

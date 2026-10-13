@@ -205,3 +205,13 @@ def test_the_outside_of_a_bend_is_filled() -> None:
             ]
             hits += all(v > 0 for v in d)
         assert hits == 1, points
+
+
+def test_a_retraced_corridor_adds_nothing_after_the_first_pass() -> None:
+    # Each retrace is already covered, so the union holds only the first
+    # pass's triangles however many times the line goes back and forth.
+    points = np.array([[0.0, 0.0] if i % 2 == 0 else [100.0, 0.0] for i in range(2000)])
+    strip = mesh_from_polyline(
+        points, height_at=lambda x, y: 0.0, color_rgba=(0.2, 0.4, 0.9, 0.85), width_m=8.0
+    )
+    assert strip.indices.size // 3 == 2
