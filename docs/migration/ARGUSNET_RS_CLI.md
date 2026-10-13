@@ -104,7 +104,7 @@ Design and evidence:
 its deadlines, stamped with that tick's time, and takes nothing at the ticks
 between. A rate faster than the tick is refused. The option repeats, once per
 sensor. The replay records it in `meta.sensor_rates`, a `--run-dir` run in
-`run.json` (format `argusnet-run/2`), and a checkpoint resumes only under the
+`run.json` (format `argusnet-run/3`), and a checkpoint resumes only under the
 rates it was taken with. Design and evidence:
 [DELIVERY_TIMING.md](DELIVERY_TIMING.md#per-sensor-capture-rates).
 

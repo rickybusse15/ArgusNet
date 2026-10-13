@@ -27,11 +27,17 @@ use std::collections::BTreeMap;
 
 pub const RUN_FORMAT: &str = "argusnet-run/1";
 /// The format of a run under a planning policy other than the reference
-/// (P1), or with sensors capturing at their own rates (P4.10b). A build that
-/// predates them reads only `argusnet-run/1`, so it refuses such a run by name
-/// instead of recovering it under the reference planner or every sensor at
-/// the tick. Any other run keeps `argusnet-run/1`.
+/// (P1). A build that predates the policy reads only `argusnet-run/1`, so it
+/// refuses such a run by name instead of recovering it under the reference
+/// planner. A reference run keeps `argusnet-run/1`.
 pub const RUN_FORMAT_POLICY: &str = "argusnet-run/2";
+/// The format of a run with sensors capturing at their own rates (P4.10b),
+/// whatever its planning policy. A build that predates sensor rates reads at
+/// most `argusnet-run/2`, whose reader would drop the rates as an unknown
+/// field, so such a run needs a format of its own that it refuses.
+pub const RUN_FORMAT_SENSOR_RATES: &str = "argusnet-run/3";
+/// Every format this build reads.
+const RUN_FORMATS: [&str; 3] = [RUN_FORMAT, RUN_FORMAT_POLICY, RUN_FORMAT_SENSOR_RATES];
 
 /// What `run.json` holds. Written once, never modified.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -66,13 +72,15 @@ struct RunConfig {
 }
 
 impl RunConfig {
-    /// The format this configuration is written in: `/2` when it records
-    /// something a pre-P1 build would silently drop.
+    /// The format this configuration is written in: the oldest one whose
+    /// readers know everything it records.
     fn format(&self) -> &'static str {
-        if self.planning_policy.is_reference() && self.sensor_rates.is_empty() {
-            RUN_FORMAT
-        } else {
+        if !self.sensor_rates.is_empty() {
+            RUN_FORMAT_SENSOR_RATES
+        } else if !self.planning_policy.is_reference() {
             RUN_FORMAT_POLICY
+        } else {
+            RUN_FORMAT
         }
     }
 }
@@ -189,10 +197,11 @@ impl RunDir {
         let config: RunConfig = serde_json::from_str(&text)
             .map_err(|e| incomplete(format!("run.json is damaged: {e}")))?;
         let expected = config.format();
-        if config.format != RUN_FORMAT && config.format != RUN_FORMAT_POLICY {
+        if !RUN_FORMATS.contains(&config.format.as_str()) {
             return Err(incomplete(format!(
-                "run.json is format {}, this build reads {RUN_FORMAT} and {RUN_FORMAT_POLICY}",
-                config.format
+                "run.json is format {}, this build reads {}",
+                config.format,
+                RUN_FORMATS.join(", ")
             )));
         }
         if config.format != expected {
@@ -418,6 +427,42 @@ mod tests {
         });
         let error = mismatched.bundle_text().unwrap_err();
         assert!(error.contains("planning policy reference"), "{error}");
+    }
+
+    /// Sensor rates take format `/3`, whatever the policy: a `/2` reader
+    /// (the P1 build) would drop them. A file that says `/2` but records them
+    /// is refused, and the rates come back as recorded.
+    #[test]
+    fn a_run_with_sensor_rates_is_format_3_under_any_policy() {
+        let path =
+            std::env::temp_dir().join(format!("argusnet-rundir-sensors-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        let dir = RunDir::new(&path);
+        let rates: BTreeMap<String, Schedule> =
+            [("ground-alpha".to_string(), parse_rate("1/3").unwrap())]
+                .into_iter()
+                .collect();
+        dir.create_with(
+            "{}",
+            &LaneRates::default(),
+            PlanningPolicy::EfficientV1,
+            &rates,
+        )
+        .unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.file("run.json")).unwrap()).unwrap();
+        assert_eq!(config["format"], RUN_FORMAT_SENSOR_RATES);
+        let recorded = dir.recorded().unwrap();
+        assert_eq!(recorded.sensor_rates, rates);
+        assert_eq!(recorded.policy, PlanningPolicy::EfficientV1);
+
+        let mismatched = run_dir("sensor-format", |config| {
+            config["format"] = RUN_FORMAT_POLICY.into();
+            config["planning_policy"] = "efficient_v1".into();
+            config["sensor_rates"] = serde_json::json!({"ground-alpha": "1/3"});
+        });
+        let error = mismatched.bundle_text().unwrap_err();
+        assert!(error.contains("which is format argusnet-run/3"), "{error}");
     }
 
     #[test]

@@ -231,7 +231,8 @@ no state of their own. They are configuration: recorded in `meta.sensor_rates`,
 in the stage's checkpoint beside the bias walks (`{drifts, capture_rates}`, only
 when rates are set, so other checkpoints are unchanged), and in `run.json`. A
 checkpoint resumes only under the rates it was taken with, and a run directory
-with rates is `argusnet-run/2`, which a build without them refuses.
+with rates is `argusnet-run/3`, which a build without them refuses (the P1
+build reads `/2` and would drop the rates as an unknown field).
 
 ## Not in this slice (rest of P4.10b)
 

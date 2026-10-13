@@ -7,7 +7,7 @@
   `--run`). A rated sensor captures at the first tick at or after each of its
   deadlines and takes nothing in between; every other sensor's observations
   are unchanged. Recorded in `meta.sensor_rates`, the stage's checkpoint and
-  `run.json` (`argusnet-run/2`); tracks carry `evidence_time_s` in such a run.
+  `run.json` (`argusnet-run/3`); tracks carry `evidence_time_s` in such a run.
   A rate faster than the tick is refused. Legacy runs are unchanged.
 
 - Tracks record their evidence time (P4.10b). In a run whose tracks can be

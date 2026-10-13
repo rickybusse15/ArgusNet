@@ -1013,7 +1013,7 @@ fn a_checkpoint_from_another_run_is_refused() {
 }
 
 /// P4.10b: a crashed run whose sensors capture at their own rates recovers
-/// with them from its run directory, which records them in format `/2` so a
+/// with them from its run directory, which records them in format `/3` so a
 /// build without sensor rates refuses it. A different rate is refused, and
 /// so is one faster than the tick.
 #[test]
@@ -1045,7 +1045,7 @@ fn a_crashed_run_with_sensor_rates_recovers_with_them() {
     assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
     let run: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
-    assert_eq!(run["format"], "argusnet-run/2");
+    assert_eq!(run["format"], "argusnet-run/3");
     assert_eq!(run["sensor_rates"]["ground-alpha"], "1/3");
 
     let output = binary()
