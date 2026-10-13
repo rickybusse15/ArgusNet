@@ -511,8 +511,10 @@ impl MissionDriverStage {
         };
         let mut unassigned: Vec<String> = Vec::new();
         let efficient = self.policy == PlanningPolicy::EfficientV1;
-        let pending_before = self.pending_poi_ids();
+        let mut pending_before = self.pending_poi_ids();
         if efficient {
+            // In the order the allocator considers them, by id.
+            pending_before.sort();
             self.allocate_fleet_wide(mobile, battery);
         }
         for (id, position) in mobile {
@@ -1455,6 +1457,13 @@ mod tests {
             .map(|d| d.reason)
             .collect();
         assert_eq!(reasons, vec!["fleet_min_cost", "fleet_min_cost"]);
+        // Declared poi-00 first here; the record lists them by id, as solved.
+        let first = efficient
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .unwrap();
+        assert_eq!(first.candidates, vec!["poi-00", "poi-01"]);
         let commands = efficient.take_override_commands();
         assert_eq!(commands.len(), 2, "one redirect per new assignment");
     }
@@ -1474,6 +1483,13 @@ mod tests {
         let mut stage = efficient_driver(vec![poi("poi-01", 400.0, 1), poi("poi-00", 600.0, 1)]);
         stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
         assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
+        // The decision records the candidates in the order solved: by id.
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .unwrap();
+        assert_eq!(decision.candidates, vec!["poi-00", "poi-01"]);
     }
 
     /// A POI the drone could not reach, dwell at and keep its reserve after
