@@ -203,8 +203,20 @@ time a drone is free little dwell is left to share, and the trip costs
 distance. Teams should matter for long dwells. Whether they stay on inside
 `efficient_v1`, or need a minimum time saved before a drone joins, is open.
 
-Still to do in P1: safe handoff, hysteresis once preemption exists, and the
-acceptance run (held-out seeds and a `battery_remaining_min` envelope, both
+*Third slice: safe handoff.* Under `efficient_v1`, every drone below the
+handoff threshold gives up the POI it holds before allocation. A lead's POI
+goes to the cheapest receiver that can afford the dwell still to do and the
+trip home above its reserve. A teammate already on the POI needs no trip; a
+free drone above the threshold needs the trip. The solver picks receivers
+across all low leads. A POI no drone can afford goes back to the pool
+(`poi_release`, `no_affordable_receiver`) instead of being handed to a drone
+that would run short, and a low teammate leaves its team
+(`low_battery_teammate`). A drone that gives a POI up stops flying to it and
+takes nothing new while it is below the threshold. Getting it home is P2. The
+reference's handoff, which overwrites the receiver without checking, is
+unchanged.
+
+Still to do in P1: hysteresis once preemption exists, and the acceptance run (held-out seeds and a `battery_remaining_min` envelope, both
 declared first).
 
 ### P2: per-drone return home and reserve feasibility (F5)
