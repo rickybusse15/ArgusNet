@@ -230,7 +230,9 @@ is at or below its reserve home from where it is (`dynamic_reserve_wh` to its
 station, the battery's own rule) is routed home on its own (`SetEgress`, a
 `return_home` decision with reason `reserve_reached`), whatever the mission
 phase. Its POI goes through the safe handoff (P1): to a drone that can afford
-it, or back to the pool. A homeward drone takes nothing again; the set is
+it, or back to the pool. The journal says it was the reserve, not a low battery:
+`reserve_handoff` instead of `safe_handoff`, `reserve_teammate` instead of
+`low_battery_teammate`, and `at_reserve` in the inputs of each. A homeward drone takes nothing again; the set is
 checkpointed, and absent from checkpoints that have none. A drone with no
 station stays. Team joins already require the reserve (P1), which covers the
 second bullet at join time. Not yet measured on the qualification seeds.
