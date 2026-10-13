@@ -1139,6 +1139,8 @@ pub(super) fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState
 
     let header = format!("Frame Events ({total_events})");
     ui.collapsing(header, |ui| {
+        ui.strong("Why bearings were not generated");
+        super::strip::draw_rejection_breakdown(ui, &frame.generation_rejections);
         if !frame.generation_rejections.is_empty() {
             ui.collapsing(format!("Generation Rejections ({gen_rej_count})"), |ui| {
                 let display_limit = 30;

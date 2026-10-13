@@ -144,6 +144,17 @@ pub(super) fn section_operator_timeline(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    // The run's curves behind the lanes: mean error (of the run's worst)
+    // and map known, each scaled to the lanes' full height.
+    let (error_curve, known_curve, worst_error) = replay_state
+        .document
+        .as_ref()
+        .map(|document| super::strip::metric_curves(&document.frames))
+        .unwrap_or_default();
+    let curves_legend = format!(
+        "\nCurves: mean track error (orange, 0 to {}), map known (green, 0 to 100%)",
+        worst_error.map_or("unavailable".to_string(), |worst| format!("{worst:.1} m"))
+    );
     let plot = Plot::new("operator_timeline_plot")
         .height(ui.available_height().max(16.0))
         .allow_zoom(false)
@@ -168,6 +179,21 @@ pub(super) fn section_operator_timeline(
                     .fill_color(egui::Color32::from_rgba_unmultiplied(210, 160, 90, 40)),
                 );
             }
+            let span = top + 0.6;
+            for (runs, color) in [
+                (&error_curve, egui::Color32::from_rgb(214, 140, 70)),
+                (&known_curve, egui::Color32::from_rgb(110, 185, 125)),
+            ] {
+                for run in runs.iter() {
+                    let points: Vec<[f64; 2]> =
+                        run.iter().map(|[t, y]| [*t, -0.6 + y * span]).collect();
+                    plot_ui.line(
+                        Line::new("", PlotPoints::from(points))
+                            .color(color)
+                            .width(1.0),
+                    );
+                }
+            }
             for group in MarkGroup::ALL {
                 let y = lane(group);
                 let points: Vec<[f64; 2]> = marks
@@ -185,8 +211,9 @@ pub(super) fn section_operator_timeline(
                     .width(1.5_f32),
             );
         });
-    plot.response
-        .on_hover_text(format!("Event lanes, top to bottom:\n{legend}"));
+    plot.response.on_hover_text(format!(
+        "Event lanes, top to bottom:\n{legend}{curves_legend}"
+    ));
 }
 
 /// One colour per lane; safety and fault are the alarming ones.

@@ -125,6 +125,9 @@ pub(super) fn status_line(
             ui.separator();
             ui.monospace(format_time_range(cur_s, total_s));
         }
+        if let Some(frame) = replay_state.current_frame() {
+            super::strip::draw(ui, frame);
+        }
 
         if let Some(alerts) = alerts {
             let errors = alerts
