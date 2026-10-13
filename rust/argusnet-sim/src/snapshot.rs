@@ -135,8 +135,11 @@ impl CheckpointHeader {
     /// reference (P1): written only by such a run, so a reader that predates
     /// the policy refuses its checkpoints instead of resuming them under the
     /// reference planner. The mission driver's own state then checks the
-    /// policy itself. Every other checkpoint stays version 2.
-    pub const RUNTIME_ALGORITHM_VERSION_POLICY: u32 = 3;
+    /// policy itself. Every other checkpoint stays version 2. Bumped each
+    /// time `efficient_v1` changes what it decides (4: teams on active
+    /// POIs; 5: safe handoff; 6: return home at the reserve), so a
+    /// checkpoint never resumes under a different allocator.
+    pub const RUNTIME_ALGORITHM_VERSION_POLICY: u32 = 6;
     /// Still 1: the ChaCha8 stream and the Box–Muller transform in
     /// [`crate::deterministic`]. Bump alongside any re-baseline.
     pub const SEED_VERSION: u32 = 1;

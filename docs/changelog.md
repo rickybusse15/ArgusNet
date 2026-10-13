@@ -2,6 +2,23 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `--planning-policy efficient_v1` sends each drone home on its own when its
+  battery reaches its reserve home (PLANNING_EFFICIENCY_PLAN P2), handing its
+  POI on safely first. The reference still only egresses at mission end.
+
+- `--planning-policy efficient_v1` hands POIs off safely (P1, third slice):
+  a low drone's POI goes to the cheapest drone that can afford the dwell left
+  and the trip home (a teammate first, needing no trip), or back to the pool
+  if none can; the low drone stops flying to it. The reference is unchanged.
+
+- `--planning-policy efficient_v1` forms teams (PLANNING_EFFICIENCY_PLAN P1,
+  second slice): a drone left free after allocation joins a POI being
+  inspected when it arrives in time to help and can afford the dwell and the
+  trip home, and both credit the dwell. Recorded as a `team_assignment`
+  decision and a `team_join` in the assignment history. On the qualification
+  seeds teams rarely trigger and change little (short dwells); see the plan.
+  The reference is unchanged.
+
 - Sensors can capture at their own rates (P4.10b,
   `--sensor-rate NODE_ID=NUM/DEN` on `argusnet-rs sim` and the viewer's
   `--run`). A rated sensor captures at the first tick at or after each of its

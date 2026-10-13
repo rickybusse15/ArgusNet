@@ -17,7 +17,7 @@ together than it could. File and line references are as of `main` on
 | --- | --- | --- |
 | POI allocation | Greedy, one drone at a time in fleet order (`mission_driver.rs` `inspect`). Earlier drones take the best POIs first, and nothing optimises across the fleet | Drones cross paths; a far drone can take a near POI |
 | Allocation cost | Straight-line horizontal distance at a hardcoded 350 W and 28 m/s (`poi.rs:26,91,244`). It ignores the trip home, hover during dwell, obstacles and the dynamic reserve | Drones accept POIs they cannot afford to finish and get home from |
-| Team assignment | Never assigns anything: it is called on a *pending* POI and only accepts an *active* one (pinned by `the_reference_team_assignment_branch_assigns_nothing`) | Idle drones sit out while the last POI is serviced |
+| Team assignment | Never assigns anything (reference; `efficient_v1` teams since P1 slice 2): it is called on a *pending* POI and only accepts an *active* one (pinned by `the_reference_team_assignment_branch_assigns_nothing`) | Idle drones sit out while the last POI is serviced |
 | Handoff | Overwrites whatever the receiving drone held, without checking (`poi.rs:305`) | A POI can be silently dropped |
 | Coordinator | Elected once and then shown in the viewer, but it decides nothing; `CoordinationManager` is wired only into parity tests | No shared claims, so drones duplicate work |
 | Routing | No planner at runtime (`ControllerEnvironment.planner: None`). POI, egress and frontier moves are straight lines that ignore obstacles (`GotoHover::redirect`). A* exists, but is used only at build time | Drones depend on collision push-out and deconfliction instead of planned paths |
@@ -176,9 +176,48 @@ run):
 The measurement found a defect in P0's `assignment_thrash`: it counted
 finishing a POI and taking the next one as thrash. Leaving a completed POI
 now restarts the window. With that fixed, thrash is 0 under both policies.
-Still to do in P1: teams on active POIs, safe handoff, hysteresis once
-preemption exists, and the acceptance run (held-out seeds and a
-`battery_remaining_min` envelope, both declared first).
+*Second slice: teams.* Under `efficient_v1`, a drone still free after the
+pending POIs are allocated joins a POI being inspected, so both credit its
+dwell. It joins only once every drone holding the POI is in dwell range, only
+when it would arrive before they finish it alone, and only if it can afford the trip, its share of the dwell
+and the trip home above its reserve. The same solver picks the joins, at most
+one new teammate per POI per run, on trip-plus-hover energy. The POI's status
+keeps naming the drone that took it. Under `efficient_v1` only that drone
+hands the POI on when it runs low; a teammate keeps its share. Each join is an
+applied `team_assignment` decision (`fleet_team_join`) and a `team_join` in
+the assignment history. The reference keeps its dead team branch and is
+unchanged byte for byte.
+
+Measured against the first slice on the same qualification seeds (PhysicalV1,
+paired, `efficient_v1` before and after teams; measured before the dwell-range
+rule, which can only make joins rarer):
+
+| Scenario | Seeds with a team join | `mission_completion_rate` | `fleet_distance_m` |
+| --- | --- | --- | --- |
+| `planner_adversarial` | 8 of 30 | identical on every seed | +9 m (0 to 18), worse on 8, better on 0 |
+| `persistent_long` | 6 of 30 | one more POI on one seed | +14 m (−40 to 69), no detectable difference |
+
+So teams work as specified (two drones finish a POI in half the dwell), but
+on these scenarios they rarely pay. Their POIs need 15 s of dwell, so by the
+time a drone is free little dwell is left to share, and the trip costs
+distance. Teams should matter for long dwells. Whether they stay on inside
+`efficient_v1`, or need a minimum time saved before a drone joins, is open.
+
+*Third slice: safe handoff.* Under `efficient_v1`, every drone below the
+handoff threshold gives up the POI it holds before allocation. A lead's POI
+goes to the cheapest receiver that can afford the dwell still to do and the
+trip home above its reserve. A teammate already on the POI needs no trip; a
+free drone above the threshold needs the trip. The solver picks receivers
+across all low leads. A POI no drone can afford goes back to the pool
+(`poi_release`, `no_affordable_receiver`) instead of being handed to a drone
+that would run short, and a low teammate leaves its team
+(`low_battery_teammate`). A drone that gives a POI up stops flying to it and
+takes nothing new while it is below the threshold. Getting it home is P2. The
+reference's handoff, which overwrites the receiver without checking, is
+unchanged.
+
+Still to do in P1: hysteresis once preemption exists, and the acceptance run (held-out seeds and a `battery_remaining_min` envelope, both
+declared first).
 
 ### P2: per-drone return home and reserve feasibility (F5)
 
@@ -186,6 +225,18 @@ preemption exists, and the acceptance run (held-out seeds and a
   `SetEgress` home of its own, and its POI goes back to the allocator.
 - Re-check reserve feasibility continuously, not only when assigning. No team
   assignment may weaken one drone's reserve.
+
+*First slice done (`efficient_v1`):* every mission run, a drone whose battery
+is at or below its reserve home from where it is (`dynamic_reserve_wh` to its
+station, the battery's own rule) is routed home on its own (`SetEgress`, a
+`return_home` decision with reason `reserve_reached`), whatever the mission
+phase. Its POI goes through the safe handoff (P1): to a drone that can afford
+it, or back to the pool. The journal says it was the reserve, not a low battery:
+`reserve_handoff` instead of `safe_handoff`, `reserve_teammate` instead of
+`low_battery_teammate`, and `at_reserve` in the inputs of each. A homeward drone takes nothing again; the set is
+checkpointed, and absent from checkpoints that have none. A drone with no
+station stays. Team joins already require the reserve (P1), which covers the
+second bullet at join time. Not yet measured on the qualification seeds.
 
 ### P3: obstacle-aware routing at runtime
 
