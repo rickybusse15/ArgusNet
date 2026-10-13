@@ -12,8 +12,8 @@
   and translucent materials are single-sided with clockwise footprints'
   walls reversed to face out, so a building's far wall never draws over its
   near one. GIS scenes split per feature too, and road and water strips are
-  one joined, upward-facing strip, mitred at gentle bends and
-  butt-joined at sharp ones. A GPU probe checks the roof of a built building against the same
+  one joined, upward-facing strip, simplified to half its width and
+  mitred or bevelled at each bend, so no part of it is drawn twice. A GPU probe checks the roof of a built building against the same
   building drawn opaque.
 
 - Plans: [PLANNING_EFFICIENCY_PLAN.md](PLANNING_EFFICIENCY_PLAN.md) (fleet-wide

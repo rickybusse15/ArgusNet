@@ -292,6 +292,29 @@ def mesh_from_polygon(
     )
 
 
+def _simplify_polyline(points: list[np.ndarray], tolerance_m: float) -> list[np.ndarray]:
+    """Douglas-Peucker: drop points within ``tolerance_m`` of the simplified line."""
+    if len(points) < 3:
+        return points
+    first, last = points[0], points[-1]
+    chord = last - first
+    chord_length = float(np.linalg.norm(chord))
+    best_index, best_distance = 0, -1.0
+    for index in range(1, len(points) - 1):
+        offset = points[index] - first
+        if chord_length <= 1.0e-9:
+            distance = float(np.linalg.norm(offset))
+        else:
+            distance = abs(float(chord[0] * offset[1] - chord[1] * offset[0])) / chord_length
+        if distance > best_distance:
+            best_index, best_distance = index, distance
+    if best_distance <= tolerance_m:
+        return [first, last]
+    head = _simplify_polyline(points[: best_index + 1], tolerance_m)
+    tail = _simplify_polyline(points[best_index:], tolerance_m)
+    return head[:-1] + tail
+
+
 def mesh_from_polyline(
     points_xy: np.ndarray,
     *,
@@ -300,11 +323,20 @@ def mesh_from_polyline(
     width_m: float,
     z_offset_m: float = 0.5,
 ) -> SimpleMesh:
-    # One joined strip, mitred at each bend: separate per-segment quads would
-    # overlap around every shared point, and a translucent layer draws the
-    # overlap twice. A turn too sharp to mitre gets a butt join instead.
+    """A line as one joined strip, ``width_m`` wide, facing up.
+
+    A translucent layer draws any overlap twice, so the strip avoids one:
+    segments share their joints, a bend is mitred, and a bend too sharp to
+    mitre is bevelled (a shared inner corner and one wedge on the outside).
+    Points within half a width of the simplified line are dropped first; they
+    lie inside the stroke anyway, and the segments they leave are what cannot
+    be joined without overlap. A bend whose inner corner would still pull back
+    past half of an adjoining segment -- a near reversal -- falls back to a
+    butt join, the one case that can still overlap.
+    """
     if len(points_xy) < 2:
         return merge_meshes(())
+    half_width = float(width_m) * 0.5
     points = [np.asarray(points_xy[0], dtype=np.float64)]
     for point in points_xy[1:]:
         point = np.asarray(point, dtype=np.float64)
@@ -312,58 +344,75 @@ def mesh_from_polyline(
             points.append(point)
     if len(points) < 2:
         return merge_meshes(())
+    points = _simplify_polyline(points, half_width)
     lefts = []
     lengths = []
     for start, end in zip(points[:-1], points[1:], strict=True):
         lengths.append(float(np.linalg.norm(end - start)))
         direction = (end - start) / lengths[-1]
         lefts.append(np.array([-direction[1], direction[0]]))
-    half_width = float(width_m) * 0.5
     positions: list[list[float]] = []
 
-    def pair(point: np.ndarray, side: np.ndarray, scale: float) -> int:
-        """Append the strip's right and left corners at ``point``; return the right's index."""
-        offset = side * (half_width * scale)
-        for corner in (point - offset, point + offset):
-            positions.append(
-                [
-                    float(corner[0]),
-                    float(corner[1]),
-                    float(height_at(float(corner[0]), float(corner[1]))) + z_offset_m,
-                ]
-            )
-        return len(positions) - 2
+    def corner(xy: np.ndarray) -> int:
+        positions.append(
+            [
+                float(xy[0]),
+                float(xy[1]),
+                float(height_at(float(xy[0]), float(xy[1]))) + z_offset_m,
+            ]
+        )
+        return len(positions) - 1
+
+    def square(point: np.ndarray, left: np.ndarray) -> tuple[int, int]:
+        return corner(point - left * half_width), corner(point + left * half_width)
 
     indices: list[int] = []
-    start_pair = pair(points[0], lefts[0], 1.0)
+
+    def upward(a: int, b: int, c: int) -> None:
+        pa, pb, pc = (np.asarray(positions[i][:2]) for i in (a, b, c))
+        u, v = pb - pa, pc - pa
+        indices.extend([a, b, c] if u[0] * v[1] - u[1] * v[0] > 0.0 else [a, c, b])
+
+    start_pair = square(points[0], lefts[0])
     for index, left in enumerate(lefts):
         end_point = points[index + 1]
-        if index + 1 < len(lefts):
-            miter = left + lefts[index + 1]
-            length = float(np.linalg.norm(miter))
-            # cos of half the turn: a mitre is at most four half-widths long,
-            # i.e. turns up to about 151 degrees join.
-            cos_half = float(np.dot(miter / length, left)) if length > 1.0e-9 else 0.0
-        else:
-            cos_half = 0.0
-        # A mitre's inner corner pulls back `w/2 * tan(half the turn)` along
-        # both segments; past half of either one it would fold the strip.
-        pull_back = half_width * float(np.sqrt(max(1.0 - cos_half**2, 0.0))) / max(cos_half, 1.0e-9)
-        fits = index + 1 < len(lefts) and pull_back <= 0.5 * min(lengths[index], lengths[index + 1])
-        if cos_half >= 0.25 and fits:
-            end_pair = pair(end_point, miter / length, 1.0 / cos_half)
+        if index + 1 == len(lefts):
+            end_pair = square(end_point, left)
             next_start = end_pair
         else:
-            # A sharper turn or a reversal: end square and start the next
-            # segment afresh (a butt join), so neither side swaps over.
-            end_pair = pair(end_point, left, 1.0)
-            next_start = (
-                pair(end_point, lefts[index + 1], 1.0) if index + 1 < len(lefts) else end_pair
-            )
+            following = lefts[index + 1]
+            miter = left + following
+            length = float(np.linalg.norm(miter))
+            # cos of half the turn; the inner corner pulls back
+            # `w/2 * tan(half the turn)` along both segments.
+            cos_half = float(np.dot(miter / length, left)) if length > 1.0e-9 else 0.0
+            sin_half = float(np.sqrt(max(1.0 - cos_half**2, 0.0)))
+            pull_back = half_width * sin_half / cos_half if cos_half > 1.0e-9 else np.inf
+            fits = pull_back <= 0.5 * min(lengths[index], lengths[index + 1])
+            if fits and cos_half >= 0.25:
+                # A mitre at most four half-widths long (turns up to ~151 deg).
+                offset = miter / length * (half_width / cos_half)
+                end_pair = (corner(end_point - offset), corner(end_point + offset))
+                next_start = end_pair
+            elif fits:
+                # Bevel: the inner corner is shared, the outer gap is a wedge.
+                turns_left = left[1] * following[0] - left[0] * following[1] < 0.0
+                side = 1.0 if turns_left else -1.0
+                inner = corner(end_point + side * miter / length * (half_width / cos_half))
+                outer_in = corner(end_point - side * left * half_width)
+                outer_out = corner(end_point - side * following * half_width)
+                if turns_left:
+                    end_pair, next_start = (outer_in, inner), (outer_out, inner)
+                else:
+                    end_pair, next_start = (inner, outer_in), (inner, outer_out)
+                upward(inner, outer_in, outer_out)
+            else:
+                end_pair = square(end_point, left)
+                next_start = square(end_point, following)
         # `[s-o, e+o, s+o]`, `[s-o, e-o, e+o]`: counter-clockwise from above, so
         # the strip faces up; a translucent layer is single-sided.
-        right, far = start_pair, end_pair
-        indices.extend([right, far + 1, right + 1, right, far, far + 1])
+        (right, left_start), (far_right, far_left) = start_pair, end_pair
+        indices.extend([right, far_left, left_start, right, far_right, far_left])
         start_pair = next_start
     position_array = np.asarray(positions, dtype=np.float32)
     index_array = np.asarray(indices, dtype=np.uint32)

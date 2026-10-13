@@ -118,3 +118,47 @@ def test_random_lines_never_wind_a_triangle_downward() -> None:
         corners = strip.positions.astype(np.float64)[strip.indices.reshape(-1, 3)]
         u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
         assert ((u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]) > 0.0).all(), points.tolist()
+
+
+def _coverage(strip: SimpleMesh, step_m: float = 0.25) -> np.ndarray:
+    """How many triangles cover each point of a grid over the strip."""
+    xy = strip.positions[:, :2].astype(np.float64)
+    triangles = xy[strip.indices.reshape(-1, 3)]
+    low, high = xy.min(axis=0), xy.max(axis=0)
+    gx, gy = np.meshgrid(
+        np.arange(low[0] + step_m / 2, high[0], step_m),
+        np.arange(low[1] + step_m / 2, high[1], step_m),
+    )
+    samples = np.stack([gx.ravel(), gy.ravel()], axis=1)
+    counts = np.zeros(len(samples), dtype=int)
+    for a, b, c in triangles:
+
+        def side(p, q):
+            return (q[0] - p[0]) * (samples[:, 1] - p[1]) - (q[1] - p[1]) * (samples[:, 0] - p[0])
+
+        inside = (side(a, b) > 1e-9) & (side(b, c) > 1e-9) & (side(c, a) > 1e-9)
+        counts += inside
+    return counts
+
+
+def test_bends_are_covered_once() -> None:
+    # Overlap draws twice in a blended layer: every sampled point of the strip
+    # lies in exactly one triangle, at gentle bends, sharp bends and the short
+    # segments of a tight wiggle.
+    turn = np.radians(165.0)
+    for points, width in (
+        ([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]], 4.0),
+        ([[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]], 4.0),
+        ([[0.0, 0.0], [20.0, 0.0], [0.0, 15.0]], 4.0),
+        ([[0.0, 0.0], [60.0, 0.0], [60.0 + 60.0 * np.cos(turn), 60.0 * np.sin(turn)]], 4.0),
+        ([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [20.0, 12.0], [25.0, 4.0]], 4.0),
+    ):
+        strip = mesh_from_polyline(
+            np.array(points),
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=width,
+        )
+        counts = _coverage(strip)
+        assert counts.max() == 1, points
+        assert (counts == 1).sum() > 0, points
