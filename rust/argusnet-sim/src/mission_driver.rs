@@ -350,11 +350,15 @@ impl MissionDriverStage {
     /// would then hold less than its dynamic reserve to get home from it (the
     /// static reserve without a home). Drones already on a POI keep it.
     fn allocate_fleet_wide(&mut self, mobile: &[(String, [f64; 3])], battery: &BatteryStage) {
-        let pending = self.pois.pending_pois();
-        let free: Vec<&(String, [f64; 3])> = mobile
+        // By id, so the solver's lower-index tie-break is the lower id
+        // whatever order the bundle declares drones and POIs in.
+        let mut pending = self.pois.pending_pois();
+        pending.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut free: Vec<&(String, [f64; 3])> = mobile
             .iter()
             .filter(|(id, _)| self.pois.assignment_for(id).is_none())
             .collect();
+        free.sort_by(|a, b| a.0.cmp(&b.0));
         if pending.is_empty() || free.is_empty() {
             return;
         }
@@ -1453,6 +1457,23 @@ mod tests {
         assert_eq!(reasons, vec!["fleet_min_cost", "fleet_min_cost"]);
         let commands = efficient.take_override_commands();
         assert_eq!(commands.len(), 2, "one redirect per new assignment");
+    }
+
+    /// Equal costs go to the lower drone id and the lower POI id, not to
+    /// whichever the bundle declared first.
+    #[test]
+    fn efficient_v1_breaks_ties_by_id() {
+        // Equidistant drones, declared z first: the POI goes to drone-a.
+        let (battery, mobile) = fleet(&[("drone-z", 600.0), ("drone-a", 400.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
+        assert_eq!(stage.pois.assignment_for("drone-z"), None);
+        // Equal POIs, declared poi-01 first: the one drone takes poi-00.
+        let (battery, mobile) = fleet(&[("drone-a", 500.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-01", 400.0, 1), poi("poi-00", 600.0, 1)]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
     }
 
     /// A POI the drone could not reach, dwell at and keep its reserve after

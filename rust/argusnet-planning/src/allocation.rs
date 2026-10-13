@@ -53,8 +53,12 @@ pub fn min_cost_assignment(cost: &[Vec<Option<f64>>]) -> Vec<Option<usize>> {
         cost.iter().all(|row| row.len() == cols),
         "a rectangular cost matrix"
     );
-    // An infeasible or padding pair costs more than any set of feasible pairs
-    // can, so a larger feasible assignment always wins.
+    // Every row also has its own "unassigned" column, costing more than any
+    // set of feasible pairs can, so a larger feasible assignment always
+    // wins. An infeasible pair costs more again: a row with nothing feasible
+    // goes unassigned instead of occupying a real column, which on a tie
+    // could otherwise be one a feasible row needs. Padding rows (so the
+    // matrix is square) take whatever columns are left, at no cost.
     let spread: f64 = cost
         .iter()
         .flatten()
@@ -62,12 +66,12 @@ pub fn min_cost_assignment(cost: &[Vec<Option<f64>>]) -> Vec<Option<usize>> {
         .map(|c| c.abs())
         .sum::<f64>();
     let big = 2.0 * spread + 1.0;
-    let n = rows.max(cols);
+    let n = rows + cols;
     let at = |r: usize, c: usize| -> f64 {
-        if r < rows && c < cols {
-            cost[r][c].unwrap_or(big)
-        } else {
-            big
+        match (r < rows, c < cols) {
+            (true, true) => cost[r][c].unwrap_or(4.0 * big),
+            (true, false) => big,
+            (false, _) => 0.0,
         }
     };
 
@@ -162,6 +166,20 @@ mod tests {
         assert_eq!(min_cost_assignment(&cost), vec![Some(1), Some(0)]);
         let none = vec![vec![None, None]];
         assert_eq!(min_cost_assignment(&none), vec![None]);
+    }
+
+    /// A row with nothing feasible takes no column, so it cannot take the
+    /// lower one from a feasible row on a tie.
+    #[test]
+    fn a_row_with_nothing_feasible_takes_no_column() {
+        let cost = vec![vec![None, None], vec![Some(0.0), Some(0.0)]];
+        assert_eq!(min_cost_assignment(&cost), vec![None, Some(0)]);
+        let cost = vec![
+            vec![None, None],
+            vec![None, None],
+            vec![Some(3.0), Some(3.0)],
+        ];
+        assert_eq!(min_cost_assignment(&cost), vec![None, None, Some(0)]);
     }
 
     #[test]
