@@ -73,7 +73,9 @@ fn the_replay_records_a_non_reference_policy_only() {
 fn efficient_v1_assigns_the_scan_missions_pois_fleet_wide() {
     let made = assignments(run("scan", PlanningPolicy::EfficientV1));
     assert!(!made.is_empty(), "the scan mission reaches its POIs");
-    assert!(made.iter().all(|(_, _, reason)| reason == "fleet_min_cost"));
+    assert!(made
+        .iter()
+        .all(|(_, _, reason)| reason == "fleet_min_cost" || reason == "fleet_team_join"));
     let reference = assignments(run("scan", PlanningPolicy::Reference));
     assert!(reference
         .iter()

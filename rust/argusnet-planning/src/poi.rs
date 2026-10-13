@@ -114,6 +114,18 @@ pub struct PendingPoi {
     pub required_dwell_s: f64,
 }
 
+/// A POI being inspected, as [`PoiManager::active_pois`] lists it for a
+/// planner deciding whether another drone should join it (P1): its index,
+/// id, position, the dwell still to do, and how many drones hold it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActivePoi {
+    pub index: usize,
+    pub poi_id: String,
+    pub position: [f64; 3],
+    pub remaining_dwell_s: f64,
+    pub members: usize,
+}
+
 /// Tracks every POI's lifecycle.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PoiManager {
@@ -191,6 +203,50 @@ impl PoiManager {
         self.drone_assignment
             .get(drone_id)
             .map(|index| self.pois[*index].poi_id.as_str())
+    }
+
+    /// The POIs being inspected with dwell still to do, in construction
+    /// order, each with the number of drones holding it. For a planner that
+    /// adds drones to them (P1 teams); the reference path does not read it.
+    pub fn active_pois(&self) -> Vec<ActivePoi> {
+        (0..self.pois.len())
+            .filter(|&index| self.states[index] == PoiState::Active)
+            .map(|index| ActivePoi {
+                index,
+                poi_id: self.pois[index].poi_id.clone(),
+                position: self.pois[index].position,
+                remaining_dwell_s: (self.pois[index].required_dwell_s - self.dwell_s[index])
+                    .max(0.0),
+                members: self
+                    .drone_assignment
+                    .values()
+                    .filter(|&&held| held == index)
+                    .count(),
+            })
+            .filter(|poi| poi.remaining_dwell_s > 0.0)
+            .collect()
+    }
+
+    /// Whether `drone_id` is the drone a POI's status names, rather than a
+    /// teammate added to it.
+    pub fn leads(&self, drone_id: &str) -> bool {
+        self.drone_assignment
+            .get(drone_id)
+            .is_some_and(|&index| self.assigned_drone[index].as_deref() == Some(drone_id))
+    }
+
+    /// [`Self::request_team_assign`] by index: add a free drone to the
+    /// active POI at `index`, so both credit its dwell. The status keeps
+    /// naming the drone that took it.
+    pub fn team_assign_at(&mut self, drone_id: &str, index: usize) -> bool {
+        if index >= self.pois.len()
+            || self.states[index] != PoiState::Active
+            || self.drone_assignment.contains_key(drone_id)
+        {
+            return false;
+        }
+        self.drone_assignment.insert(drone_id.to_string(), index);
+        true
     }
 
     /// The POIs still waiting for a drone, in construction order. For a
@@ -456,5 +512,61 @@ impl PoiManager {
             newly_done.push(self.pois[index].poi_id.clone());
         }
         newly_done
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn poi(id: &str, x: f64, dwell_s: f64) -> InspectionPoi {
+        InspectionPoi {
+            poi_id: id.to_string(),
+            name: id.to_string(),
+            position: [x, 0.0, 40.0],
+            priority: 1,
+            required_dwell_s: dwell_s,
+        }
+    }
+
+    /// P1 teams: only an active POI with dwell left is listed, with the
+    /// drones holding it; a teammate joins by index and credits dwell
+    /// alongside the lead, whom the status keeps naming; completion releases
+    /// both.
+    #[test]
+    fn a_teammate_joins_an_active_poi_and_shares_its_dwell() {
+        let mut manager = PoiManager::new(vec![poi("p0", 0.0, 10.0), poi("p1", 500.0, 10.0)]);
+        assert!(manager.active_pois().is_empty(), "nothing is active yet");
+        assert!(
+            !manager.team_assign_at("b", 0),
+            "a pending POI takes no team"
+        );
+        assert!(manager.assign_at("a", 0));
+        let active = manager.active_pois();
+        assert_eq!(active.len(), 1);
+        assert_eq!((active[0].poi_id.as_str(), active[0].members), ("p0", 1));
+        assert_eq!(active[0].remaining_dwell_s, 10.0);
+
+        assert!(manager.team_assign_at("b", 0));
+        assert!(
+            !manager.team_assign_at("b", 0),
+            "a held drone joins nothing"
+        );
+        assert!(manager.leads("a") && !manager.leads("b"));
+        assert_eq!(manager.active_pois()[0].members, 2);
+        assert_eq!(
+            manager.statuses()[0].assigned_drone_id.as_deref(),
+            Some("a")
+        );
+
+        // Both within 30 m: 5 s each makes the 10 s.
+        for _ in 0..5 {
+            manager.accumulate_dwell("a", [0.0, 0.0, 40.0], 1.0);
+            manager.accumulate_dwell("b", [10.0, 0.0, 40.0], 1.0);
+        }
+        assert_eq!(manager.check_completions(5.0), vec!["p0".to_string()]);
+        assert_eq!(manager.assignment_for("a"), None);
+        assert_eq!(manager.assignment_for("b"), None);
+        assert!(manager.active_pois().is_empty());
     }
 }
