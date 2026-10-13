@@ -147,7 +147,8 @@ def test_bends_are_covered_once() -> None:
     # segments of a tight wiggle.
     turn = np.radians(165.0)
     for points, width in (
-        ([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]], 4.0),
+        ([[0.0, 0.0], [3.0, 0.0], [3.0, 3.0]], 4.0),
+        ([[0.0, 0.0], [2.5, 0.0], [2.5, 2.5]], 4.0),
         ([[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]], 4.0),
         ([[0.0, 0.0], [20.0, 0.0], [0.0, 15.0]], 4.0),
         ([[0.0, 0.0], [60.0, 0.0], [60.0 + 60.0 * np.cos(turn), 60.0 * np.sin(turn)]], 4.0),
@@ -162,3 +163,27 @@ def test_bends_are_covered_once() -> None:
         counts = _coverage(strip)
         assert counts.max() == 1, points
         assert (counts == 1).sum() > 0, points
+
+
+def test_every_point_is_kept_for_the_terrain_and_hairpins() -> None:
+    # The strip samples the terrain at each point, two corners per point at
+    # a mitre, and a hairpin keeps its full length.
+    rising = mesh_from_polyline(
+        np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]]),
+        height_at=lambda x, y: x * x,
+        color_rgba=(0.2, 0.4, 0.9, 0.85),
+        width_m=4.0,
+    )
+    assert sorted({round(float(z), 3) for z in rising.positions[:, 2]}) == [
+        0.5,
+        100.5,
+        400.5,
+        900.5,
+    ]
+    hairpin = mesh_from_polyline(
+        np.array([[0.0, 0.0], [10.0, 0.0], [1.0, 0.0]]),
+        height_at=lambda x, y: 0.0,
+        color_rgba=(0.2, 0.4, 0.9, 0.85),
+        width_m=4.0,
+    )
+    assert hairpin.positions[:, 0].max() == pytest.approx(10.0)

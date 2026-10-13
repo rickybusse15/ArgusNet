@@ -292,29 +292,6 @@ def mesh_from_polygon(
     )
 
 
-def _simplify_polyline(points: list[np.ndarray], tolerance_m: float) -> list[np.ndarray]:
-    """Douglas-Peucker: drop points within ``tolerance_m`` of the simplified line."""
-    if len(points) < 3:
-        return points
-    first, last = points[0], points[-1]
-    chord = last - first
-    chord_length = float(np.linalg.norm(chord))
-    best_index, best_distance = 0, -1.0
-    for index in range(1, len(points) - 1):
-        offset = points[index] - first
-        if chord_length <= 1.0e-9:
-            distance = float(np.linalg.norm(offset))
-        else:
-            distance = abs(float(chord[0] * offset[1] - chord[1] * offset[0])) / chord_length
-        if distance > best_distance:
-            best_index, best_distance = index, distance
-    if best_distance <= tolerance_m:
-        return [first, last]
-    head = _simplify_polyline(points[: best_index + 1], tolerance_m)
-    tail = _simplify_polyline(points[best_index:], tolerance_m)
-    return head[:-1] + tail
-
-
 def mesh_from_polyline(
     points_xy: np.ndarray,
     *,
@@ -328,11 +305,12 @@ def mesh_from_polyline(
     A translucent layer draws any overlap twice, so the strip avoids one:
     segments share their joints, a bend is mitred, and a bend too sharp to
     mitre is bevelled (a shared inner corner and one wedge on the outside).
-    Points within half a width of the simplified line are dropped first; they
-    lie inside the stroke anyway, and the segments they leave are what cannot
-    be joined without overlap. A bend whose inner corner would still pull back
-    past half of an adjoining segment -- a near reversal -- falls back to a
-    butt join, the one case that can still overlap.
+    Either pulls the inner corner back along both segments, and a segment can
+    give up at most its length to the joints at its two ends. A bend that
+    would need more -- a reversal, or sharp bends closer together than the
+    line is wide -- falls back to a butt join, the one case that can still
+    overlap; avoiding it needs polygon clipping. Every point is kept, so the
+    strip still samples the terrain at each one.
     """
     if len(points_xy) < 2:
         return merge_meshes(())
@@ -344,7 +322,6 @@ def mesh_from_polyline(
             points.append(point)
     if len(points) < 2:
         return merge_meshes(())
-    points = _simplify_polyline(points, half_width)
     lefts = []
     lengths = []
     for start, end in zip(points[:-1], points[1:], strict=True):
@@ -374,6 +351,7 @@ def mesh_from_polyline(
         indices.extend([a, b, c] if u[0] * v[1] - u[1] * v[0] > 0.0 else [a, c, b])
 
     start_pair = square(points[0], lefts[0])
+    used_by_previous = 0.0
     for index, left in enumerate(lefts):
         end_point = points[index + 1]
         if index + 1 == len(lefts):
@@ -388,7 +366,12 @@ def mesh_from_polyline(
             cos_half = float(np.dot(miter / length, left)) if length > 1.0e-9 else 0.0
             sin_half = float(np.sqrt(max(1.0 - cos_half**2, 0.0)))
             pull_back = half_width * sin_half / cos_half if cos_half > 1.0e-9 else np.inf
-            fits = pull_back <= 0.5 * min(lengths[index], lengths[index + 1])
+            # What this segment has left after the previous joint's share,
+            # and the whole of the next one (its far joint decides later).
+            fits = (
+                pull_back + used_by_previous <= lengths[index] and pull_back <= lengths[index + 1]
+            )
+            used_by_previous = pull_back if fits else 0.0
             if fits and cos_half >= 0.25:
                 # A mitre at most four half-widths long (turns up to ~151 deg).
                 offset = miter / length * (half_width / cos_half)
