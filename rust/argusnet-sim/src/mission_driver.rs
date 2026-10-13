@@ -400,8 +400,11 @@ impl MissionDriverStage {
         };
         let mut receivers: Vec<&str> = Vec::new();
         for (id, _) in mobile {
+            // Only a lead hands its POI on under efficient_v1 (a teammate
+            // keeps its share), so only a lead needs a receiver kept free.
             if fraction_of(id) < self.config.handoff_low_fraction
                 && self.pois.assignment_for(id).is_some()
+                && self.pois.leads(id)
             {
                 if let Some((other, _)) = mobile.iter().find(|(other, _)| {
                     other != id
@@ -492,7 +495,10 @@ impl MissionDriverStage {
                         if arrive_s >= alone_s {
                             return None;
                         }
-                        let together_s = poi.remaining_dwell_s / (poi.members + 1) as f64;
+                        // The holders keep crediting while it travels; it
+                        // shares only what is left when it arrives.
+                        let left_s = poi.remaining_dwell_s - poi.members as f64 * arrive_s;
+                        let together_s = left_s.max(0.0) / (poi.members + 1) as f64;
                         let spent_wh = model.segment_cost_wh(*position, poi.position)
                             + model.hover_power_w * together_s / 3600.0;
                         (remaining_wh - spent_wh >= reserve_at(id, poi.position))
@@ -702,7 +708,10 @@ impl MissionDriverStage {
                         status: DecisionStatus::QueuedForNextTick,
                         subject: Some(id.clone()),
                         selected: Some(active.clone()),
-                        candidates: pending,
+                        candidates: joins
+                            .iter()
+                            .find(|join| &join.drone_id == id)
+                            .map_or(pending, |join| join.candidates.clone()),
                         reason: if joins.iter().any(|join| &join.drone_id == id) {
                             "fleet_team_join"
                         } else if efficient {
