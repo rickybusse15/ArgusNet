@@ -55,6 +55,13 @@ def scorecard_from_report(report: EvaluationReport) -> SystemScorecard:
             "task_changes": report.task_changes,
             "poi_handoffs": report.poi_handoffs,
             "assignment_thrash": report.assignment_thrash,
+            "mission_makespan_s": report.mission_makespan_s,
+            "scan_coverage_time_s": report.scan_coverage_time_s,
+            "poi_service_time_mean_s": report.poi_service_time_mean_s,
+            "fleet_distance_m": report.fleet_distance_m,
+            "distance_per_drone_m": dict(report.distance_per_drone_m),
+            "battery_used_per_drone": dict(report.battery_used_per_drone),
+            "idle_time_s": report.idle_time_s,
         },
         performance={
             "wall_clock_s": report.wall_clock_s,

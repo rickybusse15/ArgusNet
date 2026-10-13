@@ -22,6 +22,7 @@ from argusnet.evaluation.metrics import (
     evaluate_replay,
     report_from_dict,
     report_to_dict,
+    time_and_effort,
 )
 
 # ---------------------------------------------------------------------------
@@ -966,3 +967,108 @@ class TestAssignmentCounts:
         assert (report.task_changes, report.poi_handoffs, report.assignment_thrash) == (1, 0, 0)
         again = report_from_dict(report_to_dict(report))
         assert again.task_changes == 1 and again.assignment_thrash == 0
+
+
+class TestTimeAndEffort:
+    """P0: makespan, scan time, POI service time, distance, battery, idle."""
+
+    @staticmethod
+    def _replay(all_done: bool) -> dict:
+        def frame(t, x, battery, coverage, poi_done):
+            return {
+                "timestamp_s": t,
+                "nodes": [
+                    {
+                        "node_id": "d1",
+                        "is_mobile": True,
+                        "position": [x, 0.0, 0.0],
+                        "battery_fraction": battery,
+                    },
+                    {
+                        "node_id": "g1",
+                        "is_mobile": False,
+                        "position": [9.0, 9.0, 0.0],
+                        "battery_fraction": -1.0,
+                    },
+                ],
+                "scan_mission_state": {
+                    "scan_coverage_fraction": coverage,
+                    "scan_coverage_threshold": 0.65,
+                    "poi_statuses": [
+                        {"poi_id": "p1", "completion_time_s": 30.0 if poi_done else None},
+                        {
+                            "poi_id": "p2",
+                            "completion_time_s": 35.0 if (poi_done and all_done) else None,
+                        },
+                    ],
+                },
+            }
+
+        history = {
+            "d1": [
+                _event(0.0, "assign", "search"),
+                _event(12.0, "reassign", "poi:p1"),
+                _event(30.0, "reassign", "hold"),
+                _event(34.0, "reassign", "poi:p2"),
+            ]
+        }
+        return {
+            "meta": {"assignment_history": history},
+            "frames": [
+                frame(0.0, 0.0, 1.0, 0.1, False),
+                frame(10.0, 3.0, 0.9, 0.7, False),
+                frame(40.0, 7.0, 0.6, 0.9, True),
+            ],
+        }
+
+    def test_figures_from_a_finished_run(self):
+        figures = time_and_effort(self._replay(all_done=True))
+        assert figures["mission_makespan_s"] == pytest.approx(35.0)
+        assert figures["scan_coverage_time_s"] == pytest.approx(10.0)
+        # p1: on at 12, done at 30; p2: on at 34, done at 35.
+        assert figures["poi_service_time_mean_s"] == pytest.approx((18.0 + 1.0) / 2)
+        assert figures["distance_per_drone_m"] == {"d1": pytest.approx(7.0)}
+        assert figures["fleet_distance_m"] == pytest.approx(7.0)
+        assert figures["battery_used_per_drone"] == {"d1": pytest.approx(0.4)}
+        assert figures["idle_time_s"] == pytest.approx(4.0)
+
+    def test_no_makespan_while_a_poi_is_open(self):
+        figures = time_and_effort(self._replay(all_done=False))
+        assert figures["mission_makespan_s"] is None
+        assert figures["poi_service_time_mean_s"] == pytest.approx(18.0)
+
+    def test_a_resumed_replay_does_not_report_what_happened_before_it(self):
+        replay = self._replay(all_done=True)
+        # Resumed at t=33 s: p1 completed at 30 s, before the first frame, and
+        # the scan's threshold was already reached.
+        replay["frames"] = replay["frames"][2:]
+        replay["frames"][0]["timestamp_s"] = 33.0
+        figures = time_and_effort(replay)
+        assert figures["mission_makespan_s"] is None
+        assert figures["scan_coverage_time_s"] is None
+
+    def test_a_poi_already_held_when_a_resumed_replay_begins_has_no_service_time(self):
+        replay = self._replay(all_done=True)
+        replay["frames"] = replay["frames"][1:]
+        # The history restarts at the checkpoint, with d1 already on p1.
+        replay["meta"]["assignment_history"] = {
+            "d1": [_event(10.0, "assign", "poi:p1"), _event(34.0, "reassign", "poi:p2")]
+        }
+        figures = time_and_effort(replay)
+        # p1's start was before the replay; p2's is observed (34 -> 35).
+        assert figures["poi_service_time_mean_s"] == pytest.approx(1.0)
+
+    def test_without_a_mission_or_history(self):
+        figures = time_and_effort(_build_good_replay())
+        assert figures["mission_makespan_s"] is None
+        assert figures["scan_coverage_time_s"] is None
+        assert figures["idle_time_s"] is None
+
+    def test_the_report_and_scorecard_carry_them(self):
+        replay = self._replay(all_done=True)
+        replay["meta"].update({"scenario_name": "s", "seed": 1, "dt_s": 1.0})
+        report = evaluate_replay(replay, "s", "m", 0.1, 1)
+        assert report.mission_makespan_s == pytest.approx(35.0)
+        again = report_from_dict(report_to_dict(report))
+        assert again.distance_per_drone_m == {"d1": pytest.approx(7.0)}
+        assert again.idle_time_s == pytest.approx(4.0)

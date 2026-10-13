@@ -68,6 +68,8 @@ class ScorecardAndPresetTest(unittest.TestCase):
         self.assertEqual(mission["task_changes"], 2)
         self.assertEqual(mission["poi_handoffs"], 1)
         self.assertEqual(mission["assignment_thrash"], 1)
+        self.assertIn("distance_per_drone_m", mission)
+        self.assertIn("battery_used_per_drone", mission)
 
     def test_operational_presets_are_registered(self) -> None:
         expected = {
