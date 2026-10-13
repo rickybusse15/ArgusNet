@@ -1429,7 +1429,8 @@ impl StageHandler for MissionDriverStage {
 
     fn not_due(&mut self, context: &mut TickContext<'_>) -> Result<(), StageError> {
         // This tick's outputs: the decisions it records and the override
-        // commands stage 2 takes next tick. A boundary it sat out made none.
+        // commands stage 2 takes next tick. A boundary it sat out made none,
+        // but for a return home under `efficient_v1` (below).
         // The machine's events are taken where they are made, in `run`.
         self.override_commands.clear();
         self.decisions.clear();
@@ -1438,11 +1439,21 @@ impl StageHandler for MissionDriverStage {
         // next run it would count a drone that arrived or left in between for
         // the whole interval, and a POI assigned at that run for time before
         // it was assigned. Assignment and completion wait for the lane's run.
+        let mobile = mobile_positions(context);
         if self.machine.phase() == MissionPhase::Inspecting {
-            for (id, position) in mobile_positions(context) {
+            for (id, position) in &mobile {
                 self.pois
-                    .accumulate_dwell(&id, position, context.boundary_dt_s);
+                    .accumulate_dwell(id, *position, context.boundary_dt_s);
             }
+        }
+        // A drone that reaches its reserve between the lane's runs turns for
+        // home at once, not at the next run: what it would fly meanwhile is
+        // the energy that gets it home. Its POI goes at the next run, which
+        // treats a homeward drone as giving it up.
+        if self.policy == PlanningPolicy::EfficientV1 {
+            let empty = BatteryStage::new();
+            let battery = stage_one_battery(context.stages).unwrap_or(&empty);
+            self.send_low_drones_home(&mobile, battery, context.timestamp_s);
         }
         Ok(())
     }
