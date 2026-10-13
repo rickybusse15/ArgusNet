@@ -299,6 +299,10 @@ pub struct MissionDriverStage {
 /// unless it is that much further. Tuned on the qualification seeds only.
 pub const PRIORITY_WORTH_WH: f64 = 5.0;
 
+/// How close a drone must be to a POI, horizontally, to credit its dwell:
+/// the `<= 30.0` in [`PoiManager::accumulate_dwell`].
+const POI_DWELL_RANGE_M: f64 = 30.0;
+
 impl std::fmt::Debug for MissionDriverStage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -626,8 +630,10 @@ impl MissionDriverStage {
         // Teams: a drone still free joins a POI being inspected, so both
         // credit its dwell, when that helps and it can afford it. It helps if
         // the drone arrives before the POI's holders would finish it alone
-        // (they credit the remaining dwell together; holders still en route
-        // are counted as there, so the estimate favours not joining). It can
+        // (they credit the remaining dwell together). Only a POI whose
+        // holders are all already in dwell range takes a teammate: one still
+        // en route would leave the newcomer hovering alone for time the
+        // energy estimate does not charge. It can
         // afford it if, after the trip and hovering until the POI is done
         // with it, it still has its reserve home. One new teammate per POI
         // per run, chosen by the same solver on trip-plus-hover energy.
@@ -635,7 +641,24 @@ impl MissionDriverStage {
             .into_iter()
             .filter(|(id, _)| self.pois.assignment_for(id).is_none())
             .collect();
-        let mut active = self.pois.active_pois();
+        let in_range = |poi: &argusnet_planning::poi::ActivePoi| {
+            let holders: Vec<&[f64; 3]> = mobile
+                .iter()
+                .filter(|(id, _)| self.pois.assignment_for(id) == Some(poi.poi_id.as_str()))
+                .map(|(_, position)| position)
+                .collect();
+            holders.len() == poi.members
+                && holders.iter().all(|position| {
+                    let (dx, dy) = (poi.position[0] - position[0], poi.position[1] - position[1]);
+                    (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
+                })
+        };
+        let mut active: Vec<_> = self
+            .pois
+            .active_pois()
+            .into_iter()
+            .filter(in_range)
+            .collect();
         active.sort_by(|a, b| a.poi_id.cmp(&b.poi_id).then(a.index.cmp(&b.index)));
         if free.is_empty() || active.is_empty() {
             return Vec::new();
@@ -1801,7 +1824,14 @@ mod tests {
         stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
         assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
         assert!(stage.pois.leads("drone-a"), "the POI is drone-a's");
-        // drone-z, left free, joins it as a teammate (P1 teams).
+        // drone-z, left free, waits while drone-a is still en route, then
+        // joins it as a teammate once drone-a is in dwell range (P1 teams).
+        assert_eq!(stage.pois.assignment_for("drone-z"), None);
+        let arrived = vec![
+            mobile[0].clone(),
+            ("drone-a".to_string(), [500.0, 0.0, 40.0]),
+        ];
+        stage.inspect(1.0, 1.0, &arrived, &battery, &empty_map());
         assert_eq!(stage.pois.assignment_for("drone-z"), Some("poi-00"));
         assert!(!stage.pois.leads("drone-z"));
         // Equal POIs, declared poi-01 first: the one drone takes poi-00.
