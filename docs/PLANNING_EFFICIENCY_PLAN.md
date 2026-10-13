@@ -17,7 +17,7 @@ together than it could. File and line references are as of `main` on
 | --- | --- | --- |
 | POI allocation | Greedy, one drone at a time in fleet order (`mission_driver.rs` `inspect`). Earlier drones take the best POIs first, and nothing optimises across the fleet | Drones cross paths; a far drone can take a near POI |
 | Allocation cost | Straight-line horizontal distance at a hardcoded 350 W and 28 m/s (`poi.rs:26,91,244`). It ignores the trip home, hover during dwell, obstacles and the dynamic reserve | Drones accept POIs they cannot afford to finish and get home from |
-| Team assignment | Never assigns anything: it is called on a *pending* POI and only accepts an *active* one (pinned by `the_reference_team_assignment_branch_assigns_nothing`) | Idle drones sit out while the last POI is serviced |
+| Team assignment | Never assigns anything (reference; `efficient_v1` teams since P1 slice 2): it is called on a *pending* POI and only accepts an *active* one (pinned by `the_reference_team_assignment_branch_assigns_nothing`) | Idle drones sit out while the last POI is serviced |
 | Handoff | Overwrites whatever the receiving drone held, without checking (`poi.rs:305`) | A POI can be silently dropped |
 | Coordinator | Elected once and then shown in the viewer, but it decides nothing; `CoordinationManager` is wired only into parity tests | No shared claims, so drones duplicate work |
 | Routing | No planner at runtime (`ControllerEnvironment.planner: None`). POI, egress and frontier moves are straight lines that ignore obstacles (`GotoHover::redirect`). A* exists, but is used only at build time | Drones depend on collision push-out and deconfliction instead of planned paths |
@@ -176,9 +176,35 @@ run):
 The measurement found a defect in P0's `assignment_thrash`: it counted
 finishing a POI and taking the next one as thrash. Leaving a completed POI
 now restarts the window. With that fixed, thrash is 0 under both policies.
-Still to do in P1: teams on active POIs, safe handoff, hysteresis once
-preemption exists, and the acceptance run (held-out seeds and a
-`battery_remaining_min` envelope, both declared first).
+*Second slice: teams.* Under `efficient_v1`, a drone still free after the
+pending POIs are allocated joins a POI being inspected, so both credit its
+dwell. It joins only when it would arrive before the drones holding the POI
+finish it alone, and only if it can afford the trip, its share of the dwell
+and the trip home above its reserve. The same solver picks the joins, at most
+one new teammate per POI per run, on trip-plus-hover energy. The POI's status
+keeps naming the drone that took it. Under `efficient_v1` only that drone
+hands the POI on when it runs low; a teammate keeps its share. Each join is an
+applied `team_assignment` decision (`fleet_team_join`) and a `team_join` in
+the assignment history. The reference keeps its dead team branch and is
+unchanged byte for byte.
+
+Measured against the first slice on the same qualification seeds (PhysicalV1,
+paired, `efficient_v1` before and after teams):
+
+| Scenario | Seeds with a team join | `mission_completion_rate` | `fleet_distance_m` |
+| --- | --- | --- | --- |
+| `planner_adversarial` | 8 of 30 | identical on every seed | +9 m (0 to 18), worse on 8, better on 0 |
+| `persistent_long` | 6 of 30 | one more POI on one seed | +14 m (−40 to 69), no detectable difference |
+
+So teams work as specified (two drones finish a POI in half the dwell), but
+on these scenarios they rarely pay. Their POIs need 15 s of dwell, so by the
+time a drone is free little dwell is left to share, and the trip costs
+distance. Teams should matter for long dwells. Whether they stay on inside
+`efficient_v1`, or need a minimum time saved before a drone joins, is open.
+
+Still to do in P1: safe handoff, hysteresis once preemption exists, and the
+acceptance run (held-out seeds and a `battery_remaining_min` envelope, both
+declared first).
 
 ### P2: per-drone return home and reserve feasibility (F5)
 
