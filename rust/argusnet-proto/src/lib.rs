@@ -471,6 +471,8 @@ pub fn track_from_pb(track: pb::TrackState) -> Result<TrackState, String> {
             Some(track.mode_probability_cv)
         },
         contributing_node_ids: std::sync::Arc::new(track.contributing_nodes),
+        // Not on the wire: `last_seen_s` is the track time (see track_pb).
+        evidence_time_s: None,
     })
 }
 

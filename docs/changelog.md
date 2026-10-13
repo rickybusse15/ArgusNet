@@ -2,6 +2,14 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Tracks record their evidence time (P4.10b). In a run whose tracks can be
+  older than their frame (delivery modelled, or fusion at its own rate),
+  every replay track carries `evidence_time_s`, the time it last took a
+  measurement. The scorecard reports `track_measurement_age_mean_s`, the
+  evidence age plus any coasting, and the viewer's track summary shows each
+  track's age. Legacy replays carry no such key and are byte for byte
+  unchanged.
+
 - `--planning-policy efficient_v1` (PLANNING_EFFICIENCY_PLAN P1, first
   slice, opt-in) allocates a scan mission's POIs across the whole fleet at
   once: a deterministic minimum-cost assignment (Hungarian method,

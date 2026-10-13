@@ -527,6 +527,10 @@
           "minimum": 0.0,
           "maximum": 1.0,
           "description": "Fusion engine track quality score."
+        },
+        "evidence_time_s": {
+          "type": "number",
+          "description": "When the track last took a measurement (P4.10b). Written only by runs whose tracks can be older than their frame: delivery modelled or a fusion lane rate. Frame time minus this is the track's measurement age."
         }
       }
     },

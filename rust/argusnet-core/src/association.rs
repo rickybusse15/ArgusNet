@@ -34,6 +34,9 @@ pub struct JPDATrackUpdate {
     pub position: Vector3<f64>,
     pub measurement_std_m: f64,
     pub association_probability: f64,
+    /// The clusters weighed into this update (inside the track's gate), as
+    /// indices into the clusters the associator was given.
+    pub cluster_indices: SmallVec<[usize; 4]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -187,15 +190,17 @@ impl JPDAAssociator {
             let mut weighted_position = Vector3::zeros();
             let mut weighted_std_sq = 0.0;
             let mut total_weight = 0.0;
-            for (cluster_index, estimate) in cluster_estimates.iter().enumerate() {
+            let mut cluster_indices = SmallVec::new();
+            for (estimate_index, estimate) in cluster_estimates.iter().enumerate() {
                 let weight =
-                    likelihoods[track_index][cluster_index] / row_denominators[track_index];
+                    likelihoods[track_index][estimate_index] / row_denominators[track_index];
                 if weight <= 0.0 {
                     continue;
                 }
                 weighted_position += estimate.position * weight;
                 weighted_std_sq += estimate.measurement_std_m.powi(2) * weight;
                 total_weight += weight;
+                cluster_indices.push(estimate.cluster_index);
             }
             if total_weight <= 0.0 {
                 continue;
@@ -205,6 +210,7 @@ impl JPDAAssociator {
                 position: weighted_position / total_weight,
                 measurement_std_m: (weighted_std_sq / total_weight).sqrt().max(1.0),
                 association_probability,
+                cluster_indices,
             });
         }
 

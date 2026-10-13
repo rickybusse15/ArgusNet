@@ -52,7 +52,26 @@ fn a_zero_profile_through_the_network_is_the_legacy_run() {
     let mut run = assemble(&bundle).unwrap();
     run.set_delivery(profile(0.0, 0.0, 0.0, bundle.dt_s))
         .unwrap();
-    assert_eq!(frames(run), legacy);
+    // Through the network, every track also records its evidence time
+    // (P4.10b); apart from that label the frames are the legacy run's.
+    let delivered = frames(run);
+    assert!(delivered.iter().any(|f| f.contains("\"evidence_time_s\"")));
+    let parsed = |frames: &[String]| {
+        frames
+            .iter()
+            .map(|f| without_evidence_time(f))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(parsed(&delivered), parsed(&legacy));
+}
+
+/// A serialised frame, parsed, with every track's `evidence_time_s` taken out.
+fn without_evidence_time(frame: &str) -> serde_json::Value {
+    let mut value: serde_json::Value = serde_json::from_str(frame).unwrap();
+    for track in value["tracks"].as_array_mut().into_iter().flatten() {
+        track.as_object_mut().unwrap().remove("evidence_time_s");
+    }
+    value
 }
 
 /// Lag 2 ticks, delay 1, jitter 1: every fused observation at tick t was

@@ -279,6 +279,7 @@ dependencies = [
  "criterion",
  "nalgebra",
  "serde",
+ "serde_json",
  "smallvec",
 ]
 

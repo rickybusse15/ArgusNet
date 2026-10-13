@@ -168,6 +168,7 @@ mod tests {
             quality_score: None,
             mode_probability_cv: None,
             contributing_node_ids: Default::default(),
+            evidence_time_s: None,
         }
     }
 
