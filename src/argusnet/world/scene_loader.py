@@ -459,6 +459,7 @@ def _build_obstacle_meshes(
             semantic_kind=str(style[layer_id]["semantic_kind"]),
             mesh=merge_meshes(meshes),
             style_id=layer_id,
+            parts=tuple(meshes),
         )
         for layer_id, meshes in grouped.items()
     ]
@@ -720,6 +721,8 @@ def build_scene_from_gis(
                     semantic_kind=str(style[style_id]["semantic_kind"]),
                     mesh=merge_meshes(meshes),
                     style_id=style_id,
+                    # One node per feature, so blended features sort apart.
+                    parts=tuple(meshes),
                 )
             )
 

@@ -1,0 +1,217 @@
+"""R0: a translucent overlay mesh blends; an opaque one stays OPAQUE.
+
+glTF ignores vertex alpha unless the material's ``alphaMode`` is ``BLEND``,
+so without it a layer's styled opacity never reached the viewer.
+"""
+
+from __future__ import annotations
+
+import json
+import struct
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from argusnet.world._glb import SimpleMesh, write_glb
+from argusnet.world._scene_geometry import mesh_from_polyline
+
+
+def _material(path: Path) -> dict:
+    data = path.read_bytes()
+    (json_length,) = struct.unpack_from("<I", data, 12)
+    return json.loads(data[20 : 20 + json_length])["materials"][0]
+
+
+def _triangle(alpha: float) -> SimpleMesh:
+    return SimpleMesh(
+        positions=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
+        normals=np.array([[0.0, 0.0, 1.0]] * 3, dtype=np.float32),
+        colors=np.array([[0.9, 0.9, 0.9, alpha]] * 3, dtype=np.float32),
+        indices=np.array([0, 1, 2], dtype=np.uint32),
+    )
+
+
+def test_a_translucent_mesh_blends_and_an_opaque_one_does_not(tmp_path: Path) -> None:
+    write_glb(tmp_path / "blend.glb", _triangle(0.45), name="buildings")
+    write_glb(tmp_path / "opaque.glb", _triangle(1.0), name="terrain-base")
+    assert _material(tmp_path / "blend.glb")["alphaMode"] == "BLEND"
+    assert "alphaMode" not in _material(tmp_path / "opaque.glb")
+    # Blended faces are culled from behind; opaque meshes keep both faces.
+    assert _material(tmp_path / "blend.glb")["doubleSided"] is False
+    assert _material(tmp_path / "opaque.glb")["doubleSided"] is True
+
+
+def test_each_part_is_its_own_node(tmp_path: Path) -> None:
+    write_glb(tmp_path / "parts.glb", [_triangle(0.45), _triangle(0.45)], name="buildings")
+    data = (tmp_path / "parts.glb").read_bytes()
+    (json_length,) = struct.unpack_from("<I", data, 12)
+    document = json.loads(data[20 : 20 + json_length])
+    assert len(document["meshes"]) == 2
+    assert [node["name"] for node in document["nodes"]] == ["buildings-0", "buildings-1"]
+    assert document["scenes"][0]["nodes"] == [0, 1]
+
+
+def test_a_line_strip_faces_up() -> None:
+    # Translucent layers are single-sided, so a strip wound downward (as
+    # water and roads once were) would be culled from every camera above it.
+    strip = mesh_from_polyline(
+        np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]),
+        height_at=lambda x, y: 0.0,
+        color_rgba=(0.2, 0.4, 0.9, 0.85),
+        width_m=4.0,
+    )
+    corners = strip.positions.astype(np.float64)[strip.indices.reshape(-1, 3)]
+    up = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])[:, 2]
+    assert (up > 0.0).all()
+    assert (strip.normals[:, 2] > 0.0).all()
+
+
+def test_a_line_that_doubles_back_keeps_every_triangle_facing_up() -> None:
+    # A mitre at a reversal would swap the strip's sides and wind triangles
+    # downward, which a single-sided translucent layer culls.
+    for points in (
+        [[0.0, 0.0], [10.0, 0.0], [0.0, 0.0]],
+        [[0.0, 0.0], [10.0, 0.0], [0.0, 1.0]],
+        [[0.0, 0.0], [10.0, 0.0], [5.0, 3.0], [5.0, 20.0]],
+    ):
+        strip = mesh_from_polyline(
+            np.array(points),
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=4.0,
+        )
+        corners = strip.positions.astype(np.float64)[strip.indices.reshape(-1, 3)]
+        u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
+        assert ((u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]) > 0.0).all(), points
+
+
+def test_random_lines_never_wind_a_triangle_downward() -> None:
+    rng = np.random.default_rng(7)
+    for _ in range(300):
+        points = rng.uniform(-30.0, 30.0, size=(int(rng.integers(2, 8)), 2))
+        strip = mesh_from_polyline(
+            points,
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=float(rng.uniform(1.0, 10.0)),
+        )
+        corners = strip.positions.astype(np.float64)[strip.indices.reshape(-1, 3)]
+        u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
+        assert ((u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]) > 0.0).all(), points.tolist()
+
+
+def _coverage(strip: SimpleMesh, step_m: float = 0.25) -> np.ndarray:
+    """How many triangles cover each point of a grid over the strip."""
+    xy = strip.positions[:, :2].astype(np.float64)
+    triangles = xy[strip.indices.reshape(-1, 3)]
+    low, high = xy.min(axis=0), xy.max(axis=0)
+    gx, gy = np.meshgrid(
+        np.arange(low[0] + step_m / 2, high[0], step_m),
+        np.arange(low[1] + step_m / 2, high[1], step_m),
+    )
+    samples = np.stack([gx.ravel(), gy.ravel()], axis=1)
+    counts = np.zeros(len(samples), dtype=int)
+    for a, b, c in triangles:
+
+        def side(p, q):
+            return (q[0] - p[0]) * (samples[:, 1] - p[1]) - (q[1] - p[1]) * (samples[:, 0] - p[0])
+
+        inside = (side(a, b) > 1e-9) & (side(b, c) > 1e-9) & (side(c, a) > 1e-9)
+        counts += inside
+    return counts
+
+
+def test_bends_are_covered_once() -> None:
+    # Overlap draws twice in a blended layer: every sampled point of the strip
+    # lies in exactly one triangle, at gentle bends, sharp bends and the short
+    # segments of a tight wiggle.
+    turn = np.radians(165.0)
+    for points, width in (
+        ([[0.0, 0.0], [3.0, 0.0], [3.0, 3.0]], 4.0),
+        ([[0.0, 0.0], [2.5, 0.0], [2.5, 2.5]], 4.0),
+        ([[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]], 4.0),
+        ([[0.0, 0.0], [20.0, 0.0], [0.0, 15.0]], 4.0),
+        ([[0.0, 0.0], [60.0, 0.0], [60.0 + 60.0 * np.cos(turn), 60.0 * np.sin(turn)]], 4.0),
+        ([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [20.0, 12.0], [25.0, 4.0]], 4.0),
+        ([[0.0, 0.0], [10.0, 0.0], [1.0, 0.0]], 4.0),
+        ([[0.0, 0.0], [10.0, 0.0], [10.0, 1.0], [0.0, 1.0], [0.0, 2.0], [10.0, 2.0]], 4.0),
+        ([[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 10.0]], 3.0),
+    ):
+        strip = mesh_from_polyline(
+            np.array(points),
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=width,
+        )
+        counts = _coverage(strip)
+        assert counts.max() == 1, points
+        assert (counts == 1).sum() > 0, points
+
+
+def test_every_point_is_kept_for_the_terrain_and_hairpins() -> None:
+    # The strip samples the terrain at each point, two corners per point at
+    # a mitre, and a hairpin keeps its full length.
+    rising = mesh_from_polyline(
+        np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]]),
+        height_at=lambda x, y: x * x,
+        color_rgba=(0.2, 0.4, 0.9, 0.85),
+        width_m=4.0,
+    )
+    assert sorted({round(float(z), 3) for z in rising.positions[:, 2]}) == [
+        0.5,
+        100.5,
+        400.5,
+        900.5,
+    ]
+    hairpin = mesh_from_polyline(
+        np.array([[0.0, 0.0], [10.0, 0.0], [1.0, 0.0]]),
+        height_at=lambda x, y: 0.0,
+        color_rgba=(0.2, 0.4, 0.9, 0.85),
+        width_m=4.0,
+    )
+    assert hairpin.positions[:, 0].max() == pytest.approx(10.0)
+
+
+def test_random_lines_cover_each_point_once() -> None:
+    rng = np.random.default_rng(11)
+    for _ in range(40):
+        points = rng.uniform(-15.0, 15.0, size=(int(rng.integers(2, 6)), 2))
+        strip = mesh_from_polyline(
+            points,
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=float(rng.uniform(1.0, 6.0)),
+        )
+        assert _coverage(strip, step_m=0.4).max() == 1, points.tolist()
+
+
+def test_the_outside_of_a_bend_is_filled() -> None:
+    # A bevel wedge closes the gap between two segments' outer corners.
+    for points, outside in (
+        ([[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]], (21.0, -0.8)),
+        ([[0.0, 0.0], [20.0, 0.0], [20.0, -20.0]], (21.0, 0.8)),
+    ):
+        strip = mesh_from_polyline(
+            np.array(points), height_at=lambda x, y: 0.0, color_rgba=(1, 1, 1, 0.5), width_m=4.0
+        )
+        xy = strip.positions[:, :2].astype(np.float64)
+        p = np.array(outside)
+        hits = 0
+        for a, b, c in xy[strip.indices.reshape(-1, 3)]:
+            d = [
+                (q[0] - o[0]) * (p[1] - o[1]) - (q[1] - o[1]) * (p[0] - o[0])
+                for o, q in ((a, b), (b, c), (c, a))
+            ]
+            hits += all(v > 0 for v in d)
+        assert hits == 1, points
+
+
+def test_a_retraced_corridor_adds_nothing_after_the_first_pass() -> None:
+    # Each retrace is already covered, so the union holds only the first
+    # pass's triangles however many times the line goes back and forth.
+    points = np.array([[0.0, 0.0] if i % 2 == 0 else [100.0, 0.0] for i in range(2000)])
+    strip = mesh_from_polyline(
+        points, height_at=lambda x, y: 0.0, color_rgba=(0.2, 0.4, 0.9, 0.85), width_m=8.0
+    )
+    assert strip.indices.size // 3 == 2

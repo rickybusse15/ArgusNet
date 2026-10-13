@@ -41,11 +41,12 @@ C8 (P2.6) and D2 (P5.1).
 
 ### R0: small fixes (behaviour-neutral)
 
-- Write `alphaMode: BLEND` on the overlay GLB materials, so layer `alpha`
-  styles actually show. glTF allows only `OPAQUE`, `MASK` and `BLEND`, and its
-  colours are stored straight, not premultiplied. Any premultiplication the
-  renderer wants happens after import. Add a headless probe that checks
-  building translucency.
+- **Done.** Write `alphaMode: BLEND` on the overlay GLB materials, so layer
+  `alpha` styles actually show. glTF allows only `OPAQUE`, `MASK` and
+  `BLEND`, and its colours are stored straight, not premultiplied. Any
+  premultiplication the renderer wants happens after import. A headless probe
+  checks building translucency
+  (`geometry_probes::a_building_is_drawn_at_its_styled_opacity`).
 - Name the world-model shapes explicitly: polygon prism, cylinder prism, and the
   new ones below, so each consumer (`los`, `first_hit`, `point_collides`, the
   planner, `scene_build`) matches on a shape, not on a `kind` string.

@@ -2,6 +2,21 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Buildings, vegetation and walls are now drawn at their styled opacity
+  (WORLD_REALISM_PLAN R0). The overlay GLBs carried translucent vertex
+  colours, but their material had no `alphaMode`, so glTF's default `OPAQUE`
+  drew them solid. Both GLB writers (`scene_export.rs`, `_glb.py`) now write
+  `alphaMode: BLEND` for a mesh with any translucent colour, and leave opaque
+  meshes as they were. Blending draws without depth writes, so each overlay
+  object is its own glTF mesh and node (the viewer sorts them back to front),
+  and translucent materials are single-sided with clockwise footprints'
+  walls reversed to face out, so a building's far wall never draws over its
+  near one. GIS scenes split per feature too, and road and water strips are
+  drawn as the exact union of their segments and bevel wedges, facing up, so
+  no part of a line is drawn twice -- not at a bend, nor where it retraces or
+  crosses itself. A GPU probe checks the roof of a built building against the
+  same building drawn opaque.
+
 - `--mapping-rate NUM/DEN` (`argusnet-rs sim --executor lanes`, and the
   viewer's `--run`) runs the mapping lane at its own rate (B2.5). The ticks it
   sits out are kept -- positions, scans -- and integrated in order when it

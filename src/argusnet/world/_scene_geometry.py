@@ -17,6 +17,9 @@ class SceneLayerMesh:
     semantic_kind: str
     mesh: SimpleMesh
     style_id: str | None = None
+    # One mesh per object (building, wall, stand), written as separate glTF
+    # nodes so the viewer depth-sorts them; empty writes `mesh` whole.
+    parts: tuple[SimpleMesh, ...] = ()
 
 
 def normalize(vector: np.ndarray) -> np.ndarray:
@@ -289,6 +292,73 @@ def mesh_from_polygon(
     )
 
 
+_Polygon = list[tuple[float, float]]
+
+
+def _polygon_area(polygon: _Polygon) -> float:
+    return 0.5 * sum(
+        x0 * y1 - x1 * y0
+        for (x0, y0), (x1, y1) in zip(polygon, polygon[1:] + polygon[:1], strict=True)
+    )
+
+
+def _split_by_line(
+    polygon: _Polygon, a: tuple[float, float], b: tuple[float, float]
+) -> tuple[_Polygon, _Polygon]:
+    """Split a convex polygon by the line ``a -> b``: (right of it, left of it)."""
+
+    def side(point: tuple[float, float]) -> float:
+        return (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0])
+
+    left: _Polygon = []
+    right: _Polygon = []
+    for current, following in zip(polygon, polygon[1:] + polygon[:1], strict=True):
+        s0, s1 = side(current), side(following)
+        # A vertex on the line bounds both sides.
+        if s0 >= 0.0:
+            left.append(current)
+        if s0 <= 0.0:
+            right.append(current)
+        if (s0 > 0.0 and s1 < 0.0) or (s0 < 0.0 and s1 > 0.0):
+            t = s0 / (s0 - s1)
+            crossing = (
+                current[0] + t * (following[0] - current[0]),
+                current[1] + t * (following[1] - current[1]),
+            )
+            left.append(crossing)
+            right.append(crossing)
+    return right, left
+
+
+def _overlaps(first: _Polygon, second: _Polygon, tolerance_m: float = 1.0e-7) -> bool:
+    """Whether two convex polygons share interior (separating-axis test)."""
+    for polygon in (first, second):
+        for a, b in zip(polygon, polygon[1:] + polygon[:1], strict=True):
+            axis = (a[1] - b[1], b[0] - a[0])
+            length = math.hypot(*axis)
+            if length <= 1.0e-12:
+                continue
+            p1 = [(x * axis[0] + y * axis[1]) / length for x, y in first]
+            p2 = [(x * axis[0] + y * axis[1]) / length for x, y in second]
+            if max(p1) <= min(p2) + tolerance_m or max(p2) <= min(p1) + tolerance_m:
+                return False
+    return True
+
+
+def _convex_minus(polygon: _Polygon, cutter: _Polygon) -> list[_Polygon]:
+    """``polygon`` minus ``cutter`` (both convex, counter-clockwise), as convex pieces."""
+    pieces: list[_Polygon] = []
+    rest = polygon
+    for index, a in enumerate(cutter):
+        outside, inside = _split_by_line(rest, a, cutter[(index + 1) % len(cutter)])
+        if len(outside) >= 3 and _polygon_area(outside) > 1.0e-9:
+            pieces.append(outside)
+        if len(inside) < 3 or _polygon_area(inside) <= 1.0e-9:
+            return pieces
+        rest = inside
+    return pieces
+
+
 def mesh_from_polyline(
     points_xy: np.ndarray,
     *,
@@ -297,30 +367,138 @@ def mesh_from_polyline(
     width_m: float,
     z_offset_m: float = 0.5,
 ) -> SimpleMesh:
+    """A line as a flat stroke ``width_m`` wide, facing up, covering each point once.
+
+    A translucent layer draws any overlap twice, and segment quads overlap at
+    every bend -- and wholesale where a line retraces or crosses itself. So the
+    stroke is built as the exact union of convex pieces: a quad per segment
+    and a bevel wedge on the outside of each bend, each piece minus every
+    earlier one (convex minus convex is a few convex pieces), fanned into
+    counter-clockwise triangles. Every point is kept, so the stroke samples
+    the terrain at each one.
+    """
     if len(points_xy) < 2:
         return merge_meshes(())
+    half_width = float(width_m) * 0.5
+    points = [np.asarray(points_xy[0], dtype=np.float64)]
+    for point in points_xy[1:]:
+        point = np.asarray(point, dtype=np.float64)
+        if float(np.linalg.norm(point - points[-1])) > 1.0e-6:
+            points.append(point)
+    if len(points) < 2:
+        return merge_meshes(())
+
+    def xy(point: np.ndarray) -> tuple[float, float]:
+        return (float(point[0]), float(point[1]))
+
+    lefts = []
+    for start, end in zip(points[:-1], points[1:], strict=True):
+        direction = (end - start) / float(np.linalg.norm(end - start))
+        lefts.append(np.array([-direction[1], direction[0]]))
+    pieces: list[_Polygon] = []
+    for index, left in enumerate(lefts):
+        start, end = points[index], points[index + 1]
+        offset = left * half_width
+        pieces.append([xy(start - offset), xy(end - offset), xy(end + offset), xy(start + offset)])
+        if index + 1 < len(lefts):
+            following = lefts[index + 1]
+            # The outside of the bend: right of a left turn, left of a right one.
+            turn = following[0] * left[1] - following[1] * left[0]
+            if abs(turn) > 1.0e-9:
+                side = 1.0 if turn > 0.0 else -1.0
+                wedge = [
+                    xy(end),
+                    xy(end + side * left * half_width),
+                    xy(end + side * following * half_width),
+                ]
+                if _polygon_area(wedge) < 0.0:
+                    wedge.reverse()
+                pieces.append(wedge)
+    boxes = [
+        (min(x for x, _ in p), min(y for _, y in p), max(x for x, _ in p), max(y for _, y in p))
+        for p in pieces
+    ]
+    # The union so far is kept as disjoint convex fragments, indexed in a
+    # uniform grid: each new piece is cut only by fragments near it, and a
+    # stretch the line retraces adds no fragments, so buckets stay bounded by
+    # the stroke's area rather than its length. Cells the size of a typical
+    # piece keep a long diagonal segment from spanning a square of tiny cells;
+    # the rare fragment spanning many cells sits on a short list instead.
+    extents = sorted(max(x1 - x0, y1 - y0) for x0, y0, x1, y1 in boxes)
+    cell_m = max(extents[len(extents) // 2], float(width_m), 1.0e-3)
+    grid: dict[tuple[int, int], list[int]] = {}
+    large: list[int] = []
+
+    def bounds(polygon: _Polygon) -> tuple[float, float, float, float]:
+        xs, ys = [x for x, _ in polygon], [y for _, y in polygon]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def cells(box: tuple[float, float, float, float]) -> list[tuple[int, int]] | None:
+        x0, y0, x1, y1 = (math.floor(v / cell_m) for v in box)
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 64:
+            return None
+        return [(i, j) for i in range(x0, x1 + 1) for j in range(y0, y1 + 1)]
+
+    union: list[_Polygon] = []
+    union_boxes: list[tuple[float, float, float, float]] = []
+    for index, piece in enumerate(pieces):
+        fragments = [piece]
+        x0, y0, x1, y1 = boxes[index]
+        piece_cells = cells(boxes[index])
+        if piece_cells is None:
+            nearby: list[int] = list(range(len(union)))
+        else:
+            nearby = sorted(
+                {other for cell in piece_cells for other in grid.get(cell, ())}.union(large)
+            )
+        for other in nearby:
+            ex0, ey0, ex1, ey1 = union_boxes[other]
+            # Most pieces only touch their neighbours; cutting by one that
+            # merely touches would only shatter this piece into slivers.
+            if ex0 >= x1 or ex1 <= x0 or ey0 >= y1 or ey1 <= y0:
+                continue
+            cutter = union[other]
+            fragments = [
+                part
+                for fragment in fragments
+                for part in (
+                    _convex_minus(fragment, cutter) if _overlaps(fragment, cutter) else [fragment]
+                )
+            ]
+            if not fragments:
+                break  # already covered
+        for fragment in fragments:
+            fragment_box = bounds(fragment)
+            fragment_cells = cells(fragment_box)
+            if fragment_cells is None:
+                large.append(len(union))
+            else:
+                for cell in fragment_cells:
+                    grid.setdefault(cell, []).append(len(union))
+            union.append(fragment)
+            union_boxes.append(fragment_box)
+
     positions: list[list[float]] = []
     indices: list[int] = []
-    for segment_index in range(len(points_xy) - 1):
-        start = np.asarray(points_xy[segment_index], dtype=np.float32)
-        end = np.asarray(points_xy[segment_index + 1], dtype=np.float32)
-        direction = end - start
-        length = float(np.linalg.norm(direction))
-        if length <= 1.0e-6:
+    for fragment in union:
+        # Splits can leave vertices a hair apart; float32 would merge them.
+        polygon: _Polygon = []
+        for point in fragment:
+            if not polygon or math.dist(point, polygon[-1]) > 1.0e-4:
+                polygon.append(point)
+        if len(polygon) > 1 and math.dist(polygon[0], polygon[-1]) <= 1.0e-4:
+            polygon.pop()
+        if len(polygon) < 3:
             continue
-        normal = np.array([-direction[1], direction[0]], dtype=np.float32) / length
-        offset = normal * (float(width_m) * 0.5)
-        quad_xy = [start - offset, start + offset, end + offset, end - offset]
         base = len(positions)
-        for point in quad_xy:
-            positions.append(
-                [
-                    float(point[0]),
-                    float(point[1]),
-                    float(height_at(float(point[0]), float(point[1]))) + z_offset_m,
-                ]
-            )
-        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3])
+        for x, y in polygon:
+            positions.append([x, y, float(height_at(x, y)) + z_offset_m])
+        for corner in range(1, len(polygon) - 1):
+            # Collinear points from a split leave slivers that round to zero
+            # area (or flip) in float32; skip any under a square millimetre.
+            triangle = [polygon[0], polygon[corner], polygon[corner + 1]]
+            if _polygon_area(triangle) > 1.0e-6:
+                indices.extend([base, base + corner, base + corner + 1])
     if not indices:
         return merge_meshes(())
     position_array = np.asarray(positions, dtype=np.float32)
@@ -358,12 +536,15 @@ def mesh_from_extrusion(
             indices=roof_indices,
         )
 
+    # Outward for a counter-clockwise footprint, so a clockwise one is walked
+    # backwards: outward walls let a translucent layer cull back faces.
+    ccw = footprint[::-1] if polygon_area(footprint) < 0.0 else footprint
     wall_positions: list[list[float]] = []
     wall_indices: list[int] = []
-    for index in range(len(footprint)):
-        next_index = (index + 1) % len(footprint)
-        start = footprint[index]
-        end = footprint[next_index]
+    for index in range(len(ccw)):
+        next_index = (index + 1) % len(ccw)
+        start = ccw[index]
+        end = ccw[next_index]
         base = len(wall_positions)
         wall_positions.extend(
             [
@@ -499,7 +680,8 @@ def write_scene_layers(
         relative_path = (
             Path("terrain") if semantic_kind == "terrain" else Path("overlays")
         ) / f"{layer_id}.glb"
-        write_glb(output_dir / relative_path, mesh, name=layer_id)
+        parts = [part for part in layer.parts if part.vertex_count and part.indices.size]
+        write_glb(output_dir / relative_path, parts or mesh, name=layer_id)
         manifest_layers.append(
             {
                 "id": layer_id,

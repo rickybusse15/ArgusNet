@@ -18,7 +18,9 @@
 //!
 //! GLB files follow `argusnet/world/_glb.py`: one mesh, one primitive with
 //! `POSITION`, `NORMAL` and `COLOR_0` (linear RGBA floats), `u32` indices,
-//! one white double-sided material; metres, ENU, Z up.
+//! one white double-sided material; metres, ENU, Z up. A mesh with any
+//! translucent vertex colour gets `alphaMode: BLEND` (R0), so a layer's styled
+//! opacity reaches the viewer; an opaque one stays `OPAQUE` (the default).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -373,66 +375,102 @@ pub fn export_replay_scene(
 
 /// Write `mesh` as a binary glTF 2.0 file, laid out as `_glb.py` writes it.
 pub fn write_glb(path: &Path, mesh: &MeshData, name: &str) -> Result<(), String> {
+    write_glb_parts(path, &[mesh], name)
+}
+
+/// Write `parts` as one binary glTF 2.0 file: one node, mesh and primitive
+/// per part, all sharing one material. A viewer draws each node as its own
+/// object, so translucent parts (one per building) are depth-sorted against
+/// each other rather than drawn in index order. One part is laid out exactly
+/// as [`write_glb`] always wrote it.
+///
+/// A translucent file gets `alphaMode: BLEND` (R0) -- glTF ignores vertex
+/// alpha otherwise, and `BLEND` is its only translucent mode, with straight
+/// colours -- and is single-sided: its parts are closed solids, so culling
+/// their back faces keeps a far wall from blending over a near one.
+pub fn write_glb_parts(path: &Path, parts: &[&MeshData], name: &str) -> Result<(), String> {
     fn floats(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
         values.into_iter().flat_map(f32::to_le_bytes).collect()
     }
-    let count = mesh.positions.len();
-    let payloads: [(Vec<u8>, u32); 4] = [
-        (floats(mesh.positions.iter().flatten().copied()), 34962),
-        (floats(mesh.normals.iter().flatten().copied()), 34962),
-        (
-            floats(mesh.colours.iter().flatten().map(|c| c.clamp(0.0, 1.0))),
-            34962,
-        ),
-        (
-            mesh.indices.iter().flat_map(|i| i.to_le_bytes()).collect(),
-            34963,
-        ),
-    ];
     let mut bin: Vec<u8> = Vec::new();
     let mut views = Vec::new();
-    for (payload, target) in &payloads {
-        views.push(json!({
-            "buffer": 0, "byteOffset": bin.len(), "byteLength": payload.len(), "target": target,
+    let mut accessors = Vec::new();
+    let mut meshes = Vec::new();
+    let mut nodes = Vec::new();
+    for (index, mesh) in parts.iter().enumerate() {
+        let count = mesh.positions.len();
+        let payloads: [(Vec<u8>, u32); 4] = [
+            (floats(mesh.positions.iter().flatten().copied()), 34962),
+            (floats(mesh.normals.iter().flatten().copied()), 34962),
+            (
+                floats(mesh.colours.iter().flatten().map(|c| c.clamp(0.0, 1.0))),
+                34962,
+            ),
+            (
+                mesh.indices.iter().flat_map(|i| i.to_le_bytes()).collect(),
+                34963,
+            ),
+        ];
+        let first_view = views.len();
+        for (payload, target) in &payloads {
+            views.push(json!({
+                "buffer": 0, "byteOffset": bin.len(), "byteLength": payload.len(), "target": target,
+            }));
+            bin.extend_from_slice(payload);
+            while !bin.len().is_multiple_of(4) {
+                bin.push(0);
+            }
+        }
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        for p in &mesh.positions {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let first = accessors.len();
+        accessors.extend([
+            json!({"bufferView": first_view, "componentType": 5126, "count": count, "type": "VEC3", "min": lo, "max": hi}),
+            json!({"bufferView": first_view + 1, "componentType": 5126, "count": count, "type": "VEC3"}),
+            json!({"bufferView": first_view + 2, "componentType": 5126, "count": count, "type": "VEC4"}),
+            json!({"bufferView": first_view + 3, "componentType": 5125, "count": mesh.indices.len(), "type": "SCALAR"}),
+        ]);
+        let part_name = if parts.len() == 1 {
+            name.to_string()
+        } else {
+            format!("{name}-{index}")
+        };
+        meshes.push(json!({
+            "name": part_name,
+            "primitives": [{
+                "attributes": {"POSITION": first, "NORMAL": first + 1, "COLOR_0": first + 2},
+                "indices": first + 3, "material": 0, "mode": 4,
+            }],
         }));
-        bin.extend_from_slice(payload);
-        while !bin.len().is_multiple_of(4) {
-            bin.push(0);
-        }
+        nodes.push(json!({"mesh": index, "name": part_name}));
     }
-    let mut lo = [f32::INFINITY; 3];
-    let mut hi = [f32::NEG_INFINITY; 3];
-    for p in &mesh.positions {
-        for k in 0..3 {
-            lo[k] = lo[k].min(p[k]);
-            hi[k] = hi[k].max(p[k]);
-        }
+    let translucent = parts
+        .iter()
+        .any(|mesh| mesh.colours.iter().any(|c| c[3] < 1.0));
+    let mut material = json!({
+        "name": format!("{name}-material"),
+        "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 1.0},
+        "doubleSided": !translucent,
+    });
+    if translucent {
+        material["alphaMode"] = json!("BLEND");
     }
     let gltf = json!({
         "asset": {"version": "2.0", "generator": "argusnet_sim::scene_export"},
         "scene": 0,
-        "scenes": [{"nodes": [0], "name": name}],
-        "nodes": [{"mesh": 0, "name": name}],
+        "scenes": [{"nodes": (0..parts.len()).collect::<Vec<_>>(), "name": name}],
+        "nodes": nodes,
         "buffers": [{"byteLength": bin.len()}],
         "bufferViews": views,
-        "accessors": [
-            {"bufferView": 0, "componentType": 5126, "count": count, "type": "VEC3", "min": lo, "max": hi},
-            {"bufferView": 1, "componentType": 5126, "count": count, "type": "VEC3"},
-            {"bufferView": 2, "componentType": 5126, "count": count, "type": "VEC4"},
-            {"bufferView": 3, "componentType": 5125, "count": mesh.indices.len(), "type": "SCALAR"},
-        ],
-        "materials": [{
-            "name": format!("{name}-material"),
-            "pbrMetallicRoughness": {"baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 1.0},
-            "doubleSided": true,
-        }],
-        "meshes": [{
-            "name": name,
-            "primitives": [{
-                "attributes": {"POSITION": 0, "NORMAL": 1, "COLOR_0": 2},
-                "indices": 3, "material": 0, "mode": 4,
-            }],
-        }],
+        "accessors": accessors,
+        "materials": [material],
+        "meshes": meshes,
     });
     let mut json_chunk = serde_json::to_vec(&gltf).map_err(|error| error.to_string())?;
     while json_chunk.len() % 4 != 0 {
@@ -526,5 +564,53 @@ mod tests {
         rows.apply(&[BeliefCellUpdate(1, 1, None, Some(2000), 90, 2)]);
         let dir = std::env::temp_dir().join("argusnet-export-empty-test");
         assert!(export_belief_scene(&dir, "x", layout(), &rows, json!({})).is_err());
+    }
+
+    /// The JSON chunk of a GLB file.
+    fn glb_json(path: &Path) -> Value {
+        let bytes = std::fs::read(path).unwrap();
+        let length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        serde_json::from_slice(&bytes[20..20 + length]).unwrap()
+    }
+
+    fn triangle(alpha: f32) -> MeshData {
+        MeshData {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]; 3],
+            colours: vec![[0.9, 0.9, 0.9, alpha]; 3],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    /// R0: a translucent mesh blends, so its styled opacity reaches the
+    /// viewer; an opaque one stays glTF's default `OPAQUE`, byte for byte as
+    /// before.
+    #[test]
+    fn a_translucent_mesh_blends_and_an_opaque_one_does_not() {
+        let dir = std::env::temp_dir().join(format!("argusnet-glb-alpha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (blend, opaque) = (dir.join("blend.glb"), dir.join("opaque.glb"));
+        write_glb(&blend, &triangle(0.45), "buildings").unwrap();
+        write_glb(&opaque, &triangle(1.0), "terrain-base").unwrap();
+        assert_eq!(glb_json(&blend)["materials"][0]["alphaMode"], "BLEND");
+        assert!(glb_json(&opaque)["materials"][0].get("alphaMode").is_none());
+        // Blended faces are culled from behind so a building's far side never
+        // draws over its near side; opaque meshes keep both faces.
+        assert_eq!(glb_json(&blend)["materials"][0]["doubleSided"], false);
+        assert_eq!(glb_json(&opaque)["materials"][0]["doubleSided"], true);
+    }
+
+    #[test]
+    fn each_part_is_its_own_node_so_the_viewer_can_sort_them() {
+        let dir = std::env::temp_dir().join(format!("argusnet-glb-parts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("parts.glb");
+        let (a, b) = (triangle(0.45), triangle(0.45));
+        write_glb_parts(&path, &[&a, &b], "buildings").unwrap();
+        let doc = glb_json(&path);
+        assert_eq!(doc["meshes"].as_array().unwrap().len(), 2);
+        assert_eq!(doc["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(doc["nodes"][1]["name"], "buildings-1");
+        assert_eq!(doc["scenes"][0]["nodes"], serde_json::json!([0, 1]));
     }
 }

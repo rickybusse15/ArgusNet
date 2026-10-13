@@ -37,7 +37,6 @@ def _glb(path: Path) -> tuple[dict[str, np.ndarray], np.ndarray]:
     (json_length,) = struct.unpack_from("<I", data, 12)
     document = json.loads(data[20 : 20 + json_length])
     binary = data[20 + json_length + 8 :]
-    primitive = document["meshes"][0]["primitives"][0]
 
     def accessor(index: int) -> np.ndarray:
         acc = document["accessors"][index]
@@ -49,8 +48,18 @@ def _glb(path: Path) -> tuple[dict[str, np.ndarray], np.ndarray]:
             binary, dtype=dtype, count=acc["count"] * width, offset=offset
         ).reshape(-1, width)
 
-    attributes = {name: accessor(index) for name, index in primitive["attributes"].items()}
-    return attributes, accessor(primitive["indices"]).reshape(-1)
+    # Overlay layers carry one mesh per object; concatenate them in node order.
+    parts: dict[str, list[np.ndarray]] = {}
+    indices: list[np.ndarray] = []
+    base = 0
+    for node in document["nodes"]:
+        primitive = document["meshes"][node["mesh"]]["primitives"][0]
+        for name, index in primitive["attributes"].items():
+            parts.setdefault(name, []).append(accessor(index))
+        indices.append(accessor(primitive["indices"]).reshape(-1).astype(np.int64) + base)
+        base += document["accessors"][primitive["attributes"]["POSITION"]]["count"]
+    attributes = {name: np.concatenate(values) for name, values in parts.items()}
+    return attributes, np.concatenate(indices)
 
 
 def _replay_with_obstacles() -> dict:
