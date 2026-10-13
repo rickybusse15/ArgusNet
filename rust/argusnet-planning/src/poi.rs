@@ -235,6 +235,36 @@ impl PoiManager {
             .is_some_and(|&index| self.assigned_drone[index].as_deref() == Some(drone_id))
     }
 
+    /// Take `drone_id` off its POI (P1 safe handoff). If other drones hold
+    /// the POI it stays active, and if `drone_id` led it the lowest-id
+    /// remaining holder leads it now. If none do, the POI goes back to
+    /// pending with no drone, for the allocator to give out again. `false`
+    /// if the drone held nothing.
+    pub fn release(&mut self, drone_id: &str) -> bool {
+        let Some(index) = self.drone_assignment.remove(drone_id) else {
+            return false;
+        };
+        let mut remaining: Vec<&String> = self
+            .drone_assignment
+            .iter()
+            .filter(|(_, &held)| held == index)
+            .map(|(id, _)| id)
+            .collect();
+        remaining.sort();
+        match remaining.first() {
+            Some(next) => {
+                if self.assigned_drone[index].as_deref() == Some(drone_id) {
+                    self.assigned_drone[index] = Some((*next).clone());
+                }
+            }
+            None => {
+                self.states[index] = PoiState::Pending;
+                self.assigned_drone[index] = None;
+            }
+        }
+        true
+    }
+
     /// [`Self::request_team_assign`] by index: add a free drone to the
     /// active POI at `index`, so both credit its dwell. The status keeps
     /// naming the drone that took it.
@@ -564,9 +594,30 @@ mod tests {
             manager.accumulate_dwell("a", [0.0, 0.0, 40.0], 1.0);
             manager.accumulate_dwell("b", [10.0, 0.0, 40.0], 1.0);
         }
+        // A teammate that leaves hands nothing on; a lead that leaves hands
+        // the lead to the remaining holder.
+        assert!(manager.release("a"));
+        assert!(manager.leads("b"));
+        assert_eq!(
+            manager.statuses()[0].assigned_drone_id.as_deref(),
+            Some("b")
+        );
+        assert!(manager.team_assign_at("a", 0));
         assert_eq!(manager.check_completions(5.0), vec!["p0".to_string()]);
         assert_eq!(manager.assignment_for("a"), None);
         assert_eq!(manager.assignment_for("b"), None);
         assert!(manager.active_pois().is_empty());
+    }
+
+    /// The last holder released: the POI is pending again, for anyone.
+    #[test]
+    fn releasing_the_last_holder_returns_the_poi_to_the_pool() {
+        let mut manager = PoiManager::new(vec![poi("p0", 0.0, 10.0)]);
+        assert!(manager.assign_at("a", 0));
+        assert!(manager.release("a"));
+        assert!(!manager.release("a"), "it holds nothing now");
+        assert_eq!(manager.statuses()[0].state, PoiState::Pending);
+        assert_eq!(manager.statuses()[0].assigned_drone_id, None);
+        assert_eq!(manager.pending_pois().len(), 1);
     }
 }

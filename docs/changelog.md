@@ -2,6 +2,11 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `--planning-policy efficient_v1` hands POIs off safely (P1, third slice):
+  a low drone's POI goes to the cheapest drone that can afford the dwell left
+  and the trip home (a teammate first, needing no trip), or back to the pool
+  if none can; the low drone stops flying to it. The reference is unchanged.
+
 - `--planning-policy efficient_v1` forms teams (PLANNING_EFFICIENCY_PLAN P1,
   second slice): a drone left free after allocation joins a POI being
   inspected when it arrives in time to help and can afford the dwell and the
