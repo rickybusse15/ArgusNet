@@ -1846,6 +1846,19 @@ mod tests {
         assert_eq!(decision.candidates, vec!["poi-00", "poi-01"]);
     }
 
+    /// A drone already below the handoff threshold is given no POI, so the
+    /// team stage cannot take the receiver its handoff would need.
+    #[test]
+    fn efficient_v1_gives_a_low_drone_nothing_new() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 520.0)]);
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), None);
+        assert!(stage.pois.leads("drone-b"));
+    }
+
     /// P1 teams: a drone left free after allocation joins a POI being
     /// inspected when it arrives before the holder would finish alone. Both
     /// credit the dwell, the POI completes sooner than with its holder
