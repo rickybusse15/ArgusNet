@@ -111,6 +111,8 @@ pub struct PendingPoi {
     pub poi_id: String,
     pub position: [f64; 3],
     pub priority: i64,
+    /// The dwell still to do: all of it, but for a POI returned to the pool
+    /// part done, which keeps what was credited.
     pub required_dwell_s: f64,
 }
 
@@ -311,7 +313,7 @@ impl PoiManager {
                     poi_id: poi.poi_id.clone(),
                     position: poi.position,
                     priority: self.effective_priorities[index],
-                    required_dwell_s: poi.required_dwell_s,
+                    required_dwell_s: (poi.required_dwell_s - self.dwell_s[index]).max(0.0),
                 }
             })
             .collect()
@@ -676,6 +678,7 @@ mod tests {
             manager.accumulate_dwell("a", [0.0, 0.0, 40.0], 1.0);
         }
         manager.release_poi("a");
+        assert_eq!(manager.pending_pois()[0].required_dwell_s, 6.0);
         assert!(manager.assign_at("b", 0));
         assert_eq!(manager.active_pois()[0].remaining_dwell_s, 6.0);
     }
