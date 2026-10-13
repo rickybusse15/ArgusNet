@@ -21,7 +21,9 @@ impl StripCell {
 }
 
 /// The strip's figures for `frame`, in display order.
-pub fn strip_cells(frame: &ReplayFrame) -> Vec<StripCell> {
+/// `live` frames come off the tracker wire, which carries no world
+/// contacts, so their count is unavailable rather than zero.
+pub fn strip_cells(frame: &ReplayFrame, live: bool) -> Vec<StripCell> {
     let metrics = &frame.metrics;
     let judged = metrics.accepted_observation_count + metrics.rejected_observation_count;
     let evidence_ages: Vec<f64> = frame
@@ -85,8 +87,13 @@ pub fn strip_cells(frame: &ReplayFrame) -> Vec<StripCell> {
         ),
         StripCell::new(
             "Contacts",
-            Ok(frame.world_contacts.len().to_string()),
-            "Platforms physics put back out of the ground or a structure this frame",
+            if live {
+                Err("live frames do not carry world contacts")
+            } else {
+                Ok(frame.world_contacts.len().to_string())
+            },
+            "Platforms physics put back out of the ground or a structure this frame \
+             (a replay written before contacts were recorded shows 0)",
         ),
     ]
 }
@@ -159,8 +166,11 @@ pub fn metric_curves(frames: &[ReplayFrame], gaps: &[(f32, f32)]) -> (Curve, Cur
     let runs = |value: &dyn Fn(&ReplayFrame) -> Option<f64>| {
         let mut runs: Curve = Vec::new();
         let mut current: Vec<[f64; 2]> = Vec::new();
+        // Both in time order, so one pass over each.
+        let mut gap_ends = gaps.iter().map(|(_, to)| *to).peekable();
         for frame in frames {
-            if gaps.iter().any(|(_, to)| *to == frame.timestamp_s) && !current.is_empty() {
+            while gap_ends.next_if(|to| *to < frame.timestamp_s).is_some() {}
+            if gap_ends.next_if(|to| *to == frame.timestamp_s).is_some() && !current.is_empty() {
                 runs.push(std::mem::take(&mut current));
             }
             match value(frame) {
@@ -190,8 +200,8 @@ pub fn metric_curves(frames: &[ReplayFrame], gaps: &[(f32, f32)]) -> (Curve, Cur
 }
 
 /// Draw the strip into the status line.
-pub(super) fn draw(ui: &mut egui::Ui, frame: &ReplayFrame) {
-    for cell in strip_cells(frame) {
+pub(super) fn draw(ui: &mut egui::Ui, frame: &ReplayFrame, live: bool) {
+    for cell in strip_cells(frame, live) {
         ui.separator();
         match &cell.value {
             Ok(value) => {
@@ -225,7 +235,7 @@ mod tests {
     /// zero; counts that are genuinely zero read zero.
     #[test]
     fn a_figure_without_a_source_is_unavailable_not_zero() {
-        let cells = strip_cells(&frame(serde_json::json!({ "timestamp_s": 1.0 })));
+        let cells = strip_cells(&frame(serde_json::json!({ "timestamp_s": 1.0 })), false);
         assert_eq!(value(&cells, "Tracks"), &Ok("0".to_string()));
         for label in ["Error now", "Rejected", "Map known", "Evidence age"] {
             assert!(value(&cells, label).is_err(), "{label}");
@@ -296,7 +306,7 @@ mod tests {
 
     #[test]
     fn the_figures_come_from_the_frame() {
-        let cells = strip_cells(&frame(serde_json::json!({
+        let frame = frame(serde_json::json!({
             "timestamp_s": 10.0,
             "tracks": [
                 { "track_id": "t1", "position": [0, 0, 0], "velocity": [0, 0, 0], "evidence_time_s": 9.0 },
@@ -308,12 +318,17 @@ mod tests {
                 "rejected_observation_count": 2
             },
             "mapping_state": { "coverage_fraction": 0.375, "covered_cells": 3, "total_cells": 8 }
-        })));
+        }));
+        let live = strip_cells(&frame, true);
+        let cells = strip_cells(&frame, false);
         assert_eq!(value(&cells, "Tracks"), &Ok("2".to_string()));
         assert_eq!(value(&cells, "Error now"), &Ok("4.2 m".to_string()));
         assert_eq!(value(&cells, "Bearings"), &Ok("6".to_string()));
         assert_eq!(value(&cells, "Rejected"), &Ok("25%".to_string()));
         assert_eq!(value(&cells, "Map known"), &Ok("38%".to_string()));
         assert_eq!(value(&cells, "Evidence age"), &Ok("2.0 s".to_string()));
+        assert_eq!(value(&cells, "Contacts"), &Ok("0".to_string()));
+        // The tracker wire carries no contacts: unavailable, not zero.
+        assert!(value(&live, "Contacts").is_err());
     }
 }

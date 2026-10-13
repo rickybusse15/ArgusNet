@@ -171,7 +171,7 @@ pub(super) fn status_line(
         // alert or an operational notice; a compact window drops it.
         if !layout.compact {
             if let Some(frame) = replay_state.current_frame() {
-                super::strip::draw(ui, frame);
+                super::strip::draw(ui, frame, replay_state.live);
             }
         }
     });
