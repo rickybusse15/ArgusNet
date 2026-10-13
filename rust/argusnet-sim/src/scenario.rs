@@ -1969,7 +1969,13 @@ impl AssembledRun {
             .collect();
         self.enrich(&mut replay_frame, timestamp_s, &snapshot.platforms, &truths);
         self.replay.push_frame(replay_frame);
-        self.record_assignments(timestamp_s);
+        let mobile: std::collections::BTreeSet<&str> = snapshot
+            .platforms
+            .iter()
+            .filter(|node| node.is_mobile)
+            .map(|node| node.node_id.as_str())
+            .collect();
+        self.record_assignments(timestamp_s, &mobile);
         Ok(snapshot)
     }
 
@@ -1977,7 +1983,7 @@ impl AssembledRun {
     /// stage 2 flew wins (egress, a POI, a frontier goal), else the
     /// platform's own controller; then the handoffs and team joins stage 9
     /// applied, which no task change shows.
-    fn record_assignments(&mut self, timestamp_s: f64) {
+    fn record_assignments(&mut self, timestamp_s: f64, mobile: &std::collections::BTreeSet<&str>) {
         use crate::assignments::PoiTransfer;
         use crate::mission_driver::DecisionStatus;
         use crate::overrides::OverrideSource;
@@ -1992,9 +1998,12 @@ impl AssembledRun {
             .sim
             .stage::<MissionOverrideStage>(Stage::ApplyMissionOverrides);
         let driver = self.driver();
+        // Drones are the nodes the scenario marks mobile, whatever controller
+        // flies them.
         let tasks: Vec<(String, String)> = controllers
             .tasks()
             .into_iter()
+            .filter(|(node_id, _)| mobile.contains(node_id.as_str()))
             .map(|(drone_id, own)| {
                 let task = match overrides.and_then(|o| o.applied_source(&drone_id)) {
                     Some(OverrideSource::Egress) => "egress".to_string(),

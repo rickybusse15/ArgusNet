@@ -149,12 +149,13 @@ pub enum Operational {
 impl Operational {
     /// What the platform is doing, for the assignment history
     /// ([`crate::assignments`]): `search`, `follow:<target>` or `explore`. A
-    /// search-then-follow platform searches until its sensor engages.
+    /// search-then-follow platform searches until it first flies the follow
+    /// path, the sample after its sensor engages.
     pub fn task(&self) -> String {
         match self {
             Operational::Search(_) => "search".to_string(),
             Operational::Follow { target_id, .. } => format!("follow:{target_id}"),
-            Operational::SearchThenFollow(search) if search.is_engaged() => {
+            Operational::SearchThenFollow(search) if search.followed_last_sample() => {
                 format!("follow:{}", search.preferred_target_id())
             }
             Operational::SearchThenFollow(_) => "search".to_string(),
@@ -698,19 +699,22 @@ pub struct ControllerStage {
 }
 
 impl ControllerStage {
-    /// Each mobile platform's own task, in fleet order: what it flies when no
-    /// recall overrides it. Ground stations have none.
+    /// Each platform's own task, in fleet order: what it flies when no recall
+    /// overrides it. A platform held in place has `hold`. Which platforms are
+    /// drones is the node's own `is_mobile`, for the caller to apply.
     pub fn tasks(&self) -> Vec<(String, String)> {
         self.state
             .controllers
             .iter()
-            .filter_map(|(id, controller)| {
-                let operational = match controller {
-                    PlatformController::Static { .. } => return None,
-                    PlatformController::Free(operational) => operational,
-                    PlatformController::Launched { controller, .. } => controller.operational(),
+            .map(|(id, controller)| {
+                let task = match controller {
+                    PlatformController::Static { .. } => "hold".to_string(),
+                    PlatformController::Free(operational) => operational.task(),
+                    PlatformController::Launched { controller, .. } => {
+                        controller.operational().task()
+                    }
                 };
-                Some((id.clone(), operational.task()))
+                (id.clone(), task)
             })
             .collect()
     }

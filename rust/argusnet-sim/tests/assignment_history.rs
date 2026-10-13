@@ -89,3 +89,28 @@ fn a_reset_run_records_the_history_a_fresh_run_does() {
     let meta = serde_json::to_value(&replay.meta).expect("meta");
     assert_eq!(meta["assignment_history"], fresh);
 }
+
+#[test]
+fn the_history_covers_exactly_the_mobile_nodes() {
+    for case in ["scan", "tt", "tt_follow"] {
+        let replay = assemble(&bundle(case))
+            .expect("assembles")
+            .run_to_replay()
+            .expect("runs");
+        let document = serde_json::to_value(&replay).expect("serialises");
+        let mobile: std::collections::BTreeSet<String> = document["frames"][0]["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .filter(|node| node["is_mobile"] == true)
+            .map(|node| node["node_id"].as_str().unwrap().to_string())
+            .collect();
+        let recorded: std::collections::BTreeSet<String> = document["meta"]["assignment_history"]
+            .as_object()
+            .expect("a history")
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(recorded, mobile, "{case}");
+    }
+}

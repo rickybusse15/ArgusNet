@@ -62,6 +62,10 @@ pub struct EngagementState {
     /// `(timestamp_s, position, velocity)` of the last sample returned,
     /// whichever half produced it.
     pub last_sample: Option<(f64, [f64; 3], [f64; 3])>,
+    /// The time of the sample engagement followed: the follow half flies
+    /// only from the next sample. Absent in older checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engaged_after_s: Option<f64>,
 }
 
 /// Accepted-observation counts keyed `(node_id, target_id)` -- the shape of
@@ -111,6 +115,22 @@ impl<S, F: Seedable> ObservationTriggeredFollow<S, F> {
 
     pub fn is_engaged(&self) -> bool {
         self.state.engaged
+    }
+
+    /// Whether the last sample came from the follow half. Engagement lands
+    /// after the tick's sample (stage 6 after stage 1), so a drone engaged on
+    /// this tick still flew its search lane.
+    pub fn followed_last_sample(&self) -> bool {
+        match (
+            self.state.engaged,
+            self.state.engaged_after_s,
+            self.state.last_sample,
+        ) {
+            (false, _, _) => false,
+            (true, Some(after), Some((t, _, _))) => t > after,
+            (true, Some(_), None) => false,
+            (true, None, _) => true,
+        }
     }
 
     pub fn search(&self) -> &S {
@@ -169,6 +189,7 @@ impl<S, F: Seedable> ObservationTriggeredFollow<S, F> {
         }
         if let Some((timestamp_s, position, velocity)) = self.state.last_sample {
             self.follow.seed(position, velocity, timestamp_s);
+            self.state.engaged_after_s = Some(timestamp_s);
         }
         self.state.engaged = true;
         true
@@ -179,5 +200,36 @@ impl<S, F: Seedable> ObservationTriggeredFollow<S, F> {
     pub fn reset_state(&mut self) {
         self.state = EngagementState::default();
         self.follow.reset_state();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    struct Stub;
+
+    impl Seedable for Stub {
+        fn seed(&mut self, _: [f64; 3], _: [f64; 3], _: f64) {}
+        fn reset_state(&mut self) {}
+    }
+
+    #[test]
+    fn the_follow_half_flies_from_the_sample_after_engagement() {
+        let mut controller = ObservationTriggeredFollow::new("d1", "t1", Stub, Stub);
+        let search = |_: &mut Stub, _: f64| ([0.0; 3], [0.0; 3]);
+        let follow = |_: &mut Stub, _: f64| ([1.0; 3], [0.0; 3]);
+        controller.sample(1.0, search, follow);
+        let mut seen = AcceptedByNodeTarget::new();
+        seen.insert(("d1".into(), "t1".into()), 1);
+        assert!(controller.update_from_observations(&seen));
+        // Engaged on this tick, after its search sample was flown.
+        assert!(controller.is_engaged());
+        assert!(!controller.followed_last_sample());
+        controller.sample(2.0, search, follow);
+        assert!(controller.followed_last_sample());
+        controller.reset_state();
+        assert!(!controller.followed_last_sample());
     }
 }
