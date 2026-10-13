@@ -125,10 +125,6 @@ pub(super) fn status_line(
             ui.separator();
             ui.monospace(format_time_range(cur_s, total_s));
         }
-        if let Some(frame) = replay_state.current_frame() {
-            super::strip::draw(ui, frame);
-        }
-
         if let Some(alerts) = alerts {
             let errors = alerts
                 .iter()
@@ -144,6 +140,13 @@ pub(super) fn status_line(
             }
             if errors == 0 && warnings == 0 {
                 ui.label("No alerts");
+            }
+        }
+        // The strip after the alerts, so a narrow window clips figures and
+        // never a critical alert; a compact window drops it.
+        if !layout.compact {
+            if let Some(frame) = replay_state.current_frame() {
+                super::strip::draw(ui, frame);
             }
         }
 

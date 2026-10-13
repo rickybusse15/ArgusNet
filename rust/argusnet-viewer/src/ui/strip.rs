@@ -140,15 +140,16 @@ pub(super) fn draw_rejection_breakdown(
 }
 
 /// A curve as runs of `[time, value]` points, broken where a frame has no
-/// value.
+/// value or the recording has a gap.
 pub type Curve = Vec<Vec<[f64; 2]>>;
 
 /// The timeline's curves (§7.1): each frame's mean track error as a share
 /// of the run's worst, and the share of the map known, both `0..=1` against
 /// source time. A frame with no paired track or no mapping state leaves a
-/// gap in that curve rather than a zero. Also returns the worst error, for
-/// the legend.
-pub fn metric_curves(frames: &[ReplayFrame]) -> (Curve, Curve, Option<f32>) {
+/// gap in that curve rather than a zero, and so does each recording gap in
+/// `gaps` (the timeline's, as `(from, to)` source times). Also returns the
+/// worst error, for the legend.
+pub fn metric_curves(frames: &[ReplayFrame], gaps: &[(f32, f32)]) -> (Curve, Curve, Option<f32>) {
     let worst = frames
         .iter()
         .filter_map(|frame| frame.metrics.mean_error_m)
@@ -159,6 +160,9 @@ pub fn metric_curves(frames: &[ReplayFrame]) -> (Curve, Curve, Option<f32>) {
         let mut runs: Curve = Vec::new();
         let mut current: Vec<[f64; 2]> = Vec::new();
         for frame in frames {
+            if gaps.iter().any(|(_, to)| *to == frame.timestamp_s) && !current.is_empty() {
+                runs.push(std::mem::take(&mut current));
+            }
             match value(frame) {
                 Some(y) => current.push([f64::from(frame.timestamp_s), y]),
                 None if !current.is_empty() => runs.push(std::mem::take(&mut current)),
@@ -267,10 +271,27 @@ mod tests {
         .into_iter()
         .map(frame)
         .collect();
-        let (error, known, worst) = metric_curves(&frames);
+        let (error, known, worst) = metric_curves(&frames, &[]);
         assert_eq!(worst, Some(4.0));
         assert_eq!(error, vec![vec![[0.0, 0.5]], vec![[2.0, 1.0]]]);
         assert_eq!(known, vec![vec![[2.0, 0.5]]]);
+    }
+
+    /// A recording gap breaks a curve even where both sides have a value,
+    /// so missing history never draws as measured.
+    #[test]
+    fn curves_break_at_recording_gaps() {
+        let frames: Vec<ReplayFrame> = [0.0, 1.0, 9.0, 10.0]
+            .into_iter()
+            .map(|t| {
+                frame(serde_json::json!({ "timestamp_s": t, "metrics": { "mean_error_m": 1.0 } }))
+            })
+            .collect();
+        let (error, _, _) = metric_curves(&frames, &[(1.0, 9.0)]);
+        assert_eq!(
+            error,
+            vec![vec![[0.0, 1.0], [1.0, 1.0]], vec![[9.0, 1.0], [10.0, 1.0]]]
+        );
     }
 
     #[test]

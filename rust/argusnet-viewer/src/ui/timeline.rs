@@ -149,7 +149,7 @@ pub(super) fn section_operator_timeline(
     let (error_curve, known_curve, worst_error) = replay_state
         .document
         .as_ref()
-        .map(|document| super::strip::metric_curves(&document.frames))
+        .map(|document| super::strip::metric_curves(&document.frames, &gaps))
         .unwrap_or_default();
     let curves_legend = format!(
         "\nCurves: mean track error (orange, 0 to {}), map known (green, 0 to 100%)",
