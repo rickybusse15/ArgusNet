@@ -7,7 +7,7 @@
 //! exactly at those boundaries.
 
 use argusnet_sim::run_options::{DeliverySeconds, RunOptions};
-use argusnet_sim::scenario::{assemble, AssembledRun, RunError, ScenarioBundle};
+use argusnet_sim::scenario::{assemble, RunError, ScenarioBundle};
 use argusnet_sim::scheduler::{parse_rate, LaneRates, PhasedLaneExecutor};
 use argusnet_sim::simulation::TickError;
 
@@ -20,14 +20,24 @@ fn bundle(case: &str) -> ScenarioBundle {
         .expect("bundle parses")
 }
 
-/// Every boundary's tracks (their `Debug` form, which prints every float in
-/// full), stepping through the lanes executor.
-fn tracks_per_boundary(
+/// What one boundary published, cumulatively where the fusion lane may
+/// report a skipped boundary's work later: the tracks (their `Debug` form,
+/// which prints every float in full); the observation counts summed over the
+/// run so far; and every rejection so far as `(reason, timestamp, node)`,
+/// sorted.
+#[derive(Debug, PartialEq)]
+struct Published {
+    tracks: String,
+    counts: [u64; 3],
+    rejections: Vec<(String, String, String)>,
+}
+
+fn per_boundary(
     case: &str,
     rates: LaneRates,
     delivery: Option<DeliverySeconds>,
     faults: bool,
-) -> Vec<String> {
+) -> Vec<Published> {
     let bundle = bundle(case);
     let mut run = assemble(&bundle).expect("assembles");
     let options = RunOptions {
@@ -40,18 +50,37 @@ fn tracks_per_boundary(
     let mut lanes = rates
         .apply(PhasedLaneExecutor::new::<RunError>(bundle.dt_s, 0).expect("exact timestep"))
         .expect("rates");
-    let mut tracks = Vec::new();
+    let mut published = Vec::new();
+    let mut counts = [0u64; 3];
+    let mut rejections = Vec::new();
     loop {
         match lanes.step(&mut run) {
-            Ok(_) => tracks.push(format!("{:?}", run.sim.world().tracks())),
+            Ok(_) => {
+                let frame = run.last_frame().expect("a frame per boundary");
+                counts[0] += u64::from(frame.metrics.observation_count);
+                counts[1] += u64::from(frame.metrics.accepted_observation_count);
+                counts[2] += u64::from(frame.metrics.rejected_observation_count);
+                rejections.extend(frame.rejected_observations.iter().map(|r| {
+                    (
+                        r.reason.clone(),
+                        format!("{:?}", r.timestamp_s),
+                        r.node_id.clone(),
+                    )
+                }));
+                rejections.sort();
+                published.push(Published {
+                    tracks: format!("{:?}", run.sim.world().tracks()),
+                    counts,
+                    rejections: rejections.clone(),
+                });
+            }
             Err(argusnet_sim::scheduler::ExecutorError::Tick(RunError::Tick(
                 TickError::Completed { .. },
             ))) => break,
             Err(error) => panic!("{error:?}"),
         }
     }
-    let _: &AssembledRun = &run;
-    tracks
+    published
 }
 
 /// Link faults that land while fusion boundaries are pending. At 0.5 s
@@ -101,20 +130,28 @@ fn fusion_every_third_boundary(case: &str) -> LaneRates {
     }
 }
 
+/// At every boundary fusion runs, the rated run has published exactly what
+/// the every-boundary run has: the same tracks, the same observation counts
+/// and the same rejections, each stamped at its own time. In between, the
+/// tracks are stale.
 fn check(case: &str, delivery: Option<DeliverySeconds>, faults: bool) {
-    let every = tracks_per_boundary(case, LaneRates::default(), delivery.clone(), faults);
-    let rated = tracks_per_boundary(case, fusion_every_third_boundary(case), delivery, faults);
+    let every = per_boundary(case, LaneRates::default(), delivery.clone(), faults);
+    let rated = per_boundary(case, fusion_every_third_boundary(case), delivery, faults);
     assert_eq!(every.len(), rated.len());
     assert!(
-        every.iter().any(|t| t != "[]"),
+        every.iter().any(|p| p.tracks != "[]"),
         "no tracks, so nothing compared"
+    );
+    assert!(
+        every.last().unwrap().counts[0] > 0,
+        "no observations, so nothing compared"
     );
     let mut differed = false;
     for (n, (a, b)) in every.iter().zip(&rated).enumerate() {
         if n % 3 == 0 {
             assert_eq!(a, b, "{case}: boundary {n}, where fusion ran");
         } else {
-            differed |= a != b;
+            differed |= a.tracks != b.tracks;
         }
     }
     assert!(

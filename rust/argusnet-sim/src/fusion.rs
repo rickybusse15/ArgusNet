@@ -309,6 +309,29 @@ impl StageHandler for FusionStage {
         Ok(())
     }
 
+    /// At its own rate (B2.6) the kept boundaries are exactly the `lag` it
+    /// was recorded as sitting out before `tick`: a missing, duplicated or
+    /// stray batch is refused rather than silently lost or fused twice.
+    fn check_lag(
+        &self,
+        state: &serde_json::Value,
+        lag: u64,
+        tick: u64,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let (_, _, pending) = split_checkpoint(state)?;
+        let kept: Vec<u64> = pending.iter().map(|boundary| boundary.tick).collect();
+        let expected: Vec<u64> = (tick.saturating_sub(lag)..tick).collect();
+        if kept != expected {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: format!(
+                    "the kept fusion boundaries {kept:?} are not the {lag} sat out before tick \
+                     {tick}"
+                ),
+            });
+        }
+        Ok(())
+    }
+
     fn restore_state(
         &mut self,
         state: &serde_json::Value,
@@ -368,7 +391,7 @@ impl StageHandler for FusionStage {
             observations: Vec::new(),
             rejected_observations: drops
                 .iter()
-                .map(|drop| drop.rejection(context.dt_s))
+                .map(|drop| drop.rejection(context.boundary_dt_s))
                 .collect(),
             tracks,
             truths: Vec::new(),
@@ -398,6 +421,7 @@ impl StageHandler for FusionStage {
         // reported in this boundary's frame, before this boundary's own.
         let mut caught_up = Vec::new();
         let mut caught_up_rejections = Vec::new();
+        let mut caught_up_metrics = Vec::new();
         for boundary in std::mem::take(&mut shared.pending) {
             let frame = shared.engine.ingest_frame(
                 boundary.fusion_time_s,
@@ -409,6 +433,7 @@ impl StageHandler for FusionStage {
             );
             caught_up.extend(frame.observations.iter().cloned());
             caught_up_rejections.extend(frame.rejected_observations.iter().cloned());
+            caught_up_metrics.push(frame.metrics.clone());
         }
 
         // The reference calls `ingest_frame` unconditionally, every tick, even
@@ -438,19 +463,28 @@ impl StageHandler for FusionStage {
             inbox.safety_events,
         );
 
-        if !caught_up.is_empty() || !caught_up_rejections.is_empty() {
+        if !caught_up_metrics.is_empty() {
             let frame = Arc::make_mut(&mut frame);
             caught_up.append(&mut frame.observations);
             frame.observations = caught_up;
             caught_up_rejections.append(&mut frame.rejected_observations);
             frame.rejected_observations = caught_up_rejections;
+            // The counts cover everything this frame reports fused, as the
+            // replay's summaries sum them.
+            for metrics in &caught_up_metrics {
+                add_counts(&mut frame.metrics, metrics);
+            }
         }
         // Every delivery drop is recorded with its reason, beside the
-        // tracker's own rejections.
+        // tracker's own rejections, stamped at the boundary it happened at
+        // (`boundary_dt_s`: a rated lane's `dt_s` is the time since it last
+        // ran).
         if !drops.is_empty() {
-            Arc::make_mut(&mut frame)
-                .rejected_observations
-                .extend(drops.iter().map(|drop| drop.rejection(context.dt_s)));
+            Arc::make_mut(&mut frame).rejected_observations.extend(
+                drops
+                    .iter()
+                    .map(|drop| drop.rejection(context.boundary_dt_s)),
+            );
         }
         context.world.set_tracks(frame.tracks.clone());
         let track_count = frame.tracks.len();
@@ -463,6 +497,33 @@ impl StageHandler for FusionStage {
              {rejection_count} rejected"
         ));
         Ok(StageOutcome::Ran)
+    }
+}
+
+/// Add `other`'s observation counts to `metrics`: the totals and the per
+/// reason and per target tallies. The track figures (count, errors) stay the
+/// latest boundary's.
+fn add_counts(
+    metrics: &mut argusnet_types::PlatformMetrics,
+    other: &argusnet_types::PlatformMetrics,
+) {
+    metrics.observation_count += other.observation_count;
+    metrics.accepted_observation_count += other.accepted_observation_count;
+    metrics.rejected_observation_count += other.rejected_observation_count;
+    for (key, count) in &other.rejection_counts {
+        *metrics.rejection_counts.entry(key.clone()).or_insert(0) += count;
+    }
+    for (key, count) in &other.accepted_observations_by_target {
+        *metrics
+            .accepted_observations_by_target
+            .entry(key.clone())
+            .or_insert(0) += count;
+    }
+    for (key, count) in &other.rejected_observations_by_target {
+        *metrics
+            .rejected_observations_by_target
+            .entry(key.clone())
+            .or_insert(0) += count;
     }
 }
 
@@ -1018,6 +1079,52 @@ mod tests {
             resumed_lanes.step(&mut resumed).expect("tick");
             assert_eq!(fusion_state(&resumed), fusion_state(&whole), "boundary {k}");
             assert_eq!(resumed.world().tracks(), whole.world().tracks());
+        }
+    }
+
+    /// A checkpoint whose kept boundaries do not match the lag the
+    /// simulation recorded -- one dropped, one duplicated -- is refused
+    /// before anything is restored, rather than losing or refusing a batch.
+    #[test]
+    fn a_checkpoint_with_inconsistent_pending_boundaries_is_refused() {
+        let mut whole = rig();
+        whole.declare_lane_rate(Stage::UpdateFusion, "1/3");
+        let mut lanes = executor(Some("1/3"), 0);
+        for k in 0..6 {
+            feed(&mut whole, k);
+            lanes.step(&mut whole).expect("tick");
+        }
+        let checkpoint = serde_json::to_value(whole.checkpoint().expect("not faulted")).unwrap();
+        let stage_key = checkpoint["stage_states"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .find(|(_, state)| state.get("pending").is_some())
+            .map(|(key, _)| key.clone())
+            .expect("fusion keeps pending boundaries");
+        for edit in ["drop", "duplicate"] {
+            let mut damaged = checkpoint.clone();
+            let pending = damaged["stage_states"][&stage_key]["pending"]
+                .as_array_mut()
+                .unwrap();
+            match edit {
+                "drop" => {
+                    pending.pop();
+                }
+                _ => {
+                    let first = pending[0].clone();
+                    pending.push(first);
+                }
+            }
+            let damaged: crate::snapshot::SimulationCheckpoint =
+                serde_json::from_value(damaged).unwrap();
+            let mut resumed = rig();
+            resumed.declare_lane_rate(Stage::UpdateFusion, "1/3");
+            let error = resumed.restore(&damaged).unwrap_err();
+            assert!(
+                format!("{error:?}").contains("kept fusion boundaries"),
+                "{edit}: {error:?}"
+            );
         }
     }
 }
