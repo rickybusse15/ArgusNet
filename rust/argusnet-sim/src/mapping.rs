@@ -426,6 +426,26 @@ struct MappingCheckpoint {
     /// so a prior run's checkpoint is the one it always was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     belief: Option<crate::belief_world::BeliefGrid>,
+    /// The boundaries the lane sat out since it last ran (B2.5), still to be
+    /// integrated. Absent when empty, so every checkpoint taken at the legacy
+    /// rate is the one it always was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pending: Vec<PendingBoundary>,
+}
+
+/// One boundary stage 8 sat out (its lane at its own rate, B2.5): what it
+/// would have integrated then. Integrated, in order, when the lane next runs,
+/// so coverage, zone inspection and the self-built map are what they would
+/// have been had it run every boundary.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct PendingBoundary {
+    tick: u64,
+    timestamp_s: f64,
+    /// The mobile platforms' positions then, in platform order.
+    positions: Vec<(String, [f64; 2])>,
+    /// The range scans stage 6 handed over then (a run without a prior map).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scans: Vec<crate::range_scan::RangeScan>,
 }
 
 /// Stage 8's self-built map (`world_knowledge: none`): the grid, the handle
@@ -473,6 +493,8 @@ pub struct MappingStage {
     /// scoring (B3); serial unless the session gives it more.
     compute: std::sync::Arc<crate::compute::ComputePool>,
     belief: Option<BeliefMapping>,
+    /// The boundaries sat out since the lane last ran (B2.5).
+    pending: Vec<PendingBoundary>,
 }
 
 impl MappingStage {
@@ -531,16 +553,26 @@ impl MappingStage {
         self.belief.as_ref().map_or(&[], |belief| &belief.fused)
     }
 
-    /// Fuse this tick's scans and publish the result.
-    fn update_belief(&mut self, tick: u64) {
+    /// Fuse this tick's scans, after those of the boundaries the lane sat
+    /// out (each at its own tick), and publish the result.
+    fn update_belief(&mut self, pending: &mut [PendingBoundary], tick: u64) {
         let Some(belief) = self.belief.as_mut() else {
             return;
         };
+        let mut fused = Vec::new();
+        for boundary in pending {
+            let scans = std::mem::take(&mut boundary.scans);
+            for scan in &scans {
+                belief.grid.integrate(scan, boundary.tick);
+            }
+            fused.extend(scans);
+        }
         let scans = std::mem::take(&mut belief.inbox);
         for scan in &scans {
             belief.grid.integrate(scan, tick);
         }
-        belief.fused = scans;
+        fused.extend(scans);
+        belief.fused = fused;
         belief.publish();
     }
 
@@ -569,6 +601,7 @@ impl MappingStage {
             },
             compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
             belief: None,
+            pending: Vec::new(),
         })
     }
 
@@ -595,6 +628,114 @@ impl MappingStage {
     }
 }
 
+/// The mobile platforms' positions, in platform order: what stage 8 marks.
+fn mobile_positions(context: &TickContext<'_>) -> Vec<(String, [f64; 2])> {
+    context
+        .world
+        .platforms()
+        .iter()
+        .filter(|platform| platform.is_mobile)
+        .map(|platform| {
+            (
+                platform.node_id.clone(),
+                [platform.position.x, platform.position.y],
+            )
+        })
+        .collect()
+}
+
+/// One boundary's coverage and zone inspection: every footprint marked, the
+/// newly covered cells and the zone events recorded. Returns the cell hits.
+fn mark_boundary(
+    shared: &mut State,
+    positions: &[(String, [f64; 2])],
+    timestamp_s: f64,
+) -> Result<usize, StageError> {
+    let State {
+        bounds,
+        footprint_radius_m,
+        sampling,
+        ..
+    } = *shared;
+    let mut marked = 0usize;
+    for (node_id, centre) in positions {
+        // ONE rasterization, feeding both consumers -- P4.6's ask.
+        let hits = rasterize_circle(&bounds, *centre, footprint_radius_m, sampling)
+            .map_err(|e| StageError::Invariant(format!("footprint for {node_id}: {e}")))?;
+        if hits.is_empty() {
+            continue;
+        }
+        marked += hits.len();
+
+        // Hits arrive with multiplicity and every one is applied, because
+        // a cell the lattice folds onto twice is incremented twice by the
+        // reference's `np.add.at`.
+        for (i, j) in &hits {
+            if shared.coverage.count_at(*i, *j) == 0 {
+                shared.newly_covered.push((*i, *j));
+            }
+            shared.coverage.mark_cell(*i, *j);
+        }
+    }
+    // `np.where` over the (nx, ny) grid: ascending i, then j. Each cell is
+    // listed once already: it is recorded only while its count is zero,
+    // and its first mark ends that, whichever footprint (or repeated
+    // lattice hit) reaches it next.
+    shared.newly_covered.sort_unstable();
+
+    // --- zone inspection ------------------------------------------------
+    let State {
+        zones,
+        inspection_events,
+        ..
+    } = &mut *shared;
+    for track in zones.iter_mut() {
+        let [zx, zy] = track.zone.center_xy;
+        for (node_id, centre) in positions {
+            // `np.linalg.norm` of a 2-vector: no `hypot`.
+            let (dx, dy) = (centre[0] - zx, centre[1] - zy);
+            let inside = (dx * dx + dy * dy).sqrt() <= track.zone.radius_m;
+            let was_inside = track.inside.contains(node_id);
+            if inside {
+                let hits = rasterize_circle(&bounds, *centre, footprint_radius_m, sampling)
+                    .map_err(|e| {
+                        StageError::Invariant(format!(
+                            "zone {} footprint for {node_id}: {e}",
+                            track.zone.zone_id
+                        ))
+                    })?;
+                for (i, j) in hits {
+                    track.coverage.mark_cell(i, j);
+                }
+            }
+            let zone_coverage_fraction = track.coverage.stats().coverage_fraction;
+            let event_type = if inside && !was_inside {
+                track.inside.insert(node_id.clone());
+                if track.zone.zone_type == EXCLUSION_ZONE_TYPE {
+                    INSPECTION_VIOLATION
+                } else {
+                    INSPECTION_ENTERED
+                }
+            } else if !inside && was_inside {
+                track.inside.remove(node_id);
+                INSPECTION_EXITED
+            } else if inside {
+                INSPECTION_COVERAGE_UPDATED
+            } else {
+                continue;
+            };
+            inspection_events.push(InspectionEvent {
+                zone_id: track.zone.zone_id.clone(),
+                node_id: node_id.clone(),
+                event_type: event_type.to_string(),
+                timestamp_s,
+                zone_coverage_fraction,
+            });
+        }
+    }
+    Ok(marked)
+}
+
 impl StageHandler for MappingStage {
     fn reset(&mut self) {
         self.clear();
@@ -604,6 +745,7 @@ impl StageHandler for MappingStage {
             belief.fused.clear();
             belief.publish();
         }
+        self.pending.clear();
     }
 
     /// Coverage counts (and their running aggregates), the localizer, its
@@ -627,6 +769,7 @@ impl StageHandler for MappingStage {
                 .collect(),
             team: shared.team.clone(),
             belief: self.belief.as_ref().map(|belief| belief.grid.clone()),
+            pending: self.pending.clone(),
         };
         Some(serde_json::to_value(state).expect("mapping state serialises"))
     }
@@ -700,117 +843,85 @@ impl StageHandler for MappingStage {
             belief.fused.clear();
             belief.publish();
         }
+        self.pending = decoded.pending;
+        Ok(())
+    }
+
+    /// The kept boundaries must be exactly the `lag` before `tick`, in order:
+    /// a queue with one missing or repeated would lose or replay evidence.
+    fn check_lag(
+        &self,
+        state: &serde_json::Value,
+        lag: u64,
+        tick: u64,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: MappingCheckpoint = crate::simulation::decode_stage_state(state)?;
+        let kept: Vec<u64> = decoded
+            .pending
+            .iter()
+            .map(|boundary| boundary.tick)
+            .collect();
+        let expected: Vec<u64> = (tick.saturating_sub(lag)..tick).collect();
+        if kept != expected {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: format!(
+                    "the kept boundaries {kept:?} are not the {lag} sat out before tick {tick}"
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// The lane sits this boundary out (B2.5): keep what it would have
+    /// integrated -- the platforms' positions and the scans stage 6 handed
+    /// over -- for its next run, and clear this tick's outputs (coverage
+    /// deltas, inspection events, fused scans) so a boundary it did not run
+    /// reports none. The localization estimates stay: they are the latest the
+    /// lane has, and the mission machine reads them every tick.
+    fn not_due(&mut self, context: &mut TickContext<'_>) -> Result<(), StageError> {
+        let scans = self
+            .belief
+            .as_mut()
+            .map(|belief| {
+                belief.fused.clear();
+                std::mem::take(&mut belief.inbox)
+            })
+            .unwrap_or_default();
+        self.pending.push(PendingBoundary {
+            tick: context.tick,
+            timestamp_s: context.timestamp_s,
+            positions: mobile_positions(context),
+            scans,
+        });
+        self.state.inspection_events.clear();
+        self.state.newly_covered.clear();
         Ok(())
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
-        self.update_belief(context.tick);
+        // The boundaries the lane sat out first, each as it was then (B2.5);
+        // at the legacy rate there are none.
+        let mut pending = std::mem::take(&mut self.pending);
+        self.update_belief(&mut pending, context.tick);
         let compute = &*self.compute;
         let shared = &mut self.state;
         shared.inspection_events.clear();
         shared.newly_covered.clear();
+        let mut marked = 0usize;
+        for boundary in &pending {
+            marked += mark_boundary(shared, &boundary.positions, boundary.timestamp_s)?;
+        }
 
-        let positions: Vec<(String, [f64; 2])> = context
-            .world
-            .platforms()
-            .iter()
-            .filter(|platform| platform.is_mobile)
-            .map(|platform| {
-                (
-                    platform.node_id.clone(),
-                    [platform.position.x, platform.position.y],
-                )
-            })
-            .collect();
+        let positions = mobile_positions(context);
         if positions.is_empty() {
             return Ok(StageOutcome::NoWork);
         }
-
+        marked += mark_boundary(shared, &positions, context.timestamp_s)?;
         let State {
             bounds,
             footprint_radius_m,
-            sampling,
             ..
         } = *shared;
-
-        let mut marked = 0usize;
-        for (node_id, centre) in &positions {
-            // ONE rasterization, feeding both consumers -- P4.6's ask.
-            let hits = rasterize_circle(&bounds, *centre, footprint_radius_m, sampling)
-                .map_err(|e| StageError::Invariant(format!("footprint for {node_id}: {e}")))?;
-            if hits.is_empty() {
-                continue;
-            }
-            marked += hits.len();
-
-            // Hits arrive with multiplicity and every one is applied, because
-            // a cell the lattice folds onto twice is incremented twice by the
-            // reference's `np.add.at`.
-            for (i, j) in &hits {
-                if shared.coverage.count_at(*i, *j) == 0 {
-                    shared.newly_covered.push((*i, *j));
-                }
-                shared.coverage.mark_cell(*i, *j);
-            }
-        }
-        // `np.where` over the (nx, ny) grid: ascending i, then j. Each cell is
-        // listed once already: it is recorded only while its count is zero,
-        // and its first mark ends that, whichever footprint (or repeated
-        // lattice hit) reaches it next.
-        shared.newly_covered.sort_unstable();
-
-        // --- zone inspection ------------------------------------------------
-        let timestamp_s = context.timestamp_s;
-        let State {
-            zones,
-            inspection_events,
-            ..
-        } = &mut *shared;
-        for track in zones.iter_mut() {
-            let [zx, zy] = track.zone.center_xy;
-            for (node_id, centre) in &positions {
-                // `np.linalg.norm` of a 2-vector: no `hypot`.
-                let (dx, dy) = (centre[0] - zx, centre[1] - zy);
-                let inside = (dx * dx + dy * dy).sqrt() <= track.zone.radius_m;
-                let was_inside = track.inside.contains(node_id);
-                if inside {
-                    let hits = rasterize_circle(&bounds, *centre, footprint_radius_m, sampling)
-                        .map_err(|e| {
-                            StageError::Invariant(format!(
-                                "zone {} footprint for {node_id}: {e}",
-                                track.zone.zone_id
-                            ))
-                        })?;
-                    for (i, j) in hits {
-                        track.coverage.mark_cell(i, j);
-                    }
-                }
-                let zone_coverage_fraction = track.coverage.stats().coverage_fraction;
-                let event_type = if inside && !was_inside {
-                    track.inside.insert(node_id.clone());
-                    if track.zone.zone_type == EXCLUSION_ZONE_TYPE {
-                        INSPECTION_VIOLATION
-                    } else {
-                        INSPECTION_ENTERED
-                    }
-                } else if !inside && was_inside {
-                    track.inside.remove(node_id);
-                    INSPECTION_EXITED
-                } else if inside {
-                    INSPECTION_COVERAGE_UPDATED
-                } else {
-                    continue;
-                };
-                inspection_events.push(InspectionEvent {
-                    zone_id: track.zone.zone_id.clone(),
-                    node_id: node_id.clone(),
-                    event_type: event_type.to_string(),
-                    timestamp_s,
-                    zone_coverage_fraction,
-                });
-            }
-        }
-
         let stats = shared.coverage.stats();
 
         // --- localization -------------------------------------------------
@@ -1937,6 +2048,178 @@ mod tests {
     // -----------------------------------------------------------------
     // Zone inspection and the team readout (P4.9a.2)
     // -----------------------------------------------------------------
+
+    // -----------------------------------------------------------------
+    // B2.5: the mapping lane at its own rate
+    // -----------------------------------------------------------------
+
+    /// A rig with a zone and a self-built map, for the lane-rate tests.
+    fn buffered_rig() -> Simulation {
+        let mut sim = rig(vec![node("drone-1", true, 100.0, 500.0)]);
+        map(&mut sim)
+            .set_zones(vec![zone("z", "survey", 300.0, 500.0, 120.0)])
+            .expect("zones");
+        let grid = crate::belief_world::BeliefGrid::new(
+            argusnet_types::Bounds2d::new(0.0, 1_000.0, 0.0, 1_000.0),
+            10.0,
+            0.0,
+        )
+        .expect("grid");
+        map(&mut sim).set_belief(grid, crate::belief_world::ExplorationConfig::default());
+        sim
+    }
+
+    /// Boundary `k`'s inputs: the drone moves 40 m east a tick, and its scan
+    /// sees one structure ahead of it.
+    fn feed(sim: &mut Simulation, k: u64) {
+        let x = 100.0 + 40.0 * k as f64;
+        place(sim, "drone-1", x, 500.0);
+        let scan = crate::range_scan::RangeScan {
+            node_id: "drone-1".into(),
+            timestamp_s: k as f64,
+            origin_m: [x, 500.0, 80.0],
+            returns: vec![crate::range_scan::RangeReturn {
+                point_m: [x + 60.0, 500.0 + 10.0 * k as f64, 30.0],
+                class: crate::range_scan::ReturnClass::Structure,
+            }],
+            misses: 0,
+        };
+        map(sim).submit_range_scans(vec![scan]);
+    }
+
+    fn mapping_state(sim: &Simulation) -> serde_json::Value {
+        mapped(sim).checkpoint_state().expect("stage 8 checkpoints")
+    }
+
+    fn executor(rate: Option<&str>, first: u64) -> crate::scheduler::PhasedLaneExecutor {
+        let executor =
+            crate::scheduler::PhasedLaneExecutor::new::<crate::simulation::TickError>(1.0, first)
+                .unwrap();
+        match rate {
+            Some(rate) => executor
+                .with_mapping_rate(crate::scheduler::parse_rate(rate).unwrap())
+                .unwrap(),
+            None => executor,
+        }
+    }
+
+    /// A mapping lane at a third of the boundary rate keeps every boundary
+    /// it sits out and integrates it when it runs: at each boundary it runs,
+    /// coverage, zone inspection and the self-built map are exactly the
+    /// every-boundary run's. In between, the rest of the tick reads the map
+    /// as it last left it.
+    #[test]
+    fn a_mapping_lane_at_its_own_rate_catches_up_exactly() {
+        let mut every = buffered_rig();
+        let mut rated = buffered_rig();
+        rated.declare_lane_rate(Stage::UpdateMappingAndLocalization, "1/3");
+        let (mut every_lanes, mut rated_lanes) = (executor(None, 0), executor(Some("1/3"), 0));
+        for k in 0..12 {
+            feed(&mut every, k);
+            feed(&mut rated, k);
+            every_lanes.step(&mut every).expect("tick");
+            rated_lanes.step(&mut rated).expect("tick");
+            if k % 3 == 0 {
+                assert_eq!(mapping_state(&rated), mapping_state(&every), "boundary {k}");
+            } else {
+                assert_ne!(mapping_state(&rated), mapping_state(&every), "boundary {k}");
+                assert_eq!(
+                    mapping_state(&rated)["pending"].as_array().unwrap().len() as u64,
+                    k % 3
+                );
+            }
+        }
+        // The legacy rate checkpoints no pending boundaries at all.
+        assert!(mapping_state(&every).get("pending").is_none());
+    }
+
+    /// A checkpoint taken while boundaries are pending (ticks 4 and 5, before
+    /// tick 6 runs) carries them, so the resumed run integrates them as the
+    /// uninterrupted one does.
+    #[test]
+    fn pending_boundaries_survive_a_checkpoint() {
+        let mut straight = buffered_rig();
+        straight.declare_lane_rate(Stage::UpdateMappingAndLocalization, "1/3");
+        let mut lanes = executor(Some("1/3"), 0);
+        let mut checkpoint = None;
+        for k in 0..9 {
+            if k == 6 {
+                checkpoint = Some(straight.checkpoint().expect("checkpoint"));
+            }
+            feed(&mut straight, k);
+            lanes.step(&mut straight).expect("tick");
+        }
+        let checkpoint = checkpoint.unwrap();
+        assert!(checkpoint.stage_states.values().any(|state| state
+            .get("pending")
+            .is_some_and(|p| p.as_array().unwrap().len() == 2)));
+
+        let mut resumed = buffered_rig();
+        resumed.declare_lane_rate(Stage::UpdateMappingAndLocalization, "1/3");
+        resumed.restore(&checkpoint).expect("restores");
+        let mut lanes = executor(Some("1/3"), 6);
+        for k in 6..9 {
+            feed(&mut resumed, k);
+            lanes.step(&mut resumed).expect("tick");
+        }
+        assert_eq!(mapping_state(&resumed), mapping_state(&straight));
+    }
+
+    /// A checkpoint whose kept boundaries disagree with the recorded lag --
+    /// one dropped, one repeated, or the mapping state missing altogether --
+    /// is refused, and the run is untouched.
+    #[test]
+    fn kept_boundaries_must_match_the_recorded_lag() {
+        let mut sim = buffered_rig();
+        sim.declare_lane_rate(Stage::UpdateMappingAndLocalization, "1/3");
+        let mut lanes = executor(Some("1/3"), 0);
+        for k in 0..6 {
+            feed(&mut sim, k);
+            lanes.step(&mut sim).expect("tick");
+        }
+        let checkpoint = sim.checkpoint().expect("checkpoint");
+        let name = Stage::UpdateMappingAndLocalization.to_string();
+        assert_eq!(checkpoint.stage_lag.get(&name), Some(&2));
+
+        let damaged = |edit: &dyn Fn(&mut Vec<serde_json::Value>)| {
+            let mut copy = checkpoint.clone();
+            let pending = copy
+                .stage_states
+                .get_mut(&name)
+                .and_then(|state| state.get_mut("pending"))
+                .and_then(serde_json::Value::as_array_mut)
+                .expect("two kept boundaries");
+            edit(pending);
+            copy
+        };
+        let mut fresh = buffered_rig();
+        fresh.declare_lane_rate(Stage::UpdateMappingAndLocalization, "1/3");
+        let dropped = damaged(&|pending| {
+            pending.remove(0);
+        });
+        assert!(
+            fresh.restore(&dropped).is_err(),
+            "a dropped boundary was accepted"
+        );
+        let repeated = damaged(&|pending| {
+            let first = pending[0].clone();
+            pending.insert(0, first);
+        });
+        assert!(
+            fresh.restore(&repeated).is_err(),
+            "a repeated boundary was accepted"
+        );
+        let mut missing = checkpoint.clone();
+        missing.stage_states.remove(&name);
+        assert!(
+            fresh.restore(&missing).is_err(),
+            "a missing mapping state was accepted"
+        );
+        assert_eq!(fresh.tick(), 0, "a refused restore changed the run");
+        fresh
+            .restore(&checkpoint)
+            .expect("the undamaged checkpoint restores");
+    }
 
     fn zone(id: &str, zone_type: &str, x: f64, y: f64, radius_m: f64) -> InspectionZone {
         InspectionZone {

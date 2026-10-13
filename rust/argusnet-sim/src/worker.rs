@@ -27,9 +27,9 @@
 //! all of it. After a reset the run is held again, so a reset never sets a run
 //! going on its own.
 //!
-//! A run with its mission lane at its own rate (B2.4, `scheduled_v1`) is
-//! stepped through a [`PhasedLaneExecutor`] at that rate
-//! ([`SimWorker::spawn_with_rate`]); every other run is stepped as the CLI's
+//! A run with lanes at their own rates (B2.4, B2.5, `scheduled_v1`) is
+//! stepped through a [`PhasedLaneExecutor`] at those rates
+//! ([`SimWorker::spawn_with_rates`]); every other run is stepped as the CLI's
 //! legacy run is, one tick at a time.
 //!
 //! World preparation runs on the worker thread too. Closing the worker while it
@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 use crate::command::{AckStatus, CommandAck, CommandEnvelope, CommandKind, RejectReason};
 use crate::replay::ReplayFrame;
 use crate::scenario::{AssembledRun, RunError};
-use crate::scheduler::{ExecutorError, PhasedLaneExecutor, Schedule};
+use crate::scheduler::{ExecutorError, LaneRates, PhasedLaneExecutor};
 use crate::simulation::TickError;
 use crate::snapshot::RuntimeSnapshot;
 
@@ -105,20 +105,16 @@ enum Control {
     Stop,
 }
 
-/// The lanes executor that steps `run` with its mission lane at
-/// `mission_rate` (B2.4), from the run's current tick. Refused when the run's
-/// timestep is not a whole number of nanoseconds, or the rate is invalid: a
-/// front end calls this before it opens, so such a run never starts.
+/// The lanes executor that steps `run` with its lanes at `rates` (B2.4,
+/// B2.5), from the run's current tick. Refused when the run's timestep is not
+/// a whole number of nanoseconds, or a rate is invalid: a front end calls
+/// this before it opens, so such a run never starts.
 pub fn scheduled_executor(
     run: &AssembledRun,
-    mission_rate: Schedule,
+    rates: &LaneRates,
 ) -> Result<PhasedLaneExecutor, String> {
     PhasedLaneExecutor::new::<RunError>(run.dt_s(), run.sim.tick())
-        .and_then(|executor| {
-            executor
-                .with_mission_rate(mission_rate)
-                .map_err(ExecutorError::Time)
-        })
+        .and_then(|executor| rates.apply(executor).map_err(ExecutorError::Time))
         .map_err(|error| error.to_string())
 }
 
@@ -152,27 +148,22 @@ impl SimWorker {
     where
         F: FnOnce() -> Result<AssembledRun, String> + Send + 'static,
     {
-        Self::spawn_inner(build, pacing, capacity, None)
+        Self::spawn_inner(build, pacing, capacity, LaneRates::default())
     }
 
-    /// [`Self::spawn`], with the mission lane at `mission_rate` (B2.4): the
-    /// run is stepped through a [`PhasedLaneExecutor`] at that rate. `build`
-    /// must declare the same rate on the run, as
-    /// [`crate::run_options::RunOptions::apply`] does. `None` is
+    /// [`Self::spawn`], with lanes at their own rates (B2.4, B2.5): the run
+    /// is stepped through a [`PhasedLaneExecutor`] at those rates. `build`
+    /// must declare the same rates on the run, as
+    /// [`crate::run_options::RunOptions::apply`] does. Empty rates are
     /// [`Self::spawn`].
-    pub fn spawn_with_rate<F>(build: F, pacing: Pacing, mission_rate: Option<Schedule>) -> Self
+    pub fn spawn_with_rates<F>(build: F, pacing: Pacing, rates: LaneRates) -> Self
     where
         F: FnOnce() -> Result<AssembledRun, String> + Send + 'static,
     {
-        Self::spawn_inner(build, pacing, DEFAULT_COMMAND_CAPACITY, mission_rate)
+        Self::spawn_inner(build, pacing, DEFAULT_COMMAND_CAPACITY, rates)
     }
 
-    fn spawn_inner<F>(
-        build: F,
-        pacing: Pacing,
-        capacity: usize,
-        mission_rate: Option<Schedule>,
-    ) -> Self
+    fn spawn_inner<F>(build: F, pacing: Pacing, capacity: usize, rates: LaneRates) -> Self
     where
         F: FnOnce() -> Result<AssembledRun, String> + Send + 'static,
     {
@@ -196,8 +187,8 @@ impl SimWorker {
             .name("argusnet-sim-worker".into())
             .spawn(move || {
                 let built = build().and_then(|run| {
-                    let executor = mission_rate
-                        .map(|rate| scheduled_executor(&run, rate))
+                    let executor = (!rates.is_empty())
+                        .then(|| scheduled_executor(&run, &rates))
                         .transpose()?;
                     Ok((run, executor))
                 });
@@ -706,10 +697,10 @@ mod tests {
         }
     }
 
-    /// B2.4 in the worker: a run with its mission lane at its own rate is
-    /// stepped through the lanes executor at that rate, so its frames are the
-    /// CLI's (`--executor lanes --mission-rate`), and a reset starts the
-    /// lane's deadlines over with the run.
+    /// B2.4 and B2.5 in the worker: a run with lanes at their own rates is
+    /// stepped through the lanes executor at those rates, so its frames are
+    /// the CLI's (`--executor lanes --mapping-rate --mission-rate`), and a
+    /// reset starts the lanes' deadlines over with the run.
     #[test]
     fn a_lane_at_its_own_rate_runs_as_the_clis_scheduled_run() {
         use crate::run_options::RunOptions;
@@ -721,9 +712,12 @@ mod tests {
         );
         let bundle =
             ScenarioBundle::from_json(&std::fs::read_to_string(&path).expect("fixture")).unwrap();
-        let rate = parse_rate("1/7").expect("rate");
+        let rates = LaneRates {
+            mapping: Some(parse_rate("1/3").expect("rate")),
+            mission: Some(parse_rate("1/7").expect("rate")),
+        };
         let options = RunOptions {
-            mission_rate: Some(rate),
+            lane_rates: rates,
             ..RunOptions::default()
         };
         let build = |bundle: &ScenarioBundle, options: &RunOptions| {
@@ -732,11 +726,11 @@ mod tests {
             Ok::<_, String>(run)
         };
 
-        // What `argusnet-rs sim --executor lanes --mission-rate 1/7` steps.
+        // What `argusnet-rs sim --executor lanes --mapping-rate 1/3
+        // --mission-rate 1/7` steps.
         let mut direct = build(&bundle, &options).unwrap();
-        let mut executor = PhasedLaneExecutor::new::<RunError>(bundle.dt_s, 0)
-            .unwrap()
-            .with_mission_rate(rate)
+        let mut executor = rates
+            .apply(PhasedLaneExecutor::new::<RunError>(bundle.dt_s, 0).unwrap())
             .unwrap();
         loop {
             match executor.step(&mut direct) {
@@ -763,10 +757,10 @@ mod tests {
         assert_ne!(want, legacy, "the rate changes the run");
 
         let (worker_bundle, worker_options) = (bundle.clone(), options.clone());
-        let worker = SimWorker::spawn_with_rate(
+        let worker = SimWorker::spawn_with_rates(
             move || build(&worker_bundle, &worker_options),
             Pacing::Unpaced,
-            Some(rate),
+            rates,
         );
         command(&worker, 1, CommandKind::Resume);
         assert_eq!(run_to_completion(&worker), want);
@@ -786,14 +780,17 @@ mod tests {
         let mut inexact = bundle();
         inexact.dt_s = 1.0 / 3.0;
         let run = assemble(&inexact).expect("an inexact timestep still assembles");
-        let rate = crate::scheduler::parse_rate("1/1").unwrap();
-        let refused = scheduled_executor(&run, rate).expect_err("refused");
+        let rates = LaneRates {
+            mission: Some(crate::scheduler::parse_rate("1/1").unwrap()),
+            ..LaneRates::default()
+        };
+        let refused = scheduled_executor(&run, &rates).expect_err("refused");
         assert!(refused.contains("whole number of nanoseconds"), "{refused}");
 
-        let worker = SimWorker::spawn_with_rate(
+        let worker = SimWorker::spawn_with_rates(
             move || assemble(&inexact).map_err(|e| e.to_string()),
             Pacing::Unpaced,
-            Some(rate),
+            rates,
         );
         let status = wait_for(&worker, |s| matches!(s.phase, WorkerPhase::Failed(_)));
         assert_eq!(status.phase, WorkerPhase::Failed(refused));

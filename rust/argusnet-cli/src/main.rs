@@ -141,6 +141,16 @@ struct SimArgs {
     /// `execution_model: scheduled_v1`. Needs `--executor lanes`.
     #[arg(long, value_parser = parse_rate)]
     mission_rate: Option<Schedule>,
+    /// Run the mapping lane (stage 8) at its own rate, `NUM/DEN` Hz (B2.5).
+    /// It keeps what every tick it sits out would have integrated -- the
+    /// platforms' positions, the range scans -- and integrates them in order
+    /// when it next runs, so coverage and the self-built map catch up exactly;
+    /// between its runs the rest of the tick reads the map as it last left
+    /// it. Localization runs at this rate. Recorded like `--mission-rate`.
+    /// A rate that would leave it idle for more than 1024 ticks in a row is
+    /// refused, since it buffers every one. Needs `--executor lanes`.
+    #[arg(long, value_parser = parse_rate)]
+    mapping_rate: Option<Schedule>,
     /// Workers for the stages that fork work inside a phase (B3): currently
     /// observation generation. The replay is identical at every count; 1 is
     /// the serial path.
@@ -233,7 +243,9 @@ enum Executor {
 /// The scheduler driving the run, if any.
 enum Driver {
     Compound(LegacyLaneExecutor),
-    Lanes(PhasedLaneExecutor),
+    // Boxed: the lanes executor carries a rate per lane, and the enum
+    // would otherwise be sized for it whichever driver runs.
+    Lanes(Box<PhasedLaneExecutor>),
 }
 
 const EXIT_FAULT: u8 = 1;
@@ -313,7 +325,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             }
         }),
         // Resolved by `sim`: a recovered run takes it from its run directory.
-        mission_rate: None,
+        lane_rates: argusnet_sim::scheduler::LaneRates::default(),
     })
 }
 
@@ -487,15 +499,19 @@ fn build(args: BuildArgs) -> ExitCode {
 
 fn sim(args: SimArgs) -> ExitCode {
     let started = Instant::now();
-    if args.mission_rate.is_some() && !matches!(args.executor, Executor::Lanes) {
+    let flag_rates = argusnet_sim::scheduler::LaneRates {
+        mapping: args.mapping_rate,
+        mission: args.mission_rate,
+    };
+    if !flag_rates.is_empty() && !matches!(args.executor, Executor::Lanes) {
         return fail(
             EXIT_INVALID,
-            "--mission-rate runs the mission lane at its own rate; it needs --executor lanes",
+            "--mission-rate and --mapping-rate run a lane at its own rate; they need --executor lanes",
         );
     }
     // A recovered run takes the scheduler options its run directory recorded.
     let mut executor_kind = args.executor;
-    let mut mission_rate = args.mission_rate;
+    let mut lane_rates = flag_rates;
     if args.pursuit.is_some() && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
         return fail(
             EXIT_INVALID,
@@ -553,25 +569,22 @@ fn sim(args: SimArgs) -> ExitCode {
                 }
                 match dir.recorded() {
                     Ok((text, recorded)) => {
-                        let recorded = match recorded.as_deref().map(parse_rate).transpose() {
-                            Ok(recorded) => recorded,
-                            Err(error) => {
-                                return fail(
-                                    EXIT_INVALID,
-                                    format!("{}: run.json's mission rate: {error}", path.display()),
-                                )
-                            }
+                        let differs = |flag: Option<Schedule>, recorded: Option<Schedule>| {
+                            flag.is_some() && flag != recorded
                         };
-                        if args.mission_rate.is_some() && args.mission_rate != recorded {
+                        if differs(args.mission_rate, recorded.mission)
+                            || differs(args.mapping_rate, recorded.mapping)
+                        {
                             return fail(
                                 EXIT_INVALID,
-                                "--mission-rate differs from the rate this run was recorded with",
+                                "--mission-rate or --mapping-rate differs from the rates this \
+                                 run was recorded with",
                             );
                         }
-                        if recorded.is_some() {
+                        if !recorded.is_empty() {
                             executor_kind = Executor::Lanes;
                         }
-                        mission_rate = recorded;
+                        lane_rates = recorded;
                         text
                     }
                     Err(error) => return fail(EXIT_INVALID, error),
@@ -584,6 +597,15 @@ fn sim(args: SimArgs) -> ExitCode {
         Ok(bundle) => bundle,
         Err(error) => return fail(EXIT_INVALID, error),
     };
+    // The lane rates are checked against the timestep before anything is
+    // written: a refused rate leaves no run directory behind.
+    if !lane_rates.is_empty() {
+        if let Err(error) = PhasedLaneExecutor::new::<RunError>(bundle.dt_s, 0)
+            .and_then(|executor| lane_rates.apply(executor).map_err(ExecutorError::Time))
+        {
+            return fail(EXIT_INVALID, error);
+        }
+    }
     let compute = match argusnet_sim::compute::ComputePool::new(args.workers) {
         Ok(pool) => std::sync::Arc::new(pool),
         Err(error) => return fail(EXIT_INVALID, error),
@@ -595,7 +617,7 @@ fn sim(args: SimArgs) -> ExitCode {
     };
     let options = match run_options(&args) {
         Ok(options) => argusnet_sim::run_options::RunOptions {
-            mission_rate,
+            lane_rates,
             ..options
         },
         Err(error) => return fail(EXIT_UNSUPPORTED, error),
@@ -618,7 +640,7 @@ fn sim(args: SimArgs) -> ExitCode {
             "bundle_version": bundle.version,
             // The format this run's checkpoints are written in: a run with a
             // lane rate carries it in every checkpoint (format 5).
-            "checkpoint_format": if mission_rate.is_some() {
+            "checkpoint_format": if !lane_rates.is_empty() {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
             } else {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
@@ -650,8 +672,7 @@ fn sim(args: SimArgs) -> ExitCode {
     let mut recorder = match (&args.run_dir, &args.recover) {
         (Some(path), _) => {
             let dir = RunDir::new(path);
-            let recorded_rate = mission_rate.map(argusnet_sim::scheduler::rate_text);
-            if let Err(error) = dir.create_with(&text, recorded_rate.as_deref()) {
+            if let Err(error) = dir.create_with(&text, &lane_rates) {
                 return fail(EXIT_INVALID, error);
             }
             match Recorder::start(
@@ -724,12 +745,9 @@ fn sim(args: SimArgs) -> ExitCode {
             }
         }
         Executor::Lanes => match PhasedLaneExecutor::new::<RunError>(bundle.dt_s, run.sim.tick()) {
-            Ok(executor) => match mission_rate {
-                None => Some(Driver::Lanes(executor)),
-                Some(rate) => match executor.with_mission_rate(rate) {
-                    Ok(executor) => Some(Driver::Lanes(executor)),
-                    Err(error) => return fail(EXIT_INVALID, error),
-                },
+            Ok(executor) => match lane_rates.apply(executor) {
+                Ok(executor) => Some(Driver::Lanes(Box::new(executor))),
+                Err(error) => return fail(EXIT_INVALID, error),
             },
             Err(error) => return fail(EXIT_INVALID, error),
         },
