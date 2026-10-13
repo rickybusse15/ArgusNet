@@ -353,7 +353,7 @@ impl MissionDriverStage {
         // By id, so the solver's lower-index tie-break is the lower id
         // whatever order the bundle declares drones and POIs in.
         let mut pending = self.pois.pending_pois();
-        pending.sort_by(|a, b| a.0.cmp(&b.0));
+        pending.sort_by(|a, b| a.poi_id.cmp(&b.poi_id).then(a.index.cmp(&b.index)));
         let mut free: Vec<&(String, [f64; 3])> = mobile
             .iter()
             .filter(|(id, _)| self.pois.assignment_for(id).is_none())
@@ -370,9 +370,10 @@ impl MissionDriverStage {
                 let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
                 pending
                     .iter()
-                    .map(|(_, poi_position, priority, dwell_s)| {
+                    .map(|poi| {
+                        let poi_position = &poi.position;
                         let spent_wh = model.segment_cost_wh(*position, *poi_position)
-                            + model.hover_power_w * dwell_s.max(0.0) / 3600.0;
+                            + model.hover_power_w * poi.required_dwell_s.max(0.0) / 3600.0;
                         let reserve_wh = match self.homes.get(id.as_str()) {
                             Some(home) => model.dynamic_reserve_wh(
                                 *poi_position,
@@ -383,14 +384,14 @@ impl MissionDriverStage {
                             None => model.capacity_wh * model.reserve_fraction,
                         };
                         (remaining_wh - spent_wh >= reserve_wh)
-                            .then_some(spent_wh - PRIORITY_WORTH_WH * *priority as f64)
+                            .then_some(spent_wh - PRIORITY_WORTH_WH * poi.priority as f64)
                     })
                     .collect()
             })
             .collect();
         for (row, column) in min_cost_assignment(&cost).into_iter().enumerate() {
             if let Some(column) = column {
-                let assigned = self.pois.assign(&free[row].0, &pending[column].0);
+                let assigned = self.pois.assign_at(&free[row].0, pending[column].index);
                 debug_assert!(assigned, "a free drone takes a pending POI");
             }
         }
@@ -1490,6 +1491,20 @@ mod tests {
             .find(|d| d.kind == "poi_assignment")
             .unwrap();
         assert_eq!(decision.candidates, vec!["poi-00", "poi-01"]);
+    }
+
+    /// A bundle may repeat a POI id. The allocator assigns by index, so
+    /// both POIs are taken; by id, the second would resolve to the first
+    /// (already active) and stay pending for good.
+    #[test]
+    fn efficient_v1_assigns_pois_that_share_an_id() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0), ("drone-b", 900.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 100.0, 1), poi("poi-00", 900.0, 1)]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let states: Vec<PoiState> = stage.pois.statuses().into_iter().map(|s| s.state).collect();
+        assert_eq!(states, vec![PoiState::Active, PoiState::Active]);
+        assert!(stage.pois.assignment_for("drone-a").is_some());
+        assert!(stage.pois.assignment_for("drone-b").is_some());
     }
 
     /// A POI the drone could not reach, dwell at and keep its reserve after
