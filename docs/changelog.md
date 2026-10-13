@@ -2,6 +2,12 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- The scorecard reports time and effort (PLANNING_EFFICIENCY_PLAN P0):
+  `mission_makespan_s`, `scan_coverage_time_s`, `poi_service_time_mean_s`,
+  `fleet_distance_m` and per-drone distance, battery used per drone and
+  `idle_time_s`, all read from the replay and its assignment history. Reporting
+  only; nothing a run does changes.
+
 - Every Rust replay records each drone's task over the run
   (`meta.assignment_history`, PLANNING_EFFICIENCY_PLAN P0): the task it flies
   on each tick (a search lane, a followed target, an explorer, a POI, egress),

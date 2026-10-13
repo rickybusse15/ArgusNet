@@ -87,8 +87,15 @@ the transition (`poi_assigned`, `poi_released`, `egress`, `egress_cleared`,
 reset (so a reset run records exactly a fresh run's history) and, like the
 frames, starts at the checkpoint in a resumed run. The scorecard reports
 `task_changes`, `poi_handoffs` and `assignment_thrash` (a change within 30 s
-of that drone's previous one) from it; None for a replay without one. Time and
-effort metrics come next, from the same history.
+of that drone's previous one) from it; None for a replay without one.
+
+*Done (time and effort):* the scorecard reports, from the replay, the mission
+makespan (first frame to the last POI completed, when every POI was), the
+time to reach the scan's coverage threshold, the mean POI service time (first
+time a drone was on the POI, from the history, to its completion), distance
+flown per drone and per fleet, battery used per drone, and idle time (time on
+`hold`). Duplicate coverage needs the belief map's measurement counts and is
+still open.
 
 The metrics are computed from the replay, in Rust (`argusnet-sim`
 evaluation) and mirrored in the Python scorecard:

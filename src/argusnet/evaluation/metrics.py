@@ -16,6 +16,7 @@ Usage::
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
@@ -108,6 +109,21 @@ class EvaluationReport:
     task_changes: int | None = None
     poi_handoffs: int | None = None
     assignment_thrash: int | None = None
+
+    # Time and effort (P0), reporting only. Makespan: from the first frame
+    # to the last POI completed, when every POI was; None otherwise or
+    # without POIs. Scan time: the first frame at the scan's coverage
+    # threshold. POI service time: from the first time a drone was on the
+    # POI (assignment history) to its completion, averaged over completed
+    # POIs. Distance: the path each mobile node flew. Battery used: its first
+    # minus its last `battery_fraction`. Idle: time drones spent on `hold`.
+    mission_makespan_s: float | None = None
+    scan_coverage_time_s: float | None = None
+    poi_service_time_mean_s: float | None = None
+    fleet_distance_m: float = 0.0
+    distance_per_drone_m: dict[str, float] = field(default_factory=dict)
+    battery_used_per_drone: dict[str, float] = field(default_factory=dict)
+    idle_time_s: float | None = None
 
     # Performance matrix
     wall_clock_s: float | None = None
@@ -605,6 +621,7 @@ def evaluate_replay(
         task_changes=assignments[0] if assignments else None,
         poi_handoffs=assignments[1] if assignments else None,
         assignment_thrash=assignments[2] if assignments else None,
+        **time_and_effort(replay_doc),
         # Performance matrix
         wall_clock_s=_optional_float(performance_meta.get("wall_clock_s")),
         frame_time_mean_ms=_optional_float(frame_times.get("mean_ms")),
@@ -653,6 +670,99 @@ def assignment_counts(replay_doc: dict) -> tuple[int, int, int] | None:
             if kind == "reassign":
                 last_change = t
     return changes, handoffs, thrash
+
+
+def time_and_effort(replay_doc: dict) -> dict:
+    """The P0 time and effort figures (see `EvaluationReport`), as a dict of
+    the report's field names."""
+    frames = replay_doc.get("frames") or []
+    meta = replay_doc.get("meta")
+    history = meta.get("assignment_history") if isinstance(meta, dict) else None
+    history = history if isinstance(history, dict) else None
+    start = float(frames[0].get("timestamp_s", 0.0)) if frames else 0.0
+    end = float(frames[-1].get("timestamp_s", 0.0)) if frames else 0.0
+
+    states = [
+        f["scan_mission_state"] for f in frames if isinstance(f.get("scan_mission_state"), dict)
+    ]
+    statuses = states[-1].get("poi_statuses") or [] if states else []
+    completions = {
+        str(p["poi_id"]): float(p["completion_time_s"])
+        for p in statuses
+        if p.get("completion_time_s") is not None
+    }
+    makespan = (
+        max(completions.values()) - start
+        if statuses and len(completions) == len(statuses)
+        else None
+    )
+    scan_time = next(
+        (
+            float(f["timestamp_s"]) - start
+            for f in frames
+            if isinstance(f.get("scan_mission_state"), dict)
+            and float(f["scan_mission_state"].get("scan_coverage_fraction", 0.0))
+            >= float(f["scan_mission_state"].get("scan_coverage_threshold", 1.0))
+        ),
+        None,
+    )
+
+    service: list[float] = []
+    idle: float | None = None
+    if history is not None:
+        first_on: dict[str, float] = {}
+        idle = 0.0
+        for events in history.values():
+            held_since: float | None = None
+            for event in events or []:
+                t = float(event.get("timestamp_s", 0.0))
+                task = str(event.get("task", ""))
+                if task.startswith("poi:") and event.get("kind") in ("assign", "reassign"):
+                    first_on[task[4:]] = min(first_on.get(task[4:], t), t)
+                if event.get("kind") not in ("assign", "reassign"):
+                    continue
+                if held_since is not None:
+                    idle += t - held_since
+                    held_since = None
+                if task == "hold":
+                    held_since = t
+            if held_since is not None:
+                idle += end - held_since
+        service = [done - first_on[poi] for poi, done in completions.items() if poi in first_on]
+
+    previous: dict[str, list[float]] = {}
+    distance: dict[str, float] = {}
+    battery_first: dict[str, float] = {}
+    battery_last: dict[str, float] = {}
+    for frame in frames:
+        for node in frame.get("nodes") or []:
+            if not node.get("is_mobile"):
+                continue
+            node_id = str(node["node_id"])
+            position = [float(v) for v in node.get("position", (0.0, 0.0, 0.0))]
+            if node_id in previous:
+                distance[node_id] = distance.get(node_id, 0.0) + math.dist(
+                    previous[node_id], position
+                )
+            else:
+                distance.setdefault(node_id, 0.0)
+            previous[node_id] = position
+            fraction = node.get("battery_fraction")
+            if fraction is not None and float(fraction) >= 0.0:
+                battery_first.setdefault(node_id, float(fraction))
+                battery_last[node_id] = float(fraction)
+
+    return {
+        "mission_makespan_s": makespan,
+        "scan_coverage_time_s": scan_time,
+        "poi_service_time_mean_s": (sum(service) / len(service)) if service else None,
+        "fleet_distance_m": float(sum(distance.values())),
+        "distance_per_drone_m": distance,
+        "battery_used_per_drone": {
+            node: battery_first[node] - battery_last[node] for node in battery_first
+        },
+        "idle_time_s": idle,
+    }
 
 
 def _battery_remaining_min(frames: list[dict]) -> float | None:
@@ -907,6 +1017,13 @@ def report_to_dict(report: EvaluationReport) -> dict:
         "frame_time_p95_ms": _float_or_none(report.frame_time_p95_ms),
         "frame_time_p99_ms": _float_or_none(report.frame_time_p99_ms),
         "peak_rss_mb": _float_or_none(report.peak_rss_mb),
+        "mission_makespan_s": _float_or_none(report.mission_makespan_s),
+        "scan_coverage_time_s": _float_or_none(report.scan_coverage_time_s),
+        "poi_service_time_mean_s": _float_or_none(report.poi_service_time_mean_s),
+        "fleet_distance_m": float(report.fleet_distance_m),
+        "distance_per_drone_m": {k: float(v) for k, v in report.distance_per_drone_m.items()},
+        "battery_used_per_drone": {k: float(v) for k, v in report.battery_used_per_drone.items()},
+        "idle_time_s": _float_or_none(report.idle_time_s),
         "task_changes": report.task_changes,
         "poi_handoffs": report.poi_handoffs,
         "assignment_thrash": report.assignment_thrash,
@@ -974,6 +1091,13 @@ def report_from_dict(d: dict) -> EvaluationReport:
         battery_remaining_min=(
             None if d.get("battery_remaining_min") is None else float(d["battery_remaining_min"])
         ),
+        mission_makespan_s=_optional_float(d.get("mission_makespan_s")),
+        scan_coverage_time_s=_optional_float(d.get("scan_coverage_time_s")),
+        poi_service_time_mean_s=_optional_float(d.get("poi_service_time_mean_s")),
+        fleet_distance_m=float(d.get("fleet_distance_m", 0.0)),
+        distance_per_drone_m=dict(d.get("distance_per_drone_m") or {}),
+        battery_used_per_drone=dict(d.get("battery_used_per_drone") or {}),
+        idle_time_s=_optional_float(d.get("idle_time_s")),
         task_changes=_optional_int(d.get("task_changes")),
         poi_handoffs=_optional_int(d.get("poi_handoffs")),
         assignment_thrash=_optional_int(d.get("assignment_thrash")),
