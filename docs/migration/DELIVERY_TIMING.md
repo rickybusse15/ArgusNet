@@ -180,8 +180,9 @@ observation behind its last update. Accepted observations may be stamped up
 to `max_timestamp_skew_s` from the frame that fuses them, so this can be
 earlier than the update itself; the tracker keeps the difference
 (`measurement_lag_s`) in its checkpoint only when it is not zero. Under JPDA,
-which weighs every cluster into every update, the newest accepted observation
-stands in.
+which can weigh several clusters into one update, it is the newest
+measurement among the clusters inside that track's gate; a new track takes
+its own cluster's.
 
 A replay writes it as each track's `evidence_time_s` only in a run whose
 tracks can be older than their frame: delivery modelled, or the fusion lane

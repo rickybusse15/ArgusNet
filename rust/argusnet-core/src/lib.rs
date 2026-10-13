@@ -1582,9 +1582,6 @@ impl TrackingEngine {
         for cluster in &valid_clusters {
             accepted_observations.extend(cluster.iter().cloned());
         }
-        // JPDA weighs every cluster into every update, so no single cluster's
-        // acquisition time is the track's: the newest accepted one stands in.
-        let measured_at_s = latest_acquisition(&accepted_observations);
 
         let mut updated_track_ids: SmallVec<[String; 8]> = SmallVec::new();
         for update in result.track_updates {
@@ -1596,7 +1593,15 @@ impl TrackingEngine {
                     .update(update.position, update.measurement_std_m, timestamp_s, &[])
                     .is_ok()
                 {
-                    track.record_measured_at(measured_at_s);
+                    // The newest measurement among the clusters weighed
+                    // into this track's update.
+                    track.record_measured_at(
+                        update
+                            .cluster_indices
+                            .iter()
+                            .filter_map(|&index| latest_acquisition(&valid_clusters[index]))
+                            .reduce(f64::max),
+                    );
                     updated_track_ids.push(update.track_id);
                 }
             }
@@ -1611,7 +1616,7 @@ impl TrackingEngine {
                 candidate.measurement_std_m,
                 &self.config,
             );
-            track.record_measured_at(measured_at_s);
+            track.record_measured_at(latest_acquisition(&valid_clusters[candidate.cluster_index]));
             self.tracks.insert(track_id.clone(), track);
             updated_track_ids.push(track_id);
         }
@@ -2039,6 +2044,68 @@ mod tests {
         assert!(!serde_json::to_string(&engine)
             .unwrap()
             .contains("measurement_lag_s"));
+    }
+
+    /// Under JPDA a track's evidence time comes from the clusters inside its
+    /// gate, and a new track's from its own cluster: a newer measurement of
+    /// another target elsewhere in the frame does not make it look fresher.
+    #[test]
+    fn jpda_evidence_time_comes_from_the_tracks_own_clusters() {
+        let mut engine = TrackingEngine::new(TrackerConfig {
+            data_association_mode: AssociationMode::JPDA,
+            ..TrackerConfig::default()
+        })
+        .unwrap();
+        let (a, b) = (vec3(0.0, 0.0, 0.0), vec3(1000.0, 0.0, 0.0));
+        for (node_id, position) in [("ground-a", a), ("ground-b", b)] {
+            engine.nodes.insert(
+                node_id.to_string(),
+                NodeState {
+                    node_id: node_id.to_string(),
+                    position,
+                    velocity: Vector3::zeros(),
+                    is_mobile: false,
+                    timestamp_s: 0.0,
+                    health: 1.0,
+                    ..Default::default()
+                },
+            );
+        }
+        let (near, far) = (vec3(300.0, 300.0, 10.0), vec3(700.0, 300.0, 10.0));
+        let seen = |target: Vector3<f64>, id: &str, at: f64| {
+            vec![
+                bearing("ground-a", id, a, target, at),
+                bearing("ground-b", id, b, target, at),
+            ]
+        };
+
+        let first = engine.ingest_frame(
+            1.0,
+            Vec::new(),
+            seen(near, "x", 1.0),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(1, first.tracks.len());
+        let near_id = first.tracks[0].track_id.clone();
+
+        // The near target measured 0.4 s before the frame, a far one at it.
+        let mut observations = seen(near, "x", 1.6);
+        observations.extend(seen(far, "y", 2.0));
+        let second = engine.ingest_frame(
+            2.0,
+            Vec::new(),
+            observations,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(2, second.tracks.len());
+        for track in &second.tracks {
+            let expected = if track.track_id == near_id { 1.6 } else { 2.0 };
+            assert_eq!(Some(expected), track.evidence_time_s, "{}", track.track_id);
+        }
     }
 
     #[test]
