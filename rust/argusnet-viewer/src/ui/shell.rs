@@ -125,7 +125,6 @@ pub(super) fn status_line(
             ui.separator();
             ui.monospace(format_time_range(cur_s, total_s));
         }
-
         if let Some(alerts) = alerts {
             let errors = alerts
                 .iter()
@@ -167,6 +166,13 @@ pub(super) fn status_line(
         } else if layout.drawer_suppressed {
             ui.separator();
             ui.label("Panel hidden: window too narrow");
+        }
+        // The strip last, so a narrow window clips figures and never an
+        // alert or an operational notice; a compact window drops it.
+        if !layout.compact {
+            if let Some(frame) = replay_state.current_frame() {
+                super::strip::draw(ui, frame, replay_state.live);
+            }
         }
     });
 }

@@ -23,6 +23,7 @@ mod platform;
 pub mod preferences;
 mod shell;
 mod source;
+pub mod strip;
 mod time;
 mod timeline;
 mod widgets;
