@@ -146,9 +146,9 @@ An option the run cannot support (for example, a delay longer than the fusion
 lag) is refused before the window opens. Reset keeps the options.
 
 `--mission-rate NUM/DEN` runs the mission lane at its own rate (B2.4,
-`scheduled_v1`): the viewer's run is then the CLI's `--executor lanes
---mission-rate NUM/DEN` run, frame for frame, and a reset starts the lane's
-deadlines over.
+`scheduled_v1`), and `--mapping-rate NUM/DEN` the mapping lane (B2.5): the
+viewer's run is then the CLI's `--executor lanes` run with the same rates,
+frame for frame, and a reset starts the lanes' deadlines over.
 
 Each control shows as pending until the run confirms it took effect, and a
 refusal says why (for example, Run on a finished run). The timeline holds

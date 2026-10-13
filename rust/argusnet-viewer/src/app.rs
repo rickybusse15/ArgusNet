@@ -132,8 +132,8 @@ pub fn run_sim(
     // The worker would only report the same refusal in the strip.
     let probe = crate::sim_session::load_run(&run_path, &options)
         .map_err(|error| anyhow::anyhow!(error))?;
-    if let Some(rate) = options.mission_rate {
-        argusnet_sim::worker::scheduled_executor(&probe, rate)
+    if !options.lane_rates.is_empty() {
+        argusnet_sim::worker::scheduled_executor(&probe, &options.lane_rates)
             .map_err(|error| anyhow::anyhow!(error))?;
     }
     let run_meta = probe.replay_extra_meta().clone();

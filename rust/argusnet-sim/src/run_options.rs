@@ -1,7 +1,7 @@
 //! The run options shared by every front end that assembles a run: the
 //! energy profile (D-3), timestamped delivery (B4), scheduled faults (F2),
-//! what the platforms know of the world before sensing it, and the mission
-//! lane's own rate (B2.4, `scheduled_v1`).
+//! what the platforms know of the world before sensing it, and the lanes'
+//! own rates (B2.4 mission, B2.5 mapping: `scheduled_v1`).
 //!
 //! `argusnet-rs sim` and the viewer's in-process run (`--run`) both apply them
 //! through [`RunOptions::apply`], so a run commanded from the viewer is the
@@ -18,8 +18,7 @@ use crate::belief_world::{ExplorationConfig, WorldKnowledge};
 use crate::delivery::{DeliveryProfile, DEFAULT_QUEUE_CAPACITY};
 use crate::faults::FaultManifest;
 use crate::scenario::{AssembledRun, ScenarioBundle};
-use crate::scheduler::{describe, rate_text, Schedule};
-use crate::stage::Stage;
+use crate::scheduler::{describe, rate_text, LaneRates};
 
 /// Timestamped delivery in seconds, as a user states it. Converted to ticks
 /// against the run's timestep by [`DeliveryProfile::from_seconds`].
@@ -75,10 +74,12 @@ pub struct RunOptions {
     pub world_knowledge: WorldKnowledge,
     /// How a `none` run senses and maps; the defaults when `None`.
     pub exploration: Option<ExplorationConfig>,
-    /// The mission lane's own rate (B2.4); `None` runs it every tick. The
-    /// driver must step the run with a [`crate::scheduler::PhasedLaneExecutor`]
-    /// at this rate: `apply` only declares it on the simulation and records it.
-    pub mission_rate: Option<Schedule>,
+    /// The lanes' own rates (B2.4, B2.5); empty runs every lane every tick.
+    /// The driver must step the run with a
+    /// [`crate::scheduler::PhasedLaneExecutor`] at these rates
+    /// ([`LaneRates::apply`]): `apply` only declares them on the simulation
+    /// and records them.
+    pub lane_rates: LaneRates,
 }
 
 impl RunOptions {
@@ -89,7 +90,7 @@ impl RunOptions {
             && self.delivery.is_none()
             && self.faults.is_none()
             && self.world_knowledge == WorldKnowledge::Prior
-            && self.mission_rate.is_none()
+            && self.lane_rates.is_empty()
     }
 
     /// Install the options on `run`, assembled from `bundle`, and record what
@@ -119,11 +120,14 @@ impl RunOptions {
             self.world_knowledge,
             self.exploration.clone().unwrap_or_default(),
         )?;
-        if let Some(rate) = self.mission_rate {
-            // Declared before any restore: a checkpoint resumes only under
-            // the rates it was taken with.
-            run.sim
-                .declare_lane_rate(Stage::EvaluateMissionTransitions, rate_text(rate));
+        if !self.lane_rates.is_empty() {
+            let mut recorded = serde_json::Map::new();
+            for (stage, name, rate) in self.lane_rates.rated() {
+                // Declared before any restore: a checkpoint resumes only
+                // under the rates it was taken with.
+                run.sim.declare_lane_rate(stage, rate_text(rate));
+                recorded.insert(name.to_string(), serde_json::json!(describe(rate)));
+            }
             // Additive: a run at the legacy rates carries neither key, so its
             // replay is byte for byte what it was.
             run.extend_replay_meta([
@@ -133,7 +137,7 @@ impl RunOptions {
                 ),
                 (
                     "lane_rates".to_string(),
-                    serde_json::json!({ "mission": describe(rate) }),
+                    serde_json::Value::Object(recorded),
                 ),
             ]);
         }

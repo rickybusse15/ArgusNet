@@ -12,10 +12,17 @@
   and translucent materials are single-sided with clockwise footprints'
   walls reversed to face out, so a building's far wall never draws over its
   near one. GIS scenes split per feature too, and road and water strips are
-  drawn as the exact union of their segments and bevel
-  wedges, facing up, so no part of a line is drawn twice -- not at a bend,
-  nor where it retraces or crosses itself. A GPU probe checks the roof of a built building against the same
-  building drawn opaque.
+  drawn as the exact union of their segments and bevel wedges, facing up, so
+  no part of a line is drawn twice -- not at a bend, nor where it retraces or
+  crosses itself. A GPU probe checks the roof of a built building against the
+  same building drawn opaque.
+
+- `--mapping-rate NUM/DEN` (`argusnet-rs sim --executor lanes`, and the
+  viewer's `--run`) runs the mapping lane at its own rate (B2.5). The ticks it
+  sits out are kept -- positions, scans -- and integrated in order when it
+  next runs, so coverage, zone inspection and the self-built map equal the
+  every-tick run's whenever it has run; a checkpoint carries the kept ticks.
+  The replay's `meta.lane_rates` records it as `mapping`.
 
 - Plans: [PLANNING_EFFICIENCY_PLAN.md](PLANNING_EFFICIENCY_PLAN.md) (fleet-wide
   allocation, reserve-feasible return home, runtime obstacle-aware routing,
@@ -27,9 +34,9 @@
 
 - `argusnet-viewer --run ... --mission-rate NUM/DEN` runs the viewer's
   in-process run with the mission lane at its own rate: `SimWorker` steps it
-  through the lanes executor (`SimWorker::spawn_with_rate`), so its frames are
+  through the lanes executor (`SimWorker::spawn_with_rates`), so its frames are
   the CLI's `--executor lanes --mission-rate` run's. The rate is a run option
-  (`RunOptions::mission_rate`): `apply` declares it on the run and records
+  (`RunOptions::lane_rates`): `apply` declares it on the run and records
   `scheduled_v1` in the replay, for the CLI and the viewer alike.
 
 - `argusnet-rs sim --executor lanes --mission-rate NUM/DEN` runs the mission
