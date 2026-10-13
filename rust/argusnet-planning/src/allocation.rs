@@ -41,8 +41,12 @@ impl PlanningPolicy {
 /// that size the total cost is least. Rows and columns may differ in number.
 ///
 /// Deterministic: the Hungarian method in its potentials form, scanning
-/// indices in order with strict comparisons, so among equal-cost solutions
-/// the lower indices win. Callers order rows and columns by id.
+/// indices in order. Among equal-cost solutions, no two rows could exchange
+/// columns at exactly the same total so that the lower row gets the lower
+/// column (or a column, where it had none): [`prefer_lower_rows`]. That
+/// settles every tie between two rows, such as co-located drones with equal
+/// costs; a tie that only a cycle of three or more rows could break is left
+/// as the scan found it. Callers order rows and columns by id.
 pub fn min_cost_assignment(cost: &[Vec<Option<f64>>]) -> Vec<Option<usize>> {
     let rows = cost.len();
     let cols = cost.first().map_or(0, Vec::len);
@@ -133,7 +137,41 @@ pub fn min_cost_assignment(cost: &[Vec<Option<f64>>]) -> Vec<Option<usize>> {
             result[row - 1] = Some(col - 1);
         }
     }
+    prefer_lower_rows(cost, &mut result);
     result
+}
+
+/// Exchange two rows' columns while that keeps the total exactly and gives
+/// the lower row the lower column, an unassigned row ranking last. Each
+/// exchange makes the result lexicographically smaller, so this ends.
+fn prefer_lower_rows(cost: &[Vec<Option<f64>>], result: &mut [Option<usize>]) {
+    let rank = |c: Option<usize>| c.unwrap_or(usize::MAX);
+    let pair = |r: usize, c: Option<usize>| match c {
+        None => Some(0.0),
+        Some(c) => cost[r][c],
+    };
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..result.len() {
+            for j in i + 1..result.len() {
+                let (ci, cj) = (result[i], result[j]);
+                if rank(cj) >= rank(ci) {
+                    continue;
+                }
+                let (Some(old_i), Some(old_j)) = (pair(i, ci), pair(j, cj)) else {
+                    continue;
+                };
+                let (Some(new_i), Some(new_j)) = (pair(i, cj), pair(j, ci)) else {
+                    continue;
+                };
+                if new_i + new_j == old_i + old_j {
+                    result.swap(i, j);
+                    changed = true;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -166,6 +204,20 @@ mod tests {
         assert_eq!(min_cost_assignment(&cost), vec![Some(1), Some(0)]);
         let none = vec![vec![None, None]];
         assert_eq!(min_cost_assignment(&none), vec![None]);
+    }
+
+    /// Two rows with equal costs: the lower row takes the lower column,
+    /// even where the scan found the crossed matching first.
+    #[test]
+    fn equal_rows_give_the_lower_row_the_lower_column() {
+        let cost = vec![vec![Some(1.0), Some(0.0)], vec![Some(1.0), Some(0.0)]];
+        assert_eq!(min_cost_assignment(&cost), vec![Some(0), Some(1)]);
+        let cost = vec![
+            vec![Some(2.0), Some(2.0), Some(2.0)],
+            vec![Some(2.0), Some(2.0), Some(2.0)],
+            vec![Some(2.0), Some(2.0), Some(2.0)],
+        ];
+        assert_eq!(min_cost_assignment(&cost), vec![Some(0), Some(1), Some(2)]);
     }
 
     /// A row with nothing feasible takes no column, so it cannot take the
