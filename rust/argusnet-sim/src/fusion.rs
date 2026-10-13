@@ -96,14 +96,19 @@ struct State {
 }
 
 /// One boundary stage 7 sat out (its lane at its own rate, B2.6): what it
-/// would have fused then. Fused, in order, when the lane next runs, so the
-/// tracker's state is what it would have been had it run every boundary.
-/// Target metadata and safety events are not kept: the tracker only passes
-/// them through to its frame, so the boundary publishes them itself.
+/// would have fused then, at the time it would have fused it. Fused, in
+/// order, when the lane next runs, so the tracker's state is what it would
+/// have been had it run every boundary. With delivery modelled, the boundary
+/// already went through the delivery network at its own tick, under the link
+/// state of that tick, and this is what the network delivered. Target
+/// metadata and safety events are not kept: the tracker only passes them
+/// through to its frame, so the boundary publishes them itself.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct PendingBoundary {
     tick: u64,
-    timestamp_s: f64,
+    /// The time the batch is fused at: the boundary's own, or with delivery
+    /// modelled the horizon's.
+    fusion_time_s: f64,
     nodes: Vec<NodeState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     observations: Vec<crate::delivery::StoredObservation>,
@@ -320,20 +325,28 @@ impl StageHandler for FusionStage {
         Ok(())
     }
 
-    /// The lane is not due (B2.6): keep this boundary's platforms and
-    /// observations to fuse, in order, when it next runs, and publish a frame
-    /// that fused nothing -- the tracks as they stand, this boundary's
-    /// platforms, and the metadata and safety events the tracker would only
-    /// have passed through.
+    /// The lane is not due (B2.6): keep this boundary's platforms and the
+    /// batch it would fuse, to fuse in order when the lane next runs, and
+    /// publish a frame that fused nothing -- the tracks as they stand, this
+    /// boundary's platforms, the metadata and safety events the tracker would
+    /// only have passed through, and anything the delivery network dropped.
+    /// With delivery modelled the batch goes through the network now, at this
+    /// tick, so link faults applied tick by tick act on it as they would have.
     fn not_due(&mut self, context: &mut TickContext<'_>) -> Result<(), StageError> {
         let shared = &mut self.state;
         let inbox = std::mem::take(&mut shared.inbox);
         let nodes = context.world.platforms().to_vec();
+        let (fusion_time_s, observations, drops) = take_delivered(
+            shared.delivery.as_mut(),
+            context.tick,
+            context.timestamp_s,
+            inbox.observations,
+        );
         shared.pending.push(PendingBoundary {
             tick: context.tick,
-            timestamp_s: context.timestamp_s,
+            fusion_time_s,
             nodes: nodes.clone(),
-            observations: inbox.observations.iter().map(Into::into).collect(),
+            observations: observations.iter().map(Into::into).collect(),
         });
         let tracks = context.world.tracks().to_vec();
         let metrics = argusnet_types::PlatformMetrics {
@@ -353,7 +366,10 @@ impl StageHandler for FusionStage {
             timestamp_s: context.timestamp_s,
             nodes,
             observations: Vec::new(),
-            rejected_observations: Vec::new(),
+            rejected_observations: drops
+                .iter()
+                .map(|drop| drop.rejection(context.dt_s))
+                .collect(),
             tracks,
             truths: Vec::new(),
             metrics,
@@ -383,24 +399,16 @@ impl StageHandler for FusionStage {
         let mut caught_up = Vec::new();
         let mut caught_up_rejections = Vec::new();
         for boundary in std::mem::take(&mut shared.pending) {
-            let observations = boundary.observations.iter().map(Into::into).collect();
-            let (fusion_time_s, observations, drops) = take_delivered(
-                shared.delivery.as_mut(),
-                boundary.tick,
-                boundary.timestamp_s,
-                observations,
-            );
             let frame = shared.engine.ingest_frame(
-                fusion_time_s,
+                boundary.fusion_time_s,
                 boundary.nodes,
-                observations,
+                boundary.observations.iter().map(Into::into).collect(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
             );
             caught_up.extend(frame.observations.iter().cloned());
             caught_up_rejections.extend(frame.rejected_observations.iter().cloned());
-            caught_up_rejections.extend(drops.iter().map(|drop| drop.rejection(context.dt_s)));
         }
 
         // The reference calls `ingest_frame` unconditionally, every tick, even
