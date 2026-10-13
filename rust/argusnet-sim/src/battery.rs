@@ -146,6 +146,11 @@ impl BatteryStage {
         self.state.wind_mps = wind_mps;
     }
 
+    /// The wind the reserve is estimated against, if any.
+    pub fn wind_mps(&self) -> Option<[f64; 3]> {
+        self.state.wind_mps
+    }
+
     /// Set a registered platform's remaining energy -- a scenario that starts
     /// partly charged, or a test that needs a drone near empty. Returns
     /// whether the platform was registered.

@@ -187,6 +187,12 @@ struct SimArgs {
     /// of each tick not spent moving.
     #[arg(long, value_enum, default_value = "legacy")]
     energy_profile: EnergyProfileArg,
+    /// Who allocates the mission's POIs (P1): `reference` is the reference's
+    /// greedy, fleet-order assignment; `efficient_v1` assigns every free drone
+    /// against every pending POI at once, on trip and dwell energy within the
+    /// reserve home. Recorded in the replay's `meta.planning_policy`.
+    #[arg(long, value_enum, default_value = "reference")]
+    planning_policy: PlanningPolicyArg,
     /// Model timestamped delivery (B4): fusion ingests the evidence acquired
     /// this many seconds ago. Delays plus jitter must not exceed it. Omit for
     /// the legacy same-tick path.
@@ -283,6 +289,14 @@ enum EnergyProfileArg {
     PhysicalV1,
 }
 
+/// `--planning-policy`'s values (P1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum PlanningPolicyArg {
+    Reference,
+    #[value(name = "efficient_v1")]
+    EfficientV1,
+}
+
 /// The energy profile, delivery and faults the flags ask for, applied by
 /// the same code as the viewer's in-process run.
 fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, String> {
@@ -291,6 +305,14 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
             EnergyProfileArg::PhysicalV1 => argusnet_planning::battery::EnergyProfile::PhysicalV1,
+        },
+        planning_policy: match args.planning_policy {
+            PlanningPolicyArg::Reference => {
+                argusnet_planning::allocation::PlanningPolicy::Reference
+            }
+            PlanningPolicyArg::EfficientV1 => {
+                argusnet_planning::allocation::PlanningPolicy::EfficientV1
+            }
         },
         delivery: args.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {
             fusion_lag_s,

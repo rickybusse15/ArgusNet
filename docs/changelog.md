@@ -2,6 +2,24 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `--planning-policy efficient_v1` (PLANNING_EFFICIENCY_PLAN P1, first
+  slice, opt-in) allocates a scan mission's POIs across the whole fleet at
+  once: a deterministic minimum-cost assignment (Hungarian method,
+  `argusnet-planning::allocation`) of every free drone against every pending
+  POI. The cost is the trip's energy plus hover for the dwell, less a worth
+  per priority level. A pair that would leave the drone below its reserve
+  home (`dynamic_reserve_wh`) is never assigned, and a drone keeps a POI it
+  holds. The default, `reference`, is unchanged: all 14 replays are
+  byte-identical, and reset and resume are equal on every canonical run. A
+  non-reference policy is recorded in `meta.planning_policy` and in the
+  driver's checkpoint, which resumes only under the same policy. Available on
+  `argusnet-rs sim` and the viewer's `--run`.
+
+- `assignment_thrash` no longer counts finishing a POI and taking the next
+  as thrash: leaving a POI the replay reports completed restarts the drone's
+  30 s window. Scenario comparisons now report the P0 time and effort
+  figures and the assignment counts.
+
 - The scorecard reports time and effort (PLANNING_EFFICIENCY_PLAN P0):
   `mission_makespan_s`, `scan_coverage_time_s`, `poi_service_time_mean_s`,
   `fleet_distance_m` and per-drone distance, battery used per drone and

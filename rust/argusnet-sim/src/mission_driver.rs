@@ -33,6 +33,7 @@
 
 use std::collections::BTreeMap;
 
+use argusnet_planning::allocation::{min_cost_assignment, PlanningPolicy};
 use argusnet_planning::frontier::{find_gap_cells, CoverageView};
 use argusnet_planning::poi::{
     InspectionPoi, PoiAssignmentContext, PoiManager, PoiState, PoiStatus,
@@ -221,6 +222,9 @@ struct DriverCheckpoint {
     rescored: bool,
     #[serde(default)]
     coordinator: Option<String>,
+    /// Absent for the reference policy, so its checkpoints are unchanged.
+    #[serde(default, skip_serializing_if = "PlanningPolicy::is_reference")]
+    policy: PlanningPolicy,
 }
 
 /// What stage 9 reports for a replay: POI statuses with their positions, and
@@ -281,10 +285,19 @@ pub struct MissionDriverStage {
     /// tick with a fleet (`_coordinator_elected`).
     coordinator: Option<String>,
     config: MissionDriverConfig,
+    /// Who allocates POIs (P1). Scenario, like `config`: set before the
+    /// first tick, kept by reset, and checked against a checkpoint's.
+    policy: PlanningPolicy,
     replay: LocalizationReplay,
     /// Refreshed at the end of every run, and on reset and restore.
     report: DriverReport,
 }
+
+/// Under [`PlanningPolicy::EfficientV1`], what one step of rescored POI
+/// priority is worth against energy. At the reference battery's 350 W and
+/// 28 m/s, 5 Wh is about 1.4 km of flight: a higher-priority POI is preferred
+/// unless it is that much further. Tuned on the qualification seeds only.
+pub const PRIORITY_WORTH_WH: f64 = 5.0;
 
 impl std::fmt::Debug for MissionDriverStage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -315,8 +328,67 @@ impl MissionDriverStage {
             rescored: false,
             coordinator: None,
             config,
+            policy: PlanningPolicy::Reference,
             replay: LocalizationReplay::default(),
             report: DriverReport::default(),
+        }
+    }
+
+    /// Allocate POIs under `policy` (P1). Before the first tick only.
+    pub fn set_policy(&mut self, policy: PlanningPolicy) {
+        self.policy = policy;
+    }
+
+    pub fn policy(&self) -> PlanningPolicy {
+        self.policy
+    }
+
+    /// [`PlanningPolicy::EfficientV1`]: every free drone against every
+    /// pending POI at once. A drone's cost for a POI is the energy to fly
+    /// there and hover through its dwell, less [`PRIORITY_WORTH_WH`] per step
+    /// of the POI's rescored priority. A POI is infeasible for a drone that
+    /// would then hold less than its dynamic reserve to get home from it (the
+    /// static reserve without a home). Drones already on a POI keep it.
+    fn allocate_fleet_wide(&mut self, mobile: &[(String, [f64; 3])], battery: &BatteryStage) {
+        let pending = self.pois.pending_pois();
+        let free: Vec<&(String, [f64; 3])> = mobile
+            .iter()
+            .filter(|(id, _)| self.pois.assignment_for(id).is_none())
+            .collect();
+        if pending.is_empty() || free.is_empty() {
+            return;
+        }
+        let model = battery.model();
+        let wind = battery.wind_mps();
+        let cost: Vec<Vec<Option<f64>>> = free
+            .iter()
+            .map(|(id, position)| {
+                let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
+                pending
+                    .iter()
+                    .map(|(_, poi_position, priority, dwell_s)| {
+                        let spent_wh = model.segment_cost_wh(*position, *poi_position)
+                            + model.hover_power_w * dwell_s.max(0.0) / 3600.0;
+                        let reserve_wh = match self.homes.get(id.as_str()) {
+                            Some(home) => model.dynamic_reserve_wh(
+                                *poi_position,
+                                *home,
+                                wind,
+                                argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
+                            ),
+                            None => model.capacity_wh * model.reserve_fraction,
+                        };
+                        (remaining_wh - spent_wh >= reserve_wh)
+                            .then_some(spent_wh - PRIORITY_WORTH_WH * *priority as f64)
+                    })
+                    .collect()
+            })
+            .collect();
+        for (row, column) in min_cost_assignment(&cost).into_iter().enumerate() {
+            if let Some(column) = column {
+                let assigned = self.pois.assign(&free[row].0, &pending[column].0);
+                debug_assert!(assigned, "a free drone takes a pending POI");
+            }
         }
     }
 
@@ -434,11 +506,24 @@ impl MissionDriverStage {
                 .map_or(1.0, |remaining| remaining / capacity_wh)
         };
         let mut unassigned: Vec<String> = Vec::new();
+        let efficient = self.policy == PlanningPolicy::EfficientV1;
+        let pending_before = self.pending_poi_ids();
+        if efficient {
+            self.allocate_fleet_wide(mobile, battery);
+        }
         for (id, position) in mobile {
-            let pending = self.pending_poi_ids();
+            let pending = if efficient {
+                pending_before.clone()
+            } else {
+                self.pending_poi_ids()
+            };
             let remaining_wh = battery.remaining_wh(id).unwrap_or(capacity_wh);
-            let context = PoiAssignmentContext::new(id, *position, remaining_wh, capacity_wh);
-            let assigned = self.pois.assign_energy_aware(&context).is_some();
+            let assigned = if efficient {
+                self.pois.assignment_for(id).is_some()
+            } else {
+                let context = PoiAssignmentContext::new(id, *position, remaining_wh, capacity_wh);
+                self.pois.assign_energy_aware(&context).is_some()
+            };
             if !assigned && self.pois.assignment_for(id).is_none() {
                 unassigned.push(id.clone());
             }
@@ -467,11 +552,23 @@ impl MissionDriverStage {
                         subject: Some(id.clone()),
                         selected: Some(active.clone()),
                         candidates: pending,
-                        reason: "energy_aware_priority",
-                        detail: format!(
-                            "{id} takes {active}: the highest-priority pending POI it can \
-                             reach within its usable energy"
-                        ),
+                        reason: if efficient {
+                            "fleet_min_cost"
+                        } else {
+                            "energy_aware_priority"
+                        },
+                        detail: if efficient {
+                            format!(
+                                "{id} takes {active}: the fleet's least-cost assignment, \
+                                 trip and dwell energy less priority, within the reserve \
+                                 home"
+                            )
+                        } else {
+                            format!(
+                                "{id} takes {active}: the highest-priority pending POI it can \
+                                 reach within its usable energy"
+                            )
+                        },
                         inputs: serde_json::json!({
                             "position_m": position,
                             "remaining_wh": remaining_wh,
@@ -826,6 +923,7 @@ impl StageHandler for MissionDriverStage {
             redirected: self.redirected.clone(),
             rescored: self.rescored,
             coordinator: self.coordinator.clone(),
+            policy: self.policy,
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -841,6 +939,15 @@ impl StageHandler for MissionDriverStage {
         if ids(decoded.pois.statuses()) != ids(self.pois.statuses()) {
             return Err(crate::simulation::StageStateError::Malformed {
                 detail: "the checkpoint's POIs are not this run's".into(),
+            });
+        }
+        if decoded.policy != self.policy {
+            return Err(crate::simulation::StageStateError::Malformed {
+                detail: format!(
+                    "the checkpoint allocated POIs under {}, this run under {}",
+                    decoded.policy.as_str(),
+                    self.policy.as_str()
+                ),
             });
         }
         Ok(())
@@ -1300,5 +1407,107 @@ mod tests {
             Some("drone-1"),
             "re-elected"
         );
+    }
+
+    fn efficient_driver(pois: Vec<InspectionPoi>) -> MissionDriverStage {
+        let mut stage = driver(pois);
+        stage.set_policy(PlanningPolicy::EfficientV1);
+        stage
+    }
+
+    fn fleet(ids: &[(&str, f64)]) -> (BatteryStage, Vec<(String, [f64; 3])>) {
+        let mut battery = BatteryStage::new();
+        for (id, _) in ids {
+            battery.register(*id, None);
+        }
+        let mobile = ids
+            .iter()
+            .map(|(id, x)| (id.to_string(), [*x, 0.0, 40.0]))
+            .collect();
+        (battery, mobile)
+    }
+
+    /// P1: the reference hands the first drone in fleet order the best POI,
+    /// however far; the fleet-wide planner sends each drone to the near one
+    /// when every POI is served either way.
+    #[test]
+    fn efficient_v1_beats_the_fleet_order_greedy() {
+        let pois = || vec![poi("poi-00", 900.0, 2), poi("poi-01", 100.0, 1)];
+        let (battery, mobile) = fleet(&[("drone-a", 100.0), ("drone-b", 900.0)]);
+
+        let mut reference = driver(pois());
+        reference.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(reference.pois.assignment_for("drone-a"), Some("poi-00"));
+        assert_eq!(reference.pois.assignment_for("drone-b"), Some("poi-01"));
+
+        let mut efficient = efficient_driver(pois());
+        efficient.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(efficient.pois.assignment_for("drone-a"), Some("poi-01"));
+        assert_eq!(efficient.pois.assignment_for("drone-b"), Some("poi-00"));
+        let reasons: Vec<&str> = efficient
+            .decisions()
+            .iter()
+            .filter(|d| d.kind == "poi_assignment")
+            .map(|d| d.reason)
+            .collect();
+        assert_eq!(reasons, vec!["fleet_min_cost", "fleet_min_cost"]);
+        let commands = efficient.take_override_commands();
+        assert_eq!(commands.len(), 2, "one redirect per new assignment");
+    }
+
+    /// A POI the drone could not reach, dwell at and keep its reserve after
+    /// is never assigned to it, however good the POI.
+    #[test]
+    fn efficient_v1_never_assigns_past_the_reserve() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 100.0), ("drone-b", 900.0)]);
+        let model = battery.model();
+        // Exactly the static reserve: any trip at all would dip into it.
+        assert!(battery.set_remaining_wh("drone-a", model.capacity_wh * model.reserve_fraction));
+        let mut stage = efficient_driver(vec![poi("poi-00", 100.0, 3)]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), None);
+        assert_eq!(stage.pois.assignment_for("drone-b"), Some("poi-00"));
+    }
+
+    /// No preemption in this slice: a drone keeps the POI it holds when a
+    /// later solve would rather it went elsewhere.
+    #[test]
+    fn efficient_v1_never_takes_a_held_poi_away() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 100.0, 1), poi("poi-01", 900.0, 1)]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
+        let moved = vec![("drone-a".to_string(), [900.0, 0.0, 40.0])];
+        stage.inspect(1.0, 1.0, &moved, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
+        // `inspect` appends; `run` clears. One assignment, one decision.
+        let assignments = stage
+            .decisions()
+            .iter()
+            .filter(|d| d.kind == "poi_assignment")
+            .count();
+        assert_eq!(assignments, 1, "no new assignment, so no new decision");
+    }
+
+    /// The checkpoint records the policy (absent for the reference, so a
+    /// reference checkpoint is unchanged), and a resume under the other
+    /// policy is refused.
+    #[test]
+    fn a_checkpoint_resumes_only_under_its_own_policy() {
+        let pois = || vec![poi("poi-00", 100.0, 1)];
+        let reference = driver(pois());
+        let efficient = efficient_driver(pois());
+        let reference_state = reference.checkpoint_state().expect("state");
+        let efficient_state = efficient.checkpoint_state().expect("state");
+        assert!(reference_state.get("policy").is_none());
+        assert_eq!(efficient_state["policy"], "efficient_v1");
+        assert!(reference.check_state(&reference_state).is_ok());
+        assert!(efficient.check_state(&efficient_state).is_ok());
+        let refused = efficient.check_state(&reference_state).unwrap_err();
+        assert!(
+            format!("{refused:?}").contains("under reference, this run under efficient_v1"),
+            "{refused:?}"
+        );
+        assert!(reference.check_state(&efficient_state).is_err());
     }
 }

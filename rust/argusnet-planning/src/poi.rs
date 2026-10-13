@@ -181,6 +181,38 @@ impl PoiManager {
             .map(|index| self.pois[*index].poi_id.as_str())
     }
 
+    /// The POIs still waiting for a drone, in construction order: id,
+    /// position, rescored priority and required dwell. For a planner that
+    /// allocates them all at once (P1); the reference path does not read it.
+    pub fn pending_pois(&self) -> Vec<(String, [f64; 3], i64, f64)> {
+        (0..self.pois.len())
+            .filter(|&index| self.states[index] == PoiState::Pending)
+            .map(|index| {
+                let poi = &self.pois[index];
+                (
+                    poi.poi_id.clone(),
+                    poi.position,
+                    self.effective_priorities[index],
+                    poi.required_dwell_s,
+                )
+            })
+            .collect()
+    }
+
+    /// Give `poi_id` to `drone_id`, as a fleet-wide planner chose (P1).
+    /// Refused, and nothing changes, unless the POI is pending and the drone
+    /// holds no POI that is not yet complete.
+    pub fn assign(&mut self, drone_id: &str, poi_id: &str) -> bool {
+        let Some(index) = self.index_of(poi_id) else {
+            return false;
+        };
+        if self.states[index] != PoiState::Pending || self.existing_assignment(drone_id).is_some() {
+            return false;
+        }
+        self.take_assignment(drone_id, index);
+        true
+    }
+
     fn take_assignment(&mut self, drone_id: &str, index: usize) {
         self.drone_assignment.insert(drone_id.to_string(), index);
         self.dwell_s[index] = 0.0;

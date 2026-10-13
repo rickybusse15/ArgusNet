@@ -76,6 +76,32 @@ METRICS: dict[str, tuple[str | None, str]] = {
         "Lowest battery fraction any drone reached, as the battery ledger recorded it. "
         "Unlike energy_reserve_min it follows the energy profile, hover included (D-3).",
     ),
+    # P0 time and effort, from `meta.assignment_history` and the frames.
+    "mission_makespan_s": (
+        "lower",
+        "Seconds from the first frame to the last POI completed; absent unless every POI "
+        "was completed.",
+    ),
+    "scan_coverage_time_s": (
+        "lower",
+        "Seconds from the first frame to the first frame at the scan's coverage threshold.",
+    ),
+    "poi_service_time_mean_s": (
+        "lower",
+        "Mean over completed POIs of the seconds from a drone first flying to the POI to "
+        "its completion.",
+    ),
+    "fleet_distance_m": ("lower", "Metres flown by every mobile node, summed."),
+    "idle_time_s": ("lower", "Drone-seconds spent on the hold task, summed over the fleet."),
+    "task_changes": (
+        None,
+        "Changes of a drone's task after its first, summed over the fleet. Context-dependent: "
+        "a mission with more work changes task more.",
+    ),
+    "assignment_thrash": (
+        "lower",
+        "Task changes within the thrash window of the same drone's previous change.",
+    ),
     "false_handoff_rate": ("lower", "Fraction of track handoffs that went to the wrong target."),
     "safety_override_count": (
         None,
