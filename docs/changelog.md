@@ -2,6 +2,14 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Every Rust replay records each drone's task over the run
+  (`meta.assignment_history`, PLANNING_EFFICIENCY_PLAN P0): the task it flies
+  on each tick (a search lane, a followed target, an explorer, a POI, egress),
+  each change with its time and reason, and the POI handoffs stage 9 applied.
+  The scorecard reports `task_changes`, `poi_handoffs` and `assignment_thrash`
+  from it. Nothing else in a replay changes:
+  `scripts/replay_hashes.py --ignore-meta assignment_history` hashes the rest.
+
 - Buildings, vegetation and walls are now drawn at their styled opacity
   (WORLD_REALISM_PLAN R0). The overlay GLBs carried translucent vertex
   colours, but their material had no `alphaMode`, so glTF's default `OPAQUE`

@@ -11,6 +11,9 @@ replay bytes. This records them, or checks a build against a record:
     python3 scripts/replay_hashes.py --check before.json      # on the change
 
 `--check` exits non-zero and names every scenario/seed whose replay differs.
+A change that adds a record of the run to `meta` (and claims nothing else)
+records and checks with `--ignore-meta KEY`, which hashes the rest of each
+replay as canonical JSON; the record keeps the key, so `--check` uses it.
 
 `--lifecycle` checks A2 on every canonical scenario and seed instead: a run
 reset at a seeded tick K replays byte-identical to a straight run (A2.1), and
@@ -47,6 +50,20 @@ RELEASE_BINARY = REPO_ROOT / "target" / "release" / "argusnet-rs"
 
 
 EXECUTOR_ARGS: list[str] = []
+# `meta` keys left out of the hash (`--ignore-meta`), for a change that adds a
+# record of the run and claims to change nothing else.
+IGNORED_META: list[str] = []
+
+
+def document_hash(replay: Path) -> str:
+    """The replay's bytes, or with `IGNORED_META` removed, its canonical JSON."""
+    if not IGNORED_META:
+        return hashlib.sha256(replay.read_bytes()).hexdigest()
+    document = json.loads(replay.read_text())
+    for key in IGNORED_META:
+        document.get("meta", {}).pop(key, None)
+    canonical = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def replay_hash(binary: Path, config_path: Path, replay: Path) -> str | None:
@@ -69,7 +86,7 @@ def replay_hash(binary: Path, config_path: Path, replay: Path) -> str | None:
         return None
     if completed.returncode != 0:
         raise RuntimeError(f"argusnet-rs failed ({completed.returncode}): {completed.stderr}")
-    return hashlib.sha256(replay.read_bytes()).hexdigest()
+    return document_hash(replay)
 
 
 def run_sim(binary: Path, config_path: Path, *extra: str) -> int:
@@ -165,6 +182,14 @@ def main() -> int:
         help="argusnet-rs's pair-evaluation workers (B3); every count must reproduce "
         "the serial replays byte for byte",
     )
+    parser.add_argument(
+        "--ignore-meta",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help="hash each replay without this additive meta key (as canonical JSON); "
+        "recorded with --out, and a --check uses the record's keys",
+    )
     mode.add_argument("--out", type=Path, help="record hashes here")
     mode.add_argument("--check", type=Path, help="compare against a record")
     mode.add_argument(
@@ -184,17 +209,17 @@ def main() -> int:
             print(f"FAIL {failure}")
         print("lifecycle: " + ("all equal" if not failures else f"{len(failures)} failure(s)"))
         return 1 if failures else 0
+    IGNORED_META[:] = args.ignore_meta
     if args.check:
         record = json.loads(args.check.read_text())
         seeds = record["seeds"]
+        IGNORED_META[:] = record.get("ignore_meta", [])
     hashes = collect(args.binary, seeds)
     if args.out:
-        args.out.write_text(
-            json.dumps(
-                {"platform": platform.platform(), "seeds": seeds, "hashes": hashes}, indent=1
-            )
-            + "\n"
-        )
+        recorded = {"platform": platform.platform(), "seeds": seeds, "hashes": hashes}
+        if IGNORED_META:
+            recorded["ignore_meta"] = list(IGNORED_META)
+        args.out.write_text(json.dumps(recorded, indent=1) + "\n")
         return 0
     if record["platform"] != platform.platform():
         print(f"warning: recorded on {record['platform']}, checking on {platform.platform()}")

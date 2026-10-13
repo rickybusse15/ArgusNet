@@ -74,6 +74,22 @@ history, never from POI status. Otherwise, once P1 turns on teams, a drone
 helping on a POI would count as idle, and handoff and thrash counts would
 leave it out.
 
+*Done (history):* the Rust writer records `meta.assignment_history`, drone id
+to its events in time order, each `{timestamp_s, kind, task, previous,
+reason, to}`. A task is what the drone flies on the tick: a recall stage 2
+flew (`egress`, `poi:<id>`, `frontier`), else its own controller (`search`,
+`follow:<target>`, `explore`; a search-then-follow drone is `search` until its
+sensor engages). Kinds are `assign` (its first task), `reassign`, and
+`handoff` and `team_join` from stage 9's applied decisions, since the
+reference leaves a drone that hands its POI on flying to it. Reasons come from
+the transition (`poi_assigned`, `poi_released`, `egress`, `egress_cleared`,
+`target_engaged`, ...). It is read after each committed tick, cleared by a
+reset (so a reset run records exactly a fresh run's history) and, like the
+frames, starts at the checkpoint in a resumed run. The scorecard reports
+`task_changes`, `poi_handoffs` and `assignment_thrash` (a change within 30 s
+of that drone's previous one) from it; None for a replay without one. Time and
+effort metrics come next, from the same history.
+
 The metrics are computed from the replay, in Rust (`argusnet-sim`
 evaluation) and mirrored in the Python scorecard:
 

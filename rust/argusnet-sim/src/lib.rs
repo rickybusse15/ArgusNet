@@ -1,5 +1,6 @@
 //! The Rust simulation runtime shell.
 
+pub mod assignments;
 pub mod battery;
 pub mod belief_mesh;
 pub mod belief_world;

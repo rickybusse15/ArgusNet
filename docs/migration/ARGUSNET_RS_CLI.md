@@ -67,6 +67,16 @@ source's queue. Every dropped envelope is a rejected observation with a
 `--fusion-lag-s` the run is the legacy run, byte for byte. Design and
 evidence: [DELIVERY_TIMING.md](DELIVERY_TIMING.md).
 
+## Assignment history (P0)
+
+Every replay's `meta.assignment_history` lists each drone's task changes:
+the task it flies on a tick (`search`, `follow:<target>`, `explore`,
+`poi:<id>`, `egress`, `frontier`), when it changed and why, and the POI
+handoffs and team joins stage 9 applied. It is additive and records nothing
+the run reads back; `scripts/replay_hashes.py --ignore-meta
+assignment_history` proves a change to it leaves everything else
+byte-identical. See PLANNING_EFFICIENCY_PLAN.md P0.
+
 ## A lane at its own rate (B2.4, `scheduled_v1`)
 
 `--executor lanes --mission-rate NUM/DEN` runs the mission lane (stage 9) at

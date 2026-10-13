@@ -146,6 +146,23 @@ pub enum Operational {
     Explore(FrontierExplorer),
 }
 
+impl Operational {
+    /// What the platform is doing, for the assignment history
+    /// ([`crate::assignments`]): `search`, `follow:<target>` or `explore`. A
+    /// search-then-follow platform searches until its sensor engages.
+    pub fn task(&self) -> String {
+        match self {
+            Operational::Search(_) => "search".to_string(),
+            Operational::Follow { target_id, .. } => format!("follow:{target_id}"),
+            Operational::SearchThenFollow(search) if search.is_engaged() => {
+                format!("follow:{}", search.preferred_target_id())
+            }
+            Operational::SearchThenFollow(_) => "search".to_string(),
+            Operational::Explore(_) => "explore".to_string(),
+        }
+    }
+}
+
 /// The launch path's two tuning values; the rest of its weather context is
 /// the environment's.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -678,6 +695,25 @@ pub struct ControllerStage {
     /// the ground or a structure is put back and recorded. `None` in every
     /// prior run, which then samples exactly as before.
     guard: Option<crate::belief_world::PhysicalGuard>,
+}
+
+impl ControllerStage {
+    /// Each mobile platform's own task, in fleet order: what it flies when no
+    /// recall overrides it. Ground stations have none.
+    pub fn tasks(&self) -> Vec<(String, String)> {
+        self.state
+            .controllers
+            .iter()
+            .filter_map(|(id, controller)| {
+                let operational = match controller {
+                    PlatformController::Static { .. } => return None,
+                    PlatformController::Free(operational) => operational,
+                    PlatformController::Launched { controller, .. } => controller.operational(),
+                };
+                Some((id.clone(), operational.task()))
+            })
+            .collect()
+    }
 }
 
 impl fmt::Debug for ControllerStage {
