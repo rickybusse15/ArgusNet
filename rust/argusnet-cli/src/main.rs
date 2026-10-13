@@ -684,7 +684,7 @@ fn sim(args: SimArgs) -> ExitCode {
             } else {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
             },
-            "runtime_algorithm": argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+            "runtime_algorithm": run.sim.runtime_algorithm_version(),
             "input": if args.recover.is_some() {
                 "recovered run directory"
             } else if args.config.is_some() {
@@ -1029,7 +1029,7 @@ fn main() -> ExitCode {
         Command::Fuse(args) => fuse(args),
         Command::Version => {
             println!(
-                "argusnet-rs {}\nscenario config format {} v{}\nscenario bundle format {} v{}\ncheckpoint format {} ({} with lane rates), runtime algorithm {}, seed version {}",
+                "argusnet-rs {}\nscenario config format {} v{}\nscenario bundle format {} v{}\ncheckpoint format {} ({} with lane rates), runtime algorithm {} ({} with a planning policy), seed version {}",
                 env!("CARGO_PKG_VERSION"),
                 builder::CONFIG_FORMAT,
                 builder::CONFIG_VERSION,
@@ -1038,6 +1038,7 @@ fn main() -> ExitCode {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION,
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG,
                 argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+                argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION_POLICY,
                 argusnet_sim::snapshot::CheckpointHeader::SEED_VERSION,
             );
             ExitCode::SUCCESS

@@ -1539,6 +1539,7 @@ impl AssembledRun {
         {
             Some(driver) => {
                 driver.set_policy(policy);
+                self.sim.set_policy_algorithm(!policy.is_reference());
                 true
             }
             None => false,

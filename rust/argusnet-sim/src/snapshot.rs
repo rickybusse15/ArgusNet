@@ -131,6 +131,12 @@ impl CheckpointHeader {
     /// Version 2 changes command-boundary recovery and single-step semantics.
     /// Old checkpoints must not silently resume under a different control contract.
     pub const RUNTIME_ALGORITHM_VERSION: u32 = 2;
+    /// Version 2 with POIs allocated under a planning policy other than the
+    /// reference (P1): written only by such a run, so a reader that predates
+    /// the policy refuses its checkpoints instead of resuming them under the
+    /// reference planner. The mission driver's own state then checks the
+    /// policy itself. Every other checkpoint stays version 2.
+    pub const RUNTIME_ALGORITHM_VERSION_POLICY: u32 = 3;
     /// Still 1: the ChaCha8 stream and the Box–Muller transform in
     /// [`crate::deterministic`]. Bump alongside any re-baseline.
     pub const SEED_VERSION: u32 = 1;
@@ -292,7 +298,10 @@ impl SimulationCheckpoint {
                 expected,
             });
         }
-        if self.header.runtime_algorithm_version != CheckpointHeader::RUNTIME_ALGORITHM_VERSION {
+        if self.header.runtime_algorithm_version != CheckpointHeader::RUNTIME_ALGORITHM_VERSION
+            && self.header.runtime_algorithm_version
+                != CheckpointHeader::RUNTIME_ALGORITHM_VERSION_POLICY
+        {
             return Err(RestoreError::AlgorithmVersion {
                 found: self.header.runtime_algorithm_version,
                 expected: CheckpointHeader::RUNTIME_ALGORITHM_VERSION,

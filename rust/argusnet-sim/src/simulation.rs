@@ -566,6 +566,9 @@ pub struct Simulation {
     /// as the driver declared them. Only these may sit out a boundary, and a
     /// checkpoint restores only into a run that declared the same.
     lane_rates: BTreeMap<Stage, String>,
+    /// The algorithm version its checkpoints carry: 2, or 3 under a planning
+    /// policy other than the reference (P1).
+    runtime_algorithm_version: u32,
 }
 
 impl fmt::Debug for Simulation {
@@ -625,6 +628,7 @@ impl Simulation {
             scenario_hash: 0,
             stage_lag: BTreeMap::new(),
             lane_rates: BTreeMap::new(),
+            runtime_algorithm_version: CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
         })
     }
 
@@ -1287,6 +1291,22 @@ impl Simulation {
     }
 
     /// The lanes declared to run at their own rate.
+    /// Mark the run's checkpoints as allocating POIs under a planning policy
+    /// other than the reference (P1), so a build that predates the policy
+    /// refuses them ([`CheckpointHeader::RUNTIME_ALGORITHM_VERSION_POLICY`]).
+    pub fn set_policy_algorithm(&mut self, policy_bearing: bool) {
+        self.runtime_algorithm_version = if policy_bearing {
+            CheckpointHeader::RUNTIME_ALGORITHM_VERSION_POLICY
+        } else {
+            CheckpointHeader::RUNTIME_ALGORITHM_VERSION
+        };
+    }
+
+    /// The algorithm version this run's checkpoints carry.
+    pub fn runtime_algorithm_version(&self) -> u32 {
+        self.runtime_algorithm_version
+    }
+
     pub fn lane_rates(&self) -> &BTreeMap<Stage, String> {
         &self.lane_rates
     }
@@ -1586,7 +1606,7 @@ impl Simulation {
                 } else {
                     CheckpointHeader::FORMAT_VERSION_STAGE_LAG
                 },
-                runtime_algorithm_version: CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+                runtime_algorithm_version: self.runtime_algorithm_version,
                 seed_version: CheckpointHeader::SEED_VERSION,
                 run_id: self.config.run_id().to_string(),
                 epoch: self.epoch,

@@ -96,3 +96,41 @@ fn a_reset_efficient_run_is_a_fresh_one() {
     let again = serde_json::to_string(&reset.run_to_replay().expect("runs")).unwrap();
     assert!(fresh == again, "a reset keeps the policy and starts over");
 }
+
+/// A checkpoint taken under `efficient_v1` carries runtime algorithm 3, so a
+/// build that predates the policy (which accepts only 2) refuses it instead
+/// of resuming it under the reference planner. It resumes into an
+/// `efficient_v1` run; a reference run refuses it on the driver's policy. A
+/// reference checkpoint is unchanged at 2.
+#[test]
+fn an_efficient_checkpoint_is_versioned_and_resumes_only_as_efficient() {
+    use argusnet_sim::snapshot::CheckpointHeader;
+    let mut source = run("scan", PlanningPolicy::EfficientV1);
+    for _ in 0..40 {
+        source.step().expect("steps");
+    }
+    let checkpoint = source.sim.checkpoint().expect("not faulted");
+    assert_eq!(
+        checkpoint.header.runtime_algorithm_version,
+        CheckpointHeader::RUNTIME_ALGORITHM_VERSION_POLICY
+    );
+    assert!(run("scan", PlanningPolicy::EfficientV1)
+        .restore(&checkpoint)
+        .is_ok());
+    let refused = run("scan", PlanningPolicy::Reference)
+        .restore(&checkpoint)
+        .unwrap_err();
+    assert!(format!("{refused}").contains("efficient_v1"), "{refused}");
+
+    let mut reference = run("scan", PlanningPolicy::Reference);
+    reference.step().expect("steps");
+    assert_eq!(
+        reference
+            .sim
+            .checkpoint()
+            .expect("not faulted")
+            .header
+            .runtime_algorithm_version,
+        CheckpointHeader::RUNTIME_ALGORITHM_VERSION
+    );
+}
