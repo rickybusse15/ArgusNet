@@ -374,9 +374,35 @@ impl MissionDriverStage {
         // whatever order the bundle declares drones and POIs in.
         let mut pending = self.pois.pending_pois();
         pending.sort_by(|a, b| a.poi_id.cmp(&b.poi_id).then(a.index.cmp(&b.index)));
+        // A low drone holding a POI hands it, later this run, to the first
+        // fresh free drone in fleet order. Keep that drone out of the solve,
+        // or the solve could take the only receiver and strand the handoff.
+        let capacity_wh = battery.model().capacity_wh;
+        let fraction_of = |id: &str| {
+            battery
+                .remaining_wh(id)
+                .map_or(1.0, |remaining| remaining / capacity_wh)
+        };
+        let mut receivers: Vec<&str> = Vec::new();
+        for (id, _) in mobile {
+            if fraction_of(id) < self.config.handoff_low_fraction
+                && self.pois.assignment_for(id).is_some()
+            {
+                if let Some((other, _)) = mobile.iter().find(|(other, _)| {
+                    other != id
+                        && fraction_of(other) > self.config.handoff_fresh_fraction
+                        && self.pois.assignment_for(other).is_none()
+                        && !receivers.contains(&other.as_str())
+                }) {
+                    receivers.push(other);
+                }
+            }
+        }
         let mut free: Vec<&(String, [f64; 3])> = mobile
             .iter()
-            .filter(|(id, _)| self.pois.assignment_for(id).is_none())
+            .filter(|(id, _)| {
+                self.pois.assignment_for(id).is_none() && !receivers.contains(&id.as_str())
+            })
             .collect();
         free.sort_by(|a, b| a.0.cmp(&b.0));
         if pending.is_empty() || free.is_empty() {
@@ -1526,6 +1552,29 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("poi-00 is repeated"), "{error}");
         assert!(driver(pois()).set_policy(PlanningPolicy::Reference).is_ok());
+    }
+
+    /// A low drone holding a POI keeps its receiver: the fresh free drone the
+    /// handoff will choose is not spent on a pending POI first.
+    #[test]
+    fn efficient_v1_keeps_the_handoff_receiver_free() {
+        let (mut battery, mobile) = fleet(&[("drone-low", 100.0), ("drone-fresh", 900.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 100.0, 1), poi("poi-01", 900.0, 1)]);
+        // drone-low takes poi-00 while it is still full.
+        let only_low = vec![mobile[0].clone()];
+        stage.inspect(0.0, 1.0, &only_low, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-low"), Some("poi-00"));
+        // Then it runs low, and drone-fresh appears with poi-01 pending.
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-low", 0.25 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        let handoff = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_handoff")
+            .expect("the low drone hands off");
+        assert_eq!(handoff.status, DecisionStatus::Applied);
+        assert_eq!(handoff.selected.as_deref(), Some("drone-fresh"));
     }
 
     /// A POI the drone could not reach, dwell at and keep its reserve after

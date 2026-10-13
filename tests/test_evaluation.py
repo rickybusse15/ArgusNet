@@ -980,6 +980,30 @@ class TestAssignmentCounts:
         replay["frames"] = []
         assert assignment_counts(replay) == (4, 0, 3)
 
+    def test_a_shared_poi_id_gets_no_completion_exemption(self):
+        # Two POIs share the id p1 and only one completed: leaving "p1" could
+        # be leaving the unfinished one, so it is counted as a change.
+        history = {
+            "drone-a": [
+                _event(0.0, "assign", "search"),
+                _event(40.0, "reassign", "poi:p1", previous="search"),
+                _event(55.0, "reassign", "search", previous="poi:p1"),
+            ],
+        }
+        frames = [
+            {
+                "timestamp_s": 70.0,
+                "scan_mission_state": {
+                    "poi_statuses": [
+                        {"poi_id": "p1", "completion_time_s": 50.0},
+                        {"poi_id": "p1", "completion_time_s": None},
+                    ]
+                },
+            }
+        ]
+        replay = {"frames": frames, "meta": {"assignment_history": history}}
+        assert assignment_counts(replay) == (2, 0, 1)
+
     def test_none_without_a_history(self):
         assert assignment_counts({"meta": {}}) is None
         report = evaluate_replay(_build_good_replay(), "s", "m", 0.1, 1)

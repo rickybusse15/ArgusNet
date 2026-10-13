@@ -684,15 +684,21 @@ def assignment_counts(replay_doc: dict) -> tuple[int, int, int] | None:
 
 
 def _poi_completions(frames: list) -> dict[str, float]:
-    """Each completed POI's completion time, from the last scan mission state."""
+    """Each completed POI's completion time, from the last scan mission state.
+
+    A POI id that more than one POI shares is left out: the history names a
+    task only by id, so it cannot tell which of them a drone left."""
     states = [
         f["scan_mission_state"] for f in frames if isinstance(f.get("scan_mission_state"), dict)
     ]
     statuses = states[-1].get("poi_statuses") or [] if states else []
+    counts: dict[str, int] = {}
+    for p in statuses:
+        counts[str(p["poi_id"])] = counts.get(str(p["poi_id"]), 0) + 1
     return {
         str(p["poi_id"]): float(p["completion_time_s"])
         for p in statuses
-        if p.get("completion_time_s") is not None
+        if p.get("completion_time_s") is not None and counts[str(p["poi_id"])] == 1
     }
 
 
