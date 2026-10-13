@@ -50,6 +50,9 @@ struct RunConfig {
     /// The same for the mapping lane (`--mapping-rate`, B2.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mapping_rate: Option<String>,
+    /// The same for the fusion lane (`--fusion-rate`, B2.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fusion_rate: Option<String>,
     /// How the run allocates POIs (`--planning-policy`, P1). Absent for the
     /// reference, so a reference run's `run.json` is unchanged.
     #[serde(default, skip_serializing_if = "PlanningPolicy::is_reference")]
@@ -137,6 +140,7 @@ impl RunDir {
             bundle: bundle_text.to_string(),
             mission_rate: rates.mission.map(rate_text),
             mapping_rate: rates.mapping.map(rate_text),
+            fusion_rate: rates.fusion.map(rate_text),
             planning_policy: policy,
         };
         let json = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
@@ -184,7 +188,10 @@ impl RunDir {
         // Recorded for the recovery that reads it back: a run whose checkpoints
         // this build cannot read is refused here, by name, rather than failing
         // later on the checkpoint's own header.
-        let checkpoint_format = if config.mission_rate.is_some() || config.mapping_rate.is_some() {
+        let checkpoint_format = if config.mission_rate.is_some()
+            || config.mapping_rate.is_some()
+            || config.fusion_rate.is_some()
+        {
             argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
         } else {
             argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
@@ -207,6 +214,7 @@ impl RunDir {
                 .map_err(|error| incomplete(format!("run.json's {flag}: {error}")))
         };
         let rates = LaneRates {
+            fusion: rate(config.fusion_rate, "fusion rate")?,
             mapping: rate(config.mapping_rate, "mapping rate")?,
             mission: rate(config.mission_rate, "mission rate")?,
         };

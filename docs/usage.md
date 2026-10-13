@@ -153,7 +153,8 @@ non-reference policy in `meta.planning_policy`, and a checkpoint resumes only
 under the policy it was taken with.
 
 `--mission-rate NUM/DEN` runs the mission lane at its own rate (B2.4,
-`scheduled_v1`), and `--mapping-rate NUM/DEN` the mapping lane (B2.5): the
+`scheduled_v1`), `--mapping-rate NUM/DEN` the mapping lane (B2.5) and
+`--fusion-rate NUM/DEN` the fusion lane (B2.6): the
 viewer's run is then the CLI's `--executor lanes` run with the same rates,
 frame for frame, and a reset starts the lanes' deadlines over.
 

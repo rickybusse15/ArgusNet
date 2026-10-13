@@ -685,6 +685,7 @@ mod tests {
     fn lane_rates_are_declared_and_recorded() {
         let options = RunOptions {
             lane_rates: argusnet_sim::scheduler::LaneRates {
+                fusion: Some(argusnet_sim::scheduler::parse_rate("1/2").unwrap()),
                 mapping: Some(argusnet_sim::scheduler::parse_rate("1/3").unwrap()),
                 mission: Some(argusnet_sim::scheduler::parse_rate("1/7").unwrap()),
             },
@@ -710,6 +711,7 @@ mod tests {
             Some("1/3")
         );
         assert_eq!(meta["lane_rates"]["mapping"], "1/3 Hz");
+        assert_eq!(meta["lane_rates"]["fusion"], "1/2 Hz");
     }
 
     #[test]

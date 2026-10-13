@@ -151,6 +151,16 @@ struct SimArgs {
     /// refused, since it buffers every one. Needs `--executor lanes`.
     #[arg(long, value_parser = parse_rate)]
     mapping_rate: Option<Schedule>,
+    /// Run the fusion lane (stage 7) at its own rate, `NUM/DEN` Hz (B2.6).
+    /// It keeps what every tick it sits out would have fused -- the
+    /// platforms, the observations -- and fuses them in order when it next
+    /// runs, so the tracker catches up exactly; between its runs the rest of
+    /// the tick reads the tracks it last fused. Recorded like
+    /// `--mission-rate`. A rate that would leave it idle for more than 1024
+    /// ticks in a row is refused, since it buffers every one. Needs
+    /// `--executor lanes`.
+    #[arg(long, value_parser = parse_rate)]
+    fusion_rate: Option<Schedule>,
     /// Workers for the stages that fork work inside a phase (B3): currently
     /// observation generation. The replay is identical at every count; 1 is
     /// the serial path.
@@ -522,13 +532,15 @@ fn build(args: BuildArgs) -> ExitCode {
 fn sim(args: SimArgs) -> ExitCode {
     let started = Instant::now();
     let flag_rates = argusnet_sim::scheduler::LaneRates {
+        fusion: args.fusion_rate,
         mapping: args.mapping_rate,
         mission: args.mission_rate,
     };
     if !flag_rates.is_empty() && !matches!(args.executor, Executor::Lanes) {
         return fail(
             EXIT_INVALID,
-            "--mission-rate and --mapping-rate run a lane at its own rate; they need --executor lanes",
+            "--mission-rate, --mapping-rate and --fusion-rate run a lane at its own rate; they need \
+             --executor lanes",
         );
     }
     // A recovered run takes the scheduler options its run directory recorded.
@@ -601,10 +613,11 @@ fn sim(args: SimArgs) -> ExitCode {
                         };
                         if differs(args.mission_rate, recorded.mission)
                             || differs(args.mapping_rate, recorded.mapping)
+                            || differs(args.fusion_rate, recorded.fusion)
                         {
                             return fail(
                                 EXIT_INVALID,
-                                "--mission-rate or --mapping-rate differs from the rates this \
+                                "--mission-rate, --mapping-rate or --fusion-rate differs from the rates this \
                                  run was recorded with",
                             );
                         }
