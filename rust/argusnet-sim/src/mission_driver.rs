@@ -460,11 +460,9 @@ impl MissionDriverStage {
                             poi.members
                         };
                         let hover_s = poi.remaining_dwell_s / members.max(1) as f64;
-                        let trip_wh = if teammate {
-                            0.0
-                        } else {
-                            model.segment_cost_wh(*position, poi.position)
-                        };
+                        // From where it is: a teammate still en route has
+                        // the rest of its trip to fly as well.
+                        let trip_wh = model.segment_cost_wh(*position, poi.position);
                         let spent_wh = trip_wh + model.hover_power_w * hover_s / 3600.0;
                         let reserve_wh = match self.homes.get(id.as_str()) {
                             Some(home) => model.dynamic_reserve_wh(
@@ -2087,6 +2085,45 @@ mod tests {
         assert_eq!(stage.pois.assignment_for("drone-a"), None);
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
         assert_eq!(stage.pois.pending_pois().len(), 1);
+    }
+
+    /// A teammate still en route is charged the rest of its trip: one that
+    /// could afford the dwell from the POI but not the flight there first is
+    /// no receiver, and the POI goes back to the pool.
+    #[test]
+    fn efficient_v1_charges_an_en_route_teammate_its_trip() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 20_500.0)]);
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 60.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        assert!(stage.pois.team_assign_at("drone-b", 0));
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        assert!(battery.set_remaining_wh("drone-b", 0.45 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        let released = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_release")
+            .expect("given up, not handed to drone-b");
+        assert_eq!(released.reason, "no_affordable_receiver");
+        assert_eq!(stage.pois.assignment_for("drone-b"), None);
+
+        // The same teammate at the POI takes it.
+        let (mut battery, mut mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 500.0)]);
+        mobile[1].1[1] = 10.0;
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 60.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        assert!(stage.pois.team_assign_at("drone-b", 0));
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        assert!(battery.set_remaining_wh("drone-b", 0.45 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        assert!(stage.pois.leads("drone-b"));
     }
 
     /// A low teammate leaves before the lead's handoff is costed, so the
