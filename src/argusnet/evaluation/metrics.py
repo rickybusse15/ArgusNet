@@ -691,20 +691,25 @@ def time_and_effort(replay_doc: dict) -> dict:
         for p in statuses
         if p.get("completion_time_s") is not None
     }
+    # A replay resumed from a checkpoint starts mid-run: a POI completed, or
+    # the scan's threshold reached, before its first frame happened outside
+    # the window, so neither figure is available from it.
     makespan = (
         max(completions.values()) - start
-        if statuses and len(completions) == len(statuses)
+        if statuses and len(completions) == len(statuses) and min(completions.values()) >= start
         else None
     )
-    scan_time = next(
-        (
-            float(f["timestamp_s"]) - start
-            for f in frames
-            if isinstance(f.get("scan_mission_state"), dict)
-            and float(f["scan_mission_state"].get("scan_coverage_fraction", 0.0))
-            >= float(f["scan_mission_state"].get("scan_coverage_threshold", 1.0))
-        ),
-        None,
+
+    def covered(frame: dict) -> bool:
+        state = frame.get("scan_mission_state")
+        return isinstance(state, dict) and float(state.get("scan_coverage_fraction", 0.0)) >= float(
+            state.get("scan_coverage_threshold", 1.0)
+        )
+
+    scan_time = (
+        None
+        if frames and covered(frames[0]) and start > 0.0
+        else next((float(f["timestamp_s"]) - start for f in frames if covered(f)), None)
     )
 
     service: list[float] = []
@@ -717,7 +722,10 @@ def time_and_effort(replay_doc: dict) -> dict:
             for event in events or []:
                 t = float(event.get("timestamp_s", 0.0))
                 task = str(event.get("task", ""))
-                if task.startswith("poi:") and event.get("kind") in ("assign", "reassign"):
+                # A drone already on a POI when a resumed replay begins was
+                # assigned it earlier: its service time is unknown.
+                observed = event.get("kind") == "reassign" or start <= 0.0
+                if task.startswith("poi:") and observed and event.get("kind") != "handoff":
                     first_on[task[4:]] = min(first_on.get(task[4:], t), t)
                 if event.get("kind") not in ("assign", "reassign"):
                     continue

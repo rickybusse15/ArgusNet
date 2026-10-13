@@ -1037,6 +1037,27 @@ class TestTimeAndEffort:
         assert figures["mission_makespan_s"] is None
         assert figures["poi_service_time_mean_s"] == pytest.approx(18.0)
 
+    def test_a_resumed_replay_does_not_report_what_happened_before_it(self):
+        replay = self._replay(all_done=True)
+        # Resumed at t=33 s: p1 completed at 30 s, before the first frame, and
+        # the scan's threshold was already reached.
+        replay["frames"] = replay["frames"][2:]
+        replay["frames"][0]["timestamp_s"] = 33.0
+        figures = time_and_effort(replay)
+        assert figures["mission_makespan_s"] is None
+        assert figures["scan_coverage_time_s"] is None
+
+    def test_a_poi_already_held_when_a_resumed_replay_begins_has_no_service_time(self):
+        replay = self._replay(all_done=True)
+        replay["frames"] = replay["frames"][1:]
+        # The history restarts at the checkpoint, with d1 already on p1.
+        replay["meta"]["assignment_history"] = {
+            "d1": [_event(10.0, "assign", "poi:p1"), _event(34.0, "reassign", "poi:p2")]
+        }
+        figures = time_and_effort(replay)
+        # p1's start was before the replay; p2's is observed (34 -> 35).
+        assert figures["poi_service_time_mean_s"] == pytest.approx(1.0)
+
     def test_without_a_mission_or_history(self):
         figures = time_and_effort(_build_good_replay())
         assert figures["mission_makespan_s"] is None
