@@ -426,6 +426,10 @@ impl Flight {
 /// unless it is that much further. Tuned on the qualification seeds only.
 pub const PRIORITY_WORTH_WH: f64 = 5.0;
 
+/// How close a drone must be to a POI, horizontally, to credit its dwell:
+/// the `<= 30.0` in [`PoiManager::accumulate_dwell`].
+const POI_DWELL_RANGE_M: f64 = 30.0;
+
 impl std::fmt::Debug for MissionDriverStage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -747,17 +751,28 @@ impl MissionDriverStage {
                         if !teammate && self.pois.assignment_for(id).is_some() {
                             return None;
                         }
-                        let members = if teammate {
-                            poi.members - 1
-                        } else {
-                            poi.members
-                        };
-                        let hover_s = poi.remaining_dwell_s / members.max(1) as f64;
-                        let trip_wh = if teammate {
-                            0.0
-                        } else {
-                            self.trip_cost_wh(&model, *position, poi.position)
-                        };
+                        // It shares the dwell only with the holders that
+                        // stay and are already in range: one still en route
+                        // would leave it hovering alone until it arrives.
+                        let sharing = mobile
+                            .iter()
+                            .filter(|(other, other_position)| {
+                                other != lead
+                                    && other != id
+                                    && self.pois.assignment_for(other) == Some(poi.poi_id.as_str())
+                                    && {
+                                        let (dx, dy) = (
+                                            poi.position[0] - other_position[0],
+                                            poi.position[1] - other_position[1],
+                                        );
+                                        (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
+                                    }
+                            })
+                            .count();
+                        let hover_s = poi.remaining_dwell_s / (sharing + 1) as f64;
+                        // From where it is: a teammate still en route has
+                        // the rest of its trip to fly as well.
+                        let trip_wh = self.trip_cost_wh(&model, *position, poi.position);
                         let spent_wh = trip_wh + model.hover_power_w * hover_s / 3600.0;
                         let reserve_wh = match self.homes.get(id.as_str()) {
                             Some(home) => model.dynamic_reserve_wh(
@@ -934,8 +949,10 @@ impl MissionDriverStage {
         // Teams: a drone still free joins a POI being inspected, so both
         // credit its dwell, when that helps and it can afford it. It helps if
         // the drone arrives before the POI's holders would finish it alone
-        // (they credit the remaining dwell together; holders still en route
-        // are counted as there, so the estimate favours not joining). It can
+        // (they credit the remaining dwell together). Only a POI whose
+        // holders are all already in dwell range takes a teammate: one still
+        // en route would leave the newcomer hovering alone for time the
+        // energy estimate does not charge. It can
         // afford it if, after the trip and hovering until the POI is done
         // with it, it still has its reserve home. One new teammate per POI
         // per run, chosen by the same solver on trip-plus-hover energy.
@@ -943,7 +960,29 @@ impl MissionDriverStage {
             .into_iter()
             .filter(|(id, _)| self.pois.assignment_for(id).is_none())
             .collect();
-        let mut active = self.pois.active_pois();
+        let in_range = |poi: &argusnet_planning::poi::ActivePoi| {
+            let holders: Vec<&(String, [f64; 3])> = mobile
+                .iter()
+                .filter(|(id, _)| self.pois.assignment_for(id) == Some(poi.poi_id.as_str()))
+                .collect();
+            holders.len() == poi.members
+                && holders.iter().all(|(id, position)| {
+                    // A holder about to hand the POI on leaves it this run,
+                    // and the newcomer would hover alone until its receiver
+                    // arrived.
+                    fraction_of(id) >= self.config.handoff_low_fraction && {
+                        let (dx, dy) =
+                            (poi.position[0] - position[0], poi.position[1] - position[1]);
+                        (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
+                    }
+                })
+        };
+        let mut active: Vec<_> = self
+            .pois
+            .active_pois()
+            .into_iter()
+            .filter(in_range)
+            .collect();
         active.sort_by(|a, b| a.poi_id.cmp(&b.poi_id).then(a.index.cmp(&b.index)));
         if free.is_empty() || active.is_empty() {
             return Vec::new();
@@ -1617,7 +1656,8 @@ impl StageHandler for MissionDriverStage {
 
     fn not_due(&mut self, context: &mut TickContext<'_>) -> Result<(), StageError> {
         // This tick's outputs: the decisions it records and the override
-        // commands stage 2 takes next tick. A boundary it sat out made none.
+        // commands stage 2 takes next tick. A boundary it sat out made none,
+        // but for a return home under `efficient_v1` (below).
         // The machine's events are taken where they are made, in `run`.
         self.override_commands.clear();
         self.decisions.clear();
@@ -1626,11 +1666,21 @@ impl StageHandler for MissionDriverStage {
         // next run it would count a drone that arrived or left in between for
         // the whole interval, and a POI assigned at that run for time before
         // it was assigned. Assignment and completion wait for the lane's run.
+        let mobile = mobile_positions(context);
         if self.machine.phase() == MissionPhase::Inspecting {
-            for (id, position) in mobile_positions(context) {
+            for (id, position) in &mobile {
                 self.pois
-                    .accumulate_dwell(&id, position, context.boundary_dt_s);
+                    .accumulate_dwell(id, *position, context.boundary_dt_s);
             }
+        }
+        // A drone that reaches its reserve between the lane's runs turns for
+        // home at once, not at the next run: what it would fly meanwhile is
+        // the energy that gets it home. Its POI goes at the next run, which
+        // treats a homeward drone as giving it up.
+        if self.policy == PlanningPolicy::EfficientV1 {
+            let empty = BatteryStage::new();
+            let battery = stage_one_battery(context.stages).unwrap_or(&empty);
+            self.send_low_drones_home(&mobile, battery, context.timestamp_s);
         }
         Ok(())
     }
@@ -2121,7 +2171,14 @@ mod tests {
         stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
         assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
         assert!(stage.pois.leads("drone-a"), "the POI is drone-a's");
-        // drone-z, left free, joins it as a teammate (P1 teams).
+        // drone-z, left free, waits while drone-a is still en route, then
+        // joins it as a teammate once drone-a is in dwell range (P1 teams).
+        assert_eq!(stage.pois.assignment_for("drone-z"), None);
+        let arrived = vec![
+            mobile[0].clone(),
+            ("drone-a".to_string(), [500.0, 0.0, 40.0]),
+        ];
+        stage.inspect(1.0, 1.0, &arrived, &battery, &empty_map());
         assert_eq!(stage.pois.assignment_for("drone-z"), Some("poi-00"));
         assert!(!stage.pois.leads("drone-z"));
         // Equal POIs, declared poi-01 first: the one drone takes poi-00.
@@ -2136,6 +2193,40 @@ mod tests {
             .find(|d| d.kind == "poi_assignment")
             .unwrap();
         assert_eq!(decision.candidates, vec!["poi-00", "poi-01"]);
+    }
+
+    /// A drone already below the handoff threshold is given no POI, so the
+    /// team stage cannot take the receiver its handoff would need.
+    #[test]
+    fn efficient_v1_gives_a_low_drone_nothing_new() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 520.0)]);
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), None);
+        assert!(stage.pois.leads("drone-b"));
+    }
+
+    /// No drone joins a POI whose holder is about to hand it on: it would
+    /// hover alone until the receiver arrived.
+    #[test]
+    fn efficient_v1_never_teams_onto_a_poi_being_handed_on() {
+        // drone-b is kept free to receive it; drone-c, close by, is free too.
+        let (mut battery, mobile) =
+            fleet(&[("drone-a", 500.0), ("drone-b", 3_000.0), ("drone-c", 520.0)]);
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 60.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert!(stage
+            .decisions()
+            .iter()
+            .all(|d| d.kind != "team_assignment"));
     }
 
     /// P1 teams: a drone left free after allocation joins a POI being
@@ -2617,6 +2708,73 @@ mod tests {
         assert_eq!(stage.pois.assignment_for("drone-a"), None);
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
         assert_eq!(stage.pois.pending_pois().len(), 1);
+    }
+
+    /// A teammate still en route is charged the rest of its trip: one that
+    /// could afford the dwell from the POI but not the flight there first is
+    /// no receiver, and the POI goes back to the pool.
+    #[test]
+    fn efficient_v1_charges_an_en_route_teammate_its_trip() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 20_500.0)]);
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 60.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        assert!(stage.pois.team_assign_at("drone-b", 0));
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        assert!(battery.set_remaining_wh("drone-b", 0.45 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        let released = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_release")
+            .expect("given up, not handed to drone-b");
+        assert_eq!(released.reason, "no_affordable_receiver");
+        assert_eq!(stage.pois.assignment_for("drone-b"), None);
+
+        // The same teammate at the POI takes it.
+        let (mut battery, mut mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 500.0)]);
+        mobile[1].1[1] = 10.0;
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 60.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        assert!(stage.pois.team_assign_at("drone-b", 0));
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        assert!(battery.set_remaining_wh("drone-b", 0.45 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        assert!(stage.pois.leads("drone-b"));
+    }
+
+    /// A teammate still en route shares nothing yet: a receiver already at
+    /// the POI is charged the dwell alone, and one that can afford only half
+    /// of it is passed over for one that can afford its share.
+    #[test]
+    fn efficient_v1_shares_a_handoff_only_with_teammates_in_range() {
+        let (mut battery, mobile) =
+            fleet(&[("drone-a", 500.0), ("drone-b", 510.0), ("drone-c", 2_000.0)]);
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            required_dwell_s: 360.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        assert!(stage.pois.assign_at("drone-a", 0));
+        assert!(stage.pois.team_assign_at("drone-b", 0));
+        assert!(stage.pois.team_assign_at("drone-c", 0));
+        let capacity = battery.model().capacity_wh;
+        assert!(battery.set_remaining_wh("drone-a", 0.25 * capacity));
+        // 40 Wh: 360 s of hover alone (30 Wh) would leave it under its
+        // 20 Wh reserve; half of it (15 Wh) would not.
+        assert!(battery.set_remaining_wh("drone-b", 0.40 * capacity));
+        stage.inspect(1.0, 1.0, &mobile, &battery, &empty_map());
+        let handoff = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_handoff")
+            .expect("handed on");
+        assert_eq!(handoff.selected.as_deref(), Some("drone-c"));
     }
 
     /// A low teammate leaves before the lead's handoff is costed, so the

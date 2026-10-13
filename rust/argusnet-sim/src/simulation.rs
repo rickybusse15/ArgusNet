@@ -785,21 +785,24 @@ impl Simulation {
                         fusion.submit_safety_events(events);
                     }
                 }
-                Handoff::OverridesFromMission => {
-                    let Some(commands) = self
-                        .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
-                        .map(MissionDriverStage::take_override_commands)
-                    else {
-                        continue;
-                    };
-                    if let Some(overrides) =
-                        self.stage_mut::<MissionOverrideStage>(Stage::ApplyMissionOverrides)
-                    {
-                        for command in commands {
-                            overrides.apply(command);
-                        }
-                    }
-                }
+                Handoff::OverridesFromMission => self.deliver_mission_overrides(),
+            }
+        }
+    }
+
+    /// Hand the mission driver's queued override writes to stage 2.
+    fn deliver_mission_overrides(&mut self) {
+        let Some(commands) = self
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+            .map(MissionDriverStage::take_override_commands)
+        else {
+            return;
+        };
+        if let Some(overrides) =
+            self.stage_mut::<MissionOverrideStage>(Stage::ApplyMissionOverrides)
+        {
+            for command in commands {
+                overrides.apply(command);
             }
         }
     }
@@ -1380,6 +1383,15 @@ impl Simulation {
                 }
                 None => None,
             };
+            // The one write a sat-out stage can make: a return home the
+            // mission driver queued when a drone reached its reserve between
+            // its runs (P2). Delivered as a run would, or it is lost.
+            if declined.is_none()
+                && stage == Stage::EvaluateMissionTransitions
+                && self.handoffs.contains(&Handoff::OverridesFromMission)
+            {
+                self.deliver_mission_overrides();
+            }
             if let Some(error) = declined {
                 self.trace.record(StageRecord {
                     tick,

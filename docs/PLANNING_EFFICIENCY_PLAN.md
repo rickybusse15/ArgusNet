@@ -178,8 +178,8 @@ finishing a POI and taking the next one as thrash. Leaving a completed POI
 now restarts the window. With that fixed, thrash is 0 under both policies.
 *Second slice: teams.* Under `efficient_v1`, a drone still free after the
 pending POIs are allocated joins a POI being inspected, so both credit its
-dwell. It joins only when it would arrive before the drones holding the POI
-finish it alone, and only if it can afford the trip, its share of the dwell
+dwell. It joins only once every drone holding the POI is in dwell range, only
+when it would arrive before they finish it alone, and only if it can afford the trip, its share of the dwell
 and the trip home above its reserve. The same solver picks the joins, at most
 one new teammate per POI per run, on trip-plus-hover energy. The POI's status
 keeps naming the drone that took it. Under `efficient_v1` only that drone
@@ -189,7 +189,8 @@ the assignment history. The reference keeps its dead team branch and is
 unchanged byte for byte.
 
 Measured against the first slice on the same qualification seeds (PhysicalV1,
-paired, `efficient_v1` before and after teams):
+paired, `efficient_v1` before and after teams; measured before the dwell-range
+rule, which can only make joins rarer):
 
 | Scenario | Seeds with a team join | `mission_completion_rate` | `fleet_distance_m` |
 | --- | --- | --- | --- |
