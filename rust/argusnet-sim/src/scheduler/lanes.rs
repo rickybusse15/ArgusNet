@@ -105,17 +105,24 @@ pub const LANES_V1: [Lane; 5] = [
 /// The stages whose lanes may run at their own rate, and why each may:
 /// mission (B2.4) because its inputs are cumulative (the map, the fleet) and
 /// its one use of elapsed time is given the time since it last ran; mapping
-/// (B2.5) because it keeps what each boundary it sits out would have
-/// integrated and integrates it, in order, when it next runs.
-pub const RATED_LANES: [Stage; 2] = [
+/// (B2.5) and fusion (B2.6) because each keeps what every boundary it sits
+/// out would have taken in and takes it in, in order, when it next runs.
+pub const RATED_LANES: [Stage; 3] = [
+    Stage::UpdateFusion,
     Stage::UpdateMappingAndLocalization,
     Stage::EvaluateMissionTransitions,
 ];
 
-/// The lanes' own rates as a run is configured with them (B2.4, B2.5). All
+/// The rated lanes that buffer what they sit out, and so are capped at
+/// [`MAX_BUFFERED_BOUNDARIES`].
+const BUFFERING_LANES: [Stage; 2] = [Stage::UpdateFusion, Stage::UpdateMappingAndLocalization];
+
+/// The lanes' own rates as a run is configured with them (B2.4–B2.6). All
 /// `None` is the legacy run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LaneRates {
+    /// The fusion lane (stage 7).
+    pub fusion: Option<Schedule>,
     /// The mapping lane (stage 8).
     pub mapping: Option<Schedule>,
     /// The mission lane (stage 9).
@@ -125,13 +132,14 @@ pub struct LaneRates {
 impl LaneRates {
     /// No lane has its own rate: the legacy run.
     pub fn is_empty(&self) -> bool {
-        self.mapping.is_none() && self.mission.is_none()
+        self.fusion.is_none() && self.mapping.is_none() && self.mission.is_none()
     }
 
     /// Each rated lane as `(stage, name, rate)`, in pipeline order. The name
     /// is the key the replay's `meta.lane_rates` records it under.
     pub fn rated(&self) -> impl Iterator<Item = (Stage, &'static str, Schedule)> {
         [
+            (Stage::UpdateFusion, "fusion", self.fusion),
             (Stage::UpdateMappingAndLocalization, "mapping", self.mapping),
             (Stage::EvaluateMissionTransitions, "mission", self.mission),
         ]
@@ -148,9 +156,10 @@ impl LaneRates {
     }
 }
 
-/// The most boundaries in a row a buffering lane (mapping) may sit out. What
-/// it keeps per boundary is the platforms' positions and their scans, held in
-/// memory and written into every checkpoint, so a rate that leaves it idle for
+/// The most boundaries in a row a buffering lane (fusion, mapping) may sit
+/// out. What it keeps per boundary (the platforms and the observations or
+/// scans of that boundary) is held in memory and written into every
+/// checkpoint, so a rate that leaves it idle for
 /// hours of ticks would grow without bound in practice. 1024 boundaries is
 /// over 17 minutes at the 1 s canonical timestep and about 20 s at 50 Hz.
 pub const MAX_BUFFERED_BOUNDARIES: u64 = 1024;
@@ -228,11 +237,21 @@ impl PhasedLaneExecutor {
         self.with_rate(Stage::UpdateMappingAndLocalization, schedule)
     }
 
+    /// The fusion lane (stage 7) at its own rate (B2.6): it keeps what each
+    /// boundary it sits out would have fused -- the platforms, the
+    /// observations, metadata and safety events -- and fuses them in order
+    /// when it next runs, so the tracker's state is the every-boundary run's
+    /// whenever it has run. Between runs, the stages after it see the tracks
+    /// it last fused.
+    pub fn with_fusion_rate(self, schedule: Schedule) -> Result<Self, TimeError> {
+        self.with_rate(Stage::UpdateFusion, schedule)
+    }
+
     fn with_rate(mut self, stage: Stage, schedule: Schedule) -> Result<Self, TimeError> {
         debug_assert!(RATED_LANES.contains(&stage));
         let lane = lane_of(stage).expect("a rated lane is one of LANES_V1");
         schedule.validate()?;
-        if stage == Stage::UpdateMappingAndLocalization {
+        if BUFFERING_LANES.contains(&stage) {
             let boundaries = self.longest_gap(schedule)?;
             if boundaries > MAX_BUFFERED_BOUNDARIES {
                 return Err(TimeError::BacklogTooLong {

@@ -68,7 +68,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use argusnet_core::{TrackerConfig, TrackingEngine};
-use argusnet_types::{BearingObservation, PlatformFrame, SafetyEvent, TargetMetadata};
+use argusnet_types::{BearingObservation, NodeState, PlatformFrame, SafetyEvent, TargetMetadata};
 
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{StageError, StageOutcome};
@@ -90,6 +90,23 @@ struct State {
     /// Timestamped delivery between capture and fusion (B4). `None` is the
     /// legacy path: this tick's batch is fused this tick.
     delivery: Option<crate::delivery::DeliveryNetwork>,
+    /// The boundaries the lane sat out since it last ran (B2.6), in order.
+    /// Empty at the legacy rate.
+    pending: Vec<PendingBoundary>,
+}
+
+/// One boundary stage 7 sat out (its lane at its own rate, B2.6): what it
+/// would have fused then. Fused, in order, when the lane next runs, so the
+/// tracker's state is what it would have been had it run every boundary.
+/// Target metadata and safety events are not kept: the tracker only passes
+/// them through to its frame, so the boundary publishes them itself.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct PendingBoundary {
+    tick: u64,
+    timestamp_s: f64,
+    nodes: Vec<NodeState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    observations: Vec<crate::delivery::StoredObservation>,
 }
 
 /// `TrackingEngine` is not `Debug`, and `StageHandler` requires it. Written by
@@ -111,29 +128,47 @@ impl fmt::Debug for State {
 
 /// The key a fusion checkpoint keeps its delivery network under.
 const DELIVERY_KEY: &str = "delivery_network";
+/// The key a fusion checkpoint keeps the boundaries it sat out under (B2.6).
+const PENDING_KEY: &str = "pending";
 
-/// A fusion checkpoint: the engine alone (legacy), or the engine and the
-/// delivery network.
+/// A fusion checkpoint: the engine alone (legacy), or the engine beside the
+/// delivery network and the boundaries sat out, each when there is one.
+type SplitCheckpoint = (
+    TrackingEngine,
+    Option<crate::delivery::DeliveryNetwork>,
+    Vec<PendingBoundary>,
+);
+
 fn split_checkpoint(
     state: &serde_json::Value,
-) -> Result<
-    (TrackingEngine, Option<crate::delivery::DeliveryNetwork>),
-    crate::simulation::StageStateError,
-> {
-    match state.get(DELIVERY_KEY) {
-        None => Ok((crate::simulation::decode_stage_state(state)?, None)),
-        Some(delivery) => {
-            let engine = state.get("engine").ok_or_else(|| {
-                crate::simulation::StageStateError::Malformed {
-                    detail: "a checkpoint with a delivery network has no engine".into(),
-                }
-            })?;
-            Ok((
-                crate::simulation::decode_stage_state(engine)?,
-                Some(crate::simulation::decode_stage_state(delivery)?),
-            ))
-        }
+) -> Result<SplitCheckpoint, crate::simulation::StageStateError> {
+    if state.get(DELIVERY_KEY).is_none() && state.get(PENDING_KEY).is_none() {
+        return Ok((
+            crate::simulation::decode_stage_state(state)?,
+            None,
+            Vec::new(),
+        ));
     }
+    let engine =
+        state
+            .get("engine")
+            .ok_or_else(|| crate::simulation::StageStateError::Malformed {
+                detail: "a fusion checkpoint with a delivery network or pending boundaries has \
+                         no engine"
+                    .into(),
+            })?;
+    Ok((
+        crate::simulation::decode_stage_state(engine)?,
+        state
+            .get(DELIVERY_KEY)
+            .map(crate::simulation::decode_stage_state)
+            .transpose()?,
+        state
+            .get(PENDING_KEY)
+            .map(crate::simulation::decode_stage_state)
+            .transpose()?
+            .unwrap_or_default(),
+    ))
 }
 
 /// [`Stage::UpdateFusion`] as a [`StageHandler`].
@@ -155,6 +190,7 @@ impl FusionStage {
                 inbox: Inbox::default(),
                 frame: None,
                 delivery: None,
+                pending: Vec::new(),
             },
         })
     }
@@ -213,6 +249,7 @@ impl StageHandler for FusionStage {
         shared.engine = TrackingEngine::new(config).expect("the config was valid at construction");
         shared.inbox = Inbox::default();
         shared.frame = None;
+        shared.pending.clear();
         if let Some(delivery) = shared.delivery.as_mut() {
             delivery.reset();
         }
@@ -220,24 +257,31 @@ impl StageHandler for FusionStage {
 
     /// Every track's filters, lifecycle and history, and each node's health.
     /// With a delivery network, the envelopes in transit too, under
-    /// [`DELIVERY_KEY`]; without one the state is exactly the engine's, as it
+    /// [`DELIVERY_KEY`]; with boundaries sat out (B2.6), those under
+    /// [`PENDING_KEY`]. With neither the state is exactly the engine's, as it
     /// always was.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
         let engine = serde_json::to_value(&self.state.engine).expect("engine state serialises");
-        Some(match &self.state.delivery {
-            None => engine,
-            Some(delivery) => serde_json::json!({
-                "engine": engine,
-                DELIVERY_KEY: serde_json::to_value(delivery).expect("delivery state serialises"),
-            }),
-        })
+        if self.state.delivery.is_none() && self.state.pending.is_empty() {
+            return Some(engine);
+        }
+        let mut state = serde_json::json!({ "engine": engine });
+        if let Some(delivery) = &self.state.delivery {
+            state[DELIVERY_KEY] =
+                serde_json::to_value(delivery).expect("delivery state serialises");
+        }
+        if !self.state.pending.is_empty() {
+            state[PENDING_KEY] =
+                serde_json::to_value(&self.state.pending).expect("pending boundaries serialise");
+        }
+        Some(state)
     }
 
     fn check_state(
         &self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let (engine, delivery) = split_checkpoint(state)?;
+        let (engine, delivery, _) = split_checkpoint(state)?;
         if delivery.is_some() != self.state.delivery.is_some() {
             return Err(crate::simulation::StageStateError::Malformed {
                 detail: "the checkpoint and this run disagree on whether delivery is modelled"
@@ -264,14 +308,63 @@ impl StageHandler for FusionStage {
         &mut self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let (engine, delivery) = split_checkpoint(state)?;
+        let (engine, delivery, pending) = split_checkpoint(state)?;
         let shared = &mut self.state;
         shared.engine = engine;
         shared.inbox = Inbox::default();
         shared.frame = None;
+        shared.pending = pending;
         if delivery.is_some() {
             shared.delivery = delivery;
         }
+        Ok(())
+    }
+
+    /// The lane is not due (B2.6): keep this boundary's platforms and
+    /// observations to fuse, in order, when it next runs, and publish a frame
+    /// that fused nothing -- the tracks as they stand, this boundary's
+    /// platforms, and the metadata and safety events the tracker would only
+    /// have passed through.
+    fn not_due(&mut self, context: &mut TickContext<'_>) -> Result<(), StageError> {
+        let shared = &mut self.state;
+        let inbox = std::mem::take(&mut shared.inbox);
+        let nodes = context.world.platforms().to_vec();
+        shared.pending.push(PendingBoundary {
+            tick: context.tick,
+            timestamp_s: context.timestamp_s,
+            nodes: nodes.clone(),
+            observations: inbox.observations.iter().map(Into::into).collect(),
+        });
+        let tracks = context.world.tracks().to_vec();
+        let metrics = argusnet_types::PlatformMetrics {
+            mean_error_m: None,
+            max_error_m: None,
+            active_track_count: tracks.len() as u32,
+            observation_count: 0,
+            accepted_observation_count: 0,
+            rejected_observation_count: 0,
+            mean_measurement_std_m: None,
+            track_errors_m: Default::default(),
+            rejection_counts: Default::default(),
+            accepted_observations_by_target: Default::default(),
+            rejected_observations_by_target: Default::default(),
+        };
+        shared.frame = Some(Arc::new(PlatformFrame {
+            timestamp_s: context.timestamp_s,
+            nodes,
+            observations: Vec::new(),
+            rejected_observations: Vec::new(),
+            tracks,
+            truths: Vec::new(),
+            metrics,
+            generation_rejections: Vec::new(),
+            target_metadata: inbox.target_metadata,
+            safety_events: inbox.safety_events,
+        }));
+        context.note(format!(
+            "not due: {} boundary(ies) waiting to be fused",
+            shared.pending.len()
+        ));
         Ok(())
     }
 
@@ -283,6 +376,33 @@ impl StageHandler for FusionStage {
         // exists to prevent.
         let inbox = std::mem::take(&mut shared.inbox);
 
+        // The boundaries the lane sat out first, each as it was then (B2.6),
+        // so the tracker ages and updates exactly as it would have every
+        // boundary; at the legacy rate there are none. What they fused is
+        // reported in this boundary's frame, before this boundary's own.
+        let mut caught_up = Vec::new();
+        let mut caught_up_rejections = Vec::new();
+        for boundary in std::mem::take(&mut shared.pending) {
+            let observations = boundary.observations.iter().map(Into::into).collect();
+            let (fusion_time_s, observations, drops) = take_delivered(
+                shared.delivery.as_mut(),
+                boundary.tick,
+                boundary.timestamp_s,
+                observations,
+            );
+            let frame = shared.engine.ingest_frame(
+                fusion_time_s,
+                boundary.nodes,
+                observations,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            caught_up.extend(frame.observations.iter().cloned());
+            caught_up_rejections.extend(frame.rejected_observations.iter().cloned());
+            caught_up_rejections.extend(drops.iter().map(|drop| drop.rejection(context.dt_s)));
+        }
+
         // The reference calls `ingest_frame` unconditionally, every tick, even
         // with an empty batch -- the tracker's lifecycle ages tracks toward
         // `Coasting` and `Lost` on the strength of ticks passing, so skipping a
@@ -292,16 +412,12 @@ impl StageHandler for FusionStage {
         // the horizon's time. Before the first horizon nothing can have been
         // delivered, so an empty batch is fused at the current time; no track
         // can exist yet, so nothing is aged at the wrong time.
-        let (fusion_time_s, observations, drops) = match shared.delivery.as_mut() {
-            None => (context.timestamp_s, inbox.observations, Vec::new()),
-            Some(delivery) => {
-                delivery.capture(context.tick, context.timestamp_s, &inbox.observations);
-                let (time_s, batch) = delivery
-                    .deliver(context.tick)
-                    .unwrap_or((context.timestamp_s, Vec::new()));
-                (time_s, batch, delivery.take_drops())
-            }
-        };
+        let (fusion_time_s, observations, drops) = take_delivered(
+            shared.delivery.as_mut(),
+            context.tick,
+            context.timestamp_s,
+            inbox.observations,
+        );
         let mut frame = shared.engine.ingest_frame(
             fusion_time_s,
             node_states,
@@ -314,6 +430,13 @@ impl StageHandler for FusionStage {
             inbox.safety_events,
         );
 
+        if !caught_up.is_empty() || !caught_up_rejections.is_empty() {
+            let frame = Arc::make_mut(&mut frame);
+            caught_up.append(&mut frame.observations);
+            frame.observations = caught_up;
+            caught_up_rejections.append(&mut frame.rejected_observations);
+            frame.rejected_observations = caught_up_rejections;
+        }
         // Every delivery drop is recorded with its reason, beside the
         // tracker's own rejections.
         if !drops.is_empty() {
@@ -332,6 +455,26 @@ impl StageHandler for FusionStage {
              {rejection_count} rejected"
         ));
         Ok(StageOutcome::Ran)
+    }
+}
+
+/// The batch to fuse at legacy tick `tick`: this tick's observations as they
+/// are (legacy), or, with delivery modelled, those captured now go in transit
+/// and what was acquired at the horizon comes out, at the horizon's time, with
+/// whatever the network dropped.
+fn take_delivered(
+    delivery: Option<&mut crate::delivery::DeliveryNetwork>,
+    tick: u64,
+    timestamp_s: f64,
+    observations: Vec<BearingObservation>,
+) -> (f64, Vec<BearingObservation>, Vec<crate::delivery::Dropped>) {
+    match delivery {
+        None => (timestamp_s, observations, Vec::new()),
+        Some(delivery) => {
+            delivery.capture(tick, timestamp_s, &observations);
+            let (time_s, batch) = delivery.deliver(tick).unwrap_or((timestamp_s, Vec::new()));
+            (time_s, batch, delivery.take_drops())
+        }
     }
 }
 
@@ -769,6 +912,104 @@ mod tests {
                 a.position.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
                 b.position.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
             );
+        }
+    }
+
+    fn fusion_state(sim: &Simulation) -> serde_json::Value {
+        fused(sim).checkpoint_state().expect("stage 7 checkpoints")
+    }
+
+    fn executor(rate: Option<&str>, first: u64) -> crate::scheduler::PhasedLaneExecutor {
+        let executor =
+            crate::scheduler::PhasedLaneExecutor::new::<crate::simulation::TickError>(1.0, first)
+                .unwrap();
+        match rate {
+            Some(rate) => executor
+                .with_fusion_rate(crate::scheduler::parse_rate(rate).unwrap())
+                .unwrap(),
+            None => executor,
+        }
+    }
+
+    /// Boundary `k`'s input: the crossing pair, observed at `k`.
+    fn feed(sim: &mut Simulation, k: u64) {
+        fusion(sim).submit_observations(crossing_pair(k as f64));
+    }
+
+    /// B2.6: a fusion lane at a third of the boundary rate keeps every
+    /// boundary it sits out and fuses it when it runs: at each boundary it
+    /// runs, the tracker is exactly the every-boundary run's. A boundary it
+    /// sits out publishes the tracks as they stand and fuses nothing.
+    #[test]
+    fn a_fusion_lane_at_its_own_rate_catches_up_exactly() {
+        let mut every = rig();
+        let mut rated = rig();
+        rated.declare_lane_rate(Stage::UpdateFusion, "1/3");
+        let (mut every_lanes, mut rated_lanes) = (executor(None, 0), executor(Some("1/3"), 0));
+        for k in 0..12 {
+            feed(&mut every, k);
+            feed(&mut rated, k);
+            every_lanes.step(&mut every).expect("tick");
+            rated_lanes.step(&mut rated).expect("tick");
+            let frame = fused(&rated).frame().expect("a frame every boundary");
+            if k % 3 == 0 {
+                assert_eq!(fusion_state(&rated), fusion_state(&every), "boundary {k}");
+                assert_eq!(
+                    rated.world().tracks(),
+                    every.world().tracks(),
+                    "boundary {k}"
+                );
+                // The boundaries it caught up on are reported with this one.
+                let fused_here = if k == 0 { 2 } else { 6 };
+                assert_eq!(frame.observations.len(), fused_here, "boundary {k}");
+            } else {
+                assert_eq!(
+                    fusion_state(&rated)["pending"].as_array().unwrap().len() as u64,
+                    k % 3
+                );
+                assert!(frame.observations.is_empty(), "boundary {k}");
+                assert_eq!(frame.timestamp_s, k as f64);
+                assert_eq!(frame.tracks, rated.world().tracks());
+            }
+        }
+        assert!(
+            !every.world().tracks().is_empty(),
+            "no tracks, so nothing was compared"
+        );
+        // The legacy rate checkpoints the engine alone, as it always did.
+        assert!(fusion_state(&every).get("engine").is_none());
+    }
+
+    /// A checkpoint taken while boundaries are pending (ticks 4 and 5) holds
+    /// them, and a run restored from it fuses exactly what an uninterrupted
+    /// one does.
+    #[test]
+    fn pending_fusion_boundaries_survive_a_checkpoint() {
+        let mut whole = rig();
+        whole.declare_lane_rate(Stage::UpdateFusion, "1/3");
+        let mut lanes = executor(Some("1/3"), 0);
+        for k in 0..6 {
+            feed(&mut whole, k);
+            lanes.step(&mut whole).expect("tick");
+        }
+        let checkpoint = whole.checkpoint().expect("not faulted");
+        assert_eq!(
+            fusion_state(&whole)["pending"].as_array().unwrap().len(),
+            2,
+            "ticks 4 and 5 are pending"
+        );
+
+        let mut resumed = rig();
+        resumed.declare_lane_rate(Stage::UpdateFusion, "1/3");
+        resumed.restore(&checkpoint).expect("restores");
+        let mut resumed_lanes = executor(Some("1/3"), 6);
+        for k in 6..10 {
+            feed(&mut whole, k);
+            feed(&mut resumed, k);
+            lanes.step(&mut whole).expect("tick");
+            resumed_lanes.step(&mut resumed).expect("tick");
+            assert_eq!(fusion_state(&resumed), fusion_state(&whole), "boundary {k}");
+            assert_eq!(resumed.world().tracks(), whole.world().tracks());
         }
     }
 }

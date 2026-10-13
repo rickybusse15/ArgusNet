@@ -155,6 +155,10 @@ struct RunOptionArgs {
     /// --executor lanes --mapping-rate`.
     #[arg(long, value_parser = argusnet_sim::scheduler::parse_rate, requires = "run")]
     mapping_rate: Option<argusnet_sim::scheduler::Schedule>,
+    /// Run the fusion lane at `NUM/DEN` Hz (B2.6), as `argusnet-rs sim
+    /// --executor lanes --fusion-rate`.
+    #[arg(long, value_parser = argusnet_sim::scheduler::parse_rate, requires = "run")]
+    fusion_rate: Option<argusnet_sim::scheduler::Schedule>,
 }
 
 impl RunOptionArgs {
@@ -184,6 +188,7 @@ impl RunOptionArgs {
             },
             exploration: None,
             lane_rates: argusnet_sim::scheduler::LaneRates {
+                fusion: self.fusion_rate,
                 mapping: self.mapping_rate,
                 mission: self.mission_rate,
             },

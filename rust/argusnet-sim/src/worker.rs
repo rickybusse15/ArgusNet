@@ -713,6 +713,7 @@ mod tests {
         let bundle =
             ScenarioBundle::from_json(&std::fs::read_to_string(&path).expect("fixture")).unwrap();
         let rates = LaneRates {
+            fusion: Some(parse_rate("1/2").expect("rate")),
             mapping: Some(parse_rate("1/3").expect("rate")),
             mission: Some(parse_rate("1/7").expect("rate")),
         };

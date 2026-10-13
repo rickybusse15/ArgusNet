@@ -711,6 +711,88 @@ fn a_crashed_run_with_a_mapping_rate_recovers_with_it() {
     );
 }
 
+/// B2.6: a run with its fusion lane at its own rate records the rate and,
+/// crashed, recovers to the uninterrupted journal byte for byte -- including
+/// when its last checkpoint holds boundaries the fusion lane had not yet
+/// fused.
+#[test]
+fn a_crashed_run_with_a_fusion_rate_recovers_with_it() {
+    // Every 3 s against 1 s ticks: the checkpoint at tick 50 comes after the
+    // lane ran at tick 48, with ticks 49 and 50 still to fuse.
+    let rates = ["--executor", "lanes", "--fusion-rate", "1/3"];
+    let whole = run_dir("journal-fusion-whole");
+    let replay = scratch("journal-fusion-whole-replay.json");
+    let with_replay: Vec<&str> = rates
+        .iter()
+        .copied()
+        .chain(["--replay", replay.to_str().unwrap()])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &whole, &with_replay);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let meta = serde_json::to_value(&read_replay(&replay).meta).unwrap();
+    assert_eq!(meta["lane_rates"]["fusion"], "1/3 Hz");
+
+    let crashed = run_dir("journal-fusion-crashed");
+    let with_crash: Vec<&str> = rates
+        .iter()
+        .copied()
+        .chain(["--crash-after", "61"])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &crashed, &with_crash);
+    assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run["fusion_rate"], "1/3");
+    let checkpoint: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("checkpoint.json")).unwrap())
+            .unwrap();
+    assert!(
+        checkpoint["stage_states"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|state| state.get("engine").is_some() && state.get("pending").is_some()),
+        "the last checkpoint holds boundaries the fusion lane had not fused"
+    );
+
+    // A different rate is refused before anything is touched.
+    let output = binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(&crashed)
+        .args(["--executor", "lanes", "--fusion-rate", "1/1"])
+        .output()
+        .expect("runs");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("differs"));
+
+    let output = recover(&crashed);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        std::fs::read(whole.join("journal.jsonl")).unwrap(),
+        "the recovered journal is not the uninterrupted one"
+    );
+
+    // A rate that would buffer without bound is refused, as for mapping.
+    let refused = run_dir("journal-fusion-refused");
+    let output = record(
+        "scenario_bundle_scan.json",
+        &refused,
+        &["--executor", "lanes", "--fusion-rate", "1/2000"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("at most 1024"));
+    assert!(!refused.exists());
+}
+
 /// A mapping rate that would buffer more than the allowed run of skipped
 /// ticks is refused before anything is written, so the run directory is not
 /// left behind half made and the corrected command can use the same path.
