@@ -418,11 +418,38 @@ def mesh_from_polyline(
         (min(x for x, _ in p), min(y for _, y in p), max(x for x, _ in p), max(y for _, y in p))
         for p in pieces
     ]
+    # A uniform grid indexes the pieces, so each one is only tested against
+    # earlier pieces near it: linear in the line's length rather than
+    # quadratic. Cells the size of a typical piece keep a long diagonal
+    # segment from spanning a square of tiny cells.
+    extents = sorted(max(x1 - x0, y1 - y0) for x0, y0, x1, y1 in boxes)
+    cell_m = max(extents[len(extents) // 2], float(width_m), 1.0e-3)
+    grid: dict[tuple[int, int], list[int]] = {}
+
+    # The rare piece spanning many cells (one long diagonal segment) is kept
+    # on a short list every piece checks, rather than filling a square of cells.
+    large: list[int] = []
+
+    def cells(box: tuple[float, float, float, float]) -> list[tuple[int, int]] | None:
+        x0, y0, x1, y1 = (math.floor(v / cell_m) for v in box)
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 64:
+            return None
+        return [(i, j) for i in range(x0, x1 + 1) for j in range(y0, y1 + 1)]
+
     union: list[_Polygon] = []
     for index, piece in enumerate(pieces):
         fragments = [piece]
         x0, y0, x1, y1 = boxes[index]
-        for earlier, (ex0, ey0, ex1, ey1) in zip(pieces[:index], boxes[:index], strict=True):
+        piece_cells = cells(boxes[index])
+        if piece_cells is None:
+            nearby = list(range(index))
+        else:
+            nearby = sorted(
+                {other for cell in piece_cells for other in grid.get(cell, ())}.union(large)
+            )
+        for other in nearby:
+            earlier = pieces[other]
+            ex0, ey0, ex1, ey1 = boxes[other]
             # Most pieces only touch their neighbours; cutting by a piece that
             # merely touches would only shatter this one into slivers.
             if ex0 >= x1 or ex1 <= x0 or ey0 >= y1 or ey1 <= y0:
@@ -437,6 +464,11 @@ def mesh_from_polyline(
                 )
             ]
         union.extend(fragments)
+        if piece_cells is None:
+            large.append(index)
+        else:
+            for cell in piece_cells:
+                grid.setdefault(cell, []).append(index)
 
     positions: list[list[float]] = []
     indices: list[int] = []
