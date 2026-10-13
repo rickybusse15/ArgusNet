@@ -300,34 +300,50 @@ def mesh_from_polyline(
     width_m: float,
     z_offset_m: float = 0.5,
 ) -> SimpleMesh:
+    # One joined strip, mitred at each bend: separate per-segment quads would
+    # overlap around every shared point, and a translucent layer draws the
+    # overlap twice.
     if len(points_xy) < 2:
         return merge_meshes(())
+    points = [np.asarray(points_xy[0], dtype=np.float64)]
+    for point in points_xy[1:]:
+        point = np.asarray(point, dtype=np.float64)
+        if float(np.linalg.norm(point - points[-1])) > 1.0e-6:
+            points.append(point)
+    if len(points) < 2:
+        return merge_meshes(())
+    lefts = []
+    for start, end in zip(points[:-1], points[1:], strict=True):
+        direction = (end - start) / float(np.linalg.norm(end - start))
+        lefts.append(np.array([-direction[1], direction[0]]))
+    half_width = float(width_m) * 0.5
     positions: list[list[float]] = []
-    indices: list[int] = []
-    for segment_index in range(len(points_xy) - 1):
-        start = np.asarray(points_xy[segment_index], dtype=np.float32)
-        end = np.asarray(points_xy[segment_index + 1], dtype=np.float32)
-        direction = end - start
-        length = float(np.linalg.norm(direction))
-        if length <= 1.0e-6:
-            continue
-        normal = np.array([-direction[1], direction[0]], dtype=np.float32) / length
-        offset = normal * (float(width_m) * 0.5)
-        quad_xy = [start - offset, start + offset, end + offset, end - offset]
-        base = len(positions)
-        for point in quad_xy:
+    for index, point in enumerate(points):
+        before = lefts[max(index - 1, 0)]
+        after = lefts[min(index, len(lefts) - 1)]
+        miter = before + after
+        length = float(np.linalg.norm(miter))
+        if length <= 1.0e-9:
+            miter, scale = after, 1.0
+        else:
+            miter = miter / length
+            # A hairpin's miter grows without bound; cap it at four widths.
+            scale = 1.0 / max(float(np.dot(miter, after)), 0.25)
+        offset = miter * (half_width * scale)
+        for corner in (point - offset, point + offset):
             positions.append(
                 [
-                    float(point[0]),
-                    float(point[1]),
-                    float(height_at(float(point[0]), float(point[1]))) + z_offset_m,
+                    float(corner[0]),
+                    float(corner[1]),
+                    float(height_at(float(corner[0]), float(corner[1]))) + z_offset_m,
                 ]
             )
-        # Counter-clockwise from above, so the strip faces up: a translucent
-        # layer is single-sided and would cull a downward-wound strip.
-        indices.extend([base, base + 2, base + 1, base, base + 3, base + 2])
-    if not indices:
-        return merge_meshes(())
+    indices: list[int] = []
+    for index in range(len(points) - 1):
+        # `[s-o, e+o, s+o]`, `[s-o, e-o, e+o]`: counter-clockwise from above, so
+        # the strip faces up; a translucent layer is single-sided.
+        right, left = 2 * index, 2 * index + 1
+        indices.extend([right, left + 2, left, right, right + 2, left + 2])
     position_array = np.asarray(positions, dtype=np.float32)
     index_array = np.asarray(indices, dtype=np.uint32)
     return SimpleMesh(

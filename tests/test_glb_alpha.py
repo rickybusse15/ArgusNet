@@ -11,6 +11,7 @@ import struct
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from argusnet.world._glb import SimpleMesh, write_glb
 from argusnet.world._scene_geometry import mesh_from_polyline
@@ -64,3 +65,22 @@ def test_a_line_strip_faces_up() -> None:
     up = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])[:, 2]
     assert (up > 0.0).all()
     assert (strip.normals[:, 2] > 0.0).all()
+
+
+def test_a_bent_line_strip_does_not_overlap_itself() -> None:
+    # Translucent fragments do not write depth, so overlapping segment quads
+    # would draw a darker seam at every bend. The joined strip's triangles
+    # cover exactly its outline.
+    points = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [20.0, 12.0]])
+    strip = mesh_from_polyline(
+        points, height_at=lambda x, y: 0.0, color_rgba=(0.2, 0.4, 0.9, 0.85), width_m=4.0
+    )
+    assert strip.positions.shape[0] == 2 * len(points)
+    xy = strip.positions[:, :2].astype(np.float64)
+    corners = xy[strip.indices.reshape(-1, 3)]
+    u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
+    covered = 0.5 * (u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]).sum()
+    outline = np.concatenate([xy[0::2], xy[1::2][::-1]])
+    x, y = outline[:, 0], outline[:, 1]
+    outline_area = 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+    assert covered == pytest.approx(outline_area, rel=1e-5)
