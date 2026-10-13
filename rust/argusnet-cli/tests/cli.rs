@@ -570,6 +570,64 @@ fn a_crashed_run_recovers_to_the_uninterrupted_journal() {
     assert!(output.status.success());
 }
 
+/// P1: an `efficient_v1` run recovers as that run. Its run directory
+/// records the policy, so recovery needs no flag, and a flag naming another
+/// policy is refused.
+#[test]
+fn a_crashed_efficient_run_recovers_with_its_planning_policy() {
+    let policy = ["--planning-policy", "efficient_v1"];
+    let whole = run_dir("journal-efficient-whole");
+    let output = record("scenario_bundle_scan.json", &whole, &policy);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let crashed = run_dir("journal-efficient-crashed");
+    let with_crash: Vec<&str> = policy
+        .iter()
+        .copied()
+        .chain(["--crash-after", "60"])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &crashed, &with_crash);
+    assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run["planning_policy"], "efficient_v1");
+    assert_eq!(run["format"], "argusnet-run/2", "refused by a pre-P1 build");
+
+    let named_default = binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(&crashed)
+        .args(["--checkpoint-every", "25", "--planning-policy", "reference"])
+        .output()
+        .expect("runs");
+    // The reference is the flag's default, so naming it changes nothing:
+    // the run directory's policy wins. (Only a different non-reference
+    // policy is refused, and there is no second one yet.)
+    assert!(
+        named_default.status.success(),
+        "{}",
+        String::from_utf8_lossy(&named_default.stderr)
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        std::fs::read(whole.join("journal.jsonl")).unwrap(),
+        "the recovered journal is not the uninterrupted efficient_v1 one"
+    );
+
+    // A reference run's run directory does not mention a policy.
+    let reference = run_dir("journal-efficient-reference");
+    let output = record("scenario_bundle_scan.json", &reference, &[]);
+    assert!(output.status.success());
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(reference.join("run.json")).unwrap())
+            .unwrap();
+    assert!(run.get("planning_policy").is_none());
+    assert_eq!(run["format"], "argusnet-run/1");
+}
+
 /// B2.4: a run with the mission lane at its own rate recovers as that run,
 /// not as the legacy one: its run directory records the rate.
 #[test]

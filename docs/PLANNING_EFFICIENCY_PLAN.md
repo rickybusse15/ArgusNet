@@ -155,6 +155,31 @@ hover during dwell or a team waiting at a POI. So acceptance also requires
 gets an envelope of its own, declared before the policy's first acceptance
 run.
 
+*First slice done:* `--planning-policy efficient_v1` (CLI and viewer `--run`)
+solves free drones × pending POIs with a deterministic Hungarian solver
+(`argusnet-planning::allocation::min_cost_assignment`, checked against brute
+force). The cost is the trip's energy, plus hover for the dwell, less 5 Wh
+per priority level. A pair that would leave the drone below
+`dynamic_reserve_wh` home (the static reserve without a home) is infeasible.
+A drone keeps the POI it holds, so there is no preemption and so no
+hysteresis yet. The reference is byte-identical (14/14 replays; reset and
+resume equal). Development measurement (qualification seeds, PhysicalV1,
+paired over 30 seeds, `scripts/compare_scenarios.py`; not the acceptance
+run):
+
+| Scenario | `mission_completion_rate` | `fleet_distance_m` | `battery_remaining_min` |
+| --- | --- | --- | --- |
+| `planner_adversarial` | +0.10 (0.04 to 0.16), better on 12, worse on 1 | +108 (−3 to 219), no detectable difference | identical |
+| `persistent_long` | +0.17 (0.09 to 0.24), better on 15, worse on 0 | +363 (−3 to 728), no detectable difference | identical |
+| `baseline_coverage` | identical (its runs end before the POIs) | identical | identical |
+
+The measurement found a defect in P0's `assignment_thrash`: it counted
+finishing a POI and taking the next one as thrash. Leaving a completed POI
+now restarts the window. With that fixed, thrash is 0 under both policies.
+Still to do in P1: teams on active POIs, safe handoff, hysteresis once
+preemption exists, and the acceptance run (held-out seeds and a
+`battery_remaining_min` envelope, both declared first).
+
 ### P2: per-drone return home and reserve feasibility (F5)
 
 - Consume `ReserveReached`. A drone that reaches its reserve gets a

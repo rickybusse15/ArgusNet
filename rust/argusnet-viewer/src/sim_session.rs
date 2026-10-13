@@ -651,6 +651,32 @@ mod tests {
         );
     }
 
+    /// `--planning-policy` reaches the viewer's run as the CLI's: the same
+    /// frames as `RunOptions::apply` on a direct run, and recorded in meta.
+    #[test]
+    fn the_planning_policy_reaches_the_viewers_run() {
+        let options = RunOptions {
+            planning_policy: argusnet_sim::run_options::PlanningPolicy::EfficientV1,
+            ..RunOptions::default()
+        };
+        let path = fixture("scenario_bundle_scan.json");
+        let replay = load_run(&path, &options)
+            .expect("loads")
+            .run_to_replay()
+            .expect("runs");
+        let meta = serde_json::to_value(&replay.meta).unwrap();
+        assert_eq!(meta["planning_policy"], "efficient_v1");
+        let bundle = ScenarioBundle::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut direct = assemble(&bundle).unwrap();
+        options.apply(&mut direct, &bundle).expect("applies");
+        let viewer_frames: Vec<String> = replay
+            .frames
+            .iter()
+            .map(|frame| serde_json::to_string(frame).unwrap())
+            .collect();
+        assert_eq!(viewer_frames, frames_of(direct));
+    }
+
     /// `--mission-rate` and `--mapping-rate` reach the viewer's run as the
     /// CLI's: declared on the run and recorded in its replay (the session's
     /// worker steps it at those rates; `worker::tests` compares the frames

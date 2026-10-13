@@ -145,6 +145,13 @@ cargo run -p argusnet-viewer -- --scene runs/demo.smartscene --run runs/demo-con
 An option the run cannot support (for example, a delay longer than the fusion
 lag) is refused before the window opens. Reset keeps the options.
 
+`--planning-policy efficient_v1` (on `argusnet-rs sim` and the viewer's
+`--run`) allocates a scan mission's POIs across the whole fleet at once
+(PLANNING_EFFICIENCY_PLAN P1) instead of the reference's one drone at a time
+in fleet order. The default, `reference`, is unchanged. The replay records a
+non-reference policy in `meta.planning_policy`, and a checkpoint resumes only
+under the policy it was taken with.
+
 `--mission-rate NUM/DEN` runs the mission lane at its own rate (B2.4,
 `scheduled_v1`), `--mapping-rate NUM/DEN` the mapping lane (B2.5) and
 `--fusion-rate NUM/DEN` the fusion lane (B2.6): the

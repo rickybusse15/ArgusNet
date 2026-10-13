@@ -1527,6 +1527,27 @@ impl AssembledRun {
         BatteryStage::of_mut(&mut self.sim).expect("assembly chains a BatteryStage into stage 1")
     }
 
+    /// Allocate the mission's POIs under `policy` (P1). `Ok(false)` for a
+    /// run with no mission driver; refused for a mission the policy cannot
+    /// run (see [`MissionDriverStage::set_policy`]). Before the first tick
+    /// only.
+    pub fn set_planning_policy(
+        &mut self,
+        policy: argusnet_planning::allocation::PlanningPolicy,
+    ) -> Result<bool, String> {
+        match self
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+        {
+            Some(driver) => {
+                driver.set_policy(policy)?;
+                self.sim.set_policy_algorithm(!policy.is_reference());
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     /// Stage 9's mission driver, for scan-map-inspect runs.
     pub fn driver(&self) -> Option<&MissionDriverStage> {
         self.sim

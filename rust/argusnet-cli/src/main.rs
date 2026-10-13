@@ -197,6 +197,12 @@ struct SimArgs {
     /// of each tick not spent moving.
     #[arg(long, value_enum, default_value = "legacy")]
     energy_profile: EnergyProfileArg,
+    /// Who allocates the mission's POIs (P1): `reference` is the reference's
+    /// greedy, fleet-order assignment; `efficient_v1` assigns every free drone
+    /// against every pending POI at once, on trip and dwell energy within the
+    /// reserve home. Recorded in the replay's `meta.planning_policy`.
+    #[arg(long, value_enum, default_value = "reference")]
+    planning_policy: PlanningPolicyArg,
     /// Model timestamped delivery (B4): fusion ingests the evidence acquired
     /// this many seconds ago. Delays plus jitter must not exceed it. Omit for
     /// the legacy same-tick path.
@@ -293,6 +299,14 @@ enum EnergyProfileArg {
     PhysicalV1,
 }
 
+/// `--planning-policy`'s values (P1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum PlanningPolicyArg {
+    Reference,
+    #[value(name = "efficient_v1")]
+    EfficientV1,
+}
+
 /// The energy profile, delivery and faults the flags ask for, applied by
 /// the same code as the viewer's in-process run.
 fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, String> {
@@ -301,6 +315,14 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
             EnergyProfileArg::PhysicalV1 => argusnet_planning::battery::EnergyProfile::PhysicalV1,
+        },
+        planning_policy: match args.planning_policy {
+            PlanningPolicyArg::Reference => {
+                argusnet_planning::allocation::PlanningPolicy::Reference
+            }
+            PlanningPolicyArg::EfficientV1 => {
+                argusnet_planning::allocation::PlanningPolicy::EfficientV1
+            }
         },
         delivery: args.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {
             fusion_lag_s,
@@ -524,6 +546,7 @@ fn sim(args: SimArgs) -> ExitCode {
     // A recovered run takes the scheduler options its run directory recorded.
     let mut executor_kind = args.executor;
     let mut lane_rates = flag_rates;
+    let mut recorded_policy = None;
     if args.pursuit.is_some() && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
         return fail(
             EXIT_INVALID,
@@ -580,7 +603,11 @@ fn sim(args: SimArgs) -> ExitCode {
                     return ExitCode::SUCCESS;
                 }
                 match dir.recorded() {
-                    Ok((text, recorded)) => {
+                    Ok(rundir::Recorded {
+                        bundle: text,
+                        rates: recorded,
+                        policy,
+                    }) => {
                         let differs = |flag: Option<Schedule>, recorded: Option<Schedule>| {
                             flag.is_some() && flag != recorded
                         };
@@ -598,6 +625,7 @@ fn sim(args: SimArgs) -> ExitCode {
                             executor_kind = Executor::Lanes;
                         }
                         lane_rates = recorded;
+                        recorded_policy = Some(policy);
                         text
                     }
                     Err(error) => return fail(EXIT_INVALID, error),
@@ -628,13 +656,24 @@ fn sim(args: SimArgs) -> ExitCode {
         Err(error @ BundleError::Unsupported(_)) => return fail(EXIT_UNSUPPORTED, error),
         Err(error) => return fail(EXIT_INVALID, error),
     };
-    let options = match run_options(&args) {
+    let mut options = match run_options(&args) {
         Ok(options) => argusnet_sim::run_options::RunOptions {
             lane_rates,
             ..options
         },
         Err(error) => return fail(EXIT_UNSUPPORTED, error),
     };
+    // A recovered run allocates POIs as it was started: its run directory
+    // records the policy. A flag naming another one is refused.
+    if let Some(recorded) = recorded_policy {
+        if !options.planning_policy.is_reference() && options.planning_policy != recorded {
+            return fail(
+                EXIT_INVALID,
+                "--planning-policy differs from the policy this run was recorded with",
+            );
+        }
+        options.planning_policy = recorded;
+    }
     // Refused before anything runs (B4, F2: an unsupported delivery profile
     // or an impossible fault manifest is rejected before the run).
     if let Err(error) = options.apply(&mut run, &bundle) {
@@ -658,7 +697,7 @@ fn sim(args: SimArgs) -> ExitCode {
             } else {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION
             },
-            "runtime_algorithm": argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+            "runtime_algorithm": run.sim.runtime_algorithm_version(),
             "input": if args.recover.is_some() {
                 "recovered run directory"
             } else if args.config.is_some() {
@@ -685,7 +724,7 @@ fn sim(args: SimArgs) -> ExitCode {
     let mut recorder = match (&args.run_dir, &args.recover) {
         (Some(path), _) => {
             let dir = RunDir::new(path);
-            if let Err(error) = dir.create_with(&text, &lane_rates) {
+            if let Err(error) = dir.create_with(&text, &lane_rates, options.planning_policy) {
                 return fail(EXIT_INVALID, error);
             }
             match Recorder::start(
@@ -1003,7 +1042,7 @@ fn main() -> ExitCode {
         Command::Fuse(args) => fuse(args),
         Command::Version => {
             println!(
-                "argusnet-rs {}\nscenario config format {} v{}\nscenario bundle format {} v{}\ncheckpoint format {} ({} with lane rates), runtime algorithm {}, seed version {}",
+                "argusnet-rs {}\nscenario config format {} v{}\nscenario bundle format {} v{}\ncheckpoint format {} ({} with lane rates), runtime algorithm {} ({} with a planning policy), seed version {}",
                 env!("CARGO_PKG_VERSION"),
                 builder::CONFIG_FORMAT,
                 builder::CONFIG_VERSION,
@@ -1012,6 +1051,7 @@ fn main() -> ExitCode {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION,
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG,
                 argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+                argusnet_sim::snapshot::CheckpointHeader::RUNTIME_ALGORITHM_VERSION_POLICY,
                 argusnet_sim::snapshot::CheckpointHeader::SEED_VERSION,
             );
             ExitCode::SUCCESS

@@ -105,7 +105,8 @@ class EvaluationReport:
     # writer records; None for a replay without one (the Python reference).
     # Every change of a drone's task after its first; POIs a drone handed to
     # another; and thrash, a change within THRASH_WINDOW_S of that drone's
-    # previous change (its first task is not a change).
+    # previous change (its first task is not a change, and leaving a POI it
+    # completed restarts the window: see `assignment_counts`).
     task_changes: int | None = None
     poi_handoffs: int | None = None
     assignment_thrash: int | None = None
@@ -650,7 +651,13 @@ def assignment_counts(replay_doc: dict) -> tuple[int, int, int] | None:
     task), `reassign`, `handoff` and `team_join`. A handoff leaves the giving
     drone's own task unchanged (the reference keeps it flying to the POI), so
     it is counted apart from task changes.
+
+    Thrash is a change of mind, not a change of work: leaving a POI the
+    replay reports completed by then is never thrash, and restarts the
+    drone's window like its first task, so finishing one POI and taking the
+    next is not counted either.
     """
+    completions = _poi_completions(replay_doc.get("frames") or [])
     meta = replay_doc.get("meta")
     history = meta.get("assignment_history") if isinstance(meta, dict) else None
     if not isinstance(history, dict):
@@ -665,11 +672,34 @@ def assignment_counts(replay_doc: dict) -> tuple[int, int, int] | None:
                 handoffs += 1
             elif kind == "reassign":
                 changes += 1
+                previous = str(event.get("previous") or "")
+                done = completions.get(previous.removeprefix("poi:"))
+                if previous.startswith("poi:") and done is not None and done <= t:
+                    last_change = None
+                    continue
                 if last_change is not None and t - last_change < THRASH_WINDOW_S:
                     thrash += 1
-            if kind == "reassign":
                 last_change = t
     return changes, handoffs, thrash
+
+
+def _poi_completions(frames: list) -> dict[str, float]:
+    """Each completed POI's completion time, from the last scan mission state.
+
+    A POI id that more than one POI shares is left out: the history names a
+    task only by id, so it cannot tell which of them a drone left."""
+    states = [
+        f["scan_mission_state"] for f in frames if isinstance(f.get("scan_mission_state"), dict)
+    ]
+    statuses = states[-1].get("poi_statuses") or [] if states else []
+    counts: dict[str, int] = {}
+    for p in statuses:
+        counts[str(p["poi_id"])] = counts.get(str(p["poi_id"]), 0) + 1
+    return {
+        str(p["poi_id"]): float(p["completion_time_s"])
+        for p in statuses
+        if p.get("completion_time_s") is not None and counts[str(p["poi_id"])] == 1
+    }
 
 
 def time_and_effort(replay_doc: dict) -> dict:
@@ -686,11 +716,7 @@ def time_and_effort(replay_doc: dict) -> dict:
         f["scan_mission_state"] for f in frames if isinstance(f.get("scan_mission_state"), dict)
     ]
     statuses = states[-1].get("poi_statuses") or [] if states else []
-    completions = {
-        str(p["poi_id"]): float(p["completion_time_s"])
-        for p in statuses
-        if p.get("completion_time_s") is not None
-    }
+    completions = _poi_completions(frames)
     # A replay resumed from a checkpoint starts mid-run: a POI completed, or
     # the scan's threshold reached, before its first frame happened outside
     # the window, so neither figure is available from it.

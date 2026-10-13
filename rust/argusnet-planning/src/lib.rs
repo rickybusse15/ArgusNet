@@ -1,6 +1,7 @@
 //! Planning: battery accounting, and later the frontier, POI and
 //! deconfliction work P4.7 names.
 
+pub mod allocation;
 pub mod battery;
 pub mod coordination;
 pub mod deconfliction;

@@ -102,6 +102,18 @@ fn distance_xy(a: [f64; 3], b: [f64; 3]) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
+/// A POI still waiting for a drone, as [`PoiManager::pending_pois`] lists
+/// it: its index in the manager, id, position, rescored priority and
+/// required dwell.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingPoi {
+    pub index: usize,
+    pub poi_id: String,
+    pub position: [f64; 3],
+    pub priority: i64,
+    pub required_dwell_s: f64,
+}
+
 /// Tracks every POI's lifecycle.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PoiManager {
@@ -179,6 +191,40 @@ impl PoiManager {
         self.drone_assignment
             .get(drone_id)
             .map(|index| self.pois[*index].poi_id.as_str())
+    }
+
+    /// The POIs still waiting for a drone, in construction order. For a
+    /// planner that allocates them all at once (P1); the reference path does
+    /// not read it.
+    pub fn pending_pois(&self) -> Vec<PendingPoi> {
+        (0..self.pois.len())
+            .filter(|&index| self.states[index] == PoiState::Pending)
+            .map(|index| {
+                let poi = &self.pois[index];
+                PendingPoi {
+                    index,
+                    poi_id: poi.poi_id.clone(),
+                    position: poi.position,
+                    priority: self.effective_priorities[index],
+                    required_dwell_s: poi.required_dwell_s,
+                }
+            })
+            .collect()
+    }
+
+    /// Give the POI at `index` (from [`Self::pending_pois`]) to `drone_id`,
+    /// as a fleet-wide planner chose (P1). By index, not id: a bundle may
+    /// repeat an id, and each such POI must still be assignable. Refused,
+    /// and nothing changes, unless the POI is pending and the drone holds no
+    /// POI that is not yet complete.
+    pub fn assign_at(&mut self, drone_id: &str, index: usize) -> bool {
+        if self.states.get(index) != Some(&PoiState::Pending)
+            || self.existing_assignment(drone_id).is_some()
+        {
+            return false;
+        }
+        self.take_assignment(drone_id, index);
+        true
     }
 
     fn take_assignment(&mut self, drone_id: &str, index: usize) {

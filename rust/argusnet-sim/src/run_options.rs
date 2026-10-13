@@ -1,5 +1,5 @@
 //! The run options shared by every front end that assembles a run: the
-//! energy profile (D-3), timestamped delivery (B4), scheduled faults (F2),
+//! energy profile (D-3), the planning policy (P1), timestamped delivery (B4), scheduled faults (F2),
 //! what the platforms know of the world before sensing it, and the lanes'
 //! own rates (B2.4 mission, B2.5 mapping: `scheduled_v1`).
 //!
@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 
+pub use argusnet_planning::allocation::PlanningPolicy;
 pub use argusnet_planning::battery::EnergyProfile;
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +68,8 @@ impl DeliverySeconds {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunOptions {
     pub energy_profile: EnergyProfile,
+    /// Who allocates the mission's POIs (P1); the reference by default.
+    pub planning_policy: PlanningPolicy,
     /// `None` is the legacy same-tick path.
     pub delivery: Option<DeliverySeconds>,
     pub faults: Option<FaultManifest>,
@@ -87,6 +90,7 @@ impl RunOptions {
     /// recorded.
     pub fn is_legacy(&self) -> bool {
         self.energy_profile.is_legacy()
+            && self.planning_policy.is_reference()
             && self.delivery.is_none()
             && self.faults.is_none()
             && self.world_knowledge == WorldKnowledge::Prior
@@ -103,6 +107,15 @@ impl RunOptions {
             run.extend_replay_meta([(
                 "energy_profile".to_string(),
                 serde_json::json!(self.energy_profile.as_str()),
+            )]);
+        }
+        if !self.planning_policy.is_reference() {
+            // A run with no mission driver has no POIs to allocate; it is
+            // still recorded, so the replay says what was asked for.
+            run.set_planning_policy(self.planning_policy)?;
+            run.extend_replay_meta([(
+                "planning_policy".to_string(),
+                serde_json::json!(self.planning_policy.as_str()),
             )]);
         }
         if let Some(delivery) = &self.delivery {

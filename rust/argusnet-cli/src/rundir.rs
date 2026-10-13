@@ -19,11 +19,17 @@ use std::path::{Path, PathBuf};
 
 use argusnet_sim::config::fnv1a;
 use argusnet_sim::journal::{JournalError, JournalWriter};
+use argusnet_sim::run_options::PlanningPolicy;
 use argusnet_sim::scenario::AssembledRun;
 use argusnet_sim::scheduler::{parse_rate, rate_text, LaneRates};
 use argusnet_sim::snapshot::SimulationCheckpoint;
 
 pub const RUN_FORMAT: &str = "argusnet-run/1";
+/// The format of a run under a planning policy other than the reference
+/// (P1). A build that predates the policy reads only `argusnet-run/1`, so it
+/// refuses such a run by name instead of recovering it under the reference
+/// planner. A reference run keeps `argusnet-run/1`.
+pub const RUN_FORMAT_POLICY: &str = "argusnet-run/2";
 
 /// What `run.json` holds. Written once, never modified.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -47,6 +53,17 @@ struct RunConfig {
     /// The same for the fusion lane (`--fusion-rate`, B2.6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fusion_rate: Option<String>,
+    /// How the run allocates POIs (`--planning-policy`, P1). Absent for the
+    /// reference, so a reference run's `run.json` is unchanged.
+    #[serde(default, skip_serializing_if = "PlanningPolicy::is_reference")]
+    planning_policy: PlanningPolicy,
+}
+
+/// What a run directory says the run was started with.
+pub struct Recorded {
+    pub bundle: String,
+    pub rates: LaneRates,
+    pub policy: PlanningPolicy,
 }
 
 pub struct RunDir {
@@ -80,11 +97,21 @@ impl RunDir {
     /// Start a run here: the directory must be new or empty.
     #[cfg(test)]
     pub fn create(&self, bundle_text: &str) -> Result<(), String> {
-        self.create_with(bundle_text, &LaneRates::default())
+        self.create_with(
+            bundle_text,
+            &LaneRates::default(),
+            PlanningPolicy::Reference,
+        )
     }
 
-    /// [`Self::create`], recording the lanes' own rates if they have any.
-    pub fn create_with(&self, bundle_text: &str, rates: &LaneRates) -> Result<(), String> {
+    /// [`Self::create`], recording the lanes' own rates if they have any and
+    /// a planning policy that is not the reference.
+    pub fn create_with(
+        &self,
+        bundle_text: &str,
+        rates: &LaneRates,
+        policy: PlanningPolicy,
+    ) -> Result<(), String> {
         std::fs::create_dir_all(&self.path).map_err(|e| e.to_string())?;
         let occupied = std::fs::read_dir(&self.path)
             .map_err(|e| e.to_string())?
@@ -97,7 +124,12 @@ impl RunDir {
             ));
         }
         let config = RunConfig {
-            format: RUN_FORMAT.to_string(),
+            format: if policy.is_reference() {
+                RUN_FORMAT
+            } else {
+                RUN_FORMAT_POLICY
+            }
+            .to_string(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             checkpoint_format: if !rates.is_empty() {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
@@ -109,6 +141,7 @@ impl RunDir {
             mission_rate: rates.mission.map(rate_text),
             mapping_rate: rates.mapping.map(rate_text),
             fusion_rate: rates.fusion.map(rate_text),
+            planning_policy: policy,
         };
         let json = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
         write_atomic(&self.file("run.json"), &json).map_err(|e| e.to_string())
@@ -117,12 +150,12 @@ impl RunDir {
     /// The bundle text the run was started with, checked.
     #[cfg(test)]
     pub fn bundle_text(&self) -> Result<String, String> {
-        self.recorded().map(|(bundle, _)| bundle)
+        self.recorded().map(|recorded| recorded.bundle)
     }
 
-    /// The bundle text and the lanes' own rates the run was started with,
-    /// checked.
-    pub fn recorded(&self) -> Result<(String, LaneRates), String> {
+    /// The bundle text, the lanes' own rates and the planning policy the run
+    /// was started with, checked.
+    pub fn recorded(&self) -> Result<Recorded, String> {
         let incomplete = |detail: String| {
             format!(
                 "{}: incomplete run artifact, cannot recover: {detail}",
@@ -133,10 +166,23 @@ impl RunDir {
             .map_err(|e| incomplete(format!("run.json: {e}")))?;
         let config: RunConfig = serde_json::from_str(&text)
             .map_err(|e| incomplete(format!("run.json is damaged: {e}")))?;
-        if config.format != RUN_FORMAT {
+        let expected = if config.planning_policy.is_reference() {
+            RUN_FORMAT
+        } else {
+            RUN_FORMAT_POLICY
+        };
+        if config.format != RUN_FORMAT && config.format != RUN_FORMAT_POLICY {
             return Err(incomplete(format!(
-                "run.json is format {}, this build reads {RUN_FORMAT}",
+                "run.json is format {}, this build reads {RUN_FORMAT} and {RUN_FORMAT_POLICY}",
                 config.format
+            )));
+        }
+        if config.format != expected {
+            return Err(incomplete(format!(
+                "run.json is format {} but records planning policy {}, which is format \
+                 {expected}",
+                config.format,
+                config.planning_policy.as_str()
             )));
         }
         // Recorded for the recovery that reads it back: a run whose checkpoints
@@ -172,7 +218,11 @@ impl RunDir {
             mapping: rate(config.mapping_rate, "mapping rate")?,
             mission: rate(config.mission_rate, "mission rate")?,
         };
-        Ok((config.bundle, rates))
+        Ok(Recorded {
+            bundle: config.bundle,
+            rates,
+            policy: config.planning_policy,
+        })
     }
 
     pub fn is_complete(&self) -> bool {
@@ -298,10 +348,40 @@ mod tests {
     #[test]
     fn an_unsupported_run_format_is_refused_by_name() {
         let dir = run_dir("format", |config| {
-            config["format"] = "argusnet-run/2".into()
+            config["format"] = "argusnet-run/9".into()
         });
         let error = dir.bundle_text().unwrap_err();
-        assert!(error.contains("format argusnet-run/2"), "{error}");
+        assert!(error.contains("format argusnet-run/9"), "{error}");
+    }
+
+    /// P1: a run under another planning policy is format 2, which a build
+    /// predating the policy refuses; the format and the policy must agree.
+    #[test]
+    fn a_policy_run_is_format_2_and_must_say_so() {
+        let path =
+            std::env::temp_dir().join(format!("argusnet-rundir-policy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        let dir = RunDir::new(&path);
+        dir.create_with("{}", &LaneRates::default(), PlanningPolicy::EfficientV1)
+            .unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.file("run.json")).unwrap()).unwrap();
+        assert_eq!(config["format"], RUN_FORMAT_POLICY);
+        assert_eq!(dir.recorded().unwrap().policy, PlanningPolicy::EfficientV1);
+
+        let mismatched = run_dir("policy-format", |config| {
+            config["planning_policy"] = "efficient_v1".into()
+        });
+        let error = mismatched.bundle_text().unwrap_err();
+        assert!(
+            error.contains("records planning policy efficient_v1"),
+            "{error}"
+        );
+        let mismatched = run_dir("reference-format", |config| {
+            config["format"] = RUN_FORMAT_POLICY.into()
+        });
+        let error = mismatched.bundle_text().unwrap_err();
+        assert!(error.contains("planning policy reference"), "{error}");
     }
 
     #[test]
