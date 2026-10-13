@@ -221,8 +221,8 @@ pub struct ReplayTrack {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f64>,
     /// When the track last took a measurement (P4.10b). Written only by a
-    /// run whose tracks can be older than their frame (delivery modelled or a
-    /// fusion rate), so a legacy replay is byte for byte what it was; see
+    /// run whose tracks can be older than their frame (delivery modelled, a
+    /// fusion rate or a sensor rate), so a legacy replay is byte for byte what it was; see
     /// `AssembledRun::record_frame`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_time_s: Option<f64>,

@@ -158,6 +158,13 @@ under the policy it was taken with.
 viewer's run is then the CLI's `--executor lanes` run with the same rates,
 frame for frame, and a reset starts the lanes' deadlines over.
 
+`--sensor-rate NODE_ID=NUM/DEN` (on `argusnet-rs sim` and the viewer's `--run`,
+repeatable) has that sensor capture at its own rate instead of every tick: at
+the first tick at or after each of its deadlines, and nothing in between. The
+replay records it in `meta.sensor_rates`; the tracks then carry
+`evidence_time_s`, so the track summary shows how old each track's last
+measurement is.
+
 Each control shows as pending until the run confirms it took effect, and a
 refusal says why (for example, Run on a finished run). The timeline holds
 every tick so far; scrubbing it reviews history without rewinding the run.

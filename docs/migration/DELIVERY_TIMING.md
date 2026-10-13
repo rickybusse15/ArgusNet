@@ -185,8 +185,8 @@ measurement among the clusters inside that track's gate; a new track takes
 its own cluster's.
 
 A replay writes it as each track's `evidence_time_s` only in a run whose
-tracks can be older than their frame: delivery modelled, or the fusion lane
-at its own rate (`AssembledRun::tracks_lag_their_frames`). Legacy replays are
+tracks can be older than their frame: delivery modelled, the fusion lane at
+its own rate, or a sensor at its own rate (`AssembledRun::tracks_lag_their_frames`). Legacy replays are
 byte for byte unchanged. For a track updated at the fusion horizon it equals
 `timestamp_s`; for a coasting one it is earlier. A frame published while the
 fusion lane sits out a boundary republishes the last tracks, and their
@@ -202,11 +202,44 @@ The gRPC wire does not carry it. `TrackState.last_seen_s` on the wire stays an
 alias of `timestamp_s` (FIELD_PARITY.md); giving it the evidence time would
 change what the Python client receives, which is a contract change of its own.
 
+## Per-sensor capture rates
+
+`--sensor-rate NODE_ID=NUM/DEN` has one sensor capture at its own rate instead
+of every tick (`observe::CaptureRates`, stage 6). The rule is the rated lanes'
+rule: it captures at the first tick at or after each of its deadlines, and
+those deadlines come from the same exact rational `Schedule`. A capture is
+stamped with the tick that takes it. Positions exist only at ticks, and
+interpolating between them would claim a sample the physical model never
+produced (RUST_RUNTIME_ARCHITECTURE §3). A rate faster than the tick is
+therefore refused rather than rounded.
+
+At the ticks between captures the sensor takes nothing: no detections, no
+clutter, and no step of its bias walk. The rate is the bearing sensor's. A
+platform's range scanner, in a run that maps the world for itself, still scans
+every tick. Every other sensor's observations stay
+exactly the every-tick run's. Each (sensor, target, tick) draws from its own
+stream, and each bias walk belongs to one sensor (`tests/sensor_rates.rs`
+compares stage 6's output sensor by sensor on the canonical target-tracking
+scenario). What changes downstream is what fusion makes of fewer bearings. A
+target seen by one sensor fewer can fall below the cluster minimum at a tick
+(`insufficient_cluster`), and tracks coast between captures. A run with sensor
+rates writes `evidence_time_s` on every track, so the replay shows how old each
+track's last measurement is.
+
+Whether a sensor captures at a tick depends only on the tick, so the rates hold
+no state of their own. They are configuration: recorded in `meta.sensor_rates`,
+in the stage's checkpoint beside the bias walks (`{drifts, capture_rates}`, only
+when rates are set, so other checkpoints are unchanged), and in `run.json`. A
+checkpoint resumes only under the rates it was taken with, and a run directory
+with rates is `argusnet-run/3`, which a build without them refuses (the P1
+build reads `/2` and would drop the rates as an unknown field).
+
 ## Not in this slice (rest of P4.10b)
 
 - Buffered mapping inputs with batch-size and max-age triggers (no lost
   evidence when sensing outruns mapping).
-- Per-source capture schedules (rates other than the tick).
+- Capture rates that do not land on ticks. These need sensor profiles that
+  name how they sample between integration steps.
 - Clock quality and frame or calibration identity on the envelope.
 - Evidence time on the gRPC wire (`last_seen_s`). Source identity is already
   on every track (`contributing_node_ids`), and the evidence time now is in the

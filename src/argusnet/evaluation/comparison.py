@@ -52,7 +52,7 @@ METRICS: dict[str, tuple[str | None, str]] = {
         "lower",
         "Mean time in seconds since the published tracks last took a measurement (frame "
         "time minus the track's evidence_time_s): the evidence age plus any coasting. "
-        "Reported only by runs that model delivery or run fusion at its own rate.",
+        "Reported only by runs that model delivery or run fusion or a sensor at its own rate.",
     ),
     "track_continuity_mean": (
         "higher",

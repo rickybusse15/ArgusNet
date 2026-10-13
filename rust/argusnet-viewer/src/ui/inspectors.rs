@@ -583,7 +583,7 @@ pub(super) fn section_track_summary(
         return;
     }
 
-    // Only a timed run (delivery modelled or a fusion rate) records when each
+    // Only a timed run (delivery modelled, a fusion or a sensor rate) records when each
     // track last took a measurement; the column appears only then.
     let timed = frame
         .tracks

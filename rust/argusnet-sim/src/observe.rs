@@ -483,6 +483,100 @@ pub struct ObserveStage {
     range: Option<crate::range_scan::RangeScanner>,
     /// This tick's scans, handed to stage 8.
     scans: Vec<crate::range_scan::RangeScan>,
+    /// Sensors that capture at their own rate (P4.10b); `None` is every
+    /// sensor every tick.
+    capture: Option<CaptureRates>,
+}
+
+/// Sensors capturing at their own rates rather than every tick.
+///
+/// A sensor captures at the first tick at or after each of its deadlines, as
+/// a lane at its own rate runs: positions exist only at ticks, so a capture
+/// is stamped at the tick that takes it, never interpolated between them.
+/// Whether it captures at a tick is a function of the tick alone, so nothing
+/// here changes as a run goes on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptureRates {
+    rates: BTreeMap<String, crate::scheduler::Schedule>,
+    tick_ns: std::num::NonZeroU64,
+}
+
+impl CaptureRates {
+    /// Rates for the given sensors, in a run whose tick is `dt_s`. Refused if
+    /// the tick is not a whole number of nanoseconds, or a rate is faster
+    /// than the tick: a sensor cannot capture between ticks.
+    pub fn new(
+        rates: BTreeMap<String, crate::scheduler::Schedule>,
+        dt_s: f64,
+    ) -> Result<Self, String> {
+        let tick_ns = crate::scheduler::exact_tick_nanos(dt_s)
+            .ok_or_else(|| format!("the tick ({dt_s} s) is not a whole number of nanoseconds"))?;
+        for (node_id, schedule) in &rates {
+            schedule
+                .validate()
+                .map_err(|error| format!("{node_id}: {error}"))?;
+            let faster = match *schedule {
+                crate::scheduler::Schedule::Rational { hz_num, hz_den } => {
+                    u128::from(hz_num.get()) * u128::from(tick_ns.get())
+                        > u128::from(hz_den.get()) * 1_000_000_000
+                }
+                crate::scheduler::Schedule::Period(period) => period < tick_ns,
+                crate::scheduler::Schedule::Once(_) => {
+                    return Err(format!("{node_id}: a sensor rate must recur"));
+                }
+            };
+            if faster {
+                return Err(format!(
+                    "{node_id}: {} is faster than the tick ({dt_s} s); a sensor captures at most \
+                     once a tick",
+                    crate::scheduler::describe(*schedule)
+                ));
+            }
+        }
+        Ok(Self { rates, tick_ns })
+    }
+
+    /// Each rated sensor's rate.
+    pub fn rates(&self) -> &BTreeMap<String, crate::scheduler::Schedule> {
+        &self.rates
+    }
+
+    /// Whether `node_id` captures at `tick`: one of its deadlines falls in
+    /// the tick's interval `(previous tick, this tick]`, or this is tick 0.
+    fn captures(&self, node_id: &str, tick: u64) -> bool {
+        let Some(schedule) = self.rates.get(node_id) else {
+            return true;
+        };
+        let epoch = crate::scheduler::SimTime::EPOCH;
+        let served_through = |tick: u64| -> u64 {
+            // Occurrences with a deadline at or before this tick's time.
+            let at = u64::from(self.tick_ns)
+                .saturating_mul(tick)
+                .saturating_add(1)
+                .min(i64::MAX as u64) as i64;
+            schedule
+                .first_at_or_after(epoch, crate::scheduler::SimTime::from_nanos(at))
+                .unwrap_or(u64::MAX)
+        };
+        tick == 0 || served_through(tick) > served_through(tick - 1)
+    }
+
+    /// As recorded: each sensor's rate as `NUM/DEN`.
+    fn recorded(&self) -> BTreeMap<String, String> {
+        self.rates
+            .iter()
+            .map(|(id, rate)| (id.clone(), crate::scheduler::rate_text(*rate)))
+            .collect()
+    }
+}
+
+/// The stage's checkpoint when sensors capture at their own rates: the bias
+/// walks and the rates they were taken under. Without rates the checkpoint is
+/// the bias walks alone, as it always was.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RatedState {
+    drifts: BTreeMap<String, SensorState>,
+    capture_rates: BTreeMap<String, String>,
 }
 
 impl Default for ObserveStage {
@@ -509,6 +603,72 @@ impl ObserveStage {
             compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
             range: None,
             scans: Vec::new(),
+            capture: None,
+        }
+    }
+
+    /// Sensors that capture at their own rates (P4.10b). Every rated sensor
+    /// must be installed. Configuration, like the sensor table: set before
+    /// any tick or restore, kept across reset.
+    pub fn set_capture_rates(&mut self, capture: CaptureRates) -> Result<(), String> {
+        if let Some(missing) = capture
+            .rates
+            .keys()
+            .find(|id| !self.state.sensors.contains_key(*id))
+        {
+            return Err(format!("{missing} has no sensor to set a capture rate for"));
+        }
+        self.capture = (!capture.rates.is_empty()).then_some(capture);
+        Ok(())
+    }
+
+    /// The sensors capturing at their own rates; `None` when every sensor
+    /// captures every tick.
+    pub fn capture_rates(&self) -> Option<&CaptureRates> {
+        self.capture.as_ref()
+    }
+
+    /// Whether `node_id` captures at `tick`.
+    pub fn captures_at(&self, node_id: &str, tick: u64) -> bool {
+        self.capture
+            .as_ref()
+            .is_none_or(|capture| capture.captures(node_id, tick))
+    }
+
+    /// The checkpointed bias walks, refusing a checkpoint taken under other
+    /// capture rates. The form is this run's: the wrapper when it has rates,
+    /// the plain map of bias walks when it has none. It is never guessed from
+    /// the keys, since a node may be called anything. A checkpoint of the
+    /// other form does not decode as this one, and is refused.
+    fn decode_drifts(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<BTreeMap<String, SensorState>, crate::simulation::StageStateError> {
+        let mismatch = |recorded: Option<&BTreeMap<String, String>>| {
+            crate::simulation::StageStateError::Malformed {
+                detail: format!(
+                    "the checkpoint's sensor capture rates ({}) are not this run's ({})",
+                    describe_rates(recorded),
+                    describe_rates(self.capture.as_ref().map(CaptureRates::recorded).as_ref())
+                ),
+            }
+        };
+        match &self.capture {
+            None => crate::simulation::decode_stage_state(state).map_err(|error| {
+                // Said plainly when it is the rated form that failed to decode.
+                match serde_json::from_value::<RatedState>(state.clone()) {
+                    Ok(rated) => mismatch(Some(&rated.capture_rates)),
+                    Err(_) => error,
+                }
+            }),
+            Some(capture) => {
+                let rated: RatedState =
+                    crate::simulation::decode_stage_state(state).map_err(|_| mismatch(None))?;
+                if rated.capture_rates != capture.recorded() {
+                    return Err(mismatch(Some(&rated.capture_rates)));
+                }
+                Ok(rated.drifts)
+            }
         }
     }
 
@@ -1071,6 +1231,18 @@ fn bearing_perturbation(noise_std_rad: f64, rng: &mut DeterministicRng) -> Vecto
     Vector3::new(x, y, z)
 }
 
+/// Capture rates as an error message names them.
+fn describe_rates(rates: Option<&BTreeMap<String, String>>) -> String {
+    match rates {
+        None => "every sensor every tick".to_string(),
+        Some(rates) => rates
+            .iter()
+            .map(|(id, rate)| format!("{id} at {rate} Hz"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
 impl StageHandler for ObserveStage {
     /// Every sensor's walk back to zero, streams re-seeded: installation state.
     fn reset(&mut self) {
@@ -1092,14 +1264,20 @@ impl StageHandler for ObserveStage {
     /// table, oracle and feeds are configuration, rebuilt by assembly.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
         let shared = &self.state;
-        Some(serde_json::to_value(&shared.drifts).expect("drift state serialises"))
+        Some(match &self.capture {
+            None => serde_json::to_value(&shared.drifts).expect("drift state serialises"),
+            Some(capture) => serde_json::json!({
+                "drifts": shared.drifts,
+                "capture_rates": capture.recorded(),
+            }),
+        })
     }
 
     fn check_state(
         &self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let drifts: BTreeMap<String, SensorState> = crate::simulation::decode_stage_state(state)?;
+        let drifts = self.decode_drifts(state)?;
         let shared = &self.state;
         if !drifts.keys().eq(shared.sensors.keys()) {
             return Err(crate::simulation::StageStateError::Malformed {
@@ -1113,7 +1291,7 @@ impl StageHandler for ObserveStage {
         &mut self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let drifts: BTreeMap<String, SensorState> = crate::simulation::decode_stage_state(state)?;
+        let drifts = self.decode_drifts(state)?;
         let shared = &mut self.state;
         shared.drifts = drifts;
         shared.observations.clear();
@@ -1162,9 +1340,14 @@ impl StageHandler for ObserveStage {
         // order decides nothing -- each pair has its own stream -- but it
         // decides the trace, and a trace whose order moved run to run would be
         // useless for comparing against Python.
+        // A sensor at its own rate that is not due this tick takes nothing:
+        // no detections, no clutter, no step of its bias walk (P4.10b).
+        let capture = self.capture.as_ref();
+        let tick = context.tick;
         let specs: Vec<(String, SensorSpec)> = shared
             .sensors
             .iter()
+            .filter(|(id, _)| capture.is_none_or(|capture| capture.captures(id, tick)))
             .map(|(id, spec)| (id.clone(), *spec))
             .collect();
 
@@ -1368,6 +1551,114 @@ impl StageHandler for ObserveStage {
 mod tests {
     use super::*;
     use crate::config::SimulationConfig;
+
+    fn capture(rates: &[(&str, &str)], dt_s: f64) -> Result<CaptureRates, String> {
+        CaptureRates::new(
+            rates
+                .iter()
+                .map(|(id, rate)| (id.to_string(), crate::scheduler::parse_rate(rate).unwrap()))
+                .collect(),
+            dt_s,
+        )
+    }
+
+    fn ticks_captured(capture: &CaptureRates, node_id: &str, ticks: u64) -> Vec<u64> {
+        (0..ticks)
+            .filter(|&tick| capture.captures(node_id, tick))
+            .collect()
+    }
+
+    /// A sensor captures at the first tick at or after each of its deadlines:
+    /// every second tick at 1 Hz on 0.5 s ticks, and on the 0.5 s grid
+    /// nearest after each 4/3 s deadline at 3/4 Hz. A sensor without a rate
+    /// captures every tick.
+    #[test]
+    fn a_sensor_captures_at_the_first_tick_at_or_after_each_deadline() {
+        let capture = capture(&[("slow", "1/1"), ("odd", "3/4")], 0.5).unwrap();
+        assert_eq!(ticks_captured(&capture, "slow", 9), [0, 2, 4, 6, 8]);
+        // Deadlines 0, 1.333, 2.667, 4.0 s: ticks at 0, 1.5, 3.0 and 4.0 s.
+        assert_eq!(ticks_captured(&capture, "odd", 9), [0, 3, 6, 8]);
+        assert_eq!(ticks_captured(&capture, "other", 3), [0, 1, 2]);
+        // At the tick's own rate, every tick.
+        let every = super::tests::capture(&[("s", "2/1")], 0.5).unwrap();
+        assert_eq!(ticks_captured(&every, "s", 4), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_rate_faster_than_the_tick_is_refused() {
+        let error = capture(&[("fast", "3/1")], 0.5).unwrap_err();
+        assert!(error.contains("faster than the tick"), "{error}");
+        assert!(
+            capture(&[("s", "1/1")], 0.1 + 0.2).is_err(),
+            "an inexact tick"
+        );
+    }
+
+    /// The rates are configuration a checkpoint must agree with: a stage at
+    /// other rates refuses it, in both directions, and a stage without rates
+    /// still writes the bias walks alone.
+    #[test]
+    fn a_checkpoint_resumes_only_under_its_capture_rates() {
+        let spec = SensorSpec::default();
+        let plain = || {
+            let mut stage = ObserveStage::new();
+            stage.install_sensor("a", spec);
+            stage
+        };
+        let rated = |rate: &str| {
+            let mut stage = plain();
+            stage
+                .set_capture_rates(capture(&[("a", rate)], 1.0).unwrap())
+                .unwrap();
+            stage
+        };
+        let legacy_state = plain().checkpoint_state().unwrap();
+        assert!(legacy_state.get("capture_rates").is_none());
+        let rated_state = rated("1/2").checkpoint_state().unwrap();
+        assert_eq!(rated_state["capture_rates"]["a"], "1/2");
+
+        assert!(rated("1/2").restore_state(&rated_state).is_ok());
+        assert!(plain().restore_state(&legacy_state).is_ok());
+        for (mut stage, state) in [
+            (plain(), &rated_state),
+            (rated("1/2"), &legacy_state),
+            (rated("1/3"), &rated_state),
+        ] {
+            let error = stage.restore_state(state).unwrap_err().to_string();
+            assert!(error.contains("capture rates"), "{error}");
+        }
+
+        let mut stage = plain();
+        let error = stage
+            .set_capture_rates(capture(&[("b", "1/2")], 1.0).unwrap())
+            .unwrap_err();
+        assert!(error.contains("no sensor"), "{error}");
+    }
+
+    /// The checkpoint's form follows the run's configuration, not its keys:
+    /// a sensor may be called `capture_rates` or `drifts`.
+    #[test]
+    fn a_sensor_may_be_called_anything() {
+        let spec = SensorSpec::default();
+        let stage = |rated: bool| {
+            let mut stage = ObserveStage::new();
+            stage.install_sensor("capture_rates", spec);
+            stage.install_sensor("drifts", spec);
+            if rated {
+                stage
+                    .set_capture_rates(capture(&[("drifts", "1/2")], 1.0).unwrap())
+                    .unwrap();
+            }
+            stage
+        };
+        for rated in [false, true] {
+            let state = stage(rated).checkpoint_state().unwrap();
+            stage(rated).check_state(&state).unwrap();
+            stage(rated).restore_state(&state).unwrap();
+            let error = stage(!rated).restore_state(&state).unwrap_err().to_string();
+            assert!(error.contains("capture rates"), "{error}");
+        }
+    }
     use crate::fusion::FusionStage;
     use crate::simulation::Simulation;
     use argusnet_sensing::cascade::{Blocker, RejectReason};
