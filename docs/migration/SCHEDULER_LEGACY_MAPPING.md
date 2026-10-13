@@ -207,3 +207,42 @@ Fusion stays every boundary: the replay holds one fusion frame per tick.
 Rates for the other lanes, `nanos / 1e9` time for a lane at its own rate,
 per-sensor rates, fork-join (B3) and background jobs (B5) follow the
 extraction of the lanes they touch.
+
+## B2.6: the fusion lane at its own rate, observations buffered
+
+`--fusion-rate NUM/DEN` runs stage 7 at its own rate, beside the mapping and
+mission lanes (any of the three can be set). Fusion's inputs, like
+mapping's, are not cumulative: every boundary brings that boundary's bearing
+observations and platform states. So a boundary it sits out loses nothing:
+
+- **Buffered.** `FusionStage::not_due` keeps the boundary: its platforms and
+  the batch it would fuse, at the time it would fuse it. With timestamped
+  delivery modelled, the boundary's observations go through the delivery
+  network at once, at its own tick, so link faults applied tick by tick (delay
+  overrides, source restarts) act on them as they would have, and what the
+  network drops is reported on that boundary's own frame. The next run fuses
+  every kept batch in order before its own. The tracker therefore ages and updates exactly as it
+  would have every boundary: at every boundary the lane runs, the tracker's
+  state and the tracks equal the every-boundary run's
+  (`fusion::tests::a_fusion_lane_at_its_own_rate_catches_up_exactly`;
+  `tests/fusion_rate.rs` on the canonical target-tracking scenario, without
+  delivery, with it, and with source restarts and a link delay landing while
+  boundaries are pending). Target metadata and safety events are not kept: the
+  tracker only passes them through to its frame, so the skipped boundary
+  publishes them itself.
+- **Between runs** the rest of the tick reads the tracks the lane last fused,
+  and a skipped boundary's frame shows them with this boundary's platforms
+  and no fused observations. The frame of the boundary the lane runs at
+  reports what it fused for the kept boundaries before its own. In a run
+  without a prior world, pursuit follows the tracks late by up to one lane
+  period.
+- **Bounded and checkpointed** as for mapping: a rate that would leave the
+  lane idle for more than 1024 ticks in a row is refused, and the kept
+  boundaries are part of stage 7's checkpoint (`pending`, beside `engine`;
+  absent when empty, so legacy checkpoints are unchanged). The CLI recovers a
+  crash whose last checkpoint holds pending boundaries to the uninterrupted
+  journal byte for byte, and the run directory records the rate
+  (`fusion_rate`).
+- **Rated lanes** are now fusion, mapping and mission (`RATED_LANES`).
+  Publication stays at the legacy rate.
+

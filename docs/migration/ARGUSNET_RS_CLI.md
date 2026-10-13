@@ -92,6 +92,10 @@ only with the same `--mission-rate`. The viewer's `--run` takes the same flag
 and runs the same scheduled run. `--mapping-rate NUM/DEN` does the same for
 the mapping lane (B2.5): the ticks it sits out are kept and integrated when
 it next runs, so coverage and the self-built map catch up exactly.
+`--fusion-rate NUM/DEN` does the same for the fusion lane (B2.6): the ticks it
+sits out are kept and fused in order when it next runs, so the tracks catch up
+exactly; between its runs the rest of the tick reads the tracks it last
+fused.
 Design and evidence:
 [SCHEDULER_LEGACY_MAPPING.md](SCHEDULER_LEGACY_MAPPING.md) (B2.4).
 
