@@ -332,9 +332,12 @@ impl PoiManager {
         true
     }
 
+    /// Keeps the dwell already credited. The reference zeroes it here, but
+    /// in the reference a pending POI never has any: only
+    /// [`Self::release`] and [`Self::release_poi`] return a POI part done
+    /// to the pool, and the next drone carries on from what was done.
     fn take_assignment(&mut self, drone_id: &str, index: usize) {
         self.drone_assignment.insert(drone_id.to_string(), index);
-        self.dwell_s[index] = 0.0;
         self.states[index] = PoiState::Active;
         self.assigned_drone[index] = Some(drone_id.to_string());
     }
@@ -661,5 +664,19 @@ mod tests {
             "other POIs keep theirs"
         );
         assert!(manager.release_poi("a").is_empty(), "it holds nothing now");
+    }
+
+    /// A POI returned to the pool part done keeps its dwell for the next
+    /// drone.
+    #[test]
+    fn a_requeued_poi_keeps_its_dwell() {
+        let mut manager = PoiManager::new(vec![poi("p0", 0.0, 10.0)]);
+        assert!(manager.assign_at("a", 0));
+        for _ in 0..4 {
+            manager.accumulate_dwell("a", [0.0, 0.0, 40.0], 1.0);
+        }
+        manager.release_poi("a");
+        assert!(manager.assign_at("b", 0));
+        assert_eq!(manager.active_pois()[0].remaining_dwell_s, 6.0);
     }
 }
