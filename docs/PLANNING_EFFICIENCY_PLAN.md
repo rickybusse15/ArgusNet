@@ -225,6 +225,16 @@ declared first).
 - Re-check reserve feasibility continuously, not only when assigning. No team
   assignment may weaken one drone's reserve.
 
+*First slice done (`efficient_v1`):* every mission run, a drone whose battery
+is at or below its reserve home from where it is (`dynamic_reserve_wh` to its
+station, the battery's own rule) is routed home on its own (`SetEgress`, a
+`return_home` decision with reason `reserve_reached`), whatever the mission
+phase. Its POI goes through the safe handoff (P1): to a drone that can afford
+it, or back to the pool. A homeward drone takes nothing again; the set is
+checkpointed, and absent from checkpoints that have none. A drone with no
+station stays. Team joins already require the reserve (P1), which covers the
+second bullet at join time. Not yet measured on the qualification seeds.
+
 ### P3: obstacle-aware routing at runtime
 
 - Wire `RoutePlanner` (visibility-graph A* with smoothing, `route.rs`) into

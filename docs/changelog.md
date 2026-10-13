@@ -2,6 +2,10 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `--planning-policy efficient_v1` sends each drone home on its own when its
+  battery reaches its reserve home (PLANNING_EFFICIENCY_PLAN P2), handing its
+  POI on safely first. The reference still only egresses at mission end.
+
 - `--planning-policy efficient_v1` hands POIs off safely (P1, third slice):
   a low drone's POI goes to the cheapest drone that can afford the dwell left
   and the trip home (a teammate first, needing no trip), or back to the pool
