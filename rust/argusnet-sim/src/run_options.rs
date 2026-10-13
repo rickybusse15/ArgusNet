@@ -112,7 +112,7 @@ impl RunOptions {
         if !self.planning_policy.is_reference() {
             // A run with no mission driver has no POIs to allocate; it is
             // still recorded, so the replay says what was asked for.
-            run.set_planning_policy(self.planning_policy);
+            run.set_planning_policy(self.planning_policy)?;
             run.extend_replay_meta([(
                 "planning_policy".to_string(),
                 serde_json::json!(self.planning_policy.as_str()),

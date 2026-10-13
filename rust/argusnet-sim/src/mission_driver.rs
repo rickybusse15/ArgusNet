@@ -335,8 +335,28 @@ impl MissionDriverStage {
     }
 
     /// Allocate POIs under `policy` (P1). Before the first tick only.
-    pub fn set_policy(&mut self, policy: PlanningPolicy) {
+    /// Allocate POIs under `policy`. A policy other than the reference
+    /// refuses a mission that repeats a POI id: it assigns, redirects and
+    /// credits POIs by id, which a repeated id makes ambiguous. (The
+    /// reference's own scenarios never repeat one, and the reference keeps
+    /// accepting whatever it accepted.)
+    pub fn set_policy(&mut self, policy: PlanningPolicy) -> Result<(), String> {
+        if !policy.is_reference() {
+            let mut seen = std::collections::BTreeSet::new();
+            if let Some(repeated) = self
+                .initial_pois
+                .iter()
+                .find(|poi| !seen.insert(poi.poi_id.as_str()))
+            {
+                return Err(format!(
+                    "--planning-policy {} needs unique POI ids; {} is repeated",
+                    policy.as_str(),
+                    repeated.poi_id
+                ));
+            }
+        }
         self.policy = policy;
+        Ok(())
     }
 
     pub fn policy(&self) -> PlanningPolicy {
@@ -1418,7 +1438,9 @@ mod tests {
 
     fn efficient_driver(pois: Vec<InspectionPoi>) -> MissionDriverStage {
         let mut stage = driver(pois);
-        stage.set_policy(PlanningPolicy::EfficientV1);
+        stage
+            .set_policy(PlanningPolicy::EfficientV1)
+            .expect("unique ids");
         stage
     }
 
@@ -1493,18 +1515,17 @@ mod tests {
         assert_eq!(decision.candidates, vec!["poi-00", "poi-01"]);
     }
 
-    /// A bundle may repeat a POI id. The allocator assigns by index, so
-    /// both POIs are taken; by id, the second would resolve to the first
-    /// (already active) and stay pending for good.
+    /// A mission that repeats a POI id is refused under efficient_v1 (the
+    /// driver resolves POIs by id), and accepted under the reference as
+    /// before.
     #[test]
-    fn efficient_v1_assigns_pois_that_share_an_id() {
-        let (battery, mobile) = fleet(&[("drone-a", 100.0), ("drone-b", 900.0)]);
-        let mut stage = efficient_driver(vec![poi("poi-00", 100.0, 1), poi("poi-00", 900.0, 1)]);
-        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
-        let states: Vec<PoiState> = stage.pois.statuses().into_iter().map(|s| s.state).collect();
-        assert_eq!(states, vec![PoiState::Active, PoiState::Active]);
-        assert!(stage.pois.assignment_for("drone-a").is_some());
-        assert!(stage.pois.assignment_for("drone-b").is_some());
+    fn efficient_v1_refuses_repeated_poi_ids() {
+        let pois = || vec![poi("poi-00", 100.0, 1), poi("poi-00", 900.0, 1)];
+        let error = driver(pois())
+            .set_policy(PlanningPolicy::EfficientV1)
+            .unwrap_err();
+        assert!(error.contains("poi-00 is repeated"), "{error}");
+        assert!(driver(pois()).set_policy(PlanningPolicy::Reference).is_ok());
     }
 
     /// A POI the drone could not reach, dwell at and keep its reserve after
