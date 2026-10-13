@@ -12,8 +12,9 @@
   holds. The default, `reference`, is unchanged: all 14 replays are
   byte-identical, and reset and resume are equal on every canonical run. A
   non-reference policy is recorded in `meta.planning_policy` and in the
-  driver's checkpoint, which resumes only under the same policy. Available on
-  `argusnet-rs sim` and the viewer's `--run`.
+  driver's checkpoint, which resumes only under the same policy. A
+  `--run-dir` run records it in `run.json`, so `--recover` continues under
+  it. Available on `argusnet-rs sim` and the viewer's `--run`.
 
 - `assignment_thrash` no longer counts finishing a POI and taking the next
   as thrash: leaving a POI the replay reports completed restarts the drone's

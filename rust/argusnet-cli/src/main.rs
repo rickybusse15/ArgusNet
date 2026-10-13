@@ -534,6 +534,7 @@ fn sim(args: SimArgs) -> ExitCode {
     // A recovered run takes the scheduler options its run directory recorded.
     let mut executor_kind = args.executor;
     let mut lane_rates = flag_rates;
+    let mut recorded_policy = None;
     if args.pursuit.is_some() && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
         return fail(
             EXIT_INVALID,
@@ -590,7 +591,11 @@ fn sim(args: SimArgs) -> ExitCode {
                     return ExitCode::SUCCESS;
                 }
                 match dir.recorded() {
-                    Ok((text, recorded)) => {
+                    Ok(rundir::Recorded {
+                        bundle: text,
+                        rates: recorded,
+                        policy,
+                    }) => {
                         let differs = |flag: Option<Schedule>, recorded: Option<Schedule>| {
                             flag.is_some() && flag != recorded
                         };
@@ -607,6 +612,7 @@ fn sim(args: SimArgs) -> ExitCode {
                             executor_kind = Executor::Lanes;
                         }
                         lane_rates = recorded;
+                        recorded_policy = Some(policy);
                         text
                     }
                     Err(error) => return fail(EXIT_INVALID, error),
@@ -637,13 +643,24 @@ fn sim(args: SimArgs) -> ExitCode {
         Err(error @ BundleError::Unsupported(_)) => return fail(EXIT_UNSUPPORTED, error),
         Err(error) => return fail(EXIT_INVALID, error),
     };
-    let options = match run_options(&args) {
+    let mut options = match run_options(&args) {
         Ok(options) => argusnet_sim::run_options::RunOptions {
             lane_rates,
             ..options
         },
         Err(error) => return fail(EXIT_UNSUPPORTED, error),
     };
+    // A recovered run allocates POIs as it was started: its run directory
+    // records the policy. A flag naming another one is refused.
+    if let Some(recorded) = recorded_policy {
+        if !options.planning_policy.is_reference() && options.planning_policy != recorded {
+            return fail(
+                EXIT_INVALID,
+                "--planning-policy differs from the policy this run was recorded with",
+            );
+        }
+        options.planning_policy = recorded;
+    }
     // Refused before anything runs (B4, F2: an unsupported delivery profile
     // or an impossible fault manifest is rejected before the run).
     if let Err(error) = options.apply(&mut run, &bundle) {
@@ -694,7 +711,7 @@ fn sim(args: SimArgs) -> ExitCode {
     let mut recorder = match (&args.run_dir, &args.recover) {
         (Some(path), _) => {
             let dir = RunDir::new(path);
-            if let Err(error) = dir.create_with(&text, &lane_rates) {
+            if let Err(error) = dir.create_with(&text, &lane_rates, options.planning_policy) {
                 return fail(EXIT_INVALID, error);
             }
             match Recorder::start(

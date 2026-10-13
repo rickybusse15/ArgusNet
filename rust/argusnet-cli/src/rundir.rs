@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use argusnet_sim::config::fnv1a;
 use argusnet_sim::journal::{JournalError, JournalWriter};
+use argusnet_sim::run_options::PlanningPolicy;
 use argusnet_sim::scenario::AssembledRun;
 use argusnet_sim::scheduler::{parse_rate, rate_text, LaneRates};
 use argusnet_sim::snapshot::SimulationCheckpoint;
@@ -44,6 +45,17 @@ struct RunConfig {
     /// The same for the mapping lane (`--mapping-rate`, B2.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mapping_rate: Option<String>,
+    /// How the run allocates POIs (`--planning-policy`, P1). Absent for the
+    /// reference, so a reference run's `run.json` is unchanged.
+    #[serde(default, skip_serializing_if = "PlanningPolicy::is_reference")]
+    planning_policy: PlanningPolicy,
+}
+
+/// What a run directory says the run was started with.
+pub struct Recorded {
+    pub bundle: String,
+    pub rates: LaneRates,
+    pub policy: PlanningPolicy,
 }
 
 pub struct RunDir {
@@ -77,11 +89,21 @@ impl RunDir {
     /// Start a run here: the directory must be new or empty.
     #[cfg(test)]
     pub fn create(&self, bundle_text: &str) -> Result<(), String> {
-        self.create_with(bundle_text, &LaneRates::default())
+        self.create_with(
+            bundle_text,
+            &LaneRates::default(),
+            PlanningPolicy::Reference,
+        )
     }
 
-    /// [`Self::create`], recording the lanes' own rates if they have any.
-    pub fn create_with(&self, bundle_text: &str, rates: &LaneRates) -> Result<(), String> {
+    /// [`Self::create`], recording the lanes' own rates if they have any and
+    /// a planning policy that is not the reference.
+    pub fn create_with(
+        &self,
+        bundle_text: &str,
+        rates: &LaneRates,
+        policy: PlanningPolicy,
+    ) -> Result<(), String> {
         std::fs::create_dir_all(&self.path).map_err(|e| e.to_string())?;
         let occupied = std::fs::read_dir(&self.path)
             .map_err(|e| e.to_string())?
@@ -105,6 +127,7 @@ impl RunDir {
             bundle: bundle_text.to_string(),
             mission_rate: rates.mission.map(rate_text),
             mapping_rate: rates.mapping.map(rate_text),
+            planning_policy: policy,
         };
         let json = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
         write_atomic(&self.file("run.json"), &json).map_err(|e| e.to_string())
@@ -113,12 +136,12 @@ impl RunDir {
     /// The bundle text the run was started with, checked.
     #[cfg(test)]
     pub fn bundle_text(&self) -> Result<String, String> {
-        self.recorded().map(|(bundle, _)| bundle)
+        self.recorded().map(|recorded| recorded.bundle)
     }
 
-    /// The bundle text and the lanes' own rates the run was started with,
-    /// checked.
-    pub fn recorded(&self) -> Result<(String, LaneRates), String> {
+    /// The bundle text, the lanes' own rates and the planning policy the run
+    /// was started with, checked.
+    pub fn recorded(&self) -> Result<Recorded, String> {
         let incomplete = |detail: String| {
             format!(
                 "{}: incomplete run artifact, cannot recover: {detail}",
@@ -164,7 +187,11 @@ impl RunDir {
             mapping: rate(config.mapping_rate, "mapping rate")?,
             mission: rate(config.mission_rate, "mission rate")?,
         };
-        Ok((config.bundle, rates))
+        Ok(Recorded {
+            bundle: config.bundle,
+            rates,
+            policy: config.planning_policy,
+        })
     }
 
     pub fn is_complete(&self) -> bool {
