@@ -84,3 +84,37 @@ def test_a_bent_line_strip_does_not_overlap_itself() -> None:
     x, y = outline[:, 0], outline[:, 1]
     outline_area = 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
     assert covered == pytest.approx(outline_area, rel=1e-5)
+
+
+def test_a_line_that_doubles_back_keeps_every_triangle_facing_up() -> None:
+    # A mitre at a reversal would swap the strip's sides and wind triangles
+    # downward, which a single-sided translucent layer culls.
+    for points in (
+        [[0.0, 0.0], [10.0, 0.0], [0.0, 0.0]],
+        [[0.0, 0.0], [10.0, 0.0], [0.0, 1.0]],
+        [[0.0, 0.0], [10.0, 0.0], [5.0, 3.0], [5.0, 20.0]],
+    ):
+        strip = mesh_from_polyline(
+            np.array(points),
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=4.0,
+        )
+        corners = strip.positions.astype(np.float64)[strip.indices.reshape(-1, 3)]
+        u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
+        assert ((u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]) > 0.0).all(), points
+
+
+def test_random_lines_never_wind_a_triangle_downward() -> None:
+    rng = np.random.default_rng(7)
+    for _ in range(300):
+        points = rng.uniform(-30.0, 30.0, size=(int(rng.integers(2, 8)), 2))
+        strip = mesh_from_polyline(
+            points,
+            height_at=lambda x, y: 0.0,
+            color_rgba=(0.2, 0.4, 0.9, 0.85),
+            width_m=float(rng.uniform(1.0, 10.0)),
+        )
+        corners = strip.positions.astype(np.float64)[strip.indices.reshape(-1, 3)]
+        u, v = corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]
+        assert ((u[:, 0] * v[:, 1] - u[:, 1] * v[:, 0]) > 0.0).all(), points.tolist()
