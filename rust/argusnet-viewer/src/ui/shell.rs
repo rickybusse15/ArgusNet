@@ -142,13 +142,6 @@ pub(super) fn status_line(
                 ui.label("No alerts");
             }
         }
-        // The strip after the alerts, so a narrow window clips figures and
-        // never a critical alert; a compact window drops it.
-        if !layout.compact {
-            if let Some(frame) = replay_state.current_frame() {
-                super::strip::draw(ui, frame);
-            }
-        }
 
         // The camera's mode, and what it last had to say (P2.4b): a lost
         // follow is reported here, not silently dropped.
@@ -173,6 +166,13 @@ pub(super) fn status_line(
         } else if layout.drawer_suppressed {
             ui.separator();
             ui.label("Panel hidden: window too narrow");
+        }
+        // The strip last, so a narrow window clips figures and never an
+        // alert or an operational notice; a compact window drops it.
+        if !layout.compact {
+            if let Some(frame) = replay_state.current_frame() {
+                super::strip::draw(ui, frame);
+            }
         }
     });
 }
