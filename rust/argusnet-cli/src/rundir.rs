@@ -25,6 +25,11 @@ use argusnet_sim::scheduler::{parse_rate, rate_text, LaneRates};
 use argusnet_sim::snapshot::SimulationCheckpoint;
 
 pub const RUN_FORMAT: &str = "argusnet-run/1";
+/// The format of a run under a planning policy other than the reference
+/// (P1). A build that predates the policy reads only `argusnet-run/1`, so it
+/// refuses such a run by name instead of recovering it under the reference
+/// planner. A reference run keeps `argusnet-run/1`.
+pub const RUN_FORMAT_POLICY: &str = "argusnet-run/2";
 
 /// What `run.json` holds. Written once, never modified.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -116,7 +121,12 @@ impl RunDir {
             ));
         }
         let config = RunConfig {
-            format: RUN_FORMAT.to_string(),
+            format: if policy.is_reference() {
+                RUN_FORMAT
+            } else {
+                RUN_FORMAT_POLICY
+            }
+            .to_string(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             checkpoint_format: if !rates.is_empty() {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
@@ -152,10 +162,23 @@ impl RunDir {
             .map_err(|e| incomplete(format!("run.json: {e}")))?;
         let config: RunConfig = serde_json::from_str(&text)
             .map_err(|e| incomplete(format!("run.json is damaged: {e}")))?;
-        if config.format != RUN_FORMAT {
+        let expected = if config.planning_policy.is_reference() {
+            RUN_FORMAT
+        } else {
+            RUN_FORMAT_POLICY
+        };
+        if config.format != RUN_FORMAT && config.format != RUN_FORMAT_POLICY {
             return Err(incomplete(format!(
-                "run.json is format {}, this build reads {RUN_FORMAT}",
+                "run.json is format {}, this build reads {RUN_FORMAT} and {RUN_FORMAT_POLICY}",
                 config.format
+            )));
+        }
+        if config.format != expected {
+            return Err(incomplete(format!(
+                "run.json is format {} but records planning policy {}, which is format \
+                 {expected}",
+                config.format,
+                config.planning_policy.as_str()
             )));
         }
         // Recorded for the recovery that reads it back: a run whose checkpoints
@@ -317,10 +340,40 @@ mod tests {
     #[test]
     fn an_unsupported_run_format_is_refused_by_name() {
         let dir = run_dir("format", |config| {
-            config["format"] = "argusnet-run/2".into()
+            config["format"] = "argusnet-run/9".into()
         });
         let error = dir.bundle_text().unwrap_err();
-        assert!(error.contains("format argusnet-run/2"), "{error}");
+        assert!(error.contains("format argusnet-run/9"), "{error}");
+    }
+
+    /// P1: a run under another planning policy is format 2, which a build
+    /// predating the policy refuses; the format and the policy must agree.
+    #[test]
+    fn a_policy_run_is_format_2_and_must_say_so() {
+        let path =
+            std::env::temp_dir().join(format!("argusnet-rundir-policy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        let dir = RunDir::new(&path);
+        dir.create_with("{}", &LaneRates::default(), PlanningPolicy::EfficientV1)
+            .unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.file("run.json")).unwrap()).unwrap();
+        assert_eq!(config["format"], RUN_FORMAT_POLICY);
+        assert_eq!(dir.recorded().unwrap().policy, PlanningPolicy::EfficientV1);
+
+        let mismatched = run_dir("policy-format", |config| {
+            config["planning_policy"] = "efficient_v1".into()
+        });
+        let error = mismatched.bundle_text().unwrap_err();
+        assert!(
+            error.contains("records planning policy efficient_v1"),
+            "{error}"
+        );
+        let mismatched = run_dir("reference-format", |config| {
+            config["format"] = RUN_FORMAT_POLICY.into()
+        });
+        let error = mismatched.bundle_text().unwrap_err();
+        assert!(error.contains("planning policy reference"), "{error}");
     }
 
     #[test]

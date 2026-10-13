@@ -98,6 +98,11 @@ METRICS: dict[str, tuple[str | None, str]] = {
         "Changes of a drone's task after its first, summed over the fleet. Context-dependent: "
         "a mission with more work changes task more.",
     ),
+    "poi_handoffs": (
+        None,
+        "POIs a drone handed to another, summed over the fleet. Context-dependent: a "
+        "handoff can save a mission or show a poor first assignment.",
+    ),
     "assignment_thrash": (
         "lower",
         "Task changes within the thrash window of the same drone's previous change.",

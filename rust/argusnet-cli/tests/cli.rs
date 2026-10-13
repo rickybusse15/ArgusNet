@@ -595,6 +595,7 @@ fn a_crashed_efficient_run_recovers_with_its_planning_policy() {
     let run: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
     assert_eq!(run["planning_policy"], "efficient_v1");
+    assert_eq!(run["format"], "argusnet-run/2", "refused by a pre-P1 build");
 
     let named_default = binary()
         .args(["sim", "--quiet", "--recover"])
@@ -624,6 +625,7 @@ fn a_crashed_efficient_run_recovers_with_its_planning_policy() {
         serde_json::from_str(&std::fs::read_to_string(reference.join("run.json")).unwrap())
             .unwrap();
     assert!(run.get("planning_policy").is_none());
+    assert_eq!(run["format"], "argusnet-run/1");
 }
 
 /// B2.4: a run with the mission lane at its own rate recovers as that run,
