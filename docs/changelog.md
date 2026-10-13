@@ -2,7 +2,6 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
-<<<<<<< HEAD
 - `--planning-policy efficient_v1` (PLANNING_EFFICIENCY_PLAN P1, first
   slice, opt-in) allocates a scan mission's POIs across the whole fleet at
   once: a deterministic minimum-cost assignment (Hungarian method,
@@ -21,7 +20,7 @@
   as thrash: leaving a POI the replay reports completed restarts the drone's
   30 s window. Scenario comparisons now report the P0 time and effort
   figures and the assignment counts.
-=======
+
 - The fusion lane can run at its own rate under `scheduled_v1` (B2.6,
   `argusnet-rs sim --executor lanes --fusion-rate NUM/DEN`, and the viewer's
   `--run ... --fusion-rate`). The ticks it sits out are kept (platforms and
@@ -31,7 +30,6 @@
   it last fused. Kept ticks are part of stage 7's checkpoint, the run
   directory records the rate, and a rate that would leave it idle for more
   than 1024 ticks is refused. Legacy runs are unchanged.
->>>>>>> origin/main
 
 - The scorecard reports time and effort (PLANNING_EFFICIENCY_PLAN P0):
   `mission_makespan_s`, `scan_coverage_time_s`, `poi_service_time_mean_s`,
