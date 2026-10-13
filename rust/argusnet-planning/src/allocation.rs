@@ -39,6 +39,7 @@ impl PlanningPolicy {
 /// gives each row its column, or `None`. As many rows as possible are
 /// assigned first (an infeasible pair never is), and among assignments of
 /// that size the total cost is least. Rows and columns may differ in number.
+/// Costs must be finite and far below `f64::MAX` (it panics otherwise).
 ///
 /// Deterministic: the Hungarian method in its potentials form, scanning
 /// indices in order. Among equal-cost solutions, no two rows could exchange
@@ -70,6 +71,12 @@ pub fn min_cost_assignment(cost: &[Vec<Option<f64>>]) -> Vec<Option<usize>> {
         .map(|c| c.abs())
         .sum::<f64>();
     let big = 2.0 * spread + 1.0;
+    // Costs are energies of a few watt-hours; the penalties must stay finite
+    // (and the costs real) or the method's arithmetic stops terminating.
+    assert!(
+        big.is_finite() && 4.0 * big < f64::INFINITY,
+        "min_cost_assignment needs finite costs well below f64::MAX"
+    );
     let n = rows + cols;
     let at = |r: usize, c: usize| -> f64 {
         match (r < rows, c < cols) {
@@ -218,6 +225,20 @@ mod tests {
             vec![Some(2.0), Some(2.0), Some(2.0)],
         ];
         assert_eq!(min_cost_assignment(&cost), vec![Some(0), Some(1), Some(2)]);
+    }
+
+    /// Costs too large to price the penalties, or not real, are refused
+    /// rather than left to loop.
+    #[test]
+    #[should_panic(expected = "finite costs")]
+    fn costs_too_large_to_solve_are_refused() {
+        min_cost_assignment(&[vec![Some(f64::MAX)], vec![Some(f64::MAX)]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "finite costs")]
+    fn a_nan_cost_is_refused() {
+        min_cost_assignment(&[vec![Some(f64::NAN)]]);
     }
 
     /// A row with nothing feasible takes no column, so it cannot take the
