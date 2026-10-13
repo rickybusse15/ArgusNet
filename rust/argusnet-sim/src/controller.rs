@@ -146,6 +146,24 @@ pub enum Operational {
     Explore(FrontierExplorer),
 }
 
+impl Operational {
+    /// What the platform is doing, for the assignment history
+    /// ([`crate::assignments`]): `search`, `follow:<target>` or `explore`. A
+    /// search-then-follow platform searches until it first flies the follow
+    /// path, the sample after its sensor engages.
+    pub fn task(&self) -> String {
+        match self {
+            Operational::Search(_) => "search".to_string(),
+            Operational::Follow { target_id, .. } => format!("follow:{target_id}"),
+            Operational::SearchThenFollow(search) if search.followed_last_sample() => {
+                format!("follow:{}", search.preferred_target_id())
+            }
+            Operational::SearchThenFollow(_) => "search".to_string(),
+            Operational::Explore(_) => "explore".to_string(),
+        }
+    }
+}
+
 /// The launch path's two tuning values; the rest of its weather context is
 /// the environment's.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -678,6 +696,28 @@ pub struct ControllerStage {
     /// the ground or a structure is put back and recorded. `None` in every
     /// prior run, which then samples exactly as before.
     guard: Option<crate::belief_world::PhysicalGuard>,
+}
+
+impl ControllerStage {
+    /// Each platform's own task, in fleet order: what it flies when no recall
+    /// overrides it. A platform held in place has `hold`. Which platforms are
+    /// drones is the node's own `is_mobile`, for the caller to apply.
+    pub fn tasks(&self) -> Vec<(String, String)> {
+        self.state
+            .controllers
+            .iter()
+            .map(|(id, controller)| {
+                let task = match controller {
+                    PlatformController::Static { .. } => "hold".to_string(),
+                    PlatformController::Free(operational) => operational.task(),
+                    PlatformController::Launched { controller, .. } => {
+                        controller.operational().task()
+                    }
+                };
+                (id.clone(), task)
+            })
+            .collect()
+    }
 }
 
 impl fmt::Debug for ControllerStage {

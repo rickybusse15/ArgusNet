@@ -51,6 +51,10 @@ def scorecard_from_report(report: EvaluationReport) -> SystemScorecard:
             "energy_reserve_min": report.energy_reserve_min,
             "localisation_rmse_m": report.localisation_rmse_m,
             "track_continuity_mean": report.track_continuity_mean,
+            # P0: from `meta.assignment_history`; None without one.
+            "task_changes": report.task_changes,
+            "poi_handoffs": report.poi_handoffs,
+            "assignment_thrash": report.assignment_thrash,
         },
         performance={
             "wall_clock_s": report.wall_clock_s,

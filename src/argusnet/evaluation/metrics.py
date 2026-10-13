@@ -100,6 +100,15 @@ class EvaluationReport:
     # is a distance-based estimate and does not see hover or the profile.
     battery_remaining_min: float | None = None
 
+    # Assignment history (P0): from `meta.assignment_history`, which the Rust
+    # writer records; None for a replay without one (the Python reference).
+    # Every change of a drone's task after its first; POIs a drone handed to
+    # another; and thrash, a change within THRASH_WINDOW_S of that drone's
+    # previous change (its first task is not a change).
+    task_changes: int | None = None
+    poi_handoffs: int | None = None
+    assignment_thrash: int | None = None
+
     # Performance matrix
     wall_clock_s: float | None = None
     frame_time_mean_ms: float | None = None
@@ -561,6 +570,7 @@ def evaluate_replay(
     frame_times = performance_meta.get("frame_times_ms")
     frame_times = frame_times if isinstance(frame_times, dict) else {}
     now_utc = datetime.now(timezone.utc).isoformat()
+    assignments = assignment_counts(replay_doc)
 
     return EvaluationReport(
         scenario_name=scenario_name,
@@ -592,6 +602,9 @@ def evaluate_replay(
         energy_reserve_min=energy_min,
         energy_reserve_per_drone=energy_per_drone,
         battery_remaining_min=_battery_remaining_min(frames),
+        task_changes=assignments[0] if assignments else None,
+        poi_handoffs=assignments[1] if assignments else None,
+        assignment_thrash=assignments[2] if assignments else None,
         # Performance matrix
         wall_clock_s=_optional_float(performance_meta.get("wall_clock_s")),
         frame_time_mean_ms=_optional_float(frame_times.get("mean_ms")),
@@ -607,6 +620,39 @@ def evaluate_replay(
         tags=[],
         generated_at_utc=now_utc,
     )
+
+
+THRASH_WINDOW_S = 30.0
+
+
+def assignment_counts(replay_doc: dict) -> tuple[int, int, int] | None:
+    """`(task_changes, poi_handoffs, assignment_thrash)` from the replay's
+    `meta.assignment_history`, or None when it has none.
+
+    The history lists each drone's events in time order: `assign` (its first
+    task), `reassign`, `handoff` and `team_join`. A handoff leaves the giving
+    drone's own task unchanged (the reference keeps it flying to the POI), so
+    it is counted apart from task changes.
+    """
+    meta = replay_doc.get("meta")
+    history = meta.get("assignment_history") if isinstance(meta, dict) else None
+    if not isinstance(history, dict):
+        return None
+    changes = handoffs = thrash = 0
+    for events in history.values():
+        last_change: float | None = None
+        for event in events or []:
+            kind = event.get("kind")
+            t = float(event.get("timestamp_s", 0.0))
+            if kind == "handoff":
+                handoffs += 1
+            elif kind == "reassign":
+                changes += 1
+                if last_change is not None and t - last_change < THRASH_WINDOW_S:
+                    thrash += 1
+            if kind == "reassign":
+                last_change = t
+    return changes, handoffs, thrash
 
 
 def _battery_remaining_min(frames: list[dict]) -> float | None:
@@ -690,6 +736,10 @@ def _compute_energy_reserves(frames: list[dict]) -> dict[str, float]:
         energy_per_drone[nid] = max(0.0, min(1.0, reserve))
 
     return energy_per_drone
+
+
+def _optional_int(value: object) -> int | None:
+    return None if value is None else int(value)  # type: ignore[call-overload]
 
 
 def _optional_float(value: object) -> float | None:
@@ -857,6 +907,9 @@ def report_to_dict(report: EvaluationReport) -> dict:
         "frame_time_p95_ms": _float_or_none(report.frame_time_p95_ms),
         "frame_time_p99_ms": _float_or_none(report.frame_time_p99_ms),
         "peak_rss_mb": _float_or_none(report.peak_rss_mb),
+        "task_changes": report.task_changes,
+        "poi_handoffs": report.poi_handoffs,
+        "assignment_thrash": report.assignment_thrash,
         "replay_size_mb": _float_or_none(report.replay_size_mb),
         "terrain_queries_per_sec": _float_or_none(report.terrain_queries_per_sec),
         "observations_per_sec": _float_or_none(report.observations_per_sec),
@@ -921,6 +974,9 @@ def report_from_dict(d: dict) -> EvaluationReport:
         battery_remaining_min=(
             None if d.get("battery_remaining_min") is None else float(d["battery_remaining_min"])
         ),
+        task_changes=_optional_int(d.get("task_changes")),
+        poi_handoffs=_optional_int(d.get("poi_handoffs")),
+        assignment_thrash=_optional_int(d.get("assignment_thrash")),
         wall_clock_s=_optional_float(d.get("wall_clock_s")),
         frame_time_mean_ms=_optional_float(d.get("frame_time_mean_ms")),
         frame_time_p95_ms=_optional_float(d.get("frame_time_p95_ms")),

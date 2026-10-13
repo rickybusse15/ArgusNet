@@ -770,6 +770,10 @@ pub struct AssembledRun {
     /// Which belief cells a true building or wall covers, for the replay's
     /// evaluation figures. Never read by the run.
     true_structures: Vec<bool>,
+    /// Each drone's task changes (P0), rebuilt from every committed tick and
+    /// written as `meta.assignment_history`. Not checkpointed: like the
+    /// frames, a resumed run's history starts at its checkpoint.
+    assignments: crate::assignments::AssignmentHistory,
 }
 
 /// What the replay frames need beyond the stages' own handles.
@@ -1331,6 +1335,7 @@ pub fn assemble_with(
         world,
         guard: None,
         true_structures: Vec::new(),
+        assignments: Default::default(),
     })
 }
 
@@ -1593,6 +1598,7 @@ impl AssembledRun {
             .load_world(self.initial_platforms.clone(), Vec::new());
         self.replay.clear_frames();
         self.report.totals = GenerationTotals::default();
+        self.assignments.clear();
         self.restarts_applied_at = None;
         if let Some(guard) = &self.guard {
             guard.take_contacts();
@@ -1963,7 +1969,89 @@ impl AssembledRun {
             .collect();
         self.enrich(&mut replay_frame, timestamp_s, &snapshot.platforms, &truths);
         self.replay.push_frame(replay_frame);
+        let mobile: std::collections::BTreeSet<&str> = snapshot
+            .platforms
+            .iter()
+            .filter(|node| node.is_mobile)
+            .map(|node| node.node_id.as_str())
+            .collect();
+        self.record_assignments(timestamp_s, &mobile);
         Ok(snapshot)
+    }
+
+    /// The committed tick's tasks into the assignment history: a recall
+    /// stage 2 flew wins (egress, a POI, a frontier goal), else the
+    /// platform's own controller; then the handoffs and team joins stage 9
+    /// applied, which no task change shows.
+    fn record_assignments(&mut self, timestamp_s: f64, mobile: &std::collections::BTreeSet<&str>) {
+        use crate::assignments::PoiTransfer;
+        use crate::mission_driver::DecisionStatus;
+        use crate::overrides::OverrideSource;
+
+        let Some(controllers) = self
+            .sim
+            .stage::<ControllerStage>(Stage::SampleControllersAndBattery)
+        else {
+            return;
+        };
+        let overrides = self
+            .sim
+            .stage::<MissionOverrideStage>(Stage::ApplyMissionOverrides);
+        let driver = self.driver();
+        // Drones are the nodes the scenario marks mobile, whatever controller
+        // flies them.
+        let tasks: Vec<(String, String)> = controllers
+            .tasks()
+            .into_iter()
+            .filter(|(node_id, _)| mobile.contains(node_id.as_str()))
+            .map(|(drone_id, own)| {
+                let task = match overrides.and_then(|o| o.applied_source(&drone_id)) {
+                    Some(OverrideSource::Egress) => "egress".to_string(),
+                    // Stage 9 forgets a released POI on the tick it releases
+                    // it, a tick before stage 2 stops flying it: until then
+                    // the drone is still on the POI it was recorded on.
+                    Some(OverrideSource::Poi) => {
+                        match driver.and_then(|d| d.redirected_poi(&drone_id)) {
+                            Some(poi) => format!("poi:{poi}"),
+                            None => match self.assignments.current(&drone_id) {
+                                Some(task) if task.starts_with("poi:") => task.to_string(),
+                                _ => "poi:unknown".to_string(),
+                            },
+                        }
+                    }
+                    Some(OverrideSource::Frontier) => "frontier".to_string(),
+                    None => own,
+                };
+                (drone_id, task)
+            })
+            .collect();
+        let transfers: Vec<PoiTransfer> = driver
+            .map(|d| d.decisions())
+            .unwrap_or_default()
+            .iter()
+            .filter(|decision| decision.status == DecisionStatus::Applied)
+            .filter_map(|decision| {
+                let kind = match decision.kind {
+                    "poi_handoff" => "handoff",
+                    "team_assignment" => "team_join",
+                    _ => return None,
+                };
+                let poi_id = match kind {
+                    "handoff" => decision.inputs.get("poi")?.as_str()?.to_string(),
+                    _ => decision.selected.clone()?,
+                };
+                Some(PoiTransfer {
+                    kind,
+                    drone_id: decision.subject.clone()?,
+                    poi_id,
+                    to: (kind == "handoff")
+                        .then(|| decision.selected.clone())
+                        .flatten(),
+                    reason: decision.reason,
+                })
+            })
+            .collect();
+        self.assignments.observe(timestamp_s, &tasks, &transfers);
     }
 
     /// The frame's optional payloads, each as `run_simulation` builds its
@@ -2220,6 +2308,18 @@ impl AssembledRun {
             self.replay
                 .extend_meta([("delivery_totals".to_string(), document)]);
         }
+        // P0: absent for a run with no mobile platform, like the other
+        // optional keys.
+        if !self.assignments.is_empty() {
+            let document = self.assignments.document();
+            self.replay
+                .extend_meta([("assignment_history".to_string(), document)]);
+        }
         Ok(self.replay.finish())
+    }
+
+    /// The assignment history so far (P0).
+    pub fn assignments(&self) -> &crate::assignments::AssignmentHistory {
+        &self.assignments
     }
 }

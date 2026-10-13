@@ -320,6 +320,11 @@ impl MissionDriverStage {
         }
     }
 
+    /// The POI `drone_id` was last redirected to, if it still holds one.
+    pub fn redirected_poi(&self, drone_id: &str) -> Option<&str> {
+        self.redirected.get(drone_id).map(String::as_str)
+    }
+
     /// The last run's decisions, in the order made.
     pub fn decisions(&self) -> &[Decision] {
         &self.decisions

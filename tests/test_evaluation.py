@@ -11,6 +11,7 @@ import pytest
 
 from argusnet.evaluation.metrics import (
     EvaluationReport,
+    assignment_counts,
     check_pass_fail,
     compute_covariance_reduction,
     compute_covariance_reductions,
@@ -922,3 +923,46 @@ class TestIntegration:
         result = check_pass_fail(report)
         assert result.passed is False
         assert len(result.failure_reasons) >= 2
+
+
+def _event(t: float, kind: str, task: str, **extra: str) -> dict:
+    return {"timestamp_s": t, "kind": kind, "task": task, "reason": "r", **extra}
+
+
+class TestAssignmentCounts:
+    """P0: task changes, handoffs and thrash from `meta.assignment_history`."""
+
+    def test_counts_changes_handoffs_and_thrash(self):
+        history = {
+            "drone-a": [
+                _event(0.0, "assign", "search"),
+                _event(40.0, "reassign", "poi:p1"),
+                _event(50.0, "handoff", "poi:p1", to="drone-b"),
+                # 20 s after its last change: thrash.
+                _event(60.0, "reassign", "search"),
+            ],
+            "drone-b": [
+                _event(0.0, "assign", "search"),
+                # Within 30 s of its first task, which is not a change: no thrash.
+                _event(10.0, "reassign", "poi:p1"),
+            ],
+        }
+        assert assignment_counts({"meta": {"assignment_history": history}}) == (3, 1, 1)
+
+    def test_none_without_a_history(self):
+        assert assignment_counts({"meta": {}}) is None
+        report = evaluate_replay(_build_good_replay(), "s", "m", 0.1, 1)
+        assert report.task_changes is None and report.poi_handoffs is None
+
+    def test_the_report_carries_and_round_trips_the_counts(self):
+        replay = _build_good_replay()
+        replay["meta"]["assignment_history"] = {
+            "drone-a": [
+                _event(0.0, "assign", "search"),
+                _event(90.0, "reassign", "egress"),
+            ]
+        }
+        report = evaluate_replay(replay, "s", "m", 0.1, 1)
+        assert (report.task_changes, report.poi_handoffs, report.assignment_thrash) == (1, 0, 0)
+        again = report_from_dict(report_to_dict(report))
+        assert again.task_changes == 1 and again.assignment_thrash == 0
