@@ -21,14 +21,16 @@ use argusnet_sim::config::fnv1a;
 use argusnet_sim::journal::{JournalError, JournalWriter};
 use argusnet_sim::run_options::PlanningPolicy;
 use argusnet_sim::scenario::AssembledRun;
-use argusnet_sim::scheduler::{parse_rate, rate_text, LaneRates};
+use argusnet_sim::scheduler::{parse_rate, rate_text, LaneRates, Schedule};
 use argusnet_sim::snapshot::SimulationCheckpoint;
+use std::collections::BTreeMap;
 
 pub const RUN_FORMAT: &str = "argusnet-run/1";
 /// The format of a run under a planning policy other than the reference
-/// (P1). A build that predates the policy reads only `argusnet-run/1`, so it
-/// refuses such a run by name instead of recovering it under the reference
-/// planner. A reference run keeps `argusnet-run/1`.
+/// (P1), or with sensors capturing at their own rates (P4.10b). A build that
+/// predates them reads only `argusnet-run/1`, so it refuses such a run by name
+/// instead of recovering it under the reference planner or every sensor at
+/// the tick. Any other run keeps `argusnet-run/1`.
 pub const RUN_FORMAT_POLICY: &str = "argusnet-run/2";
 
 /// What `run.json` holds. Written once, never modified.
@@ -57,6 +59,22 @@ struct RunConfig {
     /// reference, so a reference run's `run.json` is unchanged.
     #[serde(default, skip_serializing_if = "PlanningPolicy::is_reference")]
     planning_policy: PlanningPolicy,
+    /// Each sensor capturing at its own rate (`--sensor-rate`, P4.10b), as
+    /// `NUM/DEN` Hz. Absent when every sensor captures every tick.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sensor_rates: BTreeMap<String, String>,
+}
+
+impl RunConfig {
+    /// The format this configuration is written in: `/2` when it records
+    /// something a pre-P1 build would silently drop.
+    fn format(&self) -> &'static str {
+        if self.planning_policy.is_reference() && self.sensor_rates.is_empty() {
+            RUN_FORMAT
+        } else {
+            RUN_FORMAT_POLICY
+        }
+    }
 }
 
 /// What a run directory says the run was started with.
@@ -64,6 +82,7 @@ pub struct Recorded {
     pub bundle: String,
     pub rates: LaneRates,
     pub policy: PlanningPolicy,
+    pub sensor_rates: BTreeMap<String, Schedule>,
 }
 
 pub struct RunDir {
@@ -101,16 +120,19 @@ impl RunDir {
             bundle_text,
             &LaneRates::default(),
             PlanningPolicy::Reference,
+            &BTreeMap::new(),
         )
     }
 
-    /// [`Self::create`], recording the lanes' own rates if they have any and
-    /// a planning policy that is not the reference.
+    /// [`Self::create`], recording the lanes' own rates if they have any, a
+    /// planning policy that is not the reference, and any sensor's own
+    /// capture rate.
     pub fn create_with(
         &self,
         bundle_text: &str,
         rates: &LaneRates,
         policy: PlanningPolicy,
+        sensor_rates: &BTreeMap<String, Schedule>,
     ) -> Result<(), String> {
         std::fs::create_dir_all(&self.path).map_err(|e| e.to_string())?;
         let occupied = std::fs::read_dir(&self.path)
@@ -123,13 +145,8 @@ impl RunDir {
                 self.path.display()
             ));
         }
-        let config = RunConfig {
-            format: if policy.is_reference() {
-                RUN_FORMAT
-            } else {
-                RUN_FORMAT_POLICY
-            }
-            .to_string(),
+        let mut config = RunConfig {
+            format: String::new(),
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             checkpoint_format: if !rates.is_empty() {
                 argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_STAGE_LAG
@@ -142,7 +159,12 @@ impl RunDir {
             mapping_rate: rates.mapping.map(rate_text),
             fusion_rate: rates.fusion.map(rate_text),
             planning_policy: policy,
+            sensor_rates: sensor_rates
+                .iter()
+                .map(|(id, rate)| (id.clone(), rate_text(*rate)))
+                .collect(),
         };
+        config.format = config.format().to_string();
         let json = serde_json::to_vec(&config).map_err(|e| e.to_string())?;
         write_atomic(&self.file("run.json"), &json).map_err(|e| e.to_string())
     }
@@ -166,11 +188,7 @@ impl RunDir {
             .map_err(|e| incomplete(format!("run.json: {e}")))?;
         let config: RunConfig = serde_json::from_str(&text)
             .map_err(|e| incomplete(format!("run.json is damaged: {e}")))?;
-        let expected = if config.planning_policy.is_reference() {
-            RUN_FORMAT
-        } else {
-            RUN_FORMAT_POLICY
-        };
+        let expected = config.format();
         if config.format != RUN_FORMAT && config.format != RUN_FORMAT_POLICY {
             return Err(incomplete(format!(
                 "run.json is format {}, this build reads {RUN_FORMAT} and {RUN_FORMAT_POLICY}",
@@ -179,10 +197,11 @@ impl RunDir {
         }
         if config.format != expected {
             return Err(incomplete(format!(
-                "run.json is format {} but records planning policy {}, which is format \
-                 {expected}",
+                "run.json is format {} but records planning policy {} and {} sensor capture \
+                 rate(s), which is format {expected}",
                 config.format,
-                config.planning_policy.as_str()
+                config.planning_policy.as_str(),
+                config.sensor_rates.len()
             )));
         }
         // Recorded for the recovery that reads it back: a run whose checkpoints
@@ -218,10 +237,22 @@ impl RunDir {
             mapping: rate(config.mapping_rate, "mapping rate")?,
             mission: rate(config.mission_rate, "mission rate")?,
         };
+        let sensor_rates = config
+            .sensor_rates
+            .iter()
+            .map(|(id, text)| {
+                parse_rate(text)
+                    .map(|rate| (id.clone(), rate))
+                    .map_err(|error| {
+                        incomplete(format!("run.json's sensor rate for {id}: {error}"))
+                    })
+            })
+            .collect::<Result<_, _>>()?;
         Ok(Recorded {
             bundle: config.bundle,
             rates,
             policy: config.planning_policy,
+            sensor_rates,
         })
     }
 
@@ -362,8 +393,13 @@ mod tests {
             std::env::temp_dir().join(format!("argusnet-rundir-policy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         let dir = RunDir::new(&path);
-        dir.create_with("{}", &LaneRates::default(), PlanningPolicy::EfficientV1)
-            .unwrap();
+        dir.create_with(
+            "{}",
+            &LaneRates::default(),
+            PlanningPolicy::EfficientV1,
+            &BTreeMap::new(),
+        )
+        .unwrap();
         let config: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.file("run.json")).unwrap()).unwrap();
         assert_eq!(config["format"], RUN_FORMAT_POLICY);

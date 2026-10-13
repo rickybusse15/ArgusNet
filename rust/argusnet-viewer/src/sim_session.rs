@@ -677,6 +677,42 @@ mod tests {
         assert_eq!(viewer_frames, frames_of(direct));
     }
 
+    /// `--sensor-rate` reaches the viewer's run as the CLI's: the same frames
+    /// as `RunOptions::apply` on a direct run, and recorded in meta.
+    #[test]
+    fn sensor_rates_reach_the_viewers_run() {
+        let options = RunOptions {
+            sensor_rates: [(
+                "drone-north".to_string(),
+                argusnet_sim::scheduler::parse_rate("2/3").unwrap(),
+            )]
+            .into_iter()
+            .collect(),
+            ..RunOptions::default()
+        };
+        let path = fixture("scenario_bundle_tt.json");
+        let replay = load_run(&path, &options)
+            .expect("loads")
+            .run_to_replay()
+            .expect("runs");
+        let meta = serde_json::to_value(&replay.meta).unwrap();
+        assert_eq!(meta["sensor_rates"]["drone-north"], "2/3 Hz");
+        let bundle = ScenarioBundle::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut direct = assemble(&bundle).unwrap();
+        options.apply(&mut direct, &bundle).expect("applies");
+        let viewer_frames: Vec<String> = replay
+            .frames
+            .iter()
+            .map(|frame| serde_json::to_string(frame).unwrap())
+            .collect();
+        assert_eq!(viewer_frames, frames_of(direct));
+        assert_ne!(
+            viewer_frames,
+            frames_of(load_run_legacy(&path).unwrap()),
+            "the rate changed the run"
+        );
+    }
+
     /// `--mission-rate` and `--mapping-rate` reach the viewer's run as the
     /// CLI's: declared on the run and recorded in its replay (the session's
     /// worker steps it at those rates; `worker::tests` compares the frames

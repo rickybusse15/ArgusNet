@@ -505,7 +505,7 @@ pub struct TrackState {
     #[serde(default)]
     pub contributing_node_ids: Vec<String>,
     /// When the track last took a measurement (P4.10b); only timed runs
-    /// (delivery modelled or a fusion rate) write it.
+    /// (delivery modelled, a fusion rate or a sensor rate) write it.
     #[serde(default)]
     pub evidence_time_s: Option<f64>,
 }

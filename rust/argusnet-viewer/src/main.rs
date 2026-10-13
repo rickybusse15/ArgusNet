@@ -162,6 +162,11 @@ struct RunOptionArgs {
     /// --executor lanes --fusion-rate`.
     #[arg(long, value_parser = argusnet_sim::scheduler::parse_rate, requires = "run")]
     fusion_rate: Option<argusnet_sim::scheduler::Schedule>,
+    /// Have one sensor capture at `NUM/DEN` Hz instead of every tick
+    /// (P4.10b), as `argusnet-rs sim --sensor-rate NODE_ID=NUM/DEN`.
+    /// Repeatable, one sensor each.
+    #[arg(long, value_parser = argusnet_sim::run_options::parse_sensor_rate, requires = "run")]
+    sensor_rate: Vec<(String, argusnet_sim::scheduler::Schedule)>,
 }
 
 impl RunOptionArgs {
@@ -199,6 +204,8 @@ impl RunOptionArgs {
                 mapping: self.mapping_rate,
                 mission: self.mission_rate,
             },
+            sensor_rates: RunOptions::sensor_rate_table(&self.sensor_rate)
+                .map_err(|error| anyhow::anyhow!(error))?,
         })
     }
 }

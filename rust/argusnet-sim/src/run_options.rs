@@ -83,6 +83,10 @@ pub struct RunOptions {
     /// ([`LaneRates::apply`]): `apply` only declares them on the simulation
     /// and records them.
     pub lane_rates: LaneRates,
+    /// Sensors that capture at their own rates (P4.10b), by node; empty is
+    /// every sensor every tick. Independent of the executor: stage 6 decides
+    /// at each tick which sensors are due.
+    pub sensor_rates: std::collections::BTreeMap<String, crate::scheduler::Schedule>,
 }
 
 impl RunOptions {
@@ -95,6 +99,7 @@ impl RunOptions {
             && self.faults.is_none()
             && self.world_knowledge == WorldKnowledge::Prior
             && self.lane_rates.is_empty()
+            && self.sensor_rates.is_empty()
     }
 
     /// Install the options on `run`, assembled from `bundle`, and record what
@@ -124,6 +129,21 @@ impl RunOptions {
             run.extend_replay_meta([(
                 "delivery_profile".to_string(),
                 serde_json::to_value(&profile).expect("profile serialises"),
+            )]);
+        }
+        if !self.sensor_rates.is_empty() {
+            let capture =
+                crate::observe::CaptureRates::new(self.sensor_rates.clone(), bundle.dt_s)?;
+            run.set_sensor_rates(capture)?;
+            // Additive: a run with every sensor at the tick carries no key.
+            run.extend_replay_meta([(
+                "sensor_rates".to_string(),
+                serde_json::Value::Object(
+                    self.sensor_rates
+                        .iter()
+                        .map(|(id, rate)| (id.clone(), serde_json::json!(describe(*rate))))
+                        .collect(),
+                ),
             )]);
         }
         if let Some(manifest) = &self.faults {
@@ -157,10 +177,35 @@ impl RunOptions {
         Ok(())
     }
 
+    /// `--sensor-rate` values as a table, refusing a sensor named twice.
+    pub fn sensor_rate_table(
+        pairs: &[(String, crate::scheduler::Schedule)],
+    ) -> Result<std::collections::BTreeMap<String, crate::scheduler::Schedule>, String> {
+        let mut table = std::collections::BTreeMap::new();
+        for (node_id, rate) in pairs {
+            if table.insert(node_id.clone(), *rate).is_some() {
+                return Err(format!("--sensor-rate names {node_id} more than once"));
+            }
+        }
+        Ok(table)
+    }
+
     /// A fault manifest from a file, checked for format and version.
     pub fn read_faults(path: &std::path::Path) -> Result<FaultManifest, String> {
         std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {error}", path.display()))
             .and_then(|text| FaultManifest::from_json(&text))
     }
+}
+
+/// `NODE_ID=NUM/DEN` for `--sensor-rate`: that sensor captures at `NUM/DEN`
+/// Hz (P4.10b).
+pub fn parse_sensor_rate(text: &str) -> Result<(String, crate::scheduler::Schedule), String> {
+    let (node_id, rate) = text
+        .split_once('=')
+        .ok_or_else(|| format!("expected NODE_ID=NUM/DEN, got {text:?}"))?;
+    if node_id.is_empty() {
+        return Err("the node id is empty".into());
+    }
+    Ok((node_id.to_string(), crate::scheduler::parse_rate(rate)?))
 }

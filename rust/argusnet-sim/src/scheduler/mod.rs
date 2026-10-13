@@ -36,3 +36,9 @@ pub use lanes::{
 };
 pub use queue::{EventKey, EventQueue, Phase, Scheduled, SourceId};
 pub use time::{Schedule, SimTime, TimeError, NANOS_PER_SECOND};
+
+/// A tick of `dt_s` seconds as whole nanoseconds, or `None` if it is not one:
+/// the exactness every rate in a run is measured against.
+pub fn exact_tick_nanos(dt_s: f64) -> Option<std::num::NonZeroU64> {
+    executor::exact_nanos(dt_s)
+}

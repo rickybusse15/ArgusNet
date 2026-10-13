@@ -530,7 +530,7 @@
         },
         "evidence_time_s": {
           "type": "number",
-          "description": "When the track last took a measurement (P4.10b). Written only by runs whose tracks can be older than their frame: delivery modelled or a fusion lane rate. Frame time minus this is the track's measurement age."
+          "description": "When the track last took a measurement (P4.10b). Written only by runs whose tracks can be older than their frame: delivery modelled, a fusion lane rate, or a sensor capture rate. Frame time minus this is the track's measurement age."
         }
       }
     },

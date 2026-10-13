@@ -1011,3 +1011,70 @@ fn a_checkpoint_from_another_run_is_refused() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("cannot recover"), "{stderr}");
 }
+
+/// P4.10b: a crashed run whose sensors capture at their own rates recovers
+/// with them from its run directory, which records them in format `/2` so a
+/// build without sensor rates refuses it. A different rate is refused, and
+/// so is one faster than the tick.
+#[test]
+fn a_crashed_run_with_sensor_rates_recovers_with_them() {
+    let rate = ["--sensor-rate", "ground-alpha=1/3"];
+    let whole = run_dir("journal-sensor-whole");
+    let replay = scratch("journal-sensor-whole-replay.json");
+    let with_replay: Vec<&str> = rate
+        .iter()
+        .copied()
+        .chain(["--replay", replay.to_str().unwrap()])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &whole, &with_replay);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let meta = serde_json::to_value(&read_replay(&replay).meta).unwrap();
+    assert_eq!(meta["sensor_rates"]["ground-alpha"], "1/3 Hz");
+
+    let crashed = run_dir("journal-sensor-crashed");
+    let with_crash: Vec<&str> = rate
+        .iter()
+        .copied()
+        .chain(["--crash-after", "61"])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &crashed, &with_crash);
+    assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run["format"], "argusnet-run/2");
+    assert_eq!(run["sensor_rates"]["ground-alpha"], "1/3");
+
+    let output = binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(&crashed)
+        .args(["--sensor-rate", "ground-alpha=1/2"])
+        .output()
+        .expect("runs");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("differs"));
+
+    let output = recover(&crashed);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        std::fs::read(whole.join("journal.jsonl")).unwrap(),
+        "the recovered journal is not the uninterrupted one"
+    );
+
+    let refused = run_dir("journal-sensor-refused");
+    let output = record(
+        "scenario_bundle_scan.json",
+        &refused,
+        &["--sensor-rate", "ground-alpha=2/1"],
+    );
+    assert_ne!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("faster than the tick"));
+}

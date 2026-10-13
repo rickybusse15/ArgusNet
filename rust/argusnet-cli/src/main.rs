@@ -161,6 +161,15 @@ struct SimArgs {
     /// `--executor lanes`.
     #[arg(long, value_parser = parse_rate)]
     fusion_rate: Option<Schedule>,
+    /// Have one sensor capture at its own rate, `NODE_ID=NUM/DEN` Hz, instead
+    /// of every tick (P4.10b). It captures at the first tick at or after each
+    /// of its deadlines, stamped with that tick's time, and takes nothing at
+    /// the ticks between: no detections, no clutter, no step of its bias
+    /// walk. A rate faster than the tick is refused. Repeatable, one sensor
+    /// each; recorded in the replay's `meta.sensor_rates`. Any executor. The
+    /// bearing sensor's rate: a range scanner still scans every tick.
+    #[arg(long, value_parser = argusnet_sim::run_options::parse_sensor_rate)]
+    sensor_rate: Vec<(String, Schedule)>,
     /// Workers for the stages that fork work inside a phase (B3): currently
     /// observation generation. The replay is identical at every count; 1 is
     /// the serial path.
@@ -358,6 +367,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         }),
         // Resolved by `sim`: a recovered run takes it from its run directory.
         lane_rates: argusnet_sim::scheduler::LaneRates::default(),
+        sensor_rates: RunOptions::sensor_rate_table(&args.sensor_rate)?,
     })
 }
 
@@ -547,6 +557,7 @@ fn sim(args: SimArgs) -> ExitCode {
     let mut executor_kind = args.executor;
     let mut lane_rates = flag_rates;
     let mut recorded_policy = None;
+    let mut recorded_sensor_rates = None;
     if args.pursuit.is_some() && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
         return fail(
             EXIT_INVALID,
@@ -607,6 +618,7 @@ fn sim(args: SimArgs) -> ExitCode {
                         bundle: text,
                         rates: recorded,
                         policy,
+                        sensor_rates,
                     }) => {
                         let differs = |flag: Option<Schedule>, recorded: Option<Schedule>| {
                             flag.is_some() && flag != recorded
@@ -626,6 +638,7 @@ fn sim(args: SimArgs) -> ExitCode {
                         }
                         lane_rates = recorded;
                         recorded_policy = Some(policy);
+                        recorded_sensor_rates = Some(sensor_rates);
                         text
                     }
                     Err(error) => return fail(EXIT_INVALID, error),
@@ -673,6 +686,17 @@ fn sim(args: SimArgs) -> ExitCode {
             );
         }
         options.planning_policy = recorded;
+    }
+    // Likewise its sensors' capture rates. Flags that name any are refused
+    // unless they are exactly what was recorded.
+    if let Some(recorded) = recorded_sensor_rates {
+        if !options.sensor_rates.is_empty() && options.sensor_rates != recorded {
+            return fail(
+                EXIT_INVALID,
+                "--sensor-rate differs from the sensor rates this run was recorded with",
+            );
+        }
+        options.sensor_rates = recorded;
     }
     // Refused before anything runs (B4, F2: an unsupported delivery profile
     // or an impossible fault manifest is rejected before the run).
@@ -724,7 +748,12 @@ fn sim(args: SimArgs) -> ExitCode {
     let mut recorder = match (&args.run_dir, &args.recover) {
         (Some(path), _) => {
             let dir = RunDir::new(path);
-            if let Err(error) = dir.create_with(&text, &lane_rates, options.planning_policy) {
+            if let Err(error) = dir.create_with(
+                &text,
+                &lane_rates,
+                options.planning_policy,
+                &options.sensor_rates,
+            ) {
                 return fail(EXIT_INVALID, error);
             }
             match Recorder::start(

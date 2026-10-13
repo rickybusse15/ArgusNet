@@ -1961,13 +1961,28 @@ impl AssembledRun {
     }
 
     /// Whether this run's tracks can be older than the frame that publishes
-    /// them: delivery is modelled (fusion runs a lag behind) or fusion runs at
-    /// its own rate (between its runs a frame republishes the last tracks).
+    /// them: delivery is modelled (fusion runs a lag behind), fusion runs at
+    /// its own rate (between its runs a frame republishes the last tracks), or
+    /// sensors capture at their own rates (tracks coast between captures).
     /// Only such a run writes each track's `evidence_time_s`, so a legacy
     /// replay is byte for byte what it was.
     pub fn tracks_lag_their_frames(&self) -> bool {
         self.fusion().delivery().is_some()
             || self.sim.lane_rates().contains_key(&Stage::UpdateFusion)
+            || self.observe().capture_rates().is_some()
+    }
+
+    /// Sensors that capture at their own rates (P4.10b). Before the first
+    /// tick or any restore: a checkpoint resumes only under the rates it was
+    /// taken with.
+    pub fn set_sensor_rates(
+        &mut self,
+        capture: crate::observe::CaptureRates,
+    ) -> Result<(), String> {
+        self.sim
+            .stage_mut::<ObserveStage>(Stage::GenerateObservations)
+            .expect("assembly installs stage 6")
+            .set_capture_rates(capture)
     }
 
     /// The committed tick's replay frame.

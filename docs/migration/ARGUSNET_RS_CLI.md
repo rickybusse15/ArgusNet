@@ -99,6 +99,15 @@ fused.
 Design and evidence:
 [SCHEDULER_LEGACY_MAPPING.md](SCHEDULER_LEGACY_MAPPING.md) (B2.4).
 
+`--sensor-rate NODE_ID=NUM/DEN` has one sensor capture at its own rate
+(P4.10b), with any executor. It captures at the first tick at or after each of
+its deadlines, stamped with that tick's time, and takes nothing at the ticks
+between. A rate faster than the tick is refused. The option repeats, once per
+sensor. The replay records it in `meta.sensor_rates`, a `--run-dir` run in
+`run.json` (format `argusnet-run/2`), and a checkpoint resumes only under the
+rates it was taken with. Design and evidence:
+[DELIVERY_TIMING.md](DELIVERY_TIMING.md#per-sensor-capture-rates).
+
 ## Scheduled faults (F2)
 
 `--faults MANIFEST` applies an `argusnet.fault-manifest`: sensor outages,
