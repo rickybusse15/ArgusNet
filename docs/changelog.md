@@ -24,6 +24,13 @@
   every-tick run's whenever it has run; a checkpoint carries the kept ticks.
   The replay's `meta.lane_rates` records it as `mapping`.
 
+- `mission_completion_rate` is observable (PLANNING_EFFICIENCY_PLAN P0). It
+  read 1.0 for every Rust scan-map-inspect replay, because neither replay
+  writer emits a top-level `mission` object; it now comes from the last
+  frame's `scan_mission_state` POI counts. The stored acceptance reference
+  (`docs/performance/p49c-reference.json`) is re-recorded with it on all four
+  seed sets.
+
 - Plans: [PLANNING_EFFICIENCY_PLAN.md](PLANNING_EFFICIENCY_PLAN.md) (fleet-wide
   allocation, reserve-feasible return home, runtime obstacle-aware routing,
   rebalancing coverage, coordination over delayed links) and

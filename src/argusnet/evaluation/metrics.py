@@ -540,9 +540,11 @@ def evaluate_replay(
     energy_per_drone: dict[str, float] = _compute_energy_reserves(frames)
     energy_min = float(min(energy_per_drone.values())) if energy_per_drone else 1.0
 
-    # Mission completion — use metadata if present, else default to 1.0 if we
-    # have no objectives info (unknown objectives are treated as all met).
-    mission_meta = replay_doc.get("mission") or {}
+    # Mission completion: the top-level `mission` summary if a producer writes
+    # one; otherwise the POIs of the last frame's `scan_mission_state` (both
+    # the Python and the Rust writers record them there). Only a run with
+    # neither -- one with no objectives -- counts as all met.
+    mission_meta = replay_doc.get("mission") or _poi_objectives(frames)
     required_total = int(mission_meta.get("required_objectives_total", 0))
     required_met = int(mission_meta.get("required_objectives_met", required_total))
     mission_completion_rate: float
@@ -623,6 +625,20 @@ def _battery_remaining_min(frames: list[dict]) -> float | None:
                 continue
             lowest = float(fraction) if lowest is None else min(lowest, float(fraction))
     return lowest
+
+
+def _poi_objectives(frames: list[dict]) -> dict[str, int]:
+    """The inspection POIs as objectives, from the last frame that reports
+    them: every POI is required, and a completed one is met. Empty when no
+    frame carries a `scan_mission_state`."""
+    for frame in reversed(frames):
+        state = frame.get("scan_mission_state")
+        if isinstance(state, dict) and "total_poi_count" in state:
+            return {
+                "required_objectives_total": int(state["total_poi_count"]),
+                "required_objectives_met": int(state.get("completed_poi_count", 0)),
+            }
+    return {}
 
 
 def _compute_energy_reserves(frames: list[dict]) -> dict[str, float]:

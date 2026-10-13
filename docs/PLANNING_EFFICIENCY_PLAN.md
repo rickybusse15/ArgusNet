@@ -92,6 +92,14 @@ replay (POIs required, completed, unmet) and derives the rate from it, with a
 test that a run leaving a POI unfinished scores below 1.0. Only after that
 can the metric gate any policy.
 
+*Done:* the replays already carry the summary. Every frame's
+`scan_mission_state` has `total_poi_count`, `completed_poi_count` and the
+per-POI statuses, so `metrics.py` now takes the objectives from the last
+frame when a replay has no top-level `mission`, and no replay change was
+needed. A run with an unfinished POI scores below 1.0, and one with no POIs
+still has no objective to miss. The stored acceptance reference was
+re-recorded with it (525 runs).
+
 Reported by phase acceptance, for reporting only (no envelope), on the
 canonical and qualification seeds. This baseline is what every later phase
 is measured against.
