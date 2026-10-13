@@ -568,6 +568,43 @@ class TestEvaluateReplay:
         assert report.required_objectives_met == 3
         assert report.required_objectives_total == 4
 
+    def test_mission_completion_from_the_last_scan_mission_state(self):
+        # Neither writer emits a top-level `mission`; a scan-map-inspect run
+        # records its POIs in each frame's `scan_mission_state`. A run that
+        # leaves a POI unfinished scores below 1.0 (it used to read 1.0).
+        replay = _build_good_replay()
+        del replay["mission"]
+        replay["frames"][0]["scan_mission_state"] = {
+            "total_poi_count": 4,
+            "completed_poi_count": 0,
+        }
+        replay["frames"][-1]["scan_mission_state"] = {
+            "total_poi_count": 4,
+            "completed_poi_count": 3,
+        }
+        report = evaluate_replay(replay, "s", "m", 0.1, 1)
+        assert report.mission_completion_rate == pytest.approx(0.75)
+        assert report.required_objectives_met == 3
+        assert report.required_objectives_total == 4
+
+    def test_a_top_level_mission_summary_wins(self):
+        replay = _build_good_replay()
+        replay["frames"][-1]["scan_mission_state"] = {
+            "total_poi_count": 4,
+            "completed_poi_count": 0,
+        }
+        replay["mission"] = {"required_objectives_total": 2, "required_objectives_met": 2}
+        report = evaluate_replay(replay, "s", "m", 0.1, 1)
+        assert report.mission_completion_rate == pytest.approx(1.0)
+        assert report.required_objectives_total == 2
+
+    def test_a_run_with_no_objectives_counts_as_complete(self):
+        replay = _build_good_replay()
+        del replay["mission"]
+        report = evaluate_replay(replay, "s", "m", 0.1, 1)
+        assert report.mission_completion_rate == pytest.approx(1.0)
+        assert report.required_objectives_total == 0
+
     def test_empty_replay(self):
         replay = {"meta": {"duration_s": 60.0}, "frames": []}
         report = evaluate_replay(replay, "empty", "surv", 0.0, 0)
