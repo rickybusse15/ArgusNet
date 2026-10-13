@@ -77,6 +77,12 @@ viewer surfaces and acceptance criteria. Both are planned work, not shipped clai
 | 6 | F6 cross-mission spatial memory and F7 evidence-driven adaptive inspection | Product 4; single-mission F7 may precede F6 |
 | Throughout / after migration | Measure startup/tick/render/storage costs, share coverage work, bound snapshots/recordings, then retire unused Python paths | Migration P6 only after consumer and installed-package gates |
 
+Viewer console parity (slices V0–V4 in
+[VIEWER_FEATURE_INTEGRATION.md](VIEWER_FEATURE_INTEGRATION.md) section 7) is part of
+priority 4. Its first slice, V0, adds the missing mapping, scan-mission and
+localization state to the live protocol so live and replay carry the same frame
+content; the strip, rail, inspector and layer work follows on that contract.
+
 The [viewer specification](VIEWER_UI.md) is the presentation contract. Backend
 features and their operator views ship as vertical slices; a plausible display
 must never stand in for missing belief, evidence or mission state.

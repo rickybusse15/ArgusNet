@@ -221,3 +221,64 @@ Before implementation, freeze numeric per-scenario integrity/containment limits,
 reference hardware and chunk budgets. Autopilot choice, aircraft command policy,
 volumetric encoding, reconstruction formats and model qualification are backend
 product decisions; the UI exposes declared capabilities instead of guessing them.
+
+## 7. Console parity: live viewer and the reference replay console
+
+Planned work, not a claim of implementation. A browser replay console
+(single-file HTML/Three.js, one baked replay) demonstrated the target
+usability: a status strip, a fleet rail, a spatial canvas, a typed inspector and
+one docked timeline. It is a **reference prototype and acceptance target only**;
+the native Bevy/egui viewer is the product and shares no code with it. This
+section records what the native viewer must match and what the live path must
+supply first. It refines, and does not replace, the shell in section 1 and
+[VIEWER_UI.md](VIEWER_UI.md).
+
+### 7.1 Parity checklist
+
+| Reference console element | Native requirement | Data it reads |
+| --- | --- | --- |
+| Status strip: sim time, tracks, mean error now, bearings accepted, run mean error, fusion rejection rate, map known, contacts | One strip above the canvas in every workspace; a value with no source reads "unavailable", never zero | `FrameMetrics`; `MappingState.coverage_fraction`; contacts from mapping/world state |
+| Entity rail grouped Targets (fused tracks) / Drones / Ground stations, click to select | Operate rail index; selection is the same typed selection as the canvas | `tracks`, `nodes` (`is_mobile`), `target_metadata` |
+| Inspector for the selected entity plus a "Why bearings were not generated" breakdown | Typed inspector; rejection bars by reason (dropout, terrain, vegetation occlusion, noise, low confidence) | `generation_rejections`, `rejected_observations`, `FrameMetrics.rejection_counts` |
+| Primary belief/truth toggle ("Drones' map" / "True world") ahead of secondary layer chips | Belief first, truth only under Evaluation (VIEWER_UI 2.2); chips for scans, bearings, 2σ, trails, zones, sensor range | `mapping_state`, `scan_mission_state`, `truths` (Evaluation only) |
+| 3D / Map toggle, Reset view, scale bar | Perspective / Top-down projection with reset and scale; Section remains planned | none (camera state) |
+| One timeline with mean-error and map-known curves, 1×/4×/10× | Single bottom timeline (section 1); curves from per-frame metrics; live shows a history window, never a paused aircraft | `FrameMetrics.mean_error_m`, `MappingState.coverage_fraction` |
+| Task per drone and handoff history (not in the prototype; added by planning-efficiency P0) | Rail row and inspector section for current task, reason for last change | per-drone assignment history (P0b) |
+
+### 7.2 Live path audit (2026-10-12)
+
+`argusnet-viewer/src/live.rs` receives `WatchFramesV2` and converts each
+`PlatformFrame` with `frame_from_pb` (`argusnet-replay/src/lib.rs`). That
+conversion fills tracks, truths, nodes, observations, rejected and generation
+rejections, metrics, target metadata and safety events. It sets these to empty
+or `None` because the wire message has no field for them:
+
+- `mapping_state` (map known %, covered cells, the drones' map)
+- `scan_mission_state` (phase, coverage threshold, POI status, team localization,
+  egress progress)
+- `localization_state`, `inspection_events`, `deconfliction_events`
+- the document `meta`, `summary` and `mission_assurance`
+
+Consequence: a live no-prior-map run (`argusnet live --mission-mode
+scan_map_inspect --cooperative-search`) streams tracks and bearings but cannot
+drive the map-known, contacts, team-localization or assurance elements above.
+`proto/argusnet/v1/world_model.proto` `PlatformFrame` carries fields 1–10 only.
+This is the main gap, and it is a data gap, not a styling gap. Replay JSON
+already carries all of these fields, so replay and live currently differ in
+semantics, against VIEWER_UI 2.3 (same semantics in simulation, replay and
+live).
+
+### 7.3 Slices
+
+| Slice | Content | Gate |
+| --- | --- | --- |
+| V0 Shared frame contract | Add the missing frame content to the live protocol so `frame_from_pb` yields the same `ReplayFrame` as replay JSON. Additive proto fields; update Python bindings (`src/argusnet/v1/`) and Rust (`argusnet-proto`, `argusnet-core`, `argusnet-server`, `argusnet-replay`) together. Rust remains the source of truth for fused state; mapping state is published by the stage that owns it. | A recorded run replayed through the daemon and the same run loaded from JSON produce equal `ReplayFrame`s for every field in 7.2; fields still unavailable stay `None` |
+| V1 Shell and strip | Status strip; split `ui.rs` (~3000 lines) into strip, rail, inspector, dock and canvas modules before restyling; no behaviour change in the split commit | `headless.rs` snapshot of each module; existing viewer tests unchanged |
+| V2 Rail and inspector | Entity rail, typed selection shared with canvas picking, rejection-reason breakdown, per-source "unavailable" states | Keyboard-equivalent selection; non-colour status cues; selection survives workspace and projection changes |
+| V3 Layers and timeline | Belief/truth primary toggle, layer chips, projection toggle with reset and scale, error and map-known curves on the timeline, live history window | Truth hidden outside Evaluation; scrubbing never implies a live flight is paused |
+| V4 Planned-feature surfaces | P0b assignment history and efficiency metrics, P1 allocation lines, R0–R4 world layers, scheduler lane rates in Diagnostics | Each ships with the backend slice that produces its data; no panel without a source |
+
+V0 is the prerequisite for everything that makes live look like the console;
+V1–V3 can proceed on replay in parallel and are verified there first, then
+re-verified on live once V0 lands. V4 items are scheduled by their owning
+backend phases rather than by the viewer track.
