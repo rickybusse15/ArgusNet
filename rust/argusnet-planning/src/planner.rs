@@ -391,7 +391,55 @@ impl RoutePlanner {
             cached.cache_hit = true;
             return Some(cached);
         }
+        let route = self.search(scene, start, goal, clearance_m)?;
+        self.route_cache
+            .insert(key, route.clone(), self.config.max_cache_entries);
+        Some(route)
+    }
 
+    /// [`Self::plan_route`] without the route cache: the same guards and the
+    /// same search, always from exactly `start` to exactly `goal`.
+    ///
+    /// The cache quantizes its key to `snap_m`, so a hit hands back a route
+    /// that starts where an *earlier* request started, up to half a snap
+    /// away. That is harmless at build time, where the planner is asked once.
+    /// A runtime caller that plans from wherever a platform happens to be
+    /// would make its output depend on what it asked before, and a run
+    /// resumed from a checkpoint (with an empty cache) would then fly
+    /// differently from the run it resumed. This entry point is for that
+    /// caller. The expanded-footprint cache is still used: it is keyed
+    /// exactly, so it can only save work, never change an answer.
+    pub fn plan_route_uncached(
+        &mut self,
+        scene: Scene<'_>,
+        start: Point2,
+        goal: Point2,
+        clearance_m: f64,
+    ) -> Option<PlannerRoute> {
+        if !self.point_within_bounds(start, clearance_m)
+            || !self.point_within_bounds(goal, clearance_m)
+        {
+            return None;
+        }
+        if self.blocking_primitive(scene, start, clearance_m).is_some() {
+            return None;
+        }
+        if self.blocking_primitive(scene, goal, clearance_m).is_some() {
+            return None;
+        }
+        self.search(scene, start, goal, clearance_m)
+    }
+
+    /// The straight segment if it is free, else the smoothed A* route over
+    /// the visibility graph. The endpoints are already known to be in bounds
+    /// and outside every obstacle.
+    fn search(
+        &mut self,
+        scene: Scene<'_>,
+        start: Point2,
+        goal: Point2,
+        clearance_m: f64,
+    ) -> Option<PlannerRoute> {
         // The candidate set is computed once for the whole start-goal window
         // and reused for every pair, where the reference re-queries the layer
         // per segment. That is equivalent, not a shortcut: an obstacle the
@@ -409,16 +457,13 @@ impl RoutePlanner {
             .collect();
 
         if segment_is_free(start, goal, &polygons) {
-            let route = PlannerRoute {
+            return Some(PlannerRoute {
                 points_xy_m: vec![start, goal],
                 length_m: path_length(&[start, goal]),
                 vertex_count: 2,
                 cache_hit: false,
                 skipped_segments: 0,
-            };
-            self.route_cache
-                .insert(key, route.clone(), self.config.max_cache_entries);
-            return Some(route);
+            });
         }
 
         let mut nodes: Vec<Point2> = vec![start, goal];
@@ -435,16 +480,13 @@ impl RoutePlanner {
         let indices = astar_path(&nodes, &adjacency, &self.route_config())?;
         let raw: Vec<Point2> = indices.iter().map(|&i| nodes[i]).collect();
         let smoothed = smooth_path(&raw, &polygons);
-        let route = PlannerRoute {
+        Some(PlannerRoute {
             length_m: path_length(&smoothed),
             vertex_count: smoothed.len(),
             points_xy_m: smoothed,
             cache_hit: false,
             skipped_segments: 0,
-        };
-        self.route_cache
-            .insert(key, route.clone(), self.config.max_cache_entries);
-        Some(route)
+        })
     }
 
     /// Route through a sequence of anchors, optionally closing the loop.

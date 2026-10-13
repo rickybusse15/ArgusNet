@@ -17,9 +17,9 @@ argusnet-planning = { path = "../argusnet-planning" }
 argusnet-sensing = { path = "../argusnet-sensing" }
 argusnet-types = { path = "../argusnet-types" }
 # P4.8d.2 prerequisite: `motion_world` adapts this crate's terrain and
-# obstacle queries to the narrow contracts in `motion`. Only that module
-# uses it; `motion` itself stays world-free so its fixture tests can drive a
-# recorded oracle.
+# obstacle queries to the narrow contracts in `motion`; `motion` itself stays
+# world-free so its fixture tests can drive a recorded oracle. The mission
+# driver also plans routes over the obstacle layer (P3).
 argusnet-world = { path = "../argusnet-world" }
 safety-engine = { path = "../safety-engine" }
 # Pinned deliberately: this crate's output values are a contract. See

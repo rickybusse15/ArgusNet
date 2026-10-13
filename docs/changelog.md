@@ -2,6 +2,15 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `--planning-policy efficient_v1` routes around known obstacles
+  (PLANNING_EFFICIENCY_PLAN P3, first slice): a POI or egress redirect whose
+  straight line crosses a building or wall tall enough to hit flies a planned
+  route around it (visibility-graph A*), and the fleet-wide allocation, team joins and safe
+  handoffs cost the route's length. The redirect decision records
+  `route_length_m` and `route_waypoints`. A run with no prior map, or a trip
+  the planner cannot route, flies straight as before. The reference is
+  unchanged.
+
 - `--planning-policy efficient_v1` sends each drone home on its own when its
   battery reaches its reserve home (PLANNING_EFFICIENCY_PLAN P2), handing its
   POI on safely first. The reference still only egresses at mission end.

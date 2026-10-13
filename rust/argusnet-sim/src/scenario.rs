@@ -1235,7 +1235,7 @@ pub fn assemble_with(
             })
             .collect();
         homes_for_egress = homes.clone();
-        let driver = MissionDriverStage::new(
+        let mut driver = MissionDriverStage::new(
             MissionDriverConfig {
                 mission: MissionConfig {
                     scan_coverage_threshold: mission.scan_coverage_threshold,
@@ -1259,6 +1259,10 @@ pub fn assemble_with(
                 .collect(),
             homes,
         );
+        // The prior map's hard obstacles, for routing under efficient_v1
+        // (P3). The reference never reads them; a run without a prior map
+        // takes them away again (`set_world_knowledge`).
+        driver.set_known_obstacles(Some(world.obstacles.layer()), bundle.map_bounds_m);
         // Read back off the constructed driver, so a caller (and the wiring
         // test) sees what the stage was actually given.
         mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));
@@ -1747,6 +1751,16 @@ impl AssembledRun {
             controllers.explore_search_lanes();
         }
         controllers.set_physical_guard(guard.clone());
+
+        // The platforms do not know the true obstacles, so the mission
+        // driver must not route around them. Planning on the belief grid is
+        // still to do (P3); until then it flies straight lines.
+        if let Some(driver) = self
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+        {
+            driver.set_known_obstacles(None, self.map_bounds_m);
+        }
 
         let deconflict = self
             .sim
