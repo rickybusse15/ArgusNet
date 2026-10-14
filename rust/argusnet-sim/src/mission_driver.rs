@@ -31,13 +31,19 @@
 //! reads. So the driver keeps its own latch and rescores at step 2, and the
 //! event is informational.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use argusnet_planning::allocation::{min_cost_assignment, PlanningPolicy};
 use argusnet_planning::frontier::{find_gap_cells, CoverageView};
+use argusnet_planning::planner::{PlannerConfig, PlannerRoute, RoutePlanner, Scene};
 use argusnet_planning::poi::{
     InspectionPoi, PoiAssignmentContext, PoiManager, PoiState, PoiStatus,
 };
+use argusnet_planning::BatteryModel;
+use argusnet_types::Bounds2d;
+use argusnet_world::index::ObstacleLayer;
 
 use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingStage;
@@ -298,6 +304,128 @@ pub struct MissionDriverStage {
     replay: LocalizationReplay,
     /// Refreshed at the end of every run, and on reset and restore.
     report: DriverReport,
+    /// The known hard obstacles that POI and egress flights route around,
+    /// and that the allocation costs, under efficient_v1 (P3). `None` flies
+    /// straight lines, as the reference always does. Scenario, like
+    /// `config`: set at assembly and kept by reset.
+    obstacles: Option<KnownObstacles>,
+    /// The prior map's terrain, so a route round obstacles that would carry a
+    /// drone lower than the ground under its corners is not flown (P3).
+    terrain: Option<Arc<dyn crate::observe::TerrainHeight>>,
+}
+
+/// The obstacle layer the driver plans routes over (P3), with its planner.
+///
+/// The planner works in the plane, but a platform only has to go around what
+/// reaches its height: one flying over a low building collides with nothing
+/// (stage 2's collision is 3D). So a trip is planned only against the hard
+/// obstacles whose top, plus the planner's clearance, is above the lowest
+/// height the flight passes through. That height is rounded down to a
+/// [`ROUTE_HEIGHT_BAND_M`] band, which can only add obstacles, and the
+/// filtered layer is kept per band.
+///
+/// The planner's own route cache is not used: it is keyed on endpoints
+/// snapped to 10 m, so it would hand back a route from wherever an earlier
+/// request started, and a resumed run, whose cache starts empty, would fly
+/// differently. Instead each run keeps the routes it has planned by their
+/// exact endpoints, so the cost matrices and the redirects that follow them
+/// plan each trip once, and starts the next run empty.
+struct KnownObstacles {
+    layer: Arc<ObstacleLayer>,
+    planner: RefCell<RoutePlanner>,
+    /// The obstacles that reach above each height band, by band; `None`
+    /// when nothing does.
+    reaching: RefCell<BTreeMap<i64, Option<Arc<ObstacleLayer>>>>,
+    this_run: RefCell<BTreeMap<[u64; 6], Option<PlannerRoute>>>,
+}
+
+/// How finely a routed flight is checked against the terrain, in metres:
+/// under half the finest heightmap spacing in use (5 m), so a ridge between
+/// two samples cannot rise far above both before the 8 m clearance runs out.
+pub const TERRAIN_CHECK_STEP_M: f64 = 2.0;
+
+/// The height bands a route's obstacles are filtered in, in metres.
+pub const ROUTE_HEIGHT_BAND_M: f64 = 10.0;
+
+impl KnownObstacles {
+    /// The obstacles a flight never lower than `floor_m` must go around, or
+    /// `None` when none reaches that high.
+    fn reaching(&self, floor_m: f64, clearance_m: f64) -> Option<Arc<ObstacleLayer>> {
+        let band = (floor_m / ROUTE_HEIGHT_BAND_M).floor() as i64;
+        if let Some(known) = self.reaching.borrow().get(&band) {
+            return known.clone();
+        }
+        let band_floor_m = band as f64 * ROUTE_HEIGHT_BAND_M;
+        let primitives: Vec<_> = self
+            .layer
+            .primitives
+            .iter()
+            .filter(|obstacle| obstacle.top_z_m + clearance_m > band_floor_m)
+            .cloned()
+            .collect();
+        let layer = if primitives.is_empty() {
+            None
+        } else {
+            ObstacleLayer::new(self.layer.bounds, self.layer.tile_size_m, primitives)
+                .ok()
+                .map(Arc::new)
+        };
+        self.reaching.borrow_mut().insert(band, layer.clone());
+        layer
+    }
+
+    /// A route around the hard obstacles from `from` to `to`, or `None` when
+    /// nothing reaches the flight's height or the planner finds no route (an
+    /// endpoint out of bounds or within clearance of an obstacle, or no way
+    /// through).
+    fn route(&self, from: [f64; 3], to: [f64; 3]) -> Option<PlannerRoute> {
+        let key = [
+            from[0].to_bits(),
+            from[1].to_bits(),
+            from[2].to_bits(),
+            to[0].to_bits(),
+            to[1].to_bits(),
+            to[2].to_bits(),
+        ];
+        if let Some(known) = self.this_run.borrow().get(&key) {
+            return known.clone();
+        }
+        let mut planner = self.planner.borrow_mut();
+        let clearance_m = planner.config().drone_clearance_m;
+        let route = self
+            .reaching(from[2].min(to[2]), clearance_m)
+            .and_then(|layer| {
+                // Each band's layer is fixed for the run; the band is its
+                // revision, so the planner never mixes their footprints.
+                let band = (from[2].min(to[2]) / ROUTE_HEIGHT_BAND_M).floor() as i64;
+                let scene = Scene {
+                    layer: &layer,
+                    revision: band as u64,
+                };
+                planner.plan_route_uncached(scene, [from[0], from[1]], [to[0], to[1]], clearance_m)
+            });
+        self.this_run.borrow_mut().insert(key, route.clone());
+        route
+    }
+}
+
+/// A flight the driver commanded, and the route it follows if it turns.
+struct Flight {
+    trajectory: GotoHover,
+    /// `(length, corners)` of a route around obstacles; `None` for a straight
+    /// flight.
+    route: Option<(f64, usize)>,
+}
+
+impl Flight {
+    /// Add the route to a decision's inputs, when there is one. Additive: a
+    /// straight flight's inputs are unchanged.
+    fn record(&self, inputs: &mut serde_json::Value) {
+        if let (Some((length_m, corners)), Some(fields)) = (self.route, inputs.as_object_mut()) {
+            fields.insert("route_length_m".into(), serde_json::json!(length_m));
+            fields.insert("route_waypoints".into(), serde_json::json!(corners));
+        }
+    }
 }
 
 /// Under [`PlanningPolicy::EfficientV1`], what one step of rescored POI
@@ -354,6 +482,137 @@ impl MissionDriverStage {
             policy: PlanningPolicy::Reference,
             replay: LocalizationReplay::default(),
             report: DriverReport::default(),
+            obstacles: None,
+            terrain: None,
+        }
+    }
+
+    /// The hard obstacles POI and egress flights route around under
+    /// efficient_v1 (P3), planned within `bounds`. `None` (the default) flies
+    /// straight lines. The reference never reads it. A run whose platforms
+    /// do not know the world in advance must not be given the true layer.
+    pub fn set_known_obstacles(&mut self, layer: Option<Arc<ObstacleLayer>>, bounds: Bounds2d) {
+        self.obstacles = layer.map(|layer| KnownObstacles {
+            layer,
+            planner: RefCell::new(RoutePlanner::new(bounds, PlannerConfig::default())),
+            reaching: RefCell::new(BTreeMap::new()),
+            this_run: RefCell::new(BTreeMap::new()),
+        });
+    }
+
+    /// The terrain a routed flight must stay above (P3). Without it a route
+    /// is flown as planned.
+    pub fn set_known_terrain(&mut self, terrain: Option<Arc<dyn crate::observe::TerrainHeight>>) {
+        self.terrain = terrain;
+    }
+
+    /// Whether flights route around known obstacles when the policy does.
+    pub fn knows_obstacles(&self) -> bool {
+        self.obstacles.is_some()
+    }
+
+    /// The route from `from` to `to` around known obstacles, when the policy
+    /// routes, a layer is known and the planner finds one. A route that does
+    /// not turn is returned too, as two points.
+    fn route(&self, from: [f64; 3], to: [f64; 3]) -> Option<PlannerRoute> {
+        if self.policy != PlanningPolicy::EfficientV1 {
+            return None;
+        }
+        self.obstacles.as_ref()?.route(from, to)
+    }
+
+    /// The route's corners, if it turns at all.
+    fn corners(&self, from: [f64; 3], to: [f64; 3]) -> Option<(Vec<[f64; 2]>, f64)> {
+        let route = self.route(from, to)?;
+        let points = &route.points_xy_m;
+        if points.len() <= 2 || !self.clears_terrain(points, from[2], to[2], route.length_m) {
+            return None;
+        }
+        Some((points[1..points.len() - 1].to_vec(), route.length_m))
+    }
+
+    /// Whether a routed flight, its height changing linearly along the route
+    /// as [`GotoHover::routed`] flies it, keeps the planner's clearance above
+    /// the terrain, sampled every [`TERRAIN_CHECK_STEP_M`]. A detour can
+    /// cross higher ground than the straight line between its ends; one that
+    /// would go below it is not flown.
+    fn clears_terrain(&self, points: &[[f64; 2]], from_z: f64, to_z: f64, length_m: f64) -> bool {
+        let Some(terrain) = &self.terrain else {
+            return true;
+        };
+        let clearance_m = PlannerConfig::default().drone_clearance_m;
+        let mut flown_m = 0.0;
+        for pair in points.windows(2) {
+            let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+            let leg_m = (dx * dx + dy * dy).sqrt();
+            let steps = (leg_m / TERRAIN_CHECK_STEP_M).ceil().max(1.0) as usize;
+            for step in 0..=steps {
+                let along = step as f64 / steps as f64;
+                let (x, y) = (pair[0][0] + along * dx, pair[0][1] + along * dy);
+                let frac = if length_m > 0.0 {
+                    ((flown_m + along * leg_m) / length_m).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let z = from_z + frac * (to_z - from_z);
+                if z < terrain.height_at(x, y) + clearance_m {
+                    return false;
+                }
+            }
+            flown_m += leg_m;
+        }
+        true
+    }
+
+    /// The horizontal distance a trip flies: the route's length when it has
+    /// to turn, else the straight line.
+    fn trip_length_m(&self, from: [f64; 3], to: [f64; 3]) -> f64 {
+        match self.corners(from, to) {
+            Some((_, length_m)) => length_m,
+            None => {
+                let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+                (dx * dx + dy * dy).sqrt()
+            }
+        }
+    }
+
+    /// The energy a trip costs: the route's length when it has to turn, else
+    /// exactly the straight segment's cost the allocator has always used.
+    fn trip_cost_wh(&self, model: &BatteryModel, from: [f64; 3], to: [f64; 3]) -> f64 {
+        match self.corners(from, to) {
+            Some((_, length_m)) => {
+                model.travel_cost_wh(length_m) + model.climb_cost_wh(to[2] - from[2])
+            }
+            None => model.segment_cost_wh(from, to),
+        }
+    }
+
+    /// The flight from `start` to `target`: around known obstacles when the
+    /// route turns, else the straight redirect, exactly as before.
+    fn flight(&self, start: [f64; 3], target: [f64; 3], t_start: f64) -> Flight {
+        let speed = self.config.redirect_speed_mps;
+        match self.corners(start, target) {
+            Some((via, length_m)) => Flight {
+                route: Some((length_m, via.len())),
+                trajectory: GotoHover::routed(
+                    start,
+                    via,
+                    [target[0], target[1]],
+                    target[2],
+                    t_start,
+                    speed,
+                ),
+            },
+            None => Flight {
+                route: None,
+                trajectory: GotoHover::redirect(
+                    start,
+                    [target[0], target[1]],
+                    target[2],
+                    t_start,
+                    speed,
+                ),
+            },
         }
     }
 
@@ -420,16 +679,16 @@ impl MissionDriverStage {
                 continue;
             }
             self.homeward.insert(id.clone());
-            self.override_commands.push(OverrideCommand::SetEgress(
-                id.clone(),
-                GotoHover::redirect(
-                    *position,
-                    [home[0], home[1]],
-                    home[2],
-                    timestamp_s,
-                    self.config.redirect_speed_mps,
-                ),
-            ));
+            let flight = self.flight(*position, home, timestamp_s);
+            let mut inputs = serde_json::json!({
+                "remaining_wh": remaining_wh,
+                "reserve_wh": reserve_wh,
+                "position_m": position,
+                "poi": self.pois.assignment_for(id),
+            });
+            flight.record(&mut inputs);
+            self.override_commands
+                .push(OverrideCommand::SetEgress(id.clone(), flight.trajectory));
             self.decisions.push(Decision {
                 kind: "return_home",
                 status: DecisionStatus::QueuedForNextTick,
@@ -441,12 +700,7 @@ impl MissionDriverStage {
                     "{id} has {remaining_wh:.1} Wh, at or below the {reserve_wh:.1} Wh it needs \
                      to get home from here: routed home on its own"
                 ),
-                inputs: serde_json::json!({
-                    "remaining_wh": remaining_wh,
-                    "reserve_wh": reserve_wh,
-                    "position_m": position,
-                    "poi": self.pois.assignment_for(id),
-                }),
+                inputs,
                 command: Some("set_egress"),
             });
         }
@@ -569,7 +823,7 @@ impl MissionDriverStage {
                         let hover_s = poi.remaining_dwell_s / (sharing + 1) as f64;
                         // From where it is: a teammate still en route has
                         // the rest of its trip to fly as well.
-                        let trip_wh = model.segment_cost_wh(*position, poi.position);
+                        let trip_wh = self.trip_cost_wh(&model, *position, poi.position);
                         let spent_wh = trip_wh + model.hover_power_w * hover_s / 3600.0;
                         let reserve_wh = match self.homes.get(id.as_str()) {
                             Some(home) => model.dynamic_reserve_wh(
@@ -725,7 +979,7 @@ impl MissionDriverStage {
                     .iter()
                     .map(|poi| {
                         let poi_position = &poi.position;
-                        let spent_wh = model.segment_cost_wh(*position, *poi_position)
+                        let spent_wh = self.trip_cost_wh(&model, *position, *poi_position)
                             + model.hover_power_w * poi.required_dwell_s.max(0.0) / 3600.0;
                         let reserve_wh = reserve_at(id, *poi_position);
                         (remaining_wh - spent_wh >= reserve_wh)
@@ -793,9 +1047,7 @@ impl MissionDriverStage {
                     .iter()
                     .map(|poi| {
                         let alone_s = poi.remaining_dwell_s / poi.members.max(1) as f64;
-                        let (dx, dy) =
-                            (poi.position[0] - position[0], poi.position[1] - position[1]);
-                        let arrive_s = (dx * dx + dy * dy).sqrt() / speed;
+                        let arrive_s = self.trip_length_m(*position, poi.position) / speed;
                         if arrive_s >= alone_s {
                             return None;
                         }
@@ -803,7 +1055,7 @@ impl MissionDriverStage {
                         // shares only what is left when it arrives.
                         let left_s = poi.remaining_dwell_s - poi.members as f64 * arrive_s;
                         let together_s = left_s.max(0.0) / (poi.members + 1) as f64;
-                        let spent_wh = model.segment_cost_wh(*position, poi.position)
+                        let spent_wh = self.trip_cost_wh(&model, *position, poi.position)
                             + model.hover_power_w * together_s / 3600.0;
                         (remaining_wh - spent_wh >= reserve_at(id, poi.position))
                             .then_some(spent_wh)
@@ -992,21 +1244,21 @@ impl MissionDriverStage {
             if let Some(active) = self.pois.assignment_for(id).map(str::to_string) {
                 if self.redirected.get(id) != Some(&active) {
                     self.redirected.insert(id.clone(), active.clone());
-                    let poi = self
+                    let poi_position = self
                         .initial_pois
                         .iter()
                         .find(|p| p.poi_id == active)
-                        .expect("an assigned POI is one of the manager's");
-                    self.override_commands.push(OverrideCommand::SetPoi(
-                        id.clone(),
-                        GotoHover::redirect(
-                            *position,
-                            [poi.position[0], poi.position[1]],
-                            poi.position[2],
-                            timestamp_s,
-                            self.config.redirect_speed_mps,
-                        ),
-                    ));
+                        .expect("an assigned POI is one of the manager's")
+                        .position;
+                    let flight = self.flight(*position, poi_position, timestamp_s);
+                    let mut inputs = serde_json::json!({
+                        "position_m": position,
+                        "remaining_wh": remaining_wh,
+                        "capacity_wh": capacity_wh,
+                    });
+                    flight.record(&mut inputs);
+                    self.override_commands
+                        .push(OverrideCommand::SetPoi(id.clone(), flight.trajectory));
                     self.decisions.push(Decision {
                         kind: "poi_assignment",
                         status: DecisionStatus::QueuedForNextTick,
@@ -1037,11 +1289,7 @@ impl MissionDriverStage {
                                  reach within its usable energy"
                             )
                         },
-                        inputs: serde_json::json!({
-                            "position_m": position,
-                            "remaining_wh": remaining_wh,
-                            "capacity_wh": capacity_wh,
-                        }),
+                        inputs,
                         command: Some("set_poi"),
                     });
                 }
@@ -1176,6 +1424,9 @@ impl StageHandler for MissionDriverStage {
         // driver installed without stage 2 does not grow without bound.
         self.override_commands.clear();
         self.decisions.clear();
+        if let Some(obstacles) = &self.obstacles {
+            obstacles.this_run.borrow_mut().clear();
+        }
         let empty = BatteryStage::new();
         let battery = stage_one_battery(context.stages).unwrap_or(&empty);
         // Stage 8's map as it left it this tick, through the lent views.
@@ -1306,19 +1557,28 @@ impl StageHandler for MissionDriverStage {
                             .push(OverrideCommand::ClearPoi(id.clone()));
                     }
                     self.redirected.clear();
+                    // Routes around obstacles, by drone, for the journal;
+                    // only drones whose way home turns.
+                    let mut routes = BTreeMap::new();
                     for (id, position) in &mobile {
-                        if let Some(home) = self.homes.get(id) {
-                            self.override_commands.push(OverrideCommand::SetEgress(
-                                id.clone(),
-                                GotoHover::redirect(
-                                    *position,
-                                    [home[0], home[1]],
-                                    home[2],
-                                    at_s,
-                                    self.config.redirect_speed_mps,
-                                ),
-                            ));
+                        if let Some(home) = self.homes.get(id).copied() {
+                            let flight = self.flight(*position, home, at_s);
+                            if let Some((length_m, corners)) = flight.route {
+                                routes.insert(
+                                    id.clone(),
+                                    serde_json::json!({
+                                        "route_length_m": length_m,
+                                        "route_waypoints": corners,
+                                    }),
+                                );
+                            }
+                            self.override_commands
+                                .push(OverrideCommand::SetEgress(id.clone(), flight.trajectory));
                         }
+                    }
+                    let mut inputs = gate_inputs.clone();
+                    if let (false, Some(fields)) = (routes.is_empty(), inputs.as_object_mut()) {
+                        fields.insert("routes".into(), serde_json::json!(routes));
                     }
                     context.note("egress routes set");
                     self.decisions.push(Decision {
@@ -1335,7 +1595,7 @@ impl StageHandler for MissionDriverStage {
                         detail: "every POI redirect released; each drone with a station is \
                                  routed home"
                             .to_string(),
-                        inputs: gate_inputs.clone(),
+                        inputs,
                         command: Some("set_egress"),
                     });
                 }
@@ -2229,6 +2489,215 @@ mod tests {
         assert_eq!(left.reason, "low_battery_teammate");
         assert!(stage.pois.leads("drone-a"), "the lead keeps it");
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
+    }
+
+    /// A wall across the x axis at x = 300, 400 m long and 10 m thick, in a
+    /// 2 km square: whatever is west of it flies around one end to reach a
+    /// POI east of it.
+    fn walled(stage: &mut MissionDriverStage) {
+        let wall = argusnet_world::obstacles::Obstacle::wall_segment(
+            "wall",
+            argusnet_world::obstacles::BlockerType::Wall,
+            [300.0, -200.0],
+            [300.0, 200.0],
+            10.0,
+            0.0,
+            120.0,
+        )
+        .expect("valid wall");
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let layer = ObstacleLayer::new(bounds, 250.0, vec![wall]).expect("valid layer");
+        stage.set_known_obstacles(Some(Arc::new(layer)), bounds);
+    }
+
+    fn poi_flight(commands: &[OverrideCommand], drone: &str) -> GotoHover {
+        commands
+            .iter()
+            .find_map(|command| match command {
+                OverrideCommand::SetPoi(id, flight) if id == drone => Some(flight.clone()),
+                _ => None,
+            })
+            .expect("a POI redirect")
+    }
+
+    /// P3: under efficient_v1 a drone flies around the wall between it and
+    /// its POI, not through it, and the journal records the route.
+    #[test]
+    fn efficient_v1_routes_a_poi_redirect_around_a_wall() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut stage);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+
+        assert!(!flight.via_xy().is_empty(), "the route turns");
+        assert!(
+            flight.path_length_m() > 400.0,
+            "longer than the straight line"
+        );
+        assert_eq!(flight.target(), [500.0, 0.0, 40.0]);
+        let steps = 400;
+        for step in 0..=steps {
+            let t = flight.t_arrive() * step as f64 / steps as f64;
+            let ([x, y, _], _) = flight.sample(t);
+            assert!(
+                !((295.0..=305.0).contains(&x) && (-200.0..=200.0).contains(&y)),
+                "inside the wall at t = {t}: ({x}, {y})"
+            );
+        }
+        let (arrived, stopped) = flight.sample(flight.t_arrive());
+        assert_eq!(arrived, [500.0, 0.0, 40.0]);
+        assert_eq!(stopped, [0.0, 0.0, 0.0]);
+
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .expect("assigned");
+        assert_eq!(decision.reason, "fleet_min_cost", "reason codes unchanged");
+        let length = decision.inputs["route_length_m"]
+            .as_f64()
+            .expect("recorded");
+        assert_eq!(length, flight.path_length_m());
+        assert_eq!(decision.inputs["route_waypoints"], flight.via_xy().len());
+    }
+
+    /// Ground 100 m high beyond |y| = 150, flat inside: a ridge under both
+    /// ends of the wall.
+    #[derive(Debug)]
+    struct Ridges;
+
+    impl crate::observe::TerrainHeight for Ridges {
+        fn height_at(&self, _x_m: f64, y_m: f64) -> f64 {
+            if y_m.abs() > 150.0 {
+                100.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    /// P3: a detour that would carry the drone below the ground under it is
+    /// not flown; the drone keeps the straight redirect.
+    #[test]
+    fn efficient_v1_never_routes_a_drone_below_the_terrain() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut stage);
+        stage.set_known_terrain(Some(Arc::new(Ridges)));
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(flight.via_xy().is_empty(), "straight, not over the ridge");
+    }
+
+    /// A ridge 2 m wide, narrower than the old 10 m check step, still stops
+    /// a detour that would cross it too low.
+    #[derive(Debug)]
+    struct NarrowRidge;
+
+    impl crate::observe::TerrainHeight for NarrowRidge {
+        fn height_at(&self, _x_m: f64, y_m: f64) -> f64 {
+            if (y_m.abs() - 180.0).abs() < 1.0 {
+                100.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    #[test]
+    fn efficient_v1_sees_a_narrow_ridge_on_a_detour() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut stage);
+        stage.set_known_terrain(Some(Arc::new(NarrowRidge)));
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(flight.via_xy().is_empty(), "straight, not over the ridge");
+    }
+
+    /// P3: the allocation costs the route, not the straight line. drone-a is
+    /// 250 m from the POI in a straight line and drone-b 300 m, but drone-a
+    /// has the wall in front of it and must fly some 500 m around it.
+    #[test]
+    fn efficient_v1_allocates_on_route_length() {
+        let (battery, mobile) = fleet(&[("drone-a", 250.0), ("drone-b", 800.0)]);
+
+        let mut straight = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        straight.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(straight.pois.assignment_for("drone-a"), Some("poi-00"));
+
+        let mut routed = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut routed);
+        assert!(routed.trip_length_m(mobile[0].1, [500.0, 0.0, 40.0]) > 450.0);
+        routed.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(routed.pois.assignment_for("drone-b"), Some("poi-00"));
+        assert_eq!(routed.pois.assignment_for("drone-a"), None);
+        // drone-b's way is clear, so it flies straight and records no route.
+        let flight = poi_flight(&routed.take_override_commands(), "drone-b");
+        assert!(flight.via_xy().is_empty());
+        let decision = routed
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .expect("assigned");
+        assert!(decision.inputs.get("route_length_m").is_none());
+    }
+
+    /// A drone flying over the wall (its top is 120 m; the flight never goes
+    /// below 200 m) has nothing to go around and flies straight.
+    #[test]
+    fn efficient_v1_flies_straight_over_an_obstacle_below_it() {
+        let (battery, _) = fleet(&[("drone-a", 100.0)]);
+        let mobile = vec![("drone-a".to_string(), [100.0, 0.0, 200.0])];
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            position: [500.0, 0.0, 200.0],
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        walled(&mut stage);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert_eq!(
+            flight,
+            GotoHover::redirect([100.0, 0.0, 200.0], [500.0, 0.0], 200.0, 0.0, 28.0)
+        );
+    }
+
+    /// With no obstacle layer, or under the reference, a redirect is the
+    /// straight one exactly, wall or no wall.
+    #[test]
+    fn without_a_layer_or_under_the_reference_redirects_fly_straight() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let straight = GotoHover::redirect([100.0, 0.0, 40.0], [500.0, 0.0], 40.0, 0.0, 28.0);
+
+        let mut unlayered = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        assert!(!unlayered.knows_obstacles());
+        unlayered.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(
+            poi_flight(&unlayered.take_override_commands(), "drone-a"),
+            straight
+        );
+        assert!(unlayered.decisions()[1..]
+            .iter()
+            .all(|d| d.inputs.get("route_length_m").is_none()));
+
+        let mut reference = driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut reference);
+        reference.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(
+            poi_flight(&reference.take_override_commands(), "drone-a"),
+            straight
+        );
+
+        // A layer that is withdrawn (a run with no prior map) flies straight.
+        let mut withdrawn = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut withdrawn);
+        withdrawn.set_known_obstacles(None, Bounds2d::new(0.0, 1.0, 0.0, 1.0));
+        withdrawn.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(
+            poi_flight(&withdrawn.take_override_commands(), "drone-a"),
+            straight
+        );
     }
 
     /// P2: a drone at its reserve home is routed home on its own, gives its

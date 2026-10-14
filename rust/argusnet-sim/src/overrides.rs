@@ -79,13 +79,22 @@ const EPSILON_S: f64 = 1.0e-9;
 ///   interval alone, so a sample taken early reports the start position moving
 ///   at full speed. Nothing samples early today; it is reproduced because it is
 ///   what is written.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+///
+/// A routed flight (P3, `efficient_v1` only) also carries the corners of a
+/// route around obstacles, flown at constant speed along the polyline. A
+/// flight with no corners is exactly the reference's, and serialises exactly
+/// as it did, so every existing checkpoint reads back unchanged.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GotoHover {
     start: [f64; 3],
     target_xy: [f64; 2],
     target_z: f64,
     t_start: f64,
     t_arrive: f64,
+    /// The route's corners between `start` and the target, in order. Empty
+    /// for a straight flight.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    via_xy: Vec<[f64; 2]>,
 }
 
 impl GotoHover {
@@ -103,6 +112,7 @@ impl GotoHover {
             target_z,
             t_start,
             t_arrive,
+            via_xy: Vec::new(),
         }
     }
 
@@ -128,6 +138,59 @@ impl GotoHover {
         Self::over(start, target_xy, target_z, t_start, t_start + flight_s)
     }
 
+    /// A flight along a planned route at a speed (P3).
+    ///
+    /// `via_xy` are the route's corners between `start` and the target. The
+    /// flight takes the polyline's length at `speed_mps`, floored like
+    /// [`Self::redirect`], and the height changes linearly over the whole
+    /// flight, as a straight redirect's does. With no corners this is
+    /// exactly [`Self::redirect`].
+    pub fn routed(
+        start: [f64; 3],
+        via_xy: Vec<[f64; 2]>,
+        target_xy: [f64; 2],
+        target_z: f64,
+        t_start: f64,
+        speed_mps: f64,
+    ) -> Self {
+        if via_xy.is_empty() {
+            return Self::redirect(start, target_xy, target_z, t_start, speed_mps);
+        }
+        let mut flight = Self::over(start, target_xy, target_z, t_start, t_start);
+        flight.via_xy = via_xy;
+        let flight_s = (flight.path_length_m() / speed_mps.max(EPSILON_S)).max(MIN_FLIGHT_TIME_S);
+        flight.t_arrive = t_start + flight_s;
+        flight
+    }
+
+    /// The horizontal points flown through: the start, any corners, the
+    /// target.
+    fn path_xy(&self) -> Vec<[f64; 2]> {
+        let mut points = Vec::with_capacity(self.via_xy.len() + 2);
+        points.push([self.start[0], self.start[1]]);
+        points.extend(self.via_xy.iter().copied());
+        points.push(self.target_xy);
+        points
+    }
+
+    /// The horizontal length of the flight: the route's, or the straight
+    /// line's when it has no corners.
+    pub fn path_length_m(&self) -> f64 {
+        self.path_xy()
+            .windows(2)
+            .map(|pair| {
+                let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+                (dx * dx + dy * dy).sqrt()
+            })
+            .sum()
+    }
+
+    /// The route's corners between the start and the target; empty for a
+    /// straight flight.
+    pub fn via_xy(&self) -> &[[f64; 2]] {
+        &self.via_xy
+    }
+
     /// Position and velocity at `t`.
     pub fn sample(&self, t: f64) -> ([f64; 3], [f64; 3]) {
         if t >= self.t_arrive {
@@ -135,6 +198,9 @@ impl GotoHover {
                 [self.target_xy[0], self.target_xy[1], self.target_z],
                 [0.0, 0.0, 0.0],
             );
+        }
+        if !self.via_xy.is_empty() {
+            return self.sample_route(t);
         }
         let span = (self.t_arrive - self.t_start).max(EPSILON_S);
         let frac = ((t - self.t_start) / span).clamp(0.0, 1.0);
@@ -151,6 +217,47 @@ impl GotoHover {
         let dt_inv = 1.0 / span;
         let velocity = [delta[0] * dt_inv, delta[1] * dt_inv, delta[2] * dt_inv];
         (position, velocity)
+    }
+
+    /// [`Self::sample`] for a routed flight, before arrival: the same
+    /// fraction of the flight as a straight one, measured along the polyline,
+    /// at the constant speed that covers it in the flight time. The velocity
+    /// points along the leg being flown. Before `t_start` the position clamps
+    /// to the start and the velocity is the first leg's, the straight
+    /// flight's quirk carried over.
+    fn sample_route(&self, t: f64) -> ([f64; 3], [f64; 3]) {
+        let span = (self.t_arrive - self.t_start).max(EPSILON_S);
+        let frac = ((t - self.t_start) / span).clamp(0.0, 1.0);
+        let points = self.path_xy();
+        let total_m = self.path_length_m();
+        let speed = total_m / span;
+        let dz = self.target_z - self.start[2];
+        let z = self.start[2] + frac * dz;
+        let vz = dz / span;
+        let mut left_m = frac * total_m;
+        let last = points.len() - 2;
+        for (index, pair) in points.windows(2).enumerate() {
+            let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+            let leg_m = (dx * dx + dy * dy).sqrt();
+            if leg_m <= 0.0 {
+                continue;
+            }
+            // A corner belongs to the leg it starts, so a sample taken on
+            // it flies the outgoing heading; only the target ends a leg.
+            if left_m < leg_m || index == last {
+                let along = (left_m / leg_m).min(1.0);
+                let (ux, uy) = (dx / leg_m, dy / leg_m);
+                return (
+                    [pair[0][0] + along * dx, pair[0][1] + along * dy, z],
+                    [ux * speed, uy * speed, vz],
+                );
+            }
+            left_m -= leg_m;
+        }
+        // Only rounding past the end of the last leg with any length gets
+        // here (the corners are never all on the start, since `routed` keeps
+        // corners only from a route that turns).
+        ([self.target_xy[0], self.target_xy[1], z], [0.0, 0.0, vz])
     }
 
     /// Where this trajectory ends. Stage 9 stores it to decide when a platform
@@ -549,6 +656,87 @@ mod tests {
 
         assert_eq!(flat.t_arrive(), 10.0);
         assert_eq!(climbing.t_arrive(), 10.0);
+    }
+
+    /// A routed flight (P3) flies the polyline at constant speed: 300 m east,
+    /// then 400 m north, 700 m at 28 m/s is 25 s. It starts where it starts,
+    /// turns the corner on time, climbs linearly over the whole flight, and
+    /// stops exactly on the target.
+    #[test]
+    fn a_routed_flight_turns_its_corners_at_constant_speed() {
+        let traj = GotoHover::routed(
+            [0.0, 0.0, 40.0],
+            vec![[300.0, 0.0]],
+            [300.0, 400.0],
+            90.0,
+            10.0,
+            28.0,
+        );
+        assert_eq!(traj.t_arrive(), 35.0);
+        assert_eq!(traj.path_length_m(), 700.0);
+        assert_eq!(traj.target(), [300.0, 400.0, 90.0]);
+
+        let (start, start_velocity) = traj.sample(10.0);
+        assert_eq!(start, [0.0, 0.0, 40.0]);
+        assert_eq!(start_velocity, [28.0, 0.0, 2.0]);
+
+        // 5 s in: 140 m along the first leg.
+        let (first_leg, first_velocity) = traj.sample(15.0);
+        assert!((first_leg[0] - 140.0).abs() < 1e-9 && first_leg[1].abs() < 1e-9);
+        assert!((first_leg[2] - 50.0).abs() < 1e-9);
+        assert_eq!(first_velocity, [28.0, 0.0, 2.0]);
+
+        // 15 s in: 420 m along, so 120 m past the corner, flying north.
+        let (second_leg, second_velocity) = traj.sample(25.0);
+        assert!((second_leg[0] - 300.0).abs() < 1e-9);
+        assert!((second_leg[1] - 120.0).abs() < 1e-9);
+        assert!((second_leg[2] - 70.0).abs() < 1e-9);
+        assert!(second_velocity[0].abs() < 1e-9);
+        assert!((second_velocity[1] - 28.0).abs() < 1e-9);
+
+        let (arrived, stopped) = traj.sample(35.0);
+        assert_eq!(arrived, [300.0, 400.0, 90.0]);
+        assert_eq!(stopped, [0.0, 0.0, 0.0]);
+    }
+
+    /// With no corners a routed flight is the straight redirect, and a
+    /// straight flight checkpoints exactly as it always has: no route field.
+    /// A sample that lands exactly on a corner already flies the outgoing
+    /// leg, so stage 3 never predicts it carrying on through the corner.
+    #[test]
+    fn a_sample_on_a_corner_flies_the_outgoing_leg() {
+        // 100 m east then 100 m north at 10 m/s: the corner is at t = 10.
+        let flight = GotoHover::routed(
+            [0.0, 0.0, 50.0],
+            vec![[100.0, 0.0]],
+            [100.0, 100.0],
+            50.0,
+            0.0,
+            10.0,
+        );
+        let (position, velocity) = flight.sample(10.0);
+        assert_eq!([position[0], position[1]], [100.0, 0.0]);
+        assert_eq!([velocity[0], velocity[1]], [0.0, 10.0]);
+    }
+
+    #[test]
+    fn a_flight_with_no_corners_is_the_straight_redirect() {
+        let routed = GotoHover::routed([0.0, 0.0, 80.0], Vec::new(), [280.0, 0.0], 80.0, 0.0, 28.0);
+        let straight = GotoHover::redirect([0.0, 0.0, 80.0], [280.0, 0.0], 80.0, 0.0, 28.0);
+        assert_eq!(routed, straight);
+        let text = serde_json::to_value(&straight).unwrap();
+        assert!(text.get("via_xy").is_none(), "{text}");
+        let turned = GotoHover::routed(
+            [0.0, 0.0, 80.0],
+            vec![[100.0, 50.0]],
+            [280.0, 0.0],
+            80.0,
+            0.0,
+            28.0,
+        );
+        let back: GotoHover =
+            serde_json::from_value(serde_json::to_value(&turned).unwrap()).unwrap();
+        assert_eq!(back, turned, "a routed flight survives a checkpoint");
     }
 
     /// `max(dist / speed, 1.0e-3)`. A drone standing on its own target still

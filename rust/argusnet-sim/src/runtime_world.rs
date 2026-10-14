@@ -86,6 +86,11 @@ impl SharedObstacles {
     pub fn new(layer: Arc<ObstacleLayer>) -> Self {
         Self { layer }
     }
+
+    /// The layer itself, for a stage that plans routes over it.
+    pub fn layer(&self) -> Arc<ObstacleLayer> {
+        Arc::clone(&self.layer)
+    }
 }
 
 impl ObstacleSampler for SharedObstacles {
