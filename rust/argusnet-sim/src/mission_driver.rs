@@ -339,8 +339,10 @@ struct KnownObstacles {
     this_run: RefCell<BTreeMap<[u64; 6], Option<PlannerRoute>>>,
 }
 
-/// How finely a routed flight is checked against the terrain, in metres.
-pub const TERRAIN_CHECK_STEP_M: f64 = 10.0;
+/// How finely a routed flight is checked against the terrain, in metres:
+/// under half the finest heightmap spacing in use (5 m), so a ridge between
+/// two samples cannot rise far above both before the 8 m clearance runs out.
+pub const TERRAIN_CHECK_STEP_M: f64 = 2.0;
 
 /// The height bands a route's obstacles are filtered in, in metres.
 pub const ROUTE_HEIGHT_BAND_M: f64 = 10.0;
@@ -2583,6 +2585,32 @@ mod tests {
         let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
         walled(&mut stage);
         stage.set_known_terrain(Some(Arc::new(Ridges)));
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(flight.via_xy().is_empty(), "straight, not over the ridge");
+    }
+
+    /// A ridge 2 m wide, narrower than the old 10 m check step, still stops
+    /// a detour that would cross it too low.
+    #[derive(Debug)]
+    struct NarrowRidge;
+
+    impl crate::observe::TerrainHeight for NarrowRidge {
+        fn height_at(&self, _x_m: f64, y_m: f64) -> f64 {
+            if (y_m.abs() - 180.0).abs() < 1.0 {
+                100.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    #[test]
+    fn efficient_v1_sees_a_narrow_ridge_on_a_detour() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut stage);
+        stage.set_known_terrain(Some(Arc::new(NarrowRidge)));
         stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
         let flight = poi_flight(&stage.take_override_commands(), "drone-a");
         assert!(flight.via_xy().is_empty(), "straight, not over the ridge");
