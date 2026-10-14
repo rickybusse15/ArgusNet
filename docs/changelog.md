@@ -2,6 +2,15 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `--planning-policy efficient_v1` routes around known obstacles
+  (PLANNING_EFFICIENCY_PLAN P3, first slice): a POI or egress redirect whose
+  straight line crosses a building or wall tall enough to hit flies a planned
+  route around it (visibility-graph A*), and the fleet-wide allocation, team joins and safe
+  handoffs cost the route's length. The redirect decision records
+  `route_length_m` and `route_waypoints`. A run with no prior map, or a trip
+  the planner cannot route, flies straight as before. The reference is
+  unchanged.
+
 - Terrain preset `urban_dense` and the measurement scenario
   `urban_dense_inspection` (`planner_adversarial` on it, 150 s): a flat city
   of 30 blocks, 70–110 m tall, on a 6 × 5 grid with streets of at least 42 m,

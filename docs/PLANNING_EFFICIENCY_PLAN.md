@@ -252,6 +252,55 @@ second bullet at join time. Not yet measured on the qualification seeds.
 - Later: 3D routing that climbs over low structures, where the energy cost
   says it is worth it (KNOWN_GAPS "3D path planning").
 
+*First slice done (`efficient_v1`):* the mission driver (stage 9) is given
+the prior map's obstacle layer at assembly and plans with `RoutePlanner`
+(visibility-graph A* with smoothing, 8 m clearance, buildings and walls
+only). A trip is planned only around the obstacles that reach its height:
+those whose top plus the clearance is above the lowest height the flight
+passes through, rounded down to a 10 m band. A drone flying over a low
+building collides with nothing (collision is 3D), so it is not sent round
+it. A POI redirect, a reserve return home and the mission-end egress
+whose straight line is blocked fly the planned route instead: `GotoHover`
+carries the route's corners (`via_xy`, absent from the serialised form when
+there are none, so every existing checkpoint is unchanged) and flies the
+polyline at the redirect speed, with height changing linearly over the
+whole flight and an exact stop on the target. The fleet-wide allocation,
+the team-join arrival and cost, and the safe-handoff trip cost use the
+route's length when the route turns, and exactly the straight-line cost
+otherwise. The redirect decisions record `route_length_m` and
+`route_waypoints` (and the egress decision a `routes` map by drone), only
+when a route turns; reason codes are unchanged. A trip the planner cannot
+route (an endpoint within clearance of an obstacle or out of bounds, or no
+way through) flies straight, exactly as before. A run with no prior map
+(`set_world_knowledge` with `NoPrior`) withdraws the layer, so it never
+routes on truth. The reference never reads the layer and is byte-identical.
+
+The planner's own route cache is deliberately not used at runtime: it keys
+on endpoints snapped to 10 m, so a hit returns a route from where an earlier
+request started, and a resumed run (empty cache) would fly differently. The
+driver uses `RoutePlanner::plan_route_uncached` and keeps each run's routes
+by exact endpoints only for that run.
+
+Measured against `efficient_v1` before routing, on the same qualification
+seeds (PhysicalV1, paired over 30 seeds; development measurement, not the
+acceptance run):
+
+| Scenario | Seeds with a routed redirect | `mission_completion_rate` | `fleet_distance_m` | `battery_remaining_min` |
+| --- | --- | --- | --- | --- |
+| `planner_adversarial` | 11 of 30 | identical on every seed | +1.9 m (−0.8 to 4.6), worse on 7, better on 5 | identical |
+| `persistent_long` | 6 of 30 | identical on every seed | +0.06 m (−0.07 to 0.20), no detectable difference | identical |
+
+So the routing works but these scenarios barely exercise it: the urban
+preset places a handful of buildings, and drones redirect at operating
+height, mostly above them. A scenario with tall, dense structures (the
+realism plan's) is what will show whether it pays.
+
+Still to do in P3: the reserve (`dynamic_reserve_wh`) still prices the trip
+home as a straight line; routes are not cached across runs by obstacle-layer
+revision (P4.7), so every mission run re-plans the blocked pairs it costs;
+frontier moves still fly straight; planning on the belief grid for runs with
+no prior map; and 3D routing.
+
 *Measured on a dense city.* On `planner_adversarial` the first routing slice
 (`efficient_v1` routes POI and egress redirects around known buildings and
 walls; PR #236) had little to route: `urban_flat` has a handful of buildings
