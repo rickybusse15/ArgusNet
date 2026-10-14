@@ -156,3 +156,30 @@ fn a_route_reaches_an_end_inside_the_clearance() {
         .plan_route_between(scene, start, [305.0, 0.0], 8.0)
         .is_none());
 }
+
+/// A round building is checked as its circle, not as the polygon the
+/// planner inscribes in it: an end at radius 9.9 m and 15° round a 10 m
+/// tower lies between that polygon's chord and the curve, and is refused.
+#[test]
+fn an_end_inside_a_round_building_is_refused() {
+    let tower = Obstacle::cylinder("tower", BlockerType::Building, 300.0, 0.0, 10.0, 0.0, 120.0)
+        .expect("valid tower");
+    let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+    let layer = ObstacleLayer::new(bounds, 50.0, vec![tower]).expect("valid layer");
+    let scene = Scene {
+        layer: &layer,
+        revision: 0,
+    };
+    let mut planner = RoutePlanner::new(bounds, PlannerConfig::default());
+    let angle = 15f64.to_radians();
+    let inside = [300.0 + 9.9 * angle.cos(), 9.9 * angle.sin()];
+    assert!(layer.primitives[0].point_inside(inside[0], inside[1], 10.0));
+    assert!(planner
+        .plan_route_between(scene, [100.0, 0.0], inside, 8.0)
+        .is_none());
+    // Just outside the circle, at the same bearing, is reached.
+    let outside = [300.0 + 10.5 * angle.cos(), 10.5 * angle.sin()];
+    assert!(planner
+        .plan_route_between(scene, [100.0, 0.0], outside, 8.0)
+        .is_some());
+}

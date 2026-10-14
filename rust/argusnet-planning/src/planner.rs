@@ -154,6 +154,41 @@ impl RouteCache {
     }
 }
 
+/// Whether `point` is inside `obstacle`'s footprint, its boundary included.
+fn footprint_contains(obstacle: &Obstacle, point: Point2) -> bool {
+    match &obstacle.shape {
+        ObstacleShape::Cylinder {
+            center_xy_m,
+            radius_m,
+        } => {
+            let (dx, dy) = (point[0] - center_xy_m[0], point[1] - center_xy_m[1]);
+            (dx * dx + dy * dy).sqrt() <= *radius_m
+        }
+        ObstacleShape::Polygon { footprint_xy_m } => {
+            argusnet_world::obstacles::point_in_polygon(point, footprint_xy_m)
+        }
+    }
+}
+
+/// Whether the segment from `from` to `to` passes through `obstacle`'s
+/// footprint. Both ends are already known to be outside it.
+fn footprint_crossed(obstacle: &Obstacle, from: Point2, to: Point2) -> bool {
+    match &obstacle.shape {
+        ObstacleShape::Cylinder {
+            center_xy_m,
+            radius_m,
+        } => {
+            let nearest =
+                argusnet_world::obstacles::nearest_point_on_segment(*center_xy_m, from, to);
+            let (dx, dy) = (nearest[0] - center_xy_m[0], nearest[1] - center_xy_m[1]);
+            (dx * dx + dy * dy).sqrt() <= *radius_m
+        }
+        ObstacleShape::Polygon { footprint_xy_m } => {
+            !segment_is_free(from, to, std::slice::from_ref(footprint_xy_m))
+        }
+    }
+}
+
 /// Plans routes around an obstacle layer.
 #[derive(Debug)]
 pub struct RoutePlanner {
@@ -499,27 +534,20 @@ impl RoutePlanner {
         if !self.point_within_bounds(start, 0.0) || !self.point_within_bounds(goal, 0.0) {
             return None;
         }
-        let footprints: Vec<Vec<Point2>> = self
-            .hard_primitives(scene)
-            .into_iter()
-            .cloned()
-            .collect::<Vec<Obstacle>>()
-            .iter()
-            .map(|o| self.expanded_polygon(scene, o, 0.0))
-            .collect();
-        // `segment_is_free` lets a segment end on a polygon's boundary, so
-        // an end on a face (which `Obstacle::point_inside` counts as inside)
-        // is refused here first.
-        let solid = |point: Point2| {
-            footprints
-                .iter()
-                .any(|footprint| argusnet_world::obstacles::point_in_polygon(point, footprint))
-        };
+        // Checked against each obstacle's true footprint: a polygon as it is,
+        // a cylinder as its circle (the planner's polygon for it is
+        // inscribed, and misses the slivers between its chords and the
+        // curve). An end on a face counts as inside, as in
+        // `Obstacle::point_inside`; `segment_is_free` alone would let a leg
+        // end on a polygon's boundary.
+        let hard: Vec<Obstacle> = self.hard_primitives(scene).into_iter().cloned().collect();
+        let solid = |point: Point2| hard.iter().any(|o| footprint_contains(o, point));
         if solid(start) || solid(goal) {
             return None;
         }
-        let leg_clear =
-            |from: Point2, to: Point2| from == to || segment_is_free(from, to, &footprints);
+        let leg_clear = |from: Point2, to: Point2| {
+            from == to || hard.iter().all(|o| !footprint_crossed(o, from, to))
+        };
         if !leg_clear(start, free_start) || !leg_clear(free_goal, goal) {
             return None;
         }
