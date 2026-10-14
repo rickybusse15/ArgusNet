@@ -454,14 +454,21 @@ impl RoutePlanner {
                 .any(|pair| !segment_is_free(pair[0], pair[1], &omitted_polygons))
         };
         // No route among fewer obstacles means none among more.
-        match route? {
-            route if !crosses_omitted(&route) => Some(route),
+        let route = match route? {
+            route if !crosses_omitted(&route) => route,
             _ => {
                 let mut all = corridor;
                 all.extend(omitted);
-                self.search_among(scene, &all, start, goal, clearance_m)
+                self.search_among(scene, &all, start, goal, clearance_m)?
             }
-        }
+        };
+        // An obstacle at the map's edge has corners past it; a route round
+        // one would leave the world, so there is none.
+        route
+            .points_xy_m
+            .iter()
+            .all(|point| self.point_within_bounds(*point, clearance_m))
+            .then_some(route)
     }
 
     /// The straight segment if it is free, else the smoothed A* route over

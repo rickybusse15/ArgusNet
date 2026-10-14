@@ -60,3 +60,29 @@ fn an_uncached_route_avoids_obstacles_outside_the_corridor() {
         );
     }
 }
+
+/// A wall reaching the map's edge leaves no way round inside the world: no
+/// route, rather than one through the expanded corners past the edge.
+#[test]
+fn an_uncached_route_never_leaves_the_bounds() {
+    let wall = Obstacle::wall_segment(
+        "wall",
+        BlockerType::Wall,
+        [300.0, -1000.0],
+        [300.0, 1000.0],
+        10.0,
+        0.0,
+        120.0,
+    )
+    .expect("valid wall");
+    let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+    let layer = ObstacleLayer::new(bounds, 50.0, vec![wall]).expect("valid layer");
+    let scene = Scene {
+        layer: &layer,
+        revision: 0,
+    };
+    let mut planner = RoutePlanner::new(bounds, PlannerConfig::default());
+    assert!(planner
+        .plan_route_uncached(scene, [100.0, 0.0], [500.0, 0.0], 8.0)
+        .is_none());
+}

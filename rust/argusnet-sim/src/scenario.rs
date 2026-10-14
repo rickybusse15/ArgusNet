@@ -1263,6 +1263,7 @@ pub fn assemble_with(
         // (P3). The reference never reads them; a run without a prior map
         // takes them away again (`set_world_knowledge`).
         driver.set_known_obstacles(Some(world.obstacles.layer()), bundle.map_bounds_m);
+        driver.set_known_terrain(Some(Arc::new(world.terrain.clone())));
         // Read back off the constructed driver, so a caller (and the wiring
         // test) sees what the stage was actually given.
         mission_setup = Some((driver.config().clone(), driver.pois().to_vec()));

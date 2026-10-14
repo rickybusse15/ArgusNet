@@ -309,6 +309,9 @@ pub struct MissionDriverStage {
     /// straight lines, as the reference always does. Scenario, like
     /// `config`: set at assembly and kept by reset.
     obstacles: Option<KnownObstacles>,
+    /// The prior map's terrain, so a route round obstacles that would carry a
+    /// drone lower than the ground under its corners is not flown (P3).
+    terrain: Option<Arc<dyn crate::observe::TerrainHeight>>,
 }
 
 /// The obstacle layer the driver plans routes over (P3), with its planner.
@@ -335,6 +338,9 @@ struct KnownObstacles {
     reaching: RefCell<BTreeMap<i64, Option<Arc<ObstacleLayer>>>>,
     this_run: RefCell<BTreeMap<[u64; 6], Option<PlannerRoute>>>,
 }
+
+/// How finely a routed flight is checked against the terrain, in metres.
+pub const TERRAIN_CHECK_STEP_M: f64 = 10.0;
 
 /// The height bands a route's obstacles are filtered in, in metres.
 pub const ROUTE_HEIGHT_BAND_M: f64 = 10.0;
@@ -475,6 +481,7 @@ impl MissionDriverStage {
             replay: LocalizationReplay::default(),
             report: DriverReport::default(),
             obstacles: None,
+            terrain: None,
         }
     }
 
@@ -489,6 +496,12 @@ impl MissionDriverStage {
             reaching: RefCell::new(BTreeMap::new()),
             this_run: RefCell::new(BTreeMap::new()),
         });
+    }
+
+    /// The terrain a routed flight must stay above (P3). Without it a route
+    /// is flown as planned.
+    pub fn set_known_terrain(&mut self, terrain: Option<Arc<dyn crate::observe::TerrainHeight>>) {
+        self.terrain = terrain;
     }
 
     /// Whether flights route around known obstacles when the policy does.
@@ -510,7 +523,43 @@ impl MissionDriverStage {
     fn corners(&self, from: [f64; 3], to: [f64; 3]) -> Option<(Vec<[f64; 2]>, f64)> {
         let route = self.route(from, to)?;
         let points = &route.points_xy_m;
-        (points.len() > 2).then(|| (points[1..points.len() - 1].to_vec(), route.length_m))
+        if points.len() <= 2 || !self.clears_terrain(points, from[2], to[2], route.length_m) {
+            return None;
+        }
+        Some((points[1..points.len() - 1].to_vec(), route.length_m))
+    }
+
+    /// Whether a routed flight, its height changing linearly along the route
+    /// as [`GotoHover::routed`] flies it, keeps the planner's clearance above
+    /// the terrain, sampled every [`TERRAIN_CHECK_STEP_M`]. A detour can
+    /// cross higher ground than the straight line between its ends; one that
+    /// would go below it is not flown.
+    fn clears_terrain(&self, points: &[[f64; 2]], from_z: f64, to_z: f64, length_m: f64) -> bool {
+        let Some(terrain) = &self.terrain else {
+            return true;
+        };
+        let clearance_m = PlannerConfig::default().drone_clearance_m;
+        let mut flown_m = 0.0;
+        for pair in points.windows(2) {
+            let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+            let leg_m = (dx * dx + dy * dy).sqrt();
+            let steps = (leg_m / TERRAIN_CHECK_STEP_M).ceil().max(1.0) as usize;
+            for step in 0..=steps {
+                let along = step as f64 / steps as f64;
+                let (x, y) = (pair[0][0] + along * dx, pair[0][1] + along * dy);
+                let frac = if length_m > 0.0 {
+                    ((flown_m + along * leg_m) / length_m).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let z = from_z + frac * (to_z - from_z);
+                if z < terrain.height_at(x, y) + clearance_m {
+                    return false;
+                }
+            }
+            flown_m += leg_m;
+        }
+        true
     }
 
     /// The horizontal distance a trip flies: the route's length when it has
@@ -2509,6 +2558,34 @@ mod tests {
             .expect("recorded");
         assert_eq!(length, flight.path_length_m());
         assert_eq!(decision.inputs["route_waypoints"], flight.via_xy().len());
+    }
+
+    /// Ground 100 m high beyond |y| = 150, flat inside: a ridge under both
+    /// ends of the wall.
+    #[derive(Debug)]
+    struct Ridges;
+
+    impl crate::observe::TerrainHeight for Ridges {
+        fn height_at(&self, _x_m: f64, y_m: f64) -> f64 {
+            if y_m.abs() > 150.0 {
+                100.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    /// P3: a detour that would carry the drone below the ground under it is
+    /// not flown; the drone keeps the straight redirect.
+    #[test]
+    fn efficient_v1_never_routes_a_drone_below_the_terrain() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        walled(&mut stage);
+        stage.set_known_terrain(Some(Arc::new(Ridges)));
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(flight.via_xy().is_empty(), "straight, not over the ridge");
     }
 
     /// P3: the allocation costs the route, not the straight line. drone-a is
