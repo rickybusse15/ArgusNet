@@ -242,7 +242,9 @@ impl GotoHover {
             if leg_m <= 0.0 {
                 continue;
             }
-            if left_m <= leg_m || index == last {
+            // A corner belongs to the leg it starts, so a sample taken on
+            // it flies the outgoing heading; only the target ends a leg.
+            if left_m < leg_m || index == last {
                 let along = (left_m / leg_m).min(1.0);
                 let (ux, uy) = (dx / leg_m, dy / leg_m);
                 return (
@@ -699,6 +701,24 @@ mod tests {
 
     /// With no corners a routed flight is the straight redirect, and a
     /// straight flight checkpoints exactly as it always has: no route field.
+    /// A sample that lands exactly on a corner already flies the outgoing
+    /// leg, so stage 3 never predicts it carrying on through the corner.
+    #[test]
+    fn a_sample_on_a_corner_flies_the_outgoing_leg() {
+        // 100 m east then 100 m north at 10 m/s: the corner is at t = 10.
+        let flight = GotoHover::routed(
+            [0.0, 0.0, 50.0],
+            vec![[100.0, 0.0]],
+            [100.0, 100.0],
+            50.0,
+            0.0,
+            10.0,
+        );
+        let (position, velocity) = flight.sample(10.0);
+        assert_eq!([position[0], position[1]], [100.0, 0.0]);
+        assert_eq!([velocity[0], velocity[1]], [0.0, 10.0]);
+    }
+
     #[test]
     fn a_flight_with_no_corners_is_the_straight_redirect() {
         let routed = GotoHover::routed([0.0, 0.0, 80.0], Vec::new(), [280.0, 0.0], 80.0, 0.0, 28.0);
