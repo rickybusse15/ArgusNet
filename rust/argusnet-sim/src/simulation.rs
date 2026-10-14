@@ -1704,6 +1704,25 @@ impl Simulation {
                     detail: error.to_string(),
                 })?;
         }
+        // The policy the checkpoint was taken under is the policy this run
+        // must have: it changes deconfliction even with no mission driver
+        // (whose own state would otherwise refuse the mismatch above).
+        if checkpoint.header.runtime_algorithm_version != self.runtime_algorithm_version {
+            let policy = |version| {
+                if version == CheckpointHeader::RUNTIME_ALGORITHM_VERSION {
+                    "the reference planning policy"
+                } else {
+                    "a non-reference planning policy (efficient_v1)"
+                }
+            };
+            return Err(RestoreError::InvalidState {
+                detail: format!(
+                    "the checkpoint was taken under {} and this run is configured for {}                      (argusnet-rs: the same --planning-policy)",
+                    policy(checkpoint.header.runtime_algorithm_version),
+                    policy(self.runtime_algorithm_version)
+                ),
+            });
+        }
         // The rates the checkpoint was taken under are the rates this run
         // must be driven at: anything else would move future deadlines.
         let declared: BTreeMap<String, String> = self

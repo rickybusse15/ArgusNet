@@ -226,6 +226,28 @@ fn the_deconfliction_guard_follows_the_policy_alone() {
     scan.set_planning_policy(PlanningPolicy::Reference).unwrap();
     assert!(!guarded(&scan));
 
+    // A driverless checkpoint resumes only under its own policy: the guard
+    // is the difference, and no driver state is there to refuse it.
+    let mut source = assemble(&bundle("tt")).expect("assembles");
+    source
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    for _ in 0..5 {
+        source.sim.step().expect("steps");
+    }
+    let checkpoint = source.sim.checkpoint().expect("not faulted");
+    let mut reference = assemble(&bundle("tt")).expect("assembles");
+    let refused = reference.sim.restore(&checkpoint).unwrap_err();
+    assert!(
+        format!("{refused}").contains("planning policy"),
+        "{refused}"
+    );
+    let mut efficient = assemble(&bundle("tt")).expect("assembles");
+    efficient
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    assert!(efficient.sim.restore(&checkpoint).is_ok());
+
     // After the first tick the policy is fixed, with or without a driver.
     follow.sim.step().expect("steps");
     assert!(follow
