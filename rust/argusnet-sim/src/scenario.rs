@@ -1539,11 +1539,20 @@ impl AssembledRun {
     /// Allocate the mission's POIs under `policy` (P1). `Ok(false)` for a
     /// run with no mission driver, whose deconfliction the policy still
     /// guards; refused for a mission the policy cannot run (see
-    /// [`MissionDriverStage::set_policy`]). Before the first tick only.
+    /// [`MissionDriverStage::set_policy`]). Before the first tick only:
+    /// refused after it, with or without a driver, since it changes the
+    /// physics and the checkpoint version mid-run.
     pub fn set_planning_policy(
         &mut self,
         policy: argusnet_planning::allocation::PlanningPolicy,
     ) -> Result<bool, String> {
+        if self.sim.tick() != 0 {
+            return Err(format!(
+                "--planning-policy {} must be set before the first tick (now at tick {})",
+                policy.as_str(),
+                self.sim.tick()
+            ));
+        }
         let has_driver = match self
             .sim
             .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)

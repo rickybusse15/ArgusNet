@@ -225,4 +225,16 @@ fn the_deconfliction_guard_follows_the_policy_alone() {
         .unwrap();
     scan.set_planning_policy(PlanningPolicy::Reference).unwrap();
     assert!(!guarded(&scan));
+
+    // After the first tick the policy is fixed, with or without a driver.
+    follow.sim.step().expect("steps");
+    assert!(follow
+        .set_planning_policy(PlanningPolicy::Reference)
+        .is_err());
+    assert!(guarded(&follow));
+    scan.sim.step().expect("steps");
+    assert!(scan
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .is_err());
+    assert!(!guarded(&scan));
 }
