@@ -199,3 +199,30 @@ fn efficient_v1_guards_deconfliction_and_the_reference_does_not() {
     assert!(guarded(PlanningPolicy::EfficientV1));
     assert!(!guarded(PlanningPolicy::Reference));
 }
+
+/// The guard belongs to the policy, not to the mission: a target-follow run
+/// with no mission driver is guarded too, and going back to the reference
+/// before the first tick takes the guard away again.
+#[test]
+fn the_deconfliction_guard_follows_the_policy_alone() {
+    use argusnet_sim::deconflict::DeconflictStage;
+    use argusnet_sim::stage::Stage;
+    let guarded = |run: &AssembledRun| {
+        run.sim
+            .stage::<DeconflictStage>(Stage::Deconflict)
+            .expect("installed")
+            .is_guarded()
+    };
+    let mut follow = assemble(&bundle("tt")).expect("assembles");
+    assert!(follow.driver().is_none(), "no mission driver");
+    assert!(!follow
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap());
+    assert!(guarded(&follow));
+
+    let mut scan = assemble(&bundle("scan")).expect("assembles");
+    scan.set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    scan.set_planning_policy(PlanningPolicy::Reference).unwrap();
+    assert!(!guarded(&scan));
+}

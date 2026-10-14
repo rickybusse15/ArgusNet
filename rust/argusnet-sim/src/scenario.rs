@@ -767,6 +767,9 @@ pub struct AssembledRun {
     launch_floor_m: f64,
     /// Physics, in a run without a prior map: its contacts go to the replay.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// Whether `guard` is the planning policy's (P3) rather than a run with
+    /// no prior map's.
+    policy_guard: bool,
     /// Which belief cells a true building or wall covers, for the replay's
     /// evaluation figures. Never read by the run.
     true_structures: Vec<bool>,
@@ -1339,6 +1342,7 @@ pub fn assemble_with(
         map_bounds_m: bundle.map_bounds_m,
         world,
         guard: None,
+        policy_guard: false,
         true_structures: Vec::new(),
         assignments: Default::default(),
     })
@@ -1533,42 +1537,57 @@ impl AssembledRun {
     }
 
     /// Allocate the mission's POIs under `policy` (P1). `Ok(false)` for a
-    /// run with no mission driver; refused for a mission the policy cannot
-    /// run (see [`MissionDriverStage::set_policy`]). Before the first tick
-    /// only.
+    /// run with no mission driver, whose deconfliction the policy still
+    /// guards; refused for a mission the policy cannot run (see
+    /// [`MissionDriverStage::set_policy`]). Before the first tick only.
     pub fn set_planning_policy(
         &mut self,
         policy: argusnet_planning::allocation::PlanningPolicy,
     ) -> Result<bool, String> {
-        match self
+        let has_driver = match self
             .sim
             .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
         {
             Some(driver) => {
                 driver.set_policy(policy)?;
-                self.sim.set_policy_algorithm(!policy.is_reference());
-                // A policy that routes round obstacles (P3) keeps 8 m from
-                // them, and deconfliction's lateral push can reach further:
-                // keep its adjusted positions out of the ground and out of
-                // structures, as a run with no prior map already does. The
-                // reference keeps its unguarded push, byte for byte; a run
-                // with no prior map installs its own guard, which wins.
-                if !policy.is_reference() && self.guard.is_none() {
-                    let guard = crate::belief_world::PhysicalGuard::new(
-                        self.world.terrain.clone(),
-                        self.world.obstacles.clone(),
-                        crate::belief_world::ExplorationConfig::default().contact_clearance_m,
-                    );
-                    if let Some(deconflict) =
-                        self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict)
-                    {
-                        deconflict.set_physical_guard(guard.clone());
-                    }
-                    self.guard = Some(guard);
-                }
-                Ok(true)
+                true
             }
-            None => Ok(false),
+            None => false,
+        };
+        // Deconfliction is guarded whatever the mission (below), so a run
+        // with no mission driver changes too, and its checkpoints say so.
+        self.sim.set_policy_algorithm(!policy.is_reference());
+        self.guard_deconfliction(!policy.is_reference());
+        Ok(has_driver)
+    }
+
+    /// A policy other than the reference routes round obstacles (P3) and
+    /// keeps 8 m from them, and deconfliction's lateral push can reach
+    /// further: keep its adjusted positions out of the ground and out of
+    /// structures, as a run with no prior map already does. The reference
+    /// keeps its unguarded push, byte for byte. A run with no prior map
+    /// installs its own guard, which this never replaces or removes; the
+    /// policy's own guard is removed again when the policy goes back to the
+    /// reference, so a run's behaviour never depends on the order it was
+    /// configured in.
+    fn guard_deconfliction(&mut self, guarded: bool) {
+        if guarded && self.guard.is_none() {
+            let guard = crate::belief_world::PhysicalGuard::new(
+                self.world.terrain.clone(),
+                self.world.obstacles.clone(),
+                crate::belief_world::ExplorationConfig::default().contact_clearance_m,
+            );
+            if let Some(deconflict) = self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict) {
+                deconflict.set_physical_guard(guard.clone());
+            }
+            self.guard = Some(guard);
+            self.policy_guard = true;
+        } else if !guarded && self.policy_guard {
+            if let Some(deconflict) = self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict) {
+                deconflict.clear_physical_guard();
+            }
+            self.guard = None;
+            self.policy_guard = false;
         }
     }
 
@@ -1801,6 +1820,7 @@ impl AssembledRun {
             .connect(crate::simulation::Handoff::RangeScansToMapping)
             .map_err(|error| format!("{error:?}"))?;
         self.guard = Some(guard);
+        self.policy_guard = false;
         self.extend_replay_meta([("world_knowledge".to_string(), summary)]);
         Ok(())
     }

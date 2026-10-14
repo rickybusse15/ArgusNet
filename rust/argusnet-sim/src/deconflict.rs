@@ -220,6 +220,10 @@ impl DeconflictStage {
         self.guard = Some(guard);
     }
 
+    pub fn clear_physical_guard(&mut self) {
+        self.guard = None;
+    }
+
     /// Whether adjusted positions are kept out of the ground and structures.
     pub fn is_guarded(&self) -> bool {
         self.guard.is_some()
