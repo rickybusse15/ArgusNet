@@ -138,9 +138,10 @@ impl CheckpointHeader {
     /// policy itself. Every other checkpoint stays version 2. Bumped each
     /// time `efficient_v1` changes what it decides (4: teams on active
     /// POIs; 5: safe handoff; 6: return home at the reserve; 7: routes
-    /// around known obstacles), so a checkpoint never resumes under a
-    /// different allocator.
-    pub const RUNTIME_ALGORITHM_VERSION_POLICY: u32 = 7;
+    /// around known obstacles; 8: routes whose ends sit inside the
+    /// clearance), so a checkpoint never resumes under a different
+    /// allocator.
+    pub const RUNTIME_ALGORITHM_VERSION_POLICY: u32 = 8;
     /// Still 1: the ChaCha8 stream and the Box–Muller transform in
     /// [`crate::deterministic`]. Bump alongside any re-baseline.
     pub const SEED_VERSION: u32 = 1;

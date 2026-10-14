@@ -154,6 +154,41 @@ impl RouteCache {
     }
 }
 
+/// Whether `point` is inside `obstacle`'s footprint, its boundary included.
+fn footprint_contains(obstacle: &Obstacle, point: Point2) -> bool {
+    match &obstacle.shape {
+        ObstacleShape::Cylinder {
+            center_xy_m,
+            radius_m,
+        } => {
+            let (dx, dy) = (point[0] - center_xy_m[0], point[1] - center_xy_m[1]);
+            (dx * dx + dy * dy).sqrt() <= *radius_m
+        }
+        ObstacleShape::Polygon { footprint_xy_m } => {
+            argusnet_world::obstacles::point_in_polygon(point, footprint_xy_m)
+        }
+    }
+}
+
+/// Whether the segment from `from` to `to` passes through `obstacle`'s
+/// footprint. Both ends are already known to be outside it.
+fn footprint_crossed(obstacle: &Obstacle, from: Point2, to: Point2) -> bool {
+    match &obstacle.shape {
+        ObstacleShape::Cylinder {
+            center_xy_m,
+            radius_m,
+        } => {
+            let nearest =
+                argusnet_world::obstacles::nearest_point_on_segment(*center_xy_m, from, to);
+            let (dx, dy) = (nearest[0] - center_xy_m[0], nearest[1] - center_xy_m[1]);
+            (dx * dx + dy * dy).sqrt() <= *radius_m
+        }
+        ObstacleShape::Polygon { footprint_xy_m } => {
+            !segment_is_free(from, to, std::slice::from_ref(footprint_xy_m))
+        }
+    }
+}
+
 /// Plans routes around an obstacle layer.
 #[derive(Debug)]
 pub struct RoutePlanner {
@@ -469,6 +504,113 @@ impl RoutePlanner {
             .iter()
             .all(|point| self.point_within_bounds(*point, clearance_m))
             .then_some(route)
+    }
+
+    /// [`Self::plan_route_uncached`] for ends that may sit inside the
+    /// clearance: a POI beside a wall, or a scan lane's end at the map's
+    /// edge. Each end in the clearance is moved to the nearest point a
+    /// platform can be ([`Self::nearest_free_point`]), the route is planned
+    /// between those, and the true ends are joined to it by straight legs.
+    /// A leg is accepted only if it crosses no hard obstacle's own footprint
+    /// (it is inside the clearance by construction), and an end must itself
+    /// be in bounds and outside every footprint, its faces included;
+    /// otherwise there is no route. The legs are the only part of the route
+    /// inside the clearance: even when the clear points see each other, the
+    /// route still goes by them rather than straight between the true ends,
+    /// which could run along a wall inside the clearance all the way.
+    pub fn plan_route_between(
+        &mut self,
+        scene: Scene<'_>,
+        start: Point2,
+        goal: Point2,
+        clearance_m: f64,
+    ) -> Option<PlannerRoute> {
+        // Checked against each obstacle's true footprint before anything else,
+        // whether or not an end moves: a polygon as it is, a cylinder as its
+        // circle (the planner's polygon for it is inscribed, and a large
+        // enough cylinder holds points beyond that polygon and its clearance
+        // both). An end on a face counts as inside, as in
+        // `Obstacle::point_inside`; `segment_is_free` alone would let a leg
+        // end on a polygon's boundary.
+        let hard: Vec<Obstacle> = self.hard_primitives(scene).into_iter().cloned().collect();
+        let solid = |point: Point2| hard.iter().any(|o| footprint_contains(o, point));
+        if solid(start) || solid(goal) {
+            return None;
+        }
+        // Coincident ends in bounds are already there: no route, rather than
+        // one out to the clearance's edge and back.
+        if start == goal && self.point_within_bounds(start, 0.0) {
+            return Some(PlannerRoute {
+                points_xy_m: vec![start, goal],
+                length_m: 0.0,
+                vertex_count: 2,
+                cache_hit: false,
+                skipped_segments: 0,
+            });
+        }
+        let crosses = |route: &PlannerRoute| {
+            route
+                .points_xy_m
+                .windows(2)
+                .any(|pair| hard.iter().any(|o| footprint_crossed(o, pair[0], pair[1])))
+        };
+        let mut free_start = self.nearest_free_point(scene, start, clearance_m);
+        let mut free_goal = self.nearest_free_point(scene, goal, clearance_m);
+        let mut middle = self.plan_route_uncached(scene, free_start, free_goal, clearance_m)?;
+        // The planner routes round a cylinder's inscribed polygon; a very
+        // large one (radius above `clearance / (1 - cos(pi / vertices))`,
+        // about 235 m by default) can then have a segment clip its curve.
+        // Planning again with the clearance widened by the polygon's shortfall
+        // clears the circle itself. If that finds nothing there is no route:
+        // the planner never returns one through a footprint. (The mission
+        // driver's straight fallback is kept out of structures by the
+        // deconfliction stage's physical guard.)
+        if crosses(&middle) {
+            let half_step = std::f64::consts::PI / self.config.cylinder_vertex_count.max(6) as f64;
+            let shortfall = hard
+                .iter()
+                .filter_map(|o| match &o.shape {
+                    ObstacleShape::Cylinder { radius_m, .. } => {
+                        Some(radius_m * (1.0 / half_step.cos() - 1.0))
+                    }
+                    ObstacleShape::Polygon { .. } => None,
+                })
+                .fold(0.0_f64, f64::max);
+            let widened_m = clearance_m + shortfall + 1e-3;
+            let wide_start = self.nearest_free_point(scene, start, widened_m);
+            let wide_goal = self.nearest_free_point(scene, goal, widened_m);
+            let wide = self
+                .plan_route_uncached(scene, wide_start, wide_goal, widened_m)
+                .filter(|wide| !crosses(wide))?;
+            (free_start, free_goal, middle) = (wide_start, wide_goal, wide);
+        }
+        if free_start == start && free_goal == goal {
+            return Some(middle);
+        }
+        if !self.point_within_bounds(start, 0.0) || !self.point_within_bounds(goal, 0.0) {
+            return None;
+        }
+        let leg_clear = |from: Point2, to: Point2| {
+            from == to || hard.iter().all(|o| !footprint_crossed(o, from, to))
+        };
+        if !leg_clear(start, free_start) || !leg_clear(free_goal, goal) {
+            return None;
+        }
+        let mut points = Vec::with_capacity(middle.points_xy_m.len() + 2);
+        if free_start != start {
+            points.push(start);
+        }
+        points.extend(middle.points_xy_m.iter().copied());
+        if free_goal != goal {
+            points.push(goal);
+        }
+        Some(PlannerRoute {
+            length_m: path_length(&points),
+            vertex_count: points.len(),
+            points_xy_m: points,
+            cache_hit: false,
+            skipped_segments: 0,
+        })
     }
 
     /// The straight segment if it is free, else the smoothed A* route over

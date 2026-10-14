@@ -376,8 +376,9 @@ impl KnownObstacles {
 
     /// A route around the hard obstacles from `from` to `to`, or `None` when
     /// nothing reaches the flight's height or the planner finds no route (an
-    /// endpoint out of bounds or within clearance of an obstacle, or no way
-    /// through).
+    /// end inside an obstacle or out of bounds, or no way through). An end
+    /// inside the clearance, such as a POI beside a wall, is joined to the
+    /// route by a short straight leg ([`RoutePlanner::plan_route_between`]).
     fn route(&self, from: [f64; 3], to: [f64; 3]) -> Option<PlannerRoute> {
         let key = [
             from[0].to_bits(),
@@ -402,7 +403,7 @@ impl KnownObstacles {
                     layer: &layer,
                     revision: band as u64,
                 };
-                planner.plan_route_uncached(scene, [from[0], from[1]], [to[0], to[1]], clearance_m)
+                planner.plan_route_between(scene, [from[0], from[1]], [to[0], to[1]], clearance_m)
             });
         self.this_run.borrow_mut().insert(key, route.clone());
         route
@@ -2614,6 +2615,29 @@ mod tests {
         stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
         let flight = poi_flight(&stage.take_override_commands(), "drone-a");
         assert!(flight.via_xy().is_empty(), "straight, not over the ridge");
+    }
+
+    /// P3: a POI 3 m beyond the wall, inside the planner's clearance, is
+    /// still reached round the wall, not straight through it: the route ends
+    /// with a short leg from the nearest clear point to the POI itself.
+    #[test]
+    fn efficient_v1_routes_to_a_poi_beside_a_wall() {
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 308.0, 1)]);
+        walled(&mut stage);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(!flight.via_xy().is_empty(), "round the wall");
+        assert_eq!(flight.target(), [308.0, 0.0, 40.0]);
+        let steps = 400;
+        for step in 0..=steps {
+            let t = flight.t_arrive() * step as f64 / steps as f64;
+            let ([x, y, _], _) = flight.sample(t);
+            assert!(
+                !((295.0..=305.0).contains(&x) && (-200.0..=200.0).contains(&y)),
+                "inside the wall at t = {t}: ({x}, {y})"
+            );
+        }
     }
 
     /// P3: the allocation costs the route, not the straight line. drone-a is
