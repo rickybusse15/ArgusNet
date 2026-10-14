@@ -540,6 +540,16 @@ impl RoutePlanner {
         let free_start = self.nearest_free_point(scene, start, clearance_m);
         let free_goal = self.nearest_free_point(scene, goal, clearance_m);
         let middle = self.plan_route_uncached(scene, free_start, free_goal, clearance_m)?;
+        // The planner routes round a cylinder's inscribed polygon; a very
+        // large one (radius above `clearance / (1 - cos(pi / vertices))`,
+        // about 235 m by default) can then have a segment clip its curve.
+        if middle
+            .points_xy_m
+            .windows(2)
+            .any(|pair| hard.iter().any(|o| footprint_crossed(o, pair[0], pair[1])))
+        {
+            return None;
+        }
         if free_start == start && free_goal == goal {
             return Some(middle);
         }

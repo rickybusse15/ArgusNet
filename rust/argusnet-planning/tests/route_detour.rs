@@ -204,4 +204,15 @@ fn an_end_inside_a_large_round_building_is_refused() {
     assert!(planner
         .plan_route_between(scene, [-800.0, 0.0], inside, 8.0)
         .is_none());
+    // A route round it never clips the curve between the polygon's corners.
+    if let Some(route) = planner.plan_route_between(scene, [-800.0, 0.0], [800.0, 0.0], 8.0) {
+        for pair in route.points_xy_m.windows(2) {
+            let nearest =
+                argusnet_world::obstacles::nearest_point_on_segment([0.0, 0.0], pair[0], pair[1]);
+            assert!(
+                nearest[0].hypot(nearest[1]) > 300.0,
+                "{pair:?} clips the tower"
+            );
+        }
+    }
 }
