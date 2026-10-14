@@ -243,4 +243,33 @@ fn coincident_ends_inside_the_clearance_stay_put() {
         .expect("already there");
     assert_eq!(route.points_xy_m, vec![beside, beside]);
     assert_eq!(route.length_m, 0.0);
+    // Out of bounds is no route, coincident or not.
+    assert!(planner
+        .plan_route_between(scene, [501.0, 0.0], [501.0, 0.0], 8.0)
+        .is_none());
+}
+
+#[test]
+fn no_route_clips_a_large_round_building_it_cannot_widen_round() {
+    // Too little room above and below the tower for the widened clearance:
+    // no route, rather than one through the curve.
+    let tower = Obstacle::cylinder("tower", BlockerType::Building, 0.0, 0.0, 300.0, 0.0, 120.0)
+        .expect("valid tower");
+    let bounds = Bounds2d::new(-1000.0, 1000.0, -320.0, 320.0);
+    let layer = ObstacleLayer::new(bounds, 50.0, vec![tower]).expect("valid layer");
+    let scene = Scene {
+        layer: &layer,
+        revision: 0,
+    };
+    let mut planner = RoutePlanner::new(bounds, PlannerConfig::default());
+    if let Some(route) = planner.plan_route_between(scene, [-800.0, 0.0], [800.0, 0.0], 8.0) {
+        for pair in route.points_xy_m.windows(2) {
+            let nearest =
+                argusnet_world::obstacles::nearest_point_on_segment([0.0, 0.0], pair[0], pair[1]);
+            assert!(
+                nearest[0].hypot(nearest[1]) > 300.0,
+                "{pair:?} clips the tower"
+            );
+        }
+    }
 }

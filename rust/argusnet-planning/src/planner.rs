@@ -537,9 +537,9 @@ impl RoutePlanner {
         if solid(start) || solid(goal) {
             return None;
         }
-        // Coincident ends are already there: no route, rather than one out to
-        // the clearance's edge and back.
-        if start == goal {
+        // Coincident ends in bounds are already there: no route, rather than
+        // one out to the clearance's edge and back.
+        if start == goal && self.point_within_bounds(start, 0.0) {
             return Some(PlannerRoute {
                 points_xy_m: vec![start, goal],
                 length_m: 0.0,
@@ -561,9 +561,10 @@ impl RoutePlanner {
         // large one (radius above `clearance / (1 - cos(pi / vertices))`,
         // about 235 m by default) can then have a segment clip its curve.
         // Planning again with the clearance widened by the polygon's shortfall
-        // clears the circle itself. If that finds nothing the first route is
-        // kept: its clip is shallow, where the caller's fallback with no
-        // route is a straight flight through the whole building.
+        // clears the circle itself. If that finds nothing there is no route:
+        // the planner never returns one through a footprint. (The mission
+        // driver's straight fallback is kept out of structures by the
+        // deconfliction stage's physical guard.)
         if crosses(&middle) {
             let half_step = std::f64::consts::PI / self.config.cylinder_vertex_count.max(6) as f64;
             let shortfall = hard
@@ -578,11 +579,10 @@ impl RoutePlanner {
             let widened_m = clearance_m + shortfall + 1e-3;
             let wide_start = self.nearest_free_point(scene, start, widened_m);
             let wide_goal = self.nearest_free_point(scene, goal, widened_m);
-            if let Some(wide) = self.plan_route_uncached(scene, wide_start, wide_goal, widened_m) {
-                if !crosses(&wide) {
-                    (free_start, free_goal, middle) = (wide_start, wide_goal, wide);
-                }
-            }
+            let wide = self
+                .plan_route_uncached(scene, wide_start, wide_goal, widened_m)
+                .filter(|wide| !crosses(wide))?;
+            (free_start, free_goal, middle) = (wide_start, wide_goal, wide);
         }
         if free_start == start && free_goal == goal {
             return Some(middle);
