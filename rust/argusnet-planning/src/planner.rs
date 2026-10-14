@@ -525,6 +525,18 @@ impl RoutePlanner {
         goal: Point2,
         clearance_m: f64,
     ) -> Option<PlannerRoute> {
+        // Checked against each obstacle's true footprint before anything else,
+        // whether or not an end moves: a polygon as it is, a cylinder as its
+        // circle (the planner's polygon for it is inscribed, and a large
+        // enough cylinder holds points beyond that polygon and its clearance
+        // both). An end on a face counts as inside, as in
+        // `Obstacle::point_inside`; `segment_is_free` alone would let a leg
+        // end on a polygon's boundary.
+        let hard: Vec<Obstacle> = self.hard_primitives(scene).into_iter().cloned().collect();
+        let solid = |point: Point2| hard.iter().any(|o| footprint_contains(o, point));
+        if solid(start) || solid(goal) {
+            return None;
+        }
         let free_start = self.nearest_free_point(scene, start, clearance_m);
         let free_goal = self.nearest_free_point(scene, goal, clearance_m);
         let middle = self.plan_route_uncached(scene, free_start, free_goal, clearance_m)?;
@@ -532,17 +544,6 @@ impl RoutePlanner {
             return Some(middle);
         }
         if !self.point_within_bounds(start, 0.0) || !self.point_within_bounds(goal, 0.0) {
-            return None;
-        }
-        // Checked against each obstacle's true footprint: a polygon as it is,
-        // a cylinder as its circle (the planner's polygon for it is
-        // inscribed, and misses the slivers between its chords and the
-        // curve). An end on a face counts as inside, as in
-        // `Obstacle::point_inside`; `segment_is_free` alone would let a leg
-        // end on a polygon's boundary.
-        let hard: Vec<Obstacle> = self.hard_primitives(scene).into_iter().cloned().collect();
-        let solid = |point: Point2| hard.iter().any(|o| footprint_contains(o, point));
-        if solid(start) || solid(goal) {
             return None;
         }
         let leg_clear = |from: Point2, to: Point2| {
