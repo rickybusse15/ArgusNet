@@ -427,7 +427,41 @@ impl RoutePlanner {
         if self.blocking_primitive(scene, goal, clearance_m).is_some() {
             return None;
         }
-        self.search(scene, start, goal, clearance_m)
+        // The corridor's candidates can miss an obstacle on a detour that
+        // leaves the corridor, so the route is checked against the obstacles
+        // the corridor left out, and searched again among every hard
+        // obstacle if it crosses one of them.
+        let corridor: Vec<Obstacle> = self
+            .candidate_primitives(scene, start, goal)
+            .into_iter()
+            .cloned()
+            .collect();
+        let route = self.search_among(scene, &corridor, start, goal, clearance_m);
+        let omitted: Vec<Obstacle> = self
+            .hard_primitives(scene)
+            .into_iter()
+            .filter(|o| !corridor.iter().any(|c| c.id == o.id))
+            .cloned()
+            .collect();
+        let omitted_polygons: Vec<Vec<Point2>> = omitted
+            .iter()
+            .map(|o| self.expanded_polygon(scene, o, clearance_m))
+            .collect();
+        let crosses_omitted = |route: &PlannerRoute| {
+            route
+                .points_xy_m
+                .windows(2)
+                .any(|pair| !segment_is_free(pair[0], pair[1], &omitted_polygons))
+        };
+        // No route among fewer obstacles means none among more.
+        match route? {
+            route if !crosses_omitted(&route) => Some(route),
+            _ => {
+                let mut all = corridor;
+                all.extend(omitted);
+                self.search_among(scene, &all, start, goal, clearance_m)
+            }
+        }
     }
 
     /// The straight segment if it is free, else the smoothed A* route over
@@ -451,6 +485,18 @@ impl RoutePlanner {
             .into_iter()
             .cloned()
             .collect();
+        self.search_among(scene, &candidates, start, goal, clearance_m)
+    }
+
+    /// [`Self::search`] over a given set of obstacles.
+    fn search_among(
+        &mut self,
+        scene: Scene<'_>,
+        candidates: &[Obstacle],
+        start: Point2,
+        goal: Point2,
+        clearance_m: f64,
+    ) -> Option<PlannerRoute> {
         let polygons: Vec<Vec<Point2>> = candidates
             .iter()
             .map(|o| self.expanded_polygon(scene, o, clearance_m))
