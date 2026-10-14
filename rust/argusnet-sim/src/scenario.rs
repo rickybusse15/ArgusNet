@@ -1546,9 +1546,9 @@ impl AssembledRun {
         &mut self,
         policy: argusnet_planning::allocation::PlanningPolicy,
     ) -> Result<bool, String> {
-        if self.sim.tick() != 0 {
+        if self.sim.has_begun() {
             return Err(format!(
-                "--planning-policy {} must be set before the first tick (now at tick {})",
+                "--planning-policy {} must be set before the first tick begins (now at tick {})",
                 policy.as_str(),
                 self.sim.tick()
             ));
@@ -1900,6 +1900,8 @@ impl AssembledRun {
         &mut self,
         checkpoint: &crate::snapshot::SimulationCheckpoint,
     ) -> Result<(), crate::snapshot::RestoreError> {
+        // Refused before the fault schedule touches the sensor table.
+        self.sim.check_policy(checkpoint)?;
         self.apply_sensor_faults(checkpoint.tick);
         self.sim.restore(checkpoint)
     }

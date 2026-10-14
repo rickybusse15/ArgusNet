@@ -1310,6 +1310,37 @@ impl Simulation {
         self.runtime_algorithm_version
     }
 
+    /// Refuse a checkpoint taken under another planning policy: the policy
+    /// changes deconfliction even with no mission driver, whose own state
+    /// would otherwise refuse the mismatch. Touches nothing, so a wrapper
+    /// can call it before any state of its own changes.
+    pub fn check_policy(&self, checkpoint: &SimulationCheckpoint) -> Result<(), RestoreError> {
+        if checkpoint.header.runtime_algorithm_version == self.runtime_algorithm_version {
+            return Ok(());
+        }
+        let policy = |version| {
+            if version == CheckpointHeader::RUNTIME_ALGORITHM_VERSION {
+                "the reference planning policy"
+            } else {
+                "a non-reference planning policy (efficient_v1)"
+            }
+        };
+        Err(RestoreError::InvalidState {
+            detail: format!(
+                "the checkpoint was taken under {} and this run is configured for {} \
+                 (argusnet-rs: the same --planning-policy)",
+                policy(checkpoint.header.runtime_algorithm_version),
+                policy(self.runtime_algorithm_version)
+            ),
+        })
+    }
+
+    /// Whether any tick has begun: the clock has advanced, or a stage has
+    /// run in a tick still open at 0.
+    pub fn has_begun(&self) -> bool {
+        self.clock.tick() != 0 || !self.trace.records().is_empty() || self.trace.dropped() != 0
+    }
+
     pub fn lane_rates(&self) -> &BTreeMap<Stage, String> {
         &self.lane_rates
     }
@@ -1704,25 +1735,7 @@ impl Simulation {
                     detail: error.to_string(),
                 })?;
         }
-        // The policy the checkpoint was taken under is the policy this run
-        // must have: it changes deconfliction even with no mission driver
-        // (whose own state would otherwise refuse the mismatch above).
-        if checkpoint.header.runtime_algorithm_version != self.runtime_algorithm_version {
-            let policy = |version| {
-                if version == CheckpointHeader::RUNTIME_ALGORITHM_VERSION {
-                    "the reference planning policy"
-                } else {
-                    "a non-reference planning policy (efficient_v1)"
-                }
-            };
-            return Err(RestoreError::InvalidState {
-                detail: format!(
-                    "the checkpoint was taken under {} and this run is configured for {}                      (argusnet-rs: the same --planning-policy)",
-                    policy(checkpoint.header.runtime_algorithm_version),
-                    policy(self.runtime_algorithm_version)
-                ),
-            });
-        }
+        self.check_policy(checkpoint)?;
         // The rates the checkpoint was taken under are the rates this run
         // must be driven at: anything else would move future deadlines.
         let declared: BTreeMap<String, String> = self

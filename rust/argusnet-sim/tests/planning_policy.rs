@@ -237,7 +237,7 @@ fn the_deconfliction_guard_follows_the_policy_alone() {
     }
     let checkpoint = source.sim.checkpoint().expect("not faulted");
     let mut reference = assemble(&bundle("tt")).expect("assembles");
-    let refused = reference.sim.restore(&checkpoint).unwrap_err();
+    let refused = reference.restore(&checkpoint).unwrap_err();
     assert!(
         format!("{refused}").contains("planning policy"),
         "{refused}"
@@ -247,6 +247,16 @@ fn the_deconfliction_guard_follows_the_policy_alone() {
         .set_planning_policy(PlanningPolicy::EfficientV1)
         .unwrap();
     assert!(efficient.sim.restore(&checkpoint).is_ok());
+
+    // Once tick 0 is open (stage 0 run, clock still at 0) the policy is
+    // fixed.
+    let mut opened = assemble(&bundle("tt")).expect("assembles");
+    let _open = opened.sim.begin_tick().expect("begins");
+    assert_eq!(opened.sim.tick(), 0);
+    assert!(opened
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .is_err());
+    assert!(!guarded(&opened));
 
     // After the first tick the policy is fixed, with or without a driver.
     follow.sim.step().expect("steps");
