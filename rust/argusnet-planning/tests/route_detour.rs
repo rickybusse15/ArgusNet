@@ -134,4 +134,25 @@ fn a_route_reaches_an_end_inside_the_clearance() {
         .plan_route_between(scene, [100.0, 300.0], [500.0, 300.0], 8.0)
         .expect("open ground");
     assert_eq!(straight.points_xy_m.len(), 2);
+
+    // Both ends 3 m from the wall's face, 100 m apart along it: the route
+    // keeps the clearance between the clear points, with only the two short
+    // legs inside it, not a straight line hugging the wall.
+    let along = planner
+        .plan_route_between(scene, [308.0, 0.0], [308.0, 100.0], 8.0)
+        .expect("along the wall");
+    let inner = &along.points_xy_m[1..along.points_xy_m.len() - 1];
+    assert!(inner.len() >= 2, "{:?}", along.points_xy_m);
+    for point in inner {
+        assert!(
+            point[0] >= 313.0 - 1e-9,
+            "inside the clearance: {:?}",
+            along.points_xy_m
+        );
+    }
+
+    // An end on the wall's face is inside the wall: no route.
+    assert!(planner
+        .plan_route_between(scene, start, [305.0, 0.0], 8.0)
+        .is_none());
 }

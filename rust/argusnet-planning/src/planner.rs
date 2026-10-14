@@ -478,7 +478,11 @@ impl RoutePlanner {
     /// between those, and the true ends are joined to it by straight legs.
     /// A leg is accepted only if it crosses no hard obstacle's own footprint
     /// (it is inside the clearance by construction), and an end must itself
-    /// be in bounds and outside every footprint; otherwise there is no route.
+    /// be in bounds and outside every footprint, its faces included;
+    /// otherwise there is no route. The legs are the only part of the route
+    /// inside the clearance: even when the clear points see each other, the
+    /// route still goes by them rather than straight between the true ends,
+    /// which could run along a wall inside the clearance all the way.
     pub fn plan_route_between(
         &mut self,
         scene: Scene<'_>,
@@ -503,22 +507,21 @@ impl RoutePlanner {
             .iter()
             .map(|o| self.expanded_polygon(scene, o, 0.0))
             .collect();
+        // `segment_is_free` lets a segment end on a polygon's boundary, so
+        // an end on a face (which `Obstacle::point_inside` counts as inside)
+        // is refused here first.
+        let solid = |point: Point2| {
+            footprints
+                .iter()
+                .any(|footprint| argusnet_world::obstacles::point_in_polygon(point, footprint))
+        };
+        if solid(start) || solid(goal) {
+            return None;
+        }
         let leg_clear =
             |from: Point2, to: Point2| from == to || segment_is_free(from, to, &footprints);
         if !leg_clear(start, free_start) || !leg_clear(free_goal, goal) {
             return None;
-        }
-        // Nothing to go round between the clear points, and nothing in the
-        // way of the true ends: the straight line itself.
-        if middle.points_xy_m.len() == 2 && leg_clear(start, goal) {
-            let points = vec![start, goal];
-            return Some(PlannerRoute {
-                length_m: path_length(&points),
-                vertex_count: 2,
-                points_xy_m: points,
-                cache_hit: false,
-                skipped_segments: 0,
-            });
         }
         let mut points = Vec::with_capacity(middle.points_xy_m.len() + 2);
         if free_start != start {
