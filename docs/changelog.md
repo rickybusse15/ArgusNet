@@ -2,6 +2,13 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `efficient_v1` routes trips that start or end beside a wall or at the
+  map's edge (P3, second slice): planned from and to the nearest clear points
+  and joined by short legs that cross no obstacle. On `urban_dense_inspection`
+  time spent inside buildings falls by two thirds; completion, distance and
+  battery are unchanged. Checkpoint policy version 8. The reference is
+  unchanged.
+
 - `--planning-policy efficient_v1` routes around known obstacles
   (PLANNING_EFFICIENCY_PLAN P3, first slice): a POI or egress redirect whose
   straight line crosses a building or wall tall enough to hit flies a planned

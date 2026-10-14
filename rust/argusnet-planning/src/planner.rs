@@ -471,6 +471,72 @@ impl RoutePlanner {
             .then_some(route)
     }
 
+    /// [`Self::plan_route_uncached`] for ends that may sit inside the
+    /// clearance: a POI beside a wall, or a scan lane's end at the map's
+    /// edge. Each end in the clearance is moved to the nearest point a
+    /// platform can be ([`Self::nearest_free_point`]), the route is planned
+    /// between those, and the true ends are joined to it by straight legs.
+    /// A leg is accepted only if it crosses no hard obstacle's own footprint
+    /// (it is inside the clearance by construction), and an end must itself
+    /// be in bounds and outside every footprint; otherwise there is no route.
+    pub fn plan_route_between(
+        &mut self,
+        scene: Scene<'_>,
+        start: Point2,
+        goal: Point2,
+        clearance_m: f64,
+    ) -> Option<PlannerRoute> {
+        let free_start = self.nearest_free_point(scene, start, clearance_m);
+        let free_goal = self.nearest_free_point(scene, goal, clearance_m);
+        let middle = self.plan_route_uncached(scene, free_start, free_goal, clearance_m)?;
+        if free_start == start && free_goal == goal {
+            return Some(middle);
+        }
+        if !self.point_within_bounds(start, 0.0) || !self.point_within_bounds(goal, 0.0) {
+            return None;
+        }
+        let footprints: Vec<Vec<Point2>> = self
+            .hard_primitives(scene)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<Obstacle>>()
+            .iter()
+            .map(|o| self.expanded_polygon(scene, o, 0.0))
+            .collect();
+        let leg_clear =
+            |from: Point2, to: Point2| from == to || segment_is_free(from, to, &footprints);
+        if !leg_clear(start, free_start) || !leg_clear(free_goal, goal) {
+            return None;
+        }
+        // Nothing to go round between the clear points, and nothing in the
+        // way of the true ends: the straight line itself.
+        if middle.points_xy_m.len() == 2 && leg_clear(start, goal) {
+            let points = vec![start, goal];
+            return Some(PlannerRoute {
+                length_m: path_length(&points),
+                vertex_count: 2,
+                points_xy_m: points,
+                cache_hit: false,
+                skipped_segments: 0,
+            });
+        }
+        let mut points = Vec::with_capacity(middle.points_xy_m.len() + 2);
+        if free_start != start {
+            points.push(start);
+        }
+        points.extend(middle.points_xy_m.iter().copied());
+        if free_goal != goal {
+            points.push(goal);
+        }
+        Some(PlannerRoute {
+            length_m: path_length(&points),
+            vertex_count: points.len(),
+            points_xy_m: points,
+            cache_hit: false,
+            skipped_segments: 0,
+        })
+    }
+
     /// The straight segment if it is free, else the smoothed A* route over
     /// the visibility graph. The endpoints are already known to be in bounds
     /// and outside every obstacle.

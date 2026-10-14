@@ -347,6 +347,27 @@ at the endpoints), before reserve pricing or caching.
 Reproduce with `scripts/compare_scenarios.py --scenario urban_dense_inspection`
 (one binary per run; it now accepts any scenario in `scenarios.py`).
 
+*Second slice: route ends inside the clearance.* A trip whose start or end
+lies within the planner's clearance of a wall or of the map's edge is now
+planned from and to the nearest clear points
+(`RoutePlanner::plan_route_between`), joined to the true ends by short
+straight legs that must cross no obstacle's own footprint. When nothing is in
+the way it is still the straight line. Measured on `urban_dense_inspection`
+against main with the first slice (same seeds and setup as above, binaries
+built in separate target directories):
+
+| Metric | First slice | Route ends | Paired difference (95% CI) | Seeds better / worse |
+| --- | --- | --- | --- | --- |
+| `mission_completion_rate` | 0.733 | 0.744 | +0.011 (−0.005 to 0.027), no detectable difference | 2 / 0 |
+| `fleet_distance_m` | 18,740 | 18,749 | +9 m (−88 to 106), no detectable difference | 13 / 13 |
+| `battery_remaining_min` | 0.947 | 0.947 | identical on every seed | 0 / 0 |
+| Samples in a block | 14.7 | 5.0 | −9.7 (−13.2 to −6.2), better | 20 / 0 |
+
+Routed POI redirects rise from 73 to 131 of 187. The passes left come from
+trips with no way round inside the clearance and from deconfliction, whose
+lateral push is not checked against obstacles in a run with a prior map
+(the next step, which changes the reference and re-records its replays).
+
 ### P4: coverage that rebalances
 
 - **Balanced split.** Size each drone's scan region by flight time and the

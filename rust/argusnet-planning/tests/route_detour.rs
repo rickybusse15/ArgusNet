@@ -86,3 +86,52 @@ fn an_uncached_route_never_leaves_the_bounds() {
         .plan_route_uncached(scene, [100.0, 0.0], [500.0, 0.0], 8.0)
         .is_none());
 }
+
+/// A POI 3 m from the wall's far face, inside the 8 m clearance:
+/// `plan_route_uncached` refuses it, `plan_route_between` routes round the
+/// wall to the nearest clear point and finishes with a short straight leg,
+/// clear of the wall's own footprint.
+#[test]
+fn a_route_reaches_an_end_inside_the_clearance() {
+    let wall = Obstacle::wall_segment(
+        "wall",
+        BlockerType::Wall,
+        [300.0, -200.0],
+        [300.0, 200.0],
+        10.0,
+        0.0,
+        120.0,
+    )
+    .expect("valid wall");
+    let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+    let layer = ObstacleLayer::new(bounds, 50.0, vec![wall]).expect("valid layer");
+    let scene = Scene {
+        layer: &layer,
+        revision: 0,
+    };
+    let mut planner = RoutePlanner::new(bounds, PlannerConfig::default());
+    let (start, goal) = ([100.0, 0.0], [308.0, 0.0]);
+    assert!(planner
+        .plan_route_uncached(scene, start, goal, 8.0)
+        .is_none());
+    let route = planner
+        .plan_route_between(scene, start, goal, 8.0)
+        .expect("a route to the POI by the wall");
+    assert_eq!(route.points_xy_m.first(), Some(&start));
+    assert_eq!(route.points_xy_m.last(), Some(&goal));
+    assert!(route.points_xy_m.len() > 3, "round the wall");
+    let footprint = planner.expanded_polygon(scene, &layer.primitives[0], 0.0);
+    for pair in route.points_xy_m.windows(2) {
+        assert!(
+            segment_is_free(pair[0], pair[1], std::slice::from_ref(&footprint)),
+            "{pair:?} crosses the wall: {:?}",
+            route.points_xy_m
+        );
+    }
+
+    // Nothing in the way: the straight line, not a detour.
+    let straight = planner
+        .plan_route_between(scene, [100.0, 300.0], [500.0, 300.0], 8.0)
+        .expect("open ground");
+    assert_eq!(straight.points_xy_m.len(), 2);
+}
