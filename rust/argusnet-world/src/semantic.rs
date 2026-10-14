@@ -499,7 +499,7 @@ mod tests {
         for name in preset_names() {
             assert_eq!(terrain_profile_for_preset(name).name, name);
         }
-        assert_eq!(preset_names().len(), 12);
+        assert_eq!(preset_names().len(), 13);
     }
 
     #[test]

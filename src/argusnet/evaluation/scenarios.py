@@ -261,7 +261,43 @@ OPERATIONAL_PRESETS: tuple[BenchmarkConfig, ...] = (
     ),
 )
 
-ALL_SCENARIOS: tuple[BenchmarkConfig, ...] = (*CANONICAL_SCENARIOS, *OPERATIONAL_PRESETS)
+# Scenarios for development measurements. They are kept out of
+# CANONICAL_SCENARIOS, which the acceptance run, its stored reference
+# (docs/performance/p49c-reference.json) and scripts/replay_hashes.py all
+# enumerate, so adding one changes no recorded baseline.
+MEASUREMENT_SCENARIOS: tuple[BenchmarkConfig, ...] = (
+    # planner_adversarial on the dense block grid: the same fleet, POIs and
+    # weather, with 30 blocks standing 70-110 m tall where planner_adversarial
+    # has a handful of low ones. POIs hover 40 m above the streets, so a
+    # straight flight from one POI to the next usually crosses a block, which
+    # is what obstacle-aware routing (PLANNING_EFFICIENCY_PLAN P3) has to beat.
+    # 150 s rather than 120 s: at 120 s most runs are still scanning, and by
+    # 180 s every run has finished its POIs, so neither shows trip length.
+    _config(
+        "urban_dense_inspection",
+        mission_type="planner_adversarial",
+        difficulty=0.85,
+        duration_s=150.0,
+        map_preset="medium",
+        terrain_preset="urban_dense",
+        drone_count=4,
+        sim_args={
+            "mission_mode": "scan_map_inspect",
+            "target_count": 0,
+            "drone_mode": "mixed",
+            "poi_count": 6,
+            "scan_coverage_threshold": 0.75,
+            "weather_preset": "heavy_rain",
+        },
+        tags=("measurement", "routing"),
+    ),
+)
+
+ALL_SCENARIOS: tuple[BenchmarkConfig, ...] = (
+    *CANONICAL_SCENARIOS,
+    *OPERATIONAL_PRESETS,
+    *MEASUREMENT_SCENARIOS,
+)
 
 _SCENARIOS_BY_NAME = {config.name: config for config in ALL_SCENARIOS}
 

@@ -72,6 +72,7 @@ const TERRAIN_PRESETS: &[&str] = &[
     "alpine",
     "coastal",
     "urban_flat",
+    "urban_dense",
     "desert_canyon",
     "rolling_highlands",
     "lake_district",

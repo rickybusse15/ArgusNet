@@ -79,7 +79,7 @@ argusnet sim \
 
 Key flags:
 - `--map-preset`: `small`, `medium`, `large`, `xlarge`, `regional`, `theater`, `operational`
-- `--terrain-preset`: `alpine`, `coastal`, `urban_flat`, `desert_canyon`, `rolling_highlands`, `lake_district`, `jungle_canopy`, `arctic_tundra`, `river_valley`
+- `--terrain-preset`: `alpine`, `coastal`, `urban_flat`, `urban_dense`, `desert_canyon`, `rolling_highlands`, `lake_district`, `jungle_canopy`, `arctic_tundra`, `river_valley`, `military_compound`, `mountain_pass`. `urban_dense` is a flat city of 30 blocks 70–110 m tall on a 6 × 5 grid with streets at least 42 m wide (scaled with the map); POIs and ground stations land in the streets.
 - `--platform-preset`: `baseline`, `wide_area`
 - `--mission-mode`: `scan_map_inspect` for the map/localize/inspect workflow
 - `--drone-mode`: `follow`, `search`, `mixed`

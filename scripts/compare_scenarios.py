@@ -3,7 +3,7 @@
 
 Every variant runs on the same seeds through a release ``argusnet-rs``, and
 is scored the way acceptance scores (``evaluate_replay``). A variant is the
-canonical scenario plus extra ``argusnet sim`` arguments; the last value of a
+scenario plus extra ``argusnet sim`` arguments; the last value of a
 repeated flag wins, so a variant overrides the scenario's own setting.
 
     cargo build --release -p argusnet-cli
@@ -44,7 +44,7 @@ from run_phase_acceptance import RELEASE_BINARY, SEED_SETS, rust_argv  # noqa: E
 from argusnet.evaluation.comparison import RunResult, compare, markdown  # noqa: E402
 from argusnet.evaluation.metrics import check_pass_fail, evaluate_replay  # noqa: E402
 from argusnet.evaluation.replay import load_replay_document  # noqa: E402
-from argusnet.evaluation.scenarios import CANONICAL_SCENARIOS  # noqa: E402
+from argusnet.evaluation.scenarios import ALL_SCENARIOS  # noqa: E402
 from argusnet.simulation import sim  # noqa: E402
 
 
@@ -162,7 +162,7 @@ def git(*args: str) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--scenario", required=True, help="a canonical scenario name")
+    parser.add_argument("--scenario", required=True, help="a scenario name (scenarios.py)")
     parser.add_argument(
         "--variant",
         action="append",
@@ -180,7 +180,7 @@ def main() -> int:
     parser.add_argument("--markdown", type=Path, default=None)
     args = parser.parse_args()
 
-    configs = {c.name: c for c in CANONICAL_SCENARIOS}
+    configs = {c.name: c for c in ALL_SCENARIOS}
     if args.scenario not in configs:
         parser.error(f"unknown scenario {args.scenario!r}; one of {', '.join(configs)}")
     config = configs[args.scenario]

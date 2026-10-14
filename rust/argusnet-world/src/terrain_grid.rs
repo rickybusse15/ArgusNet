@@ -362,7 +362,7 @@ mod tests {
         // up itself, so unlike `build_land_cover_layer` there is no way for a
         // caller to drive the bias directly. Across the whole table the biases
         // are 0.0, 0.01, 0.02, 0.03, 0.06, 0.08, 0.16, 0.2 and 0.28: none
-        // exceeds 0.30, let alone 0.35, and the two zeroes skip the block
+        // exceeds 0.30, let alone 0.35, and the zeroes skip the block
         // entirely rather than clamping up to 0.01. Both bounds are therefore
         // no-ops on every reachable input.
         use crate::semantic::terrain_profile_for_preset;
@@ -378,6 +378,7 @@ mod tests {
             "mountain_pass",
             "river_valley",
             "rolling_highlands",
+            "urban_dense",
             "urban_flat",
         ] {
             let bias = terrain_profile_for_preset(preset).water_bias;
@@ -391,9 +392,9 @@ mod tests {
     #[test]
     fn the_lowland_depth_scale_floor_is_unreachable_from_the_preset_table() {
         // `max(relief_m * 0.18, 1.0)`. The floor bites below a relief of
-        // 5.56 m. The two presets with the smallest relief -- urban_flat at 12
-        // and military_compound at 24 -- both have `water_bias == 0` and so
-        // never reach this line at all; every preset that does reach it has a
+        // 5.56 m. The three presets with the smallest relief -- urban_dense at
+        // 8, urban_flat at 12 and military_compound at 24 -- all have
+        // `water_bias == 0` and so never reach this line at all; every preset that does reach it has a
         // relief of at least 28 m, giving 5.04. Another proven no-op.
         use crate::semantic::terrain_profile_for_preset;
         for preset in [
@@ -408,6 +409,7 @@ mod tests {
             "mountain_pass",
             "river_valley",
             "rolling_highlands",
+            "urban_dense",
             "urban_flat",
         ] {
             let profile = terrain_profile_for_preset(preset);

@@ -756,6 +756,9 @@ TERRAIN_PRESET_BUILDERS = {
     "alpine": alpine_terrain,
     "coastal": coastal_terrain,
     "urban_flat": urban_flat_terrain,
+    # The procedural build gives urban_dense a profile of its own; the analytic
+    # model only needs a flat city, which urban_flat already is.
+    "urban_dense": urban_flat_terrain,
     "desert_canyon": desert_canyon_terrain,
     "rolling_highlands": rolling_highlands_terrain,
     "lake_district": lake_district_terrain,
