@@ -2097,6 +2097,66 @@ def _river_corridor_patch(scale: float) -> LandCoverPatch:
     )
 
 
+# Block centres of `urban_dense`'s grid, before scaling, in metres: six
+# columns and five rows around the map's middle (y = 15 before scaling).
+_URBAN_DENSE_COLUMNS_X = (-225.0, -135.0, -45.0, 45.0, 135.0, 225.0)
+_URBAN_DENSE_ROWS_Y = (-170.0, -75.0, 20.0, 115.0, 210.0)
+# A block's size along x and y, before scaling. With the 90 m and 95 m pitches
+# the streets are 42 m and 45 m wide on the small map, so a POI or a ground
+# station pushed out of a block lands in open street.
+_URBAN_DENSE_BLOCK_LENGTH_M = 48.0
+_URBAN_DENSE_BLOCK_WIDTH_M = 50.0
+
+
+def _urban_dense_blocks(terrain: object, scale: float) -> list[object]:
+    """The 30 blocks of ``urban_dense``, row by row.
+
+    The preset exists to make a straight redirect cross buildings (P3). A
+    drone inspects a POI hovering 40 m above the ground and flies from one POI
+    to the next at that height, so every block stands 70 m to 110 m tall: even
+    the lowest top is more than 30 m above a POI-to-POI flight. All of them
+    stay well below the 230 m operating height, so scanning flies over the
+    grid. The heights follow a fixed pattern rather than a random draw, so the
+    layout is the same for every seed. The Rust builder places the same blocks
+    (`urban_dense_blocks` in `builder/environment.rs`).
+    """
+    blocks: list[object] = []
+    for row, y_m in enumerate(_URBAN_DENSE_ROWS_Y):
+        for column, x_m in enumerate(_URBAN_DENSE_COLUMNS_X):
+            nominal_height_m = 70.0 + 10.0 * float((2 * row + 3 * column) % 5)
+            center_x_m = x_m * scale
+            center_y_m = y_m * scale
+            length_m = _URBAN_DENSE_BLOCK_LENGTH_M * scale
+            width_m = _URBAN_DENSE_BLOCK_WIDTH_M * scale
+            footprint = OrientedBox(
+                primitive_id=f"urban-block-{row}-{column}-shape",
+                blocker_type="building",
+                center_x_m=center_x_m,
+                center_y_m=center_y_m,
+                length_m=length_m,
+                width_m=width_m,
+                yaw_rad=0.0,
+                base_z_m=0.0,
+                top_z_m=1.0,
+            ).footprint_xy_m()
+            min_z, max_z = _terrain_height_span_at_points(terrain, footprint)
+            base_z, top_z = _solid_obstacle_elevations(min_z, max_z, nominal_height_m)
+            blocks.append(
+                OrientedBox(
+                    primitive_id=f"urban-block-{row}-{column}",
+                    blocker_type="building",
+                    center_x_m=center_x_m,
+                    center_y_m=center_y_m,
+                    length_m=length_m,
+                    width_m=width_m,
+                    yaw_rad=0.0,
+                    base_z_m=base_z,
+                    top_z_m=top_z,
+                )
+            )
+    return blocks
+
+
 def _preset_environment_profile(
     *,
     terrain_preset: str,
@@ -2230,6 +2290,18 @@ def _preset_environment_profile(
 
     if terrain_preset in {"urban_flat"}:
         return (list(hard_obstacles[:3]), urban_patches[:2], terrain_only_patches)
+
+    if terrain_preset == "urban_dense":
+        # The block grid alone: the default hangar, tower and warehouse would
+        # stand inside it. One urban patch covers the whole grid.
+        grid_patch = _rectangle_patch(
+            np.array([0.0, 20.0 * scale], dtype=float),
+            520.0 * scale,
+            460.0 * scale,
+            LandCoverClass.URBAN,
+            density=200,
+        )
+        return (_urban_dense_blocks(terrain, scale), [grid_patch], terrain_only_patches)
 
     if terrain_preset in {"coastal"}:
         return (list(soft_obstacles[:1]), [coastal_patch], [coastal_patch])

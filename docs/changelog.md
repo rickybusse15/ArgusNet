@@ -2,6 +2,14 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Terrain preset `urban_dense` and the measurement scenario
+  `urban_dense_inspection` (`planner_adversarial` on it, 150 s): a flat city
+  of 30 blocks, 70–110 m tall, on a 6 × 5 grid with streets of at least 42 m,
+  so a POI-to-POI flight at 40 m usually crosses one. Built the same by the
+  Rust builder and the Python reference (parity fixtures extended). The
+  scenario is outside the canonical suite, so no recorded baseline changes.
+  Every existing preset is unchanged.
+
 - `--planning-policy efficient_v1` sends each drone home on its own when its
   battery reaches its reserve home (PLANNING_EFFICIENCY_PLAN P2), handing its
   POI on safely first. The reference still only egresses at mission end.

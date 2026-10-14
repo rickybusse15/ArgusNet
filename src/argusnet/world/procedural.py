@@ -207,6 +207,26 @@ _PRESET_PROFILES: Mapping[str, TerrainProfile] = {
         0.10,
         2,
     ),
+    # A flatter, more built-up urban_flat for the dense block grid the
+    # environment places on it (`_urban_dense_blocks` in sim.py): low relief
+    # and no water, so the landscape filter keeps every block.
+    "urban_dense": TerrainProfile(
+        "urban_dense",
+        6.0,
+        8.0,
+        0.001,
+        -0.001,
+        1,
+        1,
+        0.35,
+        0.15,
+        0.00,
+        1.00,
+        0.10,
+        0.85,
+        0.10,
+        3,
+    ),
     "desert_canyon": TerrainProfile(
         "desert_canyon",
         22.0,

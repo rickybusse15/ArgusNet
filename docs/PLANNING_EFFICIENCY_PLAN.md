@@ -252,6 +252,52 @@ second bullet at join time. Not yet measured on the qualification seeds.
 - Later: 3D routing that climbs over low structures, where the energy cost
   says it is worth it (KNOWN_GAPS "3D path planning").
 
+*Measured on a dense city.* On `planner_adversarial` the first routing slice
+(`efficient_v1` routes POI and egress redirects around known buildings and
+walls; PR #236) had little to route: `urban_flat` has a handful of buildings
+and drones mostly fly above them. The `urban_dense` preset is a flat city of
+30 blocks, 70–110 m tall, on a 6 × 5 grid with streets of at least 42 m
+(73 m on the medium map). POIs hover 40 m above the streets, so most
+POI-to-POI flights cross a block. The scenario `urban_dense_inspection` is
+`planner_adversarial` on it, run for 150 s: at 120 s most runs are still
+scanning, and by 180 s every run has finished its POIs.
+
+`efficient_v1` before routing (main, with teams, safe handoff and return
+home) against the same with PR #236 merged, both with the preset, on the
+qualification seeds (PhysicalV1, paired over 30 seeds, identical exported
+configs; development measurement, not the acceptance run). The scorecard has
+no collision metric, and a run with a prior map has no physical guard, so a
+straight flight passes through a block unrecorded. "Samples in a block" counts
+replay samples (every 0.25 s) where a drone is inside a block's box.
+
+| Metric | Before | After | Paired difference (95% CI) | Seeds better / worse |
+| --- | --- | --- | --- | --- |
+| `mission_completion_rate` | 0.744 | 0.733 | −0.011 (−0.034 to 0.012), no detectable difference | 1 / 3 |
+| `fleet_distance_m` | 18,793 | 18,744 | −49 m (−132 to 35), no detectable difference | 15 / 13 |
+| `battery_remaining_min` | 0.947 | 0.947 | identical on every seed | 0 / 0 |
+| Samples in a block | 21.5 | 13.4 | −8.1 (−11.4 to −4.8), better | 21 / 1 |
+
+Routing turned 73 of the 187 POI redirects (on 28 of 30 seeds; the other two
+never leave the scan in 150 s), adding 21 m to a trip on average (median
+18 m, at most 81 m), and 8 of the 9 egress decisions carry a route. No
+routed redirect entered a block. The completion rate falls by one POI on
+three seeds, probably where a longer trip moves a POI's finish past the
+150 s cut-off.
+
+Routing removes only 44 of the 100 passes through a block (a pass is a run of
+consecutive samples inside one), because 85 of the 187 redirects cannot be
+routed: the planner refuses an endpoint within its 8 m clearance of an
+obstacle or of the map's edge. The POI generator rejects only points inside a
+block, so 56 redirects start or end within 8 m of a wall, and 35 start or end
+within 8 m of the map's edge, where the scan's lanes end (6 are both). Those
+caused 48 of the 56 remaining passes. Flights home after an egress caused 7,
+6 of them by the drone whose ground station stands 5 m from a block. So the
+next P3 step that would pay here is letting a route start or end inside the
+clearance (planning from the nearest clear point, or shrinking the clearance
+at the endpoints), before reserve pricing or caching.
+Reproduce with `scripts/compare_scenarios.py --scenario urban_dense_inspection`
+(one binary per run; it now accepts any scenario in `scenarios.py`).
+
 ### P4: coverage that rebalances
 
 - **Balanced split.** Size each drone's scan region by flight time and the

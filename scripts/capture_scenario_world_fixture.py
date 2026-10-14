@@ -96,6 +96,12 @@ CASES = [
     dict(map_preset="operational", terrain_preset="military_compound"),
     # A terrain finer than 5 m, where the land cover's 10 m floor applies.
     dict(map_preset="small", terrain_preset="alpine", terrain_resolution_m=2.5),
+    # The dense block grid, at a scale of one and at a scale that multiplies
+    # every block. These two were appended on linux-x86_64 to a fixture
+    # captured on macos-aarch64; heights are compared within tolerance either
+    # way, and a full recapture records them like the rest.
+    dict(map_preset="small", terrain_preset="urban_dense"),
+    dict(map_preset="medium", terrain_preset="urban_dense"),
 ]
 
 

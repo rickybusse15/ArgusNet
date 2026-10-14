@@ -296,6 +296,47 @@ fn seated_prism(
     building_prism(id, footprint, base, top)
 }
 
+/// Block centres of `urban_dense`'s grid along x, before scaling, in metres.
+const URBAN_DENSE_COLUMNS_X: [f64; 6] = [-225.0, -135.0, -45.0, 45.0, 135.0, 225.0];
+/// Block centres of `urban_dense`'s grid along y, before scaling, in metres.
+/// Around the map's middle, which sits at y = 15 before scaling.
+const URBAN_DENSE_ROWS_Y: [f64; 5] = [-170.0, -75.0, 20.0, 115.0, 210.0];
+/// A block's size along x and y, before scaling. With the 90 m and 95 m
+/// pitches above, the streets between blocks are 42 m and 45 m wide on the
+/// small map and wider on larger ones, so a POI or a ground station pushed
+/// out of a block lands in open street.
+const URBAN_DENSE_BLOCK_LENGTH_M: f64 = 48.0;
+const URBAN_DENSE_BLOCK_WIDTH_M: f64 = 50.0;
+
+/// `_urban_dense_blocks`: the 30 blocks of `urban_dense`, row by row.
+///
+/// The preset exists to make a straight redirect cross buildings (P3). A
+/// drone inspects a POI hovering 40 m above the ground and flies from one
+/// POI to the next at that height, so every block stands 70 m to 110 m tall:
+/// even the lowest top is more than 30 m above a POI-to-POI flight. All of
+/// them stay well below the 230 m operating height, so scanning flies over
+/// the grid. The heights follow a fixed pattern rather than a random draw, so
+/// the layout is the same for every seed.
+fn urban_dense_blocks(terrain: &BuiltTerrain, scale: f64) -> Vec<BuiltObstacle> {
+    let mut blocks = Vec::new();
+    for (row, y) in URBAN_DENSE_ROWS_Y.iter().enumerate() {
+        for (column, x) in URBAN_DENSE_COLUMNS_X.iter().enumerate() {
+            let nominal_height_m = 70.0 + 10.0 * ((2 * row + 3 * column) % 5) as f64;
+            blocks.push(seated_box(
+                terrain,
+                &format!("urban-block-{row}-{column}"),
+                x * scale,
+                y * scale,
+                URBAN_DENSE_BLOCK_LENGTH_M * scale,
+                URBAN_DENSE_BLOCK_WIDTH_M * scale,
+                0.0,
+                nominal_height_m,
+            ));
+        }
+    }
+    blocks
+}
+
 /// `build_obstacle_cluster`: a hangar, a warehouse and a tower (hard), and a
 /// forest stand (soft), around `centre`.
 fn obstacle_cluster(
@@ -565,6 +606,19 @@ fn preset_profile(
             urban.into_iter().take(2).collect(),
             Vec::new(),
         ),
+        // The block grid alone: the default hangar, tower and warehouse would
+        // stand inside it. One urban patch covers the whole grid.
+        "urban_dense" => profile(
+            urban_dense_blocks(terrain, scale),
+            vec![rectangle_patch(
+                [0.0, 20.0 * scale],
+                520.0 * scale,
+                460.0 * scale,
+                LandCoverClass::Urban,
+                200,
+            )],
+            Vec::new(),
+        ),
         "coastal" => profile(
             soft.into_iter().take(1).collect(),
             vec![coastal.clone()],
@@ -788,6 +842,65 @@ pub fn build_environment(
 #[cfg(test)]
 mod tests {
     use super::mask_index;
+    use crate::builder::{build_world, ScenarioOptions};
+    use serde_json::Value;
+
+    /// `urban_dense` is there to put buildings across POI-to-POI flights,
+    /// which hover 40 m above the ground (`poi_hover_agl_m`). Every block
+    /// must survive the landscape filter, stand clear of that height by
+    /// more than 30 m, and leave streets of at least 40 m between blocks so
+    /// POIs and ground stations have room. Checked on the small map (scale
+    /// one, the narrowest streets) and the medium map the scenario uses.
+    #[test]
+    fn urban_dense_stands_thirty_tall_blocks_with_wide_streets() {
+        const POI_HOVER_AGL_M: f64 = 40.0;
+        for map_preset in ["small", "medium"] {
+            let world = build_world(&ScenarioOptions {
+                map_preset: map_preset.into(),
+                terrain_preset: "urban_dense".into(),
+                ..ScenarioOptions::default()
+            })
+            .unwrap();
+            let blocks: Vec<&Value> = world
+                .obstacles
+                .iter()
+                .filter(|o| o.blocker_type == "building")
+                .map(|o| &o.metadata)
+                .collect();
+            assert_eq!(blocks.len(), 30, "{map_preset}: block count");
+            assert_eq!(world.obstacles.len(), 30, "{map_preset}: only blocks");
+            let number = |block: &Value, key: &str| block[key].as_f64().unwrap();
+            for block in &blocks {
+                let ground_m = world
+                    .terrain
+                    .height_at(number(block, "center_x_m"), number(block, "center_y_m"));
+                let above_poi_flight_m =
+                    number(block, "top_elevation_m") - (ground_m + POI_HOVER_AGL_M);
+                assert!(
+                    above_poi_flight_m > 30.0,
+                    "{map_preset}: {} tops out {above_poi_flight_m} m above a POI flight",
+                    block["object_id"]
+                );
+            }
+            // Axis-aligned blocks: the street between two is the larger of
+            // the gaps along x and along y.
+            let mut narrowest_m = f64::INFINITY;
+            for (index, a) in blocks.iter().enumerate() {
+                for b in &blocks[index + 1..] {
+                    let gap = |centre: &str, size: &str| {
+                        (number(a, centre) - number(b, centre)).abs()
+                            - (number(a, size) + number(b, size)) * 0.5
+                    };
+                    let street_m = gap("center_x_m", "length_m").max(gap("center_y_m", "width_m"));
+                    narrowest_m = narrowest_m.min(street_m);
+                }
+            }
+            assert!(
+                narrowest_m >= 40.0,
+                "{map_preset}: narrowest street {narrowest_m} m"
+            );
+        }
+    }
 
     /// Python's `round` is half to even: 2.5 -> 2 and 3.5 -> 4, where Rust's
     /// `round` would give 3 and 4. Clamped into the grid either side.

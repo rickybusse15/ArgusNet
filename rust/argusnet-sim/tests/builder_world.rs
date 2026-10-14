@@ -107,7 +107,7 @@ fn hex(values: &[u8]) -> String {
 fn every_preset_builds_the_references_world() {
     let fixture: Value = serde_json::from_str(&read("scenario_world.json")).unwrap();
     let cases = fixture["cases"].as_array().unwrap();
-    assert!(cases.len() >= 27, "case count");
+    assert!(cases.len() >= 29, "case count");
     let mut tally = Tally::default();
     let mut kinds = std::collections::BTreeSet::new();
     for case in cases {

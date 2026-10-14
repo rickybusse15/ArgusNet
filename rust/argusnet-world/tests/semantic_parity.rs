@@ -121,12 +121,12 @@ fn load() -> Fixture {
     serde_json::from_str(&text).expect("semantic fixture parses")
 }
 
-/// The 12x15 preset table, field by field. A transcription typo in 180 numbers
+/// The 13x15 preset table, field by field. A transcription typo in 195 numbers
 /// survives review; it does not survive this.
 #[test]
 fn the_preset_table_matches_the_reference() {
     let fixture = load();
-    assert_eq!(fixture.presets.len(), 12, "preset count");
+    assert_eq!(fixture.presets.len(), 13, "preset count");
     for case in &fixture.presets {
         let profile = terrain_profile_for_preset(&case.lookup_name);
         let at = &case.lookup_name;

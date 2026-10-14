@@ -1,5 +1,5 @@
 /// Every preset `terrain_profile_for_preset` knows, transcribed from
-/// `_PRESET_PROFILES` by script rather than by hand -- 180 numbers is
+/// `_PRESET_PROFILES` by script rather than by hand -- 195 numbers is
 /// exactly the kind of table where a typo survives review. The fixture
 /// dumps every field of every preset and would catch one anyway.
 const PRESETS: &[TerrainProfile] = &[
@@ -189,6 +189,23 @@ const PRESETS: &[TerrainProfile] = &[
         urban_bias: 0.0,
         hydrology_strength: 0.35,
         smoothing_passes: 1,
+    },
+    TerrainProfile {
+        name: "urban_dense",
+        base_elevation_m: 6.0,
+        relief_m: 8.0,
+        slope_x: 0.001,
+        slope_y: -0.001,
+        ridge_count: 1,
+        valley_count: 1,
+        moisture: 0.35,
+        roughness: 0.15,
+        water_bias: 0.0,
+        snow_bias: 1.0,
+        vegetation_bias: 0.1,
+        urban_bias: 0.85,
+        hydrology_strength: 0.1,
+        smoothing_passes: 3,
     },
     TerrainProfile {
         name: "urban_flat",
