@@ -204,15 +204,43 @@ fn an_end_inside_a_large_round_building_is_refused() {
     assert!(planner
         .plan_route_between(scene, [-800.0, 0.0], inside, 8.0)
         .is_none());
-    // A route round it never clips the curve between the polygon's corners.
-    if let Some(route) = planner.plan_route_between(scene, [-800.0, 0.0], [800.0, 0.0], 8.0) {
-        for pair in route.points_xy_m.windows(2) {
-            let nearest =
-                argusnet_world::obstacles::nearest_point_on_segment([0.0, 0.0], pair[0], pair[1]);
-            assert!(
-                nearest[0].hypot(nearest[1]) > 300.0,
-                "{pair:?} clips the tower"
-            );
-        }
+    // A route round it is found, and never clips the curve between the
+    // polygon's corners.
+    let route = planner
+        .plan_route_between(scene, [-800.0, 0.0], [800.0, 0.0], 8.0)
+        .expect("a route round the tower");
+    assert!(route.points_xy_m.len() > 2);
+    for pair in route.points_xy_m.windows(2) {
+        let nearest =
+            argusnet_world::obstacles::nearest_point_on_segment([0.0, 0.0], pair[0], pair[1]);
+        assert!(
+            nearest[0].hypot(nearest[1]) > 300.0,
+            "{pair:?} clips the tower"
+        );
     }
+}
+
+#[test]
+fn coincident_ends_inside_the_clearance_stay_put() {
+    let wall = Obstacle::polygon_prism(
+        "wall",
+        BlockerType::Building,
+        vec![[300.0, -40.0], [305.0, -40.0], [305.0, 40.0], [300.0, 40.0]],
+        0.0,
+        60.0,
+    )
+    .expect("valid wall");
+    let bounds = Bounds2d::new(-500.0, 500.0, -500.0, 500.0);
+    let layer = ObstacleLayer::new(bounds, 50.0, vec![wall]).expect("valid layer");
+    let scene = Scene {
+        layer: &layer,
+        revision: 0,
+    };
+    let mut planner = RoutePlanner::new(bounds, PlannerConfig::default());
+    let beside = [308.0, 0.0];
+    let route = planner
+        .plan_route_between(scene, beside, beside, 8.0)
+        .expect("already there");
+    assert_eq!(route.points_xy_m, vec![beside, beside]);
+    assert_eq!(route.length_m, 0.0);
 }

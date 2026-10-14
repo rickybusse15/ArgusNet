@@ -537,18 +537,52 @@ impl RoutePlanner {
         if solid(start) || solid(goal) {
             return None;
         }
-        let free_start = self.nearest_free_point(scene, start, clearance_m);
-        let free_goal = self.nearest_free_point(scene, goal, clearance_m);
-        let middle = self.plan_route_uncached(scene, free_start, free_goal, clearance_m)?;
+        // Coincident ends are already there: no route, rather than one out to
+        // the clearance's edge and back.
+        if start == goal {
+            return Some(PlannerRoute {
+                points_xy_m: vec![start, goal],
+                length_m: 0.0,
+                vertex_count: 2,
+                cache_hit: false,
+                skipped_segments: 0,
+            });
+        }
+        let crosses = |route: &PlannerRoute| {
+            route
+                .points_xy_m
+                .windows(2)
+                .any(|pair| hard.iter().any(|o| footprint_crossed(o, pair[0], pair[1])))
+        };
+        let mut free_start = self.nearest_free_point(scene, start, clearance_m);
+        let mut free_goal = self.nearest_free_point(scene, goal, clearance_m);
+        let mut middle = self.plan_route_uncached(scene, free_start, free_goal, clearance_m)?;
         // The planner routes round a cylinder's inscribed polygon; a very
         // large one (radius above `clearance / (1 - cos(pi / vertices))`,
         // about 235 m by default) can then have a segment clip its curve.
-        if middle
-            .points_xy_m
-            .windows(2)
-            .any(|pair| hard.iter().any(|o| footprint_crossed(o, pair[0], pair[1])))
-        {
-            return None;
+        // Planning again with the clearance widened by the polygon's shortfall
+        // clears the circle itself. If that finds nothing the first route is
+        // kept: its clip is shallow, where the caller's fallback with no
+        // route is a straight flight through the whole building.
+        if crosses(&middle) {
+            let half_step = std::f64::consts::PI / self.config.cylinder_vertex_count.max(6) as f64;
+            let shortfall = hard
+                .iter()
+                .filter_map(|o| match &o.shape {
+                    ObstacleShape::Cylinder { radius_m, .. } => {
+                        Some(radius_m * (1.0 / half_step.cos() - 1.0))
+                    }
+                    ObstacleShape::Polygon { .. } => None,
+                })
+                .fold(0.0_f64, f64::max);
+            let widened_m = clearance_m + shortfall + 1e-3;
+            let wide_start = self.nearest_free_point(scene, start, widened_m);
+            let wide_goal = self.nearest_free_point(scene, goal, widened_m);
+            if let Some(wide) = self.plan_route_uncached(scene, wide_start, wide_goal, widened_m) {
+                if !crosses(&wide) {
+                    (free_start, free_goal, middle) = (wide_start, wide_goal, wide);
+                }
+            }
         }
         if free_start == start && free_goal == goal {
             return Some(middle);
