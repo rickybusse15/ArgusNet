@@ -220,6 +220,11 @@ impl DeconflictStage {
         self.guard = Some(guard);
     }
 
+    /// Whether adjusted positions are kept out of the ground and structures.
+    pub fn is_guarded(&self) -> bool {
+        self.guard.is_some()
+    }
+
     pub fn with_config(mut self, config: DeconflictionConfig) -> Self {
         self.state.config = config;
         self

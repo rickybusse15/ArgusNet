@@ -181,3 +181,21 @@ fn a_drone_at_its_reserve_between_mission_runs_turns_for_home() {
     lanes.step(&mut run).expect("the next boundary");
     assert_eq!(source(&run), Some(OverrideSource::Egress));
 }
+
+/// P3: under `efficient_v1` deconfliction's lateral push is kept out of the
+/// ground and out of structures, as in a run with no prior map; the
+/// reference keeps its unguarded push.
+#[test]
+fn efficient_v1_guards_deconfliction_and_the_reference_does_not() {
+    use argusnet_sim::deconflict::DeconflictStage;
+    use argusnet_sim::stage::Stage;
+    let guarded = |policy| {
+        run("scan", policy)
+            .sim
+            .stage::<DeconflictStage>(Stage::Deconflict)
+            .expect("installed")
+            .is_guarded()
+    };
+    assert!(guarded(PlanningPolicy::EfficientV1));
+    assert!(!guarded(PlanningPolicy::Reference));
+}

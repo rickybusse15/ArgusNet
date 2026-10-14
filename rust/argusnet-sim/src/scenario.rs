@@ -1547,6 +1547,25 @@ impl AssembledRun {
             Some(driver) => {
                 driver.set_policy(policy)?;
                 self.sim.set_policy_algorithm(!policy.is_reference());
+                // A policy that routes round obstacles (P3) keeps 8 m from
+                // them, and deconfliction's lateral push can reach further:
+                // keep its adjusted positions out of the ground and out of
+                // structures, as a run with no prior map already does. The
+                // reference keeps its unguarded push, byte for byte; a run
+                // with no prior map installs its own guard, which wins.
+                if !policy.is_reference() && self.guard.is_none() {
+                    let guard = crate::belief_world::PhysicalGuard::new(
+                        self.world.terrain.clone(),
+                        self.world.obstacles.clone(),
+                        crate::belief_world::ExplorationConfig::default().contact_clearance_m,
+                    );
+                    if let Some(deconflict) =
+                        self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict)
+                    {
+                        deconflict.set_physical_guard(guard.clone());
+                    }
+                    self.guard = Some(guard);
+                }
                 Ok(true)
             }
             None => Ok(false),

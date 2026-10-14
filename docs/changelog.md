@@ -2,6 +2,11 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `efficient_v1` keeps deconfliction's adjusted positions out of the ground
+  and out of structures in runs with a prior map, as runs with no prior map
+  already do; contacts are recorded in the replay. Checkpoint policy version
+  9. The reference is unchanged.
+
 - `efficient_v1` routes trips that start or end beside a wall or at the
   map's edge (P3, second slice): planned from and to the nearest clear points
   and joined by short legs that cross no obstacle. On `urban_dense_inspection`
