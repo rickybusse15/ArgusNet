@@ -1052,7 +1052,12 @@ impl PhysicalGuard {
     /// contact recorded for each move.
     pub fn enforce(&self, node_id: &str, timestamp_s: f64, position: [f64; 3]) -> [f64; 3] {
         let mut p = position;
-        if let Some(xy) = self.obstacles.push_clear(p, self.clearance_m) {
+        // A push out of one structure can land in the next: push again, up
+        // to eight times, as the reference's `push_outside_obstacles` does.
+        for _ in 0..8 {
+            let Some(xy) = self.obstacles.push_clear(p, self.clearance_m) else {
+                break;
+            };
             let correction = (xy[0] - p[0]).hypot(xy[1] - p[1]);
             p[0] = xy[0];
             p[1] = xy[1];
@@ -1284,5 +1289,43 @@ mod tests {
         let back: BeliefGrid = serde_json::from_str(&text).unwrap();
         assert!(back.same_layout(&belief));
         assert_eq!(back.ground_ij(2, 3), Some(70.0));
+    }
+    /// A push out of one structure can land in the next; the guard pushes
+    /// again until the point is clear (the reference's fixture).
+    #[test]
+    fn the_guard_pushes_out_of_a_neighbour_too() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let building = |id: &str, x0: f64, x1: f64, y0: f64, y1: f64| {
+            Obstacle::polygon_prism(
+                id,
+                BlockerType::Building,
+                vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                0.0,
+                100.0,
+            )
+            .unwrap()
+        };
+        let bounds = Bounds2d::new(-50.0, 50.0, -50.0, 50.0);
+        let layer = ObstacleLayer::new(
+            bounds,
+            100.0,
+            vec![
+                building("a", 0.0, 10.0, 0.0, 10.0),
+                building("b", 10.5, 30.0, 4.8, 5.2),
+            ],
+        )
+        .unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer.clone())),
+            1.0,
+        );
+        let settled = guard.enforce("d", 0.0, [9.8, 5.0, 10.0]);
+        assert!(layer.point_collides(settled).is_none(), "{settled:?}");
+        assert!(guard.take_contacts().len() >= 2, "pushed more than once");
     }
 }

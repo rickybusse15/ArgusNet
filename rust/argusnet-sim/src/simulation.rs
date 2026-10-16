@@ -569,6 +569,9 @@ pub struct Simulation {
     /// The algorithm version its checkpoints carry: 2, or 3 under a planning
     /// policy other than the reference (P1).
     runtime_algorithm_version: u32,
+    /// Set by a restore, cleared by a reset: a restored run has begun even at
+    /// tick 0 with an empty trace.
+    restored: bool,
 }
 
 impl fmt::Debug for Simulation {
@@ -629,6 +632,7 @@ impl Simulation {
             stage_lag: BTreeMap::new(),
             lane_rates: BTreeMap::new(),
             runtime_algorithm_version: CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+            restored: false,
         })
     }
 
@@ -1335,10 +1339,14 @@ impl Simulation {
         })
     }
 
-    /// Whether any tick has begun: the clock has advanced, or a stage has
-    /// run in a tick still open at 0.
+    /// Whether any tick has begun: the clock has advanced, a stage has run
+    /// in a tick still open at 0, or the run was restored from a checkpoint
+    /// (which may hold state from an open tick 0 the trace no longer shows).
     pub fn has_begun(&self) -> bool {
-        self.clock.tick() != 0 || !self.trace.records().is_empty() || self.trace.dropped() != 0
+        self.restored
+            || self.clock.tick() != 0
+            || !self.trace.records().is_empty()
+            || self.trace.dropped() != 0
     }
 
     pub fn lane_rates(&self) -> &BTreeMap<Stage, String> {
@@ -1612,6 +1620,7 @@ impl Simulation {
             );
         }
         self.trace.clear();
+        self.restored = false;
         self.last_snapshot = None;
         self.paused = false;
         self.single_step = false;
@@ -1818,6 +1827,7 @@ impl Simulation {
         self.queue = restored_queue;
         self.revision = checkpoint.revision;
         self.trace.clear();
+        self.restored = true;
         self.last_snapshot = None;
         self.paused = checkpoint.paused;
         self.speed = checkpoint.speed;

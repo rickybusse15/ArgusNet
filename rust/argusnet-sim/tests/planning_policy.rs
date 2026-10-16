@@ -246,7 +246,12 @@ fn the_deconfliction_guard_follows_the_policy_alone() {
     efficient
         .set_planning_policy(PlanningPolicy::EfficientV1)
         .unwrap();
-    assert!(efficient.sim.restore(&checkpoint).is_ok());
+    assert!(efficient.restore(&checkpoint).is_ok());
+    // A restored run has begun, even at tick 0 with an empty trace.
+    assert!(efficient
+        .set_planning_policy(PlanningPolicy::Reference)
+        .is_err());
+    assert!(guarded(&efficient));
 
     // Once tick 0 is open (stage 0 run, clock still at 0) the policy is
     // fixed.
