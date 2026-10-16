@@ -1054,9 +1054,10 @@ impl PhysicalGuard {
         let mut p = position;
         // A push out of one structure can land in the next: push again, up
         // to eight times, as the reference's `push_outside_obstacles` does.
-        // The height is clamped to the terrain after every push, so the next
-        // check sees the height the platform would really be at (a push
-        // uphill can lift it into a building whose base was above it).
+        // The height is clamped to the terrain after every push, and the
+        // structures checked again at that height (a lift, after a push
+        // uphill or on its own, can put it into a building whose base was
+        // above it).
         for _ in 0..8 {
             let pushed = self.obstacles.push_clear(p, self.clearance_m);
             if let Some(xy) = pushed {
@@ -1066,11 +1067,14 @@ impl PhysicalGuard {
                 self.record(node_id, timestamp_s, "structure", correction);
             }
             let floor = TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m;
-            if p[2] < floor {
+            let raised = p[2] < floor;
+            if raised {
                 self.record(node_id, timestamp_s, "terrain", floor - p[2]);
                 p[2] = floor;
             }
-            if pushed.is_none() {
+            // Settled only when neither moved it: a lift alone can put it
+            // into a structure whose base was above it.
+            if pushed.is_none() && !raised {
                 break;
             }
         }
@@ -1371,6 +1375,35 @@ mod tests {
             25.0,
         );
         let settled = guard.enforce("d", 0.0, [9.8, 5.0, 10.0]);
+        assert!(settled[2] >= 25.0, "{settled:?}");
+        assert!(layer.point_collides(settled).is_none(), "{settled:?}");
+    }
+    /// A lift by the terrain clamp alone can put the platform into a
+    /// structure whose base was above it; the guard checks again.
+    #[test]
+    fn the_guard_rechecks_structures_after_a_lift_alone() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let raised = Obstacle::polygon_prism(
+            "raised",
+            BlockerType::Building,
+            vec![[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]],
+            20.0,
+            100.0,
+        )
+        .unwrap();
+        let layer = ObstacleLayer::new(bounds, 400.0, vec![raised]).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer.clone())),
+            25.0,
+        );
+        // At 10 m it is under the structure; the 25 m floor lifts it in.
+        let settled = guard.enforce("d", 0.0, [0.0, 0.0, 10.0]);
         assert!(settled[2] >= 25.0, "{settled:?}");
         assert!(layer.point_collides(settled).is_none(), "{settled:?}");
     }
