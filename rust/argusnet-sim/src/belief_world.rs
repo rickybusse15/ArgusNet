@@ -1078,6 +1078,11 @@ impl PhysicalGuard {
                 break;
             }
         }
+        // Overlapping structures can bounce it between them past the limit;
+        // that is recorded, not passed off as a clear position.
+        if self.obstacles.collides(p) {
+            self.record(node_id, timestamp_s, "unresolved", 0.0);
+        }
         p
     }
 
@@ -1406,5 +1411,45 @@ mod tests {
         let settled = guard.enforce("d", 0.0, [0.0, 0.0, 10.0]);
         assert!(settled[2] >= 25.0, "{settled:?}");
         assert!(layer.point_collides(settled).is_none(), "{settled:?}");
+    }
+    /// Overlapping structures can bounce a platform between them until the
+    /// push limit runs out; the guard records that rather than hiding it.
+    #[test]
+    fn the_guard_records_a_collision_it_cannot_resolve() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let block = |id: &str, x0: f64, x1: f64| {
+            Obstacle::polygon_prism(
+                id,
+                BlockerType::Building,
+                vec![[x0, -50.0], [x1, -50.0], [x1, 50.0], [x0, 50.0]],
+                0.0,
+                100.0,
+            )
+            .unwrap()
+        };
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let layer = ObstacleLayer::new(
+            bounds,
+            400.0,
+            vec![block("a", 0.0, 10.0), block("b", 9.0, 19.0)],
+        )
+        .unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer.clone())),
+            1.0,
+        );
+        let settled = guard.enforce("d", 0.0, [9.5, 0.0, 10.0]);
+        let contacts = guard.take_contacts();
+        // The fixture bounces it until the limit runs out, still inside.
+        assert!(layer.point_collides(settled).is_some(), "{settled:?}");
+        assert!(
+            contacts.iter().any(|c| c.kind == "unresolved"),
+            "{contacts:?}"
+        );
     }
 }
