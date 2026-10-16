@@ -220,3 +220,12 @@ fn sensor_types_are_exactly_the_schemas() {
         .collect();
     assert_eq!(declared, schema);
 }
+
+#[test]
+fn world_contact_kinds() {
+    assert_within(
+        "world contact kind",
+        &argusnet_sim::belief_world::WORLD_CONTACT_KINDS,
+        "/definitions/frame/properties/world_contacts/items/properties/kind/enum",
+    );
+}

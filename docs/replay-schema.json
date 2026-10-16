@@ -1024,7 +1024,7 @@
         },
         "world_contacts": {
           "type": "array",
-          "description": "World-knowledge `none` runs: platforms physics put back out of the true ground or a structure this tick, because their belief had them there.",
+          "description": "Platforms the physical guard put back out of the true ground or a structure this tick: in world-knowledge `none` runs because their belief had them there, and under a non-reference planning policy after deconfliction pushed them. `unresolved` marks a platform the guard could not clear within its push limit (overlapping structures).",
           "items": {
             "type": "object",
             "required": [
@@ -1045,7 +1045,8 @@
                 "type": "string",
                 "enum": [
                   "terrain",
-                  "structure"
+                  "structure",
+                  "unresolved"
                 ]
               },
               "correction_m": {

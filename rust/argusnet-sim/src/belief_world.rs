@@ -1009,6 +1009,11 @@ impl VisibilitySampler for BeliefVisibility {
     }
 }
 
+/// Every `WorldContact::kind` the guard writes: out of the ground, out of a
+/// structure, and still inside one after the push limit. The replay schema
+/// lists the same (`tests/replay_vocabulary.rs`).
+pub const WORLD_CONTACT_KINDS: [&str; 3] = ["terrain", "structure", "unresolved"];
+
 /// A platform physics put back: the map had it somewhere it could not be.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorldContact {
@@ -1064,12 +1069,12 @@ impl PhysicalGuard {
                 let correction = (xy[0] - p[0]).hypot(xy[1] - p[1]);
                 p[0] = xy[0];
                 p[1] = xy[1];
-                self.record(node_id, timestamp_s, "structure", correction);
+                self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[1], correction);
             }
             let floor = TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m;
             let raised = p[2] < floor;
             if raised {
-                self.record(node_id, timestamp_s, "terrain", floor - p[2]);
+                self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[0], floor - p[2]);
                 p[2] = floor;
             }
             // Settled only when neither moved it: a lift alone can put it
@@ -1081,7 +1086,7 @@ impl PhysicalGuard {
         // Overlapping structures can bounce it between them past the limit;
         // that is recorded, not passed off as a clear position.
         if self.obstacles.collides(p) {
-            self.record(node_id, timestamp_s, "unresolved", 0.0);
+            self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[2], 0.0);
         }
         p
     }
