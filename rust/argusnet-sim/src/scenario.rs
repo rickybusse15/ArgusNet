@@ -1900,10 +1900,18 @@ impl AssembledRun {
         &mut self,
         checkpoint: &crate::snapshot::SimulationCheckpoint,
     ) -> Result<(), crate::snapshot::RestoreError> {
-        // Refused before the fault schedule touches the sensor table.
-        self.sim.check_policy(checkpoint)?;
+        // Refused before the fault schedule touches the sensor table: the
+        // header first (an older algorithm version is named as such), then
+        // the policy.
+        self.sim.preflight(checkpoint)?;
         self.apply_sensor_faults(checkpoint.tick);
-        self.sim.restore(checkpoint)
+        self.sim.restore(checkpoint)?;
+        // Contacts the guard logged in a tick the restore abandoned belong to
+        // a timeline that no longer exists.
+        if let Some(guard) = &self.guard {
+            guard.take_contacts();
+        }
+        Ok(())
     }
 
     /// Put the world in the state the fault schedule prescribes for the next
@@ -2437,5 +2445,33 @@ impl AssembledRun {
     /// The assignment history so far (P0).
     pub fn assignments(&self) -> &crate::assignments::AssignmentHistory {
         &self.assignments
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use argusnet_planning::allocation::PlanningPolicy;
+
+    /// A contact the guard logged in a tick a restore abandons is dropped,
+    /// so the next committed frame does not carry it.
+    #[test]
+    fn a_restore_drops_contacts_from_the_abandoned_tick() {
+        let path = format!(
+            "{}/../../tests/fixtures/scenario_bundle_scan.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bundle =
+            ScenarioBundle::from_json(&std::fs::read_to_string(&path).expect("fixture")).unwrap();
+        let mut run = assemble(&bundle).expect("assembles");
+        run.set_planning_policy(PlanningPolicy::EfficientV1)
+            .unwrap();
+        run.sim.step().expect("steps");
+        let checkpoint = run.sim.checkpoint().expect("not faulted");
+        let guard = run.guard.as_ref().expect("efficient_v1 guards");
+        // Below the ground: one terrain contact, as an abandoned tick's would be.
+        guard.enforce("d", 0.0, [0.0, 0.0, -1.0e4]);
+        run.restore(&checkpoint).expect("restores");
+        assert!(run.guard.as_ref().unwrap().take_contacts().is_empty());
     }
 }

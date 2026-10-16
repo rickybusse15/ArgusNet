@@ -1314,10 +1314,22 @@ impl Simulation {
         self.runtime_algorithm_version
     }
 
+    /// The checks [`Self::restore`] makes on a checkpoint's header and policy,
+    /// header first, without touching anything: for a wrapper that changes
+    /// state of its own before restoring.
+    pub fn preflight(&self, checkpoint: &SimulationCheckpoint) -> Result<(), RestoreError> {
+        checkpoint.verify(
+            self.config.run_id(),
+            self.config.content_hash(),
+            self.scenario_hash,
+        )?;
+        self.check_policy(checkpoint)
+    }
+
     /// Refuse a checkpoint taken under another planning policy: the policy
     /// changes deconfliction even with no mission driver, whose own state
-    /// would otherwise refuse the mismatch. Touches nothing, so a wrapper
-    /// can call it before any state of its own changes.
+    /// would otherwise refuse the mismatch. Touches nothing; a header that
+    /// [`SimulationCheckpoint::verify`] refuses is its error, not this one's.
     pub fn check_policy(&self, checkpoint: &SimulationCheckpoint) -> Result<(), RestoreError> {
         if checkpoint.header.runtime_algorithm_version == self.runtime_algorithm_version {
             return Ok(());

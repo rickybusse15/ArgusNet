@@ -247,6 +247,18 @@ fn the_deconfliction_guard_follows_the_policy_alone() {
         .set_planning_policy(PlanningPolicy::EfficientV1)
         .unwrap();
     assert!(efficient.restore(&checkpoint).is_ok());
+    // A checkpoint from an older efficient algorithm version is refused
+    // for its version, not as a different policy.
+    let mut older = checkpoint.clone();
+    older.header.runtime_algorithm_version -= 1;
+    let mut fresh = assemble(&bundle("tt")).expect("assembles");
+    fresh
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    assert!(matches!(
+        fresh.restore(&older),
+        Err(argusnet_sim::snapshot::RestoreError::AlgorithmVersion { .. })
+    ));
     // A restored run has begun, even at tick 0 with an empty trace.
     assert!(efficient
         .set_planning_policy(PlanningPolicy::Reference)
