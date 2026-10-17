@@ -226,6 +226,9 @@ impl SimSession {
                 .and_then(|d| d.meta.clone())
                 .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
             if let Some(object) = meta.as_object_mut() {
+                // A recorded run's task history is not this run's: a live
+                // run's tasks read as unavailable rather than as another's.
+                object.remove("assignment_history");
                 for (key, value) in &self.run_meta {
                     object.insert(key.clone(), value.clone());
                 }

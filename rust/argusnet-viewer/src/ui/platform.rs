@@ -55,6 +55,18 @@ const NOT_IN_REPLAY: &str = "not in this replay";
 /// §7.2's sections for `node_id` in `frame`; `None` if the frame has no such
 /// platform (the selection no longer resolves).
 pub fn inspect_platform(frame: &ReplayFrame, node_id: &str) -> Option<Vec<Section>> {
+    inspect_platform_with_history(frame, node_id, None)
+}
+
+/// [`inspect_platform`], with the replay's `meta.assignment_history` (P0b),
+/// when it has one: the task and its last change come from the recorded
+/// history at the frame's time instead of being guessed from POI statuses,
+/// which miss a drone helping on a team, sweeping a gap or flying home.
+pub fn inspect_platform_with_history(
+    frame: &ReplayFrame,
+    node_id: &str,
+    history: Option<&serde_json::Value>,
+) -> Option<Vec<Section>> {
     let node = frame.nodes.iter().find(|node| node.node_id == node_id)?;
     let mission = frame.scan_mission_state.as_ref();
     let estimate = mission.and_then(|state| {
@@ -130,14 +142,24 @@ pub fn inspect_platform(frame: &ReplayFrame, node_id: &str) -> Option<Vec<Sectio
             }
         }
     };
+    let recorded = history.map(|history| recorded_task(history, node_id, frame.timestamp_s));
+    let mut tasking_rows = match recorded {
+        Some(recorded) => vec![
+            Row::new("Current task", recorded.task),
+            Row::new("Last change", recorded.last_change),
+            Row::new("Task changes", recorded.changes),
+        ],
+        None => vec![
+            Row::new("Current task", task),
+            Row::unavailable("Last change", "no assignment history in this replay"),
+        ],
+    };
+    tasking_rows.push(Row::unavailable("Route / trajectory", NOT_IN_REPLAY));
+    tasking_rows.push(Row::unavailable("Next transition", NOT_IN_REPLAY));
     let tasking = Section {
         title: "4  Task and route",
         essential: false,
-        rows: vec![
-            Row::new("Current task", task),
-            Row::unavailable("Route / trajectory", NOT_IN_REPLAY),
-            Row::unavailable("Next transition", NOT_IN_REPLAY),
-        ],
+        rows: tasking_rows,
     };
 
     let mut localization_rows = vec![
@@ -337,6 +359,64 @@ pub fn inspect_platform(frame: &ReplayFrame, node_id: &str) -> Option<Vec<Sectio
     ])
 }
 
+/// A drone's task at a time, from the recorded assignment history.
+struct RecordedTask {
+    task: Field<String>,
+    last_change: Field<String>,
+    changes: Field<String>,
+}
+
+/// The last event at or before `at_s` in `node_id`'s history: its task, when
+/// and why it began, and how many changes came before. A drone the history
+/// does not list, or one not yet assigned at `at_s`, reads as unavailable.
+fn recorded_task(history: &serde_json::Value, node_id: &str, at_s: f32) -> RecordedTask {
+    let events: Vec<&serde_json::Value> = history
+        .get(node_id)
+        .and_then(|events| events.as_array())
+        .map(|events| {
+            events
+                .iter()
+                .filter(|event| {
+                    event
+                        .get("timestamp_s")
+                        .and_then(|t| t.as_f64())
+                        .is_some_and(|t| t <= f64::from(at_s) + 1e-6)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(last) = events.last() else {
+        let why = if history.get(node_id).is_some() {
+            "no task assigned yet"
+        } else {
+            "this platform has no assignment history"
+        };
+        return RecordedTask {
+            task: Field::Unavailable(why),
+            last_change: Field::Unavailable(why),
+            changes: Field::Unavailable(why),
+        };
+    };
+    let text = |key: &str| last.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    let at = last.get("timestamp_s").and_then(|t| t.as_f64()).unwrap_or(0.0);
+    let mut change = format!("t = {at:.2} s, {}", text("kind"));
+    if !text("reason").is_empty() {
+        change.push_str(&format!(" ({})", text("reason")));
+    }
+    if !text("previous").is_empty() {
+        change.push_str(&format!(", from {}", text("previous")));
+    }
+    if !text("to").is_empty() {
+        change.push_str(&format!(", to {}", text("to")));
+    }
+    RecordedTask {
+        task: Field::Value(text("task").to_string()),
+        last_change: Field::Value(change),
+        // The first event is the drone's first task, not a change.
+        changes: Field::Value((events.len() - 1).to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,5 +554,69 @@ mod tests {
     #[test]
     fn a_platform_not_in_the_frame_does_not_resolve() {
         assert!(inspect_platform(&minimal(), "drone-2").is_none());
+    }
+
+    fn history() -> serde_json::Value {
+        serde_json::json!({
+            "drone-1": [
+                {"timestamp_s": 0.0, "kind": "assign", "task": "search", "reason": "initial"},
+                {"timestamp_s": 3.0, "kind": "reassign", "task": "poi:poi-02",
+                 "previous": "search", "reason": "poi_assigned"},
+                {"timestamp_s": 9.0, "kind": "handoff", "task": "search",
+                 "previous": "poi:poi-02", "reason": "safe_handoff", "to": "drone-2"}
+            ]
+        })
+    }
+
+    /// P0b: with a recorded history, the task and its last change come from
+    /// it at the frame's time, not from the POI statuses.
+    #[test]
+    fn the_task_comes_from_the_recorded_history_at_the_frame_time() {
+        let history = history();
+        let sections =
+            inspect_platform_with_history(&minimal(), "drone-1", Some(&history)).unwrap();
+        assert_eq!(
+            row(&sections, "Current task").value,
+            Field::Value("poi:poi-02".into())
+        );
+        assert_eq!(
+            row(&sections, "Last change").value,
+            Field::Value("t = 3.00 s, reassign (poi_assigned), from search".into())
+        );
+        assert_eq!(row(&sections, "Task changes").value, Field::Value("1".into()));
+
+        let mut later = minimal();
+        later.timestamp_s = 12.0;
+        let sections = inspect_platform_with_history(&later, "drone-1", Some(&history)).unwrap();
+        assert_eq!(row(&sections, "Current task").value, Field::Value("search".into()));
+        assert_eq!(
+            row(&sections, "Last change").value,
+            Field::Value(
+                "t = 9.00 s, handoff (safe_handoff), from poi:poi-02, to drone-2".into()
+            )
+        );
+        assert_eq!(row(&sections, "Task changes").value, Field::Value("2".into()));
+    }
+
+    /// A platform the history does not list, a time before its first task,
+    /// and a replay with no history all read as unavailable, never as a task.
+    #[test]
+    fn a_missing_history_reads_as_unavailable() {
+        let history = history();
+        let other = frame(serde_json::json!({
+            "timestamp_s": 4.0,
+            "nodes": [{"node_id": "ground-1", "position": [0.0, 0.0, 0.0],
+                       "velocity": [0.0, 0.0, 0.0], "is_mobile": false}]
+        }));
+        let sections = inspect_platform_with_history(&other, "ground-1", Some(&history)).unwrap();
+        assert!(matches!(row(&sections, "Current task").value, Field::Unavailable(_)));
+
+        let mut early = minimal();
+        early.timestamp_s = -1.0;
+        let sections = inspect_platform_with_history(&early, "drone-1", Some(&history)).unwrap();
+        assert!(matches!(row(&sections, "Current task").value, Field::Unavailable(_)));
+
+        let sections = inspect_platform(&minimal(), "drone-1").unwrap();
+        assert!(matches!(row(&sections, "Last change").value, Field::Unavailable(_)));
     }
 }
