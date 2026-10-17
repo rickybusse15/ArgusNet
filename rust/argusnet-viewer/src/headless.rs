@@ -22,7 +22,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+// Bevy 0.20's prelude brings its own `ContextExt`, whose `context` and
+// `with_context` turn a result into a `BevyError`. Naming anyhow's trait
+// `ContextExt` here shadows the prelude's, so these calls stay anyhow's.
+use anyhow::Context as ContextExt;
 use bevy::app::AppExit;
 use bevy::camera::RenderTarget;
 use bevy::image::TextureFormatPixelInfo;
@@ -390,9 +394,18 @@ fn receive_image_from_buffer(
             }
         }
 
+        // wgpu 29 reports a mapped range it cannot give; that frame is
+        // skipped like a failed map, and the next one retries.
+        let pixels = match buffer_slice.get_mapped_range() {
+            Ok(view) => view.to_vec(),
+            Err(_) => {
+                image_copier.buffer.unmap();
+                continue;
+            }
+        };
         // Fails only if the main world has already torn down the receiver.
         let _ = sender.send(RenderedFrame {
-            pixels: buffer_slice.get_mapped_range().to_vec(),
+            pixels,
             pipelines_pending,
             pipeline_errors: pipeline_errors.clone(),
         });

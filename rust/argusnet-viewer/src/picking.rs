@@ -544,7 +544,7 @@ mod tests {
         app.init_resource::<Assets<Mesh>>()
             .insert_resource(fixture());
         let cube = Mesh::from(Cuboid::new(2.0, 2.0, 2.0));
-        let aabb = cube.compute_aabb().unwrap();
+        let aabb = cube.get_aabb().unwrap();
         let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(cube);
         let mut entities = Vec::new();
         for marker in &markers.markers {
@@ -568,7 +568,7 @@ mod tests {
         }
         if let Some(z) = ground_z {
             let slab = Mesh::from(Cuboid::new(1000.0, 1000.0, 1.0));
-            let aabb: Aabb = slab.compute_aabb().unwrap();
+            let aabb: Aabb = slab.get_aabb().unwrap();
             let slab = app.world_mut().resource_mut::<Assets<Mesh>>().add(slab);
             app.world_mut().spawn((
                 PickOccluder,
@@ -756,7 +756,7 @@ mod tests {
         layers.entities_by_layer.insert("terrain".into(), root);
         // Wound facing down: its front face points away from a ray from above.
         let plane = Mesh::from(Plane3d::new(Vec3::NEG_Z, Vec2::splat(500.0)));
-        let aabb = plane.compute_aabb().unwrap();
+        let aabb = plane.get_aabb().unwrap();
         let plane = w.app.world_mut().resource_mut::<Assets<Mesh>>().add(plane);
         let ground = w
             .app
@@ -799,7 +799,7 @@ mod tests {
         let markers = fixture();
         let mut w = world(&markers, None, &[]);
         let big = Mesh::from(Sphere::new(100.0));
-        let aabb = big.compute_aabb().unwrap();
+        let aabb = big.get_aabb().unwrap();
         let big = w.app.world_mut().resource_mut::<Assets<Mesh>>().add(big);
         w.app.world_mut().spawn((
             crate::sensor_volumes::PresentationOnly,
@@ -901,7 +901,7 @@ mod tests {
                 ..default()
             }),
             computed: ComputedCameraValues {
-                clip_from_view: Mat4::perspective_infinite_reverse_rh(
+                clip_from_view: bevy::math::proj::perspective_infinite_reverse(
                     std::f32::consts::FRAC_PI_4,
                     size.x as f32 / size.y as f32,
                     0.1,

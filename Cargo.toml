@@ -51,8 +51,8 @@ anyhow = "1.0"
 # default-features = false drops the 2d, ui and audio buckets: the viewer draws
 # only 3d and renders its UI through egui. "3d" already brings bevy_gltf,
 # bevy_pbr, bevy_gizmos_render, bevy_anti_alias and bevy_post_process.
-bevy = { version = "0.19.1", default-features = false, features = ["3d", "png"] }
-bevy_egui = "0.42.0"
+bevy = { version = "0.20.0", default-features = false, features = ["3d", "png"] }
+bevy_egui = "0.43.1"
 # procedural.py derives its terrain seeds with blake2b-64, which is a different
 # function from sim.py's FNV-1 walk despite sharing the name _stable_seed.
 # Hand-rolling a hash for one call site is the kind of thing that is wrong in a
