@@ -44,7 +44,6 @@ use argusnet_planning::poi::{
 use argusnet_planning::BatteryModel;
 use argusnet_types::Bounds2d;
 use argusnet_world::index::ObstacleLayer;
-use argusnet_world::obstacles::BlockerType;
 
 use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingStage;
@@ -445,8 +444,7 @@ impl KnownObstacles {
         };
         let at = Bounds2d::new(xy[0], xy[0], xy[1], xy[1]).expanded(1e-6);
         layer.query(at).into_iter().any(|o| {
-            matches!(o.blocker_type, BlockerType::Building | BlockerType::Wall)
-                && o.point_inside(xy[0], xy[1], 0.5 * (o.base_z_m + o.top_z_m))
+            o.blocker_type.is_hard() && o.point_inside(xy[0], xy[1], 0.5 * (o.base_z_m + o.top_z_m))
         })
     }
 }

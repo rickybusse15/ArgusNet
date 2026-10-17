@@ -116,7 +116,7 @@ Neither phase is complete; the simulation loop and estimator state remain Python
 | Scenario/preset configuration and procedural scene shaping | Python | Port runtime construction; retain analysis and exporter-facing configuration where useful. |
 | Sensing, mapping, GridLocalizer/VIO, planning, mission state and replay assembly | Python simulation | Phase 4. |
 | Shared runtime value types | `argusnet-types` for core/world/proto runtime values; Python and viewer DTOs remain | Finish replay DTO alignment and conversion consolidation. |
-| Interactive and headless rendering | Bevy 0.19 viewer | Finish Phase 2 materials, geometry and operator controls; integrate simulation in Phase 5. |
+| Interactive and headless rendering | Bevy 0.20 viewer | Finish Phase 2 materials, geometry and operator controls; integrate simulation in Phase 5. |
 | Viewer terrain height queries | `argusnet-world::TerrainRaster` | Mesh runtime terrain directly in Phase 5. |
 | Scene/GLB export, GIS and offline evaluation | Python | Keep as offline tooling; remove export from the interactive boot path. |
 
