@@ -413,7 +413,7 @@ pub(super) fn selection_inspector(
                     .as_ref()
                     .and_then(|document| document.meta.as_ref())
                     .and_then(|meta| meta.get("assignment_history"));
-                inspect_platform_with_history(frame, &selected.label, history)
+                inspect_platform(frame, &selected.label, history)
             })
             .map(|sections| (selected.label.clone(), sections))
     });

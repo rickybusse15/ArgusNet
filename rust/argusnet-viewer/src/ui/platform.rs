@@ -53,16 +53,12 @@ pub struct Section {
 const NOT_IN_REPLAY: &str = "not in this replay";
 
 /// §7.2's sections for `node_id` in `frame`; `None` if the frame has no such
-/// platform (the selection no longer resolves).
-pub fn inspect_platform(frame: &ReplayFrame, node_id: &str) -> Option<Vec<Section>> {
-    inspect_platform_with_history(frame, node_id, None)
-}
-
-/// [`inspect_platform`], with the replay's `meta.assignment_history` (P0b),
-/// when it has one: the task and its last change come from the recorded
-/// history at the frame's time instead of being guessed from POI statuses,
-/// which miss a drone helping on a team, sweeping a gap or flying home.
-pub fn inspect_platform_with_history(
+/// platform (the selection no longer resolves). With the replay's
+/// `meta.assignment_history` (P0b), the task and its last change come from
+/// the recorded history at the frame's time instead of being guessed from POI
+/// statuses, which miss a drone helping on a team, sweeping a gap or flying
+/// home.
+pub fn inspect_platform(
     frame: &ReplayFrame,
     node_id: &str,
     history: Option<&serde_json::Value>,
@@ -398,7 +394,10 @@ fn recorded_task(history: &serde_json::Value, node_id: &str, at_s: f32) -> Recor
         };
     };
     let text = |key: &str| last.get(key).and_then(|v| v.as_str()).unwrap_or("");
-    let at = last.get("timestamp_s").and_then(|t| t.as_f64()).unwrap_or(0.0);
+    let at = last
+        .get("timestamp_s")
+        .and_then(|t| t.as_f64())
+        .unwrap_or(0.0);
     let mut change = format!("t = {at:.2} s, {}", text("kind"));
     if !text("reason").is_empty() {
         change.push_str(&format!(" ({})", text("reason")));
@@ -443,7 +442,7 @@ mod tests {
 
     #[test]
     fn the_eleven_sections_come_in_the_specified_order() {
-        let sections = inspect_platform(&minimal(), "drone-1").unwrap();
+        let sections = inspect_platform(&minimal(), "drone-1", None).unwrap();
         let titles: Vec<&str> = sections.iter().map(|s| s.title).collect();
         assert_eq!(titles.len(), 11);
         for (index, title) in titles.iter().enumerate() {
@@ -453,7 +452,7 @@ mod tests {
 
     #[test]
     fn what_a_replay_lacks_reads_as_unavailable_never_zero() {
-        let sections = inspect_platform(&minimal(), "drone-1").unwrap();
+        let sections = inspect_platform(&minimal(), "drone-1", None).unwrap();
         for label in [
             "Battery",
             "Field of view",
@@ -496,7 +495,7 @@ mod tests {
                     "position_std_m": 1.25, "confidence": 0.8}]
             }
         }));
-        let sections = inspect_platform(&frame, "drone-1").unwrap();
+        let sections = inspect_platform(&frame, "drone-1", None).unwrap();
         assert_eq!(row(&sections, "Battery").value, Field::Value("42%".into()));
         assert_eq!(
             row(&sections, "Ground speed").value,
@@ -518,7 +517,7 @@ mod tests {
 
     #[test]
     fn legacy_estimator_outputs_are_labelled_and_integrity_is_not_inferred() {
-        let sections = inspect_platform(&minimal(), "drone-1").unwrap();
+        let sections = inspect_platform(&minimal(), "drone-1", None).unwrap();
         for label in ["Confidence", "Localization timeout", "Health"] {
             assert!(row(&sections, label).legacy, "{label} is legacy");
         }
@@ -532,7 +531,7 @@ mod tests {
 
     #[test]
     fn the_essential_sections_are_the_ones_section_4_4_names() {
-        let sections = inspect_platform(&minimal(), "drone-1").unwrap();
+        let sections = inspect_platform(&minimal(), "drone-1", None).unwrap();
         let essential: Vec<&str> = sections
             .iter()
             .filter(|section| section.essential)
@@ -553,7 +552,7 @@ mod tests {
 
     #[test]
     fn a_platform_not_in_the_frame_does_not_resolve() {
-        assert!(inspect_platform(&minimal(), "drone-2").is_none());
+        assert!(inspect_platform(&minimal(), "drone-2", None).is_none());
     }
 
     fn history() -> serde_json::Value {
@@ -573,8 +572,7 @@ mod tests {
     #[test]
     fn the_task_comes_from_the_recorded_history_at_the_frame_time() {
         let history = history();
-        let sections =
-            inspect_platform_with_history(&minimal(), "drone-1", Some(&history)).unwrap();
+        let sections = inspect_platform(&minimal(), "drone-1", Some(&history)).unwrap();
         assert_eq!(
             row(&sections, "Current task").value,
             Field::Value("poi:poi-02".into())
@@ -583,19 +581,26 @@ mod tests {
             row(&sections, "Last change").value,
             Field::Value("t = 3.00 s, reassign (poi_assigned), from search".into())
         );
-        assert_eq!(row(&sections, "Task changes").value, Field::Value("1".into()));
+        assert_eq!(
+            row(&sections, "Task changes").value,
+            Field::Value("1".into())
+        );
 
         let mut later = minimal();
         later.timestamp_s = 12.0;
-        let sections = inspect_platform_with_history(&later, "drone-1", Some(&history)).unwrap();
-        assert_eq!(row(&sections, "Current task").value, Field::Value("search".into()));
+        let sections = inspect_platform(&later, "drone-1", Some(&history)).unwrap();
+        assert_eq!(
+            row(&sections, "Current task").value,
+            Field::Value("search".into())
+        );
         assert_eq!(
             row(&sections, "Last change").value,
-            Field::Value(
-                "t = 9.00 s, handoff (safe_handoff), from poi:poi-02, to drone-2".into()
-            )
+            Field::Value("t = 9.00 s, handoff (safe_handoff), from poi:poi-02, to drone-2".into())
         );
-        assert_eq!(row(&sections, "Task changes").value, Field::Value("2".into()));
+        assert_eq!(
+            row(&sections, "Task changes").value,
+            Field::Value("2".into())
+        );
     }
 
     /// A platform the history does not list, a time before its first task,
@@ -608,15 +613,24 @@ mod tests {
             "nodes": [{"node_id": "ground-1", "position": [0.0, 0.0, 0.0],
                        "velocity": [0.0, 0.0, 0.0], "is_mobile": false}]
         }));
-        let sections = inspect_platform_with_history(&other, "ground-1", Some(&history)).unwrap();
-        assert!(matches!(row(&sections, "Current task").value, Field::Unavailable(_)));
+        let sections = inspect_platform(&other, "ground-1", Some(&history)).unwrap();
+        assert!(matches!(
+            row(&sections, "Current task").value,
+            Field::Unavailable(_)
+        ));
 
         let mut early = minimal();
         early.timestamp_s = -1.0;
-        let sections = inspect_platform_with_history(&early, "drone-1", Some(&history)).unwrap();
-        assert!(matches!(row(&sections, "Current task").value, Field::Unavailable(_)));
+        let sections = inspect_platform(&early, "drone-1", Some(&history)).unwrap();
+        assert!(matches!(
+            row(&sections, "Current task").value,
+            Field::Unavailable(_)
+        ));
 
-        let sections = inspect_platform(&minimal(), "drone-1").unwrap();
-        assert!(matches!(row(&sections, "Last change").value, Field::Unavailable(_)));
+        let sections = inspect_platform(&minimal(), "drone-1", None).unwrap();
+        assert!(matches!(
+            row(&sections, "Last change").value,
+            Field::Unavailable(_)
+        ));
     }
 }
