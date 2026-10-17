@@ -133,9 +133,15 @@ pub fn coverage_in_grid_region(
 /// The fraction of cells that are enclosed interior holes -- the gap-fill
 /// gate's input.
 fn gap_cell_fraction(mapping: &MappingStage) -> f64 {
+    let (cells, total) = gap_cells(mapping);
+    cells.len() as f64 / total.max(1) as f64
+}
+
+/// The enclosed interior holes, and the grid's cell count.
+fn gap_cells(mapping: &MappingStage) -> (Vec<(usize, usize)>, usize) {
     let bounds = mapping.bounds();
     let Ok((nx, ny)) = bounds.dimensions() else {
-        return 0.0;
+        return (Vec::new(), 0);
     };
     let counts = mapping.coverage_counts();
     debug_assert_eq!(counts.len(), nx * ny, "coverage grid and bounds disagree");
@@ -149,7 +155,7 @@ fn gap_cell_fraction(mapping: &MappingStage) -> f64 {
             ny,
         },
     };
-    find_gap_cells(&view).len() as f64 / (nx * ny).max(1) as f64
+    (find_gap_cells(&view), nx * ny)
 }
 
 /// One tick of recorded localization: what the machine would have read from
@@ -235,6 +241,18 @@ struct DriverCheckpoint {
     /// every other checkpoint is unchanged.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     homeward: BTreeSet<String>,
+    /// Drones sweeping holes (P4). Absent when none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    gap_fill: BTreeMap<String, GapFill>,
+}
+
+/// A drone sweeping one hole in the coverage map (P4).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct GapFill {
+    /// The hole's cells, as `[i, j]`.
+    cells: Vec<[usize; 2]>,
+    /// When its sweep ends: a hole the sweep left open is let go then.
+    arrive_s: f64,
 }
 
 /// What stage 9 reports for a replay: POI statuses with their positions, and
@@ -301,6 +319,9 @@ pub struct MissionDriverStage {
     /// Drones sent home on their own reserve under efficient_v1 (P2): they
     /// hold no POI and take none again.
     homeward: BTreeSet<String>,
+    /// Drones sweeping a hole in the coverage map under efficient_v1 (P4),
+    /// with the cells they sweep.
+    gap_fill: BTreeMap<String, GapFill>,
     replay: LocalizationReplay,
     /// Refreshed at the end of every run, and on reset and restore.
     report: DriverReport,
@@ -407,6 +428,53 @@ impl KnownObstacles {
         self.this_run.borrow_mut().insert(key, route.clone());
         route
     }
+}
+
+/// The holes' 4-connected clusters, each in row-major order, in the order
+/// of their first cell.
+fn hole_clusters(cells: &[(usize, usize)]) -> Vec<Vec<[usize; 2]>> {
+    let mut left: BTreeSet<[usize; 2]> = cells.iter().map(|&(i, j)| [i, j]).collect();
+    let mut clusters = Vec::new();
+    while let Some(&seed) = left.iter().next() {
+        left.remove(&seed);
+        let mut cluster = vec![seed];
+        let mut queue = std::collections::VecDeque::from([seed]);
+        while let Some([i, j]) = queue.pop_front() {
+            let neighbours = [
+                [i.wrapping_sub(1), j],
+                [i + 1, j],
+                [i, j.wrapping_sub(1)],
+                [i, j + 1],
+            ];
+            for next in neighbours {
+                if left.remove(&next) {
+                    cluster.push(next);
+                    queue.push_back(next);
+                }
+            }
+        }
+        cluster.sort_unstable();
+        clusters.push(cluster);
+    }
+    clusters
+}
+
+/// A cluster's cells in sweep order: column by column (`i`), alternating
+/// direction along each, so the sweep never doubles back across the hole.
+fn sweep_order(cluster: &[[usize; 2]]) -> Vec<[usize; 2]> {
+    let mut columns: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for &[i, j] in cluster {
+        columns.entry(i).or_default().push(j);
+    }
+    let mut order = Vec::with_capacity(cluster.len());
+    for (k, (i, mut js)) in columns.into_iter().enumerate() {
+        js.sort_unstable();
+        if k % 2 == 1 {
+            js.reverse();
+        }
+        order.extend(js.into_iter().map(|j| [i, j]));
+    }
+    order
 }
 
 /// A route's corners between its ends, and its length.
@@ -521,6 +589,7 @@ impl MissionDriverStage {
             homes,
             redirected: BTreeMap::new(),
             homeward: BTreeSet::new(),
+            gap_fill: BTreeMap::new(),
             rescored: false,
             coordinator: None,
             config,
@@ -657,6 +726,209 @@ impl MissionDriverStage {
                 model.travel_cost_wh(length_m) + model.climb_cost_wh(to[2] - from[2])
             }
             None => model.segment_cost_wh(from, to),
+        }
+    }
+
+    /// Gap filling under efficient_v1 (P4). Each drone loops its own scan
+    /// sector, so cells between sectors that no lane reaches stay uncovered,
+    /// and once coverage passes the threshold those enclosed holes hold the
+    /// scan open (the gap gate) for the rest of the run. While they do, each
+    /// hole (4-connected) gets the free drone that reaches it soonest, which
+    /// sweeps its cells from the nearer end, around known obstacles on the
+    /// way there, and goes back to its lane once the hole is covered or its
+    /// sweep ends. The flight is a frontier override, so it is flown only
+    /// while scanning or localizing.
+    fn fill_gaps(
+        &mut self,
+        holes: Option<(Vec<(usize, usize)>, usize)>,
+        gap_cell_fraction: Option<f64>,
+        mobile: &[(String, [f64; 3])],
+        mapping: &MappingStage,
+        timestamp_s: f64,
+    ) {
+        if self.machine.phase() != MissionPhase::Scanning {
+            // Past the scan: the frontier gate ends these flights itself.
+            self.gap_fill.clear();
+            return;
+        }
+        // Let go of drones whose hole is covered, whose sweep has ended, or
+        // that have left the fleet.
+        let finished: Vec<(String, &'static str)> = self
+            .gap_fill
+            .iter()
+            .filter_map(|(id, fill)| {
+                if !mobile.iter().any(|(m, _)| m == id) {
+                    Some((id.clone(), "left_fleet"))
+                } else if fill
+                    .cells
+                    .iter()
+                    .all(|[i, j]| mapping.coverage_count_at(*i, *j) > 0)
+                {
+                    Some((id.clone(), "gap_covered"))
+                } else if timestamp_s >= fill.arrive_s {
+                    Some((id.clone(), "sweep_ended"))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (id, reason) in finished {
+            let fill = self.gap_fill.remove(&id).expect("listed above");
+            self.override_commands
+                .push(OverrideCommand::ClearFrontier(id.clone()));
+            self.decisions.push(Decision {
+                kind: "gap_fill_release",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason,
+                detail: format!(
+                    "{id} goes back to its lane ({} cells swept)",
+                    fill.cells.len()
+                ),
+                inputs: serde_json::json!({ "cells": fill.cells.len() }),
+                command: Some("clear_frontier"),
+            });
+        }
+        let (Some((cells, _)), Some(fraction)) = (holes, gap_cell_fraction) else {
+            return;
+        };
+        if fraction < self.machine.config().gap_fill_min_fraction {
+            return;
+        }
+        let taken: BTreeSet<[usize; 2]> = self
+            .gap_fill
+            .values()
+            .flat_map(|fill| fill.cells.iter().copied())
+            .collect();
+        let clusters: Vec<Vec<[usize; 2]>> = hole_clusters(&cells)
+            .into_iter()
+            .filter(|cluster| cluster.iter().all(|cell| !taken.contains(cell)))
+            .collect();
+        let free: Vec<&(String, [f64; 3])> = mobile
+            .iter()
+            .filter(|(id, _)| {
+                !self.gap_fill.contains_key(id)
+                    && !self.homeward.contains(id)
+                    && self.pois.assignment_for(id).is_none()
+            })
+            .collect();
+        if clusters.is_empty() || free.is_empty() {
+            return;
+        }
+        let bounds = mapping.bounds();
+        let centre = |[i, j]: [usize; 2]| {
+            [
+                bounds.x_min_m + (i as f64 + 0.5) * bounds.resolution_m,
+                bounds.y_min_m + (j as f64 + 0.5) * bounds.resolution_m,
+            ]
+        };
+        let sweeps: Vec<Vec<[f64; 2]>> = clusters
+            .iter()
+            .map(|cluster| sweep_order(cluster).into_iter().map(centre).collect())
+            .collect();
+        // Each drone sweeps from the nearer end, at its own height above the
+        // ground, raised to clear the highest ground the sweep crosses.
+        let plan = |position: [f64; 3], sweep: &[[f64; 2]]| {
+            let ends = [sweep[0], sweep[sweep.len() - 1]];
+            let reach = |end: [f64; 2]| {
+                let (dx, dy) = (end[0] - position[0], end[1] - position[1]);
+                (dx * dx + dy * dy).sqrt()
+            };
+            let mut points = sweep.to_vec();
+            if reach(ends[1]) < reach(ends[0]) {
+                points.reverse();
+            }
+            let z = match &self.terrain {
+                Some(terrain) => {
+                    let above = position[2] - terrain.height_at(position[0], position[1]);
+                    points
+                        .iter()
+                        .map(|p| terrain.height_at(p[0], p[1]))
+                        .fold(f64::NEG_INFINITY, f64::max)
+                        + above
+                }
+                None => position[2],
+            };
+            let first = [points[0][0], points[0][1], z];
+            let approach = self.trip_length_m(position, first);
+            let sweep_m: f64 = points
+                .windows(2)
+                .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
+                .sum();
+            (points, z, approach, sweep_m)
+        };
+        let plans: Vec<Vec<_>> = free
+            .iter()
+            .map(|(_, position)| sweeps.iter().map(|sweep| plan(*position, sweep)).collect())
+            .collect();
+        let cost: Vec<Vec<Option<f64>>> = plans
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|(_, _, approach, _)| Some(*approach))
+                    .collect()
+            })
+            .collect();
+        // The corners of each assigned drone's way to its sweep, planned
+        // before anything is changed.
+        let assigned: Vec<(usize, usize, Vec<[f64; 2]>)> = min_cost_assignment(&cost)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(row, column)| {
+                let column = column?;
+                let (points, z, _, _) = &plans[row][column];
+                let first = [points[0][0], points[0][1], *z];
+                let corners = self
+                    .corners(free[row].1, first)
+                    .map(|(corners, _)| corners)
+                    .unwrap_or_default();
+                Some((row, column, corners))
+            })
+            .collect();
+        let free: Vec<(String, [f64; 3])> = free.into_iter().cloned().collect();
+        let candidates: Vec<String> = free.iter().map(|(id, _)| id.clone()).collect();
+        let speed = self.config.redirect_speed_mps.max(f64::EPSILON);
+        for (row, column, corners) in assigned {
+            let (id, position) = &free[row];
+            let (points, z, approach, sweep_m) = plans[row][column].clone();
+            let mut via = corners;
+            via.extend(points[..points.len() - 1].iter().copied());
+            let target = points[points.len() - 1];
+            let trajectory = GotoHover::routed(*position, via, target, z, timestamp_s, speed);
+            let arrive_s = trajectory.t_arrive();
+            self.override_commands
+                .push(OverrideCommand::SetFrontier(id.clone(), trajectory));
+            let cluster = clusters[column].clone();
+            self.decisions.push(Decision {
+                kind: "gap_fill",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: Some(format!("gap:{}:{}", cluster[0][0], cluster[0][1])),
+                candidates: candidates.clone(),
+                reason: "gap_gate_blocked",
+                detail: format!(
+                    "{id} sweeps {} uncovered cells enclosed by the scan ({sweep_m:.0} m, \
+                     {approach:.0} m away)",
+                    cluster.len()
+                ),
+                inputs: serde_json::json!({
+                    "gap_cell_fraction": fraction,
+                    "cells": cluster.len(),
+                    "approach_m": approach,
+                    "sweep_m": sweep_m,
+                    "position_m": position,
+                }),
+                command: Some("set_frontier"),
+            });
+            self.gap_fill.insert(
+                id.clone(),
+                GapFill {
+                    cells: cluster,
+                    arrive_s,
+                },
+            );
         }
     }
 
@@ -1633,14 +1905,19 @@ impl StageHandler for MissionDriverStage {
             Some(belief) => belief.known_fraction(),
             None => mapping.coverage_fraction(),
         };
-        let gap_cell_fraction = (phase == MissionPhase::Scanning
-            && coverage_fraction >= self.machine.config().scan_coverage_threshold)
-            .then(|| match &belief {
-                Some(belief) => {
-                    belief.enclosed_unexplored_fraction(crate::frontier::UNEXPLORED_SHARE)
-                }
-                None => gap_cell_fraction(mapping),
-            });
+        let gate_open = phase == MissionPhase::Scanning
+            && coverage_fraction >= self.machine.config().scan_coverage_threshold;
+        // The holes themselves, for the gap filler (P4), in a run with a
+        // prior map; their share is the gate's input.
+        let holes = (gate_open && belief.is_none() && self.policy == PlanningPolicy::EfficientV1)
+            .then(|| gap_cells(mapping));
+        let gap_cell_fraction = gate_open.then(|| match (&belief, &holes) {
+            (Some(belief), _) => {
+                belief.enclosed_unexplored_fraction(crate::frontier::UNEXPLORED_SHARE)
+            }
+            (None, Some((cells, total))) => cells.len() as f64 / (*total).max(1) as f64,
+            (None, None) => gap_cell_fraction(mapping),
+        });
         let all_pois_complete = self.pois.all_complete();
         let gate_inputs = serde_json::json!({
             "coverage_fraction": coverage_fraction,
@@ -1756,6 +2033,9 @@ impl StageHandler for MissionDriverStage {
                 MissionEvent::RescorePois { .. } => {}
             }
         }
+        if self.policy == PlanningPolicy::EfficientV1 {
+            self.fill_gaps(holes, gap_cell_fraction, &mobile, mapping, timestamp_s);
+        }
         self.publish_report();
         Ok(outcome)
     }
@@ -1772,6 +2052,7 @@ impl StageHandler for MissionDriverStage {
             coordinator: self.coordinator.clone(),
             policy: self.policy,
             homeward: self.homeward.clone(),
+            gap_fill: self.gap_fill.clone(),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -1812,6 +2093,7 @@ impl StageHandler for MissionDriverStage {
         self.rescored = decoded.rescored;
         self.coordinator = decoded.coordinator;
         self.homeward = decoded.homeward;
+        self.gap_fill = decoded.gap_fill;
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -1856,6 +2138,7 @@ impl StageHandler for MissionDriverStage {
         self.rescored = false;
         self.coordinator = None;
         self.homeward.clear();
+        self.gap_fill.clear();
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -2007,6 +2290,100 @@ mod tests {
                 "after flying hole cell ({x}, {y})"
             );
         }
+    }
+
+    /// The ring of [`an_enclosed_hole_holds_the_mission_in_scanning`], flown
+    /// under `policy`: every decision recorded on the way, by tick.
+    fn fly_the_ring(policy: PlanningPolicy) -> (crate::simulation::Simulation, Vec<Decision>) {
+        let in_hole = |i: i32, j: i32| (4..=5).contains(&i) && (4..=5).contains(&j);
+        let around_hole = |i: i32, j: i32| (3..=6).contains(&i) && (3..=6).contains(&j);
+        let cells: Vec<(i32, i32)> = (0..10).flat_map(|i| (0..10).map(move |j| (i, j))).collect();
+        let ring: Vec<(f64, f64)> = cells
+            .iter()
+            .filter(|(i, j)| around_hole(*i, *j) && !in_hole(*i, *j))
+            .chain(cells.iter().filter(|(i, j)| !around_hole(*i, *j)))
+            .map(|(i, j)| (25.0 + 50.0 * *i as f64, 25.0 + 50.0 * *j as f64))
+            .collect();
+        let mut sim = gate_rig(converged(ring.len() + 8));
+        sim.stage_mut::<MissionDriverStage>(crate::stage::Stage::EvaluateMissionTransitions)
+            .expect("stage 9")
+            .set_policy(policy)
+            .expect("no POIs to repeat");
+        let mut decisions = Vec::new();
+        for (x, y) in &ring {
+            let drone = sim.world_mut().platform_mut("drone-1").expect("drone");
+            drone.position.x = *x;
+            drone.position.y = *y;
+            sim.step().expect("tick");
+            decisions.extend(installed_driver(&sim).decisions().iter().cloned());
+        }
+        (sim, decisions)
+    }
+
+    /// P4: under efficient_v1 a hole that holds the scan open is swept by a
+    /// free drone, from its nearer end; the reference only waits.
+    #[test]
+    fn efficient_v1_sends_a_drone_to_sweep_an_enclosed_hole() {
+        let (_, reference) = fly_the_ring(PlanningPolicy::Reference);
+        assert!(reference.iter().all(|d| d.kind != "gap_fill"));
+
+        let (sim, efficient) = fly_the_ring(PlanningPolicy::EfficientV1);
+        let fill = efficient
+            .iter()
+            .find(|d| d.kind == "gap_fill")
+            .expect("the hole is assigned");
+        assert_eq!(fill.subject.as_deref(), Some("drone-1"));
+        assert_eq!(fill.selected.as_deref(), Some("gap:4:4"));
+        assert_eq!(fill.inputs["cells"], 4);
+        assert_eq!(fill.command, Some("set_frontier"));
+        assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
+        // Its sweep is what it holds, and what a checkpoint carries.
+        let state = installed_driver(&sim).checkpoint_state().unwrap();
+        let held = installed_driver(&sim)
+            .gap_fill
+            .get("drone-1")
+            .map(|f| f.cells.len());
+        assert!(held.is_none() || state.get("gap_fill").is_some());
+    }
+
+    /// Once the hole is flown the gate opens, and no sweep is held past the
+    /// scan.
+    #[test]
+    fn a_sweep_is_let_go_once_the_scan_ends() {
+        let (mut sim, _) = fly_the_ring(PlanningPolicy::EfficientV1);
+        for (x, y) in [
+            (225.0, 225.0),
+            (275.0, 225.0),
+            (225.0, 275.0),
+            (275.0, 275.0),
+        ] {
+            let drone = sim.world_mut().platform_mut("drone-1").expect("drone");
+            drone.position.x = x;
+            drone.position.y = y;
+            sim.step().expect("tick");
+            if machine(&sim).phase() != MissionPhase::Scanning {
+                break;
+            }
+        }
+        assert_ne!(machine(&sim).phase(), MissionPhase::Scanning);
+        assert!(installed_driver(&sim).gap_fill.is_empty());
+    }
+
+    #[test]
+    fn holes_cluster_four_connected_and_sweep_column_by_column() {
+        let cells = [(1, 1), (1, 2), (2, 2), (5, 5), (2, 1)];
+        let clusters = hole_clusters(&cells);
+        assert_eq!(
+            clusters,
+            vec![vec![[1, 1], [1, 2], [2, 1], [2, 2]], vec![[5, 5]]]
+        );
+        // Up the first column, back down the second.
+        assert_eq!(
+            sweep_order(&clusters[0]),
+            vec![[1, 1], [1, 2], [2, 2], [2, 1]]
+        );
+        // Diagonal neighbours are separate holes.
+        assert_eq!(hole_clusters(&[(0, 0), (1, 1)]).len(), 2);
     }
 
     /// B2.4: a mission lane below the base rate credits dwell boundary by

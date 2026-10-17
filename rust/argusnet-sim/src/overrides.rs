@@ -41,7 +41,7 @@
 //!
 //! POI and egress are ungated in the reference, and are ungated here.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use argusnet_types::Vector3;
 
@@ -298,6 +298,14 @@ struct State {
     /// it is the phase committed at the end of the previous tick.
     follows_mission: bool,
     applied: HashMap<String, OverrideSource>,
+    /// Rejoin a platform's own path smoothly when its override ends, under a
+    /// planning policy other than the reference (set at assembly).
+    smooth_rejoin: bool,
+    /// Where each platform an override flew last run was put, so that a
+    /// platform whose override has ended starts its rejoin there.
+    overridden_at: BTreeMap<String, [f64; 3]>,
+    /// Platforms flying back to their own path, and where each is now.
+    rejoining: BTreeMap<String, [f64; 3]>,
 }
 
 /// A write into stage 2's tables, queued by stage 9 and applied by the
@@ -312,6 +320,11 @@ pub enum OverrideCommand {
     SetEgress(String, GotoHover),
     /// `_egress_trajectories.clear()`.
     ClearAllEgress,
+    /// A gap-filling flight (P4, `efficient_v1` only): flown from the
+    /// frontier table, so only while scanning or localizing, and beneath any
+    /// POI or egress flight.
+    SetFrontier(String, GotoHover),
+    ClearFrontier(String),
 }
 
 /// [`Stage::ApplyMissionOverrides`] as a [`StageHandler`].
@@ -336,6 +349,24 @@ impl MissionOverrideStage {
     /// them fails rather than silently flying its drones through egress.
     pub fn follow_mission_phase(&mut self) {
         self.state.follows_mission = true;
+    }
+
+    /// Under a planning policy other than the reference, a platform whose
+    /// override ends (a POI released, a recall dropped, a gap filled) flies
+    /// back to where its own path has it, at [`REDIRECT_SPEED_MPS`], instead
+    /// of appearing there: the reference moves it the whole way in one tick.
+    /// Off (the default) is the reference exactly. Before the first tick.
+    pub fn set_smooth_rejoin(&mut self, smooth: bool) {
+        self.state.smooth_rejoin = smooth;
+        if !smooth {
+            self.state.overridden_at.clear();
+            self.state.rejoining.clear();
+        }
+    }
+
+    /// Where `node_id` is on its way back to its own path, if it is.
+    pub fn rejoining_at(&self, node_id: &str) -> Option<[f64; 3]> {
+        self.state.rejoining.get(node_id).copied()
     }
 
     pub fn set_frontier(&mut self, node_id: &str, trajectory: GotoHover) {
@@ -377,6 +408,10 @@ impl MissionOverrideStage {
                 self.set_egress(&node_id, trajectory)
             }
             OverrideCommand::ClearAllEgress => self.clear_all_egress(),
+            OverrideCommand::SetFrontier(node_id, trajectory) => {
+                self.set_frontier(&node_id, trajectory)
+            }
+            OverrideCommand::ClearFrontier(node_id) => self.clear_frontier(&node_id),
         }
     }
 
@@ -402,6 +437,83 @@ struct OverrideCheckpoint {
     frontier: std::collections::BTreeMap<String, GotoHover>,
     poi: std::collections::BTreeMap<String, GotoHover>,
     egress: std::collections::BTreeMap<String, GotoHover>,
+    /// Smooth rejoins (a policy other than the reference): absent when
+    /// empty, so every other checkpoint is unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    overridden_at: BTreeMap<String, [f64; 3]>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    rejoining: BTreeMap<String, [f64; 3]>,
+}
+
+/// Smooth rejoins, after this run's overrides are applied: a platform an
+/// override flew last run and none flies now starts flying back from where it
+/// was put, toward where its own path (sampled by stage 1 this tick) has it,
+/// at [`REDIRECT_SPEED_MPS`]. Within one step of it, it is on it again, and
+/// the rejoin ends. A platform an override takes again stops rejoining.
+/// Returns how many platforms are still rejoining.
+fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
+    let ended: Vec<(String, [f64; 3])> = shared
+        .overridden_at
+        .iter()
+        .filter(|(node_id, _)| !shared.applied.contains_key(*node_id))
+        .map(|(node_id, at)| (node_id.clone(), *at))
+        .collect();
+    for (node_id, at) in ended {
+        shared.rejoining.entry(node_id).or_insert(at);
+    }
+    shared
+        .rejoining
+        .retain(|node_id, _| !shared.applied.contains_key(node_id));
+    let step_m = REDIRECT_SPEED_MPS * context.dt_s.max(0.0);
+    let mut done = Vec::new();
+    for (node_id, at) in shared.rejoining.iter_mut() {
+        let Some(platform) = context.world.platform_mut(node_id) else {
+            done.push(node_id.clone());
+            continue;
+        };
+        let path = [
+            platform.position.x,
+            platform.position.y,
+            platform.position.z,
+        ];
+        let delta = [path[0] - at[0], path[1] - at[1], path[2] - at[2]];
+        let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+        if distance <= step_m {
+            // On its path again: stage 1's sample stands.
+            done.push(node_id.clone());
+            continue;
+        }
+        let unit = [
+            delta[0] / distance,
+            delta[1] / distance,
+            delta[2] / distance,
+        ];
+        *at = [
+            at[0] + unit[0] * step_m,
+            at[1] + unit[1] * step_m,
+            at[2] + unit[2] * step_m,
+        ];
+        platform.position = Vector3::new(at[0], at[1], at[2]);
+        platform.velocity = Vector3::new(
+            unit[0] * REDIRECT_SPEED_MPS,
+            unit[1] * REDIRECT_SPEED_MPS,
+            unit[2] * REDIRECT_SPEED_MPS,
+        );
+    }
+    for node_id in done {
+        shared.rejoining.remove(&node_id);
+    }
+    shared.overridden_at = shared
+        .applied
+        .keys()
+        .filter_map(|node_id| {
+            context
+                .world
+                .platform_mut(node_id)
+                .map(|p| (node_id.clone(), [p.position.x, p.position.y, p.position.z]))
+        })
+        .collect();
+    shared.rejoining.len()
 }
 
 impl StageHandler for MissionOverrideStage {
@@ -411,6 +523,8 @@ impl StageHandler for MissionOverrideStage {
         shared.poi.clear();
         shared.egress.clear();
         shared.applied.clear();
+        shared.overridden_at.clear();
+        shared.rejoining.clear();
     }
 
     /// The redirects in force: each is a flight already under way, and a
@@ -421,6 +535,8 @@ impl StageHandler for MissionOverrideStage {
             frontier: shared.frontier.clone().into_iter().collect(),
             poi: shared.poi.clone().into_iter().collect(),
             egress: shared.egress.clone().into_iter().collect(),
+            overridden_at: shared.overridden_at.clone(),
+            rejoining: shared.rejoining.clone(),
         };
         Some(serde_json::to_value(state).expect("override state serialises"))
     }
@@ -441,6 +557,8 @@ impl StageHandler for MissionOverrideStage {
         shared.frontier = decoded.frontier.into_iter().collect();
         shared.poi = decoded.poi.into_iter().collect();
         shared.egress = decoded.egress.into_iter().collect();
+        shared.overridden_at = decoded.overridden_at;
+        shared.rejoining = decoded.rejoining;
         shared.applied.clear();
         Ok(())
     }
@@ -461,7 +579,12 @@ impl StageHandler for MissionOverrideStage {
             None => true,
         };
 
-        if shared.frontier.is_empty() && shared.poi.is_empty() && shared.egress.is_empty() {
+        if shared.frontier.is_empty()
+            && shared.poi.is_empty()
+            && shared.egress.is_empty()
+            && shared.overridden_at.is_empty()
+            && shared.rejoining.is_empty()
+        {
             return Ok(StageOutcome::NoWork);
         }
 
@@ -506,12 +629,21 @@ impl StageHandler for MissionOverrideStage {
             }
         }
 
-        if shared.applied.is_empty() {
+        let rejoined = if shared.smooth_rejoin {
+            rejoin(shared, context)
+        } else {
+            0
+        };
+
+        if shared.applied.is_empty() && rejoined == 0 {
             return Ok(StageOutcome::NoWork);
         }
 
         let count = shared.applied.len();
         context.note(format!("overrode {count} platform(s)"));
+        if rejoined > 0 {
+            context.note(format!("{rejoined} platform(s) rejoining their path"));
+        }
         Ok(StageOutcome::Ran)
     }
 }
@@ -592,6 +724,102 @@ mod tests {
             .platform(node_id)
             .expect("platform is in the world")
             .velocity
+    }
+
+    /// Stage 1 standing in for a controller: puts each platform on its own
+    /// path, here a fixed point, every tick.
+    #[derive(Debug)]
+    struct OnPath(Vec<(String, [f64; 3])>);
+
+    impl StageHandler for OnPath {
+        fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+            for (node_id, at) in &self.0 {
+                if let Some(platform) = context.world.platform_mut(node_id) {
+                    platform.position = Vector3::new(at[0], at[1], at[2]);
+                }
+            }
+            Ok(StageOutcome::Ran)
+        }
+    }
+
+    fn rejoin_rig(smooth: bool) -> Simulation {
+        let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
+        sim.set_stage_handler(
+            Stage::SampleControllersAndBattery,
+            Box::new(OnPath(vec![("d0".to_string(), [0.0, 0.0, 80.0])])),
+        )
+        .expect("stage 1 takes a handler");
+        ov(&mut sim).set_smooth_rejoin(smooth);
+        // A POI flight that holds the drone 1 km east of its path.
+        ov(&mut sim).set_poi(
+            "d0",
+            GotoHover::over([1000.0, 0.0, 80.0], [1000.0, 0.0], 80.0, 0.0, 0.0),
+        );
+        sim.step().expect("tick runs");
+        assert_eq!(position_of(&sim, "d0").x, 1000.0);
+        ov(&mut sim).clear_poi("d0");
+        sim
+    }
+
+    /// The reference puts a platform whose override has ended straight back
+    /// on its path, however far away that is.
+    #[test]
+    fn the_reference_returns_a_released_platform_to_its_path_at_once() {
+        let mut sim = rejoin_rig(false);
+        sim.step().expect("tick runs");
+        assert_eq!(position_of(&sim, "d0").x, 0.0);
+        assert!(overridden(&sim)
+            .checkpoint_state()
+            .unwrap()
+            .get("rejoining")
+            .is_none());
+    }
+
+    /// With smooth rejoins it flies back at the redirect speed, is on its
+    /// path again once within a step of it, and a checkpoint taken on the way
+    /// resumes the same flight.
+    #[test]
+    fn a_smooth_rejoin_flies_back_to_the_path() {
+        let mut sim = rejoin_rig(true);
+        sim.step().expect("tick runs");
+        assert_eq!(position_of(&sim, "d0").x, 1000.0 - REDIRECT_SPEED_MPS);
+        assert_eq!(velocity_of(&sim, "d0").x, -REDIRECT_SPEED_MPS);
+        assert_eq!(
+            overridden(&sim).rejoining_at("d0").map(|p| p[0]),
+            Some(972.0)
+        );
+
+        let state = overridden(&sim).checkpoint_state().unwrap();
+        assert!(state.get("rejoining").is_some());
+        let mut resumed = rejoin_rig(true);
+        ov(&mut resumed).restore_state(&state).unwrap();
+
+        let ticks = (1000.0 / REDIRECT_SPEED_MPS).ceil() as usize;
+        for _ in 1..ticks {
+            sim.step().expect("tick runs");
+            resumed.step().expect("tick runs");
+            assert_eq!(position_of(&sim, "d0"), position_of(&resumed, "d0"));
+            assert!(position_of(&sim, "d0").x >= 0.0);
+        }
+        assert_eq!(position_of(&sim, "d0").x, 0.0, "on its path again");
+        assert_eq!(overridden(&sim).rejoining_at("d0"), None);
+        sim.step().expect("tick runs");
+        assert_eq!(outcome(&sim), StageOutcome::NoWork);
+    }
+
+    /// An override that takes the platform again ends its rejoin.
+    #[test]
+    fn a_new_override_ends_a_rejoin() {
+        let mut sim = rejoin_rig(true);
+        sim.step().expect("tick runs");
+        assert!(overridden(&sim).rejoining_at("d0").is_some());
+        ov(&mut sim).set_poi(
+            "d0",
+            GotoHover::over([500.0, 0.0, 80.0], [500.0, 0.0], 80.0, 0.0, 0.0),
+        );
+        sim.step().expect("tick runs");
+        assert_eq!(position_of(&sim, "d0").x, 500.0);
+        assert_eq!(overridden(&sim).rejoining_at("d0"), None);
     }
 
     // -----------------------------------------------------------------

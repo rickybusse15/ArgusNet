@@ -1567,6 +1567,12 @@ impl AssembledRun {
         // with no mission driver changes too, and its checkpoints say so.
         self.sim.set_policy_algorithm(!policy.is_reference());
         self.guard_deconfliction(!policy.is_reference());
+        if let Some(overrides) = self
+            .sim
+            .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
+        {
+            overrides.set_smooth_rejoin(!policy.is_reference());
+        }
         Ok(has_driver)
     }
 

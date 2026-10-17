@@ -2,6 +2,22 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `efficient_v1` fills the holes that hold a scan open (P4, first slice).
+  Each drone loops its own sector, so the seams between sectors stay
+  uncovered, and once coverage passes the threshold those enclosed holes
+  keep the gap gate shut. Now, while they do, each hole gets the free drone
+  that reaches it soonest, which sweeps it (decision `gap_fill`, a frontier
+  override) and goes back to its lane once it is covered
+  (`gap_fill_release`). On `planner_adversarial` (30 qualification seeds,
+  120 s) runs that leave the scan go from 26 to 29, and POIs inspected from
+  46 to 56 of 180. No seed got worse.
+- `efficient_v1` flies a drone back to its own path when an override ends
+  (a POI released, a recall dropped, a hole filled) at the redirect speed,
+  instead of moving it there in one tick: the reference moved drones
+  thousands of metres in a frame. On `persistent_long` frames faster than
+  60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
+  reference is unchanged (14/14 replays).
+
 - `efficient_v1` prices a drone's reserve home along the route it would fly
   home when that route turns round a known obstacle (P3), each leg with the
   wind along it, instead of along the straight line. Return home at the
