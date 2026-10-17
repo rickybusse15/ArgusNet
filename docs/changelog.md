@@ -2,6 +2,17 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- `efficient_v1` prices a drone's reserve home along the route it would fly
+  home when that route turns round a known obstacle (P3), each leg with the
+  wind along it, instead of along the straight line. Return home at the
+  reserve, safe handoff and the fleet-wide allocation all use it. A drone that
+  could fly even twice the straight line home is not planned a route at all
+  (`MAX_PRICED_DETOUR`), and routes between a POI and a station are kept
+  across runs, so a run costs about 0.4 s more, once. On
+  `urban_dense_inspection` no drone nears its reserve in 150 or 450 s, and
+  every replay is unchanged. Checkpoint policy version 10. The reference is
+  unchanged.
+
 - `efficient_v1` keeps deconfliction's adjusted positions out of the ground
   and out of structures in runs with a prior map, as runs with no prior map
   already do; contacts are recorded in the replay. Checkpoint policy version
