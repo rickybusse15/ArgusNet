@@ -451,6 +451,19 @@ impl KnownObstacles {
     }
 }
 
+/// A free drone's flight to sweep one hole: the cells in the order flown,
+/// the corners on the way (around obstacles, to the first cell and between
+/// cells), the height flown, and the lengths of the way there and of the
+/// sweep.
+#[derive(Debug, Clone)]
+struct GapPlan {
+    points: Vec<[f64; 2]>,
+    via: Vec<[f64; 2]>,
+    z: f64,
+    approach: f64,
+    sweep_m: f64,
+}
+
 /// The holes' 4-connected clusters, each in row-major order, in the order
 /// of their first cell.
 fn hole_clusters(cells: &[(usize, usize)]) -> Vec<Vec<[usize; 2]>> {
@@ -694,6 +707,106 @@ impl MissionDriverStage {
         corners
     }
 
+    /// The free drones (by position) matched to the sweeps, each pair the
+    /// drone with its flight: least total way there, over only the pairs
+    /// whose whole flight is safe, so a nearer drone that cannot fly a sweep
+    /// never takes it from a farther one that can.
+    fn assign_gap_sweeps(
+        &self,
+        positions: &[[f64; 3]],
+        sweeps: &[Vec<[f64; 2]>],
+    ) -> Vec<(usize, usize, GapPlan)> {
+        let mut plans: Vec<Vec<Option<GapPlan>>> = positions
+            .iter()
+            .map(|position| {
+                sweeps
+                    .iter()
+                    .map(|sweep| self.gap_plan(*position, sweep))
+                    .collect()
+            })
+            .collect();
+        let cost: Vec<Vec<Option<f64>>> = plans
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|plan| plan.as_ref().map(|plan| plan.approach))
+                    .collect()
+            })
+            .collect();
+        min_cost_assignment(&cost)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(row, column)| {
+                let column = column?;
+                let plan = plans[row][column]
+                    .take()
+                    .expect("only a plan has a cost to be assigned on");
+                Some((row, column, plan))
+            })
+            .collect()
+    }
+
+    /// The flight of a drone at `position` to sweep `sweep`, or `None` when
+    /// it cannot be made safe. It sweeps from the nearer end, at its own
+    /// height above the ground, raised to clear the highest ground the sweep
+    /// crosses.
+    fn gap_plan(&self, position: [f64; 3], sweep: &[[f64; 2]]) -> Option<GapPlan> {
+        let ends = [sweep[0], sweep[sweep.len() - 1]];
+        let reach = |end: [f64; 2]| {
+            let (dx, dy) = (end[0] - position[0], end[1] - position[1]);
+            (dx * dx + dy * dy).sqrt()
+        };
+        let mut points = sweep.to_vec();
+        if reach(ends[1]) < reach(ends[0]) {
+            points.reverse();
+        }
+        let z = match &self.terrain {
+            Some(terrain) => {
+                let above = position[2] - terrain.height_at(position[0], position[1]);
+                points
+                    .iter()
+                    .map(|p| terrain.height_at(p[0], p[1]))
+                    .fold(f64::NEG_INFINITY, f64::max)
+                    + above
+            }
+            None => position[2],
+        };
+        // A cell centre inside a building it cannot clear is left out:
+        // the sweep passes beside it.
+        if let Some(obstacles) = &self.obstacles {
+            points.retain(|p| !obstacles.stands_in(*p, z));
+        }
+        if points.is_empty() {
+            return None;
+        }
+        let first = [points[0][0], points[0][1], z];
+        let approach = self.trip_length_m(position, first);
+        let sweep_m: f64 = points
+            .windows(2)
+            .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
+            .sum();
+        // The whole flight, the way there and every leg of the sweep,
+        // routed around the known obstacles, at the lowest height that
+        // keeps it above the known ground everywhere. The way there is
+        // routed at the lower of the two heights it flies between, so it
+        // goes around all it climbs past. A flight that cannot be made
+        // safe is no plan at all, so the assignment never picks it.
+        let mut via =
+            self.routed_sweep(&[[position[0], position[1]], points[0]], z.min(position[2]))?;
+        via.remove(0);
+        via.pop();
+        via.extend(self.routed_sweep(&points, z)?);
+        let z = self.sweep_height(position, &via, z)?;
+        via.pop();
+        Some(GapPlan {
+            points,
+            via,
+            z,
+            approach,
+            sweep_m,
+        })
+    }
+
     /// The sweep through `points` at `z_m`, each leg routed around the
     /// known obstacles a flight at that height must avoid: the corners of
     /// every leg that turns, then its end. `None` when a leg has no route.
@@ -834,18 +947,18 @@ impl MissionDriverStage {
         mapping: &MappingStage,
         timestamp_s: f64,
     ) {
-        if self.machine.phase() != MissionPhase::Scanning {
-            // Past the scan: the frontier gate ends these flights itself.
-            self.gap_fill.clear();
-            return;
-        }
         // Let go of drones whose hole is covered, whose sweep has ended, or
-        // that have left the fleet.
+        // that have left the fleet, and of every one once the scan has
+        // ended: stage 2 still flies a frontier override while localizing,
+        // so each is cleared, not just forgotten.
+        let scanning = self.machine.phase() == MissionPhase::Scanning;
         let finished: Vec<(String, &'static str)> = self
             .gap_fill
             .iter()
             .filter_map(|(id, fill)| {
-                if !mobile.iter().any(|(m, _)| m == id) {
+                if !scanning {
+                    Some((id.clone(), "scan_ended"))
+                } else if !mobile.iter().any(|(m, _)| m == id) {
                     Some((id.clone(), "left_fleet"))
                 } else if fill
                     .cells
@@ -878,6 +991,9 @@ impl MissionDriverStage {
                 inputs: serde_json::json!({ "cells": fill.cells.len() }),
                 command: Some("clear_frontier"),
             });
+        }
+        if !scanning {
+            return;
         }
         let (Some((cells, _)), Some(fraction)) = (holes, gap_cell_fraction) else {
             return;
@@ -916,88 +1032,20 @@ impl MissionDriverStage {
             .iter()
             .map(|cluster| sweep_order(cluster).into_iter().map(centre).collect())
             .collect();
-        // Each drone sweeps from the nearer end, at its own height above the
-        // ground, raised to clear the highest ground the sweep crosses.
-        let plan = |position: [f64; 3], sweep: &[[f64; 2]]| {
-            let ends = [sweep[0], sweep[sweep.len() - 1]];
-            let reach = |end: [f64; 2]| {
-                let (dx, dy) = (end[0] - position[0], end[1] - position[1]);
-                (dx * dx + dy * dy).sqrt()
-            };
-            let mut points = sweep.to_vec();
-            if reach(ends[1]) < reach(ends[0]) {
-                points.reverse();
-            }
-            let z = match &self.terrain {
-                Some(terrain) => {
-                    let above = position[2] - terrain.height_at(position[0], position[1]);
-                    points
-                        .iter()
-                        .map(|p| terrain.height_at(p[0], p[1]))
-                        .fold(f64::NEG_INFINITY, f64::max)
-                        + above
-                }
-                None => position[2],
-            };
-            // A cell centre inside a building it cannot clear is left out:
-            // the sweep passes beside it.
-            if let Some(obstacles) = &self.obstacles {
-                points.retain(|p| !obstacles.stands_in(*p, z));
-            }
-            if points.is_empty() {
-                return None;
-            }
-            let first = [points[0][0], points[0][1], z];
-            let approach = self.trip_length_m(position, first);
-            let sweep_m: f64 = points
-                .windows(2)
-                .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
-                .sum();
-            Some((points, z, approach, sweep_m))
-        };
-        let plans: Vec<Vec<_>> = free
-            .iter()
-            .map(|(_, position)| sweeps.iter().map(|sweep| plan(*position, sweep)).collect())
-            .collect();
-        let cost: Vec<Vec<Option<f64>>> = plans
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|plan| plan.as_ref().map(|(_, _, approach, _)| *approach))
-                    .collect()
-            })
-            .collect();
-        // Each assigned drone's whole flight, planned before anything is
-        // changed: the way there and every leg of the sweep routed around
-        // the known obstacles, at the lowest height that keeps it above the
-        // known ground everywhere. A drone whose flight cannot be made safe
-        // is not sent.
-        let assigned: Vec<(usize, usize, Vec<[f64; 2]>, f64)> = min_cost_assignment(&cost)
-            .into_iter()
-            .enumerate()
-            .filter_map(|(row, column)| {
-                let column = column?;
-                let (points, z, _, _) = plans[row][column].as_ref()?;
-                // The way there is routed at the lower of the two heights it
-                // flies between, so it goes around all it climbs past.
-                let position = free[row].1;
-                let mut via = self
-                    .routed_sweep(&[[position[0], position[1]], points[0]], z.min(position[2]))?;
-                via.remove(0);
-                via.pop();
-                via.extend(self.routed_sweep(points, *z)?);
-                let z = self.sweep_height(free[row].1, &via, *z)?;
-                via.pop();
-                Some((row, column, via, z))
-            })
-            .collect();
+        let positions: Vec<[f64; 3]> = free.iter().map(|(_, position)| *position).collect();
+        let assigned = self.assign_gap_sweeps(&positions, &sweeps);
         let free: Vec<(String, [f64; 3])> = free.into_iter().cloned().collect();
         let candidates: Vec<String> = free.iter().map(|(id, _)| id.clone()).collect();
         let speed = self.config.redirect_speed_mps.max(f64::EPSILON);
-        for (row, column, via, z) in assigned {
+        for (row, column, plan) in assigned {
             let (id, position) = &free[row];
-            let (points, _, approach, sweep_m) =
-                plans[row][column].clone().expect("assigned plans exist");
+            let GapPlan {
+                points,
+                via,
+                z,
+                approach,
+                sweep_m,
+            } = plan;
             let target = points[points.len() - 1];
             let trajectory = GotoHover::routed(*position, via, target, z, timestamp_s, speed);
             let arrive_s = trajectory.t_arrive();
@@ -2451,15 +2499,21 @@ mod tests {
 
     /// Once the hole is flown the gate opens, and no sweep is held past the
     /// scan.
+    ///
+    /// The gate opens with one hole cell still uncovered, so the sweep is
+    /// still held then: it is cleared (stage 2 would otherwise go on flying
+    /// it while localizing), not just forgotten.
     #[test]
     fn a_sweep_is_let_go_once_the_scan_ends() {
         let (mut sim, _) = fly_the_ring(PlanningPolicy::EfficientV1);
+        let mut held_before_the_end = false;
         for (x, y) in [
             (225.0, 225.0),
             (275.0, 225.0),
             (225.0, 275.0),
             (275.0, 275.0),
         ] {
+            held_before_the_end = installed_driver(&sim).gap_fill.contains_key("drone-1");
             let drone = sim.world_mut().platform_mut("drone-1").expect("drone");
             drone.position.x = x;
             drone.position.y = y;
@@ -2470,6 +2524,16 @@ mod tests {
         }
         assert_ne!(machine(&sim).phase(), MissionPhase::Scanning);
         assert!(installed_driver(&sim).gap_fill.is_empty());
+        assert!(held_before_the_end, "a sweep was held when the scan ended");
+        let release = installed_driver(&sim)
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "gap_fill_release")
+            .cloned()
+            .expect("the held sweep is released");
+        assert_eq!(release.subject.as_deref(), Some("drone-1"));
+        assert_eq!(release.reason, "scan_ended");
+        assert_eq!(release.command, Some("clear_frontier"));
     }
 
     /// Ground 100 m high in a narrow band at x = 520, flat elsewhere.
@@ -2511,6 +2575,26 @@ mod tests {
         assert_eq!(flat.sweep_height(start, &[[100.0, 0.0]], 40.0), Some(40.0));
         // A start already inside the clearance cannot be made safe.
         assert_eq!(stage.sweep_height([520.0, 0.0, 50.0], &path, 40.0), None);
+    }
+
+    /// A drone nearer a hole but with no safe flight to it (here it starts
+    /// inside the ground's clearance, on the ridge) is not matched to it:
+    /// the farther drone that can fly it is, instead of nobody.
+    #[test]
+    fn a_hole_goes_to_the_nearest_drone_that_can_safely_sweep_it() {
+        let mut stage = efficient_driver(Vec::new());
+        stage.set_known_terrain(Some(Arc::new(Ridge)));
+        let near_but_unsafe = [520.0, 0.0, 50.0];
+        let far_and_safe = [0.0, 0.0, 40.0];
+        let sweep = vec![[600.0, 0.0], [650.0, 0.0]];
+        assert!(stage.gap_plan(near_but_unsafe, &sweep).is_none());
+        let assigned = stage.assign_gap_sweeps(&[near_but_unsafe, far_and_safe], &[sweep.clone()]);
+        assert_eq!(assigned.len(), 1);
+        let (row, column, plan) = &assigned[0];
+        assert_eq!((*row, *column), (1, 0));
+        assert_eq!(plan.points, sweep);
+        // Its flight climbs over the ridge on the way.
+        assert!(plan.z > 40.0);
     }
 
     #[test]
