@@ -206,11 +206,27 @@ impl PowerLine {
         pieces
     }
 
-    /// The lowest point of any conductor, metres above datum.
+    /// The lowest point of any conductor, metres above datum: each span's
+    /// parabola at its vertex (or at a support, when the vertex lies beyond
+    /// one), not just where the pieces meet.
     pub fn lowest_conductor_z_m(&self) -> f64 {
-        self.pieces()
-            .iter()
-            .flat_map(|piece| [piece.start_m[2], piece.end_m[2]])
+        self.supports
+            .windows(2)
+            .map(|pair| {
+                let (from, to) = (&pair[0], &pair[1]);
+                let sag_m = self.sag_ratio * horizontal(from.xy_m, to.xy_m);
+                let rise_m = to.top_z_m() - from.top_z_m();
+                // z(t) = z0 + rise·t − 4·sag·t(1 − t), lowest where
+                // dz/dt = rise − 4·sag + 8·sag·t is zero.
+                let t = if sag_m > 0.0 {
+                    ((4.0 * sag_m - rise_m) / (8.0 * sag_m)).clamp(0.0, 1.0)
+                } else if rise_m >= 0.0 {
+                    0.0
+                } else {
+                    1.0
+                };
+                from.top_z_m() + rise_m * t - 4.0 * sag_m * t * (1.0 - t)
+            })
             .fold(f64::INFINITY, f64::min)
     }
 
@@ -358,6 +374,38 @@ mod tests {
         for pair in pieces.windows(2) {
             assert_eq!(pair[0].end_m, pair[1].start_m);
         }
+    }
+
+    /// The lowest point is the parabola's, wherever it falls: inside the one
+    /// piece of a short span, or off-centre on a span between supports of
+    /// different heights, or at the lower support when the vertex lies
+    /// beyond it.
+    #[test]
+    fn the_lowest_point_is_the_parabolas_not_a_piece_ends() {
+        let mut short = line();
+        short.supports[1].xy_m = [4.0, 0.0];
+        assert_eq!(short.pieces().len(), 1);
+        assert!(close(short.lowest_conductor_z_m(), 20.0 - 0.03 * 4.0));
+
+        // 100 m span, 3 m sag, the far support 4 m higher: lowest where
+        // 4 - 12 + 24 t = 0, t = 1/3, z = 20 + 4/3 - 12·(1/3)(2/3) = 18.666...
+        let mut uneven = line();
+        uneven.supports[1].height_m = 24.0;
+        assert!(close(
+            uneven.lowest_conductor_z_m(),
+            20.0 + 4.0 / 3.0 - 8.0 / 3.0
+        ));
+
+        // A rise steeper than the sag pulls the vertex past the near support.
+        let mut steep = line();
+        steep.supports[1].height_m = 40.0;
+        assert!(close(steep.lowest_conductor_z_m(), 20.0));
+
+        // No sag at all: the lower support.
+        let mut taut = line();
+        taut.sag_ratio = 0.0;
+        taut.supports[0].height_m = 30.0;
+        assert!(close(taut.lowest_conductor_z_m(), 20.0));
     }
 
     #[test]
