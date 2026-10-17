@@ -1,6 +1,7 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12. Nothing here is implemented yet.
+**Status:** proposed 2026-10-12. R0's opacity fix is implemented (#222); R1–R5
+are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).

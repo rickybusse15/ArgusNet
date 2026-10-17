@@ -4,7 +4,7 @@
 # whatever was newest, so the hooks could pass on code CI would reject.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.5
+    rev: v0.17.1
     hooks:
       - id: ruff
         args: [--fix]
