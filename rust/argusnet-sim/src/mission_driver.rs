@@ -2586,7 +2586,10 @@ mod tests {
         let far_and_safe = [0.0, 0.0, 40.0];
         let sweep = vec![[600.0, 0.0], [650.0, 0.0]];
         assert!(stage.gap_plan(near_but_unsafe, &sweep).is_none());
-        let assigned = stage.assign_gap_sweeps(&[near_but_unsafe, far_and_safe], &[sweep.clone()]);
+        let assigned = stage.assign_gap_sweeps(
+            &[near_but_unsafe, far_and_safe],
+            std::slice::from_ref(&sweep),
+        );
         assert_eq!(assigned.len(), 1);
         let (row, column, plan) = &assigned[0];
         assert_eq!((*row, *column), (1, 0));
