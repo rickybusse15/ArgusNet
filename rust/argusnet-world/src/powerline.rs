@@ -108,6 +108,10 @@ impl std::error::Error for PowerLineError {}
 pub struct ConductorPiece {
     pub start_m: [f64; 3],
     pub end_m: [f64; 3],
+    /// How far the conductor can hang below this straight piece between its
+    /// ends, metres: the parabola sags under its chord by at most
+    /// `sag_ratio * h² / span` for a piece of length `h`.
+    pub sag_error_m: f64,
 }
 
 impl PowerLine {
@@ -182,9 +186,10 @@ impl PowerLine {
         let mut pieces = Vec::new();
         for pair in self.supports.windows(2) {
             let (from, to) = (&pair[0], &pair[1]);
-            let count = (horizontal(from.xy_m, to.xy_m) / MAX_PIECE_M)
-                .ceil()
-                .max(1.0) as usize;
+            let span_m = horizontal(from.xy_m, to.xy_m);
+            let count = (span_m / MAX_PIECE_M).ceil().max(1.0) as usize;
+            let piece_m = span_m / count as f64;
+            let sag_error_m = self.sag_ratio * piece_m * piece_m / span_m;
             for &offset_m in &self.conductor_offsets_m {
                 let mut start = self.conductor_at(from, to, offset_m, 0.0);
                 for k in 1..=count {
@@ -192,6 +197,7 @@ impl PowerLine {
                     pieces.push(ConductorPiece {
                         start_m: start,
                         end_m: end,
+                        sag_error_m,
                     });
                     start = end;
                 }
@@ -230,11 +236,13 @@ impl PowerLine {
     /// How far the segment from `from` to `to` (the flight between two
     /// ticks) comes to any conductor's surface, metres: negative when it
     /// passes through a wire. Swept, so a wire crossed between the ends
-    /// counts.
+    /// counts. Never more than the true clearance: each piece's distance is
+    /// cut by how far the wire can sag below it, so the straight pieces never
+    /// pass off a flight just under the wire as clear.
     pub fn clearance_along(&self, from: [f64; 3], to: [f64; 3]) -> f64 {
         self.pieces()
             .iter()
-            .map(|piece| segment_distance(from, to, piece.start_m, piece.end_m))
+            .map(|piece| segment_distance(from, to, piece.start_m, piece.end_m) - piece.sag_error_m)
             .fold(f64::INFINITY, f64::min)
             - self.conductor_radius_m
     }
@@ -385,18 +393,50 @@ mod tests {
         let line = line();
         // Over the attachment height, the sag gives more room at mid-span.
         let over = |z: f64| line.clearance_along([50.0, -30.0, z], [50.0, 30.0, z]);
-        // 8 m over the lowest point, less the radius; the straight pieces
-        // either side of mid-span tilt toward the flight by a fraction of a
-        // millimetre, which is the pieces' own approximation.
-        assert!(
-            (over(25.0) - (25.0 - 17.0 - 0.01)).abs() < 1e-3,
-            "{}",
-            over(25.0)
-        );
+        // 8 m over the lowest point, less the radius. Reported short of that
+        // by the pieces' sag error (7.5 mm), counted against it, and by the
+        // pieces either side of mid-span tilting toward the flight (a
+        // fraction of a millimetre), never over it.
+        let truth = 25.0 - 17.0 - 0.01;
+        assert!(over(25.0) <= truth + 1e-9, "{}", over(25.0));
+        assert!(over(25.0) >= truth - 0.0075 - 1e-3, "{}", over(25.0));
         assert!(!line.violated_by([50.0, -30.0, 25.0], [50.0, 30.0, 25.0]));
         assert!(line.violated_by([50.0, -30.0, 21.0], [50.0, 30.0, 21.0]));
         // Near a support the wire is higher.
         assert!(line.violated_by([1.0, -30.0, 24.0], [1.0, 30.0, 24.0]));
+    }
+
+    /// Under the wire between two piece ends the chord sits above the
+    /// parabola, so the clearance must not be read off the chord: it is
+    /// never more than the clearance from the true curve, and short of it by
+    /// no more than the piece's sag error.
+    #[test]
+    fn clearance_under_the_wire_is_never_more_than_the_true_curves() {
+        let line = line();
+        let piece_error = 0.03 * 5.0 * 5.0 / 100.0;
+        assert!(line
+            .pieces()
+            .iter()
+            .all(|p| close(p.sag_error_m, piece_error)));
+        // The true conductor, sampled densely.
+        let true_distance = |p: [f64; 3]| {
+            (0..=100_000)
+                .map(|k| {
+                    let t = k as f64 / 100_000.0;
+                    let wire = [100.0 * t, 0.0, 20.0 - 12.0 * t * (1.0 - t)];
+                    segment_distance(p, p, wire, wire)
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        // Between the piece ends at 50 m and 55 m, 5 m under the curve.
+        for x in [51.25, 52.5, 53.75] {
+            let t = x / 100.0;
+            let p = [x, 0.0, 20.0 - 12.0 * t * (1.0 - t) - 5.0];
+            let truth = true_distance(p) - 0.01;
+            let reported = line.clearance_along(p, p);
+            assert!(reported <= truth + 1e-6, "{x}: {reported} > {truth}");
+            assert!(reported >= truth - piece_error - 1e-6, "{x}: {reported}");
+        }
     }
 
     #[test]
