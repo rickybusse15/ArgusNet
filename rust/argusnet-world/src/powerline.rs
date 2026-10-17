@@ -46,7 +46,10 @@ impl Support {
 }
 
 /// A power line: supports in order, and the conductors strung between them.
+/// Read only through [`PowerLine::validated`], so a line in a bundle that
+/// the model refuses is an error, never a line that silently clears nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "UncheckedPowerLine")]
 pub struct PowerLine {
     pub id: String,
     pub supports: Vec<Support>,
@@ -62,6 +65,33 @@ pub struct PowerLine {
     /// How far a platform must stay from a conductor's surface, metres. Set
     /// from the line's voltage by whoever builds the line.
     pub clearance_m: f64,
+}
+
+/// A [`PowerLine`] as written, before it is checked.
+#[derive(Deserialize)]
+struct UncheckedPowerLine {
+    id: String,
+    supports: Vec<Support>,
+    conductor_offsets_m: Vec<f64>,
+    sag_ratio: f64,
+    conductor_radius_m: f64,
+    clearance_m: f64,
+}
+
+impl TryFrom<UncheckedPowerLine> for PowerLine {
+    type Error = PowerLineError;
+
+    fn try_from(line: UncheckedPowerLine) -> Result<Self, Self::Error> {
+        PowerLine {
+            id: line.id,
+            supports: line.supports,
+            conductor_offsets_m: line.conductor_offsets_m,
+            sag_ratio: line.sag_ratio,
+            conductor_radius_m: line.conductor_radius_m,
+            clearance_m: line.clearance_m,
+        }
+        .validated()
+    }
 }
 
 /// Why a [`PowerLine`] cannot be used.
@@ -484,6 +514,22 @@ mod tests {
             [joint[0], joint[1], joint[2] + 1.0],
             [joint[0], joint[1], joint[2] - 1.0]
         ));
+    }
+
+    /// A line is read only if the model accepts it: one with no conductors
+    /// would otherwise clear every flight.
+    #[test]
+    fn a_line_is_checked_as_it_is_read() {
+        let good = serde_json::to_value(line()).unwrap();
+        let read: PowerLine = serde_json::from_value(good.clone()).unwrap();
+        assert_eq!(read, line());
+        let mut no_conductors = good.clone();
+        no_conductors["conductor_offsets_m"] = serde_json::json!([]);
+        let error = serde_json::from_value::<PowerLine>(no_conductors).unwrap_err();
+        assert!(error.to_string().contains("conductor"), "{error}");
+        let mut one_support = good;
+        one_support["supports"].as_array_mut().unwrap().pop();
+        assert!(serde_json::from_value::<PowerLine>(one_support).is_err());
     }
 
     #[test]
