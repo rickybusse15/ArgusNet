@@ -8,6 +8,16 @@
   scanner's structure hits and the planner (R0). No behaviour change: 14/14
   replays identical.
 
+- Viewer on Bevy 0.20 and bevy_egui 0.43 (supersedes Dependabot #244 and
+  #247). Bevy 0.20 preprocesses shaders as WESL, not with naga_oil, so the
+  sky, terrain and hologram shaders are now `.wesl` files with `import`
+  statements, and the terrain shader calls the new three-argument
+  `alpha_discard`. Other API moves: `MeshAabb::get_aabb` for
+  `compute_aabb`, `get_mapped_range` returning a `Result` in the headless
+  capture, and `anyhow::Context` imported under another name where the
+  prelude's own `ContextExt` would clash. The GPU pixel probes, the headless
+  render and the windowed smoke test all pass on it.
+
 - Viewer: a drone's inspector reads its task from the replay's recorded
   assignment history (V4): the task at the frame's time, its last change
   with kind and reason, and how many changes came before. Without a history

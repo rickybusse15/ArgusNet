@@ -9,9 +9,9 @@
 // elevation is `world_position.z` and the ground normal is close to +Z. Reading
 // y here would give north, which is the mistake the marker glyphs used to make.
 
-#import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}
-#import bevy_pbr::pbr_fragment::pbr_input_from_standard_material
-#import bevy_pbr::pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing}
+import bevy_pbr::render::forward_io::{VertexOutput, FragmentOutput};
+import bevy_pbr::render::pbr_fragment::pbr_input_from_standard_material;
+import bevy_pbr::render::pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing};
 
 struct TerrainSettings {
     /// Elevation ramp endpoints, metres. Set from the scene's terrain summary.
@@ -199,7 +199,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // elevation this pixel spans, so dividing by it converts the distance to
     // the nearest contour into pixels and holds the line a constant width at
     // any zoom or grazing angle -- the same derivative-filtering idiom
-    // hologram.wgsl uses for its scan bands.
+    // hologram.wesl uses for its scan bands.
     let contour_interval = max(terrain.contour_interval_m, 0.01);
     let contour_phase = elevation / contour_interval;
     let distance_to_line = abs(fract(contour_phase) - 0.5);
@@ -224,7 +224,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let base_rgb = pbr_input.material.base_color.rgb * tint;
     pbr_input.material.base_color = vec4<f32>(base_rgb, pbr_input.material.base_color.a);
 
-    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+    pbr_input.material.base_color = alpha_discard(
+        pbr_input.material.flags,
+        pbr_input.material.alpha_cutoff,
+        pbr_input.material.base_color
+    );
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);

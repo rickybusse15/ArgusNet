@@ -144,7 +144,7 @@ pub struct TerrainExtension {
 
 impl MaterialExtension for TerrainExtension {
     fn fragment_shader() -> ShaderRef {
-        "embedded://argusnet_viewer/shaders/terrain.wgsl".into()
+        "embedded://argusnet_viewer/shaders/terrain.wesl".into()
     }
 }
 
@@ -213,7 +213,7 @@ pub struct TerrainMaterialPlugin;
 
 impl Plugin for TerrainMaterialPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/terrain.wgsl");
+        embedded_asset!(app, "shaders/terrain.wesl");
         app.add_plugins(MaterialPlugin::<TerrainMaterial>::default())
             .add_systems(Update, apply_terrain_material_system);
     }
