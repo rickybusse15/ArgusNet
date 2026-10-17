@@ -5,8 +5,8 @@
 // Z-up (Python ENU, the proto, and all three cameras agree), so elevation is the
 // z component of that direction, not y.
 
-#import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_view_bindings::view
+import bevy_pbr::render::forward_io::VertexOutput;
+import bevy_pbr::render::mesh_view_bindings::view;
 
 // Mirrors `SkySettings` in sky.rs, field for field.
 struct SkySettings {

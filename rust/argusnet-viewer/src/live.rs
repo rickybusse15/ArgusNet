@@ -14,7 +14,11 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
+// Bevy 0.20's prelude brings its own `ContextExt`, whose `context` and
+// `with_context` turn a result into a `BevyError`. Naming anyhow's trait
+// `ContextExt` here shadows the prelude's, so these calls stay anyhow's.
+use anyhow::Context as ContextExt;
 use argusnet_proto::pb::world_model_service_client::WorldModelServiceClient;
 use argusnet_proto::pb::WatchFramesV2Request;
 use bevy::prelude::*;

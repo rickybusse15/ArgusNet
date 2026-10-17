@@ -6,7 +6,7 @@
 //! **Why the shader is embedded in the binary.** `AssetPlugin::file_path` is set
 //! to the *scene package* root (see `initialize_scene_package`) — for synthetic
 //! scenes, a freshly created temp directory. There is no `assets/` directory to
-//! put a `.wgsl` file in, and any relative path the asset server resolved would
+//! put a `.wesl` file in, and any relative path the asset server resolved would
 //! change with the scene. `embedded_asset!` sidesteps that: the shader is
 //! `include_bytes!`d at compile time and served from the `embedded://` asset
 //! source, which is independent of `file_path`. That is also the honest model —
@@ -114,7 +114,7 @@ impl Material for SkyMaterial {
     fn fragment_shader() -> ShaderRef {
         // Matches the path `embedded_asset!` derives below: the crate name, then
         // the shader's path relative to `src/`.
-        "embedded://argusnet_viewer/shaders/sky.wgsl".into()
+        "embedded://argusnet_viewer/shaders/sky.wesl".into()
     }
 
     /// The camera is *inside* the sphere, so the faces pointing at it are the
@@ -145,7 +145,7 @@ pub struct GradientSkyPlugin;
 
 impl Plugin for GradientSkyPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/sky.wgsl");
+        embedded_asset!(app, "shaders/sky.wesl");
         app.add_plugins(MaterialPlugin::<SkyMaterial>::default())
             .add_systems(Update, sync_sky_to_camera_system);
     }
@@ -165,7 +165,7 @@ pub fn spawn_sky(
     // Touch the embedded handle so the shader is loaded even before the first
     // material is specialized; without a live handle the embedded source is
     // never read and the pipeline compiles against a missing asset.
-    let _shader: Handle<Shader> = load_embedded_asset!(asset_server, "shaders/sky.wgsl");
+    let _shader: Handle<Shader> = load_embedded_asset!(asset_server, "shaders/sky.wesl");
 
     // A unit sphere scaled per-frame, so the radius is one number in the follow
     // system rather than a mesh regeneration.

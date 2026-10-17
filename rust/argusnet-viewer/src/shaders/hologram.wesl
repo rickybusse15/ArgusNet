@@ -1,5 +1,5 @@
-#import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_view_bindings::view
+import bevy_pbr::render::forward_io::VertexOutput;
+import bevy_pbr::render::mesh_view_bindings::view;
 
 @group(3) @binding(0) var<uniform> color: vec4<f32>;
 // x: the world height below which nothing is drawn. y: 1 for a marker glyph.
