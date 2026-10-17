@@ -52,7 +52,8 @@ pub struct PowerLine {
     pub supports: Vec<Support>,
     /// Where each conductor hangs across the cross-arm, metres from the
     /// line's centre, to the left of the direction of travel (negative is
-    /// to the right). One entry per conductor; `[0.0]` is a single wire.
+    /// to the right), along a cross-arm that bisects the turn at a support
+    /// between two spans. One entry per conductor; `[0.0]` is a single wire.
     pub conductor_offsets_m: Vec<f64>,
     /// Sag at mid-span as a fraction of the span's horizontal length.
     pub sag_ratio: f64,
@@ -162,21 +163,57 @@ impl PowerLine {
         Ok(self)
     }
 
-    /// Where conductor `offset_m` hangs at fraction `t` (0 at `from`, 1 at
-    /// `to`) of the span between two supports.
-    fn conductor_at(&self, from: &Support, to: &Support, offset_m: f64, t: f64) -> [f64; 3] {
-        let length = horizontal(from.xy_m, to.xy_m);
-        let along = [
-            (to.xy_m[0] - from.xy_m[0]) / length,
-            (to.xy_m[1] - from.xy_m[1]) / length,
+    /// Which way the cross-arm at support `index` points: square to its
+    /// span at an end support, and along the bisector of its two spans at a
+    /// turn, so the conductors of both spans meet on it. Left of the
+    /// direction of travel.
+    fn arm(&self, index: usize) -> [f64; 2] {
+        let left_of = |span: usize| {
+            let (from, to) = (&self.supports[span], &self.supports[span + 1]);
+            let length = horizontal(from.xy_m, to.xy_m);
+            [
+                -(to.xy_m[1] - from.xy_m[1]) / length,
+                (to.xy_m[0] - from.xy_m[0]) / length,
+            ]
+        };
+        let last = self.supports.len() - 1;
+        if index == 0 {
+            return left_of(0);
+        }
+        if index == last {
+            return left_of(last - 1);
+        }
+        let (a, b) = (left_of(index - 1), left_of(index));
+        let sum = [a[0] + b[0], a[1] + b[1]];
+        let norm = sum[0].hypot(sum[1]);
+        // A line that doubles straight back has no bisector: keep the
+        // incoming span's arm.
+        if norm < 1e-9 {
+            a
+        } else {
+            [sum[0] / norm, sum[1] / norm]
+        }
+    }
+
+    /// Where conductor `offset_m` hangs at fraction `t` (0 at support
+    /// `span`, 1 at the next) of that span: between its attachments on the
+    /// two cross-arms, sagging below their chord.
+    fn conductor_at(&self, span: usize, offset_m: f64, t: f64) -> [f64; 3] {
+        let (from, to) = (&self.supports[span], &self.supports[span + 1]);
+        let (arm_from, arm_to) = (self.arm(span), self.arm(span + 1));
+        let start = [
+            from.xy_m[0] + arm_from[0] * offset_m,
+            from.xy_m[1] + arm_from[1] * offset_m,
         ];
-        // Left of the direction of travel.
-        let left = [-along[1], along[0]];
-        let sag_m = self.sag_ratio * length;
+        let end = [
+            to.xy_m[0] + arm_to[0] * offset_m,
+            to.xy_m[1] + arm_to[1] * offset_m,
+        ];
+        let sag_m = self.sag_ratio * horizontal(from.xy_m, to.xy_m);
         let chord_z = from.top_z_m() + (to.top_z_m() - from.top_z_m()) * t;
         [
-            from.xy_m[0] + (to.xy_m[0] - from.xy_m[0]) * t + left[0] * offset_m,
-            from.xy_m[1] + (to.xy_m[1] - from.xy_m[1]) * t + left[1] * offset_m,
+            start[0] + (end[0] - start[0]) * t,
+            start[1] + (end[1] - start[1]) * t,
             chord_z - 4.0 * sag_m * t * (1.0 - t),
         ]
     }
@@ -184,16 +221,18 @@ impl PowerLine {
     /// Every straight piece of every conductor, span by span.
     pub fn pieces(&self) -> Vec<ConductorPiece> {
         let mut pieces = Vec::new();
-        for pair in self.supports.windows(2) {
+        for (span, pair) in self.supports.windows(2).enumerate() {
             let (from, to) = (&pair[0], &pair[1]);
             let span_m = horizontal(from.xy_m, to.xy_m);
             let count = (span_m / MAX_PIECE_M).ceil().max(1.0) as usize;
-            let piece_m = span_m / count as f64;
-            let sag_error_m = self.sag_ratio * piece_m * piece_m / span_m;
+            // The sag is a parabola in the span's fraction, so a piece over
+            // 1/count of it departs from its chord by at most sag/count²,
+            // whatever the conductor's own length.
+            let sag_error_m = self.sag_ratio * span_m / (count * count) as f64;
             for &offset_m in &self.conductor_offsets_m {
-                let mut start = self.conductor_at(from, to, offset_m, 0.0);
+                let mut start = self.conductor_at(span, offset_m, 0.0);
                 for k in 1..=count {
-                    let end = self.conductor_at(from, to, offset_m, k as f64 / count as f64);
+                    let end = self.conductor_at(span, offset_m, k as f64 / count as f64);
                     pieces.push(ConductorPiece {
                         start_m: start,
                         end_m: end,
@@ -406,6 +445,45 @@ mod tests {
         taut.sag_ratio = 0.0;
         taut.supports[0].height_m = 30.0;
         assert!(close(taut.lowest_conductor_z_m(), 20.0));
+    }
+
+    /// At a turn both spans' conductors meet on one cross-arm, along the
+    /// bisector, so the wire is continuous through the support: a flight
+    /// between the two spans' ends is not passed off as clear.
+    #[test]
+    fn offset_conductors_are_continuous_through_a_turn() {
+        let mut turning = line();
+        turning.supports.push(Support {
+            xy_m: [100.0, 100.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+        });
+        turning.conductor_offsets_m = vec![-3.0, 3.0];
+        let pieces = turning.pieces();
+        // Per span: 20 pieces for each of two conductors.
+        assert_eq!(pieces.len(), 80);
+        for conductor in 0..2 {
+            let into_turn = pieces[conductor * 20 + 19].end_m;
+            let out_of_turn = pieces[40 + conductor * 20].start_m;
+            assert!(
+                segment_distance(into_turn, into_turn, out_of_turn, out_of_turn) < 1e-9,
+                "conductor {conductor}: {into_turn:?} vs {out_of_turn:?}"
+            );
+        }
+        // The arm at the turn bisects the 90° corner: 3 m along it.
+        let r = 3.0 / 2f64.sqrt();
+        // The -3 m conductor leaves the turn on the second span's first
+        // piece; travelling +x then +y, left at the turn is (-1, 1)/√2.
+        let at_turn = pieces[40].start_m;
+        assert!((at_turn[0] - (100.0 + r)).abs() < 1e-9, "{at_turn:?}");
+        assert!((at_turn[1] - (-r)).abs() < 1e-9, "{at_turn:?}");
+        // A flight straight down through the support's attachment point is
+        // caught on both conductors' joins.
+        let joint = pieces[19].end_m;
+        assert!(turning.violated_by(
+            [joint[0], joint[1], joint[2] + 1.0],
+            [joint[0], joint[1], joint[2] - 1.0]
+        ));
     }
 
     #[test]
