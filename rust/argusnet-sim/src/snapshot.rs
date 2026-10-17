@@ -139,9 +139,10 @@ impl CheckpointHeader {
     /// time `efficient_v1` changes what it decides (4: teams on active
     /// POIs; 5: safe handoff; 6: return home at the reserve; 7: routes
     /// around known obstacles; 8: routes whose ends sit inside the
-    /// clearance; 9: deconfliction kept out of structures), so a checkpoint
-    /// never resumes under a different allocator.
-    pub const RUNTIME_ALGORITHM_VERSION_POLICY: u32 = 9;
+    /// clearance; 9: deconfliction kept out of structures; 10: the reserve
+    /// home priced along the route home), so a checkpoint never resumes
+    /// under a different allocator.
+    pub const RUNTIME_ALGORITHM_VERSION_POLICY: u32 = 10;
     /// Still 1: the ChaCha8 stream and the Box–Muller transform in
     /// [`crate::deterministic`]. Bump alongside any re-baseline.
     pub const SEED_VERSION: u32 = 1;

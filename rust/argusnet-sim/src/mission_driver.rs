@@ -337,6 +337,12 @@ struct KnownObstacles {
     /// when nothing does.
     reaching: RefCell<BTreeMap<i64, Option<Arc<ObstacleLayer>>>>,
     this_run: RefCell<BTreeMap<[u64; 6], Option<PlannerRoute>>>,
+    /// The corners of routes between points that do not move (a POI and a
+    /// station), checked against the terrain, kept across runs. They depend
+    /// on the two ends, the layer and the terrain alone, so keeping them only
+    /// saves work; their number is bounded by the mission's POIs and
+    /// stations. Cleared when the terrain changes.
+    kept: RefCell<BTreeMap<[u64; 6], Option<Corners>>>,
 }
 
 /// How finely a routed flight is checked against the terrain, in metres:
@@ -380,14 +386,7 @@ impl KnownObstacles {
     /// inside the clearance, such as a POI beside a wall, is joined to the
     /// route by a short straight leg ([`RoutePlanner::plan_route_between`]).
     fn route(&self, from: [f64; 3], to: [f64; 3]) -> Option<PlannerRoute> {
-        let key = [
-            from[0].to_bits(),
-            from[1].to_bits(),
-            from[2].to_bits(),
-            to[0].to_bits(),
-            to[1].to_bits(),
-            to[2].to_bits(),
-        ];
+        let key = route_key(from, to);
         if let Some(known) = self.this_run.borrow().get(&key) {
             return known.clone();
         }
@@ -408,6 +407,21 @@ impl KnownObstacles {
         self.this_run.borrow_mut().insert(key, route.clone());
         route
     }
+}
+
+/// A route's corners between its ends, and its length.
+type Corners = (Vec<[f64; 2]>, f64);
+
+/// A trip's exact ends, as a cache key.
+fn route_key(from: [f64; 3], to: [f64; 3]) -> [u64; 6] {
+    [
+        from[0].to_bits(),
+        from[1].to_bits(),
+        from[2].to_bits(),
+        to[0].to_bits(),
+        to[1].to_bits(),
+        to[2].to_bits(),
+    ]
 }
 
 /// A flight the driver commanded, and the route it follows if it turns.
@@ -434,6 +448,36 @@ impl Flight {
 /// 28 m/s, 5 Wh is about 1.4 km of flight: a higher-priority POI is preferred
 /// unless it is that much further. Tuned on the qualification seeds only.
 pub const PRIORITY_WORTH_WH: f64 = 5.0;
+
+/// The longest route home, as a multiple of the straight line, that a
+/// drone's reserve check prices exactly under efficient_v1 (P3). A drone with
+/// the energy to fly this far home, against the worst the wind can do, is
+/// not planned a route home at all: routing from every drone's position on
+/// every run would cost more than the run. A route home longer than this
+/// (behind a very long wall) is priced only once the battery falls to this
+/// bound, so the drone turns home later than its exact reserve says.
+pub const MAX_PRICED_DETOUR: f64 = 2.0;
+
+/// An upper bound on the reserve home from `at` along any route at most
+/// [`MAX_PRICED_DETOUR`] times the straight line: every leg at the slowest
+/// ground speed the wind allows (`return_home_cost_wh`'s floor of a quarter
+/// of cruise), then the battery's floor and margin. It is never below the
+/// straight-line reserve, so a drone above it is above that too.
+fn detour_bound_wh(
+    model: &BatteryModel,
+    at: [f64; 3],
+    home: [f64; 3],
+    wind: Option<[f64; 3]>,
+) -> f64 {
+    let (dx, dy) = (home[0] - at[0], home[1] - at[1]);
+    let straight_m = (dx * dx + dy * dy).sqrt();
+    let wind_mps = wind.map_or(0.0, |w| (w[0] * w[0] + w[1] * w[1]).sqrt());
+    let cruise = model.cruise_speed_m_per_s.max(0.01);
+    let slowest = (cruise - wind_mps).max(0.25 * cruise);
+    let travel_wh = model.travel_power_w * (MAX_PRICED_DETOUR * straight_m / slowest) / 3600.0;
+    let cost_wh = travel_wh + model.climb_cost_wh(home[2] - at[2]);
+    (cost_wh * BatteryModel::DEFAULT_SAFETY_MARGIN).max(model.capacity_wh * model.reserve_fraction)
+}
 
 /// How close a drone must be to a POI, horizontally, to credit its dwell:
 /// the `<= 30.0` in [`PoiManager::accumulate_dwell`].
@@ -498,6 +542,7 @@ impl MissionDriverStage {
             planner: RefCell::new(RoutePlanner::new(bounds, PlannerConfig::default())),
             reaching: RefCell::new(BTreeMap::new()),
             this_run: RefCell::new(BTreeMap::new()),
+            kept: RefCell::new(BTreeMap::new()),
         });
     }
 
@@ -505,6 +550,9 @@ impl MissionDriverStage {
     /// is flown as planned.
     pub fn set_known_terrain(&mut self, terrain: Option<Arc<dyn crate::observe::TerrainHeight>>) {
         self.terrain = terrain;
+        if let Some(obstacles) = &self.obstacles {
+            obstacles.kept.borrow_mut().clear();
+        }
     }
 
     /// Whether flights route around known obstacles when the policy does.
@@ -524,12 +572,36 @@ impl MissionDriverStage {
 
     /// The route's corners, if it turns at all.
     fn corners(&self, from: [f64; 3], to: [f64; 3]) -> Option<(Vec<[f64; 2]>, f64)> {
-        let route = self.route(from, to)?;
-        let points = &route.points_xy_m;
-        if points.len() <= 2 || !self.clears_terrain(points, from[2], to[2], route.length_m) {
-            return None;
+        self.corners_between(from, to, false)
+    }
+
+    /// [`Self::corners`]; `fixed_ends` when neither end moves, so the
+    /// outcome is kept for later runs.
+    fn corners_between(
+        &self,
+        from: [f64; 3],
+        to: [f64; 3],
+        fixed_ends: bool,
+    ) -> Option<(Vec<[f64; 2]>, f64)> {
+        let kept = match (fixed_ends, &self.obstacles) {
+            (true, Some(obstacles)) if self.policy == PlanningPolicy::EfficientV1 => {
+                Some(&obstacles.kept)
+            }
+            _ => None,
+        };
+        let key = route_key(from, to);
+        if let Some(known) = kept.and_then(|kept| kept.borrow().get(&key).cloned()) {
+            return known;
         }
-        Some((points[1..points.len() - 1].to_vec(), route.length_m))
+        let corners = self.route(from, to).and_then(|route| {
+            let points = &route.points_xy_m;
+            (points.len() > 2 && self.clears_terrain(points, from[2], to[2], route.length_m))
+                .then(|| (points[1..points.len() - 1].to_vec(), route.length_m))
+        });
+        if let Some(kept) = kept {
+            kept.borrow_mut().insert(key, corners.clone());
+        }
+        corners
     }
 
     /// Whether a routed flight, its height changing linearly along the route
@@ -585,6 +657,56 @@ impl MissionDriverStage {
                 model.travel_cost_wh(length_m) + model.climb_cost_wh(to[2] - from[2])
             }
             None => model.segment_cost_wh(from, to),
+        }
+    }
+
+    /// The reserve a drone needs to get home from `at`: the battery's own
+    /// rule (`dynamic_reserve_wh`, its floor and safety margin), priced
+    /// along the route it would fly home when that route turns (P3), each leg
+    /// with the wind along that leg. A trip home that does not turn gets
+    /// exactly the battery's straight-line reserve.
+    fn reserve_home_wh(
+        &self,
+        model: &BatteryModel,
+        at: [f64; 3],
+        home: [f64; 3],
+        wind: Option<[f64; 3]>,
+        fixed_ends: bool,
+    ) -> f64 {
+        let margin = BatteryModel::DEFAULT_SAFETY_MARGIN;
+        let Some((via, _)) = self.corners_between(at, home, fixed_ends) else {
+            return model.dynamic_reserve_wh(at, home, wind, margin);
+        };
+        let mut points = Vec::with_capacity(via.len() + 2);
+        points.push([at[0], at[1]]);
+        points.extend(via);
+        points.push([home[0], home[1]]);
+        let travel_wh: f64 = points
+            .windows(2)
+            .map(|leg| {
+                model.return_home_cost_wh(
+                    [leg[0][0], leg[0][1], 0.0],
+                    [leg[1][0], leg[1][1], 0.0],
+                    wind,
+                )
+            })
+            .sum();
+        let cost_wh = travel_wh + model.climb_cost_wh(home[2] - at[2]);
+        (cost_wh * margin).max(model.capacity_wh * model.reserve_fraction)
+    }
+
+    /// [`Self::reserve_home_wh`] for drone `id` from a POI at `at`; a drone
+    /// with no station holds the battery's floor.
+    fn reserve_for(
+        &self,
+        model: &BatteryModel,
+        id: &str,
+        at: [f64; 3],
+        wind: Option<[f64; 3]>,
+    ) -> f64 {
+        match self.homes.get(id) {
+            Some(home) => self.reserve_home_wh(model, at, *home, wind, true),
+            None => model.capacity_wh * model.reserve_fraction,
         }
     }
 
@@ -670,12 +792,13 @@ impl MissionDriverStage {
             let Some(remaining_wh) = battery.remaining_wh(id) else {
                 continue;
             };
-            let reserve_wh = model.dynamic_reserve_wh(
-                *position,
-                home,
-                wind,
-                argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
-            );
+            // Planning a route home from wherever each drone is, every run,
+            // is expensive; it is skipped while the drone could fly even a
+            // detour of MAX_PRICED_DETOUR times the straight line home.
+            if remaining_wh > detour_bound_wh(&model, *position, home, wind) {
+                continue;
+            }
+            let reserve_wh = self.reserve_home_wh(&model, *position, home, wind, false);
             if remaining_wh > reserve_wh {
                 continue;
             }
@@ -827,12 +950,9 @@ impl MissionDriverStage {
                         let trip_wh = self.trip_cost_wh(&model, *position, poi.position);
                         let spent_wh = trip_wh + model.hover_power_w * hover_s / 3600.0;
                         let reserve_wh = match self.homes.get(id.as_str()) {
-                            Some(home) => model.dynamic_reserve_wh(
-                                poi.position,
-                                *home,
-                                wind,
-                                argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
-                            ),
+                            Some(home) => {
+                                self.reserve_home_wh(&model, poi.position, *home, wind, true)
+                            }
                             None => model.capacity_wh * model.reserve_fraction,
                         };
                         let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
@@ -963,15 +1083,6 @@ impl MissionDriverStage {
         }
         let model = battery.model();
         let wind = battery.wind_mps();
-        let reserve_at = |id: &str, at: [f64; 3]| match self.homes.get(id) {
-            Some(home) => model.dynamic_reserve_wh(
-                at,
-                *home,
-                wind,
-                argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
-            ),
-            None => model.capacity_wh * model.reserve_fraction,
-        };
         let cost: Vec<Vec<Option<f64>>> = free
             .iter()
             .map(|(id, position)| {
@@ -982,7 +1093,7 @@ impl MissionDriverStage {
                         let poi_position = &poi.position;
                         let spent_wh = self.trip_cost_wh(&model, *position, *poi_position)
                             + model.hover_power_w * poi.required_dwell_s.max(0.0) / 3600.0;
-                        let reserve_wh = reserve_at(id, *poi_position);
+                        let reserve_wh = self.reserve_for(&model, id, *poi_position, wind);
                         (remaining_wh - spent_wh >= reserve_wh)
                             .then_some(spent_wh - PRIORITY_WORTH_WH * poi.priority as f64)
                     })
@@ -1058,8 +1169,9 @@ impl MissionDriverStage {
                         let together_s = left_s.max(0.0) / (poi.members + 1) as f64;
                         let spent_wh = self.trip_cost_wh(&model, *position, poi.position)
                             + model.hover_power_w * together_s / 3600.0;
-                        (remaining_wh - spent_wh >= reserve_at(id, poi.position))
-                            .then_some(spent_wh)
+                        (remaining_wh - spent_wh
+                            >= self.reserve_for(&model, id, poi.position, wind))
+                        .then_some(spent_wh)
                     })
                     .collect()
             })
@@ -2721,6 +2833,114 @@ mod tests {
         assert_eq!(
             poi_flight(&withdrawn.take_override_commands(), "drone-a"),
             straight
+        );
+    }
+
+    /// A wall at x = 0 from y = -900 to 900 in a 2 km square: a drone east
+    /// of it whose home is west of it flies round one end, much further than
+    /// the straight line.
+    fn long_walled(stage: &mut MissionDriverStage) {
+        let wall = argusnet_world::obstacles::Obstacle::wall_segment(
+            "wall",
+            argusnet_world::obstacles::BlockerType::Wall,
+            [0.0, -900.0],
+            [0.0, 900.0],
+            10.0,
+            0.0,
+            120.0,
+        )
+        .expect("valid wall");
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let layer = ObstacleLayer::new(bounds, 250.0, vec![wall]).expect("valid layer");
+        stage.set_known_obstacles(Some(Arc::new(layer)), bounds);
+    }
+
+    /// P3: the reserve home is priced along the route home when it turns.
+    /// A drone with more than the straight-line reserve but less than the
+    /// routed one is sent home when the wall is known, and not otherwise.
+    #[test]
+    fn efficient_v1_prices_the_reserve_along_the_route_home() {
+        let home = [-900.0, 0.0, 40.0];
+        let homes: BTreeMap<String, [f64; 3]> =
+            [("drone-a".to_string(), home)].into_iter().collect();
+        let (mut battery, mobile) = fleet(&[("drone-a", 900.0)]);
+        let model = battery.model();
+        let wind = battery.wind_mps();
+        let at = mobile[0].1;
+
+        let mut open =
+            MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), homes.clone());
+        open.set_policy(PlanningPolicy::EfficientV1).unwrap();
+        let straight = model.dynamic_reserve_wh(
+            at,
+            home,
+            wind,
+            argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
+        );
+        assert_eq!(
+            open.reserve_home_wh(&model, at, home, wind, false),
+            straight
+        );
+        assert!(
+            straight > model.capacity_wh * model.reserve_fraction,
+            "above the floor, so the distance shows"
+        );
+
+        let mut walled_off =
+            MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), homes);
+        walled_off.set_policy(PlanningPolicy::EfficientV1).unwrap();
+        long_walled(&mut walled_off);
+        let routed = walled_off.reserve_home_wh(&model, at, home, wind, false);
+        assert!(routed > 1.2 * straight, "{routed} vs {straight}");
+        assert!(
+            routed <= detour_bound_wh(&model, at, home, wind),
+            "the skip bound covers a detour this long"
+        );
+        // The same reserve from fixed ends, kept for later runs.
+        assert_eq!(
+            walled_off.reserve_home_wh(&model, at, home, wind, true),
+            routed
+        );
+        let kept = walled_off
+            .obstacles
+            .as_ref()
+            .expect("walled")
+            .kept
+            .borrow()
+            .len();
+        assert_eq!(kept, 1);
+
+        let between = 0.5 * (straight + routed);
+        assert!(battery.set_remaining_wh("drone-a", between));
+        open.send_low_drones_home(&mobile, &battery, 1.0);
+        assert!(open.decisions().iter().all(|d| d.kind != "return_home"));
+        walled_off.send_low_drones_home(&mobile, &battery, 1.0);
+        let sent = walled_off
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "return_home")
+            .expect("sent home");
+        assert_eq!(sent.inputs["reserve_wh"].as_f64(), Some(routed));
+        assert!(sent.inputs["route_length_m"].as_f64().expect("routed") > 2000.0);
+    }
+
+    /// The reference never reads the layer: its reserve is the battery's.
+    #[test]
+    fn the_reference_reserve_ignores_known_obstacles() {
+        let home = [-900.0, 0.0, 40.0];
+        let (battery, mobile) = fleet(&[("drone-a", 900.0)]);
+        let model = battery.model();
+        let wind = battery.wind_mps();
+        let mut reference = driver(Vec::new());
+        long_walled(&mut reference);
+        assert_eq!(
+            reference.reserve_home_wh(&model, mobile[0].1, home, wind, false),
+            model.dynamic_reserve_wh(
+                mobile[0].1,
+                home,
+                wind,
+                argusnet_planning::BatteryModel::DEFAULT_SAFETY_MARGIN,
+            )
         );
     }
 

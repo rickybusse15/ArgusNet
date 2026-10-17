@@ -377,6 +377,23 @@ unchanged. On `urban_dense_inspection` it moves little: samples in a block
 identical. Deconfliction rarely pushed a drone into a block; the passes left
 are trips the planner still cannot route.
 
+*Reserve priced by route.* The reserve home that return home (P2), safe
+handoff and allocation check (the battery's `dynamic_reserve_wh`: the energy
+home at a safety margin of 1.25, never below the 20 % floor) is priced along
+the route home when that route turns, each leg at the wind along it. A trip
+home that does not turn keeps the battery's straight-line reserve exactly.
+Planning a route from every drone's position on every run cost 13 times the
+run, so a drone with enough energy to fly `MAX_PRICED_DETOUR` (2) times the
+straight line home at the slowest ground speed the wind allows is not planned
+one: a longer detour, behind a very long wall, is priced only once the
+battery falls that far. Routes between a POI and a station, whose ends do not
+move, are kept across runs. On `urban_dense_inspection` (30 seeds, 150 s, and
+one seed at 450 s) no drone comes near its reserve, so every replay is
+byte-identical to main; a run costs about 0.4 s more, once, for the
+POI-to-station routes. The effect is in the unit tests: a drone with more than
+the straight-line reserve but less than the routed one goes home when the
+wall is known, and not otherwise.
+
 ### P4: coverage that rebalances
 
 - **Balanced split.** Size each drone's scan region by flight time and the
