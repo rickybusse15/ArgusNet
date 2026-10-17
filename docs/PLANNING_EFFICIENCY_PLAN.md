@@ -1,6 +1,8 @@
 # Planning efficiency plan: teamwork, allocation and routing
 
-**Status:** proposed 2026-10-12. Nothing here is implemented yet.
+**Status:** proposed 2026-10-12. P0, P1 and P2 and three P3 slices are
+implemented (#223–#239), behind the opt-in `efficient_v1` policy except the
+P0 metrics; P4–P6 are not started. Each phase below says what has shipped.
 **Workstream:** WS-P (new). Ties into F5 and F7
 ([AGENT_EXECUTION_PLAN.md](migration/AGENT_EXECUTION_PLAN.md)), P4.7
 ([DELIVERY_PLAN.md](migration/DELIVERY_PLAN.md)) and

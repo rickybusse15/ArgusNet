@@ -41,7 +41,7 @@ dev = [
     # red with no commit behind it. Ruff's lint set likewise shifts between
     # minor releases pre-1.0. Bump these on purpose, not on a schedule set by
     # someone else's release calendar.
-    "ruff>=0.16,<0.17",
+    "ruff>=0.16,<0.18",
     "mypy>=2.3,<3",
     "pytest>=8.0",
     "pytest-benchmark>=4.0",
