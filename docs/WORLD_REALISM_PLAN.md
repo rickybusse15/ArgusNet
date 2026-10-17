@@ -107,6 +107,14 @@ C8 (P2.6) and D2 (P5.1).
   
   Data comes from OSM (`power=line|minor_line|tower|pole`, `cables`,
   `voltage`) or is generated along roads, seeded.
+
+  *Done (model):* `argusnet_world::powerline` holds `PowerLine` (supports in
+  order, conductor offsets across the cross-arm, sag ratio, conductor radius
+  and clearance), validated on construction. Each span's conductors hang as
+  parabolas (a catenary of real sag is one to within a millimetre) cut into
+  pieces of at most 5 m. `clearance_along(from, to)` is the swept test: the
+  distance from the segment flown between two ticks to the nearest
+  conductor's surface. Nothing reads it yet.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against

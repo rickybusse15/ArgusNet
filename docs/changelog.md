@@ -2,6 +2,12 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- World: a power-line model (`powerline-v1`, R3, first slice). Supports in
+  order, conductors strung between them with their sag, and a swept
+  clearance test: how close the segment flown between two ticks comes to a
+  wire, so a wire crossed between two positions that are each clear is
+  still caught. Model only; nothing in a run reads it yet.
+
 - Viewer: a drone's inspector reads its task from the replay's recorded
   assignment history (V4): the task at the frame's time, its last change
   with kind and reason, and how many changes came before. Without a history
