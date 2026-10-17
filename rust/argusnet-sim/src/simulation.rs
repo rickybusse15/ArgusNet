@@ -569,6 +569,9 @@ pub struct Simulation {
     /// The algorithm version its checkpoints carry: 2, or 3 under a planning
     /// policy other than the reference (P1).
     runtime_algorithm_version: u32,
+    /// Set by a restore, cleared by a reset: a restored run has begun even at
+    /// tick 0 with an empty trace.
+    restored: bool,
 }
 
 impl fmt::Debug for Simulation {
@@ -629,6 +632,7 @@ impl Simulation {
             stage_lag: BTreeMap::new(),
             lane_rates: BTreeMap::new(),
             runtime_algorithm_version: CheckpointHeader::RUNTIME_ALGORITHM_VERSION,
+            restored: false,
         })
     }
 
@@ -1310,6 +1314,53 @@ impl Simulation {
         self.runtime_algorithm_version
     }
 
+    /// The checks [`Self::restore`] makes on a checkpoint's header and policy,
+    /// header first, without touching anything: for a wrapper that changes
+    /// state of its own before restoring.
+    pub fn preflight(&self, checkpoint: &SimulationCheckpoint) -> Result<(), RestoreError> {
+        checkpoint.verify(
+            self.config.run_id(),
+            self.config.content_hash(),
+            self.scenario_hash,
+        )?;
+        self.check_policy(checkpoint)
+    }
+
+    /// Refuse a checkpoint taken under another planning policy: the policy
+    /// changes deconfliction even with no mission driver, whose own state
+    /// would otherwise refuse the mismatch. Touches nothing; a header that
+    /// [`SimulationCheckpoint::verify`] refuses is its error, not this one's.
+    pub fn check_policy(&self, checkpoint: &SimulationCheckpoint) -> Result<(), RestoreError> {
+        if checkpoint.header.runtime_algorithm_version == self.runtime_algorithm_version {
+            return Ok(());
+        }
+        let policy = |version| {
+            if version == CheckpointHeader::RUNTIME_ALGORITHM_VERSION {
+                "the reference planning policy"
+            } else {
+                "a non-reference planning policy (efficient_v1)"
+            }
+        };
+        Err(RestoreError::InvalidState {
+            detail: format!(
+                "the checkpoint was taken under {} and this run is configured for {} \
+                 (argusnet-rs: the same --planning-policy)",
+                policy(checkpoint.header.runtime_algorithm_version),
+                policy(self.runtime_algorithm_version)
+            ),
+        })
+    }
+
+    /// Whether any tick has begun: the clock has advanced, a stage has run
+    /// in a tick still open at 0, or the run was restored from a checkpoint
+    /// (which may hold state from an open tick 0 the trace no longer shows).
+    pub fn has_begun(&self) -> bool {
+        self.restored
+            || self.clock.tick() != 0
+            || !self.trace.records().is_empty()
+            || self.trace.dropped() != 0
+    }
+
     pub fn lane_rates(&self) -> &BTreeMap<Stage, String> {
         &self.lane_rates
     }
@@ -1581,6 +1632,7 @@ impl Simulation {
             );
         }
         self.trace.clear();
+        self.restored = false;
         self.last_snapshot = None;
         self.paused = false;
         self.single_step = false;
@@ -1704,6 +1756,7 @@ impl Simulation {
                     detail: error.to_string(),
                 })?;
         }
+        self.check_policy(checkpoint)?;
         // The rates the checkpoint was taken under are the rates this run
         // must be driven at: anything else would move future deadlines.
         let declared: BTreeMap<String, String> = self
@@ -1786,6 +1839,7 @@ impl Simulation {
         self.queue = restored_queue;
         self.revision = checkpoint.revision;
         self.trace.clear();
+        self.restored = true;
         self.last_snapshot = None;
         self.paused = checkpoint.paused;
         self.speed = checkpoint.speed;

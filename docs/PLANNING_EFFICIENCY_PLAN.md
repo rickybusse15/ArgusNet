@@ -366,8 +366,16 @@ built in separate target directories):
 
 Routed POI redirects rise from 73 to 147 of 187. The passes left come from
 trips with no way round inside the clearance and from deconfliction, whose
-lateral push is not checked against obstacles in a run with a prior map
-(the next step, which changes the reference and re-records its replays).
+lateral push is not checked against obstacles in a run with a prior map.
+
+*Deconfliction kept out of structures.* Under `efficient_v1` stage 3's
+adjusted positions now go through the same `PhysicalGuard` a run with no
+prior map uses (out of the ground and out of structures, contacts recorded in
+the replay). The reference keeps its unguarded push, so its replays are
+unchanged. On `urban_dense_inspection` it moves little: samples in a block
+5.0 to 4.7 (−0.3, −0.8 to 0.1; 2 seeds better, none worse), everything else
+identical. Deconfliction rarely pushed a drone into a block; the passes left
+are trips the planner still cannot route.
 
 ### P4: coverage that rebalances
 

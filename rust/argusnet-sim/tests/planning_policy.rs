@@ -181,3 +181,109 @@ fn a_drone_at_its_reserve_between_mission_runs_turns_for_home() {
     lanes.step(&mut run).expect("the next boundary");
     assert_eq!(source(&run), Some(OverrideSource::Egress));
 }
+
+/// P3: under `efficient_v1` deconfliction's lateral push is kept out of the
+/// ground and out of structures, as in a run with no prior map; the
+/// reference keeps its unguarded push.
+#[test]
+fn efficient_v1_guards_deconfliction_and_the_reference_does_not() {
+    use argusnet_sim::deconflict::DeconflictStage;
+    use argusnet_sim::stage::Stage;
+    let guarded = |policy| {
+        run("scan", policy)
+            .sim
+            .stage::<DeconflictStage>(Stage::Deconflict)
+            .expect("installed")
+            .is_guarded()
+    };
+    assert!(guarded(PlanningPolicy::EfficientV1));
+    assert!(!guarded(PlanningPolicy::Reference));
+}
+
+/// The guard belongs to the policy, not to the mission: a target-follow run
+/// with no mission driver is guarded too, and going back to the reference
+/// before the first tick takes the guard away again.
+#[test]
+fn the_deconfliction_guard_follows_the_policy_alone() {
+    use argusnet_sim::deconflict::DeconflictStage;
+    use argusnet_sim::stage::Stage;
+    let guarded = |run: &AssembledRun| {
+        run.sim
+            .stage::<DeconflictStage>(Stage::Deconflict)
+            .expect("installed")
+            .is_guarded()
+    };
+    let mut follow = assemble(&bundle("tt")).expect("assembles");
+    assert!(follow.driver().is_none(), "no mission driver");
+    assert!(!follow
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap());
+    assert!(guarded(&follow));
+
+    let mut scan = assemble(&bundle("scan")).expect("assembles");
+    scan.set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    scan.set_planning_policy(PlanningPolicy::Reference).unwrap();
+    assert!(!guarded(&scan));
+
+    // A driverless checkpoint resumes only under its own policy: the guard
+    // is the difference, and no driver state is there to refuse it.
+    let mut source = assemble(&bundle("tt")).expect("assembles");
+    source
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    for _ in 0..5 {
+        source.sim.step().expect("steps");
+    }
+    let checkpoint = source.sim.checkpoint().expect("not faulted");
+    let mut reference = assemble(&bundle("tt")).expect("assembles");
+    let refused = reference.restore(&checkpoint).unwrap_err();
+    assert!(
+        format!("{refused}").contains("planning policy"),
+        "{refused}"
+    );
+    let mut efficient = assemble(&bundle("tt")).expect("assembles");
+    efficient
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    assert!(efficient.restore(&checkpoint).is_ok());
+    // A checkpoint from an older efficient algorithm version is refused
+    // for its version, not as a different policy.
+    let mut older = checkpoint.clone();
+    older.header.runtime_algorithm_version -= 1;
+    let mut fresh = assemble(&bundle("tt")).expect("assembles");
+    fresh
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    assert!(matches!(
+        fresh.restore(&older),
+        Err(argusnet_sim::snapshot::RestoreError::AlgorithmVersion { .. })
+    ));
+    // A restored run has begun, even at tick 0 with an empty trace.
+    assert!(efficient
+        .set_planning_policy(PlanningPolicy::Reference)
+        .is_err());
+    assert!(guarded(&efficient));
+
+    // Once tick 0 is open (stage 0 run, clock still at 0) the policy is
+    // fixed.
+    let mut opened = assemble(&bundle("tt")).expect("assembles");
+    let _open = opened.sim.begin_tick().expect("begins");
+    assert_eq!(opened.sim.tick(), 0);
+    assert!(opened
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .is_err());
+    assert!(!guarded(&opened));
+
+    // After the first tick the policy is fixed, with or without a driver.
+    follow.sim.step().expect("steps");
+    assert!(follow
+        .set_planning_policy(PlanningPolicy::Reference)
+        .is_err());
+    assert!(guarded(&follow));
+    scan.sim.step().expect("steps");
+    assert!(scan
+        .set_planning_policy(PlanningPolicy::EfficientV1)
+        .is_err());
+    assert!(!guarded(&scan));
+}

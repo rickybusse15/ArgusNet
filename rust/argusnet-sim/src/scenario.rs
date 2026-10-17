@@ -767,6 +767,9 @@ pub struct AssembledRun {
     launch_floor_m: f64,
     /// Physics, in a run without a prior map: its contacts go to the replay.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// Whether `guard` is the planning policy's (P3) rather than a run with
+    /// no prior map's.
+    policy_guard: bool,
     /// Which belief cells a true building or wall covers, for the replay's
     /// evaluation figures. Never read by the run.
     true_structures: Vec<bool>,
@@ -1339,6 +1342,7 @@ pub fn assemble_with(
         map_bounds_m: bundle.map_bounds_m,
         world,
         guard: None,
+        policy_guard: false,
         true_structures: Vec::new(),
         assignments: Default::default(),
     })
@@ -1533,23 +1537,66 @@ impl AssembledRun {
     }
 
     /// Allocate the mission's POIs under `policy` (P1). `Ok(false)` for a
-    /// run with no mission driver; refused for a mission the policy cannot
-    /// run (see [`MissionDriverStage::set_policy`]). Before the first tick
-    /// only.
+    /// run with no mission driver, whose deconfliction the policy still
+    /// guards; refused for a mission the policy cannot run (see
+    /// [`MissionDriverStage::set_policy`]). Before the first tick only:
+    /// refused after it, with or without a driver, since it changes the
+    /// physics and the checkpoint version mid-run.
     pub fn set_planning_policy(
         &mut self,
         policy: argusnet_planning::allocation::PlanningPolicy,
     ) -> Result<bool, String> {
-        match self
+        if self.sim.has_begun() {
+            return Err(format!(
+                "--planning-policy {} must be set before the first tick begins (now at tick {})",
+                policy.as_str(),
+                self.sim.tick()
+            ));
+        }
+        let has_driver = match self
             .sim
             .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
         {
             Some(driver) => {
                 driver.set_policy(policy)?;
-                self.sim.set_policy_algorithm(!policy.is_reference());
-                Ok(true)
+                true
             }
-            None => Ok(false),
+            None => false,
+        };
+        // Deconfliction is guarded whatever the mission (below), so a run
+        // with no mission driver changes too, and its checkpoints say so.
+        self.sim.set_policy_algorithm(!policy.is_reference());
+        self.guard_deconfliction(!policy.is_reference());
+        Ok(has_driver)
+    }
+
+    /// A policy other than the reference routes round obstacles (P3) and
+    /// keeps 8 m from them, and deconfliction's lateral push can reach
+    /// further: keep its adjusted positions out of the ground and out of
+    /// structures, as a run with no prior map already does. The reference
+    /// keeps its unguarded push, byte for byte. A run with no prior map
+    /// installs its own guard, which this never replaces or removes; the
+    /// policy's own guard is removed again when the policy goes back to the
+    /// reference, so a run's behaviour never depends on the order it was
+    /// configured in.
+    fn guard_deconfliction(&mut self, guarded: bool) {
+        if guarded && self.guard.is_none() {
+            let guard = crate::belief_world::PhysicalGuard::new(
+                self.world.terrain.clone(),
+                self.world.obstacles.clone(),
+                crate::belief_world::ExplorationConfig::default().contact_clearance_m,
+            );
+            if let Some(deconflict) = self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict) {
+                deconflict.set_physical_guard(guard.clone());
+            }
+            self.guard = Some(guard);
+            self.policy_guard = true;
+        } else if !guarded && self.policy_guard {
+            if let Some(deconflict) = self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict) {
+                deconflict.clear_physical_guard();
+            }
+            self.guard = None;
+            self.policy_guard = false;
         }
     }
 
@@ -1782,6 +1829,7 @@ impl AssembledRun {
             .connect(crate::simulation::Handoff::RangeScansToMapping)
             .map_err(|error| format!("{error:?}"))?;
         self.guard = Some(guard);
+        self.policy_guard = false;
         self.extend_replay_meta([("world_knowledge".to_string(), summary)]);
         Ok(())
     }
@@ -1852,8 +1900,18 @@ impl AssembledRun {
         &mut self,
         checkpoint: &crate::snapshot::SimulationCheckpoint,
     ) -> Result<(), crate::snapshot::RestoreError> {
+        // Refused before the fault schedule touches the sensor table: the
+        // header first (an older algorithm version is named as such), then
+        // the policy.
+        self.sim.preflight(checkpoint)?;
         self.apply_sensor_faults(checkpoint.tick);
-        self.sim.restore(checkpoint)
+        self.sim.restore(checkpoint)?;
+        // Contacts the guard logged in a tick the restore abandoned belong to
+        // a timeline that no longer exists.
+        if let Some(guard) = &self.guard {
+            guard.take_contacts();
+        }
+        Ok(())
     }
 
     /// Put the world in the state the fault schedule prescribes for the next
@@ -2387,5 +2445,33 @@ impl AssembledRun {
     /// The assignment history so far (P0).
     pub fn assignments(&self) -> &crate::assignments::AssignmentHistory {
         &self.assignments
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use argusnet_planning::allocation::PlanningPolicy;
+
+    /// A contact the guard logged in a tick a restore abandons is dropped,
+    /// so the next committed frame does not carry it.
+    #[test]
+    fn a_restore_drops_contacts_from_the_abandoned_tick() {
+        let path = format!(
+            "{}/../../tests/fixtures/scenario_bundle_scan.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bundle =
+            ScenarioBundle::from_json(&std::fs::read_to_string(&path).expect("fixture")).unwrap();
+        let mut run = assemble(&bundle).expect("assembles");
+        run.set_planning_policy(PlanningPolicy::EfficientV1)
+            .unwrap();
+        run.sim.step().expect("steps");
+        let checkpoint = run.sim.checkpoint().expect("not faulted");
+        let guard = run.guard.as_ref().expect("efficient_v1 guards");
+        // Below the ground: one terrain contact, as an abandoned tick's would be.
+        guard.enforce("d", 0.0, [0.0, 0.0, -1.0e4]);
+        run.restore(&checkpoint).expect("restores");
+        assert!(run.guard.as_ref().unwrap().take_contacts().is_empty());
     }
 }

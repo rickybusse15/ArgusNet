@@ -826,15 +826,19 @@ mod tests {
     #[test]
     fn real_time_pacing_follows_dt_over_speed() {
         let (worker, _) = worker(Pacing::RealTime);
-        // The fixture's dt is 0.5 s; at 20x, one tick every 25 ms, 40 a second.
+        // The fixture's dt is 0.5 s; at 20x, one tick every 25 ms, 40 a second,
+        // so 20 in the 0.5 s below. A late wake-up on a loaded machine only
+        // loses ticks, so the lower bound is half that: it still separates
+        // real-time pacing from a stalled run, and the upper bound from an
+        // unpaced one (thousands).
         command(&worker, 1, CommandKind::SetSpeed { multiplier: 20.0 });
         command(&worker, 2, CommandKind::Resume);
         let start = wait_for(&worker, |s| s.tick >= 1);
         std::thread::sleep(Duration::from_millis(500));
         let ticks = worker.status().tick - start.tick;
         assert!(
-            (20..=60).contains(&ticks),
-            "{ticks} ticks in 0.5 s at 80 per second"
+            (10..=60).contains(&ticks),
+            "{ticks} ticks in 0.5 s at 40 per second (20 expected)"
         );
     }
 

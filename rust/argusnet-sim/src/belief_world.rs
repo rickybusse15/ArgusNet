@@ -1009,6 +1009,11 @@ impl VisibilitySampler for BeliefVisibility {
     }
 }
 
+/// Every `WorldContact::kind` the guard writes: out of the ground, out of a
+/// structure, and still inside one after the push limit. The replay schema
+/// lists the same (`tests/replay_vocabulary.rs`).
+pub const WORLD_CONTACT_KINDS: [&str; 3] = ["terrain", "structure", "unresolved"];
+
 /// A platform physics put back: the map had it somewhere it could not be.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorldContact {
@@ -1052,16 +1057,36 @@ impl PhysicalGuard {
     /// contact recorded for each move.
     pub fn enforce(&self, node_id: &str, timestamp_s: f64, position: [f64; 3]) -> [f64; 3] {
         let mut p = position;
-        if let Some(xy) = self.obstacles.push_clear(p, self.clearance_m) {
-            let correction = (xy[0] - p[0]).hypot(xy[1] - p[1]);
-            p[0] = xy[0];
-            p[1] = xy[1];
-            self.record(node_id, timestamp_s, "structure", correction);
+        // A push out of one structure can land in the next: push again, up
+        // to eight times, as the reference's `push_outside_obstacles` does.
+        // The height is clamped to the terrain after every push, and the
+        // structures checked again at that height (a lift, after a push
+        // uphill or on its own, can put it into a building whose base was
+        // above it).
+        for _ in 0..8 {
+            let pushed = self.obstacles.push_clear(p, self.clearance_m);
+            if let Some(xy) = pushed {
+                let correction = (xy[0] - p[0]).hypot(xy[1] - p[1]);
+                p[0] = xy[0];
+                p[1] = xy[1];
+                self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[1], correction);
+            }
+            let floor = TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m;
+            let raised = p[2] < floor;
+            if raised {
+                self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[0], floor - p[2]);
+                p[2] = floor;
+            }
+            // Settled only when neither moved it: a lift alone can put it
+            // into a structure whose base was above it.
+            if pushed.is_none() && !raised {
+                break;
+            }
         }
-        let floor = TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m;
-        if p[2] < floor {
-            self.record(node_id, timestamp_s, "terrain", floor - p[2]);
-            p[2] = floor;
+        // Overlapping structures can bounce it between them past the limit;
+        // that is recorded, not passed off as a clear position.
+        if self.obstacles.collides(p) {
+            self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[2], 0.0);
         }
         p
     }
@@ -1284,5 +1309,152 @@ mod tests {
         let back: BeliefGrid = serde_json::from_str(&text).unwrap();
         assert!(back.same_layout(&belief));
         assert_eq!(back.ground_ij(2, 3), Some(70.0));
+    }
+    /// A push out of one structure can land in the next; the guard pushes
+    /// again until the point is clear (the reference's fixture).
+    #[test]
+    fn the_guard_pushes_out_of_a_neighbour_too() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let building = |id: &str, x0: f64, x1: f64, y0: f64, y1: f64| {
+            Obstacle::polygon_prism(
+                id,
+                BlockerType::Building,
+                vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                0.0,
+                100.0,
+            )
+            .unwrap()
+        };
+        let bounds = Bounds2d::new(-50.0, 50.0, -50.0, 50.0);
+        let layer = ObstacleLayer::new(
+            bounds,
+            100.0,
+            vec![
+                building("a", 0.0, 10.0, 0.0, 10.0),
+                building("b", 10.5, 30.0, 4.8, 5.2),
+            ],
+        )
+        .unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer.clone())),
+            1.0,
+        );
+        let settled = guard.enforce("d", 0.0, [9.8, 5.0, 10.0]);
+        assert!(layer.point_collides(settled).is_none(), "{settled:?}");
+        assert!(guard.take_contacts().len() >= 2, "pushed more than once");
+    }
+    /// The terrain clamp can lift a pushed platform into a neighbour whose
+    /// base was above it; the guard checks again at the clamped height.
+    #[test]
+    fn the_guard_rechecks_structures_after_the_terrain_clamp() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let building = |id: &str, x0: f64, x1: f64, y0: f64, y1: f64, base: f64| {
+            Obstacle::polygon_prism(
+                id,
+                BlockerType::Building,
+                vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                base,
+                100.0,
+            )
+            .unwrap()
+        };
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        // `b` starts 20 m up: the platform at 10 m clears it, but the floor
+        // (ground + 25 m clearance) puts it inside.
+        let layer = ObstacleLayer::new(
+            bounds,
+            400.0,
+            vec![
+                building("a", 0.0, 10.0, 0.0, 10.0, 0.0),
+                building("b", 10.5, 80.0, 4.8, 5.2, 20.0),
+            ],
+        )
+        .unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer.clone())),
+            25.0,
+        );
+        let settled = guard.enforce("d", 0.0, [9.8, 5.0, 10.0]);
+        assert!(settled[2] >= 25.0, "{settled:?}");
+        assert!(layer.point_collides(settled).is_none(), "{settled:?}");
+    }
+    /// A lift by the terrain clamp alone can put the platform into a
+    /// structure whose base was above it; the guard checks again.
+    #[test]
+    fn the_guard_rechecks_structures_after_a_lift_alone() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let raised = Obstacle::polygon_prism(
+            "raised",
+            BlockerType::Building,
+            vec![[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]],
+            20.0,
+            100.0,
+        )
+        .unwrap();
+        let layer = ObstacleLayer::new(bounds, 400.0, vec![raised]).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer.clone())),
+            25.0,
+        );
+        // At 10 m it is under the structure; the 25 m floor lifts it in.
+        let settled = guard.enforce("d", 0.0, [0.0, 0.0, 10.0]);
+        assert!(settled[2] >= 25.0, "{settled:?}");
+        assert!(layer.point_collides(settled).is_none(), "{settled:?}");
+    }
+    /// Overlapping structures can bounce a platform between them until the
+    /// push limit runs out; the guard records that rather than hiding it.
+    #[test]
+    fn the_guard_records_a_collision_it_cannot_resolve() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let block = |id: &str, x0: f64, x1: f64| {
+            Obstacle::polygon_prism(
+                id,
+                BlockerType::Building,
+                vec![[x0, -50.0], [x1, -50.0], [x1, 50.0], [x0, 50.0]],
+                0.0,
+                100.0,
+            )
+            .unwrap()
+        };
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let layer = ObstacleLayer::new(
+            bounds,
+            400.0,
+            vec![block("a", 0.0, 10.0), block("b", 9.0, 19.0)],
+        )
+        .unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer.clone())),
+            1.0,
+        );
+        let settled = guard.enforce("d", 0.0, [9.5, 0.0, 10.0]);
+        let contacts = guard.take_contacts();
+        // The fixture bounces it until the limit runs out, still inside.
+        assert!(layer.point_collides(settled).is_some(), "{settled:?}");
+        assert!(
+            contacts.iter().any(|c| c.kind == "unresolved"),
+            "{contacts:?}"
+        );
     }
 }

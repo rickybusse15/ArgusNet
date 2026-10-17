@@ -27,6 +27,7 @@ written), **ignores** (not read).
 | Deconfliction `resolution` | lateral_offset, vertical_offset, corridor_hold (`Resolution`) | schema → **rejects**; viewer → **displays** |
 | Belief cell `status` | unknown, known_safe, known_obstacle, uncertain, outside_geofence (`BeliefCellStatus`, both sides) | schema → **rejects**; viewer → **ignores** (belief reaches it as rasters) |
 | Pose estimate `status`, mission `event_type` | `LocalizationStatus`, `MissionEventType` (Python) | schema → **rejects**; viewer → **ignores** |
+| World contact `kind` | terrain, structure, unresolved (`argusnet_sim::belief_world::WORLD_CONTACT_KINDS`) | schema → **rejects**; viewer → **ignores** the kind (draws every contact the same) |
 | POI `status` | pending, active, complete | schema → **rejects**; viewer → **defaults** to the neutral colour and label |
 | `MissionZone.zone_type` | `ZONE_TYPES` (Python) | Python `MissionZone` → **rejects**; Rust builder → **rejects** an unknown profile zone; runtime → anything but `exclusion` is non-exclusion; viewer → **defaults** to grey |
 | Safety `state` / `reason` | nominal, caution, warning, abort and the monitor's reasons | checkpoint restore → **rejects**; viewer and Python adapter → **display** / pass through |
