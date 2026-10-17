@@ -1091,6 +1091,33 @@ impl PhysicalGuard {
         p
     }
 
+    /// Where the segment from `from` to `to` first meets a building or a
+    /// wall, as a fraction of its length: intersected with each structure
+    /// near it, so one thinner than any sampling step is still met. `None`
+    /// when it meets none.
+    pub fn first_structure_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+        let layer = self.obstacles.layer();
+        let around = argusnet_types::Bounds2d::new(
+            from[0].min(to[0]),
+            from[0].max(to[0]),
+            from[1].min(to[1]),
+            from[1].max(to[1]),
+        )
+        .expanded(1e-6);
+        layer
+            .query(around)
+            .into_iter()
+            .filter(|obstacle| obstacle.blocker_type.is_hard())
+            .filter_map(|obstacle| obstacle.surface_hit_t(from, to))
+            .min_by(f64::total_cmp)
+    }
+
+    /// Record that a structure stopped `node_id` `correction_m` short of
+    /// where it was going, as [`Self::enforce`] records a push out of one.
+    pub fn record_structure_stop(&self, node_id: &str, timestamp_s: f64, correction_m: f64) {
+        self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[1], correction_m);
+    }
+
     fn record(&self, node_id: &str, timestamp_s: f64, kind: &str, correction_m: f64) {
         self.contacts
             .lock()

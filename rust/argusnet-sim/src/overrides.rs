@@ -470,14 +470,45 @@ struct OverrideCheckpoint {
     climbing: BTreeMap<String, f64>,
 }
 
-/// The longest piece of a rejoin step checked on its own: thinner than any
-/// wall, so a step cannot pass through one between its ends.
+/// How far apart the ground is checked along a rejoin step, metres. The
+/// ground is a height field no finer than this; structures are met exactly.
 const REJOIN_CHECK_STEP_M: f64 = 1.0;
 
-/// `from` toward `to`, checked by `guard` every [`REJOIN_CHECK_STEP_M`]: the
-/// first point the guard has to move is where the step ends, moved; a step
-/// the guard never moves ends at `to`.
+/// How far short of a structure a step that would meet it stops, metres.
+const REJOIN_STANDOFF_M: f64 = 0.5;
+
+/// `from` toward `to`, kept out of structures and the ground. A building or
+/// wall the step would meet, however thin, stops it [`REJOIN_STANDOFF_M`]
+/// short (the segment is intersected with each, not sampled). The ground is
+/// checked every [`REJOIN_CHECK_STEP_M`]: the first point the guard has to
+/// move is where the step ends, moved. A step nothing stops ends at `to`.
 fn guarded_step(
+    guard: &crate::belief_world::PhysicalGuard,
+    node_id: &str,
+    timestamp_s: f64,
+    from: [f64; 3],
+    to: [f64; 3],
+) -> [f64; 3] {
+    let length = distance_3d(from, to);
+    match guard.first_structure_hit(from, to) {
+        Some(t) if length > 0.0 => {
+            let f = ((t * length - REJOIN_STANDOFF_M) / length).max(0.0);
+            let stop = [
+                from[0] + (to[0] - from[0]) * f,
+                from[1] + (to[1] - from[1]) * f,
+                from[2] + (to[2] - from[2]) * f,
+            ];
+            // Stopped short of the structure, and the ground checked on the
+            // way there.
+            guard.record_structure_stop(node_id, timestamp_s, distance_3d(stop, to));
+            guarded_to(guard, node_id, timestamp_s, from, stop)
+        }
+        _ => guarded_to(guard, node_id, timestamp_s, from, to),
+    }
+}
+
+/// `from` toward `to`, checked by `guard` every [`REJOIN_CHECK_STEP_M`].
+fn guarded_to(
     guard: &crate::belief_world::PhysicalGuard,
     node_id: &str,
     timestamp_s: f64,
@@ -579,8 +610,11 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
             platform.position.z,
         ];
         let distance = distance_3d(*at, path);
-        if distance <= step_m {
-            // On its path again: stage 1's sample stands.
+        // Within a step of its path: the last step is onto it. Unguarded,
+        // stage 1's sample simply stands; guarded, that step is checked like
+        // any other, and the rejoin ends only once it gets there.
+        let last_step = distance <= step_m;
+        if last_step && shared.guard.is_none() {
             done.push(node_id.clone());
             continue;
         }
@@ -591,7 +625,11 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
             shared.climbing.remove(node_id);
         }
         let floor_z = shared.climbing.get(node_id).copied();
-        let mut next = step_toward(*at, path, step_m, floor_z);
+        let mut next = if last_step {
+            path
+        } else {
+            step_toward(*at, path, step_m, floor_z)
+        };
         if let Some(guard) = &shared.guard {
             let tentative = next;
             next = guarded_step(guard, node_id, context.timestamp_s, *at, tentative);
@@ -600,6 +638,11 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
             // path that merely runs ahead of it is not a stall: the guard
             // did not move it.)
             let pushed = distance_3d(next, tentative) > 1e-9;
+            if last_step && !pushed {
+                // On its path again: stage 1's sample stands.
+                done.push(node_id.clone());
+                continue;
+            }
             if pushed && distance_3d(next, path) >= distance - 0.25 * step_m {
                 let up = guarded_step(
                     guard,
@@ -876,6 +919,12 @@ mod tests {
     }
 
     fn rejoin_rig(smooth: bool) -> Simulation {
+        rejoin_rig_at(smooth, 1000.0)
+    }
+
+    /// [`rejoin_rig`], with the POI flight holding the drone `east_m` east
+    /// of its path.
+    fn rejoin_rig_at(smooth: bool, east_m: f64) -> Simulation {
         let mut sim = rig(vec![node("d0", 0.0, 0.0)]);
         sim.set_stage_handler(
             Stage::SampleControllersAndBattery,
@@ -886,10 +935,10 @@ mod tests {
         // A POI flight that holds the drone 1 km east of its path.
         ov(&mut sim).set_poi(
             "d0",
-            GotoHover::over([1000.0, 0.0, 80.0], [1000.0, 0.0], 80.0, 0.0, 0.0),
+            GotoHover::over([east_m, 0.0, 80.0], [east_m, 0.0], 80.0, 0.0, 0.0),
         );
         sim.step().expect("tick runs");
-        assert_eq!(position_of(&sim, "d0").x, 1000.0);
+        assert_eq!(position_of(&sim, "d0").x, east_m);
         ov(&mut sim).clear_poi("d0");
         sim
     }
@@ -943,7 +992,7 @@ mod tests {
     /// A rejoin never flies through a structure between where the override
     /// left the platform and its path: every step goes through the guard.
     #[test]
-    fn a_rejoin_steps_around_a_building_in_its_way() {
+    fn a_rejoin_never_enters_a_building_in_its_way() {
         let block = building(
             [[400.0, -50.0], [600.0, -50.0], [600.0, 50.0], [400.0, 50.0]],
             200.0,
@@ -1007,16 +1056,53 @@ mod tests {
     /// climbs it before it is ever past it.
     #[test]
     fn a_rejoin_does_not_step_through_a_thin_wall() {
+        // Thinner than a step, and thinner than any sampling of one: the
+        // step is intersected with the wall, not sampled. Centred half way
+        // between whole metres, where no metre-spaced sample of these steps
+        // falls.
+        for half_m in [1.0, 0.1] {
+            let wall = building(
+                [
+                    [500.5 - half_m, -500.0],
+                    [500.5 + half_m, -500.0],
+                    [500.5 + half_m, 500.0],
+                    [500.5 - half_m, 500.0],
+                ],
+                150.0,
+            );
+            let (mut sim, _) = guarded_rejoin_rig(&wall);
+            let mut highest = 0.0_f64;
+            let mut ticks = 0;
+            while overridden(&sim).rejoining_at("d0").is_some() || ticks == 0 {
+                sim.step().expect("tick runs");
+                ticks += 1;
+                assert!(ticks < 200, "the rejoin stalled");
+                let p = position_of(&sim, "d0");
+                if p.x < 500.5 - half_m {
+                    assert!(
+                        highest > 150.0,
+                        "past the {} m wall at {} m without going over it",
+                        2.0 * half_m,
+                        p.z
+                    );
+                }
+                highest = highest.max(p.z);
+            }
+            assert_eq!(position_of(&sim, "d0").x, 0.0);
+        }
+    }
+
+    /// The last step onto the path is guarded too: released 20 m from its
+    /// path, within one step of it, with a thin wall between, the drone does
+    /// not appear on the far side; it goes over, then onto its path.
+    #[test]
+    fn the_last_step_onto_the_path_does_not_pass_through_a_wall() {
         let wall = building(
-            [
-                [499.0, -500.0],
-                [501.0, -500.0],
-                [501.0, 500.0],
-                [499.0, 500.0],
-            ],
+            [[10.4, -500.0], [10.6, -500.0], [10.6, 500.0], [10.4, 500.0]],
             150.0,
         );
-        let (mut sim, _) = guarded_rejoin_rig(&wall);
+        let mut sim = rejoin_rig_at(true, 20.0);
+        ov(&mut sim).set_physical_guard(Some(guard_around(&wall)));
         let mut highest = 0.0_f64;
         let mut ticks = 0;
         while overridden(&sim).rejoining_at("d0").is_some() || ticks == 0 {
@@ -1024,16 +1110,13 @@ mod tests {
             ticks += 1;
             assert!(ticks < 200, "the rejoin stalled");
             let p = position_of(&sim, "d0");
-            if p.x < 499.0 {
-                assert!(
-                    highest > 150.0,
-                    "past the wall at {} m without going over it",
-                    p.z
-                );
+            if p.x < 10.4 {
+                assert!(highest > 150.0, "through the wall at {} m", p.z);
             }
             highest = highest.max(p.z);
         }
         assert_eq!(position_of(&sim, "d0").x, 0.0);
+        assert!(ticks > 1, "it did not simply appear on its path");
     }
 
     /// Rejoins fly at the mission's redirect speed when one is set.
@@ -1061,6 +1144,16 @@ mod tests {
     fn guarded_rejoin_rig(
         block: &argusnet_world::obstacles::Obstacle,
     ) -> (Simulation, crate::belief_world::PhysicalGuard) {
+        let guard = guard_around(block);
+        let mut sim = rejoin_rig(true);
+        ov(&mut sim).set_physical_guard(Some(guard.clone()));
+        (sim, guard)
+    }
+
+    /// A guard over flat ground with `block` on it.
+    fn guard_around(
+        block: &argusnet_world::obstacles::Obstacle,
+    ) -> crate::belief_world::PhysicalGuard {
         use crate::belief_world::PhysicalGuard;
         use crate::runtime_world::{SharedObstacles, SharedTerrain};
         use argusnet_types::Bounds2d;
@@ -1070,14 +1163,11 @@ mod tests {
         let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
         let layer = ObstacleLayer::new(bounds, 200.0, vec![block.clone()]).unwrap();
         let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
-        let guard = PhysicalGuard::new(
+        PhysicalGuard::new(
             SharedTerrain::new(Arc::new(terrain), 5.0),
             SharedObstacles::new(Arc::new(layer)),
             2.0,
-        );
-        let mut sim = rejoin_rig(true);
-        ov(&mut sim).set_physical_guard(Some(guard.clone()));
-        (sim, guard)
+        )
     }
 
     /// An override that takes the platform again ends its rejoin.
