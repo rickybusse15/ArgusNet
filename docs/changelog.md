@@ -8,12 +8,17 @@
   keep the gap gate shut. Now, while they do, each hole gets the free drone
   that reaches it soonest, which sweeps it (decision `gap_fill`, a frontier
   override) and goes back to its lane once it is covered
-  (`gap_fill_release`). On `planner_adversarial` (30 qualification seeds,
+  (`gap_fill_release`). The way there and every leg of the sweep go round
+  the known obstacles at the sweep's height (a cell inside a building is
+  left out, a sweep with a leg that has no route is not flown), and the
+  sweep climbs to clear the known ground along all of it. On `planner_adversarial` (30 qualification seeds,
   120 s) runs that leave the scan go from 26 to 29, and POIs inspected from
   46 to 56 of 180. No seed got worse.
 - `efficient_v1` flies a drone back to its own path when an override ends
   (a POI released, a recall dropped, a hole filled) at the redirect speed,
-  instead of moving it there in one tick: the reference moved drones
+  instead of moving it there in one tick, every step kept out of the ground
+  and out of structures; a structure that stops it is climbed over rather
+  than leaving it at its face. The reference moved drones
   thousands of metres in a frame. On `persistent_long` frames faster than
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).

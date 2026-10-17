@@ -306,6 +306,9 @@ struct State {
     overridden_at: BTreeMap<String, [f64; 3]>,
     /// Platforms flying back to their own path, and where each is now.
     rejoining: BTreeMap<String, [f64; 3]>,
+    /// Rejoins climbing over a structure in their way, and the height each
+    /// holds until it is above its path again.
+    climbing: BTreeMap<String, f64>,
     /// Keeps each rejoin step out of the ground and out of structures: the
     /// way back to a path can cross what lies between.
     guard: Option<crate::belief_world::PhysicalGuard>,
@@ -364,6 +367,7 @@ impl MissionOverrideStage {
         if !smooth {
             self.state.overridden_at.clear();
             self.state.rejoining.clear();
+            self.state.climbing.clear();
         }
     }
 
@@ -452,6 +456,44 @@ struct OverrideCheckpoint {
     overridden_at: BTreeMap<String, [f64; 3]>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     rejoining: BTreeMap<String, [f64; 3]>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    climbing: BTreeMap<String, f64>,
+}
+
+fn distance_3d(a: [f64; 3], b: [f64; 3]) -> f64 {
+    ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt()
+}
+
+/// `step_m` from `at` toward `to`, held at or above `floor_z` when one is
+/// set (the horizontal part of the step is what the floor leaves of it).
+fn step_toward(at: [f64; 3], to: [f64; 3], step_m: f64, floor_z: Option<f64>) -> [f64; 3] {
+    let Some(floor_z) = floor_z else {
+        let distance = distance_3d(at, to);
+        let unit = [
+            (to[0] - at[0]) / distance,
+            (to[1] - at[1]) / distance,
+            (to[2] - at[2]) / distance,
+        ];
+        return [
+            at[0] + unit[0] * step_m,
+            at[1] + unit[1] * step_m,
+            at[2] + unit[2] * step_m,
+        ];
+    };
+    let z = to[2].max(floor_z);
+    let rise = (z - at[2]).clamp(-step_m, step_m);
+    let across = (step_m * step_m - rise * rise).sqrt();
+    let horizontal = (to[0] - at[0]).hypot(to[1] - at[1]);
+    let k = if horizontal > 0.0 {
+        (across / horizontal).min(1.0)
+    } else {
+        0.0
+    };
+    [
+        at[0] + (to[0] - at[0]) * k,
+        at[1] + (to[1] - at[1]) * k,
+        at[2] + rise,
+    ]
 }
 
 /// Smooth rejoins, after this run's overrides are applied: a platform an
@@ -473,6 +515,10 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
     shared
         .rejoining
         .retain(|node_id, _| !shared.applied.contains_key(node_id));
+    let rejoining = &shared.rejoining;
+    shared
+        .climbing
+        .retain(|node_id, _| rejoining.contains_key(node_id));
     let step_m = REDIRECT_SPEED_MPS * context.dt_s.max(0.0);
     let mut done = Vec::new();
     for (node_id, at) in shared.rejoining.iter_mut() {
@@ -485,35 +531,55 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
             platform.position.y,
             platform.position.z,
         ];
-        let delta = [path[0] - at[0], path[1] - at[1], path[2] - at[2]];
-        let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+        let distance = distance_3d(*at, path);
         if distance <= step_m {
             // On its path again: stage 1's sample stands.
             done.push(node_id.clone());
             continue;
         }
-        let unit = [
-            delta[0] / distance,
-            delta[1] / distance,
-            delta[2] / distance,
-        ];
-        *at = [
-            at[0] + unit[0] * step_m,
-            at[1] + unit[1] * step_m,
-            at[2] + unit[2] * step_m,
-        ];
-        if let Some(guard) = &shared.guard {
-            *at = guard.enforce(node_id, context.timestamp_s, *at);
+        // Climbing over a structure: hold the height reached until above
+        // the path, then come down to it.
+        let horizontal = (path[0] - at[0]).hypot(path[1] - at[1]);
+        if horizontal <= step_m {
+            shared.climbing.remove(node_id);
         }
-        platform.position = Vector3::new(at[0], at[1], at[2]);
+        let floor_z = shared.climbing.get(node_id).copied();
+        let mut next = step_toward(*at, path, step_m, floor_z);
+        if let Some(guard) = &shared.guard {
+            let tentative = next;
+            next = guard.enforce(node_id, context.timestamp_s, tentative);
+            // Pushed back out of a structure on the direct line, it would
+            // aim through the same one next tick: climb over it instead. (A
+            // path that merely runs ahead of it is not a stall: the guard
+            // did not move it.)
+            let pushed = distance_3d(next, tentative) > 1e-9;
+            if pushed && distance_3d(next, path) >= distance - 0.25 * step_m {
+                let up =
+                    guard.enforce(node_id, context.timestamp_s, [at[0], at[1], at[2] + step_m]);
+                if up[2] > at[2] + 0.5 * step_m {
+                    shared.climbing.insert(node_id.clone(), up[2]);
+                    next = up;
+                } else {
+                    // Nowhere to go (it cannot climb): it takes its place on
+                    // its path, as the reference has every platform do.
+                    shared.climbing.remove(node_id);
+                    done.push(node_id.clone());
+                    continue;
+                }
+            }
+        }
+        let moved = distance_3d(*at, next).max(1e-9);
         platform.velocity = Vector3::new(
-            unit[0] * REDIRECT_SPEED_MPS,
-            unit[1] * REDIRECT_SPEED_MPS,
-            unit[2] * REDIRECT_SPEED_MPS,
+            (next[0] - at[0]) / moved * REDIRECT_SPEED_MPS,
+            (next[1] - at[1]) / moved * REDIRECT_SPEED_MPS,
+            (next[2] - at[2]) / moved * REDIRECT_SPEED_MPS,
         );
+        *at = next;
+        platform.position = Vector3::new(at[0], at[1], at[2]);
     }
     for node_id in done {
         shared.rejoining.remove(&node_id);
+        shared.climbing.remove(&node_id);
     }
     shared.overridden_at = shared
         .applied
@@ -537,6 +603,7 @@ impl StageHandler for MissionOverrideStage {
         shared.applied.clear();
         shared.overridden_at.clear();
         shared.rejoining.clear();
+        shared.climbing.clear();
     }
 
     /// The redirects in force: each is a flight already under way, and a
@@ -549,6 +616,7 @@ impl StageHandler for MissionOverrideStage {
             egress: shared.egress.clone().into_iter().collect(),
             overridden_at: shared.overridden_at.clone(),
             rejoining: shared.rejoining.clone(),
+            climbing: shared.climbing.clone(),
         };
         Some(serde_json::to_value(state).expect("override state serialises"))
     }
@@ -571,6 +639,7 @@ impl StageHandler for MissionOverrideStage {
         shared.egress = decoded.egress.into_iter().collect();
         shared.overridden_at = decoded.overridden_at;
         shared.rejoining = decoded.rejoining;
+        shared.climbing = decoded.climbing;
         shared.applied.clear();
         Ok(())
     }
@@ -823,31 +892,11 @@ mod tests {
     /// left the platform and its path: every step goes through the guard.
     #[test]
     fn a_rejoin_steps_around_a_building_in_its_way() {
-        use crate::belief_world::PhysicalGuard;
-        use crate::runtime_world::{SharedObstacles, SharedTerrain};
-        use argusnet_types::Bounds2d;
-        use argusnet_world::index::ObstacleLayer;
-        use argusnet_world::obstacles::{BlockerType, Obstacle};
-        use argusnet_world::tiled::TiledTerrain;
-        use std::sync::Arc;
-        let block = Obstacle::polygon_prism(
-            "block",
-            BlockerType::Building,
-            vec![[400.0, -50.0], [600.0, -50.0], [600.0, 50.0], [400.0, 50.0]],
-            0.0,
+        let block = building(
+            [[400.0, -50.0], [600.0, -50.0], [600.0, 50.0], [400.0, 50.0]],
             200.0,
-        )
-        .unwrap();
-        let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
-        let layer = ObstacleLayer::new(bounds, 200.0, vec![block.clone()]).unwrap();
-        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
-        let guard = PhysicalGuard::new(
-            SharedTerrain::new(Arc::new(terrain), 5.0),
-            SharedObstacles::new(Arc::new(layer)),
-            2.0,
         );
-        let mut sim = rejoin_rig(true);
-        ov(&mut sim).set_physical_guard(Some(guard.clone()));
+        let (mut sim, guard) = guarded_rejoin_rig(&block);
         let ticks = (1000.0 / REDIRECT_SPEED_MPS).ceil() as usize + 20;
         for _ in 0..ticks {
             sim.step().expect("tick runs");
@@ -861,6 +910,78 @@ mod tests {
             );
         }
         assert!(!guard.take_contacts().is_empty(), "the guard moved it");
+    }
+
+    /// A wall too wide to be pushed around is climbed over: the rejoin does
+    /// not stall at its face, and it ends on the path.
+    #[test]
+    fn a_rejoin_climbs_over_a_wall_it_cannot_get_around() {
+        let wall = building(
+            [
+                [400.0, -500.0],
+                [600.0, -500.0],
+                [600.0, 500.0],
+                [400.0, 500.0],
+            ],
+            150.0,
+        );
+        let (mut sim, guard) = guarded_rejoin_rig(&wall);
+        let mut highest = 0.0_f64;
+        let mut ticks = 0;
+        while overridden(&sim).rejoining_at("d0").is_some() || ticks == 0 {
+            sim.step().expect("tick runs");
+            ticks += 1;
+            assert!(ticks < 200, "the rejoin stalled");
+            let p = position_of(&sim, "d0");
+            assert!(!wall.point_inside(p.x, p.y, p.z), "inside the wall");
+            highest = highest.max(p.z);
+        }
+        assert!(highest > 150.0, "it went over the wall, at {highest} m");
+        assert_eq!(position_of(&sim, "d0").x, 0.0);
+        assert_eq!(position_of(&sim, "d0").z, 80.0);
+        assert!(
+            !guard.take_contacts().is_empty(),
+            "the guard stopped it first"
+        );
+        assert!(overridden(&sim)
+            .checkpoint_state()
+            .unwrap()
+            .get("climbing")
+            .is_none());
+    }
+
+    fn building(corners: [[f64; 2]; 4], height_m: f64) -> argusnet_world::obstacles::Obstacle {
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        Obstacle::polygon_prism(
+            "block",
+            BlockerType::Building,
+            corners.to_vec(),
+            0.0,
+            height_m,
+        )
+        .unwrap()
+    }
+
+    fn guarded_rejoin_rig(
+        block: &argusnet_world::obstacles::Obstacle,
+    ) -> (Simulation, crate::belief_world::PhysicalGuard) {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
+        let layer = ObstacleLayer::new(bounds, 200.0, vec![block.clone()]).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer)),
+            2.0,
+        );
+        let mut sim = rejoin_rig(true);
+        ov(&mut sim).set_physical_guard(Some(guard.clone()));
+        (sim, guard)
     }
 
     /// An override that takes the platform again ends its rejoin.

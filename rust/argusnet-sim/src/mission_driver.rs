@@ -44,6 +44,7 @@ use argusnet_planning::poi::{
 use argusnet_planning::BatteryModel;
 use argusnet_types::Bounds2d;
 use argusnet_world::index::ObstacleLayer;
+use argusnet_world::obstacles::BlockerType;
 
 use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingStage;
@@ -428,6 +429,26 @@ impl KnownObstacles {
         self.this_run.borrow_mut().insert(key, route.clone());
         route
     }
+
+    /// Whether a flight at `z_m` must go around anything at all.
+    fn blocks_at(&self, z_m: f64) -> bool {
+        let clearance_m = self.planner.borrow().config().drone_clearance_m;
+        self.reaching(z_m, clearance_m).is_some()
+    }
+
+    /// Whether `xy` lies in the footprint of a building or wall a flight at
+    /// `z_m` must go around: the planner has no way to it.
+    fn stands_in(&self, xy: [f64; 2], z_m: f64) -> bool {
+        let clearance_m = self.planner.borrow().config().drone_clearance_m;
+        let Some(layer) = self.reaching(z_m, clearance_m) else {
+            return false;
+        };
+        let at = Bounds2d::new(xy[0], xy[0], xy[1], xy[1]).expanded(1e-6);
+        layer.query(at).into_iter().any(|o| {
+            matches!(o.blocker_type, BlockerType::Building | BlockerType::Wall)
+                && o.point_inside(xy[0], xy[1], 0.5 * (o.base_z_m + o.top_z_m))
+        })
+    }
 }
 
 /// The holes' 4-connected clusters, each in row-major order, in the order
@@ -673,6 +694,30 @@ impl MissionDriverStage {
         corners
     }
 
+    /// The sweep through `points` at `z_m`, each leg routed around the
+    /// known obstacles a flight at that height must avoid: the corners of
+    /// every leg that turns, then its end. `None` when a leg has no route.
+    fn routed_sweep(&self, points: &[[f64; 2]], z_m: f64) -> Option<Vec<[f64; 2]>> {
+        let mut path = vec![points[0]];
+        for leg in points.windows(2) {
+            let (from, to) = ([leg[0][0], leg[0][1], z_m], [leg[1][0], leg[1][1], z_m]);
+            match self.route(from, to) {
+                Some(route) => {
+                    let turns = &route.points_xy_m;
+                    if turns.len() > 2 {
+                        path.extend_from_slice(&turns[1..turns.len() - 1]);
+                    }
+                }
+                None if self.obstacles.as_ref().is_some_and(|o| o.blocks_at(z_m)) => {
+                    return None;
+                }
+                None => {}
+            }
+            path.push(leg[1]);
+        }
+        Some(path)
+    }
+
     /// The height a flight from `start` through `path` should end at, at
     /// least `base_z`, so that climbing (or descending) linearly along the
     /// whole of it, as [`GotoHover::routed`] flies, it keeps the planner's
@@ -894,13 +939,21 @@ impl MissionDriverStage {
                 }
                 None => position[2],
             };
+            // A cell centre inside a building it cannot clear is left out:
+            // the sweep passes beside it.
+            if let Some(obstacles) = &self.obstacles {
+                points.retain(|p| !obstacles.stands_in(*p, z));
+            }
+            if points.is_empty() {
+                return None;
+            }
             let first = [points[0][0], points[0][1], z];
             let approach = self.trip_length_m(position, first);
             let sweep_m: f64 = points
                 .windows(2)
                 .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
                 .sum();
-            (points, z, approach, sweep_m)
+            Some((points, z, approach, sweep_m))
         };
         let plans: Vec<Vec<_>> = free
             .iter()
@@ -910,27 +963,29 @@ impl MissionDriverStage {
             .iter()
             .map(|row| {
                 row.iter()
-                    .map(|(_, _, approach, _)| Some(*approach))
+                    .map(|plan| plan.as_ref().map(|(_, _, approach, _)| *approach))
                     .collect()
             })
             .collect();
-        // The corners of each assigned drone's way to its sweep, planned
-        // before anything is changed.
-        // Each assigned drone's whole flight, the way there and the sweep, at
-        // the lowest height that keeps it above the known ground everywhere;
-        // a drone whose flight cannot be made safe is not sent.
+        // Each assigned drone's whole flight, planned before anything is
+        // changed: the way there and every leg of the sweep routed around
+        // the known obstacles, at the lowest height that keeps it above the
+        // known ground everywhere. A drone whose flight cannot be made safe
+        // is not sent.
         let assigned: Vec<(usize, usize, Vec<[f64; 2]>, f64)> = min_cost_assignment(&cost)
             .into_iter()
             .enumerate()
             .filter_map(|(row, column)| {
                 let column = column?;
-                let (points, z, _, _) = &plans[row][column];
-                let first = [points[0][0], points[0][1], *z];
+                let (points, z, _, _) = plans[row][column].as_ref()?;
+                // The way there is routed at the lower of the two heights it
+                // flies between, so it goes around all it climbs past.
+                let position = free[row].1;
                 let mut via = self
-                    .corners(free[row].1, first)
-                    .map(|(corners, _)| corners)
-                    .unwrap_or_default();
-                via.extend(points.iter().copied());
+                    .routed_sweep(&[[position[0], position[1]], points[0]], z.min(position[2]))?;
+                via.remove(0);
+                via.pop();
+                via.extend(self.routed_sweep(points, *z)?);
                 let z = self.sweep_height(free[row].1, &via, *z)?;
                 via.pop();
                 Some((row, column, via, z))
@@ -941,7 +996,8 @@ impl MissionDriverStage {
         let speed = self.config.redirect_speed_mps.max(f64::EPSILON);
         for (row, column, via, z) in assigned {
             let (id, position) = &free[row];
-            let (points, _, approach, sweep_m) = plans[row][column].clone();
+            let (points, _, approach, sweep_m) =
+                plans[row][column].clone().expect("assigned plans exist");
             let target = points[points.len() - 1];
             let trajectory = GotoHover::routed(*position, via, target, z, timestamp_s, speed);
             let arrive_s = trajectory.t_arrive();
@@ -3318,6 +3374,39 @@ mod tests {
         let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
         let layer = ObstacleLayer::new(bounds, 250.0, vec![wall]).expect("valid layer");
         stage.set_known_obstacles(Some(Arc::new(layer)), bounds);
+    }
+
+    /// A gap sweep's legs go round the known obstacles in their way, a
+    /// sweep cell inside one is left out, and a flight above them all is
+    /// flown straight.
+    #[test]
+    fn a_gap_sweep_routes_every_leg_around_known_obstacles() {
+        let mut stage = efficient_driver(Vec::new());
+        long_walled(&mut stage);
+        let obstacles = stage.obstacles.as_ref().expect("known");
+        // The leg from (-100, 0) to (100, 0) crosses the wall: it turns
+        // round an end of it, beyond y = +-900.
+        let swept = stage
+            .routed_sweep(&[[-100.0, 0.0], [100.0, 0.0]], 40.0)
+            .expect("routed");
+        assert_eq!(swept.first(), Some(&[-100.0, 0.0]));
+        assert_eq!(swept.last(), Some(&[100.0, 0.0]));
+        assert!(swept.len() > 2, "{swept:?}");
+        assert!(swept.iter().any(|p| p[1].abs() > 900.0), "{swept:?}");
+        // A leg on one side stays straight.
+        assert_eq!(
+            stage.routed_sweep(&[[100.0, 0.0], [100.0, 50.0]], 40.0),
+            Some(vec![[100.0, 0.0], [100.0, 50.0]])
+        );
+        // The wall's footprint is no place to fly to below its top, and
+        // nothing blocks a flight above it.
+        assert!(obstacles.stands_in([0.0, 0.0], 40.0));
+        assert!(!obstacles.stands_in([100.0, 0.0], 40.0));
+        assert!(!obstacles.blocks_at(400.0));
+        assert_eq!(
+            stage.routed_sweep(&[[-100.0, 0.0], [100.0, 0.0]], 400.0),
+            Some(vec![[-100.0, 0.0], [100.0, 0.0]])
+        );
     }
 
     /// P3: the reserve home is priced along the route home when it turns.
