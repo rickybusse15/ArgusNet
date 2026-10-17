@@ -89,7 +89,7 @@ impl TerrainSampler for WorldTerrain<'_> {
 /// # The `{building, wall}` filter is not this adapter's
 ///
 /// `ObstacleLayer::point_collides` already tests
-/// `matches!(blocker_type.as_str(), "building" | "wall")` before containment,
+/// `blocker_type.is_hard()` (a building or a wall) before containment,
 /// which is the same rule the Python `ObstacleLayer` applies — so a platform
 /// inside a forest stand does not collide, and this adapter does not need to
 /// re-implement that. It is stated here because the filter is surprising, it

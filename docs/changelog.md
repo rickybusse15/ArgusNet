@@ -2,6 +2,12 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- World: what a platform collides with and a route goes around is asked of
+  the obstacle's type (`BlockerType::is_hard()`: a building or a wall), not
+  matched on its `blocker_type` string in `point_collides`, the range
+  scanner's structure hits and the planner (R0). No behaviour change: 14/14
+  replays identical.
+
 - Viewer on Bevy 0.20 and bevy_egui 0.43 (supersedes Dependabot #244 and
   #247). Bevy 0.20 preprocesses shaders as WESL, not with naga_oil, so the
   sky, terrain and hologram shaders are now `.wesl` files with `import`

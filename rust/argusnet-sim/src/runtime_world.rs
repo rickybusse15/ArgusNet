@@ -213,7 +213,7 @@ impl SharedVisibility {
             .obstacles
             .query(box_)
             .into_iter()
-            .filter(|o| matches!(o.blocker_type.as_str(), "building" | "wall"))
+            .filter(|o| o.blocker_type.is_hard())
             .filter_map(|o| {
                 o.surface_hit_t(from, end)
                     .map(|t| (t, o.blocker_type.as_str().to_string()))

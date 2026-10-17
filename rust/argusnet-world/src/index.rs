@@ -60,9 +60,6 @@ impl ObstacleLayer {
     pub fn point_collides(&self, p: [f64; 3]) -> Option<&Obstacle> {
         self.query(Bounds2d::new(p[0], p[0], p[1], p[1]).expanded(1e-6))
             .into_iter()
-            .find(|o| {
-                matches!(o.blocker_type.as_str(), "building" | "wall")
-                    && o.point_inside(p[0], p[1], p[2])
-            })
+            .find(|o| o.blocker_type.is_hard() && o.point_inside(p[0], p[1], p[2]))
     }
 }

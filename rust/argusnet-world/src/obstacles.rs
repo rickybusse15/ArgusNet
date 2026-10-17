@@ -92,6 +92,13 @@ impl BlockerType {
     pub fn is_solid(&self) -> bool {
         !matches!(self, Self::Vegetation)
     }
+
+    /// Whether a platform collides with it and a route must go around it: a
+    /// building or a wall. Vegetation is seen through and flown through, and
+    /// a kind this crate does not model is not a structure.
+    pub fn is_hard(&self) -> bool {
+        matches!(self, Self::Building | Self::Wall)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,5 +1328,23 @@ mod metadata_tests {
         .expect("building parses");
         assert_eq!(building.density, None);
         assert!(building.blocker_type.is_solid());
+    }
+
+    /// Only buildings and walls are hard: what a platform collides with and a
+    /// route goes around. A kind read from the scene that this crate does not
+    /// model (here a capitalised "Building") is not one, as before, when the
+    /// rule was a string match on `as_str()`.
+    #[test]
+    fn only_buildings_and_walls_are_hard() {
+        let hard = |text: &str| {
+            serde_json::from_str::<BlockerType>(text)
+                .expect("parses")
+                .is_hard()
+        };
+        assert!(hard(r#""building""#));
+        assert!(hard(r#""wall""#));
+        assert!(!hard(r#""vegetation""#));
+        assert!(!hard(r#""Building""#));
+        assert!(!hard(r#""tower""#));
     }
 }

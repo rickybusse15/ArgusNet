@@ -28,7 +28,7 @@ use crate::route::{
 };
 use argusnet_types::Bounds2d;
 use argusnet_world::index::ObstacleLayer;
-use argusnet_world::obstacles::{BlockerType, Obstacle, ObstacleShape};
+use argusnet_world::obstacles::{Obstacle, ObstacleShape};
 use std::collections::HashMap;
 
 /// The obstacle set a route is planned against, plus the revision that
@@ -75,11 +75,6 @@ pub struct PlannerRoute {
     /// reference does with `dataclasses.replace`.
     pub cache_hit: bool,
     pub skipped_segments: usize,
-}
-
-/// Only these block a route. Vegetation is seen through, not flown around.
-fn is_hard(blocker: &BlockerType) -> bool {
-    matches!(blocker, BlockerType::Building | BlockerType::Wall)
 }
 
 fn padded(bounds: Bounds2d, padding_m: f64) -> Bounds2d {
@@ -270,7 +265,7 @@ impl RoutePlanner {
             .layer
             .primitives
             .iter()
-            .filter(|o| is_hard(&o.blocker_type))
+            .filter(|o| o.blocker_type.is_hard())
             .collect()
     }
 
@@ -294,7 +289,7 @@ impl RoutePlanner {
             .layer
             .query(window)
             .into_iter()
-            .filter(|o| is_hard(&o.blocker_type))
+            .filter(|o| o.blocker_type.is_hard())
             .collect();
         if hard.is_empty() {
             self.hard_primitives(scene)
