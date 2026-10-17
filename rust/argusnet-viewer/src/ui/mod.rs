@@ -462,7 +462,7 @@ mod tests {
                        "velocity": [1.0, 0.0, 0.0], "is_mobile": true}]
         }))
         .unwrap();
-        let sections = inspect_platform(&frame, "drone-1").unwrap();
+        let sections = inspect_platform(&frame, "drone-1", None).unwrap();
         let context = egui::Context::default();
         // The type roles use the bundled faces, as the app installs them.
         crate::theme::install(&context);

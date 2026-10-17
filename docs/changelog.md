@@ -24,6 +24,12 @@
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).
 
+- Viewer: a drone's inspector reads its task from the replay's recorded
+  assignment history (V4): the task at the frame's time, its last change
+  with kind and reason, and how many changes came before. Without a history
+  the task is still read off the POI statuses and the change rows read as
+  unavailable. A live run drops the history of the replay loaded before it.
+
 - `efficient_v1` prices a drone's reserve home along the route it would fly
   home when that route turns round a known obstacle (P3), each leg with the
   wind along it, instead of along the straight line. Return home at the
