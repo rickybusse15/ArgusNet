@@ -362,9 +362,13 @@ struct RecordedTask {
     changes: Field<String>,
 }
 
-/// The last event at or before `at_s` in `node_id`'s history: its task, when
-/// and why it began, and how many changes came before. A drone the history
-/// does not list, or one not yet assigned at `at_s`, reads as unavailable.
+/// `node_id`'s task at `at_s` from its history, read as the scorecard reads
+/// it: the task is the latest `assign` or `reassign`, a change is a
+/// `reassign`, and `handoff` and `team_join` record a transfer without a
+/// change of task. The last change shown is the latest event of any kind. A
+/// drone the history does not list, or one not yet assigned at `at_s`, reads
+/// as unavailable. Event times are compared at the frame's own `f32`
+/// precision, so an event on a frame's tick is never read a frame late.
 fn recorded_task(history: &serde_json::Value, node_id: &str, at_s: f32) -> RecordedTask {
     let events: Vec<&serde_json::Value> = history
         .get(node_id)
@@ -376,12 +380,23 @@ fn recorded_task(history: &serde_json::Value, node_id: &str, at_s: f32) -> Recor
                     event
                         .get("timestamp_s")
                         .and_then(|t| t.as_f64())
-                        .is_some_and(|t| t <= f64::from(at_s) + 1e-6)
+                        .is_some_and(|t| (t as f32) <= at_s)
                 })
                 .collect()
         })
         .unwrap_or_default();
-    let Some(last) = events.last() else {
+    let kind = |event: &serde_json::Value| {
+        event
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let current = events
+        .iter()
+        .rev()
+        .find(|event| matches!(kind(event).as_str(), "assign" | "reassign"));
+    let (Some(last), Some(current)) = (events.last(), current) else {
         let why = if history.get(node_id).is_some() {
             "no task assigned yet"
         } else {
@@ -408,11 +423,15 @@ fn recorded_task(history: &serde_json::Value, node_id: &str, at_s: f32) -> Recor
     if !text("to").is_empty() {
         change.push_str(&format!(", to {}", text("to")));
     }
+    let task = current.get("task").and_then(|v| v.as_str()).unwrap_or("");
+    let changes = events
+        .iter()
+        .filter(|event| kind(event) == "reassign")
+        .count();
     RecordedTask {
-        task: Field::Value(text("task").to_string()),
+        task: Field::Value(task.to_string()),
         last_change: Field::Value(change),
-        // The first event is the drone's first task, not a change.
-        changes: Field::Value((events.len() - 1).to_string()),
+        changes: Field::Value(changes.to_string()),
     }
 }
 
@@ -589,9 +608,11 @@ mod tests {
         let mut later = minimal();
         later.timestamp_s = 12.0;
         let sections = inspect_platform(&later, "drone-1", Some(&history)).unwrap();
+        // A handoff is a transfer, not a change of task: the drone still
+        // flies the POI until it is reassigned, as the scorecard reads it.
         assert_eq!(
             row(&sections, "Current task").value,
-            Field::Value("search".into())
+            Field::Value("poi:poi-02".into())
         );
         assert_eq!(
             row(&sections, "Last change").value,
@@ -599,7 +620,22 @@ mod tests {
         );
         assert_eq!(
             row(&sections, "Task changes").value,
-            Field::Value("2".into())
+            Field::Value("1".into())
+        );
+
+        // An event on the frame's own tick is read on that frame, at the
+        // frame's f32 precision.
+        let history = serde_json::json!({"drone-1": [
+            {"timestamp_s": 0.0, "kind": "assign", "task": "search", "reason": "initial"},
+            {"timestamp_s": 32.1, "kind": "reassign", "task": "egress",
+             "previous": "search", "reason": "egress"}
+        ]});
+        let mut on_tick = minimal();
+        on_tick.timestamp_s = 32.1_f64 as f32;
+        let sections = inspect_platform(&on_tick, "drone-1", Some(&history)).unwrap();
+        assert_eq!(
+            row(&sections, "Current task").value,
+            Field::Value("egress".into())
         );
     }
 
