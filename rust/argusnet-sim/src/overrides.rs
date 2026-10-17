@@ -309,6 +309,9 @@ struct State {
     /// Rejoins climbing over a structure in their way, and the height each
     /// holds until it is above its path again.
     climbing: BTreeMap<String, f64>,
+    /// The mission's redirect speed, which rejoins fly at too;
+    /// [`REDIRECT_SPEED_MPS`] when none is set.
+    rejoin_speed_mps: Option<f64>,
     /// Keeps each rejoin step out of the ground and out of structures: the
     /// way back to a path can cross what lies between.
     guard: Option<crate::belief_world::PhysicalGuard>,
@@ -359,7 +362,7 @@ impl MissionOverrideStage {
 
     /// Under a planning policy other than the reference, a platform whose
     /// override ends (a POI released, a recall dropped, a gap filled) flies
-    /// back to where its own path has it, at [`REDIRECT_SPEED_MPS`], instead
+    /// back to where its own path has it, at the redirect speed, instead
     /// of appearing there: the reference moves it the whole way in one tick.
     /// Off (the default) is the reference exactly. Before the first tick.
     pub fn set_smooth_rejoin(&mut self, smooth: bool) {
@@ -378,6 +381,13 @@ impl MissionOverrideStage {
     }
 
     /// Where `node_id` is on its way back to its own path, if it is.
+    /// The speed rejoins fly at: the mission's redirect speed, so a drone
+    /// flies back to its path as fast as its overrides flew it. Before the
+    /// first tick.
+    pub fn set_rejoin_speed(&mut self, speed_mps: f64) {
+        self.state.rejoin_speed_mps = Some(speed_mps.max(f64::EPSILON));
+    }
+
     pub fn rejoining_at(&self, node_id: &str) -> Option<[f64; 3]> {
         self.state.rejoining.get(node_id).copied()
     }
@@ -460,6 +470,42 @@ struct OverrideCheckpoint {
     climbing: BTreeMap<String, f64>,
 }
 
+/// The longest piece of a rejoin step checked on its own: thinner than any
+/// wall, so a step cannot pass through one between its ends.
+const REJOIN_CHECK_STEP_M: f64 = 1.0;
+
+/// `from` toward `to`, checked by `guard` every [`REJOIN_CHECK_STEP_M`]: the
+/// first point the guard has to move is where the step ends, moved; a step
+/// the guard never moves ends at `to`.
+fn guarded_step(
+    guard: &crate::belief_world::PhysicalGuard,
+    node_id: &str,
+    timestamp_s: f64,
+    from: [f64; 3],
+    to: [f64; 3],
+) -> [f64; 3] {
+    let pieces = (distance_3d(from, to) / REJOIN_CHECK_STEP_M)
+        .ceil()
+        .max(1.0) as usize;
+    for k in 1..=pieces {
+        let point = if k == pieces {
+            to
+        } else {
+            let f = k as f64 / pieces as f64;
+            [
+                from[0] + (to[0] - from[0]) * f,
+                from[1] + (to[1] - from[1]) * f,
+                from[2] + (to[2] - from[2]) * f,
+            ]
+        };
+        let kept = guard.enforce(node_id, timestamp_s, point);
+        if kept != point {
+            return kept;
+        }
+    }
+    to
+}
+
 fn distance_3d(a: [f64; 3], b: [f64; 3]) -> f64 {
     ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt()
 }
@@ -499,7 +545,7 @@ fn step_toward(at: [f64; 3], to: [f64; 3], step_m: f64, floor_z: Option<f64>) ->
 /// Smooth rejoins, after this run's overrides are applied: a platform an
 /// override flew last run and none flies now starts flying back from where it
 /// was put, toward where its own path (sampled by stage 1 this tick) has it,
-/// at [`REDIRECT_SPEED_MPS`]. Within one step of it, it is on it again, and
+/// at the redirect speed. Within one step of it, it is on it again, and
 /// the rejoin ends. A platform an override takes again stops rejoining.
 /// Returns how many platforms are still rejoining.
 fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
@@ -519,7 +565,8 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
     shared
         .climbing
         .retain(|node_id, _| rejoining.contains_key(node_id));
-    let step_m = REDIRECT_SPEED_MPS * context.dt_s.max(0.0);
+    let speed_mps = shared.rejoin_speed_mps.unwrap_or(REDIRECT_SPEED_MPS);
+    let step_m = speed_mps * context.dt_s.max(0.0);
     let mut done = Vec::new();
     for (node_id, at) in shared.rejoining.iter_mut() {
         let Some(platform) = context.world.platform_mut(node_id) else {
@@ -547,15 +594,20 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         let mut next = step_toward(*at, path, step_m, floor_z);
         if let Some(guard) = &shared.guard {
             let tentative = next;
-            next = guard.enforce(node_id, context.timestamp_s, tentative);
+            next = guarded_step(guard, node_id, context.timestamp_s, *at, tentative);
             // Pushed back out of a structure on the direct line, it would
             // aim through the same one next tick: climb over it instead. (A
             // path that merely runs ahead of it is not a stall: the guard
             // did not move it.)
             let pushed = distance_3d(next, tentative) > 1e-9;
             if pushed && distance_3d(next, path) >= distance - 0.25 * step_m {
-                let up =
-                    guard.enforce(node_id, context.timestamp_s, [at[0], at[1], at[2] + step_m]);
+                let up = guarded_step(
+                    guard,
+                    node_id,
+                    context.timestamp_s,
+                    *at,
+                    [at[0], at[1], at[2] + step_m],
+                );
                 if up[2] > at[2] + 0.5 * step_m {
                     shared.climbing.insert(node_id.clone(), up[2]);
                     next = up;
@@ -570,9 +622,9 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         }
         let moved = distance_3d(*at, next).max(1e-9);
         platform.velocity = Vector3::new(
-            (next[0] - at[0]) / moved * REDIRECT_SPEED_MPS,
-            (next[1] - at[1]) / moved * REDIRECT_SPEED_MPS,
-            (next[2] - at[2]) / moved * REDIRECT_SPEED_MPS,
+            (next[0] - at[0]) / moved * speed_mps,
+            (next[1] - at[1]) / moved * speed_mps,
+            (next[2] - at[2]) / moved * speed_mps,
         );
         *at = next;
         platform.position = Vector3::new(at[0], at[1], at[2]);
@@ -948,6 +1000,50 @@ mod tests {
             .unwrap()
             .get("climbing")
             .is_none());
+    }
+
+    /// A wall thinner than one step is not stepped through: every piece of
+    /// each step is checked, so the drone is stopped at the wall's face and
+    /// climbs it before it is ever past it.
+    #[test]
+    fn a_rejoin_does_not_step_through_a_thin_wall() {
+        let wall = building(
+            [
+                [499.0, -500.0],
+                [501.0, -500.0],
+                [501.0, 500.0],
+                [499.0, 500.0],
+            ],
+            150.0,
+        );
+        let (mut sim, _) = guarded_rejoin_rig(&wall);
+        let mut highest = 0.0_f64;
+        let mut ticks = 0;
+        while overridden(&sim).rejoining_at("d0").is_some() || ticks == 0 {
+            sim.step().expect("tick runs");
+            ticks += 1;
+            assert!(ticks < 200, "the rejoin stalled");
+            let p = position_of(&sim, "d0");
+            if p.x < 499.0 {
+                assert!(
+                    highest > 150.0,
+                    "past the wall at {} m without going over it",
+                    p.z
+                );
+            }
+            highest = highest.max(p.z);
+        }
+        assert_eq!(position_of(&sim, "d0").x, 0.0);
+    }
+
+    /// Rejoins fly at the mission's redirect speed when one is set.
+    #[test]
+    fn a_rejoin_flies_at_the_missions_redirect_speed() {
+        let mut sim = rejoin_rig(true);
+        ov(&mut sim).set_rejoin_speed(10.0);
+        sim.step().expect("tick runs");
+        assert_eq!(position_of(&sim, "d0").x, 990.0);
+        assert_eq!(velocity_of(&sim, "d0").x, -10.0);
     }
 
     fn building(corners: [[f64; 2]; 4], height_m: f64) -> argusnet_world::obstacles::Obstacle {

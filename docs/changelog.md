@@ -16,8 +16,9 @@
   46 to 56 of 180. No seed got worse.
 - `efficient_v1` flies a drone back to its own path when an override ends
   (a POI released, a recall dropped, a hole filled) at the redirect speed,
-  instead of moving it there in one tick, every step kept out of the ground
-  and out of structures; a structure that stops it is climbed over rather
+  instead of moving it there in one tick, at the mission's redirect speed,
+  every step checked every metre along its length to keep it out of the
+  ground and out of structures; a structure that stops it is climbed over rather
   than leaving it at its face. The reference moved drones
   thousands of metres in a frame. On `persistent_long` frames faster than
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The

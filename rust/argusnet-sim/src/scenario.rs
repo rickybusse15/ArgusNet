@@ -1238,6 +1238,7 @@ pub fn assemble_with(
             })
             .collect();
         homes_for_egress = homes.clone();
+        overrides.set_rejoin_speed(mission.redirect_speed_mps);
         let mut driver = MissionDriverStage::new(
             MissionDriverConfig {
                 mission: MissionConfig {
