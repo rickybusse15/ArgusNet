@@ -306,6 +306,9 @@ struct State {
     overridden_at: BTreeMap<String, [f64; 3]>,
     /// Platforms flying back to their own path, and where each is now.
     rejoining: BTreeMap<String, [f64; 3]>,
+    /// Keeps each rejoin step out of the ground and out of structures: the
+    /// way back to a path can cross what lies between.
+    guard: Option<crate::belief_world::PhysicalGuard>,
 }
 
 /// A write into stage 2's tables, queued by stage 9 and applied by the
@@ -362,6 +365,12 @@ impl MissionOverrideStage {
             self.state.overridden_at.clear();
             self.state.rejoining.clear();
         }
+    }
+
+    /// The guard every rejoin step goes through (the one deconfliction uses);
+    /// `None` leaves the steps unguarded.
+    pub fn set_physical_guard(&mut self, guard: Option<crate::belief_world::PhysicalGuard>) {
+        self.state.guard = guard;
     }
 
     /// Where `node_id` is on its way back to its own path, if it is.
@@ -493,6 +502,9 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
             at[1] + unit[1] * step_m,
             at[2] + unit[2] * step_m,
         ];
+        if let Some(guard) = &shared.guard {
+            *at = guard.enforce(node_id, context.timestamp_s, *at);
+        }
         platform.position = Vector3::new(at[0], at[1], at[2]);
         platform.velocity = Vector3::new(
             unit[0] * REDIRECT_SPEED_MPS,
@@ -805,6 +817,50 @@ mod tests {
         assert_eq!(overridden(&sim).rejoining_at("d0"), None);
         sim.step().expect("tick runs");
         assert_eq!(outcome(&sim), StageOutcome::NoWork);
+    }
+
+    /// A rejoin never flies through a structure between where the override
+    /// left the platform and its path: every step goes through the guard.
+    #[test]
+    fn a_rejoin_steps_around_a_building_in_its_way() {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let block = Obstacle::polygon_prism(
+            "block",
+            BlockerType::Building,
+            vec![[400.0, -50.0], [600.0, -50.0], [600.0, 50.0], [400.0, 50.0]],
+            0.0,
+            200.0,
+        )
+        .unwrap();
+        let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
+        let layer = ObstacleLayer::new(bounds, 200.0, vec![block.clone()]).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer)),
+            2.0,
+        );
+        let mut sim = rejoin_rig(true);
+        ov(&mut sim).set_physical_guard(Some(guard.clone()));
+        let ticks = (1000.0 / REDIRECT_SPEED_MPS).ceil() as usize + 20;
+        for _ in 0..ticks {
+            sim.step().expect("tick runs");
+            let p = position_of(&sim, "d0");
+            assert!(
+                !block.point_inside(p.x, p.y, p.z),
+                "inside the building at ({}, {}, {})",
+                p.x,
+                p.y,
+                p.z
+            );
+        }
+        assert!(!guard.take_contacts().is_empty(), "the guard moved it");
     }
 
     /// An override that takes the platform again ends its rejoin.

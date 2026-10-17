@@ -673,6 +673,49 @@ impl MissionDriverStage {
         corners
     }
 
+    /// The height a flight from `start` through `path` should end at, at
+    /// least `base_z`, so that climbing (or descending) linearly along the
+    /// whole of it, as [`GotoHover::routed`] flies, it keeps the planner's
+    /// clearance above the known terrain at every [`TERRAIN_CHECK_STEP_M`].
+    /// `None` when no height will do: the start itself is below it.
+    fn sweep_height(&self, start: [f64; 3], path: &[[f64; 2]], base_z: f64) -> Option<f64> {
+        let Some(terrain) = &self.terrain else {
+            return Some(base_z);
+        };
+        let clearance_m = PlannerConfig::default().drone_clearance_m;
+        let mut points = Vec::with_capacity(path.len() + 1);
+        points.push([start[0], start[1]]);
+        points.extend(path.iter().copied());
+        let leg_m = |pair: &[[f64; 2]]| (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]);
+        let length_m: f64 = points.windows(2).map(leg_m).sum();
+        if start[2] < terrain.height_at(start[0], start[1]) + clearance_m {
+            return None;
+        }
+        if length_m <= 1e-9 {
+            return Some(base_z);
+        }
+        // At distance s along, the height is start + s / L * (z - start);
+        // each sample needs it at least the ground there plus the clearance.
+        let mut z = base_z;
+        let mut flown_m = 0.0;
+        for pair in points.windows(2) {
+            let leg = leg_m(pair);
+            let steps = (leg / TERRAIN_CHECK_STEP_M).ceil().max(1.0) as usize;
+            for step in 1..=steps {
+                let along = step as f64 / steps as f64;
+                let x = pair[0][0] + along * (pair[1][0] - pair[0][0]);
+                let y = pair[0][1] + along * (pair[1][1] - pair[0][1]);
+                let s = flown_m + along * leg;
+                // A micrometre over, so rounding never fails the check below.
+                let floor = terrain.height_at(x, y) + clearance_m + 1e-6;
+                z = z.max(start[2] + (floor - start[2]) * length_m / s);
+            }
+            flown_m += leg;
+        }
+        self.clears_terrain(&points, start[2], z, length_m)
+            .then_some(z)
+    }
+
     /// Whether a routed flight, its height changing linearly along the route
     /// as [`GotoHover::routed`] flies it, keeps the planner's clearance above
     /// the terrain, sampled every [`TERRAIN_CHECK_STEP_M`]. A detour can
@@ -873,28 +916,32 @@ impl MissionDriverStage {
             .collect();
         // The corners of each assigned drone's way to its sweep, planned
         // before anything is changed.
-        let assigned: Vec<(usize, usize, Vec<[f64; 2]>)> = min_cost_assignment(&cost)
+        // Each assigned drone's whole flight, the way there and the sweep, at
+        // the lowest height that keeps it above the known ground everywhere;
+        // a drone whose flight cannot be made safe is not sent.
+        let assigned: Vec<(usize, usize, Vec<[f64; 2]>, f64)> = min_cost_assignment(&cost)
             .into_iter()
             .enumerate()
             .filter_map(|(row, column)| {
                 let column = column?;
                 let (points, z, _, _) = &plans[row][column];
                 let first = [points[0][0], points[0][1], *z];
-                let corners = self
+                let mut via = self
                     .corners(free[row].1, first)
                     .map(|(corners, _)| corners)
                     .unwrap_or_default();
-                Some((row, column, corners))
+                via.extend(points.iter().copied());
+                let z = self.sweep_height(free[row].1, &via, *z)?;
+                via.pop();
+                Some((row, column, via, z))
             })
             .collect();
         let free: Vec<(String, [f64; 3])> = free.into_iter().cloned().collect();
         let candidates: Vec<String> = free.iter().map(|(id, _)| id.clone()).collect();
         let speed = self.config.redirect_speed_mps.max(f64::EPSILON);
-        for (row, column, corners) in assigned {
+        for (row, column, via, z) in assigned {
             let (id, position) = &free[row];
-            let (points, z, approach, sweep_m) = plans[row][column].clone();
-            let mut via = corners;
-            via.extend(points[..points.len() - 1].iter().copied());
+            let (points, _, approach, sweep_m) = plans[row][column].clone();
             let target = points[points.len() - 1];
             let trajectory = GotoHover::routed(*position, via, target, z, timestamp_s, speed);
             let arrive_s = trajectory.t_arrive();
@@ -2367,6 +2414,47 @@ mod tests {
         }
         assert_ne!(machine(&sim).phase(), MissionPhase::Scanning);
         assert!(installed_driver(&sim).gap_fill.is_empty());
+    }
+
+    /// Ground 100 m high in a narrow band at x = 520, flat elsewhere.
+    #[derive(Debug)]
+    struct Ridge;
+
+    impl crate::observe::TerrainHeight for Ridge {
+        fn height_at(&self, x_m: f64, _y_m: f64) -> f64 {
+            if (x_m - 520.0).abs() < 1.0 {
+                100.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    /// A sweep whose way crosses a ridge between its sample points is flown
+    /// high enough to clear it all the way; one that starts below the ground's
+    /// clearance is not flown at all.
+    #[test]
+    fn a_gap_sweep_clears_the_ground_along_its_whole_flight() {
+        let mut stage = efficient_driver(Vec::new());
+        stage.set_known_terrain(Some(Arc::new(Ridge)));
+        let start = [0.0, 0.0, 40.0];
+        let path = [[500.0, 0.0], [550.0, 0.0], [1000.0, 0.0]];
+        let z = stage
+            .sweep_height(start, &path, 40.0)
+            .expect("can clear it");
+        let clearance = PlannerConfig::default().drone_clearance_m;
+        // At the ridge (520 m of 1000 m flown) the linear climb is above it.
+        let at_ridge = start[2] + 0.52 * (z - start[2]);
+        assert!(at_ridge >= 100.0 + clearance, "{at_ridge}");
+        let mut points = vec![[start[0], start[1]]];
+        points.extend(path);
+        assert!(stage.clears_terrain(&points, start[2], z, 1000.0));
+        // Flat ground needs nothing above the base height.
+        let mut flat = efficient_driver(Vec::new());
+        flat.set_known_terrain(Some(Arc::new(Ridges)));
+        assert_eq!(flat.sweep_height(start, &[[100.0, 0.0]], 40.0), Some(40.0));
+        // A start already inside the clearance cannot be made safe.
+        assert_eq!(stage.sweep_height([520.0, 0.0, 50.0], &path, 40.0), None);
     }
 
     #[test]
