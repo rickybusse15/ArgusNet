@@ -808,6 +808,7 @@ pub mod land_cover_build;
 pub mod landscape;
 pub mod noise;
 pub mod numpy_rng;
+pub mod powerline;
 pub mod raster;
 pub mod semantic;
 pub mod terrain_grid;
