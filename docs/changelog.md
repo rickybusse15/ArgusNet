@@ -29,6 +29,14 @@
   clearance test: how close the segment flown between two ticks comes to a
   wire, so a wire crossed between two positions that are each clear is
   still caught. Model only; nothing in a run reads it yet.
+- Safety: a `structure_clearance` violation (R3). Stage 4, given power
+  lines, checks the segment each platform flew since the last tick against
+  them, so a wire crossed between two clear positions is a violation.
+- Power lines in a run (R3): the bundle's `world` carries `power_lines`, and
+  the builder's opt-in `power_lines` option strings a transmission line
+  across the map (same for every seed), recorded in the replay's meta.
+  Without the option nothing changes: no key in the bundle, the replay or
+  the bundle's hash (14/14 replays identical).
 
 - World: what a platform collides with and a route goes around is asked of
   the obstacle's type (`BlockerType::is_hard()`: a building or a wall), not

@@ -198,13 +198,36 @@ pub struct PoiDocument {
     pub required_dwell_s: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct WorldDocument {
     pub terrain: TerrainDocument,
     pub obstacles: ObstaclesDocument,
     pub land_cover: Option<LandCoverDocument>,
     pub visibility_profile: VisibilityProfile,
     pub los_terrain_clearance_m: f64,
+    /// Power lines (R3, `powerline-v1`). Absent from bundles written before
+    /// them, and written only when a world has some.
+    #[serde(default)]
+    pub power_lines: Vec<argusnet_world::powerline::PowerLine>,
+}
+
+/// As derived, except that `power_lines` is rendered only when there are
+/// some: [`ScenarioBundle::content_hash`] hashes this rendering, and a
+/// world without lines must bind the same checkpoints it did before lines
+/// existed.
+impl std::fmt::Debug for WorldDocument {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = formatter.debug_struct("WorldDocument");
+        out.field("terrain", &self.terrain)
+            .field("obstacles", &self.obstacles)
+            .field("land_cover", &self.land_cover)
+            .field("visibility_profile", &self.visibility_profile)
+            .field("los_terrain_clearance_m", &self.los_terrain_clearance_m);
+        if !self.power_lines.is_empty() {
+            out.field("power_lines", &self.power_lines);
+        }
+        out.finish()
+    }
 }
 
 /// The `terrain_new` payload.
@@ -643,6 +666,8 @@ pub struct BuiltWorld {
     pub terrain: SharedTerrain,
     pub obstacles: SharedObstacles,
     pub visibility: SharedVisibility,
+    /// Each checked: a line the model refuses is a bundle error.
+    pub power_lines: Arc<Vec<argusnet_world::powerline::PowerLine>>,
 }
 
 pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
@@ -685,10 +710,20 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
             .map_err(|error| BundleError::World(format!("land cover: {error}")))
         })
         .transpose()?;
+    let power_lines = world
+        .power_lines
+        .iter()
+        .cloned()
+        .map(|line| {
+            line.validated()
+                .map_err(|error| BundleError::World(format!("power line: {error}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let terrain = Arc::new(terrain);
     let obstacles = Arc::new(obstacles);
     Ok(BuiltWorld {
+        power_lines: Arc::new(power_lines),
         terrain: SharedTerrain::new(Arc::clone(&terrain), world.terrain.base_resolution_m),
         obstacles: SharedObstacles::new(Arc::clone(&obstacles)),
         visibility: SharedVisibility::new(
@@ -1146,6 +1181,7 @@ pub fn assemble_with(
             safety.set_role(drone_id.clone(), role.clone());
         }
         safety.set_terrain(Box::new(world.terrain.clone()));
+        safety.set_power_lines(world.power_lines.as_ref().clone());
         safety.read_stage_one_battery();
         sim.install(Stage::SafetyMonitor, Box::new(safety))
             .map_err(|error| BundleError::Invalid(format!("{error:?}")))?;

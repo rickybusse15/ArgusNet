@@ -26,6 +26,7 @@
 
 pub mod behaviors;
 pub mod environment;
+pub mod power_lines;
 pub mod scenario;
 
 use serde::{Deserialize, Serialize};
@@ -171,6 +172,11 @@ pub struct ScenarioOptions {
     pub mission_workflow: Option<String>,
     #[serde(default)]
     pub mission_tags: Vec<String>,
+    /// R3: string a transmission line across the map. Off by default, so
+    /// every existing scenario's world is unchanged; written only when on,
+    /// so the replay's provenance is too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub power_lines: bool,
 }
 
 impl Default for ScenarioOptions {
@@ -347,6 +353,8 @@ pub struct BuiltWorld {
     pub obstacles: Vec<environment::BuiltObstacle>,
     pub land_cover: CoverGrid,
     pub land_cover_resolution_m: f64,
+    /// Empty unless the `power_lines` option asks for them.
+    pub power_lines: Vec<argusnet_world::powerline::PowerLine>,
 }
 
 /// `build_terrain_layer` + `build_default_environment`.
@@ -427,6 +435,11 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         suppress_vegetation: options.clean_terrain,
     })
     .map_err(BuildError::Invalid)?;
+    let power_lines = if options.power_lines {
+        power_lines::build_power_lines(&terrain, bounds, &obstacles)
+    } else {
+        Vec::new()
+    };
 
     Ok(BuiltWorld {
         scale,
@@ -436,6 +449,7 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         obstacles: environment.obstacles,
         land_cover,
         land_cover_resolution_m,
+        power_lines,
     })
 }
 
@@ -469,7 +483,7 @@ impl BuiltWorld {
                 })
             })
             .collect();
-        json!({
+        let mut world = json!({
             "terrain": {
                 "bounds": bounds_document(self.bounds),
                 "tile_size_cells": terrain.tile_size_cells,
@@ -485,7 +499,13 @@ impl BuiltWorld {
             "land_cover": self.land_cover_document(),
             "visibility_profile": VisibilityProfile::default(),
             "los_terrain_clearance_m": LOS_TERRAIN_CLEARANCE_M,
-        })
+        });
+        // Written only when there are some, so a world without lines is
+        // the bundle it was before lines existed.
+        if !self.power_lines.is_empty() {
+            world["power_lines"] = json!(self.power_lines);
+        }
+        world
     }
 
     /// `LandCoverLayer.from_rasters`: 256-cell tiles, zero-padded past the
@@ -651,6 +671,9 @@ impl BuiltWorld {
             "environment_id".into(),
             json!(format!("procedural-{:.2}", self.scale)),
         );
+        if !self.power_lines.is_empty() {
+            map.insert("power_lines".into(), json!(self.power_lines));
+        }
         map.insert("crs_id".into(), json!("local-enu"));
         map.insert("environment_bounds_m".into(), bounds_document(self.bounds));
         map.insert("terrain_summary".into(), self.terrain_summary());

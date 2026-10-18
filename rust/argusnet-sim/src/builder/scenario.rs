@@ -1532,7 +1532,7 @@ fn generated_pois(
 
 /// `scenario_replay_metadata`'s `scenario_options`.
 fn scenario_options_document(o: &ScenarioOptions) -> Value {
-    json!({
+    let mut document = json!({
         "map_preset": o.map_preset,
         "target_motion_preset": o.target_motion_preset,
         "drone_mode_preset": o.drone_mode_preset,
@@ -1559,7 +1559,12 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
         "mission_domain": o.mission_domain,
         "mission_workflow": o.mission_workflow,
         "mission_tags": o.mission_tags,
-    })
+    });
+    // Only when set, so every other run's replay meta is unchanged.
+    if o.power_lines {
+        document["power_lines"] = json!(true);
+    }
+    document
 }
 
 #[cfg(test)]
