@@ -9,7 +9,8 @@ use argusnet_world::powerline::{PowerLine, Support};
 use super::environment::MapBounds;
 use argusnet_world::landscape::BuiltTerrain;
 
-/// Supports this far apart along the line, metres (scaled with the map).
+/// Supports at most this far apart along the line, metres. The map's
+/// bounds are already in metres at its scale, so this is not scaled again.
 const SPAN_M: f64 = 200.0;
 /// Each support's height above the ground, metres.
 const SUPPORT_HEIGHT_M: f64 = 30.0;
@@ -28,7 +29,6 @@ const CLEARANCE_M: f64 = 10.0;
 pub fn build_power_lines(
     terrain: &BuiltTerrain,
     bounds: MapBounds,
-    scale: f64,
     obstacles: &[Obstacle],
 ) -> Vec<PowerLine> {
     let width = bounds.x_max_m - bounds.x_min_m;
@@ -36,7 +36,7 @@ pub fn build_power_lines(
     let from = [bounds.x_min_m + 0.1 * width, bounds.y_min_m + 0.25 * depth];
     let to = [bounds.x_max_m - 0.1 * width, bounds.y_min_m + 0.75 * depth];
     let length = (to[0] - from[0]).hypot(to[1] - from[1]);
-    let spans = (length / (SPAN_M * scale)).ceil().max(1.0) as usize;
+    let spans = (length / SPAN_M).ceil().max(1.0) as usize;
     let stands_in_structure = |xy: [f64; 2]| {
         obstacles.iter().any(|obstacle| {
             obstacle.blocker_type.is_hard()
@@ -132,6 +132,24 @@ mod tests {
                 "seated on the ground"
             );
         }
+
+        // On the default map the supports stand about every 200 m (the map
+        // is already in metres at its scale), and the wires stay clear of
+        // the ground along every piece.
+        for pair in line.supports.windows(2) {
+            let span = (pair[1].xy_m[0] - pair[0].xy_m[0]).hypot(pair[1].xy_m[1] - pair[0].xy_m[1]);
+            assert!(span <= 2.0 * super::SPAN_M + 1e-6, "span {span} m");
+        }
+        let lowest_over_ground = line
+            .pieces()
+            .iter()
+            .flat_map(|piece| [piece.start_m, piece.end_m])
+            .map(|p| p[2] - crate::observe::TerrainHeight::height_at(&world.terrain, p[0], p[1]))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            lowest_over_ground > 10.0,
+            "{lowest_over_ground} m over the ground"
+        );
 
         let plain = ScenarioBundle::from_json(&without.to_string()).expect("parses");
         assert!(!format!("{:?}", plain.world).contains("power_lines"));

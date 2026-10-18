@@ -436,7 +436,7 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
     })
     .map_err(BuildError::Invalid)?;
     let power_lines = if options.power_lines {
-        power_lines::build_power_lines(&terrain, bounds, scale, &obstacles)
+        power_lines::build_power_lines(&terrain, bounds, &obstacles)
     } else {
         Vec::new()
     };
