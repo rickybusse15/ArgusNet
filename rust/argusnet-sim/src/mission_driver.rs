@@ -740,20 +740,26 @@ impl MissionDriverStage {
                 sweeps
                     .iter()
                     .map(|sweep| {
-                        let plan = self.gap_plan(*position, sweep)?;
-                        let end = plan.points[plan.points.len() - 1];
-                        let mut route = vec![[position[0], position[1]]];
-                        route.extend(plan.via.iter().copied());
-                        route.push(end);
-                        let length_m: f64 = route
-                            .windows(2)
-                            .map(|leg| (leg[1][0] - leg[0][0]).hypot(leg[1][1] - leg[0][1]))
-                            .sum();
-                        let spent_wh = model.travel_cost_wh(length_m)
-                            + model.climb_cost_wh(plan.z - position[2]);
-                        let reserve_wh =
-                            self.reserve_for(&model, id, [end[0], end[1], plan.z], wind);
-                        (remaining_wh - spent_wh >= reserve_wh).then_some(plan)
+                        // Either end may be the better start once routed:
+                        // the affordable one with the shorter way there.
+                        self.gap_plans(*position, sweep)
+                            .into_iter()
+                            .filter(|plan| {
+                                let end = plan.points[plan.points.len() - 1];
+                                let mut route = vec![[position[0], position[1]]];
+                                route.extend(plan.via.iter().copied());
+                                route.push(end);
+                                let length_m: f64 = route
+                                    .windows(2)
+                                    .map(|leg| (leg[1][0] - leg[0][0]).hypot(leg[1][1] - leg[0][1]))
+                                    .sum();
+                                let spent_wh = model.travel_cost_wh(length_m)
+                                    + model.climb_cost_wh(plan.z - position[2]);
+                                let reserve_wh =
+                                    self.reserve_for(&model, id, [end[0], end[1], plan.z], wind);
+                                remaining_wh - spent_wh >= reserve_wh
+                            })
+                            .min_by(|a, b| a.approach.total_cmp(&b.approach))
                     })
                     .collect()
             })
@@ -779,20 +785,37 @@ impl MissionDriverStage {
             .collect()
     }
 
-    /// The flight of a drone at `position` to sweep `sweep`, or `None` when
-    /// it cannot be made safe. It sweeps from the nearer end, at its own
-    /// height above the ground, raised to clear the highest ground the sweep
-    /// crosses.
-    fn gap_plan(&self, position: [f64; 3], sweep: &[[f64; 2]]) -> Option<GapPlan> {
-        let ends = [sweep[0], sweep[sweep.len() - 1]];
-        let reach = |end: [f64; 2]| {
-            let (dx, dy) = (end[0] - position[0], end[1] - position[1]);
-            (dx * dx + dy * dy).sqrt()
-        };
-        let mut points = sweep.to_vec();
-        if reach(ends[1]) < reach(ends[0]) {
-            points.reverse();
+    /// The flights of a drone at `position` to sweep `sweep`, one from each
+    /// end that can be made safe (nearer end first): which is better is only
+    /// known once each is routed and priced.
+    fn gap_plans(&self, position: [f64; 3], sweep: &[[f64; 2]]) -> Vec<GapPlan> {
+        let reach = |end: [f64; 2]| (end[0] - position[0]).hypot(end[1] - position[1]);
+        let mut reversed = sweep.to_vec();
+        reversed.reverse();
+        let mut orders = vec![sweep.to_vec()];
+        if sweep.len() > 1 {
+            orders.push(reversed);
         }
+        orders.sort_by(|a, b| reach(a[0]).total_cmp(&reach(b[0])));
+        orders
+            .iter()
+            .filter_map(|points| self.gap_plan_from(position, points))
+            .collect()
+    }
+
+    /// The safe flight with the shorter way there of [`Self::gap_plans`].
+    #[cfg(test)]
+    fn gap_plan(&self, position: [f64; 3], sweep: &[[f64; 2]]) -> Option<GapPlan> {
+        self.gap_plans(position, sweep)
+            .into_iter()
+            .min_by(|a, b| a.approach.total_cmp(&b.approach))
+    }
+
+    /// The flight of a drone at `position` to sweep `points` in that order,
+    /// or `None` when it cannot be made safe: at its own height above the
+    /// ground, raised to clear the highest ground the sweep crosses.
+    fn gap_plan_from(&self, position: [f64; 3], points: &[[f64; 2]]) -> Option<GapPlan> {
+        let mut points = points.to_vec();
         let z = match &self.terrain {
             Some(terrain) => {
                 let above = position[2] - terrain.height_at(position[0], position[1]);
@@ -3671,6 +3694,31 @@ mod tests {
         let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
         let layer = ObstacleLayer::new(bounds, 250.0, vec![wall]).expect("valid layer");
         stage.set_known_obstacles(Some(Arc::new(layer)), bounds);
+    }
+
+    /// The end nearer in a straight line is not always the better start:
+    /// here it is 100 m away across the wall (a detour round its end), the
+    /// other 250 m away on the drone's own side. Both are planned, and the
+    /// hole is swept from the end with the shorter way there.
+    #[test]
+    fn a_sweep_starts_from_the_end_with_the_shorter_routed_way_there() {
+        let mut stage = efficient_driver(Vec::new());
+        long_walled(&mut stage);
+        let position = [-50.0, 0.0, 40.0];
+        let sweep = vec![[50.0, 0.0], [-300.0, 0.0]];
+        let plans = stage.gap_plans(position, &sweep);
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].points[0], [50.0, 0.0], "nearer end planned first");
+        assert!(plans[0].approach > 1000.0, "{}", plans[0].approach);
+        let (battery, _) = fleet(&[("d", 0.0)]);
+        let assigned = stage.assign_gap_sweeps(
+            &[("d".to_string(), position)],
+            std::slice::from_ref(&sweep),
+            &battery,
+        );
+        let plan = &assigned[0].2;
+        assert_eq!(plan.points[0], [-300.0, 0.0]);
+        assert!((plan.approach - 250.0).abs() < 1e-6, "{}", plan.approach);
     }
 
     /// Ground 200 m up east of x = 200.
