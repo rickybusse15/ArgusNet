@@ -412,6 +412,35 @@ wall is known, and not otherwise.
 - **Adaptive revisits (F7):** limited re-flights of cells whose revisit age or
   uncertainty is high.
 
+*First slice: fill the seams (`efficient_v1`).* Measured first: on
+`planner_adversarial` (120 s) the scan takes a median 94 s and on
+`persistent_long` (300 s) 256 s, so completion (25 % and 20 %) is decided by
+the scan. Each drone loops its own equal-width sector, and the cells between
+sectors are not on any lane: once coverage passes the threshold, those
+seams are enclosed holes, and at 2 % of the grid or more the gap gate keeps
+the mission scanning to the end of the run (4 of 30 seeds on
+`planner_adversarial`). Now, while the gate holds, each hole (4-connected
+gap cells) gets the free drone that reaches it soonest (the same solver,
+on route length), which sweeps its cells column by column from the nearer
+end, at its own height above the highest ground it crosses, as a frontier
+override (`gap_fill`). It goes back to its lane once the hole is covered or
+its sweep ends (`gap_fill_release`); past the scan the frontier gate ends
+the flight. A drone whose override ends now flies back to its own path at
+the redirect speed rather than appearing on it (stage 2, every policy but
+the reference).
+
+| `planner_adversarial`, 30 seeds | main | gap fill |
+| --- | --- | --- |
+| Runs that leave the scan | 26 | 29 |
+| Median time they leave it | 94.0 s | 93.75 s |
+| POIs inspected | 46 / 180 | 56 / 180 |
+
+Three stuck seeds now leave the scan at 92–103 s, one leaves at 90 s
+instead of 116.5 s, and no seed got worse. `persistent_long` is unchanged:
+its scan reaches the coverage threshold only at 256 s, so its time goes on
+coverage, not holes. That is the balanced split and "finish, then help"
+below.
+
 ### P5: pursuit that reallocates
 
 - Reassign pursuers from fused-track state: lost tracks, covariance and time
