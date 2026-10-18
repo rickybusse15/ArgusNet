@@ -24,6 +24,12 @@
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).
 
+- World: a power-line model (`powerline-v1`, R3, first slice). Supports in
+  order, conductors strung between them with their sag, and a swept
+  clearance test: how close the segment flown between two ticks comes to a
+  wire, so a wire crossed between two positions that are each clear is
+  still caught. Model only; nothing in a run reads it yet.
+
 - World: what a platform collides with and a route goes around is asked of
   the obstacle's type (`BlockerType::is_hard()`: a building or a wall), not
   matched on its `blocker_type` string in `point_collides`, the range
