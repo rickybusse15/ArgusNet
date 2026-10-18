@@ -434,6 +434,21 @@ impl KnownObstacles {
         self.reaching(z_m, clearance_m).is_some()
     }
 
+    /// Whether the segment from `from` to `to` enters a building or wall.
+    fn crosses(&self, from: [f64; 3], to: [f64; 3]) -> bool {
+        let around = Bounds2d::new(
+            from[0].min(to[0]),
+            from[0].max(to[0]),
+            from[1].min(to[1]),
+            from[1].max(to[1]),
+        )
+        .expanded(1e-6);
+        self.layer
+            .query(around)
+            .into_iter()
+            .any(|o| o.blocker_type.is_hard() && o.surface_hit_t(from, to).is_some())
+    }
+
     /// Whether `xy` lies in the footprint of a building or wall a flight at
     /// `z_m` must go around: the planner has no way to it.
     fn stands_in(&self, xy: [f64; 2], z_m: f64) -> bool {
@@ -771,7 +786,7 @@ impl MissionDriverStage {
         // A cell centre inside a building it cannot clear is left out:
         // the sweep passes beside it.
         if let Some(obstacles) = &self.obstacles {
-            points.retain(|p| !obstacles.stands_in(*p, z));
+            points.retain(|p| !obstacles.stands_in(*p, z.min(position[2])));
         }
         if points.is_empty() {
             return None;
@@ -783,17 +798,24 @@ impl MissionDriverStage {
             .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
             .sum();
         // The whole flight, the way there and every leg of the sweep,
-        // routed around the known obstacles, at the lowest height that
-        // keeps it above the known ground everywhere. The way there is
-        // routed at the lower of the two heights it flies between, so it
-        // goes around all it climbs past. A flight that cannot be made
-        // safe is no plan at all, so the assignment never picks it.
-        let mut via =
-            self.routed_sweep(&[[position[0], position[1]], points[0]], z.min(position[2]))?;
+        // routed around the known obstacles, then raised to the lowest end
+        // height that keeps it above the known ground everywhere. It climbs
+        // linearly from where it starts to that height, never below `z`, so
+        // it never flies lower than the lower of `z` and its start: every
+        // leg is routed at that height, going around all it could fly
+        // beside. Once the height is known, each leg is checked against the
+        // structures at the heights it is actually flown. A flight that
+        // cannot be made safe is no plan at all, so the assignment never
+        // picks it.
+        let lowest_z = z.min(position[2]);
+        let mut via = self.routed_sweep(&[[position[0], position[1]], points[0]], lowest_z)?;
         via.remove(0);
         via.pop();
-        via.extend(self.routed_sweep(&points, z)?);
+        via.extend(self.routed_sweep(&points, lowest_z)?);
         let z = self.sweep_height(position, &via, z)?;
+        if !self.misses_structures(position, &via, z) {
+            return None;
+        }
         via.pop();
         Some(GapPlan {
             points,
@@ -884,6 +906,38 @@ impl MissionDriverStage {
             z = needed;
         }
         None
+    }
+
+    /// Whether the flight from `start` through `path`, its height changing
+    /// linearly from `start`'s to `end_z` as [`GotoHover::routed`] flies it,
+    /// stays out of every known building and wall: each leg intersected
+    /// with them at the heights it is flown, not sampled.
+    fn misses_structures(&self, start: [f64; 3], path: &[[f64; 2]], end_z: f64) -> bool {
+        let Some(obstacles) = &self.obstacles else {
+            return true;
+        };
+        let mut points = vec![[start[0], start[1]]];
+        points.extend(path.iter().copied());
+        let leg_m = |pair: &[[f64; 2]]| (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]);
+        let length_m: f64 = points.windows(2).map(leg_m).sum();
+        let z_at = |s: f64| {
+            if length_m > 0.0 {
+                start[2] + (end_z - start[2]) * (s / length_m).clamp(0.0, 1.0)
+            } else {
+                start[2]
+            }
+        };
+        let mut flown_m = 0.0;
+        for pair in points.windows(2) {
+            let leg = leg_m(pair);
+            let from = [pair[0][0], pair[0][1], z_at(flown_m)];
+            let to = [pair[1][0], pair[1][1], z_at(flown_m + leg)];
+            if obstacles.crosses(from, to) {
+                return false;
+            }
+            flown_m += leg;
+        }
+        true
     }
 
     /// Whether a routed flight, its height changing linearly along the route
@@ -3561,6 +3615,48 @@ mod tests {
         let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
         let layer = ObstacleLayer::new(bounds, 250.0, vec![wall]).expect("valid layer");
         stage.set_known_obstacles(Some(Arc::new(layer)), bounds);
+    }
+
+    /// Ground 200 m up east of x = 200.
+    #[derive(Debug)]
+    struct Shelf;
+
+    impl crate::observe::TerrainHeight for Shelf {
+        fn height_at(&self, x_m: f64, _y_m: f64) -> f64 {
+            if x_m >= 200.0 {
+                200.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    /// The sweep ends 240 m up (40 m over the shelf), but climbs there from
+    /// 40 m, so it crosses the 120 m wall at x = 0 well below that height:
+    /// its legs are routed at the lowest height it flies, round the wall's
+    /// end, and the flight, checked at the heights it is flown, enters
+    /// nothing.
+    #[test]
+    fn a_gap_sweep_is_routed_at_the_heights_it_climbs_through() {
+        let mut stage = efficient_driver(Vec::new());
+        long_walled(&mut stage);
+        stage.set_known_terrain(Some(Arc::new(Shelf)));
+        let start = [-150.0, 0.0, 40.0];
+        let plan = stage
+            .gap_plan(start, &[[-100.0, 0.0], [300.0, 0.0]])
+            .expect("a safe sweep");
+        assert!(plan.z >= 240.0, "{}", plan.z);
+        assert!(
+            plan.via.iter().any(|p| p[1].abs() > 900.0),
+            "round the wall: {:?}",
+            plan.via
+        );
+        let mut path = plan.via.clone();
+        path.push(*plan.points.last().unwrap());
+        assert!(stage.misses_structures(start, &path, plan.z));
+        // Straight across, ending at 240 m, it would cross the wall at
+        // 40 + 200 / 3 m, below its top.
+        assert!(!stage.misses_structures(start, &[[-100.0, 0.0], [300.0, 0.0]], 240.0));
     }
 
     /// A gap sweep's legs go round the known obstacles in their way, a

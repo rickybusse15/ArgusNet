@@ -309,6 +309,10 @@ struct State {
     /// Rejoins climbing over a structure in their way, and the height each
     /// holds until it is above its path again.
     climbing: BTreeMap<String, f64>,
+    /// Where each rejoin's path was last tick, so how fast it is running
+    /// away is measured from the path itself, not from a velocity stage 1
+    /// may not have refreshed.
+    rejoin_paths: BTreeMap<String, [f64; 3]>,
     /// The mission's redirect speed, which rejoins fly at too;
     /// [`REDIRECT_SPEED_MPS`] when none is set.
     rejoin_speed_mps: Option<f64>,
@@ -371,6 +375,7 @@ impl MissionOverrideStage {
             self.state.overridden_at.clear();
             self.state.rejoining.clear();
             self.state.climbing.clear();
+            self.state.rejoin_paths.clear();
         }
     }
 
@@ -468,7 +473,13 @@ struct OverrideCheckpoint {
     rejoining: BTreeMap<String, [f64; 3]>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     climbing: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    rejoin_paths: BTreeMap<String, [f64; 3]>,
 }
+
+/// The least share of its speed a rejoin must close on its path by: a path
+/// receding faster than the rest is not chased.
+const REJOIN_MIN_CLOSING: f64 = 0.05;
 
 /// How far short of a structure a step that would meet it stops, metres.
 const REJOIN_STANDOFF_M: f64 = 0.5;
@@ -586,6 +597,9 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
     shared
         .climbing
         .retain(|node_id, _| rejoining.contains_key(node_id));
+    shared
+        .rejoin_paths
+        .retain(|node_id, _| rejoining.contains_key(node_id));
     let speed_mps = shared.rejoin_speed_mps.unwrap_or(REDIRECT_SPEED_MPS);
     let step_m = speed_mps * context.dt_s.max(0.0);
     let mut done = Vec::new();
@@ -600,6 +614,33 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
             platform.position.z,
         ];
         let distance = distance_3d(*at, path);
+        let last_path = shared.rejoin_paths.insert(node_id.clone(), path);
+        // A path running away from it at the rejoin speed or faster is never
+        // caught: it takes its place on its path, as the reference has every
+        // platform do, once nothing stands between. How fast the path runs
+        // is measured from where it was last tick.
+        if let (Some(last), true) = (
+            last_path,
+            distance > step_m && !shared.climbing.contains_key(node_id) && context.dt_s > 0.0,
+        ) {
+            let away = [
+                (path[0] - at[0]) / distance,
+                (path[1] - at[1]) / distance,
+                (path[2] - at[2]) / distance,
+            ];
+            let receding = ((path[0] - last[0]) * away[0]
+                + (path[1] - last[1]) * away[1]
+                + (path[2] - last[2]) * away[2])
+                / context.dt_s;
+            let clear = shared.guard.as_ref().is_none_or(|guard| {
+                guard.first_structure_hit(*at, path).is_none()
+                    && guard.first_ground_contact(*at, path).is_none()
+            });
+            if receding >= (1.0 - REJOIN_MIN_CLOSING) * speed_mps && clear {
+                done.push(node_id.clone());
+                continue;
+            }
+        }
         // Within a step of its path: the last step is onto it. Unguarded,
         // stage 1's sample simply stands; guarded, that step is checked like
         // any other, and the rejoin ends only once it gets there.
@@ -665,6 +706,7 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
     for node_id in done {
         shared.rejoining.remove(&node_id);
         shared.climbing.remove(&node_id);
+        shared.rejoin_paths.remove(&node_id);
     }
     shared.overridden_at = shared
         .applied
@@ -689,6 +731,7 @@ impl StageHandler for MissionOverrideStage {
         shared.overridden_at.clear();
         shared.rejoining.clear();
         shared.climbing.clear();
+        shared.rejoin_paths.clear();
     }
 
     /// The redirects in force: each is a flight already under way, and a
@@ -702,6 +745,7 @@ impl StageHandler for MissionOverrideStage {
             overridden_at: shared.overridden_at.clone(),
             rejoining: shared.rejoining.clone(),
             climbing: shared.climbing.clone(),
+            rejoin_paths: shared.rejoin_paths.clone(),
         };
         Some(serde_json::to_value(state).expect("override state serialises"))
     }
@@ -725,6 +769,7 @@ impl StageHandler for MissionOverrideStage {
         shared.overridden_at = decoded.overridden_at;
         shared.rejoining = decoded.rejoining;
         shared.climbing = decoded.climbing;
+        shared.rejoin_paths = decoded.rejoin_paths;
         shared.applied.clear();
         Ok(())
     }
@@ -905,6 +950,61 @@ mod tests {
                 }
             }
             Ok(StageOutcome::Ran)
+        }
+    }
+
+    /// Stage 1 for one platform whose path runs west at `speed_mps` from
+    /// the origin, without touching its velocity (as a controller lane that
+    /// did not sample this tick would leave it).
+    #[derive(Debug)]
+    struct Receding {
+        speed_mps: f64,
+        x_m: f64,
+    }
+
+    impl StageHandler for Receding {
+        fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+            self.x_m -= self.speed_mps * context.dt_s;
+            if let Some(platform) = context.world.platform_mut("d0") {
+                platform.position = Vector3::new(self.x_m, 0.0, 80.0);
+            }
+            Ok(StageOutcome::Ran)
+        }
+    }
+
+    /// A path running away faster than the rejoin speed is not chased for
+    /// ever: the drone takes its place on it, as the reference does. One
+    /// running away slower is caught.
+    #[test]
+    fn a_rejoin_does_not_chase_a_path_it_cannot_catch() {
+        for (speed_mps, caught_by_flight) in [(40.0, false), (10.0, true)] {
+            let mut sim = rejoin_rig(true);
+            sim.set_stage_handler(
+                Stage::SampleControllersAndBattery,
+                Box::new(Receding {
+                    speed_mps,
+                    x_m: 0.0,
+                }),
+            )
+            .expect("stage 1 takes a handler");
+            let mut ticks = 0;
+            let mut flown_ticks = 0;
+            loop {
+                sim.step().expect("tick runs");
+                ticks += 1;
+                assert!(ticks < 500, "still chasing at {speed_mps} m/s");
+                if overridden(&sim).rejoining_at("d0").is_none() {
+                    break;
+                }
+                flown_ticks += 1;
+            }
+            let path_x = -speed_mps * ticks as f64;
+            assert_eq!(position_of(&sim, "d0").x, path_x, "on its path");
+            if caught_by_flight {
+                assert!(flown_ticks > 30, "{flown_ticks}");
+            } else {
+                assert!(flown_ticks <= 2, "{flown_ticks}");
+            }
         }
     }
 
