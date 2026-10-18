@@ -1274,6 +1274,7 @@ pub fn assemble_with(
             })
             .collect();
         homes_for_egress = homes.clone();
+        overrides.set_rejoin_speed(mission.redirect_speed_mps);
         let mut driver = MissionDriverStage::new(
             MissionDriverConfig {
                 mission: MissionConfig {
@@ -1603,6 +1604,14 @@ impl AssembledRun {
         // with no mission driver changes too, and its checkpoints say so.
         self.sim.set_policy_algorithm(!policy.is_reference());
         self.guard_deconfliction(!policy.is_reference());
+        let guard = self.guard.clone();
+        if let Some(overrides) = self
+            .sim
+            .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
+        {
+            overrides.set_smooth_rejoin(!policy.is_reference());
+            overrides.set_physical_guard(guard);
+        }
         Ok(has_driver)
     }
 
@@ -1864,6 +1873,12 @@ impl AssembledRun {
         self.sim
             .connect(crate::simulation::Handoff::RangeScansToMapping)
             .map_err(|error| format!("{error:?}"))?;
+        if let Some(overrides) = self
+            .sim
+            .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
+        {
+            overrides.set_physical_guard(Some(guard.clone()));
+        }
         self.guard = Some(guard);
         self.policy_guard = false;
         self.extend_replay_meta([("world_knowledge".to_string(), summary)]);

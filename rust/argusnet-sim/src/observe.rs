@@ -185,6 +185,18 @@ impl SensorBand {
 /// `argusnet-world`, and the reference only consults it for one number.
 pub trait TerrainHeight: fmt::Debug + Send + Sync {
     fn height_at(&self, x_m: f64, y_m: f64) -> f64;
+
+    /// The height under a straight segment as exact pieces, and the floor
+    /// it is raised to, when the terrain is a grid
+    /// ([`argusnet_world::tiled::TiledTerrain::height_along`]). `None` for
+    /// a surface with no grid, which [`crate::ground`] fits finely instead.
+    fn height_along(
+        &self,
+        _from: [f64; 2],
+        _to: [f64; 2],
+    ) -> Option<(Vec<argusnet_world::tiled::HeightPiece>, f64)> {
+        None
+    }
 }
 
 /// Terrain at the datum. The AGL ramp then reads altitude above zero, which is

@@ -74,6 +74,14 @@ impl TerrainHeight for SharedTerrain {
     fn height_at(&self, x_m: f64, y_m: f64) -> f64 {
         TerrainSampler::height_at(self, x_m, y_m)
     }
+
+    fn height_along(
+        &self,
+        from: [f64; 2],
+        to: [f64; 2],
+    ) -> Option<(Vec<argusnet_world::tiled::HeightPiece>, f64)> {
+        Some((self.terrain.height_along(from, to), self.terrain.floor_m))
+    }
 }
 
 /// The obstacle layer, shared.
