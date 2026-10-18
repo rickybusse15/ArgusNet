@@ -86,8 +86,9 @@
 
 use std::collections::BTreeMap;
 
+use argusnet_world::powerline::PowerLine;
 use safety_engine::limits::DronePhysicalLimits;
-use safety_engine::simulation::{SimulationSafetyMonitor, State, Violation};
+use safety_engine::simulation::{SimulationSafetyMonitor, State, StructureClearance, Violation};
 use serde::{Deserialize, Serialize};
 
 use crate::battery::{stage_one_battery, NOT_APPLICABLE_FRACTION};
@@ -173,6 +174,12 @@ struct SafetyState {
     previous_velocities: BTreeMap<String, [f64; 3]>,
     reads_battery: bool,
     validations: Vec<SafetyValidation>,
+    /// The power lines each flight must keep clear of (R3). None by default.
+    power_lines: Vec<PowerLine>,
+    /// Where the monitor left each platform last tick, so the flight since
+    /// is checked against the power lines as a segment. Kept only while
+    /// there are lines.
+    previous_positions: BTreeMap<String, [f64; 3]>,
 }
 
 /// One height everywhere, for rigs that have no terrain model.
@@ -192,6 +199,10 @@ struct SafetyCheckpoint {
     /// `node_id -> (consecutive violating frames, state)`.
     records: BTreeMap<String, (u32, String)>,
     previous_velocities: BTreeMap<String, [f64; 3]>,
+    /// Only a run with power lines has these: absent otherwise, so every
+    /// other checkpoint is unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    previous_positions: BTreeMap<String, [f64; 3]>,
 }
 
 /// The states `SimulationSafetyMonitor::process` assigns.
@@ -210,6 +221,8 @@ impl Default for SafetyState {
             previous_velocities: BTreeMap::new(),
             reads_battery: false,
             validations: Vec::new(),
+            power_lines: Vec::new(),
+            previous_positions: BTreeMap::new(),
         }
     }
 }
@@ -244,6 +257,14 @@ impl SafetyStage {
     /// A level floor at `terrain_height_m`, for rigs with no terrain model.
     pub fn set_terrain_height_m(&mut self, terrain_height_m: f64) {
         self.state.terrain = Box::new(Level(terrain_height_m));
+    }
+
+    /// The power lines every flight must keep its clearance from (R3): the
+    /// segment flown between two ticks is checked, so a wire crossed between
+    /// them is a `structure_clearance` violation. Before the first tick.
+    pub fn set_power_lines(&mut self, lines: Vec<PowerLine>) {
+        self.state.power_lines = lines;
+        self.state.previous_positions.clear();
     }
 
     /// The terrain the reference samples under each platform.
@@ -297,6 +318,7 @@ impl SafetyStage {
         shared.monitors.clear();
         shared.previous_velocities.clear();
         shared.validations.clear();
+        shared.previous_positions.clear();
     }
 }
 
@@ -377,6 +399,18 @@ impl StageHandler for SafetyStage {
 
             let previous_velocity = shared.previous_velocities.get(node_id).copied();
             let terrain_height_m = shared.terrain.height_at(position[0], position[1]);
+            // The flight since last tick; a platform's first tick is judged
+            // where it stands.
+            let structure_clearance = (!shared.power_lines.is_empty())
+                .then(|| {
+                    let from = shared
+                        .previous_positions
+                        .get(node_id)
+                        .copied()
+                        .unwrap_or(*position);
+                    StructureClearance::worst(&shared.power_lines, from, *position)
+                })
+                .flatten();
             let state = State {
                 position: *position,
                 velocity: *velocity,
@@ -386,6 +420,7 @@ impl StageHandler for SafetyStage {
                 dt_s: Some(dt_s),
                 other_drone_positions: peers,
                 energy_fraction,
+                structure_clearance,
             };
 
             let monitor = shared
@@ -398,6 +433,11 @@ impl StageHandler for SafetyStage {
             shared
                 .previous_velocities
                 .insert(node_id.clone(), decision.velocity);
+            if !shared.power_lines.is_empty() {
+                shared
+                    .previous_positions
+                    .insert(node_id.clone(), decision.position);
+            }
 
             let clamped = decision.position != *position || decision.velocity != *velocity;
             clamped_any |= clamped;
@@ -472,6 +512,7 @@ impl StageHandler for SafetyStage {
                 })
                 .collect(),
             previous_velocities: shared.previous_velocities.clone(),
+            previous_positions: shared.previous_positions.clone(),
         };
         Some(serde_json::to_value(state).expect("safety checkpoint serialises"))
     }
@@ -496,6 +537,15 @@ impl StageHandler for SafetyStage {
         {
             return Err(StageStateError::Malformed {
                 detail: format!("safety previous velocity for {id} is not finite"),
+            });
+        }
+        if let Some((id, _)) = decoded
+            .previous_positions
+            .iter()
+            .find(|(_, position)| !position.iter().all(|v| v.is_finite()))
+        {
+            return Err(StageStateError::Malformed {
+                detail: format!("safety previous position for {id} is not finite"),
             });
         }
         Ok(())
@@ -524,6 +574,7 @@ impl StageHandler for SafetyStage {
         }
         shared.monitors = monitors;
         shared.previous_velocities = decoded.previous_velocities;
+        shared.previous_positions = decoded.previous_positions;
         shared.validations.clear();
         Ok(())
     }
@@ -906,12 +957,21 @@ mod tests {
         let mut shape = serde_json::to_value(SafetyCheckpoint {
             records: BTreeMap::new(),
             previous_velocities: BTreeMap::from([("drone-1".to_string(), [f64::NAN, 0.0, 0.0])]),
+            previous_positions: BTreeMap::new(),
         })
         .unwrap();
         // serde_json writes NaN as null, which is not a velocity at all.
         assert!(stage.check_state(&shape).is_err());
         shape["previous_velocities"]["drone-1"] = serde_json::json!([1.0, 2.0]);
         assert!(stage.check_state(&shape).is_err());
+        // Nor is a position.
+        let position = serde_json::to_value(SafetyCheckpoint {
+            records: BTreeMap::new(),
+            previous_velocities: BTreeMap::new(),
+            previous_positions: BTreeMap::from([("drone-1".to_string(), [0.0, f64::NAN, 0.0])]),
+        })
+        .unwrap();
+        assert!(stage.check_state(&position).is_err());
     }
 
     /// Restored escalation carries on: two warnings before the checkpoint,
@@ -1130,5 +1190,72 @@ mod tests {
         assert_eq!(validations[0].validation_id, "safety-0-drone-1");
         assert_eq!(validations[0].subject_id, "drone-1");
         assert_eq!(validations[0].validator, VALIDATOR_NAME);
+    }
+
+    // -----------------------------------------------------------------
+    // Power lines (R3)
+    // -----------------------------------------------------------------
+
+    /// A wire 50 m north of the origin, 100 m up, 5 m clearance.
+    fn wire() -> PowerLine {
+        use argusnet_world::powerline::Support;
+        PowerLine {
+            id: "line".into(),
+            supports: vec![
+                Support {
+                    xy_m: [-200.0, 50.0],
+                    base_z_m: 0.0,
+                    height_m: 100.0,
+                },
+                Support {
+                    xy_m: [200.0, 50.0],
+                    base_z_m: 0.0,
+                    height_m: 100.0,
+                },
+            ],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.01,
+            clearance_m: 5.0,
+        }
+        .validated()
+        .expect("valid line")
+    }
+
+    /// The flight between two ticks is what is judged: a drone that crosses
+    /// the wire between two positions each 20 m from it is caught, and the
+    /// position it was left at survives a checkpoint.
+    #[test]
+    fn a_wire_crossed_between_two_ticks_is_a_structure_clearance_violation() {
+        let mut sim = rig(vec![node("drone-1", true, [0.0, 30.0, 100.0], [0.0; 3])]);
+        safety(&mut sim).set_power_lines(vec![wire()]);
+
+        sim.step().unwrap();
+        assert!(
+            safety(&mut sim).take_validations().is_empty(),
+            "20 m from the wire is clear"
+        );
+        let state = safety(&mut sim).checkpoint_state().unwrap();
+        assert_eq!(
+            state["previous_positions"]["drone-1"],
+            serde_json::json!([0.0, 30.0, 100.0])
+        );
+
+        let drone = sim.world_mut().platform_mut("drone-1").unwrap();
+        drone.position.y = 70.0;
+        sim.step().unwrap();
+        let validations = safety(&mut sim).take_validations();
+        assert_eq!(validations.len(), 1);
+        assert_eq!(validations[0].violations, vec!["structure_clearance"]);
+    }
+
+    /// A run with no power lines keeps no positions, so its checkpoint is
+    /// what it was before lines existed.
+    #[test]
+    fn without_power_lines_no_position_is_kept() {
+        let mut sim = rig(vec![node("drone-1", true, [0.0, 30.0, 100.0], [0.0; 3])]);
+        sim.step().unwrap();
+        let state = safety(&mut sim).checkpoint_state().unwrap();
+        assert!(state.get("previous_positions").is_none());
     }
 }

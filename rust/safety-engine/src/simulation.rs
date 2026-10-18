@@ -10,6 +10,42 @@ pub struct Violation {
     pub limit_value: f64,
     pub description: String,
 }
+/// How close the flight since the last tick came to a structure it must
+/// keep clear of (a power line's conductors), and how close it may come.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StructureClearance {
+    pub clearance_m: f64,
+    pub required_m: f64,
+}
+
+impl StructureClearance {
+    /// The tightest clearance the segment from `from` to `to` keeps from any
+    /// of `lines`, judged against each line's own required clearance: the
+    /// one with the least margin. `None` with no line near the segment.
+    pub fn worst(
+        lines: &[argusnet_world::powerline::PowerLine],
+        from: [f64; 3],
+        to: [f64; 3],
+    ) -> Option<Self> {
+        lines
+            .iter()
+            .filter(|line| {
+                let bounds = line.bounds_xy_m();
+                from[0].max(to[0]) >= bounds.x_min_m
+                    && from[0].min(to[0]) <= bounds.x_max_m
+                    && from[1].max(to[1]) >= bounds.y_min_m
+                    && from[1].min(to[1]) <= bounds.y_max_m
+            })
+            .map(|line| Self {
+                clearance_m: line.clearance_along(from, to),
+                required_m: line.clearance_m,
+            })
+            .min_by(|a, b| {
+                (a.clearance_m - a.required_m).total_cmp(&(b.clearance_m - b.required_m))
+            })
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct State {
     pub position: [f64; 3],
@@ -21,6 +57,10 @@ pub struct State {
     #[serde(default)]
     pub other_drone_positions: Vec<[f64; 3]>,
     pub energy_fraction: Option<f64>,
+    /// The flight since the last tick against the structures it must keep
+    /// clear of (R3): `None` when there are none near it.
+    #[serde(default)]
+    pub structure_clearance: Option<StructureClearance>,
 }
 fn norm(v: [f64; 3]) -> f64 {
     v.iter().map(|v| v * v).sum::<f64>().sqrt()
@@ -85,6 +125,11 @@ pub fn check(l: &DronePhysicalLimits, s: &State) -> Vec<Violation> {
     if let Some(e) = s.energy_fraction {
         if e < l.min_energy_reserve_fraction {
             add("min_energy_reserve", e, l.min_energy_reserve_fraction, true);
+        }
+    }
+    if let Some(c) = s.structure_clearance {
+        if c.clearance_m < c.required_m {
+            add("structure_clearance", c.clearance_m, c.required_m, true);
         }
     }
     for p in &s.other_drone_positions {
@@ -243,7 +288,75 @@ mod tests {
             dt_s: None,
             other_drone_positions: vec![],
             energy_fraction: None,
+            structure_clearance: None,
         }
+    }
+
+    /// A wire passed closer than its clearance is a violation, read from the
+    /// swept flight, not the position: here the flight crosses the wire
+    /// between two positions that are each well clear of it.
+    #[test]
+    fn a_wire_passed_too_close_is_a_structure_clearance_violation() {
+        use argusnet_world::powerline::{PowerLine, Support};
+        let line = PowerLine {
+            id: "line".into(),
+            supports: vec![
+                Support {
+                    xy_m: [-100.0, 50.0],
+                    base_z_m: 0.0,
+                    height_m: 100.0,
+                },
+                Support {
+                    xy_m: [100.0, 50.0],
+                    base_z_m: 0.0,
+                    height_m: 100.0,
+                },
+            ],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.01,
+            clearance_m: 5.0,
+        }
+        .validated()
+        .unwrap();
+        let lines = [line];
+        let limits = DronePhysicalLimits::tracker_default();
+        let quiet = State {
+            velocity: [10.0, 0.0, 0.0],
+            ..state()
+        };
+        // Across the wire at its height: a violation, at a clearance below 0.
+        let crossing =
+            StructureClearance::worst(&lines, [0.0, 30.0, 100.0], [0.0, 70.0, 100.0]).unwrap();
+        assert!(crossing.clearance_m < 0.0);
+        assert_eq!(crossing.required_m, 5.0);
+        let violations = check(
+            &limits,
+            &State {
+                structure_clearance: Some(crossing),
+                ..quiet.clone()
+            },
+        );
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].constraint, "structure_clearance");
+        assert_eq!(violations[0].limit_value, 5.0);
+        // 20 m over it: clear.
+        let over =
+            StructureClearance::worst(&lines, [0.0, 30.0, 120.0], [0.0, 70.0, 120.0]).unwrap();
+        assert!(check(
+            &limits,
+            &State {
+                structure_clearance: Some(over),
+                ..quiet.clone()
+            }
+        )
+        .is_empty());
+        // Far from the line: nothing to judge.
+        assert_eq!(
+            StructureClearance::worst(&lines, [0.0, 500.0, 100.0], [10.0, 500.0, 100.0]),
+            None
+        );
+        assert!(check(&limits, &quiet).is_empty());
     }
     #[test]
     fn escalation_and_reset_are_per_drone() {

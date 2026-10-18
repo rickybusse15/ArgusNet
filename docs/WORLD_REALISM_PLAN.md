@@ -123,7 +123,24 @@ C8 (P2.6) and D2 (P5.1).
   pieces of at most 5 m. `clearance_along(from, to)` is the swept test: the
   distance from the segment flown between two ticks to the nearest
   conductor's surface, never more than the true one (each piece's distance
-  is cut by how far the wire can sag below it). Nothing reads it yet.
+  is cut by how far the wire can sag below it).
+
+  *Done (safety):* the safety engine has a `structure_clearance` violation,
+  judged on the swept flight. With power lines set on stage 4
+  (`SafetyStage::set_power_lines`), it keeps where it left each platform and
+  checks the segment flown since then against every line near it, each by
+  its own clearance. A run without lines keeps nothing and checks nothing,
+  and its checkpoint is unchanged.
+
+  *Done (in a run):* the bundle's `world` carries `power_lines` (validated
+  as it is built, absent when there are none, and left out of the bundle's
+  hash then), and stage 4 checks them under `safety_blocking`. The builder's
+  `power_lines` option strings one transmission line across the map (30 m
+  supports every 200 m, three conductors, 10 m clearance), seated on the
+  ground and skipping a support that would stand in a building; it is laid
+  out from the map alone, so it is the same for every seed. The line goes
+  into the replay's meta as `power_lines`. Next: deconfliction and the guard
+  swept against conductors, the planner's corridor, and drawing.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against
