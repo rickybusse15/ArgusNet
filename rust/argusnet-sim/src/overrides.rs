@@ -686,11 +686,30 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
                     shared.climbing.insert(node_id.clone(), up[2]);
                     next = up;
                 } else {
-                    // Nowhere to go (it cannot climb): it takes its place on
-                    // its path, as the reference has every platform do.
+                    // It cannot climb (under something overhead): it steps
+                    // sideways along what blocks it, to its left first, and
+                    // tries the direct line again from there next tick. With
+                    // no way sideways either, it holds where it is, still
+                    // rejoining; it never jumps through to its path.
                     shared.climbing.remove(node_id);
-                    done.push(node_id.clone());
-                    continue;
+                    let (dx, dy) = (path[0] - at[0], path[1] - at[1]);
+                    let across = dx.hypot(dy);
+                    next = *at;
+                    if across > 1e-9 {
+                        for side in [1.0, -1.0] {
+                            let aside = [
+                                at[0] - side * dy / across * step_m,
+                                at[1] + side * dx / across * step_m,
+                                at[2],
+                            ];
+                            let stepped =
+                                guarded_step(guard, node_id, context.timestamp_s, *at, aside);
+                            if distance_3d(stepped, *at) > 0.5 * step_m {
+                                next = stepped;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1287,6 +1306,73 @@ mod tests {
             height_m,
         )
         .unwrap()
+    }
+
+    /// Under an overhang it cannot climb past, with a wall between it and
+    /// its path, a rejoin does not jump through to the path: it steps
+    /// sideways along the wall (never more than a step a tick, never inside
+    /// either) until the way is clear, then flies home.
+    #[test]
+    fn a_rejoin_under_an_overhang_goes_round_not_through() {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        // A slab over the drone (100 to 200 m up) and, under it, a wall
+        // between it and its path from the ground to the slab's underside:
+        // nothing above to climb into, no way through.
+        let slab = Obstacle::polygon_prism(
+            "slab",
+            BlockerType::Building,
+            vec![
+                [800.0, -500.0],
+                [1100.0, -500.0],
+                [1100.0, 500.0],
+                [800.0, 500.0],
+            ],
+            100.0,
+            200.0,
+        )
+        .unwrap();
+        let wall = building(
+            [[850.0, -50.0], [870.0, -50.0], [870.0, 50.0], [850.0, 50.0]],
+            100.0,
+        );
+        let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
+        let layer = ObstacleLayer::new(bounds, 200.0, vec![slab.clone(), wall.clone()]).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer)),
+            2.0,
+        );
+        let mut sim = rejoin_rig(true);
+        ov(&mut sim).set_physical_guard(Some(guard));
+        let step_m = REDIRECT_SPEED_MPS;
+        let mut last = position_of(&sim, "d0");
+        let mut ticks = 0;
+        while overridden(&sim).rejoining_at("d0").is_some() || ticks == 0 {
+            sim.step().expect("tick runs");
+            ticks += 1;
+            assert!(ticks < 400, "the rejoin stalled");
+            let p = position_of(&sim, "d0");
+            let moved =
+                ((p.x - last.x).powi(2) + (p.y - last.y).powi(2) + (p.z - last.z).powi(2)).sqrt();
+            let on_path = overridden(&sim).rejoining_at("d0").is_none();
+            // The path does not move, so even the last step onto it is a
+            // step: a jump to the path is caught.
+            assert!(moved <= step_m + 1e-6, "jumped {moved} m at tick {ticks}");
+            if !on_path {
+                for o in [&slab, &wall] {
+                    assert!(!o.point_inside(p.x, p.y, p.z), "inside {} at {p:?}", o.id);
+                }
+            }
+            last = p;
+        }
+        assert_eq!(position_of(&sim, "d0").x, 0.0);
     }
 
     fn guarded_rejoin_rig(

@@ -719,21 +719,42 @@ impl MissionDriverStage {
         corners
     }
 
-    /// The free drones (by position) matched to the sweeps, each pair the
-    /// drone with its flight: least total way there, over only the pairs
-    /// whose whole flight is safe, so a nearer drone that cannot fly a sweep
-    /// never takes it from a farther one that can.
+    /// The free drones matched to the sweeps, each pair the drone with its
+    /// flight: least total way there, over only the pairs whose whole flight
+    /// is safe and leaves the drone at least its reserve home from where the
+    /// sweep ends, as the POI allocator prices it. A nearer drone that cannot
+    /// fly a sweep, or cannot afford it, never takes it from a farther one
+    /// that can.
     fn assign_gap_sweeps(
         &self,
-        positions: &[[f64; 3]],
+        free: &[(String, [f64; 3])],
         sweeps: &[Vec<[f64; 2]>],
+        battery: &BatteryStage,
     ) -> Vec<(usize, usize, GapPlan)> {
-        let mut plans: Vec<Vec<Option<GapPlan>>> = positions
+        let model = battery.model();
+        let wind = battery.wind_mps();
+        let mut plans: Vec<Vec<Option<GapPlan>>> = free
             .iter()
-            .map(|position| {
+            .map(|(id, position)| {
+                let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
                 sweeps
                     .iter()
-                    .map(|sweep| self.gap_plan(*position, sweep))
+                    .map(|sweep| {
+                        let plan = self.gap_plan(*position, sweep)?;
+                        let end = plan.points[plan.points.len() - 1];
+                        let mut route = vec![[position[0], position[1]]];
+                        route.extend(plan.via.iter().copied());
+                        route.push(end);
+                        let length_m: f64 = route
+                            .windows(2)
+                            .map(|leg| (leg[1][0] - leg[0][0]).hypot(leg[1][1] - leg[0][1]))
+                            .sum();
+                        let spent_wh = model.travel_cost_wh(length_m)
+                            + model.climb_cost_wh(plan.z - position[2]);
+                        let reserve_wh =
+                            self.reserve_for(&model, id, [end[0], end[1], plan.z], wind);
+                        (remaining_wh - spent_wh >= reserve_wh).then_some(plan)
+                    })
                     .collect()
             })
             .collect();
@@ -1010,6 +1031,7 @@ impl MissionDriverStage {
         gap_cell_fraction: Option<f64>,
         mobile: &[(String, [f64; 3])],
         mapping: &MappingStage,
+        battery: &BatteryStage,
         timestamp_s: f64,
     ) {
         // Let go of drones whose hole is covered, whose sweep has ended, that
@@ -1102,9 +1124,8 @@ impl MissionDriverStage {
             .iter()
             .map(|cluster| sweep_order(cluster).into_iter().map(centre).collect())
             .collect();
-        let positions: Vec<[f64; 3]> = free.iter().map(|(_, position)| *position).collect();
-        let assigned = self.assign_gap_sweeps(&positions, &sweeps);
         let free: Vec<(String, [f64; 3])> = free.into_iter().cloned().collect();
+        let assigned = self.assign_gap_sweeps(&free, &sweeps, battery);
         let candidates: Vec<String> = free.iter().map(|(id, _)| id.clone()).collect();
         let speed = self.config.redirect_speed_mps.max(f64::EPSILON);
         for (row, column, plan) in assigned {
@@ -2255,7 +2276,14 @@ impl StageHandler for MissionDriverStage {
             }
         }
         if self.policy == PlanningPolicy::EfficientV1 {
-            self.fill_gaps(holes, gap_cell_fraction, &mobile, mapping, timestamp_s);
+            self.fill_gaps(
+                holes,
+                gap_cell_fraction,
+                &mobile,
+                mapping,
+                battery,
+                timestamp_s,
+            );
         }
         self.publish_report();
         Ok(outcome)
@@ -2743,8 +2771,12 @@ mod tests {
         let sweep = vec![[600.0, 0.0], [650.0, 0.0]];
         assert!(stage.gap_plan(near_but_unsafe, &sweep).is_none());
         let assigned = stage.assign_gap_sweeps(
-            &[near_but_unsafe, far_and_safe],
+            &[
+                ("near".to_string(), near_but_unsafe),
+                ("far".to_string(), far_and_safe),
+            ],
             std::slice::from_ref(&sweep),
+            &BatteryStage::new(),
         );
         assert_eq!(assigned.len(), 1);
         let (row, column, plan) = &assigned[0];
@@ -2752,6 +2784,30 @@ mod tests {
         assert_eq!(plan.points, sweep);
         // Its flight climbs over the ridge on the way.
         assert!(plan.z > 40.0);
+    }
+
+    /// A hole goes only to a drone that can fly the sweep and still get
+    /// home on its reserve, priced as the POI allocator prices a trip: the
+    /// near drone holding just its reserve is passed over for a far one
+    /// with a full battery.
+    #[test]
+    fn a_hole_goes_only_to_a_drone_that_can_afford_the_sweep() {
+        let stage = efficient_driver(Vec::new());
+        let (mut battery, _) = fleet(&[("near", 0.0), ("far", 0.0)]);
+        let model = battery.model();
+        assert!(battery.set_remaining_wh("near", model.capacity_wh * model.reserve_fraction));
+        let sweep = vec![[600.0, 0.0], [650.0, 0.0]];
+        let free = [
+            ("near".to_string(), [550.0, 0.0, 40.0]),
+            ("far".to_string(), [0.0, 0.0, 40.0]),
+        ];
+        let assigned = stage.assign_gap_sweeps(&free, std::slice::from_ref(&sweep), &battery);
+        assert_eq!(assigned.len(), 1);
+        assert_eq!((assigned[0].0, assigned[0].1), (1, 0));
+        // With a full battery the near one takes it.
+        assert!(battery.set_remaining_wh("near", model.capacity_wh));
+        let assigned = stage.assign_gap_sweeps(&free, std::slice::from_ref(&sweep), &battery);
+        assert_eq!((assigned[0].0, assigned[0].1), (0, 0));
     }
 
     #[test]
