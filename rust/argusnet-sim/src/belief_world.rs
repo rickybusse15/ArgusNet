@@ -1112,6 +1112,20 @@ impl PhysicalGuard {
             .min_by(f64::total_cmp)
     }
 
+    /// Where the flight from `from` to `to` first comes within the guard's
+    /// clearance of the ground, as a fraction of it: solved on the terrain's
+    /// cells ([`crate::ground::first_within`]), not sampled. `None` when it
+    /// never does.
+    pub fn first_ground_contact(&self, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+        crate::ground::first_within(&self.terrain, from, to, self.clearance_m)
+    }
+
+    /// Record that the ground stopped `node_id` `correction_m` short of
+    /// where it was going, as [`Self::enforce`] records a lift.
+    pub fn record_ground_stop(&self, node_id: &str, timestamp_s: f64, correction_m: f64) {
+        self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[0], correction_m);
+    }
+
     /// Record that a structure stopped `node_id` `correction_m` short of
     /// where it was going, as [`Self::enforce`] records a push out of one.
     pub fn record_structure_stop(&self, node_id: &str, timestamp_s: f64, correction_m: f64) {

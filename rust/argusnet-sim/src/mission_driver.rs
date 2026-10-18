@@ -366,10 +366,9 @@ struct KnownObstacles {
     kept: RefCell<BTreeMap<[u64; 6], Option<Corners>>>,
 }
 
-/// How finely a routed flight is checked against the terrain, in metres:
-/// under half the finest heightmap spacing in use (5 m), so a ridge between
-/// two samples cannot rise far above both before the 8 m clearance runs out.
-pub const TERRAIN_CHECK_STEP_M: f64 = 2.0;
+/// How many times [`MissionDriverStage::sweep_height`] raises a sweep's end
+/// height to clear the lowest points it finds before giving the sweep up.
+const SWEEP_HEIGHT_ROUNDS: usize = 64;
 
 /// The height bands a route's obstacles are filtered in, in metres.
 pub const ROUTE_HEIGHT_BAND_M: f64 = 10.0;
@@ -832,8 +831,11 @@ impl MissionDriverStage {
     /// The height a flight from `start` through `path` should end at, at
     /// least `base_z`, so that climbing (or descending) linearly along the
     /// whole of it, as [`GotoHover::routed`] flies, it keeps the planner's
-    /// clearance above the known terrain at every [`TERRAIN_CHECK_STEP_M`].
-    /// `None` when no height will do: the start itself is below it.
+    /// clearance above the known terrain everywhere, solved on the
+    /// terrain's cells ([`crate::ground`]). Each round raises the end height
+    /// just enough to clear every leg's lowest point; `None` when no height
+    /// will do (the start itself is below the clearance) or none is found
+    /// in [`SWEEP_HEIGHT_ROUNDS`] rounds.
     fn sweep_height(&self, start: [f64; 3], path: &[[f64; 2]], base_z: f64) -> Option<f64> {
         let Some(terrain) = &self.terrain else {
             return Some(base_z);
@@ -850,55 +852,66 @@ impl MissionDriverStage {
         if length_m <= 1e-9 {
             return Some(base_z);
         }
-        // At distance s along, the height is start + s / L * (z - start);
-        // each sample needs it at least the ground there plus the clearance.
         let mut z = base_z;
-        let mut flown_m = 0.0;
-        for pair in points.windows(2) {
-            let leg = leg_m(pair);
-            let steps = (leg / TERRAIN_CHECK_STEP_M).ceil().max(1.0) as usize;
-            for step in 1..=steps {
-                let along = step as f64 / steps as f64;
-                let x = pair[0][0] + along * (pair[1][0] - pair[0][0]);
-                let y = pair[0][1] + along * (pair[1][1] - pair[0][1]);
-                let s = flown_m + along * leg;
-                // A micrometre over, so rounding never fails the check below.
-                let floor = terrain.height_at(x, y) + clearance_m + 1e-6;
-                z = z.max(start[2] + (floor - start[2]) * length_m / s);
+        for _ in 0..SWEEP_HEIGHT_ROUNDS {
+            // At distance s along, the height is start + s / L * (z - start);
+            // a point of ground h there needs z at least
+            // start + (h + clearance - start) * L / s.
+            let mut needed = z;
+            let mut flown_m = 0.0;
+            for pair in points.windows(2) {
+                let leg = leg_m(pair);
+                let at = |s: f64| start[2] + (z - start[2]) * s / length_m;
+                let (from, to) = (
+                    [pair[0][0], pair[0][1], at(flown_m)],
+                    [pair[1][0], pair[1][1], at(flown_m + leg)],
+                );
+                let (margin, t) = crate::ground::lowest_margin(terrain.as_ref(), from, to);
+                let s = flown_m + t * leg;
+                if margin < clearance_m && s > 1e-9 {
+                    // A micrometre over, so rounding never fails the check.
+                    let ground = at(s) - margin;
+                    needed = needed
+                        .max(start[2] + (ground + clearance_m + 1e-6 - start[2]) * length_m / s);
+                }
+                flown_m += leg;
             }
-            flown_m += leg;
+            if needed <= z {
+                return self
+                    .clears_terrain(&points, start[2], z, length_m)
+                    .then_some(z);
+            }
+            z = needed;
         }
-        self.clears_terrain(&points, start[2], z, length_m)
-            .then_some(z)
+        None
     }
 
     /// Whether a routed flight, its height changing linearly along the route
     /// as [`GotoHover::routed`] flies it, keeps the planner's clearance above
-    /// the terrain, sampled every [`TERRAIN_CHECK_STEP_M`]. A detour can
-    /// cross higher ground than the straight line between its ends; one that
-    /// would go below it is not flown.
+    /// the terrain everywhere along it, solved on the terrain's cells
+    /// ([`crate::ground`]). A detour can cross higher ground than the
+    /// straight line between its ends; one that would go below it is not
+    /// flown.
     fn clears_terrain(&self, points: &[[f64; 2]], from_z: f64, to_z: f64, length_m: f64) -> bool {
         let Some(terrain) = &self.terrain else {
             return true;
         };
         let clearance_m = PlannerConfig::default().drone_clearance_m;
+        let z_at = |s: f64| {
+            let frac = if length_m > 0.0 {
+                (s / length_m).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            from_z + frac * (to_z - from_z)
+        };
         let mut flown_m = 0.0;
         for pair in points.windows(2) {
-            let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
-            let leg_m = (dx * dx + dy * dy).sqrt();
-            let steps = (leg_m / TERRAIN_CHECK_STEP_M).ceil().max(1.0) as usize;
-            for step in 0..=steps {
-                let along = step as f64 / steps as f64;
-                let (x, y) = (pair[0][0] + along * dx, pair[0][1] + along * dy);
-                let frac = if length_m > 0.0 {
-                    ((flown_m + along * leg_m) / length_m).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                let z = from_z + frac * (to_z - from_z);
-                if z < terrain.height_at(x, y) + clearance_m {
-                    return false;
-                }
+            let leg_m = (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]);
+            let from = [pair[0][0], pair[0][1], z_at(flown_m)];
+            let to = [pair[1][0], pair[1][1], z_at(flown_m + leg_m)];
+            if crate::ground::lowest_margin(terrain.as_ref(), from, to).0 < clearance_m {
+                return false;
             }
             flown_m += leg_m;
         }
@@ -945,8 +958,8 @@ impl MissionDriverStage {
         mapping: &MappingStage,
         timestamp_s: f64,
     ) {
-        // Let go of drones whose hole is covered, whose sweep has ended, or
-        // that have left the fleet, and of every one once the scan has
+        // Let go of drones whose hole is covered, whose sweep has ended, that
+        // have left the fleet or turned home, and of every one once the scan has
         // ended: stage 2 still flies a frontier override while localizing,
         // so each is cleared, not just forgotten.
         let scanning = self.machine.phase() == MissionPhase::Scanning;
@@ -958,6 +971,11 @@ impl MissionDriverStage {
                     Some((id.clone(), "scan_ended"))
                 } else if !mobile.iter().any(|(m, _)| m == id) {
                     Some((id.clone(), "left_fleet"))
+                } else if self.homeward.contains(id) {
+                    // Going home on its reserve: its hole is free for
+                    // another drone at once, not when its sweep would have
+                    // ended.
+                    Some((id.clone(), "homeward"))
                 } else if fill
                     .cells
                     .iter()
@@ -2495,6 +2513,37 @@ mod tests {
         assert!(held.is_none() || state.get("gap_fill").is_some());
     }
 
+    /// A sweeper that turns home on its reserve lets go of its hole at once
+    /// (cleared, so its frontier flight ends), freeing it for another drone
+    /// instead of holding it until its sweep would have ended.
+    #[test]
+    fn a_sweep_is_let_go_when_its_drone_turns_home() {
+        let (mut sim, _) = fly_the_ring(PlanningPolicy::EfficientV1);
+        assert!(installed_driver(&sim).gap_fill.contains_key("drone-1"));
+        sim.stage_mut::<MissionDriverStage>(crate::stage::Stage::EvaluateMissionTransitions)
+            .expect("stage 9")
+            .homeward
+            .insert("drone-1".to_string());
+        sim.step().expect("tick");
+        assert_eq!(machine(&sim).phase(), MissionPhase::Scanning);
+        assert!(installed_driver(&sim).gap_fill.is_empty());
+        let release = installed_driver(&sim)
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "gap_fill_release")
+            .cloned()
+            .expect("released");
+        assert_eq!(release.reason, "homeward");
+        assert_eq!(release.command, Some("clear_frontier"));
+        assert!(
+            installed_driver(&sim)
+                .decisions()
+                .iter()
+                .all(|d| d.kind != "gap_fill"),
+            "not sent again"
+        );
+    }
+
     /// Once the hole is flown the gate opens, and no sweep is held past the
     /// scan.
     ///
@@ -2546,6 +2595,59 @@ mod tests {
                 0.0
             }
         }
+    }
+
+    /// On a grid terrain the sweep's height is solved, not sampled: a ridge
+    /// 1 m wide and 150 m high whose crest (x = 500.5) no 2 m sample from
+    /// x = 400 lands on still raises the flight over it, with the
+    /// clearance, and the flight's lowest point over the ground is exactly
+    /// that clearance.
+    #[test]
+    fn a_gap_sweep_clears_a_ridge_between_samples() {
+        use crate::runtime_world::SharedTerrain;
+        use argusnet_types::Bounds2d;
+        use argusnet_world::tiled::{Tile, TiledTerrain};
+        let heights_m = (0..9)
+            .map(|_| {
+                (0..9)
+                    .map(|col| if col == 1 { 150.0 } else { 0.0 })
+                    .collect()
+            })
+            .collect();
+        let tile = Tile {
+            tx: 125,
+            ty: 0,
+            lod: 0,
+            x_min_m: 500.0,
+            y_min_m: 0.0,
+            cell_size_m: 0.5,
+            heights_m,
+            min_pyramid: Vec::new(),
+            max_pyramid: Vec::new(),
+        };
+        let terrain = Arc::new(SharedTerrain::new(
+            Arc::new(
+                TiledTerrain::new(
+                    Bounds2d::new(0.0, 1000.0, 0.0, 1000.0),
+                    8,
+                    0.5,
+                    0.0,
+                    vec![tile],
+                )
+                .unwrap(),
+            ),
+            0.5,
+        ));
+        let mut stage = efficient_driver(Vec::new());
+        stage.set_known_terrain(Some(terrain.clone()));
+        let start = [400.0, 1.0, 40.0];
+        let z = stage
+            .sweep_height(start, &[[600.0, 1.0]], 40.0)
+            .expect("it can climb over");
+        let clearance = PlannerConfig::default().drone_clearance_m;
+        let (low, _) = crate::ground::lowest_margin(terrain.as_ref(), start, [600.0, 1.0, z]);
+        assert!(low >= clearance - 1e-6, "{low}");
+        assert!(low < clearance + 1e-3, "no higher than it needs: {low}");
     }
 
     /// A sweep whose way crosses a ridge between its sample points is flown

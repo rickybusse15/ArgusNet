@@ -470,18 +470,14 @@ struct OverrideCheckpoint {
     climbing: BTreeMap<String, f64>,
 }
 
-/// How far apart the ground is checked along a rejoin step, metres. The
-/// ground is a height field no finer than this; structures are met exactly.
-const REJOIN_CHECK_STEP_M: f64 = 1.0;
-
 /// How far short of a structure a step that would meet it stops, metres.
 const REJOIN_STANDOFF_M: f64 = 0.5;
 
 /// `from` toward `to`, kept out of structures and the ground. A building or
 /// wall the step would meet, however thin, stops it [`REJOIN_STANDOFF_M`]
-/// short (the segment is intersected with each, not sampled). The ground is
-/// checked every [`REJOIN_CHECK_STEP_M`]: the first point the guard has to
-/// move is where the step ends, moved. A step nothing stops ends at `to`.
+/// short (the segment is intersected with each, not sampled); so does the
+/// first point within the guard's clearance of the ground, solved on the
+/// terrain's cells. A step nothing stops ends at `to`.
 fn guarded_step(
     guard: &crate::belief_world::PhysicalGuard,
     node_id: &str,
@@ -507,7 +503,8 @@ fn guarded_step(
     }
 }
 
-/// `from` toward `to`, checked by `guard` every [`REJOIN_CHECK_STEP_M`].
+/// `from` toward `to`, stopped where it first comes within the guard's
+/// clearance of the ground, then put through the guard.
 fn guarded_to(
     guard: &crate::belief_world::PhysicalGuard,
     node_id: &str,
@@ -515,26 +512,19 @@ fn guarded_to(
     from: [f64; 3],
     to: [f64; 3],
 ) -> [f64; 3] {
-    let pieces = (distance_3d(from, to) / REJOIN_CHECK_STEP_M)
-        .ceil()
-        .max(1.0) as usize;
-    for k in 1..=pieces {
-        let point = if k == pieces {
-            to
-        } else {
-            let f = k as f64 / pieces as f64;
-            [
-                from[0] + (to[0] - from[0]) * f,
-                from[1] + (to[1] - from[1]) * f,
-                from[2] + (to[2] - from[2]) * f,
-            ]
-        };
-        let kept = guard.enforce(node_id, timestamp_s, point);
-        if kept != point {
-            return kept;
+    let stop = match guard.first_ground_contact(from, to) {
+        Some(t) => {
+            let stop = [
+                from[0] + (to[0] - from[0]) * t,
+                from[1] + (to[1] - from[1]) * t,
+                from[2] + (to[2] - from[2]) * t,
+            ];
+            guard.record_ground_stop(node_id, timestamp_s, distance_3d(stop, to));
+            stop
         }
-    }
-    to
+        None => to,
+    };
+    guard.enforce(node_id, timestamp_s, stop)
 }
 
 fn distance_3d(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -1090,6 +1080,64 @@ mod tests {
             }
             assert_eq!(position_of(&sim, "d0").x, 0.0);
         }
+    }
+
+    /// The ground is met exactly too: a ridge 1 m wide, 150 m high, whose
+    /// crest lies half-way between whole metres, where no metre-spaced
+    /// sample of these steps falls. The drone goes over it, not through.
+    #[test]
+    fn a_rejoin_does_not_step_through_a_narrow_ridge() {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::tiled::{Tile, TiledTerrain};
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
+        // One tile of 8 x 8 cells of 0.5 m from x = 500, y = 0: the ridge is
+        // the column of nodes at x = 500.5.
+        let heights_m = (0..9)
+            .map(|_| {
+                (0..9)
+                    .map(|col| if col == 1 { 150.0 } else { 0.0 })
+                    .collect()
+            })
+            .collect();
+        let tile = Tile {
+            tx: 175,
+            ty: 150,
+            lod: 0,
+            x_min_m: 500.0,
+            y_min_m: 0.0,
+            cell_size_m: 0.5,
+            heights_m,
+            min_pyramid: Vec::new(),
+            max_pyramid: Vec::new(),
+        };
+        let terrain = TiledTerrain::new(bounds, 8, 0.5, 0.0, vec![tile]).unwrap();
+        assert_eq!(terrain.height_lod(500.5, 0.0, 0), 150.0);
+        assert_eq!(terrain.height_lod(500.0, 0.0, 0), 0.0);
+        let layer = ObstacleLayer::new(bounds, 200.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 0.5),
+            SharedObstacles::new(Arc::new(layer)),
+            2.0,
+        );
+        let mut sim = rejoin_rig_at(true, 1000.0);
+        ov(&mut sim).set_physical_guard(Some(guard));
+        let mut highest = 0.0_f64;
+        let mut ticks = 0;
+        while overridden(&sim).rejoining_at("d0").is_some() || ticks == 0 {
+            sim.step().expect("tick runs");
+            ticks += 1;
+            assert!(ticks < 200, "the rejoin stalled");
+            let p = position_of(&sim, "d0");
+            if p.x < 500.5 {
+                assert!(highest > 150.0, "through the ridge at {} m", p.z);
+            }
+            highest = highest.max(p.z);
+        }
+        assert_eq!(position_of(&sim, "d0").x, 0.0);
     }
 
     /// The last step onto the path is guarded too: released 20 m from its
