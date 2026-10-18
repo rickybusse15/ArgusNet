@@ -19,6 +19,10 @@ const CONDUCTOR_OFFSETS_M: [f64; 3] = [-4.0, 0.0, 4.0];
 /// A transmission line's sag at mid-span, as a fraction of the span.
 const SAG_RATIO: f64 = 0.03;
 const CONDUCTOR_RADIUS_M: f64 = 0.015;
+/// How high every wire hangs over the ground at least, metres: a support
+/// is raised above its standard height until its spans' wires do, wherever
+/// the ground rises between supports.
+const GROUND_CLEARANCE_M: f64 = 10.0;
 /// How far a flight must keep from a conductor of a transmission line.
 const CLEARANCE_M: f64 = 10.0;
 
@@ -59,7 +63,7 @@ pub fn build_power_lines(
             height_m: SUPPORT_HEIGHT_M,
         })
         .collect();
-    let line = PowerLine {
+    let mut line = PowerLine {
         id: "powerline-transmission".to_string(),
         supports,
         conductor_offsets_m: CONDUCTOR_OFFSETS_M.to_vec(),
@@ -67,6 +71,16 @@ pub fn build_power_lines(
         conductor_radius_m: CONDUCTOR_RADIUS_M,
         clearance_m: CLEARANCE_M,
     };
+    // Raising both supports of a span lifts its whole wire by as much (its
+    // sag is set by its length), so one pass clears every span; raising a
+    // support for one span only lifts its neighbour's.
+    for span in 0..line.supports.len() - 1 {
+        let short_m = GROUND_CLEARANCE_M - line.lowest_over_ground(span, &terrain.tiled);
+        if short_m > 0.0 {
+            line.supports[span].height_m += short_m + 1e-6;
+            line.supports[span + 1].height_m += short_m + 1e-6;
+        }
+    }
     vec![line
         .validated()
         .expect("a line laid across the map is a valid line")]
@@ -87,6 +101,40 @@ mod tests {
         }))
         .expect("config");
         build_bundle(&config).expect("bundle builds")
+    }
+
+    /// On rough ground the supports are raised until every wire, solved
+    /// along its whole sag, hangs at least 10 m over the ground: on
+    /// `mountain_pass` (seed 5) a standard 30 m support would leave a wire
+    /// under a ridge between supports.
+    #[test]
+    fn every_wire_clears_rough_ground_between_supports() {
+        let config: ScenarioConfig = serde_json::from_value(json!({
+            "format": "argusnet.scenario-config",
+            "version": 1,
+            "duration_s": 5.0,
+            "options": {
+                "power_lines": true,
+                "terrain_preset": "mountain_pass",
+                "terrain_seed": 5,
+            },
+        }))
+        .expect("config");
+        let built = crate::builder::build_world(&config.options).expect("world builds");
+        let line = &built.power_lines[0];
+        for span in 0..line.supports.len() - 1 {
+            let low = line.lowest_over_ground(span, &built.terrain.tiled);
+            assert!(
+                low >= super::GROUND_CLEARANCE_M - 1e-6,
+                "span {span}: {low} m"
+            );
+        }
+        let raised = line
+            .supports
+            .iter()
+            .filter(|support| support.height_m > super::SUPPORT_HEIGHT_M + 1e-3)
+            .count();
+        assert!(raised > 0, "some support had to be raised on this ground");
     }
 
     /// The option strings one line across the map, seated on the ground,

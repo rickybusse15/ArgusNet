@@ -225,6 +225,52 @@ impl PowerLine {
         }
     }
 
+    /// How far the lowest conductor of span `span` (from support `span` to
+    /// the next) hangs above `terrain`, metres: solved, not sampled. Along a
+    /// conductor the ground is a quadratic in each terrain cell it crosses
+    /// ([`TiledTerrain::height_along`]) and the sagging wire a quadratic over
+    /// the whole span, so their difference is solved for its lowest point in
+    /// each cell. Negative when a wire is under the ground.
+    pub fn lowest_over_ground(&self, span: usize, terrain: &crate::tiled::TiledTerrain) -> f64 {
+        let mut lowest = f64::INFINITY;
+        for &offset_m in &self.conductor_offsets_m {
+            let (a, b) = (
+                self.conductor_at(span, offset_m, 0.0),
+                self.conductor_at(span, offset_m, 1.0),
+            );
+            for piece in terrain.height_along([a[0], a[1]], [b[0], b[1]]) {
+                // The wire over the piece, as `c0 + c1·s + c2·s²` in the
+                // piece's own 0..1, from three points of it.
+                let wire = |s: f64| {
+                    self.conductor_at(span, offset_m, piece.t0 + (piece.t1 - piece.t0) * s)[2]
+                };
+                let (w0, wm, w1) = (wire(0.0), wire(0.5), wire(1.0));
+                let w2 = 2.0 * (w0 - 2.0 * wm + w1);
+                let wire = [w0, w1 - w0 - w2, w2];
+                let [g0, g1, g2] = piece.coefficients;
+                // Above the piece's quadratic, and above the floor it is
+                // raised to.
+                for ground in [[g0, g1, g2], [terrain.floor_m, 0.0, 0.0]] {
+                    let q = [
+                        wire[0] - ground[0],
+                        wire[1] - ground[1],
+                        wire[2] - ground[2],
+                    ];
+                    let at = |s: f64| q[0] + (q[1] + q[2] * s) * s;
+                    let mut low = at(0.0).min(at(1.0));
+                    if q[2] > 0.0 {
+                        let vertex = -q[1] / (2.0 * q[2]);
+                        if vertex > 0.0 && vertex < 1.0 {
+                            low = low.min(at(vertex));
+                        }
+                    }
+                    lowest = lowest.min(low);
+                }
+            }
+        }
+        lowest
+    }
+
     /// Where conductor `offset_m` hangs at fraction `t` (0 at support
     /// `span`, 1 at the next) of that span: between its attachments on the
     /// two cross-arms, sagging below their chord.
@@ -530,6 +576,53 @@ mod tests {
         let mut one_support = good;
         one_support["supports"].as_array_mut().unwrap().pop();
         assert!(serde_json::from_value::<PowerLine>(one_support).is_err());
+    }
+
+    /// The lowest a wire hangs over the ground is solved on the terrain's
+    /// cells: over a 30 m hump at mid-span (the wire there is at 17 m) it is
+    /// 13 m under, as dense sampling finds, and never more than sampling
+    /// says.
+    #[test]
+    fn the_lowest_wire_over_the_ground_is_solved() {
+        use crate::tiled::{Tile, TiledTerrain};
+        let heights_m = (0..5)
+            .map(|_| {
+                (0..21)
+                    .map(|col| if col == 10 { 30.0 } else { 0.0 })
+                    .collect()
+            })
+            .collect();
+        let tile = Tile {
+            tx: 0,
+            ty: 0,
+            lod: 0,
+            x_min_m: 0.0,
+            y_min_m: -10.0,
+            cell_size_m: 5.0,
+            heights_m,
+            min_pyramid: Vec::new(),
+            max_pyramid: Vec::new(),
+        };
+        let terrain = TiledTerrain::new(
+            Bounds2d::new(0.0, 100.0, -10.0, 10.0),
+            20,
+            5.0,
+            0.0,
+            vec![tile],
+        )
+        .unwrap();
+        let line = line();
+        let solved = line.lowest_over_ground(0, &terrain);
+        let sampled = (0..=100_000)
+            .map(|k| {
+                let t = k as f64 / 100_000.0;
+                let p = line.conductor_at(0, 0.0, t);
+                p[2] - terrain.height_lod(p[0], p[1], 0)
+            })
+            .fold(f64::INFINITY, f64::min);
+        assert!((solved - sampled).abs() < 1e-3, "{solved} vs {sampled}");
+        assert!(solved <= sampled + 1e-9);
+        assert!((solved + 13.0).abs() < 1e-6, "{solved}");
     }
 
     #[test]
