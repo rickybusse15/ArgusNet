@@ -5,7 +5,11 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+// Bevy 0.20's prelude brings its own `ContextExt`, whose `context` and
+// `with_context` turn a result into a `BevyError`. Naming anyhow's trait
+// `ContextExt` here shadows the prelude's, so these calls stay anyhow's.
+use anyhow::Context as ContextExt;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::Hdr;

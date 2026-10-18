@@ -1,7 +1,7 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12. R0's opacity fix is implemented (#222); R1–R5
-are not started.
+**Status:** proposed 2026-10-12. R0 is done: the opacity fix (#222) and
+typed structure matching. R1–R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -48,9 +48,17 @@ C8 (P2.6) and D2 (P5.1).
   premultiplication the renderer wants happens after import. A headless probe
   checks building translucency
   (`geometry_probes::a_building_is_drawn_at_its_styled_opacity`).
-- Name the world-model shapes explicitly: polygon prism, cylinder prism, and the
-  new ones below, so each consumer (`los`, `first_hit`, `point_collides`, the
-  planner, `scene_build`) matches on a shape, not on a `kind` string.
+- **Done.** Name the world-model shapes explicitly, so each consumer matches
+  on a shape, not on a `kind` string. Shapes were already the
+  `ObstacleShape` enum (polygon, cylinder) for `los`, `first_hit`,
+  `point_collides`, the planner and `scene_build`. What was still a string
+  match was the hard-structure rule: `point_collides` and the range
+  scanner's `first_hit` tested `blocker_type.as_str()` against
+  `"building" | "wall"`, and the planner had its own copy. All three now ask
+  `BlockerType::is_hard()`. The new kinds below add variants there. The one
+  `kind` check left, `forest-stand-v1` in land-cover painting, is the
+  reference's own rule (a stand is told from other prisms only by its tag)
+  and stays.
 
 ### R1: real buildings
 

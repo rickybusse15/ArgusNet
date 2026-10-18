@@ -97,7 +97,7 @@ impl HologramMaterial {
 }
 impl Material for HologramMaterial {
     fn fragment_shader() -> ShaderRef {
-        "embedded://argusnet_viewer/shaders/hologram.wgsl".into()
+        "embedded://argusnet_viewer/shaders/hologram.wesl".into()
     }
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Add
@@ -125,7 +125,7 @@ pub struct MarkerAssets {
 pub struct MarkerMeshPlugin;
 impl Plugin for MarkerMeshPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "shaders/hologram.wgsl");
+        embedded_asset!(app, "shaders/hologram.wesl");
         app.add_plugins(MaterialPlugin::<HologramMaterial>::default())
             .init_resource::<MarkerEntityIndex>()
             .add_systems(Startup, setup_assets);
@@ -145,7 +145,7 @@ fn drone_mesh() -> Mesh {
 /// fills the gaps between its thin arms, so the whole symbol is a target, and
 /// stops at the arms' reach, so nothing outside the symbol is.
 pub fn pick_proxy(mesh: &Mesh) -> Mesh {
-    let aabb = mesh.compute_aabb().expect("glyph meshes have positions");
+    let aabb = mesh.get_aabb().expect("glyph meshes have positions");
     let half = Vec3::from(aabb.half_extents);
     Mesh::from(Cuboid::new(half.x * 2.0, half.y * 2.0, half.z * 2.0))
         .translated_by(Vec3::from(aabb.center))
@@ -630,7 +630,7 @@ mod tests {
         assert!(!hit(&drone, 0.6, 0.0), "the gap is not in the drawn glyph");
         assert!(hit(&proxy, 0.6, 0.0), "the gap is not in the proxy");
         // The arm tips are the reach: just past them, neither.
-        let reach = Vec3::from(drone.compute_aabb().unwrap().half_extents);
+        let reach = Vec3::from(drone.get_aabb().unwrap().half_extents);
         assert!(!hit(&proxy, reach.x + 0.01, 0.0));
         assert!(!hit(&drone, reach.x + 0.01, 0.0));
     }
