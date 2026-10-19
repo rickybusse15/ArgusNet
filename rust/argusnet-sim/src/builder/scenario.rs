@@ -23,6 +23,7 @@ use argusnet_planning::planner::{PlannerConfig, RoutePlanner, Scene};
 use argusnet_world::index::ObstacleLayer;
 use argusnet_world::numpy_rng::NumpyRng;
 use argusnet_world::obstacles::{Obstacle, ObstacleMetadata};
+use argusnet_world::powerline::PowerLine;
 
 use super::behaviors::{build_target_behavior, Bounds};
 use super::environment::MapBounds;
@@ -1183,6 +1184,10 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
             seed,
             mission_profile,
         )?)
+    } else if options.power_line_inspection {
+        return Err(BuildError::Invalid(
+            "power_line_inspection needs mission_mode scan_map_inspect".into(),
+        ));
     } else {
         None
     };
@@ -1422,6 +1427,20 @@ fn mission_document(
     let count = options.poi_count as usize;
     let hover = number(&["poi_hover_agl_m"]);
     let pois = match mission_profile {
+        _ if options.power_line_inspection => {
+            if mission_profile.is_some() {
+                return Err(BuildError::Invalid(
+                    "power_line_inspection places its own POIs; it takes no mission profile"
+                        .into(),
+                ));
+            }
+            let Some(line) = ground.world.power_lines.first() else {
+                return Err(BuildError::Invalid(
+                    "power_line_inspection needs the power_lines option".into(),
+                ));
+            };
+            line_inspection_pois(ground, line, count)
+        }
         Some(profile) => profile_pois(ground, profile, map_extent_m(bounds), count, hover),
         None => generated_pois(ground, bounds, count, hover, seed),
     };
@@ -1530,6 +1549,51 @@ fn generated_pois(
     pois
 }
 
+/// How far from the line's centre a `power_line_inspection` POI stands,
+/// metres: clear of the outer conductors' 10 m clearance, close enough to
+/// see the hardware.
+const LINE_INSPECTION_OFFSET_M: f64 = 35.0;
+/// How high over the ground a `power_line_inspection` POI hovers, metres:
+/// a few metres over the conductors, which hang 24–30 m up on the builder's
+/// line, so a flight between POIs at this height is well inside their
+/// 10 m clearance. Like the builder's other POIs (40 m), it is below a
+/// tracker's 50 m safety floor (`min_agl_m`).
+const LINE_INSPECTION_HOVER_AGL_M: f64 = 32.0;
+
+/// `power_line_inspection`'s POIs: `count` of them spaced evenly along the
+/// line from its first support to its last, each beside it just over the
+/// wires, the first to its left and then alternately right and left, so
+/// neighbouring POIs are on opposite sides of the wires. Laid out from the
+/// line alone, so the same for every seed. A POI that would stand in a
+/// building is pushed out of it.
+fn line_inspection_pois(ground: &Ground<'_>, line: &PowerLine, count: usize) -> Vec<Value> {
+    let (first, last) = (
+        line.supports[0].xy_m,
+        line.supports[line.supports.len() - 1].xy_m,
+    );
+    let (dx, dy) = (last[0] - first[0], last[1] - first[1]);
+    let length = dx.hypot(dy);
+    let left = [-dy / length, dx / length];
+    (0..count)
+        .map(|i| {
+            let t = (i as f64 + 0.5) / count as f64;
+            let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+            let beside = [
+                first[0] + dx * t + side * LINE_INSPECTION_OFFSET_M * left[0],
+                first[1] + dy * t + side * LINE_INSPECTION_OFFSET_M * left[1],
+            ];
+            let [x, y] = ground.push_outside(beside, LINE_INSPECTION_HOVER_AGL_M);
+            json!({
+                "poi_id": format!("poi-{i:02}"),
+                "name": format!("Span {}", i + 1),
+                "position": [x, y, ground.height_at(x, y) + LINE_INSPECTION_HOVER_AGL_M],
+                "priority": (count - i) as i64,
+                "required_dwell_s": 15.0,
+            })
+        })
+        .collect()
+}
+
 /// `scenario_replay_metadata`'s `scenario_options`.
 fn scenario_options_document(o: &ScenarioOptions) -> Value {
     let mut document = json!({
@@ -1563,6 +1627,9 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
     // Only when set, so every other run's replay meta is unchanged.
     if o.power_lines {
         document["power_lines"] = json!(true);
+    }
+    if o.power_line_inspection {
+        document["power_line_inspection"] = json!(true);
     }
     document
 }

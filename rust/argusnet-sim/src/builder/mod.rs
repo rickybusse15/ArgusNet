@@ -177,6 +177,13 @@ pub struct ScenarioOptions {
     /// so the replay's provenance is too.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub power_lines: bool,
+    /// R3: inspect the `power_lines` line from low down. The mission's POIs
+    /// stand beside the line just over the wires, alternately on either
+    /// side, so a drone flying from one to the next crosses the wires low.
+    /// Needs `power_lines` and a `scan_map_inspect` mission without a
+    /// profile. Off by default; written only when on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub power_line_inspection: bool,
 }
 
 impl Default for ScenarioOptions {
