@@ -335,6 +335,10 @@ pub struct MissionDriverStage {
     /// The prior map's terrain, so a route round obstacles that would carry a
     /// drone lower than the ground under its corners is not flown (P3).
     terrain: Option<Arc<dyn crate::observe::TerrainHeight>>,
+    /// The run's battery model, read off stage 1 at the start of every run:
+    /// whether a flight climbs over a power line or goes round its ends is
+    /// priced on it (R3).
+    route_model: BatteryModel,
 }
 
 /// The obstacle layer the driver plans routes over (P3), with its planner.
@@ -940,6 +944,7 @@ impl MissionDriverStage {
             report: DriverReport::default(),
             obstacles: None,
             terrain: None,
+            route_model: BatteryModel::default(),
         }
     }
 
@@ -982,6 +987,18 @@ impl MissionDriverStage {
         self.terrain = terrain;
         if let Some(obstacles) = &self.obstacles {
             obstacles.kept.borrow_mut().clear();
+        }
+    }
+
+    /// Price routes on `model` (R3): the run's battery, as stage 1 holds
+    /// it. A route kept from before was chosen on another model's prices,
+    /// so a change forgets them.
+    fn price_routes_on(&mut self, model: BatteryModel) {
+        if model != self.route_model {
+            self.route_model = model;
+            if let Some(obstacles) = &self.obstacles {
+                obstacles.kept.borrow_mut().clear();
+            }
         }
     }
 
@@ -1036,8 +1053,8 @@ impl MissionDriverStage {
     /// under efficient_v1 (R3). A route whose every leg already keeps it,
     /// by the swept test, is returned as it is. Otherwise it is flown over
     /// the wires ([`Self::over_lines`]) or round the line's ends
-    /// ([`Self::around_lines`]), whichever costs less energy; a route that
-    /// can do neither is returned as it is.
+    /// ([`Self::around_lines`]), whichever costs less energy on the run's
+    /// battery model; a route that can do neither is returned as it is.
     fn keep_line_clearance(
         &self,
         from: [f64; 3],
@@ -1073,9 +1090,7 @@ impl MissionDriverStage {
                     lines: Some("over"),
                 }
             });
-        // Priced on the default platform: which way is cheaper does not
-        // turn on one platform's figures.
-        let model = BatteryModel::default();
+        let model = self.route_model;
         let cost = |c: &Corners| {
             model.travel_cost_wh(c.length_m) + c.climb_cost_wh(&model, from[2], to[2])
         };
@@ -2382,6 +2397,7 @@ impl MissionDriverStage {
         battery: &BatteryStage,
         mapping: &MappingStage,
     ) {
+        self.price_routes_on(battery.model());
         if !self.rescored {
             let radius = self.config.rescore_radius_m;
             self.pois
@@ -2644,6 +2660,7 @@ impl StageHandler for MissionDriverStage {
         }
         let empty = BatteryStage::new();
         let battery = stage_one_battery(context.stages).unwrap_or(&empty);
+        self.price_routes_on(battery.model());
         // Stage 8's map as it left it this tick, through the lent views.
         let mapping = context
             .stages
@@ -4485,6 +4502,39 @@ mod tests {
             .find(|d| d.kind == "poi_assignment")
             .expect("assigned");
         assert_eq!(decision.inputs["route_power_lines"], "around");
+    }
+
+    /// R3: over or round is priced on the run's own battery. On a platform
+    /// whose level flight costs ten times the default's and whose climbs
+    /// cost a tenth, the same short line is climbed over instead.
+    #[test]
+    fn over_or_round_is_priced_on_the_runs_battery() {
+        let line = power_line(&[-20.0, 20.0], 40.0, &[0.0]);
+        let base = BatteryModel::default();
+        let mut battery = BatteryStage::new();
+        battery.set_model(BatteryModel {
+            travel_power_w: 10.0 * base.travel_power_w,
+            climb_power_w: 0.1 * base.climb_power_w,
+            hover_power_w: 0.1 * base.hover_power_w,
+            capacity_wh: 100.0 * base.capacity_wh,
+            ..base
+        });
+        battery.register("drone-a", None);
+        let mobile = vec![("drone-a".to_string(), [100.0, 0.0, 40.0])];
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        wired(&mut stage, line.clone());
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(!flight.via_z().is_empty(), "over, not round");
+        for (from, to) in legs_of(&flight, mobile[0].1) {
+            assert!(!line.violated_by(from, to), "{from:?} -> {to:?}");
+        }
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .expect("assigned");
+        assert_eq!(decision.inputs["route_power_lines"], "over");
     }
 
     /// R3: the reference never reads the lines, and a flight high over one
