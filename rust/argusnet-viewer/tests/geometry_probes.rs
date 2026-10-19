@@ -1,5 +1,5 @@
-//! Pixel probes (P2.2): sensor volumes, zone walls and trail ribbons, read
-//! back from real headless renders.
+//! Pixel probes (P2.2): sensor volumes, zone walls, trail ribbons and power
+//! lines (R3), read back from real headless renders.
 //!
 //! Each case renders the same scene twice, with its overlay on and off, and
 //! compares the pixels at world points: where the geometry is, they must
@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use argusnet_sensing::look::{sensor_look_direction, DEFAULT_LOOK_DOWN_ANGLE_DEG};
 use argusnet_viewer::headless::{CameraPreset, HeadlessRenderOptions, ProbeRequest};
+use argusnet_viewer::quality::QualityTier;
 use argusnet_viewer::state::RuntimeOverlayVisibility;
 use argusnet_viewer::{render_headless, ViewMode};
 
@@ -105,6 +106,30 @@ fn render(
     ground: &[[f64; 2]],
     points: &[[f64; 3]],
 ) -> Vec<[f32; 3]> {
+    render_at(
+        name,
+        scene,
+        camera,
+        target_id,
+        QualityTier::default(),
+        overlays,
+        ground,
+        points,
+    )
+}
+
+/// [`render`] at a quality tier.
+#[allow(clippy::too_many_arguments)]
+fn render_at(
+    name: &str,
+    scene: &Path,
+    camera: CameraPreset,
+    target_id: Option<&str>,
+    quality: QualityTier,
+    overlays: RuntimeOverlayVisibility,
+    ground: &[[f64; 2]],
+    points: &[[f64; 3]],
+) -> Vec<[f32; 3]> {
     let dir = scratch(&format!("{name}-out"));
     let probes = dir.join("probes.json");
     render_headless(
@@ -118,7 +143,7 @@ fn render(
             height: 480,
             fps: 30,
             view_mode: ViewMode::RealWorld,
-            quality: Default::default(),
+            quality,
             frame_stats: 0,
             lifecycle: 0,
             probe: Some(ProbeRequest {
@@ -511,4 +536,137 @@ fn a_building_is_drawn_at_its_styled_opacity() {
             "at {point:?} the blended roof {b:?} is not distinguishable from the opaque {s:?} ({d})"
         );
     }
+}
+
+/// A transmission line along y = -300 m: 17 supports 200 m apart, 30 m
+/// tall on the committed terrain (18 m at its highest), three conductors.
+fn power_line() -> argusnet_world::powerline::PowerLine {
+    use argusnet_world::powerline::{PowerLine, Support};
+    PowerLine {
+        id: "probe-line".into(),
+        supports: (0..17)
+            .map(|k| Support {
+                xy_m: [-1600.0 + 200.0 * k as f64, -300.0],
+                base_z_m: 18.0,
+                height_m: 30.0,
+            })
+            .collect(),
+        conductor_offsets_m: vec![-4.0, 0.0, 4.0],
+        sag_ratio: 0.03,
+        conductor_radius_m: 0.015,
+        clearance_m: 10.0,
+    }
+    .validated()
+    .unwrap()
+}
+
+/// The probe scene, with [`power_line`] in the replay's meta.
+fn power_line_scene(name: &str) -> PathBuf {
+    let root = scene(name, 400.0, None);
+    let path = root.join("replay/replay.json");
+    let mut replay: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    replay["meta"]["power_lines"] = serde_json::to_value(vec![power_line()]).unwrap();
+    std::fs::write(&path, replay.to_string()).unwrap();
+    root
+}
+
+/// Conductors are drawn where the model hangs them, at least a pixel and a
+/// half wide however far away: a 3 cm wire seen from kilometres off, at
+/// every quality tier. The towers stand where the supports are, and
+/// nothing is drawn off the line.
+#[test]
+fn power_lines_are_drawn_where_the_model_hangs_them_at_every_tier() {
+    if !gpu_tests() {
+        eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
+        return;
+    }
+    let scene = power_line_scene("power-line");
+    let line = power_line();
+    let pieces = line.pieces();
+    // Mid-span of the centre conductor on the span from x = -1000 to -800
+    // (40 pieces per conductor per span), west of the buildings at the
+    // centre, which hide the wire from this camera: where it sags lowest.
+    let per_span = 40 * 3;
+    let span = 3;
+    let mid = pieces[span * per_span + 40 + 19].end_m;
+    assert!(
+        (mid[0] + 900.0).abs() < 1e-9 && (mid[2] - 42.0).abs() < 1e-9,
+        "{mid:?}"
+    );
+    // Half-way up a support near the centre, in the close camera's view;
+    // and 150 m north of the wire at its height, clear of everything.
+    let tower = [400.0, -300.0, 18.0 + 15.0];
+    let off_line = [mid[0], mid[1] + 150.0, mid[2]];
+    let points = [mid, tower, off_line];
+    let without = RuntimeOverlayVisibility {
+        power_lines: false,
+        ..overlays(false, false, false)
+    };
+    let with = overlays(false, false, false);
+    assert!(with.power_lines, "power lines are on by default");
+
+    for tier in [QualityTier::Low, QualityTier::Standard, QualityTier::High] {
+        let off = render_at(
+            &format!("lines-off-{tier:?}"),
+            &scene,
+            CameraPreset::Isometric,
+            None,
+            tier,
+            without.clone(),
+            &[],
+            &points,
+        );
+        let on = render_at(
+            &format!("lines-on-{tier:?}"),
+            &scene,
+            CameraPreset::Isometric,
+            None,
+            tier,
+            with.clone(),
+            &[],
+            &points,
+        );
+        for (label, i) in [("wire", 0), ("tower", 1), ("off-line", 2)] {
+            eprintln!(
+                "{tier:?} {label:>8}: off {:?} on {:?} diff {:.4}",
+                off[i],
+                on[i],
+                difference(on[i], off[i])
+            );
+        }
+        assert!(
+            difference(on[0], off[0]) > 0.03,
+            "{tier:?}: the wire is not drawn at mid-span"
+        );
+        assert!(
+            difference(on[2], off[2]) < 0.005,
+            "{tier:?}: something is drawn off the line"
+        );
+    }
+
+    // Close in, the tower itself.
+    let off = render(
+        "tower-off",
+        &scene,
+        CameraPreset::Close,
+        None,
+        without,
+        &[],
+        &[tower],
+    );
+    let on = render(
+        "tower-on",
+        &scene,
+        CameraPreset::Close,
+        None,
+        with,
+        &[],
+        &[tower],
+    );
+    eprintln!("close tower: off {:?} on {:?}", off[0], on[0]);
+    assert!(
+        difference(on[0], off[0]) > 0.03,
+        "the tower is not drawn at its support"
+    );
 }

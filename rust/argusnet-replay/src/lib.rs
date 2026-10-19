@@ -162,6 +162,14 @@ pub use argusnet_world::raster::TerrainRaster as TerrainViewerMesh;
 /// away when the shared value types move into their own crate.
 pub const DEFAULT_MAX_STALE_STEPS: u32 = 8;
 
+/// What [`ReplayDocument::power_lines`] read: the lines the model accepts,
+/// and one reason per line it refused.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PowerLinesRead {
+    pub lines: Vec<argusnet_world::powerline::PowerLine>,
+    pub refused: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReplayDocument {
     pub meta: Option<Value>,
@@ -176,6 +184,32 @@ impl ReplayDocument {
             .and_then(|m| m.get("zones"))
             .and_then(|v| serde_json::from_value::<Vec<MissionZone>>(v.clone()).ok())
             .unwrap_or_default()
+    }
+
+    /// The run's power lines (`meta.power_lines`, R3), each checked by the
+    /// model as it is read, on its own: the lines the model accepts, and why
+    /// each one it refuses was refused. A bad line is reported, never
+    /// silently dropped, and never hides the good ones beside it. Nothing
+    /// when the replay carries none.
+    pub fn power_lines(&self) -> PowerLinesRead {
+        let mut read = PowerLinesRead::default();
+        match self.meta.as_ref().and_then(|m| m.get("power_lines")) {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(lines)) => {
+                for (index, line) in lines.iter().enumerate() {
+                    match serde_json::from_value(line.clone()) {
+                        Ok(line) => read.lines.push(line),
+                        Err(error) => read
+                            .refused
+                            .push(format!("meta.power_lines[{index}]: {error}")),
+                    }
+                }
+            }
+            Some(_) => read
+                .refused
+                .push("meta.power_lines: not a list of lines".to_string()),
+        }
+        read
     }
 
     /// Stale-step threshold the tracker was actually configured with for this run.
@@ -877,6 +911,50 @@ mod tests {
     use serde_json::json;
 
     use super::ReplayDocument;
+
+    /// `meta.power_lines` is read through the model's own check, line by
+    /// line: absent is no lines, a valid line is read, and one the model
+    /// refuses is reported with its index and reason without hiding the
+    /// valid lines beside it.
+    #[test]
+    fn power_lines_are_read_checked_one_by_one() {
+        let replay = |lines: serde_json::Value| -> ReplayDocument {
+            serde_json::from_value(json!({"meta": {"power_lines": lines}, "frames": []})).unwrap()
+        };
+        let none: ReplayDocument =
+            serde_json::from_value(json!({"meta": {}, "frames": []})).unwrap();
+        assert_eq!(none.power_lines(), super::PowerLinesRead::default());
+        let line = json!({
+            "id": "line-a", "conductor_offsets_m": [0.0], "sag_ratio": 0.03,
+            "conductor_radius_m": 0.01, "clearance_m": 5.0,
+            "supports": [
+                {"xy_m": [0.0, 0.0], "base_z_m": 0.0, "height_m": 20.0},
+                {"xy_m": [100.0, 0.0], "base_z_m": 0.0, "height_m": 20.0}
+            ]
+        });
+        let read = replay(json!([line.clone()])).power_lines();
+        assert!(read.refused.is_empty(), "{:?}", read.refused);
+        assert_eq!(read.lines.len(), 1);
+        assert_eq!(read.lines[0].supports[1].xy_m, [100.0, 0.0]);
+        // A refused line between two good ones: both good ones survive.
+        let mut bare = line.clone();
+        bare["id"] = json!("line-bare");
+        bare["conductor_offsets_m"] = json!([]);
+        let mut other = line.clone();
+        other["id"] = json!("line-b");
+        let read = replay(json!([line, bare, other])).power_lines();
+        let ids: Vec<&str> = read.lines.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(ids, ["line-a", "line-b"]);
+        assert_eq!(read.refused.len(), 1);
+        assert!(
+            read.refused[0].contains("power_lines[1]") && read.refused[0].contains("line-bare"),
+            "{:?}",
+            read.refused
+        );
+        // Not a list at all: refused as a whole.
+        let read = replay(json!({"id": "line-a"})).power_lines();
+        assert!(read.lines.is_empty() && read.refused.len() == 1);
+    }
 
     /// Regression: `SafetyValidationResult.reason` is `str | None` in Python and
     /// serializes to JSON `null`, which `docs/replay-schema.json` explicitly

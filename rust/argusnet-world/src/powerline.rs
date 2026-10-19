@@ -13,8 +13,10 @@
 //! **swept**: [`PowerLine::clearance_along`] takes the segment flown between
 //! two ticks, not a point.
 //!
-//! This module is the model alone. Nothing in the simulation reads it yet:
-//! collision, clearance, planning, sensing and drawing come in later slices.
+//! This module is the model. The safety engine judges flights against it
+//! (`structure_clearance`) and the viewer draws it (supports at
+//! [`PowerLine::cross_arm`], conductors from [`PowerLine::pieces`]); the
+//! physical guard, planning and sensing come in later slices.
 
 use serde::{Deserialize, Serialize};
 
@@ -196,8 +198,9 @@ impl PowerLine {
     /// Which way the cross-arm at support `index` points: square to its
     /// span at an end support, and along the bisector of its two spans at a
     /// turn, so the conductors of both spans meet on it. Left of the
-    /// direction of travel.
-    fn arm(&self, index: usize) -> [f64; 2] {
+    /// direction of travel: a conductor at offset `o` is attached at the
+    /// support's `xy_m + o * cross_arm`.
+    pub fn cross_arm(&self, index: usize) -> [f64; 2] {
         let left_of = |span: usize| {
             let (from, to) = (&self.supports[span], &self.supports[span + 1]);
             let length = horizontal(from.xy_m, to.xy_m);
@@ -276,7 +279,7 @@ impl PowerLine {
     /// two cross-arms, sagging below their chord.
     fn conductor_at(&self, span: usize, offset_m: f64, t: f64) -> [f64; 3] {
         let (from, to) = (&self.supports[span], &self.supports[span + 1]);
-        let (arm_from, arm_to) = (self.arm(span), self.arm(span + 1));
+        let (arm_from, arm_to) = (self.cross_arm(span), self.cross_arm(span + 1));
         let start = [
             from.xy_m[0] + arm_from[0] * offset_m,
             from.xy_m[1] + arm_from[1] * offset_m,
@@ -553,6 +556,14 @@ mod tests {
         let at_turn = pieces[40].start_m;
         assert!((at_turn[0] - (100.0 + r)).abs() < 1e-9, "{at_turn:?}");
         assert!((at_turn[1] - (-r)).abs() < 1e-9, "{at_turn:?}");
+        // Where the viewer hangs it: the support plus the offset along the
+        // cross-arm, square to the span at the ends.
+        let arm = turning.cross_arm(1);
+        assert!((arm[0] + 0.5f64.sqrt()).abs() < 1e-12 && (arm[1] - 0.5f64.sqrt()).abs() < 1e-12);
+        assert!((at_turn[0] - (100.0 - 3.0 * arm[0])).abs() < 1e-9);
+        assert!((at_turn[1] - (0.0 - 3.0 * arm[1])).abs() < 1e-9);
+        assert_eq!(turning.cross_arm(0), [-0.0, 1.0]);
+        assert_eq!(turning.cross_arm(2), [-1.0, 0.0]);
         // A flight straight down through the support's attachment point is
         // caught on both conductors' joins.
         let joint = pieces[19].end_m;

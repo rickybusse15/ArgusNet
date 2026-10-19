@@ -18,7 +18,7 @@
 use crate::state::{MapLayerPreset, MissionOverlaySettings, RuntimeOverlayVisibility};
 
 /// The layers a preset sets. Toggles a preset does not own (diagnostic
-/// glyphs, the land-cover tint) are left as they are.
+/// glyphs, the land-cover tint, power lines) are left as they are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PresetLayers {
     pub nodes: bool,
