@@ -24,6 +24,15 @@
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).
 
+- Viewer: power lines are drawn (R3). The replay's `meta.power_lines`
+  becomes lattice towers on their own ground, plus conductors drawn as
+  screen-space lines at least 1.6 px wide, so a 3 cm wire never vanishes
+  with distance or at any quality tier. A Power Lines toggle sits in
+  Runtime Overlays. A replay without lines draws nothing new. GPU probes
+  cover the wire, the tower and an empty point beside them at all three
+  tiers. `PowerLine::cross_arm` is now public. No simulation change: 14/14
+  replays identical.
+
 - World: a power-line model (`powerline-v1`, R3, first slice). Supports in
   order, conductors strung between them with their sag, and a swept
   clearance test: how close the segment flown between two ticks comes to a

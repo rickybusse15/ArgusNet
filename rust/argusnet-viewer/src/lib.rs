@@ -13,6 +13,7 @@ pub mod marker_meshes;
 pub mod mission_zones;
 pub mod orbit_camera;
 pub mod picking;
+pub mod power_lines;
 pub mod prefs;
 pub mod presentation;
 pub mod projection;

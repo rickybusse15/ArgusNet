@@ -37,6 +37,9 @@ pub struct RuntimeOverlayVisibility {
     pub land_cover_tint: bool,
     /// Trail ribbons behind every presented entity (P2.2).
     pub trails: bool,
+    /// The run's power lines, towers and conductors (R3). A world
+    /// structure, not an overlay: no layer preset owns it.
+    pub power_lines: bool,
 }
 
 /// The startup layers are the Operational preset's (`crate::layers`).
@@ -59,6 +62,7 @@ impl Default for RuntimeOverlayVisibility {
             belief: false,
             land_cover_tint: true,
             trails: true,
+            power_lines: true,
         }
     }
 }

@@ -178,6 +178,18 @@ impl ReplayDocument {
             .unwrap_or_default()
     }
 
+    /// The run's power lines (`meta.power_lines`, R3), each checked by the
+    /// model as it is read. Empty when the replay carries none; an error, not
+    /// an empty list, when it carries one the model refuses, so a bad line is
+    /// reported instead of silently not drawn.
+    pub fn power_lines(&self) -> Result<Vec<argusnet_world::powerline::PowerLine>, String> {
+        match self.meta.as_ref().and_then(|m| m.get("power_lines")) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(lines) => serde_json::from_value(lines.clone())
+                .map_err(|error| format!("meta.power_lines: {error}")),
+        }
+    }
+
     /// Stale-step threshold the tracker was actually configured with for this run.
     ///
     /// Replays record it under `meta.platform.max_stale_steps`, so the viewer reads
@@ -877,6 +889,34 @@ mod tests {
     use serde_json::json;
 
     use super::ReplayDocument;
+
+    /// `meta.power_lines` is read through the model's own check: absent is no
+    /// lines, a valid line is read, and one the model refuses is an error
+    /// naming why, never an empty list.
+    #[test]
+    fn power_lines_are_read_checked() {
+        let replay = |lines: serde_json::Value| -> ReplayDocument {
+            serde_json::from_value(json!({"meta": {"power_lines": lines}, "frames": []})).unwrap()
+        };
+        let none: ReplayDocument =
+            serde_json::from_value(json!({"meta": {}, "frames": []})).unwrap();
+        assert_eq!(none.power_lines(), Ok(Vec::new()));
+        let line = json!({
+            "id": "line-a", "conductor_offsets_m": [0.0], "sag_ratio": 0.03,
+            "conductor_radius_m": 0.01, "clearance_m": 5.0,
+            "supports": [
+                {"xy_m": [0.0, 0.0], "base_z_m": 0.0, "height_m": 20.0},
+                {"xy_m": [100.0, 0.0], "base_z_m": 0.0, "height_m": 20.0}
+            ]
+        });
+        let read = replay(json!([line.clone()])).power_lines().unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].supports[1].xy_m, [100.0, 0.0]);
+        let mut bare = line;
+        bare["conductor_offsets_m"] = json!([]);
+        let refused = replay(json!([bare])).power_lines().unwrap_err();
+        assert!(refused.contains("line-a"), "{refused}");
+    }
 
     /// Regression: `SafetyValidationResult.reason` is `str | None` in Python and
     /// serializes to JSON `null`, which `docs/replay-schema.json` explicitly

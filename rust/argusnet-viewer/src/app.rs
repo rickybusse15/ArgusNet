@@ -449,6 +449,7 @@ fn run_inner(
         .add_plugins((
             GradientSkyPlugin,
             crate::marker_meshes::MarkerMeshPlugin,
+            crate::power_lines::PowerLinePlugin,
             TerrainMaterialPlugin,
             crate::terrain_rasters::TerrainRastersPlugin,
         ))
@@ -505,6 +506,8 @@ fn run_inner(
                 crate::sensor_volumes::sync_range_rings,
                 crate::trail_ribbons::sync_trail_ribbons,
                 crate::zone_walls::sync_zone_walls,
+                // The run's towers and conductors (R3).
+                crate::power_lines::sync_power_lines,
                 sync_base_layer_visibility_system,
                 sync_fog_to_camera_system,
                 // Reconstruction owns real state, so it runs regardless of its

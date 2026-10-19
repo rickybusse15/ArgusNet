@@ -1,7 +1,9 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12. R0 is done: the opacity fix (#222) and
-typed structure matching. R1–R5 are not started.
+**Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
+opacity fix (#222) and typed structure matching. R3 is in progress: the
+model, the safety clearance, lines in a run, and drawing in the viewer are
+done. R1, R2, R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -139,8 +141,31 @@ C8 (P2.6) and D2 (P5.1).
   supports every 200 m, three conductors, 10 m clearance), seated on the
   ground and skipping a support that would stand in a building; it is laid
   out from the map alone, so it is the same for every seed. The line goes
-  into the replay's meta as `power_lines`. Next: deconfliction and the guard
-  swept against conductors, the planner's corridor, and drawing.
+  into the replay's meta as `power_lines`.
+
+  *Done (drawing):* the viewer draws `meta.power_lines` (`power_lines.rs`).
+  Each support is a lattice tower on its own ground height, its cross-arm
+  along `PowerLine::cross_arm`. Towers of one height share one mesh. Every
+  conductor piece is a quad expanded in screen space by its own vertex
+  shader to at least 1.6 px, or to its true thickness when that is wider,
+  so a 3 cm wire stays visible kilometres off. Wires are never culled, at
+  any tier. The geometry is built once per run and not rebuilt as the
+  camera moves. A Power Lines toggle in Runtime Overlays shows and hides
+  them; no preset owns it. A line the model refuses is logged and not
+  drawn. GPU probes check that the wire and tower are where the model puts
+  them and that nothing is drawn 150 m off the line, at Low, Standard and
+  High.
+
+  *Measured before choosing the next slice:* on `planner_adversarial`,
+  `baseline_coverage`, `industrial_asset_survey` and `persistent_long`
+  (seeds 7 and 42, both planning policies, builder line on), no flight
+  published in a replay came within 10 m of a conductor; the closest was
+  26 m. Drones cruise at 100–260 m. So the physical guard against
+  conductors (deconfliction pushes and override flights) would change
+  nothing measurable yet. It matters once something flies low near a line:
+  inspection of the line itself, or the R5 town-edge scenario. Next: the
+  planner's corridor (P3 routes keep the clearance), then the guard swept
+  against conductors, and an optional clearance-corridor overlay.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against
