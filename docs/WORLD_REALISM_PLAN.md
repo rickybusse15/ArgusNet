@@ -151,8 +151,8 @@ C8 (P2.6) and D2 (P5.1).
   so a 3 cm wire stays visible kilometres off. Wires are never culled, at
   any tier. The geometry is built once per run and not rebuilt as the
   camera moves. A Power Lines toggle in Runtime Overlays shows and hides
-  them; no preset owns it. A line the model refuses is logged and not
-  drawn. GPU probes check that the wire and tower are where the model puts
+  them; no preset owns it. Each line is read on its own: one the model
+  refuses is logged and not drawn, and the others still are. GPU probes check that the wire and tower are where the model puts
   them and that nothing is drawn 150 m off the line, at Low, Standard and
   High.
 

@@ -27,9 +27,10 @@
 //!
 //! Both are world structures, not overlays: no layer preset owns them, and
 //! the Runtime Overlays panel's Power Lines toggle hides and shows them.
-//! Picking ignores them ([`PresentationOnly`]). A replay whose
-//! `meta.power_lines` the model refuses draws no line and logs why, once
-//! per run.
+//! Picking ignores them ([`PresentationOnly`]). Each line in
+//! `meta.power_lines` is read on its own: one the model refuses is not
+//! drawn and its reason is logged once per run, and every other line is
+//! still drawn.
 
 use std::collections::HashMap;
 
@@ -257,7 +258,7 @@ pub struct PowerLines {
     towers: usize,
     pieces: usize,
     builds: u64,
-    problem: Option<String>,
+    refused: Vec<String>,
 }
 
 impl PowerLines {
@@ -277,9 +278,9 @@ impl PowerLines {
     pub fn builds(&self) -> u64 {
         self.builds
     }
-    /// Why the replay's lines were not drawn, when they were refused.
-    pub fn problem(&self) -> Option<&str> {
-        self.problem.as_deref()
+    /// Why each line the model refused was not drawn, one per line.
+    pub fn refused(&self) -> &[String] {
+        &self.refused
     }
 }
 
@@ -321,16 +322,18 @@ pub fn sync_power_lines(
         meshes.remove(&handle);
     }
     (drawn.lines, drawn.towers, drawn.pieces) = (0, 0, 0);
-    drawn.problem = None;
-    let lines = match replay.document.as_ref().map(|d| d.power_lines()) {
-        None => Vec::new(),
-        Some(Ok(lines)) => lines,
-        Some(Err(problem)) => {
-            warn!("power lines not drawn: {problem}");
-            drawn.problem = Some(problem);
-            Vec::new()
-        }
-    };
+    // Each line is read on its own: a refused one is reported and the rest
+    // are still drawn.
+    let read = replay
+        .document
+        .as_ref()
+        .map(|d| d.power_lines())
+        .unwrap_or_default();
+    for reason in &read.refused {
+        warn!("power line not drawn: {reason}");
+    }
+    drawn.refused = read.refused;
+    let lines = read.lines;
     let Some(wires) = wire_mesh(&lines) else {
         return;
     };
@@ -606,19 +609,28 @@ mod tests {
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
     }
 
-    /// A line the model refuses is not drawn, and the reason is kept.
+    /// A line the model refuses is not drawn and its reason is kept; the
+    /// valid line beside it is still drawn in full.
     #[test]
-    fn a_refused_line_is_reported_not_drawn() {
-        let mut bad = serde_json::to_value(line()).unwrap();
+    fn a_refused_line_is_reported_and_hides_nothing_else() {
+        let good = serde_json::to_value(line()).unwrap();
+        let mut bad = good.clone();
+        bad["id"] = serde_json::json!("line-bare");
         bad["conductor_offsets_m"] = serde_json::json!([]);
-        let mut app = app(serde_json::json!({"meta": {"power_lines": [bad]}, "frames": []}));
+        let mut app = app(serde_json::json!({"meta": {"power_lines": [bad, good]}, "frames": []}));
         app.update();
-        assert!(parts(&mut app).is_empty());
         let drawn = app.world().resource::<PowerLines>();
+        assert_eq!((drawn.line_count(), drawn.tower_count()), (1, 3));
+        assert_eq!(drawn.refused().len(), 1);
         assert!(
-            drawn.problem().is_some_and(|p| p.contains("line-a")),
+            drawn.refused()[0].contains("line-bare"),
             "{:?}",
-            drawn.problem()
+            drawn.refused()
+        );
+        assert_eq!(
+            parts(&mut app).len(),
+            4,
+            "the good line's wires and three towers"
         );
     }
 }
