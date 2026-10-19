@@ -44,6 +44,8 @@ use argusnet_planning::poi::{
 use argusnet_planning::BatteryModel;
 use argusnet_types::Bounds2d;
 use argusnet_world::index::ObstacleLayer;
+use argusnet_world::obstacles::{BlockerType, Obstacle};
+use argusnet_world::powerline::PowerLine;
 
 use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingStage;
@@ -364,6 +366,176 @@ struct KnownObstacles {
     /// saves work; their number is bounded by the mission's POIs and
     /// stations. Cleared when the terrain changes.
     kept: RefCell<BTreeMap<[u64; 6], Option<Corners>>>,
+    /// The power lines a flight keeps its clearance from (R3), and their
+    /// spans' corridors. Empty when the world has none.
+    lines: Vec<PowerLine>,
+    corridors: Vec<Corridor>,
+    /// [`Self::reaching`] with the corridors as obstacles too, by band, for
+    /// routes round a line's ends.
+    reaching_lines: RefCell<BTreeMap<i64, Option<Arc<ObstacleLayer>>>>,
+    /// [`Self::this_run`] for routes round a line's ends.
+    around_this_run: RefCell<BTreeMap<[u64; 6], Option<PlannerRoute>>>,
+}
+
+/// How far past a power line's own clearance a planned crossing keeps,
+/// metres (R3): room for the straight pieces' sag error and for rounding,
+/// so a route laid out on the corridors passes the swept test.
+const LINE_MARGIN_M: f64 = 1.0;
+
+/// The steepest a climb over a power line, or the descent after it, is
+/// made when there is room (R3): 1 in 8, 3.5 m/s at the 28 m/s redirect
+/// speed, inside every role's climb and descent rates. An end nearer the
+/// line than that allows climbs as steeply as it must.
+const LINE_RAMP_GRADIENT: f64 = 0.125;
+
+/// One span of a power line from above, with its clearance (R3): a
+/// rectangle along the span holding every conductor of it and the clearance
+/// round them (plus [`LINE_MARGIN_M`]), and the height a flight over it
+/// keeps. Off the rectangle a flight is farther from the span's wires than
+/// their clearance at any height. Over it, a flight at `over_z_m` or higher
+/// is too: no wire hangs above the higher of its supports' attachments,
+/// and `over_z_m` is the clearance above that.
+#[derive(Debug, Clone)]
+struct Corridor {
+    /// The rectangle's centre line, carried past each support by the
+    /// half-width: a conductor's attachment on a turned cross-arm sits up
+    /// to its offset along the span.
+    from: [f64; 2],
+    to: [f64; 2],
+    half_width_m: f64,
+    over_z_m: f64,
+    /// The lower support's ground, the base of the corridor as an obstacle.
+    ground_z_m: f64,
+}
+
+impl Corridor {
+    /// Each span's corridor.
+    fn of_line(line: &PowerLine) -> Vec<Corridor> {
+        let reach = line
+            .conductor_offsets_m
+            .iter()
+            .fold(0.0_f64, |widest, offset| widest.max(offset.abs()))
+            + line.conductor_radius_m
+            + line.clearance_m
+            + LINE_MARGIN_M;
+        line.supports
+            .windows(2)
+            .map(|pair| {
+                let (a, b) = (pair[0].xy_m, pair[1].xy_m);
+                let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+                let along = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+                Corridor {
+                    from: [a[0] - along[0] * reach, a[1] - along[1] * reach],
+                    to: [b[0] + along[0] * reach, b[1] + along[1] * reach],
+                    half_width_m: reach,
+                    over_z_m: pair[0].top_z_m().max(pair[1].top_z_m())
+                        + line.conductor_radius_m
+                        + line.clearance_m
+                        + LINE_MARGIN_M,
+                    ground_z_m: pair[0].base_z_m.min(pair[1].base_z_m),
+                }
+            })
+            .collect()
+    }
+
+    /// The part of the leg from `p` to `q` over the rectangle, as fractions
+    /// of the leg, or `None` when the leg misses it (Liang–Barsky, in the
+    /// span's own frame).
+    fn clip(&self, p: [f64; 2], q: [f64; 2]) -> Option<(f64, f64)> {
+        let length = (self.to[0] - self.from[0]).hypot(self.to[1] - self.from[1]);
+        let along = [
+            (self.to[0] - self.from[0]) / length,
+            (self.to[1] - self.from[1]) / length,
+        ];
+        let local = |x: [f64; 2]| {
+            let d = [x[0] - self.from[0], x[1] - self.from[1]];
+            [
+                d[0] * along[0] + d[1] * along[1],
+                d[1] * along[0] - d[0] * along[1],
+            ]
+        };
+        let (a, b) = (local(p), local(q));
+        let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+        for (start, delta, low, high) in [
+            (a[0], b[0] - a[0], 0.0, length),
+            (a[1], b[1] - a[1], -self.half_width_m, self.half_width_m),
+        ] {
+            if delta.abs() < 1e-12 {
+                if start < low || start > high {
+                    return None;
+                }
+                continue;
+            }
+            let (e0, e1) = ((low - start) / delta, (high - start) / delta);
+            t0 = t0.max(e0.min(e1));
+            t1 = t1.min(e0.max(e1));
+            if t0 > t1 {
+                return None;
+            }
+        }
+        Some((t0, t1))
+    }
+
+    /// The corridor as a hard obstacle up to its crossing height, for the
+    /// planner to route round.
+    fn obstacle(&self, id: String) -> Option<Obstacle> {
+        Obstacle::wall_segment(
+            id,
+            BlockerType::Wall,
+            self.from,
+            self.to,
+            2.0 * self.half_width_m,
+            self.ground_z_m,
+            self.over_z_m,
+        )
+        .ok()
+    }
+}
+
+/// The legs flown from `start` through `path` (the corners, then the end),
+/// each with its ends' heights: `heights` at the corners when given, else
+/// changing linearly with the distance flown, from `start`'s height to
+/// `end_z`, as [`GotoHover::routed`] flies it.
+fn flown_legs(
+    start: [f64; 3],
+    path: &[[f64; 2]],
+    heights: &[f64],
+    end_z: f64,
+) -> Vec<([f64; 3], [f64; 3])> {
+    let mut points = vec![[start[0], start[1]]];
+    points.extend_from_slice(path);
+    let leg_m = |pair: &[[f64; 2]]| (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]);
+    let length_m: f64 = points.windows(2).map(leg_m).sum();
+    let mut flown_m = 0.0;
+    let mut z_at = |index: usize, leg: f64| {
+        if !heights.is_empty() {
+            return match index {
+                0 => start[2],
+                i if i > heights.len() => end_z,
+                i => heights[i - 1],
+            };
+        }
+        flown_m += leg;
+        if length_m > 0.0 {
+            start[2] + (end_z - start[2]) * (flown_m / length_m).clamp(0.0, 1.0)
+        } else {
+            start[2]
+        }
+    };
+    let mut from_z = z_at(0, 0.0);
+    points
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| {
+            let to_z = z_at(index + 1, leg_m(pair));
+            let leg = (
+                [pair[0][0], pair[0][1], from_z],
+                [pair[1][0], pair[1][1], to_z],
+            );
+            from_z = to_z;
+            leg
+        })
+        .collect()
 }
 
 /// How many times [`MissionDriverStage::sweep_height`] raises a sweep's end
@@ -461,6 +633,75 @@ impl KnownObstacles {
             o.blocker_type.is_hard() && o.point_inside(xy[0], xy[1], 0.5 * (o.base_z_m + o.top_z_m))
         })
     }
+
+    /// Whether any of `legs` comes closer to a power line than the line's
+    /// clearance: the swept test on each leg ([`PowerLine::violated_by`]).
+    fn violates_lines(&self, legs: &[([f64; 3], [f64; 3])]) -> bool {
+        legs.iter().any(|(from, to)| {
+            self.lines.iter().any(|line| {
+                let reach = line.bounds_xy_m();
+                let misses = from[0].max(to[0]) < reach.x_min_m
+                    || from[0].min(to[0]) > reach.x_max_m
+                    || from[1].max(to[1]) < reach.y_min_m
+                    || from[1].min(to[1]) > reach.y_max_m;
+                !misses && line.violated_by(*from, *to)
+            })
+        })
+    }
+
+    /// [`Self::reaching`], with the corridors of the power lines too.
+    fn reaching_lines(&self, floor_m: f64, clearance_m: f64) -> Option<Arc<ObstacleLayer>> {
+        let band = (floor_m / ROUTE_HEIGHT_BAND_M).floor() as i64;
+        if let Some(known) = self.reaching_lines.borrow().get(&band) {
+            return known.clone();
+        }
+        let band_floor_m = band as f64 * ROUTE_HEIGHT_BAND_M;
+        let primitives: Vec<_> = self
+            .layer
+            .primitives
+            .iter()
+            .cloned()
+            .chain(
+                self.corridors
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, corridor)| corridor.obstacle(format!("power-line-span-{k}"))),
+            )
+            .filter(|obstacle| obstacle.top_z_m + clearance_m > band_floor_m)
+            .collect();
+        let layer = if primitives.is_empty() {
+            None
+        } else {
+            ObstacleLayer::new(self.layer.bounds, self.layer.tile_size_m, primitives)
+                .ok()
+                .map(Arc::new)
+        };
+        self.reaching_lines.borrow_mut().insert(band, layer.clone());
+        layer
+    }
+
+    /// [`Self::route`] round the power lines' corridors as well as the
+    /// structures: past a line's ends rather than over it.
+    fn route_around_lines(&self, from: [f64; 3], to: [f64; 3]) -> Option<PlannerRoute> {
+        let key = route_key(from, to);
+        if let Some(known) = self.around_this_run.borrow().get(&key) {
+            return known.clone();
+        }
+        let mut planner = self.planner.borrow_mut();
+        let clearance_m = planner.config().drone_clearance_m;
+        let floor_m = from[2].min(to[2]);
+        let route = self.reaching_lines(floor_m, clearance_m).and_then(|layer| {
+            // Its own revisions, apart from the structures-only layers'.
+            let band = (floor_m / ROUTE_HEIGHT_BAND_M).floor() as i64;
+            let scene = Scene {
+                layer: &layer,
+                revision: (band as u64) ^ (1 << 63),
+            };
+            planner.plan_route_between(scene, [from[0], from[1]], [to[0], to[1]], clearance_m)
+        });
+        self.around_this_run.borrow_mut().insert(key, route.clone());
+        route
+    }
 }
 
 /// A free drone's flight to sweep one hole: the cells in the order flown,
@@ -471,6 +712,9 @@ impl KnownObstacles {
 struct GapPlan {
     points: Vec<[f64; 2]>,
     via: Vec<[f64; 2]>,
+    /// The height at each of `via` when the flight climbs over a power line
+    /// (R3); empty when it is flown at one height.
+    heights: Vec<f64>,
     z: f64,
     approach: f64,
     sweep_m: f64,
@@ -524,7 +768,53 @@ fn sweep_order(cluster: &[[usize; 2]]) -> Vec<[usize; 2]> {
 }
 
 /// A route's corners between its ends, and its length.
-type Corners = (Vec<[f64; 2]>, f64);
+#[derive(Debug, Clone)]
+struct Corners {
+    via: Vec<[f64; 2]>,
+    length_m: f64,
+    /// The height at each corner when the route climbs over a power line
+    /// (R3); empty when its height changes linearly from end to end.
+    heights: Vec<f64>,
+    /// How the route keeps a power line's clearance that the route round
+    /// the structures alone would not: `"over"` or `"around"`. `None` when
+    /// that route keeps it.
+    lines: Option<&'static str>,
+}
+
+impl Corners {
+    /// A route round the structures, its height changing linearly.
+    fn turning(via: Vec<[f64; 2]>, length_m: f64) -> Self {
+        Self {
+            via,
+            length_m,
+            heights: Vec::new(),
+            lines: None,
+        }
+    }
+
+    /// The energy the route's climbs and descents cost from `from_z` to
+    /// `to_z`: leg by leg over its corners' heights, or the one change of
+    /// height the allocator has always priced when it has none.
+    fn climb_cost_wh(&self, model: &BatteryModel, from_z: f64, to_z: f64) -> f64 {
+        climb_along_wh(model, from_z, &self.heights, to_z)
+    }
+}
+
+/// The energy of the climbs and descents from `from_z` through `heights` to
+/// `to_z`, leg by leg; exactly `climb_cost_wh(to_z - from_z)` with no
+/// heights.
+fn climb_along_wh(model: &BatteryModel, from_z: f64, heights: &[f64], to_z: f64) -> f64 {
+    if heights.is_empty() {
+        return model.climb_cost_wh(to_z - from_z);
+    }
+    let mut cost_wh = 0.0;
+    let mut z = from_z;
+    for &next in heights.iter().chain(std::iter::once(&to_z)) {
+        cost_wh += model.climb_cost_wh(next - z);
+        z = next;
+    }
+    cost_wh
+}
 
 /// A trip's exact ends, as a cache key.
 fn route_key(from: [f64; 3], to: [f64; 3]) -> [u64; 6] {
@@ -544,6 +834,9 @@ struct Flight {
     /// `(length, corners)` of a route around obstacles; `None` for a straight
     /// flight.
     route: Option<(f64, usize)>,
+    /// How the route keeps a power line's clearance, when it had to change
+    /// to (R3).
+    lines: Option<&'static str>,
 }
 
 impl Flight {
@@ -553,6 +846,9 @@ impl Flight {
         if let (Some((length_m, corners)), Some(fields)) = (self.route, inputs.as_object_mut()) {
             fields.insert("route_length_m".into(), serde_json::json!(length_m));
             fields.insert("route_waypoints".into(), serde_json::json!(corners));
+            if let Some(lines) = self.lines {
+                fields.insert("route_power_lines".into(), serde_json::json!(lines));
+            }
         }
     }
 }
@@ -658,7 +954,26 @@ impl MissionDriverStage {
             reaching: RefCell::new(BTreeMap::new()),
             this_run: RefCell::new(BTreeMap::new()),
             kept: RefCell::new(BTreeMap::new()),
+            lines: Vec::new(),
+            corridors: Vec::new(),
+            reaching_lines: RefCell::new(BTreeMap::new()),
+            around_this_run: RefCell::new(BTreeMap::new()),
         });
+    }
+
+    /// The power lines POI, egress and gap-fill flights keep their clearance
+    /// from under efficient_v1 (R3), passing over the wires or round a
+    /// line's ends. Part of the prior map: set after
+    /// [`Self::set_known_obstacles`], which forgets them, and ignored
+    /// without it. The reference never reads them.
+    pub fn set_known_power_lines(&mut self, lines: Vec<PowerLine>) {
+        if let Some(obstacles) = &mut self.obstacles {
+            obstacles.corridors = lines.iter().flat_map(Corridor::of_line).collect();
+            obstacles.lines = lines;
+            obstacles.reaching_lines.borrow_mut().clear();
+            obstacles.around_this_run.borrow_mut().clear();
+            obstacles.kept.borrow_mut().clear();
+        }
     }
 
     /// The terrain a routed flight must stay above (P3). Without it a route
@@ -685,19 +1000,15 @@ impl MissionDriverStage {
         self.obstacles.as_ref()?.route(from, to)
     }
 
-    /// The route's corners, if it turns at all.
-    fn corners(&self, from: [f64; 3], to: [f64; 3]) -> Option<(Vec<[f64; 2]>, f64)> {
+    /// The route's corners, if it turns (or climbs over a power line) at
+    /// all.
+    fn corners(&self, from: [f64; 3], to: [f64; 3]) -> Option<Corners> {
         self.corners_between(from, to, false)
     }
 
     /// [`Self::corners`]; `fixed_ends` when neither end moves, so the
     /// outcome is kept for later runs.
-    fn corners_between(
-        &self,
-        from: [f64; 3],
-        to: [f64; 3],
-        fixed_ends: bool,
-    ) -> Option<(Vec<[f64; 2]>, f64)> {
+    fn corners_between(&self, from: [f64; 3], to: [f64; 3], fixed_ends: bool) -> Option<Corners> {
         let kept = match (fixed_ends, &self.obstacles) {
             (true, Some(obstacles)) if self.policy == PlanningPolicy::EfficientV1 => {
                 Some(&obstacles.kept)
@@ -711,12 +1022,244 @@ impl MissionDriverStage {
         let corners = self.route(from, to).and_then(|route| {
             let points = &route.points_xy_m;
             (points.len() > 2 && self.clears_terrain(points, from[2], to[2], route.length_m))
-                .then(|| (points[1..points.len() - 1].to_vec(), route.length_m))
+                .then(|| Corners::turning(points[1..points.len() - 1].to_vec(), route.length_m))
         });
+        let corners = self.keep_line_clearance(from, to, corners);
         if let Some(kept) = kept {
             kept.borrow_mut().insert(key, corners.clone());
         }
         corners
+    }
+
+    /// `corners`, the route from `from` to `to` round the structures (`None`
+    /// for the straight line), made to keep every power line's clearance
+    /// under efficient_v1 (R3). A route whose every leg already keeps it,
+    /// by the swept test, is returned as it is. Otherwise it is flown over
+    /// the wires ([`Self::over_lines`]) or round the line's ends
+    /// ([`Self::around_lines`]), whichever costs less energy; a route that
+    /// can do neither is returned as it is.
+    fn keep_line_clearance(
+        &self,
+        from: [f64; 3],
+        to: [f64; 3],
+        corners: Option<Corners>,
+    ) -> Option<Corners> {
+        if self.policy != PlanningPolicy::EfficientV1 {
+            return corners;
+        }
+        let Some(obstacles) = self.obstacles.as_ref().filter(|o| !o.lines.is_empty()) else {
+            return corners;
+        };
+        let mut path = corners.as_ref().map_or_else(Vec::new, |c| c.via.clone());
+        path.push([to[0], to[1]]);
+        if !obstacles.violates_lines(&flown_legs(from, &path, &[], to[2])) {
+            return corners;
+        }
+        let length_m = corners.as_ref().map_or_else(
+            || {
+                let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+                (dx * dx + dy * dy).sqrt()
+            },
+            |c| c.length_m,
+        );
+        let over = self
+            .over_lines(from, &path, to[2])
+            .map(|(mut path, heights)| {
+                path.pop();
+                Corners {
+                    via: path,
+                    length_m,
+                    heights,
+                    lines: Some("over"),
+                }
+            });
+        // Priced on the default platform: which way is cheaper does not
+        // turn on one platform's figures.
+        let model = BatteryModel::default();
+        let cost = |c: &Corners| {
+            model.travel_cost_wh(c.length_m) + c.climb_cost_wh(&model, from[2], to[2])
+        };
+        match (over, self.around_lines(from, to)) {
+            (Some(over), Some(around)) if cost(&around) < cost(&over) => Some(around),
+            (Some(over), _) => Some(over),
+            (None, Some(around)) => Some(around),
+            (None, None) => corners,
+        }
+    }
+
+    /// The flight from `start` through `path` (its corners, then its end at
+    /// `end_z`), raised over every power line it would pass too close to:
+    /// the path, with a corner added where each climb starts and ends and
+    /// where it crosses onto and off each corridor, and the height at every
+    /// corner. `None` when the flight still comes too close to a line
+    /// (checked leg by leg, by the swept test), enters a building or wall,
+    /// or would have to climb at an end: one standing on a corridor below
+    /// its crossing height.
+    ///
+    /// Over each stretch the path crosses a corridor, the flight is at
+    /// least the corridor's crossing height. Before it, the flight climbs to
+    /// it at [`LINE_RAMP_GRADIENT`] (steeper when the start is nearer), and
+    /// after it comes down the same way; elsewhere it is the linear flight.
+    /// The heights are that profile's upper envelope at the corners; it is
+    /// convex between them (its only concave kinks are the corridor edges,
+    /// which are corners), so the legs between the corners never pass below
+    /// it. The flight is never lower than the linear one anywhere, so never
+    /// nearer the ground.
+    fn over_lines(
+        &self,
+        start: [f64; 3],
+        path: &[[f64; 2]],
+        end_z: f64,
+    ) -> Option<(Vec<[f64; 2]>, Vec<f64>)> {
+        let obstacles = self.obstacles.as_ref()?;
+        let mut points = vec![[start[0], start[1]]];
+        points.extend_from_slice(path);
+        let mut along = vec![0.0];
+        for pair in points.windows(2) {
+            let leg_m = (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]);
+            along.push(along[along.len() - 1] + leg_m);
+        }
+        let length_m = along[along.len() - 1];
+        if length_m <= 1e-9 {
+            return None;
+        }
+        let (z0, z1) = (start[2], end_z);
+        let slope = (z1 - z0) / length_m;
+        let linear = |s: f64| z0 + slope * s;
+        // Each stretch over a corridor the linear flight is below, as
+        // (onto, off, height, climb gradient, descent gradient).
+        let mut stretches = Vec::new();
+        for (k, pair) in points.windows(2).enumerate() {
+            let leg_m = along[k + 1] - along[k];
+            for corridor in &obstacles.corridors {
+                let Some((t0, t1)) = corridor.clip(pair[0], pair[1]) else {
+                    continue;
+                };
+                let (a, b, z) = (
+                    along[k] + t0 * leg_m,
+                    along[k] + t1 * leg_m,
+                    corridor.over_z_m,
+                );
+                if z <= linear(a).min(linear(b)) {
+                    continue;
+                }
+                // An end on the corridor below its height cannot climb.
+                if (a <= 1e-9 && z > z0) || (b >= length_m - 1e-9 && z > z1) {
+                    return None;
+                }
+                let up = if a > 1e-9 {
+                    LINE_RAMP_GRADIENT.max((z - z0) / a)
+                } else {
+                    LINE_RAMP_GRADIENT
+                };
+                let down = if b < length_m - 1e-9 {
+                    LINE_RAMP_GRADIENT.max((z - z1) / (length_m - b))
+                } else {
+                    LINE_RAMP_GRADIENT
+                };
+                stretches.push((a, b, z, up, down));
+            }
+        }
+        if stretches.is_empty() {
+            return None;
+        }
+        let envelope = |s: f64| {
+            stretches
+                .iter()
+                .map(|&(a, b, z, up, down)| {
+                    if s < a {
+                        z - up * (a - s)
+                    } else if s > b {
+                        z - down * (s - b)
+                    } else {
+                        z
+                    }
+                })
+                .fold(linear(s), f64::max)
+        };
+        // The corners: the path's own, each corridor edge, and where each
+        // climb leaves the linear flight and each descent rejoins it.
+        let mut knots: Vec<(f64, bool)> = (1..points.len() - 1).map(|k| (along[k], true)).collect();
+        for &(a, b, z, up, down) in &stretches {
+            knots.push((a, false));
+            knots.push((b, false));
+            if z > linear(a) && up > slope {
+                knots.push((a - (z - linear(a)) / (up - slope), false));
+            }
+            if z > linear(b) && down + slope > 0.0 {
+                knots.push((b + (z - linear(b)) / (down + slope), false));
+            }
+        }
+        knots.retain(|&(s, _)| s > 1e-6 && s < length_m - 1e-6);
+        // Path corners first among equals, so a knot on one is the corner.
+        knots.sort_by(|x, y| x.0.total_cmp(&y.0).then(y.1.cmp(&x.1)));
+        // Knots closer than a micrometre are one, never two corners of the
+        // path, and a corner of the path where there is one: no leg of no
+        // length, and the path's own shape kept.
+        let mut merged: Vec<(f64, bool)> = Vec::with_capacity(knots.len());
+        for knot in knots {
+            match merged.last_mut() {
+                Some(last) if knot.0 - last.0 < 1e-6 && !(knot.1 && last.1) => {
+                    if knot.1 {
+                        *last = knot;
+                    }
+                }
+                _ => merged.push(knot),
+            }
+        }
+        let mut corners = Vec::with_capacity(merged.len() + 1);
+        let mut heights = Vec::with_capacity(merged.len());
+        for (s, _) in merged {
+            let k = along
+                .partition_point(|&d| d <= s)
+                .clamp(1, points.len() - 1)
+                - 1;
+            let leg_m = along[k + 1] - along[k];
+            let t = if leg_m > 0.0 {
+                (s - along[k]) / leg_m
+            } else {
+                0.0
+            };
+            let (p, q) = (points[k], points[k + 1]);
+            corners.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]);
+            heights.push(envelope(s));
+        }
+        corners.push(points[points.len() - 1]);
+        let legs = flown_legs(start, &corners, &heights, end_z);
+        if obstacles.violates_lines(&legs)
+            || legs.iter().any(|(from, to)| obstacles.crosses(*from, *to))
+        {
+            return None;
+        }
+        Some((corners, heights))
+    }
+
+    /// The route from `from` to `to` round the power lines' corridors as
+    /// well as the structures, past a line's ends, when the planner finds
+    /// one that keeps above the terrain and clear of every line by the
+    /// swept test.
+    fn around_lines(&self, from: [f64; 3], to: [f64; 3]) -> Option<Corners> {
+        let obstacles = self.obstacles.as_ref()?;
+        let route = obstacles.route_around_lines(from, to)?;
+        let points = &route.points_xy_m;
+        if points.len() <= 2 || !self.clears_terrain(points, from[2], to[2], route.length_m) {
+            return None;
+        }
+        let via = points[1..points.len() - 1].to_vec();
+        let mut path = via.clone();
+        path.push([to[0], to[1]]);
+        let legs = flown_legs(from, &path, &[], to[2]);
+        if obstacles.violates_lines(&legs)
+            || legs
+                .iter()
+                .any(|(start, end)| obstacles.crosses(*start, *end))
+        {
+            return None;
+        }
+        Some(Corners {
+            lines: Some("around"),
+            ..Corners::turning(via, route.length_m)
+        })
     }
 
     /// The free drones matched to the sweeps, each pair the drone with its
@@ -754,7 +1297,7 @@ impl MissionDriverStage {
                                     .map(|leg| (leg[1][0] - leg[0][0]).hypot(leg[1][1] - leg[0][1]))
                                     .sum();
                                 let spent_wh = model.travel_cost_wh(length_m)
-                                    + model.climb_cost_wh(plan.z - position[2]);
+                                    + climb_along_wh(&model, position[2], &plan.heights, plan.z);
                                 let reserve_wh =
                                     self.reserve_for(&model, id, [end[0], end[1], plan.z], wind);
                                 remaining_wh - spent_wh >= reserve_wh
@@ -860,10 +1403,20 @@ impl MissionDriverStage {
         if !self.misses_structures(position, &via, z) {
             return None;
         }
+        // Clear of every power line by its clearance (R3), by the swept test
+        // on each leg: over a line the flight climbs, and one that cannot is
+        // no plan.
+        let mut heights = Vec::new();
+        if let Some(obstacles) = self.obstacles.as_ref().filter(|o| !o.lines.is_empty()) {
+            if obstacles.violates_lines(&flown_legs(position, &via, &[], z)) {
+                (via, heights) = self.over_lines(position, &via, z)?;
+            }
+        }
         via.pop();
         Some(GapPlan {
             points,
             via,
+            heights,
             z,
             approach,
             sweep_m,
@@ -1020,7 +1573,7 @@ impl MissionDriverStage {
     /// to turn, else the straight line.
     fn trip_length_m(&self, from: [f64; 3], to: [f64; 3]) -> f64 {
         match self.corners(from, to) {
-            Some((_, length_m)) => length_m,
+            Some(corners) => corners.length_m,
             None => {
                 let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
                 (dx * dx + dy * dy).sqrt()
@@ -1032,8 +1585,9 @@ impl MissionDriverStage {
     /// exactly the straight segment's cost the allocator has always used.
     fn trip_cost_wh(&self, model: &BatteryModel, from: [f64; 3], to: [f64; 3]) -> f64 {
         match self.corners(from, to) {
-            Some((_, length_m)) => {
-                model.travel_cost_wh(length_m) + model.climb_cost_wh(to[2] - from[2])
+            Some(corners) => {
+                model.travel_cost_wh(corners.length_m)
+                    + corners.climb_cost_wh(model, from[2], to[2])
             }
             None => model.segment_cost_wh(from, to),
         }
@@ -1156,16 +1710,29 @@ impl MissionDriverStage {
             let GapPlan {
                 points,
                 via,
+                heights,
                 z,
                 approach,
                 sweep_m,
             } = plan;
             let target = points[points.len() - 1];
-            let trajectory = GotoHover::routed(*position, via, target, z, timestamp_s, speed);
+            let over_lines = !heights.is_empty();
+            let trajectory =
+                GotoHover::routed_over(*position, via, heights, target, z, timestamp_s, speed);
             let arrive_s = trajectory.t_arrive();
             self.override_commands
                 .push(OverrideCommand::SetFrontier(id.clone(), trajectory));
             let cluster = clusters[column].clone();
+            let mut inputs = serde_json::json!({
+                "gap_cell_fraction": fraction,
+                "cells": cluster.len(),
+                "approach_m": approach,
+                "sweep_m": sweep_m,
+                "position_m": position,
+            });
+            if over_lines {
+                inputs["route_power_lines"] = serde_json::json!("over");
+            }
             self.decisions.push(Decision {
                 kind: "gap_fill",
                 status: DecisionStatus::QueuedForNextTick,
@@ -1178,13 +1745,7 @@ impl MissionDriverStage {
                      {approach:.0} m away)",
                     cluster.len()
                 ),
-                inputs: serde_json::json!({
-                    "gap_cell_fraction": fraction,
-                    "cells": cluster.len(),
-                    "approach_m": approach,
-                    "sweep_m": sweep_m,
-                    "position_m": position,
-                }),
+                inputs,
                 command: Some("set_frontier"),
             });
             self.gap_fill.insert(
@@ -1211,12 +1772,12 @@ impl MissionDriverStage {
         fixed_ends: bool,
     ) -> f64 {
         let margin = BatteryModel::DEFAULT_SAFETY_MARGIN;
-        let Some((via, _)) = self.corners_between(at, home, fixed_ends) else {
+        let Some(corners) = self.corners_between(at, home, fixed_ends) else {
             return model.dynamic_reserve_wh(at, home, wind, margin);
         };
-        let mut points = Vec::with_capacity(via.len() + 2);
+        let mut points = Vec::with_capacity(corners.via.len() + 2);
         points.push([at[0], at[1]]);
-        points.extend(via);
+        points.extend(corners.via.iter().copied());
         points.push([home[0], home[1]]);
         let travel_wh: f64 = points
             .windows(2)
@@ -1228,7 +1789,7 @@ impl MissionDriverStage {
                 )
             })
             .sum();
-        let cost_wh = travel_wh + model.climb_cost_wh(home[2] - at[2]);
+        let cost_wh = travel_wh + corners.climb_cost_wh(model, at[2], home[2]);
         (cost_wh * margin).max(model.capacity_wh * model.reserve_fraction)
     }
 
@@ -1252,11 +1813,13 @@ impl MissionDriverStage {
     fn flight(&self, start: [f64; 3], target: [f64; 3], t_start: f64) -> Flight {
         let speed = self.config.redirect_speed_mps;
         match self.corners(start, target) {
-            Some((via, length_m)) => Flight {
-                route: Some((length_m, via.len())),
-                trajectory: GotoHover::routed(
+            Some(corners) => Flight {
+                route: Some((corners.length_m, corners.via.len())),
+                lines: corners.lines,
+                trajectory: GotoHover::routed_over(
                     start,
-                    via,
+                    corners.via,
+                    corners.heights,
                     [target[0], target[1]],
                     target[2],
                     t_start,
@@ -1265,6 +1828,7 @@ impl MissionDriverStage {
             },
             None => Flight {
                 route: None,
+                lines: None,
                 trajectory: GotoHover::redirect(
                     start,
                     [target[0], target[1]],
@@ -2076,6 +2640,7 @@ impl StageHandler for MissionDriverStage {
         self.decisions.clear();
         if let Some(obstacles) = &self.obstacles {
             obstacles.this_run.borrow_mut().clear();
+            obstacles.around_this_run.borrow_mut().clear();
         }
         let empty = BatteryStage::new();
         let battery = stage_one_battery(context.stages).unwrap_or(&empty);
@@ -3794,6 +4359,210 @@ mod tests {
             stage.routed_sweep(&[[-100.0, 0.0], [100.0, 0.0]], 400.0),
             Some(vec![[-100.0, 0.0], [100.0, 0.0]])
         );
+    }
+
+    /// A power line across the x axis at x = 300 (R3): supports every
+    /// 400 m from y = -600 to 600, `height_m` tall on flat ground, with
+    /// `offsets` conductors sagging 3 % of the span and a 10 m clearance, in
+    /// a 2 km square with no structures.
+    fn power_line(supports_y: &[f64], height_m: f64, offsets: &[f64]) -> PowerLine {
+        PowerLine {
+            id: "line".to_string(),
+            supports: supports_y
+                .iter()
+                .map(|&y| argusnet_world::powerline::Support {
+                    xy_m: [300.0, y],
+                    base_z_m: 0.0,
+                    height_m,
+                })
+                .collect(),
+            conductor_offsets_m: offsets.to_vec(),
+            sag_ratio: 0.03,
+            conductor_radius_m: 0.015,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .expect("a valid line")
+    }
+
+    fn wired(stage: &mut MissionDriverStage, line: PowerLine) {
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let layer = ObstacleLayer::new(bounds, 250.0, Vec::new()).expect("valid layer");
+        stage.set_known_obstacles(Some(Arc::new(layer)), bounds);
+        stage.set_known_power_lines(vec![line]);
+    }
+
+    /// Every leg a flight flies, with the heights it flies them at.
+    fn legs_of(flight: &GotoHover, start: [f64; 3]) -> Vec<([f64; 3], [f64; 3])> {
+        let mut path = flight.via_xy().to_vec();
+        let target = flight.target();
+        path.push([target[0], target[1]]);
+        flown_legs(start, &path, flight.via_z(), target[2])
+    }
+
+    /// R3: under efficient_v1 a POI redirect whose straight line passes 7 m
+    /// over a three-wire line climbs over it with the clearance and comes
+    /// down to the POI, every leg clear of every wire by the swept test, and
+    /// the journal says so. It does not go round: the line's ends are 600 m
+    /// off.
+    #[test]
+    fn efficient_v1_climbs_a_poi_redirect_over_a_power_line() {
+        let line = power_line(&[-600.0, -200.0, 200.0, 600.0], 45.0, &[-4.0, 0.0, 4.0]);
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let start = mobile[0].1;
+        let target = [500.0, 0.0, 40.0];
+        assert!(
+            line.violated_by(start, target),
+            "the straight line crosses low"
+        );
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        wired(&mut stage, line.clone());
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+
+        assert!(!flight.via_z().is_empty(), "the flight climbs");
+        assert_eq!(flight.via_z().len(), flight.via_xy().len());
+        assert!(
+            flight.via_xy().iter().all(|p| p[1].abs() < 1e-9),
+            "straight on, not round: {:?}",
+            flight.via_xy()
+        );
+        assert!((flight.path_length_m() - 400.0).abs() < 1e-9);
+        for (from, to) in legs_of(&flight, start) {
+            assert!(
+                line.clearance_along(from, to) >= line.clearance_m,
+                "{from:?} -> {to:?}: {} m",
+                line.clearance_along(from, to)
+            );
+        }
+        // Higher than the top wire by the clearance over the line.
+        let highest = flight
+            .via_z()
+            .iter()
+            .fold(f64::NEG_INFINITY, |m, z| m.max(*z));
+        assert!(highest >= 45.0 + 10.0, "{highest}");
+        let (arrived, stopped) = flight.sample(flight.t_arrive());
+        assert_eq!(arrived, target);
+        assert_eq!(stopped, [0.0, 0.0, 0.0]);
+
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .expect("assigned");
+        assert_eq!(decision.inputs["route_power_lines"], "over");
+        assert_eq!(decision.inputs["route_length_m"], 400.0);
+    }
+
+    /// R3: a short line, a single wire on two supports 40 m apart, is
+    /// cheaper to fly round than to climb 11 m over and come down again, so
+    /// the redirect goes past its end, clear of the wire on every leg and
+    /// at its own height.
+    #[test]
+    fn efficient_v1_routes_a_poi_redirect_round_a_short_line() {
+        let line = power_line(&[-20.0, 20.0], 40.0, &[0.0]);
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let start = mobile[0].1;
+        assert!(line.violated_by(start, [500.0, 0.0, 40.0]));
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        wired(&mut stage, line.clone());
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+
+        assert!(flight.via_z().is_empty(), "level, not over");
+        assert!(
+            flight.via_xy().iter().any(|p| p[1].abs() > 20.0),
+            "past an end: {:?}",
+            flight.via_xy()
+        );
+        assert!(flight.path_length_m() > 400.0);
+        for (from, to) in legs_of(&flight, start) {
+            assert!(!line.violated_by(from, to), "{from:?} -> {to:?}");
+        }
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .expect("assigned");
+        assert_eq!(decision.inputs["route_power_lines"], "around");
+    }
+
+    /// R3: the reference never reads the lines, and a flight high over one
+    /// is flown as it was.
+    #[test]
+    fn only_a_flight_too_close_to_a_line_changes() {
+        let line = power_line(&[-600.0, -200.0, 200.0, 600.0], 45.0, &[-4.0, 0.0, 4.0]);
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let straight = GotoHover::redirect(mobile[0].1, [500.0, 0.0], 40.0, 0.0, 28.0);
+
+        let mut reference = driver(vec![poi("poi-00", 500.0, 1)]);
+        wired(&mut reference, line.clone());
+        reference.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(
+            poi_flight(&reference.take_override_commands(), "drone-a"),
+            straight
+        );
+
+        let high = vec![("drone-a".to_string(), [100.0, 0.0, 200.0])];
+        let mut stage = efficient_driver(vec![InspectionPoi {
+            position: [500.0, 0.0, 200.0],
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        wired(&mut stage, line);
+        stage.inspect(0.0, 1.0, &high, &battery, &empty_map());
+        assert_eq!(
+            poi_flight(&stage.take_override_commands(), "drone-a"),
+            GotoHover::redirect([100.0, 0.0, 200.0], [500.0, 0.0], 200.0, 0.0, 28.0)
+        );
+    }
+
+    /// R3: a gap sweep that would cross a line low climbs over it, every
+    /// leg clear by the swept test, and is priced with the climb.
+    #[test]
+    fn a_gap_sweep_climbs_over_a_power_line() {
+        let line = power_line(&[-600.0, -200.0, 200.0, 600.0], 45.0, &[-4.0, 0.0, 4.0]);
+        let mut stage = efficient_driver(Vec::new());
+        wired(&mut stage, line.clone());
+        let start = [100.0, 0.0, 40.0];
+        let plan = stage
+            .gap_plan(start, &[[150.0, 0.0], [450.0, 0.0]])
+            .expect("a safe sweep");
+        assert_eq!(plan.heights.len(), plan.via.len());
+        assert!(!plan.heights.is_empty(), "it climbs");
+        let mut path = plan.via.clone();
+        path.push(*plan.points.last().unwrap());
+        for (from, to) in flown_legs(start, &path, &plan.heights, plan.z) {
+            assert!(!line.violated_by(from, to), "{from:?} -> {to:?}");
+        }
+        assert!(line.violated_by([150.0, 0.0, 40.0], [450.0, 0.0, 40.0]));
+    }
+
+    /// R3: the profile over a corridor is the envelope of the linear
+    /// flight and the climb: a flight already high enough at the crossing
+    /// is not raised, and a start on a corridor below its height cannot
+    /// climb, so there is no flight over.
+    #[test]
+    fn a_flight_over_a_line_is_raised_only_where_it_must_be() {
+        let line = power_line(&[-600.0, -200.0, 200.0, 600.0], 45.0, &[-4.0, 0.0, 4.0]);
+        let mut stage = efficient_driver(Vec::new());
+        wired(&mut stage, line);
+        // Descending from 300 m to 40 m over 400 m: over the line, 100 m
+        // in, it is still 235 m up, so there is nothing to raise.
+        assert!(stage
+            .over_lines([200.0, 0.0, 300.0], &[[600.0, 0.0]], 40.0)
+            .is_none());
+        // Standing on the corridor, below the wires' clearance.
+        assert!(stage
+            .over_lines([300.0, 0.0, 40.0], &[[600.0, 0.0]], 40.0)
+            .is_none());
+        // From 50 m out the climb is steeper than 1 in 8, but it still
+        // clears.
+        let (path, heights) = stage
+            .over_lines([250.0, 0.0, 40.0], &[[350.0, 0.0]], 40.0)
+            .expect("over");
+        assert_eq!(path.last(), Some(&[350.0, 0.0]));
+        let over = heights.iter().fold(f64::NEG_INFINITY, |m, z| m.max(*z));
+        assert!(over >= 45.0 + 10.0);
     }
 
     /// P3: the reserve home is priced along the route home when it turns.

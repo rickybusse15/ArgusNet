@@ -24,6 +24,19 @@
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).
 
+- `efficient_v1` routes keep power lines' clearance (R3, the planner's
+  corridor). A POI, egress or gap-fill flight that would pass a line closer
+  than its clearance, by the swept test on each leg, is flown over the
+  wires (climbing to the clearance over each span it crosses and down
+  again; a flight now carries a height at each corner, serialised only when
+  set) or round the line's ends, whichever costs less energy. The journal
+  records which (`route_power_lines`). A gap sweep only climbs over, or is
+  not flown. The builder's opt-in `power_line_inspection` option puts the
+  POIs low beside the line, on alternate sides. On that scenario (seeds 7
+  and 42) `structure_clearance` events under efficient_v1 go from 69 and 26
+  to 2 and 0; the 2 left are deconfliction pushes. The reference is
+  unchanged, and so are the 14 canonical replays.
+
 - Viewer: power lines are drawn (R3). The replay's `meta.power_lines`
   becomes lattice towers on their own ground, plus conductors drawn as
   screen-space lines at least 1.6 px wide, so a 3 cm wire never vanishes

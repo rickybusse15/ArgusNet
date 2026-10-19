@@ -14,9 +14,11 @@
 //! two ticks, not a point.
 //!
 //! This module is the model. The safety engine judges flights against it
-//! (`structure_clearance`) and the viewer draws it (supports at
-//! [`PowerLine::cross_arm`], conductors from [`PowerLine::pieces`]); the
-//! physical guard, planning and sensing come in later slices.
+//! (`structure_clearance`), the mission planner's routes keep its clearance
+//! (efficient_v1, over the wires or round a line's ends) and the viewer
+//! draws it (supports at [`PowerLine::cross_arm`], conductors from
+//! [`PowerLine::pieces`]); the physical guard and sensing come in later
+//! slices.
 
 use serde::{Deserialize, Serialize};
 

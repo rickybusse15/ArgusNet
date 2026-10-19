@@ -1303,6 +1303,9 @@ pub fn assemble_with(
         // (P3). The reference never reads them; a run without a prior map
         // takes them away again (`set_world_knowledge`).
         driver.set_known_obstacles(Some(world.obstacles.layer()), bundle.map_bounds_m);
+        // And its power lines, which those flights keep their clearance
+        // from (R3); none in a world without them.
+        driver.set_known_power_lines(world.power_lines.as_ref().clone());
         driver.set_known_terrain(Some(Arc::new(world.terrain.clone())));
         // Read back off the constructed driver, so a caller (and the wiring
         // test) sees what the stage was actually given.
@@ -1846,8 +1849,10 @@ impl AssembledRun {
         controllers.set_physical_guard(guard.clone());
 
         // The platforms do not know the true obstacles, so the mission
-        // driver must not route around them. Planning on the belief grid is
-        // still to do (P3); until then it flies straight lines.
+        // driver must not route around them, nor keep clear of power lines
+        // it has not mapped (forgotten with the obstacles). Planning on the
+        // belief grid is still to do (P3); until then it flies straight
+        // lines.
         if let Some(driver) = self
             .sim
             .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)

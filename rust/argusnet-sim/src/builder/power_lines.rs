@@ -203,4 +203,79 @@ mod tests {
         assert!(!format!("{:?}", plain.world).contains("power_lines"));
         assert!(format!("{:?}", parsed.world).contains("power_lines"));
     }
+
+    fn inspection(options: Value) -> Result<Value, crate::builder::BuildError> {
+        let config: ScenarioConfig = serde_json::from_value(json!({
+            "format": "argusnet.scenario-config",
+            "version": 1,
+            "duration_s": 5.0,
+            "options": options,
+        }))
+        .expect("config");
+        build_bundle(&config)
+    }
+
+    /// `power_line_inspection` puts the mission's POIs along the line, each
+    /// 35 m off its centre and 32 m over the ground, on alternate sides, so
+    /// neighbours are across the wires from each other. It needs the line,
+    /// and a scan mission of its own.
+    #[test]
+    fn inspection_pois_stand_beside_the_line_on_alternate_sides() {
+        let with = inspection(json!({
+            "power_lines": true,
+            "power_line_inspection": true,
+            "poi_count": 4,
+            "terrain_preset": "urban_flat",
+        }))
+        .expect("builds");
+        assert_eq!(
+            with["presentation"]["scenario_options"]["power_line_inspection"],
+            json!(true)
+        );
+        let parsed = ScenarioBundle::from_json(&with.to_string()).expect("parses");
+        let world = build_world(&parsed.world).expect("builds");
+        let line = &world.power_lines[0];
+        let (a, b) = (
+            line.supports[0].xy_m,
+            line.supports[line.supports.len() - 1].xy_m,
+        );
+        let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let pois = with["mission"]["pois"].as_array().expect("pois");
+        assert_eq!(pois.len(), 4);
+        let sides: Vec<f64> = pois
+            .iter()
+            .map(|poi| {
+                let p: Vec<f64> = serde_json::from_value(poi["position"].clone()).unwrap();
+                let ground = crate::observe::TerrainHeight::height_at(&world.terrain, p[0], p[1]);
+                assert!(
+                    (p[2] - ground - super::super::scenario::LINE_INSPECTION_HOVER_AGL_M).abs()
+                        < 1e-6
+                );
+                // Signed distance from the line, left positive.
+                ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])) / length
+            })
+            .collect();
+        for (i, side) in sides.iter().enumerate() {
+            let expected = if i % 2 == 0 { 35.0 } else { -35.0 };
+            assert!((side - expected).abs() < 1.0, "POI {i}: {side} m");
+        }
+
+        let plain = bundle(true);
+        assert!(plain["presentation"]["scenario_options"]
+            .get("power_line_inspection")
+            .is_none());
+        assert!(inspection(json!({"power_line_inspection": true})).is_err());
+        assert!(inspection(json!({
+            "power_lines": true,
+            "power_line_inspection": true,
+            "mission_mode": "target_tracking",
+        }))
+        .is_err());
+        assert!(inspection(json!({
+            "power_lines": true,
+            "power_line_inspection": true,
+            "mission_profile_id": "industrial_asset_survey",
+        }))
+        .is_err());
+    }
 }

@@ -1430,8 +1430,7 @@ fn mission_document(
         _ if options.power_line_inspection => {
             if mission_profile.is_some() {
                 return Err(BuildError::Invalid(
-                    "power_line_inspection places its own POIs; it takes no mission profile"
-                        .into(),
+                    "power_line_inspection places its own POIs; it takes no mission profile".into(),
                 ));
             }
             let Some(line) = ground.world.power_lines.first() else {
@@ -1558,7 +1557,7 @@ const LINE_INSPECTION_OFFSET_M: f64 = 35.0;
 /// line, so a flight between POIs at this height is well inside their
 /// 10 m clearance. Like the builder's other POIs (40 m), it is below a
 /// tracker's 50 m safety floor (`min_agl_m`).
-const LINE_INSPECTION_HOVER_AGL_M: f64 = 32.0;
+pub(super) const LINE_INSPECTION_HOVER_AGL_M: f64 = 32.0;
 
 /// `power_line_inspection`'s POIs: `count` of them spaced evenly along the
 /// line from its first support to its last, each beside it just over the
