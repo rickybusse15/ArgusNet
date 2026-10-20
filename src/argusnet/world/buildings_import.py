@@ -302,10 +302,17 @@ def import_buildings(
     to_wgs84 = Transformer.from_crs(
         CRS.from_user_input(source_crs_id), CRS.from_epsg(4326), always_xy=True
     )
-    features = []
+    features: list[tuple[int, int, Mapping[str, object], list[tuple[float, float]], int]] = []
     for index, feature in enumerate(layer.features):
-        properties = feature["properties"]
-        for part, (ring, holes) in enumerate(_polygons(feature["geometry"])):
+        # The layer types its features loosely; narrow them here.
+        raw_properties = feature.get("properties")
+        properties: Mapping[str, object] = (
+            raw_properties if isinstance(raw_properties, Mapping) else {}
+        )
+        geometry = feature.get("geometry")
+        if not isinstance(geometry, Mapping):
+            continue
+        for part, (ring, holes) in enumerate(_polygons(geometry)):
             lonlat = [to_wgs84.transform(x, y) for x, y in ring]
             features.append((index, part, properties, lonlat, holes))
     if not features:
