@@ -255,4 +255,86 @@ mod tests {
         };
         assert!(config.validate().is_err());
     }
+
+    /// A scan over a world with trees: a trunk returns as structure, a
+    /// crown as canopy, each crown's draw from its own stream keyed by node
+    /// and tick.
+    #[test]
+    fn trees_return_as_structure_and_canopy_from_their_own_stream() {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::Bounds2d;
+        use argusnet_world::tiled::TiledTerrain;
+        use argusnet_world::trees::{Species, Tree, TreeLayer, CROWN_EXTINCTION_PER_M};
+        use argusnet_world::visibility::VisibilityProfile;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(0.0, 200.0, 0.0, 200.0);
+        let terrain = Arc::new(
+            TiledTerrain::from_grid(bounds, &vec![vec![0.0; 21]; 21], 10.0, 4, 0.0, &[]).unwrap(),
+        );
+        let world = SharedVisibility::new(
+            terrain,
+            Arc::new(ObstacleLayer::new(bounds, 50.0, vec![]).unwrap()),
+            None,
+            Arc::new(VisibilityProfile::default()),
+            0.0,
+        );
+        let tree = |id: &str, x: f64, density: f64| Tree {
+            id: id.into(),
+            xy_m: [x, 100.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+            crown_base_m: 8.0,
+            crown_radius_m: 5.0,
+            trunk_radius_m: 0.3,
+            species: Species::Broadleaf,
+            leaf_density: density,
+        };
+        let world = world.with_trees(Arc::new(
+            TreeLayer::new(vec![tree("trunk", 60.0, 0.0), tree("crown", 102.0, 1.0)]).unwrap(),
+        ));
+        // Level ahead at 5 m: the trunk. Straight down 2 m off the crown's
+        // axis: canopy (a crown of density 1 over 11 m stops 98 % of rays),
+        // or, in the 2 % of draws past it, the ground.
+        let level = RangeScanConfig {
+            ring_depressions_deg: Vec::new(),
+            forward_count: 1,
+            forward_depression_deg: 0.0,
+            ..RangeScanConfig::default()
+        };
+        let scanner = RangeScanner::new(level, world.clone()).unwrap();
+        let scan = scanner.scan("d", 3, 0.75, [20.0, 100.0, 5.0], [10.0, 0.0, 0.0]);
+        assert_eq!(scan.returns.len(), 2, "{scan:?}");
+        assert_eq!(scan.returns[1].class, ReturnClass::Structure);
+        // (The scan needs a ray besides the nadir: a second straight down.)
+        let down = RangeScanConfig {
+            ring_depressions_deg: Vec::new(),
+            forward_count: 1,
+            forward_depression_deg: 90.0,
+            range_noise_m: 0.0,
+            ..RangeScanConfig::default()
+        };
+        let scanner = RangeScanner::new(down, world).unwrap();
+        let scan = scanner.scan("d", 3, 0.75, [100.0, 100.0, 60.0], [0.0; 3]);
+        let mut canopy = DeterministicRng::keyed(
+            0,
+            &[
+                SeedPart::Str("d"),
+                SeedPart::Str("range-scan-canopy"),
+                SeedPart::Int(3),
+            ],
+        );
+        let u = canopy.uniform();
+        let top = 14.0 + 6.0 * (1.0_f64 - 0.16).sqrt();
+        let expected = top - (-(1.0 - u).ln() / CROWN_EXTINCTION_PER_M);
+        let hit = scan.returns[0];
+        if expected > 14.0 - 6.0 * (1.0_f64 - 0.16).sqrt() {
+            assert_eq!(hit.class, ReturnClass::Canopy, "{scan:?}");
+            assert!(
+                (hit.point_m[2] - expected).abs() < 1e-9,
+                "{hit:?} vs {expected}"
+            );
+        } else {
+            assert_eq!(hit.class, ReturnClass::Ground, "{scan:?}");
+        }
+    }
 }

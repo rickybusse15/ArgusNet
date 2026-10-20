@@ -10,8 +10,9 @@
   no-prior belief keeps canopy as soft structure (seen, never occupied),
   written to the replay as `canopy_updates`, range-scan `canopy` points and
   `belief.canopy_cells`, each only when there are some. With trees on,
-  observations in the canonical target scenarios fell by up to 29 %; a
-  no-prior run over the tree scenario maps about 7,100 canopy cells. The 14
+  observations in the canonical target scenarios fell by up to half
+  (`sar_person_search` seed 42); a no-prior run over the tree scenario maps
+  about 7,000 canopy cells. The 14
   canonical replays are unchanged.
 - Trees in a run (R2). The bundle's `world` carries `trees` (`tree-v1`),
   each validated as read, absent when there are none and left out of the

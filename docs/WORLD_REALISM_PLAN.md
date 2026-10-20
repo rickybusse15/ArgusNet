@@ -182,9 +182,9 @@ C8 (P2.6) and D2 (P5.1).
   `SharedVisibility` carries the world's trees, so bearing sensors, follow
   controllers and every other sight line see them. With trees added to the
   canonical target scenarios, observations over the run fell:
-  `intercept_stress` 2810 → 2601 and 2888 → 2569 (seeds 7, 42),
-  `sar_person_search` 205 → 186 and 104 → 74, `search_acquisition`
-  1246 → 1246 and 1013 → 968.
+  `intercept_stress` 2810 → 2776 and 2888 → 2852 (seeds 7, 42),
+  `sar_person_search` 205 → 193 and 104 → 52; `search_acquisition`
+  (urban, its trees on scrub away from the targets) is unchanged.
 
   The range scanner returns from trees (`SharedVisibility::first_return`).
   A trunk returns as structure. A crown is leaves with gaps: at each crown
@@ -206,12 +206,12 @@ C8 (P2.6) and D2 (P5.1).
   right in `structure_precision`; recall stays the buildings' and walls'.
 
   On the tree scenario with no prior map (`--world-knowledge none`,
-  efficient_v1), the belief went from dropping the canopy to holding 7,144
-  and 7,111 canopy cells (seeds 7, 42) of 15,246, with 52 and 50 trunk cells
+  efficient_v1), the belief went from dropping the canopy to holding 6,936
+  and 7,012 canopy cells (seeds 7, 42) of 15,246, with 40 and 30 trunk cells
   believed structure (precision 1.0). Fewer rays reach the ground under
-  trees, so the ground error rose a little (RMSE 0.16 → 0.20 m and 0.17 →
-  0.21 m). All 8 POIs are inspected before and after. With a prior map and
-  no targets, every frame is unchanged.
+  trees, so the ground error rose a little (RMSE 0.17 → 0.22 m and 0.18 →
+  0.21 m). All 8 POIs are inspected before and after, with no world
+  contacts. With a prior map and no targets, every frame is unchanged.
 
 ### R3: power lines
 

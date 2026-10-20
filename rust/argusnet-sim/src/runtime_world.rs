@@ -520,4 +520,42 @@ mod tests {
         assert!(!sight.visible);
         assert_eq!(sight.blocker_type, "trunk");
     }
+
+    /// A crown behind a trunk is never reached: the ray stops at the trunk
+    /// and takes no draw for the crown past it.
+    #[test]
+    fn nothing_past_a_trunk_returns_or_draws() {
+        let (plain, _) = world(0.8);
+        let near = Tree {
+            id: "near".into(),
+            xy_m: [100.0, 100.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+            crown_base_m: 8.0,
+            crown_radius_m: 5.0,
+            trunk_radius_m: 0.3,
+            species: Species::Broadleaf,
+            leaf_density: 0.8,
+        };
+        // A low, wide crown behind the near trunk, crossed at 5 m.
+        let behind = Tree {
+            id: "behind".into(),
+            xy_m: [130.0, 100.0],
+            crown_base_m: 0.5,
+            crown_radius_m: 8.0,
+            trunk_radius_m: 0.0,
+            ..near.clone()
+        };
+        let with = plain.with_trees(Arc::new(TreeLayer::new(vec![near, behind]).unwrap()));
+        let mut draws = 0;
+        let (kind, point) = with
+            .first_return([20.0, 100.0, 5.0], [180.0, 100.0, 5.0], &mut || {
+                draws += 1;
+                0.0
+            })
+            .expect("returns");
+        assert_eq!(kind, "trunk");
+        assert!((point[0] - 99.7).abs() < 1e-9, "{point:?}");
+        assert_eq!(draws, 0, "the crown past the trunk takes no draw");
+    }
 }
