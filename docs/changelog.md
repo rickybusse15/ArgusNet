@@ -2,6 +2,12 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Viewer: trees are drawn (R2). Trunks and crowns from one shared mesh
+  per species, crowns coloured by leaf density (bare to full leaf), and
+  crossed-quad impostors past 2 km, switched by the renderer's visibility
+  ranges. Never hidden by a quality tier; a Trees toggle in Runtime
+  Overlays. A replay without trees draws nothing new.
+
 - Flight among trees (R2). A trunk is hard to physics: collision, the
   physical guard and guarded deconfliction push out of it as out of a
   building, never below the terrain. A crown is soft, and each frame

@@ -30,6 +30,7 @@ pub mod terrain_material;
 pub mod terrain_rasters;
 pub mod theme;
 pub mod trail_ribbons;
+pub mod trees;
 pub mod ui;
 pub mod zone_walls;
 

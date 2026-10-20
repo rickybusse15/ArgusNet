@@ -824,3 +824,103 @@ fn clearance_corridors_are_drawn_round_the_wires_only_when_asked_at_every_tier()
         );
     }
 }
+
+/// Five big broadleaves in a row along y = -200 m, from x = 300 to 500 m,
+/// on the committed terrain at 18 m: 40 m tall, crowns of 15 m radius from
+/// 15 m up, in full leaf.
+fn probe_trees() -> Vec<argusnet_world::trees::Tree> {
+    use argusnet_world::trees::{Species, Tree};
+    (0..5)
+        .map(|k| {
+            Tree {
+                id: format!("probe-tree-{k}"),
+                xy_m: [300.0 + 50.0 * k as f64, -200.0],
+                base_z_m: 18.0,
+                height_m: 40.0,
+                crown_base_m: 15.0,
+                crown_radius_m: 15.0,
+                trunk_radius_m: 0.8,
+                species: Species::Broadleaf,
+                leaf_density: 1.0,
+            }
+            .validated()
+            .unwrap()
+        })
+        .collect()
+}
+
+/// The probe scene, with [`probe_trees`] in the replay's meta.
+fn tree_scene(name: &str) -> PathBuf {
+    let root = scene(name, 400.0, None);
+    let path = root.join("replay/replay.json");
+    let mut replay: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    replay["meta"]["trees"] = serde_json::to_value(probe_trees()).unwrap();
+    std::fs::write(&path, replay.to_string()).unwrap();
+    root
+}
+
+/// Trees are drawn where the model stands them, near (trunk and crown) and
+/// far (the impostor), at every quality tier, and nothing is drawn off
+/// them.
+#[test]
+fn trees_are_drawn_where_the_model_stands_them_at_every_tier() {
+    if !gpu_tests() {
+        eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
+        return;
+    }
+    let scene = tree_scene("trees");
+    let trees = probe_trees();
+    // The middle tree's crown centre; and 150 m north of the row, at the
+    // same height, clear of everything.
+    let crown = trees[2].crown_centre_m();
+    assert_eq!(crown, [400.0, -200.0, 18.0 + 27.5]);
+    let off_row = [400.0, -50.0, crown[2]];
+    let points = [crown, off_row];
+    let without = RuntimeOverlayVisibility {
+        trees: false,
+        ..overlays(false, false, false)
+    };
+    let with = overlays(false, false, false);
+    assert!(with.trees, "trees are on by default");
+    for camera in [CameraPreset::Close, CameraPreset::Isometric] {
+        for tier in [QualityTier::Low, QualityTier::Standard, QualityTier::High] {
+            let off = render_at(
+                &format!("trees-off-{camera:?}-{tier:?}"),
+                &scene,
+                camera,
+                None,
+                tier,
+                without.clone(),
+                &[],
+                &points,
+            );
+            let on = render_at(
+                &format!("trees-on-{camera:?}-{tier:?}"),
+                &scene,
+                camera,
+                None,
+                tier,
+                with.clone(),
+                &[],
+                &points,
+            );
+            for (label, i) in [("crown", 0), ("off-row", 1)] {
+                eprintln!(
+                    "{camera:?} {tier:?} {label:>8}: off {:?} on {:?} diff {:.4}",
+                    off[i],
+                    on[i],
+                    difference(on[i], off[i])
+                );
+            }
+            assert!(
+                difference(on[0], off[0]) > 0.03,
+                "{camera:?} {tier:?}: the crown is not drawn"
+            );
+            assert!(
+                difference(on[1], off[1]) < 0.005,
+                "{camera:?} {tier:?}: something is drawn off the trees"
+            );
+        }
+    }
+}

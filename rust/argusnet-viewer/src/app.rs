@@ -450,6 +450,7 @@ fn run_inner(
             GradientSkyPlugin,
             crate::marker_meshes::MarkerMeshPlugin,
             crate::power_lines::PowerLinePlugin,
+            crate::trees::TreePlugin,
             crate::building_material::BuildingMaterialPlugin,
             TerrainMaterialPlugin,
             crate::terrain_rasters::TerrainRastersPlugin,
@@ -509,6 +510,8 @@ fn run_inner(
                 crate::zone_walls::sync_zone_walls,
                 // The run's towers and conductors (R3).
                 crate::power_lines::sync_power_lines,
+                // The run's trees (R2).
+                crate::trees::sync_trees,
                 sync_base_layer_visibility_system,
                 sync_fog_to_camera_system,
                 // Reconstruction owns real state, so it runs regardless of its

@@ -1330,6 +1330,7 @@ pub(super) fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.launch_lines, "Launch Lines");
         ui.checkbox(&mut runtime_visibility.trails, "Trails");
         ui.checkbox(&mut runtime_visibility.power_lines, "Power Lines");
+        ui.checkbox(&mut runtime_visibility.trees, "Trees");
         ui.checkbox(
             &mut runtime_visibility.power_line_clearance,
             "Clearance Corridors",

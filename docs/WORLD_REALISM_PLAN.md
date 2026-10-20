@@ -5,9 +5,9 @@ opacity fix (#222) and typed structure matching. R1 is done: building-v2
 roofs, the georeferenced import and material facades. R3 is done: the
 model, the safety clearance, lines in a run, drawing in the viewer, the
 planner's corridor, the guard against wires, sensing wires and the
-clearance-corridor overlay. R2 is in progress: the tree model, trees in a
-run, sensing through trees and flight round trees are done; drawing
-trees is not merged. R4 and R5 are not started.
+clearance-corridor overlay. R2 is done: the tree model, trees in a run,
+sensing through trees, flight round trees and drawing trees. R4 and R5
+are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -289,6 +289,18 @@ C8 (P2.6) and D2 (P5.1).
   egress, and hovering beside a POI's crown. Under the reference every
   position is identical before and after, with the safety floor or
   without it.
+
+  *Done (drawing):* the viewer draws `meta.trees` (`trees.rs`). Each tree
+  is a trunk and a crown, from one unit mesh per species, shared so the
+  renderer batches them. Crowns are coloured from bare to full leaf in
+  four steps of leaf density, which already carries the season. Past
+  2 km a tree is a crossed-quad impostor. Bevy's `VisibilityRange`
+  switches between the two, so nothing is recomputed as the camera
+  moves. Trees are never hidden by a quality tier. A Trees toggle sits in
+  Runtime Overlays, and a tree the model refuses is reported, not drawn.
+  A GPU probe checks trees are drawn where the model stands them, at
+  Close and Isometric on every tier, and a unit test checks meshes draw
+  near and impostors far.
 
 ### R3: power lines
 
