@@ -209,12 +209,17 @@ pub struct WorldDocument {
     /// them, and written only when a world has some.
     #[serde(default)]
     pub power_lines: Vec<argusnet_world::powerline::PowerLine>,
+    /// Trees (R2, `tree-v1`), from the builder's `trees` option or from
+    /// data. Absent from bundles written before them, and written only when
+    /// a world has some.
+    #[serde(default)]
+    pub trees: Vec<argusnet_world::trees::Tree>,
 }
 
-/// As derived, except that `power_lines` is rendered only when there are
-/// some: [`ScenarioBundle::content_hash`] hashes this rendering, and a
-/// world without lines must bind the same checkpoints it did before lines
-/// existed.
+/// As derived, except that `power_lines` and `trees` are rendered only when
+/// there are some: [`ScenarioBundle::content_hash`] hashes this rendering,
+/// and a world without them must bind the same checkpoints it did before
+/// they existed.
 impl std::fmt::Debug for WorldDocument {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = formatter.debug_struct("WorldDocument");
@@ -225,6 +230,9 @@ impl std::fmt::Debug for WorldDocument {
             .field("los_terrain_clearance_m", &self.los_terrain_clearance_m);
         if !self.power_lines.is_empty() {
             out.field("power_lines", &self.power_lines);
+        }
+        if !self.trees.is_empty() {
+            out.field("trees", &self.trees);
         }
         out.finish()
     }
@@ -668,6 +676,9 @@ pub struct BuiltWorld {
     pub visibility: SharedVisibility,
     /// Each checked: a line the model refuses is a bundle error.
     pub power_lines: Arc<Vec<argusnet_world::powerline::PowerLine>>,
+    /// Each checked as read: a tree the model refuses, or two with one id,
+    /// is a bundle error. Empty when the world has none.
+    pub trees: Arc<argusnet_world::trees::TreeLayer>,
 }
 
 pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
@@ -719,11 +730,14 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
                 .map_err(|error| BundleError::World(format!("power line: {error}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let trees = argusnet_world::trees::TreeLayer::new(world.trees.clone())
+        .map_err(|error| BundleError::World(format!("tree: {error}")))?;
 
     let terrain = Arc::new(terrain);
     let obstacles = Arc::new(obstacles);
     Ok(BuiltWorld {
         power_lines: Arc::new(power_lines),
+        trees: Arc::new(trees),
         terrain: SharedTerrain::new(Arc::clone(&terrain), world.terrain.base_resolution_m),
         obstacles: SharedObstacles::new(Arc::clone(&obstacles)),
         visibility: SharedVisibility::new(

@@ -57,6 +57,17 @@ pub struct ImportedBuilding {
     /// `tagged`, `default` or `unsupported:<shape>`: how the roof was known.
     #[serde(default)]
     pub roof_source: String,
+    /// The facade's material class (`brick`, `glass`, ...), `generic` when
+    /// the data does not say. Drawn by the viewer; the run ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facade_material: Option<String>,
+    /// The roof's material class, `generic` when the data does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roof_material: Option<String>,
+    /// Storeys, when the data gives them: the viewer draws window rows only
+    /// then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub levels: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,6 +163,22 @@ pub fn place(
         });
         if let Some(azimuth) = building.ridge_azimuth_rad {
             metadata["ridge_azimuth_rad"] = json!(azimuth);
+        }
+        // How it looks, for the scene; the run reads none of these.
+        for (key, value) in [
+            (
+                "facade_material",
+                building.facade_material.as_ref().map(|v| json!(v)),
+            ),
+            (
+                "roof_material",
+                building.roof_material.as_ref().map(|v| json!(v)),
+            ),
+            ("levels", building.levels.map(|v| json!(v))),
+        ] {
+            if let Some(value) = value {
+                metadata[key] = value;
+            }
         }
         obstacles.push(imported_building(metadata, building.footprint_xy_m.clone()));
     }

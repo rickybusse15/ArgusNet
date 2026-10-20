@@ -20,8 +20,9 @@
 //! a forest cost what the trees near them cost. [`poisson_disk`] is the
 //! seeded, fixed-order sampler procedural placement scatters trees with.
 //!
-//! This module is the model. Placement in a run, sensing, flight and
-//! drawing come in later slices.
+//! This module is the model. A run's bundle carries trees in its world
+//! (`argusnet-sim`'s builder scatters them with the `trees` option);
+//! sensing, flight and drawing come in later slices.
 
 use serde::{Deserialize, Serialize};
 
@@ -677,9 +678,12 @@ pub fn poisson_disk(bounds: Bounds2d, spacing_m: f64, attempts: usize, seed: u32
             let y0 = bounds.y_min_m + row as f64 * cell;
             let mut kept: Option<[f64; 2]> = None;
             for _ in 0..attempts {
+                // The last row and column may be cut short by the bounds:
+                // draw over the part inside, not over the whole cell and
+                // clamped (which would line points up on the edge).
                 let candidate = [
-                    (x0 + rng.random() * cell).min(bounds.x_max_m),
-                    (y0 + rng.random() * cell).min(bounds.y_max_m),
+                    x0 + rng.random() * cell.min(bounds.x_max_m - x0),
+                    y0 + rng.random() * cell.min(bounds.y_max_m - y0),
                 ];
                 if kept.is_some() {
                     continue;
@@ -1214,6 +1218,11 @@ mod tests {
             "{} points, {per_r2}",
             points.len()
         );
+        // A cut-short last row and column are drawn over, not clamped to
+        // the edge: no point lies on it.
+        assert!(points
+            .iter()
+            .all(|p| p[0] < bounds.x_max_m && p[1] < bounds.y_max_m));
         // Seeded: the same seed, the same points; another seed, others.
         assert_eq!(points, poisson_disk(bounds, 8.0, 12, 7));
         assert_ne!(points, poisson_disk(bounds, 8.0, 12, 8));

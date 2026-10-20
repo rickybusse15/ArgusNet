@@ -2,6 +2,16 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Trees in a run (R2). The bundle's `world` carries `trees` (`tree-v1`),
+  each validated as read, absent when there are none and left out of the
+  bundle's hash then. The builder's opt-in `trees` option scatters them
+  over Forest and Scrub land cover from a seeded Poisson-disk sample (none
+  in forest stands or buildings), species by terrain preset, deciduous
+  crowns thinned by the season; seeded from the world, not the run. They go
+  into the replay's meta as `trees`. The opt-in `tree_inspection` option
+  puts the mission's POIs inside the canopy beside tall trees, for
+  measuring the behaviour slices. Nothing reads the trees yet: frames are
+  unchanged with them on, and the 14 canonical replays are unchanged.
 - World: a tree model (R2, first slice). `argusnet_world::trees` holds
   `Tree` (`tree-v1`): position, ground level, height, crown base, crown
   radius, trunk radius, species (conifer, broadleaf, palm, shrub) and leaf
@@ -62,6 +72,13 @@
   and 42) `structure_clearance` events under efficient_v1 go from 69 and 26
   to 2 and 0; the 2 left are deconfliction pushes. The reference is
   unchanged, and so are the 14 canonical replays.
+
+- Buildings drawn by material, with window rows (R1). Imported buildings
+  carry facade and roof material classes and their storeys. The scene
+  colours walls and roofs by class, and the viewer draws window rows on
+  facades whose storeys the data gives, none elsewhere. Unknown materials
+  draw in the layer's own colour. Nothing else changes: other GLBs are
+  byte-identical, and 14/14 replays are identical.
 
 - Real buildings in a run (R1). `scripts/import_buildings.py` turns
   GeoJSON or OSM footprints into an `argusnet.buildings` document: local

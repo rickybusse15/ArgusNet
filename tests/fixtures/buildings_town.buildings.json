@@ -8,7 +8,7 @@
   "origin_lon_deg": 7.0,
   "origin_h_m": 0.0
  },
- "source_sha256": "90a517f861defe9dd7f00d2d8376607729a4653858efba021a81e18d2d071aa2",
+ "source_sha256": "65bbe47232e213fd4b0b9b4093970aa87855a0e22fec4710b9809db526130981",
  "summary": {
   "buildings": 10,
   "skipped_degenerate": 0,
@@ -43,6 +43,9 @@
    "roof_shape": "gabled",
    "height_source": "measured",
    "roof_source": "tagged",
+   "facade_material": "brick",
+   "roof_material": "tiles",
+   "levels": 2.0,
    "ridge_azimuth_rad": 0.0
   },
   {
@@ -69,7 +72,10 @@
    "eave_height_m": 3.5999999999999996,
    "roof_shape": "hipped",
    "height_source": "levels",
-   "roof_source": "tagged"
+   "roof_source": "tagged",
+   "facade_material": "generic",
+   "roof_material": "generic",
+   "levels": 2.0
   },
   {
    "id": "way/3",
@@ -95,7 +101,9 @@
    "eave_height_m": 12.0,
    "roof_shape": "pyramidal",
    "height_source": "measured",
-   "roof_source": "tagged"
+   "roof_source": "tagged",
+   "facade_material": "generic",
+   "roof_material": "generic"
   },
   {
    "id": "way/4",
@@ -121,7 +129,10 @@
    "eave_height_m": 24.0,
    "roof_shape": "flat",
    "height_source": "measured",
-   "roof_source": "tagged"
+   "roof_source": "tagged",
+   "facade_material": "glass",
+   "roof_material": "concrete",
+   "levels": 8.0
   },
   {
    "id": "way/5",
@@ -147,7 +158,9 @@
    "eave_height_m": 10.0,
    "roof_shape": "flat",
    "height_source": "default",
-   "roof_source": "default"
+   "roof_source": "default",
+   "facade_material": "metal",
+   "roof_material": "metal"
   },
   {
    "id": "way/6",
@@ -181,7 +194,9 @@
    "eave_height_m": 12.192,
    "roof_shape": "flat",
    "height_source": "measured",
-   "roof_source": "unsupported:non-convex-hipped"
+   "roof_source": "unsupported:non-convex-hipped",
+   "facade_material": "generic",
+   "roof_material": "generic"
   },
   {
    "id": "way/7",
@@ -207,7 +222,9 @@
    "eave_height_m": 12.0,
    "roof_shape": "flat",
    "height_source": "measured",
-   "roof_source": "unsupported:mansard"
+   "roof_source": "unsupported:mansard",
+   "facade_material": "generic",
+   "roof_material": "generic"
   },
   {
    "id": "way/8",
@@ -234,6 +251,8 @@
    "roof_shape": "gabled",
    "height_source": "measured",
    "roof_source": "tagged",
+   "facade_material": "generic",
+   "roof_material": "generic",
    "ridge_azimuth_rad": -1.5707938914727546
   },
   {
@@ -260,7 +279,9 @@
    "eave_height_m": 3.0,
    "roof_shape": "flat",
    "height_source": "default",
-   "roof_source": "default"
+   "roof_source": "default",
+   "facade_material": "generic",
+   "roof_material": "generic"
   },
   {
    "id": "relation/9#1",
@@ -286,7 +307,9 @@
    "eave_height_m": 3.0,
    "roof_shape": "flat",
    "height_source": "default",
-   "roof_source": "default"
+   "roof_source": "default",
+   "facade_material": "generic",
+   "roof_material": "generic"
   }
  ]
 }
