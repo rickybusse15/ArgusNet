@@ -483,4 +483,43 @@ mod tests {
         }
         assert_ne!(leaf_color(Species::Conifer), leaf_color(Species::Palm));
     }
+
+    /// Up close a tree is its trunk and crown meshes, past
+    /// [`IMPOSTOR_DISTANCE_M`] its impostor, and never both: each part's
+    /// range is the renderer's to apply, so it is checked here.
+    #[test]
+    fn meshes_draw_near_and_impostors_far() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Trees>()
+            .insert_resource(RuntimeOverlayVisibility::default())
+            .insert_resource(ReplayState::new(Some(
+                serde_json::from_value(serde_json::json!({
+                    "meta": {"trees": [serde_json::to_value(tree()).unwrap()]},
+                    "frames": [],
+                }))
+                .unwrap(),
+            )))
+            .add_systems(Update, sync_trees);
+        app.update();
+        let mut query = app.world_mut().query::<(&TreePart, &VisibilityRange)>();
+        let parts: Vec<(TreePart, VisibilityRange)> = query
+            .iter(app.world())
+            .map(|(part, range)| (*part, range.clone()))
+            .collect();
+        assert_eq!(parts.len(), 3, "a trunk, a crown and an impostor");
+        for (part, range) in parts {
+            match part {
+                TreePart::Trunk | TreePart::Crown => {
+                    assert_eq!(range.start_margin.end, 0.0, "{part:?}");
+                    assert_eq!(range.end_margin.start, IMPOSTOR_DISTANCE_M, "{part:?}");
+                }
+                TreePart::Impostor => {
+                    assert_eq!(range.start_margin.start, IMPOSTOR_DISTANCE_M);
+                    assert_eq!(range.end_margin.start, f32::MAX);
+                }
+            }
+        }
+    }
 }
