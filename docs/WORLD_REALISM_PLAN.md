@@ -159,7 +159,7 @@ C8 (P2.6) and D2 (P5.1).
   `foliage_density_factor`; conifers and palms keep theirs. Snow paints
   over forest in winter, but the trees are placed on the cover as it is
   without snow, so they stay. The forest is part of the world, like the
-  land cover: seeded from the presets and the terrain seed, not the run's
+  land cover: seeded from the presets and the terrain's effective seed, not the run's
   seed, so seeds 7 and 42 fly over one forest. A medium default map holds
   about 7,800 trees; a map whose forest would hold more than 15,000 is
   thinned evenly to that. The trees go into the replay's meta as `trees`.
@@ -169,7 +169,7 @@ C8 (P2.6) and D2 (P5.1).
   To measure the behaviour slices, the builder's opt-in `tree_inspection`
   option stands the mission's POIs inside the canopy: beside the crowns of
   tall forest trees, spread through the forest, at 16 m over the ground,
-  in no crown and at least 10 m inside the map, so a drone flying between
+  in no crown or building and at least 10 m inside the map, so a drone flying between
   them passes through crowns. It cannot be combined with
   `power_line_inspection`; each places the POIs. The
   scenario: medium map, default terrain, 3 drones, 8 POIs, coverage
