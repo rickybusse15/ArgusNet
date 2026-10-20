@@ -48,6 +48,15 @@
   to 2 and 0; the 2 left are deconfliction pushes. The reference is
   unchanged, and so are the 14 canonical replays.
 
+- Real buildings in a run (R1). `scripts/import_buildings.py` turns
+  GeoJSON or OSM footprints into an `argusnet.buildings` document: local
+  metres around a recorded origin, heights and roofs from the tags, and
+  every estimate marked. A scenario config's `buildings_path` option puts
+  them in the run in place of the procedural buildings, with their roofs,
+  standing on the run's terrain. The bundle and the replay record where on
+  Earth they are. Without the option nothing changes: 14/14 replays
+  identical.
+
 - World: `building-v2`, buildings with roofs (R1, first slice). Flat,
   gabled, hipped and pyramidal roofs as planes over the footprint; line of
   sight, collision and the range scanner's hits clip against them exactly,
