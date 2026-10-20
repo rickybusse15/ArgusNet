@@ -23,11 +23,56 @@
 //! some rays reach the ground under a tree and some come back from its top.
 //! Forest stands' returns are still dropped: a stand is an aggregate with no
 //! surface to return from.
+//!
+//! **Wires** (R3) are seen differently. A conductor a few centimetres thick
+//! does not stop the fan's rays (wires never occlude: the ground behind
+//! still returns), and a scanner puts points on it only while its points
+//! are no further apart than the wire is thick: within
+//! [`wire_detection_range_m`], about 30 m for a 3 cm wire at the scanner's
+//! [`WIRE_RESOLUTION_RAD`]. A span with a conductor that near, below the
+//! scanner's horizon (the fan looks down), is reported as a [`WireReturn`]:
+//! the line, the span, and the nearest point. Which span the points belong
+//! to is taken from the world exactly, as the ground class is; a real
+//! system fits it from the points. So a platform without a prior map learns
+//! a wire only when it is already close.
 
+use std::sync::Arc;
+
+use argusnet_world::powerline::{segment_distance, ConductorPiece, PowerLine};
 use serde::{Deserialize, Serialize};
 
 use crate::deterministic::{DeterministicRng, SeedPart};
 use crate::runtime_world::SharedVisibility;
+
+/// The scanner's angular resolution for wires, radians: how far apart its
+/// points are at a metre's range.
+pub const WIRE_RESOLUTION_RAD: f64 = 1e-3;
+
+/// How near a conductor of `radius_m` must be for the scanner's points to
+/// land on it: where their spacing grows to the wire's thickness.
+pub fn wire_detection_range_m(radius_m: f64) -> f64 {
+    2.0 * radius_m / WIRE_RESOLUTION_RAD
+}
+
+/// A span of a power line the scanner put points on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WireReturn {
+    /// The span, as fitted to its points: [`PowerLine::span_line`], whose id
+    /// names the line and the span (`line#k`).
+    pub span: PowerLine,
+    /// The nearest point of its conductors.
+    pub point_m: [f64; 3],
+}
+
+/// One span's conductor pieces, and the box holding them.
+#[derive(Debug, Clone)]
+struct SpanPieces {
+    span: PowerLine,
+    pieces: Vec<ConductorPiece>,
+    range_m: f64,
+    low_m: [f64; 3],
+    high_m: [f64; 3],
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RangeScanConfig {
@@ -124,6 +169,10 @@ pub struct RangeScan {
     pub returns: Vec<RangeReturn>,
     /// Rays that met nothing within range (or left the world).
     pub misses: u32,
+    /// The power-line spans near enough to put points on (R3). Absent when
+    /// there are none, so a scan in a world without lines is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wires: Vec<WireReturn>,
 }
 
 /// The scanner: a fan of rays over the true world.
@@ -131,12 +180,93 @@ pub struct RangeScan {
 pub struct RangeScanner {
     config: RangeScanConfig,
     world: SharedVisibility,
+    /// The world's power lines, span by span (R3).
+    spans: Arc<Vec<SpanPieces>>,
 }
 
 impl RangeScanner {
     pub fn new(config: RangeScanConfig, world: SharedVisibility) -> Result<Self, String> {
         config.validate()?;
-        Ok(Self { config, world })
+        Ok(Self {
+            config,
+            world,
+            spans: Arc::new(Vec::new()),
+        })
+    }
+
+    /// The scanner, also detecting `lines`' wires (R3).
+    pub fn with_power_lines(mut self, lines: &[PowerLine]) -> Self {
+        let mut spans = Vec::new();
+        for line in lines {
+            // No further than the scanner reaches at all.
+            let range_m =
+                wire_detection_range_m(line.conductor_radius_m).min(self.config.max_range_m);
+            let per_span = line.pieces_by_span();
+            for (span, pieces) in per_span.into_iter().enumerate() {
+                let mut low_m = [f64::INFINITY; 3];
+                let mut high_m = [f64::NEG_INFINITY; 3];
+                for piece in &pieces {
+                    for axis in 0..3 {
+                        low_m[axis] = low_m[axis]
+                            .min(piece.start_m[axis].min(piece.end_m[axis]) - piece.sag_error_m);
+                        high_m[axis] = high_m[axis]
+                            .max(piece.start_m[axis].max(piece.end_m[axis]) + piece.sag_error_m);
+                    }
+                }
+                spans.push(SpanPieces {
+                    span: line.span_line(span),
+                    pieces,
+                    range_m,
+                    low_m,
+                    high_m,
+                });
+            }
+        }
+        self.spans = Arc::new(spans);
+        self
+    }
+
+    /// How many power-line spans the scanner can detect.
+    pub fn wire_span_count(&self) -> usize {
+        self.spans.len()
+    }
+
+    /// The spans with a conductor within detection range of `origin_m` and
+    /// below its horizon, each with its nearest point (in line, then span
+    /// order). The nearest point is on the pieces, which the wire hangs
+    /// within millimetres of.
+    fn wires_near(&self, origin_m: [f64; 3]) -> Vec<WireReturn> {
+        let mut wires = Vec::new();
+        for span in self.spans.iter() {
+            let outside = (0..3).any(|axis| {
+                origin_m[axis] < span.low_m[axis] - span.range_m
+                    || origin_m[axis] > span.high_m[axis] + span.range_m
+            });
+            if outside {
+                continue;
+            }
+            let nearest = span
+                .pieces
+                .iter()
+                .map(|piece| {
+                    let point = argusnet_world::powerline::closest_on_segment(
+                        origin_m,
+                        piece.start_m,
+                        piece.end_m,
+                    );
+                    (segment_distance(origin_m, origin_m, point, point), point)
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((distance, point)) = nearest {
+                if distance <= span.range_m && point[2] <= origin_m[2] {
+                    wires.push(WireReturn {
+                        span: span.span.clone(),
+                        point_m: point,
+                    });
+                }
+            }
+        }
+        wires
     }
 
     pub fn config(&self) -> &RangeScanConfig {
@@ -218,6 +348,7 @@ impl RangeScanner {
             origin_m,
             returns,
             misses,
+            wires: self.wires_near(origin_m),
         }
     }
 }
@@ -336,5 +467,129 @@ mod tests {
         } else {
             assert_eq!(hit.class, ReturnClass::Ground, "{scan:?}");
         }
+    }
+
+    /// Flat ground at 0 over 400 m square, nothing on it, and a scanner
+    /// that knows `lines`.
+    fn scanner_over_flat(lines: &[PowerLine]) -> RangeScanner {
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::tiled::{Tile, TiledTerrain};
+        use argusnet_world::visibility::VisibilityProfile;
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let tile = Tile {
+            tx: 0,
+            ty: 0,
+            lod: 0,
+            x_min_m: -200.0,
+            y_min_m: -200.0,
+            cell_size_m: 5.0,
+            heights_m: vec![vec![0.0; 81]; 81],
+            min_pyramid: Vec::new(),
+            max_pyramid: Vec::new(),
+        };
+        let world = SharedVisibility::new(
+            Arc::new(TiledTerrain::new(bounds, 80, 5.0, 0.0, vec![tile]).unwrap()),
+            Arc::new(ObstacleLayer::new(bounds, 400.0, Vec::new()).unwrap()),
+            None,
+            Arc::new(VisibilityProfile::default()),
+            1.0,
+        );
+        RangeScanner::new(RangeScanConfig::default(), world)
+            .unwrap()
+            .with_power_lines(lines)
+    }
+
+    /// A 3 cm single wire 20 m up, along x from -100 to 100, sagging 3 %:
+    /// two spans, the support at x = 0.
+    fn wire() -> PowerLine {
+        use argusnet_world::powerline::Support;
+        let support = |x: f64| Support {
+            xy_m: [x, 0.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+        };
+        PowerLine {
+            id: "line".into(),
+            supports: vec![support(-100.0), support(0.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.03,
+            conductor_radius_m: 0.015,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_three_centimetre_wire_is_resolved_out_to_thirty_metres() {
+        assert!((wire_detection_range_m(0.015) - 30.0).abs() < 1e-9);
+    }
+
+    /// A span is reported while a conductor is within detection range below
+    /// the scanner, with its nearest point on the pieces; not beyond the
+    /// range, and not above the scanner, whose fan looks down.
+    #[test]
+    fn a_wire_is_detected_only_near_and_below() {
+        let scanner = scanner_over_flat(&[wire()]);
+        let scan = |origin: [f64; 3]| scanner.scan("d", 0, 0.0, origin, [0.0; 3]);
+        // Over mid-span of the second span, 25 m over the wire's lowest
+        // point (17 m): seen, its nearest point just off straight below
+        // (the pieces either side tilt toward the scanner).
+        let seen = scan([50.0, 0.0, 42.0]);
+        assert_eq!(seen.wires.len(), 1, "{:?}", seen.wires);
+        assert_eq!(seen.wires[0].span.id, "line#1");
+        let point = seen.wires[0].point_m;
+        assert!(
+            (point[0] - 50.0).abs() < 0.2 && (point[2] - 17.0).abs() < 1e-3,
+            "{point:?}"
+        );
+        let near = segment_distance([50.0, 0.0, 42.0], [50.0, 0.0, 42.0], point, point);
+        assert!(near <= 25.0, "{near}");
+        // The fitted span is the line's second span alone.
+        assert_eq!(seen.wires[0].span, wire().span_line(1));
+        // 31 m over it: too far for the points to land on a 3 cm wire.
+        assert!(scan([50.0, 0.0, 48.0]).wires.is_empty());
+        // Beside the line, 29 m off, level with it: below the horizon by a
+        // hair, and seen; 1 m higher than the wire's top seen too.
+        assert_eq!(scan([50.0, 29.0, 17.5]).wires.len(), 1);
+        // Past the line's end, 20 m out along it and 10 m up: the end span
+        // is seen, from outside the box its pieces fill.
+        let past = scan([-120.0, 0.0, 30.0]);
+        let ids: Vec<&str> = past.wires.iter().map(|w| w.span.id.as_str()).collect();
+        assert_eq!(ids, ["line#0"]);
+        // A scanner that reaches only 10 m sees the wire only that near.
+        let short = RangeScanner {
+            config: RangeScanConfig {
+                max_range_m: 10.0,
+                ..RangeScanConfig::default()
+            },
+            ..scanner_over_flat(&[])
+        }
+        .with_power_lines(&[wire()]);
+        let short_scan = |origin: [f64; 3]| short.scan("d", 0, 0.0, origin, [0.0; 3]).wires.len();
+        assert_eq!(short_scan([50.0, 0.0, 28.0]), 0, "20 m over the wire");
+        assert_eq!(short_scan([50.0, 0.0, 26.5]), 1, "9.5 m over the wire");
+        // Under the wire, looking down: not seen.
+        assert!(scan([50.0, 0.0, 10.0]).wires.is_empty());
+        // Over the support, both spans are near.
+        let both = scan([0.0, 0.0, 30.0]);
+        let ids: Vec<&str> = both.wires.iter().map(|w| w.span.id.as_str()).collect();
+        assert_eq!(ids, ["line#0", "line#1"]);
+    }
+
+    /// Wires never stop a ray: the ground under one still returns, exactly
+    /// as with no line at all.
+    #[test]
+    fn a_wire_does_not_occlude_the_ground() {
+        let with = scanner_over_flat(&[wire()]).scan("d", 3, 0.0, [50.0, 0.0, 42.0], [0.0; 3]);
+        let without = scanner_over_flat(&[]).scan("d", 3, 0.0, [50.0, 0.0, 42.0], [0.0; 3]);
+        assert_eq!(with.returns, without.returns);
+        assert_eq!(with.misses, without.misses);
+        assert!(without.wires.is_empty() && !with.wires.is_empty());
+        // The nadir ray lands under the wire.
+        assert!(with.returns.iter().any(|r| r.class == ReturnClass::Ground
+            && (r.point_m[0] - 50.0).abs() < 1.5
+            && r.point_m[1].abs() < 1.5));
     }
 }

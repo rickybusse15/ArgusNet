@@ -325,11 +325,8 @@ impl SharedVisibility {
         let end = match &hard {
             Some((_, point)) => *point,
             None => {
-                let Some((_, t_end)) =
-                    visibility::clip([from[0], from[1]], [to[0], to[1]], self.terrain.bounds)
-                else {
-                    return None;
-                };
+                let (_, t_end) =
+                    visibility::clip([from[0], from[1]], [to[0], to[1]], self.terrain.bounds)?;
                 let t_end = (t_end - 1e-6).max(0.0);
                 std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t_end)
             }

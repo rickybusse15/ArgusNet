@@ -388,6 +388,11 @@ pub fn write_glb(path: &Path, mesh: &MeshData, name: &str) -> Result<(), String>
 /// alpha otherwise, and `BLEND` is its only translucent mode, with straight
 /// colours -- and is single-sided: its parts are closed solids, so culling
 /// their back faces keeps a far wall from blending over a near one.
+/// The glTF mesh `extras` key that marks a part carrying a roofed
+/// building's window coordinates (R1), and its version.
+pub const FACADE_EXTRAS_KEY: &str = "argusnet_facade";
+pub const FACADE_EXTRAS_VERSION: u32 = 1;
+
 pub fn write_glb_parts(path: &Path, parts: &[&MeshData], name: &str) -> Result<(), String> {
     fn floats(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
         values.into_iter().flat_map(f32::to_le_bytes).collect()
@@ -441,13 +446,44 @@ pub fn write_glb_parts(path: &Path, parts: &[&MeshData], name: &str) -> Result<(
         } else {
             format!("{name}-{index}")
         };
-        meshes.push(json!({
+        let mut attributes = json!({"POSITION": first, "NORMAL": first + 1, "COLOR_0": first + 2});
+        // Texture coordinates, only on a part that has them (a roofed
+        // building, R1): appended after everything a part always had, so
+        // every other file is written byte for byte as before.
+        for (key, uvs) in [("TEXCOORD_0", &mesh.uvs), ("TEXCOORD_1", &mesh.uvs_b)] {
+            if uvs.is_empty() {
+                continue;
+            }
+            if uvs.len() != count {
+                return Err(format!(
+                    "{name}: {key} has {} values for {count} vertices",
+                    uvs.len()
+                ));
+            }
+            let payload = floats(uvs.iter().flatten().copied());
+            views.push(json!({
+                "buffer": 0, "byteOffset": bin.len(), "byteLength": payload.len(), "target": 34962,
+            }));
+            bin.extend_from_slice(&payload);
+            while !bin.len().is_multiple_of(4) {
+                bin.push(0);
+            }
+            attributes[key] = json!(accessors.len());
+            accessors.push(json!({"bufferView": views.len() - 1, "componentType": 5126, "count": count, "type": "VEC2"}));
+        }
+        let mut gltf_mesh = json!({
             "name": part_name,
             "primitives": [{
-                "attributes": {"POSITION": first, "NORMAL": first + 1, "COLOR_0": first + 2},
+                "attributes": attributes,
                 "indices": first + 3, "material": 0, "mode": 4,
             }],
-        }));
+        });
+        // A part with window coordinates says so explicitly, so the viewer
+        // never reads some other file's texture coordinates as storeys.
+        if !mesh.uvs.is_empty() {
+            gltf_mesh["extras"] = json!({ FACADE_EXTRAS_KEY: FACADE_EXTRAS_VERSION });
+        }
+        meshes.push(gltf_mesh);
         nodes.push(json!({"mesh": index, "name": part_name}));
     }
     let translucent = parts
@@ -579,6 +615,7 @@ mod tests {
             normals: vec![[0.0, 0.0, 1.0]; 3],
             colours: vec![[0.9, 0.9, 0.9, alpha]; 3],
             indices: vec![0, 1, 2],
+            ..MeshData::default()
         }
     }
 
