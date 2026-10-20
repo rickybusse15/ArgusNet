@@ -1080,7 +1080,7 @@ pub fn edge_outward_normal(start: [f64; 2], end: [f64; 2], is_ccw: bool) -> [f64
 /// Fields are optional because which ones are present depends on `kind`;
 /// [`ObstacleMetadata::into_obstacle`] is where the per-kind requirements are
 /// enforced.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ObstacleMetadata {
     pub object_id: String,
     pub kind: String,
@@ -1109,6 +1109,35 @@ pub struct ObstacleMetadata {
     /// footprint's longest edge when absent.
     #[serde(default)]
     pub ridge_azimuth_rad: Option<f64>,
+}
+
+/// As derived, except that the `building-v2` fields are rendered only when
+/// set: a bundle's content hash hashes this rendering, and every bundle
+/// written before roofs must bind the same checkpoints it did then.
+impl std::fmt::Debug for ObstacleMetadata {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = formatter.debug_struct("ObstacleMetadata");
+        out.field("object_id", &self.object_id)
+            .field("kind", &self.kind)
+            .field("blocker_type", &self.blocker_type)
+            .field("footprint_xy_m", &self.footprint_xy_m)
+            .field("base_elevation_m", &self.base_elevation_m)
+            .field("top_elevation_m", &self.top_elevation_m)
+            .field("center_x_m", &self.center_x_m)
+            .field("center_y_m", &self.center_y_m)
+            .field("radius_m", &self.radius_m)
+            .field("density", &self.density);
+        if let Some(eave) = &self.eave_elevation_m {
+            out.field("eave_elevation_m", eave);
+        }
+        if let Some(shape) = &self.roof_shape {
+            out.field("roof_shape", shape);
+        }
+        if let Some(azimuth) = &self.ridge_azimuth_rad {
+            out.field("ridge_azimuth_rad", azimuth);
+        }
+        out.finish()
+    }
 }
 
 /// How a scene stored a footprint.
@@ -2025,6 +2054,25 @@ mod roof_tests {
         let prism =
             Obstacle::polygon_prism("p", BlockerType::Building, rectangle(), 0.0, 10.0).unwrap();
         assert!(!serde_json::to_string(&prism).unwrap().contains("roof"));
+    }
+
+    /// A bundle's content hash hashes this rendering: a prism's must be
+    /// what it was before roofs existed.
+    #[test]
+    fn metadata_without_a_roof_renders_as_it_always_did() {
+        let entry: ObstacleMetadata = serde_json::from_value(serde_json::json!({
+            "object_id": "p", "kind": "building-v1",
+            "footprint_xy_m": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+            "base_elevation_m": 0.0, "top_elevation_m": 5.0,
+        }))
+        .unwrap();
+        assert_eq!(
+            format!("{entry:?}"),
+            "ObstacleMetadata { object_id: \"p\", kind: \"building-v1\", blocker_type: None, \
+             footprint_xy_m: Some(Pairs([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])), \
+             base_elevation_m: 0.0, top_elevation_m: 5.0, center_x_m: None, center_y_m: None, \
+             radius_m: None, density: None }"
+        );
     }
 
     fn gabled_with_id(id: &str) -> Obstacle {
