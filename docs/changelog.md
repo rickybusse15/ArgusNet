@@ -2,6 +2,16 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Trees in a run (R2). The bundle's `world` carries `trees` (`tree-v1`),
+  each validated as read, absent when there are none and left out of the
+  bundle's hash then. The builder's opt-in `trees` option scatters them
+  over Forest and Scrub land cover from a seeded Poisson-disk sample (none
+  in forest stands or buildings), species by terrain preset, deciduous
+  crowns thinned by the season; seeded from the world, not the run. They go
+  into the replay's meta as `trees`. The opt-in `tree_inspection` option
+  puts the mission's POIs inside the canopy beside tall trees, for
+  measuring the behaviour slices. Nothing reads the trees yet: frames are
+  unchanged with them on, and the 14 canonical replays are unchanged.
 - World: a tree model (R2, first slice). `argusnet_world::trees` holds
   `Tree` (`tree-v1`): position, ground level, height, crown base, crown
   radius, trunk radius, species (conifer, broadleaf, palm, shrub) and leaf

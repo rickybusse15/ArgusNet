@@ -3,7 +3,7 @@
 **Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
 opacity fix (#222) and typed structure matching. R3 is in progress: the
 model, the safety clearance, lines in a run, drawing in the viewer and the
-planner's corridor are done. R2 is in progress: the tree model is done.
+planner's corridor are done. R2 is in progress: the tree model and trees in a run are done.
 R1, R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
@@ -164,6 +164,39 @@ C8 (P2.6) and D2 (P5.1).
   candidates and keeping the first that is clear, so the stream of draws
   depends on the seed and the grid alone and thinning the sample by land
   cover moves no point kept.
+
+  *Done (in a run):* the bundle's `world` carries `trees`, each read
+  through the model's check (a tree it refuses, or two with one id, is a
+  bundle error), absent when there are none and left out of the bundle's
+  hash then. A bundle from data carries whatever trees it lists; the
+  builder's opt-in `trees` option scatters them. Over the land cover's
+  Forest cells every point of an 8 m Poisson-disk sample is kept, over
+  Scrub about one in three (mostly shrubs, the rest broadleaves no taller
+  than 12 m, so only forest has tall trees); none stands in a forest stand
+  (the stand is the aggregate for the trees inside it, so no crown is
+  dimmed twice) or in a building. Species follow the terrain preset
+  (alpine mostly conifer, jungle broadleaf and palm, the rest conifer and
+  broadleaf), and each tree's height, crown and trunk are drawn from its
+  species' ranges. Deciduous crowns (broadleaf, shrub) take the season's
+  `foliage_density_factor`; conifers and palms keep theirs. Snow paints
+  over forest in winter, but the trees are placed on the cover as it is
+  without snow, so they stay. The forest is part of the world, like the
+  land cover: seeded from the presets and the terrain's effective seed, not the run's
+  seed, so seeds 7 and 42 fly over one forest. A medium default map holds
+  about 7,800 trees; a map whose forest would hold more than 15,000 is
+  thinned evenly to that. The trees go into the replay's meta as `trees`.
+  Nothing in a run reads them yet: with `trees` on, every frame of a run is
+  the frame it was without them.
+
+  To measure the behaviour slices, the builder's opt-in `tree_inspection`
+  option stands the mission's POIs inside the canopy: beside the crowns of
+  tall forest trees, spread through the forest, at 16 m over the ground,
+  in no crown or building and at least 10 m inside the map, so a drone flying between
+  them passes through crowns. It cannot be combined with
+  `power_line_inspection`; each places the POIs. The
+  scenario: medium map, default terrain, 3 drones, 8 POIs, coverage
+  threshold 0.3, 240 s, `trees`, `tree_inspection`, `safety_blocking`. All
+  8 POIs are inspected (seed 7, efficient_v1).
 
 ### R3: power lines
 
