@@ -344,8 +344,42 @@ C8 (P2.6) and D2 (P5.1).
   also show what this slice does not cover. A drone's own **scan lane**
   runs along the line at the wires' height, through them: stage 1's
   lanes are not routed round lines, and a prior run never puts stage 1
-  through the guard. That is the next gap for the planner. Next in R3:
-  sensing wires, then an optional clearance-corridor overlay.
+  through the guard. That is the next gap for the planner.
+
+  *Done (sensing):* the range scanner sees wires (`range_scan.rs`). A wire
+  never stops a ray: the ground behind it still returns. A scanner puts
+  points on a conductor only while its points are no further apart than
+  the wire is thick. So a span is reported (a `WireReturn`: the span as
+  fitted, `PowerLine::span_line`, and its nearest point) only while one of
+  its conductors is within `2 r / WIRE_RESOLUTION_RAD` (1 mrad, so 30 m for
+  the builder's 3 cm wire) and below the scanner, whose fan looks down. A
+  `--world-knowledge none` run maps a span the first time a scan sees it
+  (`BeliefGrid::wires`, checkpointed, published with each snapshot), and
+  learns wires late: on the inspection scenario the first is seen 58–85 s
+  in. Under efficient_v1 the mapped spans are hazards, as the prior map's
+  lines are in a prior run. POI, egress and gap-fill routes keep their
+  clearance, deconfliction and rejoins keep out of it, and a POI flight a
+  newly mapped wire lies across is flown again from where the drone is
+  (`poi_reroute`), as is a flight home, on a drone's own reserve or in the
+  mission's egress (`egress_reroute`). The detection range never exceeds
+  the scanner's own `max_range_m`. The opt-in wire-hazard prior (`--wire-prior`,
+  `ExplorationConfig::wire_prior`) gives the map every span from the
+  start, as a utility's map of its corridors would. A span alone hangs
+  as in its line, but where the line turns its outer conductors sit a
+  little off (their offset times one minus the cosine of half the turn).
+  The replay's range scans carry each wire's nearest point (`wire`).
+
+  Measured with no prior map on `power_line_inspection` (the configuration
+  above), efficient_v1, seed 42: `structure_clearance` events go from 47
+  (wires never sensed) to 8 (sensed and mapped), and to 0 with the
+  wire-hazard prior, which is as many as the same run with a prior map
+  has. The 8 left are one drone crossing a span 1.25 s after a scan
+  first mapped it, on stage 1's own exploration flight, already 23 m off
+  and descending: learned too late to turn, and on the stage 1 path the
+  previous slice found the planner does not route. Seed 7 and every
+  reference run stay at 0, with all 8 POIs inspected and no physical
+  contact in any run. Runs without lines are unchanged. Next in R3: an
+  optional clearance-corridor overlay.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against

@@ -244,8 +244,13 @@ pub struct DeconflictStage {
     guard: Option<crate::belief_world::PhysicalGuard>,
     /// The power lines a yielder is never pushed into the clearance of
     /// (R3), when its planner knows them. Empty (the reference, and a run
-    /// without a prior map) changes nothing.
+    /// without a prior map that has mapped none) changes nothing.
     power_lines: Vec<PowerLine>,
+    /// In a run without a prior map, the self-built map whose wires replace
+    /// `power_lines` (R3). Scenario.
+    mapped: Option<crate::belief_world::BeliefHandle>,
+    /// The mapped spans `power_lines` was last set from. Derived.
+    mapped_seen: Option<std::sync::Arc<Vec<PowerLine>>>,
 }
 
 impl Default for DeconflictStage {
@@ -265,7 +270,23 @@ impl DeconflictStage {
             resolver,
             guard: None,
             power_lines: Vec::new(),
+            mapped: None,
+            mapped_seen: None,
         }
+    }
+
+    /// Keep yielders out of the clearance of the power lines `map` has
+    /// mapped (R3), in a run without a prior map: from each run on, the
+    /// spans mapped so far replace [`Self::set_power_lines`]'s. `None`
+    /// (the default) maps nothing.
+    pub fn set_mapped_power_lines(&mut self, map: Option<crate::belief_world::BeliefHandle>) {
+        self.mapped = map;
+        self.mapped_seen = None;
+    }
+
+    /// Whether yielders keep clear of the wires a self-built map holds.
+    pub fn follows_mapped_power_lines(&self) -> bool {
+        self.mapped.is_some()
     }
 
     /// Keep each yielder out of `lines`' clearance (R3): a push that would
@@ -389,6 +410,17 @@ impl StageHandler for DeconflictStage {
             return Ok(StageOutcome::NoWork);
         }
 
+        if let Some(map) = &self.mapped {
+            let wires = std::sync::Arc::clone(map.current().wires());
+            if self
+                .mapped_seen
+                .as_ref()
+                .is_none_or(|seen| !std::sync::Arc::ptr_eq(seen, &wires))
+            {
+                self.power_lines = wires.to_vec();
+                self.mapped_seen = Some(wires);
+            }
+        }
         let clearance = if self.power_lines.is_empty() {
             LineClearance::default()
         } else {
@@ -779,6 +811,41 @@ mod tests {
             .position;
         assert!(b.y > -5.0 + 1.0, "short of the wire: {b:?}");
         assert!(!guard.take_contacts().is_empty());
+    }
+
+    /// In a run without a prior map the wires come from the self-built map:
+    /// once it holds the span, the push goes the other way.
+    #[test]
+    fn a_push_keeps_clear_of_a_wire_the_map_holds() {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        let config = ExplorationConfig::default();
+        let mut grid = BeliefGrid::new(
+            argusnet_types::Bounds2d::new(-200.0, 200.0, -200.0, 200.0),
+            10.0,
+            0.0,
+        )
+        .unwrap();
+        grid.know_wires(vec![wire_beside().span_line(0)]);
+        let map = BeliefHandle::new(grid.snapshot(&config));
+        let mut stage = DeconflictStage::new();
+        stage.set_mapped_power_lines(Some(map));
+        let mut sim = rig_with(
+            vec![
+                node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
+                node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
+            ],
+            stage,
+        );
+        sim.step().unwrap();
+        let b = sim
+            .world()
+            .platforms()
+            .iter()
+            .find(|p| p.node_id == "drone-b")
+            .unwrap()
+            .position;
+        assert!(b.y > 1.0, "pushed away from the wire: {b:?}");
+        assert_eq!(decon(&mut sim).power_lines().len(), 1);
     }
 
     /// The margin judges the flight from where the platform was left, swept:

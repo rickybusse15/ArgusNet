@@ -421,6 +421,10 @@ pub enum OverrideCommand {
 #[derive(Debug, Default)]
 pub struct MissionOverrideStage {
     state: State,
+    /// The self-built map whose wires rejoins keep clear of (R3). Scenario.
+    mapped: Option<crate::belief_world::BeliefHandle>,
+    /// The mapped spans the rejoins were last given. Derived.
+    mapped_seen: Option<std::sync::Arc<Vec<argusnet_world::powerline::PowerLine>>>,
 }
 
 impl MissionOverrideStage {
@@ -473,6 +477,20 @@ impl MissionOverrideStage {
                 line,
             })
             .collect();
+    }
+
+    /// Keep guarded rejoins clear of the power lines `map` has mapped (R3),
+    /// in a run without a prior map: from each run on, the spans mapped so
+    /// far replace [`Self::set_power_lines`]'s. `None` (the default) maps
+    /// nothing.
+    pub fn set_mapped_power_lines(&mut self, map: Option<crate::belief_world::BeliefHandle>) {
+        self.mapped = map;
+        self.mapped_seen = None;
+    }
+
+    /// Whether rejoins keep clear of the wires a self-built map holds.
+    pub fn follows_mapped_power_lines(&self) -> bool {
+        self.mapped.is_some()
     }
 
     /// The power lines guarded rejoins keep their clearance from.
@@ -926,6 +944,17 @@ impl StageHandler for MissionOverrideStage {
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        if let Some(map) = &self.mapped {
+            let wires = std::sync::Arc::clone(map.current().wires());
+            if self
+                .mapped_seen
+                .as_ref()
+                .is_none_or(|seen| !std::sync::Arc::ptr_eq(seen, &wires))
+            {
+                self.set_power_lines(wires.to_vec());
+                self.mapped_seen = Some(wires);
+            }
+        }
         let shared = &mut self.state;
         shared.applied.clear();
 
@@ -1616,6 +1645,29 @@ mod tests {
         let closest = kept.iter().copied().fold(f64::INFINITY, f64::min);
         assert!(closest >= 10.0 - 1e-6, "{closest}");
     }
+    /// In a run without a prior map the rejoin keeps clear of the wires the
+    /// self-built map holds, as of each run.
+    #[test]
+    fn a_rejoin_keeps_clear_of_a_wire_the_map_holds() {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        let (line, guard) = wire_across(84.0);
+        let config = ExplorationConfig::default();
+        let mut grid = BeliefGrid::new(
+            argusnet_types::Bounds2d::new(-200.0, 1200.0, -600.0, 600.0),
+            10.0,
+            0.0,
+        )
+        .unwrap();
+        grid.know_wires(vec![line.span_line(0)]);
+        let mut sim = rejoin_rig(true);
+        ov(&mut sim).set_physical_guard(Some(guard));
+        ov(&mut sim).set_mapped_power_lines(Some(BeliefHandle::new(grid.snapshot(&config))));
+        let kept = rejoin_clearances(&mut sim, &line);
+        let closest = kept.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(closest >= 10.0 - 1e-6, "{closest}");
+        assert_eq!(ov(&mut sim).power_lines().count(), 1);
+    }
+
     /// Rejoins fly at the mission's redirect speed when one is set.
     #[test]
     fn a_rejoin_flies_at_the_missions_redirect_speed() {

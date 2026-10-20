@@ -195,6 +195,12 @@ struct SimArgs {
     /// planned before the run).
     #[arg(long, value_enum)]
     explore: Option<ExploreArg>,
+    /// In a `--world-knowledge none` run, know every power line's spans
+    /// from the start (R3: the wire-hazard prior, a utility's map of its
+    /// corridors), instead of learning each only once a scanner is near it.
+    /// Recorded in the replay's `meta.world_knowledge.exploration`.
+    #[arg(long)]
+    wire_prior: bool,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -349,22 +355,27 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             WorldKnowledgeArg::Prior => argusnet_sim::belief_world::WorldKnowledge::Prior,
             WorldKnowledgeArg::None => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
         },
-        exploration: (args.pursuit.is_some() || args.explore.is_some()).then(|| {
-            let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
-            argusnet_sim::belief_world::ExplorationConfig {
-                pursuit: match args.pursuit {
-                    Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
-                    Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
-                    None => defaults.pursuit,
-                },
-                explore: match args.explore {
-                    Some(ExploreArg::Frontier) => true,
-                    Some(ExploreArg::Lanes) => false,
-                    None => defaults.explore,
-                },
-                ..defaults
-            }
-        }),
+        exploration: (args.pursuit.is_some() || args.explore.is_some() || args.wire_prior).then(
+            || {
+                let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
+                argusnet_sim::belief_world::ExplorationConfig {
+                    pursuit: match args.pursuit {
+                        Some(PursuitArg::Tracks) => {
+                            argusnet_sim::belief_world::PursuitSource::Tracks
+                        }
+                        Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
+                        None => defaults.pursuit,
+                    },
+                    explore: match args.explore {
+                        Some(ExploreArg::Frontier) => true,
+                        Some(ExploreArg::Lanes) => false,
+                        None => defaults.explore,
+                    },
+                    wire_prior: args.wire_prior,
+                    ..defaults
+                }
+            },
+        ),
         // Resolved by `sim`: a recovered run takes it from its run directory.
         lane_rates: argusnet_sim::scheduler::LaneRates::default(),
         sensor_rates: RunOptions::sensor_rate_table(&args.sensor_rate)?,
@@ -570,6 +581,13 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--explore chooses what search drones fly in a --world-knowledge none run; \
              a prior run always flies its lanes",
+        );
+    }
+    if args.wire_prior && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
+        return fail(
+            EXIT_INVALID,
+            "--wire-prior gives a --world-knowledge none run the power lines' spans; \
+             a prior run knows them already",
         );
     }
     if let Some(dir) = &args.export_scene {

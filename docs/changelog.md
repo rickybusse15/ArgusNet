@@ -45,6 +45,19 @@
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).
 
+- Wires are sensed (R3). The range scanner reports a power-line span
+  only while one of its conductors is near enough for the scan's points to
+  land on it (30 m for a 3 cm wire at 1 mrad) and below the scanner; wires
+  never occlude. A `--world-knowledge none` run maps each span the first
+  time it is seen and, under efficient_v1, plans round the mapped spans as a
+  prior run plans round its lines (routes, deconfliction, rejoins), and flies
+  again a POI flight a newly mapped wire lies across (`poi_reroute`).
+  `--wire-prior` gives the map every span from the start. With no prior map
+  on `power_line_inspection` seed 42, efficient_v1's `structure_clearance`
+  events go from 47 to 8, and to 0 with the prior. The replay's range scans
+  carry each wire's nearest point (`wire`, absent when none). The reference,
+  runs without lines and the 14 canonical replays are unchanged.
+
 - The physical guard keeps platforms off power lines' wires, and
   `efficient_v1` keeps deconfliction pushes and rejoins out of each line's
   clearance (R3). Each conductor piece is a capsule holding the true

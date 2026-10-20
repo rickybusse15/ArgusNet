@@ -517,6 +517,15 @@ impl MappingStage {
         handle
     }
 
+    /// The ids of the power-line spans the self-built map holds (R3), in id
+    /// order; empty in a prior run.
+    pub fn belief_wires(&self) -> Vec<String> {
+        self.belief
+            .as_ref()
+            .map(|belief| belief.grid.wires().map(|span| span.id.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// The scans stage 6 made this tick (`Handoff::RangeScansToMapping`).
     pub fn submit_range_scans(&mut self, scans: Vec<crate::range_scan::RangeScan>) {
         if let Some(belief) = self.belief.as_mut() {
@@ -2083,6 +2092,7 @@ mod tests {
                 class: crate::range_scan::ReturnClass::Structure,
             }],
             misses: 0,
+            wires: Vec::new(),
         };
         map(sim).submit_range_scans(vec![scan]);
     }

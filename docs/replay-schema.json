@@ -1018,6 +1018,18 @@
               "misses": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "wire": {
+                "type": "array",
+                "description": "The nearest point of each power-line span the scan put points on (R3), rounded to the decimetre. Absent when none.",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
               }
             }
           }

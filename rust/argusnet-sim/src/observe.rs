@@ -689,6 +689,11 @@ impl ObserveStage {
         self.range = Some(scanner);
     }
 
+    /// The range scanner, in a run without a prior map.
+    pub fn range_scanner(&self) -> Option<&crate::range_scan::RangeScanner> {
+        self.range.as_ref()
+    }
+
     /// This tick's range scans, in platform order. Empty without a scanner.
     pub fn range_scans(&self) -> &[crate::range_scan::RangeScan] {
         &self.scans

@@ -36,7 +36,7 @@
 //! publishes the same snapshot and plans identically. The handle and the
 //! samplers are derived: they hold no state of their own.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use argusnet_types::Bounds2d;
@@ -96,6 +96,12 @@ pub struct ExplorationConfig {
     /// measure what the truth was worth.
     #[serde(default)]
     pub pursuit: PursuitSource,
+    /// The wire-hazard prior (R3): every power line's spans are known from
+    /// the start, as a utility's map of its corridors would give them, so
+    /// the run plans round them before any scan has seen one. Off (the
+    /// default) learns each span only from the scanners.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wire_prior: bool,
 }
 
 fn default_explore() -> bool {
@@ -125,6 +131,7 @@ impl Default for ExplorationConfig {
             scan: RangeScanConfig::default(),
             explore: true,
             pursuit: PursuitSource::default(),
+            wire_prior: false,
         }
     }
 }
@@ -186,6 +193,18 @@ pub struct BeliefGrid {
     /// when what it shows changes. Checkpointed: a resumed run must write
     /// the rows the uninterrupted run would.
     shown: Vec<ShownCell>,
+    /// The power-line spans the scanners have put points on (R3), by the
+    /// fitted span's id (`line#k`). Absent when none, so a checkpoint without
+    /// lines is unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    wires: BTreeMap<String, PowerLine>,
+    /// The spans known before sensing: the opt-in wire-hazard prior. A reset
+    /// goes back to them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    prior_wires: Vec<PowerLine>,
+    /// [`Self::wires`] as snapshots share them. Derived.
+    #[serde(skip)]
+    wires_view: Option<Arc<Vec<PowerLine>>>,
     /// Cells touched since the replay last took them.
     #[serde(skip)]
     changed: BTreeSet<usize>,
@@ -238,9 +257,34 @@ impl BeliefGrid {
             last_seen_tick: vec![-1; cells],
             launch_floor_m,
             shown: vec![ShownCell::default(); cells],
+            wires: BTreeMap::new(),
+            prior_wires: Vec::new(),
+            wires_view: None,
             changed: BTreeSet::new(),
             views: None,
         })
+    }
+
+    /// Know `spans` before sensing (the wire-hazard prior, R3): mapped from
+    /// the start, and again after a reset. Each is one span of a line
+    /// ([`PowerLine::span_line`]).
+    pub fn know_wires(&mut self, spans: Vec<PowerLine>) {
+        self.prior_wires = spans;
+        self.reset_wires();
+    }
+
+    fn reset_wires(&mut self) {
+        self.wires = self
+            .prior_wires
+            .iter()
+            .map(|span| (span.id.clone(), span.clone()))
+            .collect();
+        self.wires_view = None;
+    }
+
+    /// The spans mapped so far.
+    pub fn wires(&self) -> impl Iterator<Item = &PowerLine> {
+        self.wires.values()
     }
 
     pub fn dimensions(&self) -> (usize, usize) {
@@ -266,6 +310,7 @@ impl BeliefGrid {
         self.shown.fill(ShownCell::default());
         self.changed.clear();
         self.views = None;
+        self.reset_wires();
     }
 
     /// Whether `other` covers the same cells (for a checkpoint's check).
@@ -364,8 +409,15 @@ impl BeliefGrid {
         }
     }
 
-    /// Fuse one platform's scan, in return order.
+    /// Fuse one platform's scan, in return order. A wire span is mapped the
+    /// first time a scan puts points on it.
     pub fn integrate(&mut self, scan: &RangeScan, tick: u64) {
+        for wire in &scan.wires {
+            if !self.wires.contains_key(&wire.span.id) {
+                self.wires.insert(wire.span.id.clone(), wire.span.clone());
+                self.wires_view = None;
+            }
+        }
         for hit in &scan.returns {
             let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
                 continue;
@@ -522,6 +574,10 @@ impl BeliefGrid {
             ground: Arc::clone(&views.ground),
             stand_in,
             structure_top: Arc::clone(&views.structure),
+            wires: Arc::clone(
+                self.wires_view
+                    .get_or_insert_with(|| Arc::new(self.wires.values().cloned().collect())),
+            ),
         };
         self.views = Some(views);
         snapshot
@@ -653,9 +709,17 @@ pub struct BeliefSnapshot {
     stand_in: Vec<f64>,
     /// NaN where the cell is not believed occupied.
     structure_top: Arc<Vec<f64>>,
+    /// The power-line spans mapped so far (R3), in id order.
+    wires: Arc<Vec<PowerLine>>,
 }
 
 impl BeliefSnapshot {
+    /// The power-line spans mapped when this snapshot was taken (R3): the
+    /// wires a run without a prior map plans round.
+    pub fn wires(&self) -> &Arc<Vec<PowerLine>> {
+        &self.wires
+    }
+
     fn ij(&self, x_m: f64, y_m: f64) -> (usize, usize) {
         let i = ((x_m - self.x_min_m) / self.resolution_m).floor();
         let j = ((y_m - self.y_min_m) / self.resolution_m).floor();
@@ -1276,6 +1340,7 @@ mod tests {
             origin_m: [0.0, 0.0, 100.0],
             returns,
             misses: 0,
+            wires: Vec::new(),
         }
     }
 
@@ -1461,6 +1526,54 @@ mod tests {
         assert!(back.same_layout(&belief));
         assert_eq!(back.ground_ij(2, 3), Some(70.0));
     }
+    /// R3: a span is mapped the first time a scan puts points on it, and
+    /// published with the snapshot; a reset forgets it, but not the spans
+    /// known beforehand; a grid without wires checkpoints as it always did.
+    #[test]
+    fn wires_are_mapped_as_scans_see_them() {
+        let config = ExplorationConfig::default();
+        let span = |k: usize| {
+            let mut line = wire(20.0);
+            line.supports.push(argusnet_world::powerline::Support {
+                xy_m: [200.0, 0.0],
+                base_z_m: 0.0,
+                height_m: 20.0,
+            });
+            line.span_line(k)
+        };
+        let mut belief = grid();
+        let plain = serde_json::to_value(&belief).unwrap();
+        assert!(plain.get("wires").is_none() && plain.get("prior_wires").is_none());
+        assert!(belief.snapshot(&config).wires().is_empty());
+
+        let mut seen = scan(Vec::new());
+        seen.wires = vec![crate::range_scan::WireReturn {
+            span: span(1),
+            point_m: [150.0, 0.0, 20.0],
+        }];
+        belief.integrate(&seen, 3);
+        belief.integrate(&seen, 4);
+        let first = belief.snapshot(&config);
+        assert_eq!(first.wires().as_slice(), [span(1)]);
+        // Unchanged, the snapshots share one list.
+        assert!(Arc::ptr_eq(first.wires(), belief.snapshot(&config).wires()));
+        // Round trip with the wire.
+        let back: BeliefGrid =
+            serde_json::from_str(&serde_json::to_string(&belief).unwrap()).unwrap();
+        assert_eq!(back.wires().cloned().collect::<Vec<_>>(), [span(1)]);
+
+        belief.clear();
+        assert!(belief.snapshot(&config).wires().is_empty());
+        belief.know_wires(vec![span(0)]);
+        belief.integrate(&seen, 5);
+        assert_eq!(
+            belief.snapshot(&config).wires().as_slice(),
+            [span(0), span(1)]
+        );
+        belief.clear();
+        assert_eq!(belief.snapshot(&config).wires().as_slice(), [span(0)]);
+    }
+
     /// One wire along x from 0 to 100, `height_m` up on flat ground at 0,
     /// with no sag: 2 cm radius, 10 m clearance.
     fn wire(height_m: f64) -> PowerLine {
