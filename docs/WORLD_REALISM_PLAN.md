@@ -100,8 +100,23 @@ C8 (P2.6) and D2 (P5.1).
   and leaves out (and counts) any outside the map. The model refuses a bad
   one by name. The bundle and the replay carry the georeference, the
   document's hash and the counts, and the replay's `enu_origin` is the
-  buildings' own. DEM terrain under them is R5. Next: building materials
-  (R1.3).
+  buildings' own. DEM terrain under them is R5.
+
+  *Done (materials, R1.3):* the importer sorts `building:material` and
+  `roof:material` into classes (facade: concrete, brick, glass, metal,
+  wood, stone, plaster; roof: tiles, slate, metal, concrete, membrane,
+  glass, green), with `generic` when the data does not say. It keeps
+  `building:levels`. The scene builder colours walls and roofs by class
+  and gives walls window coordinates: storey above the building's ground,
+  metres along the wall, and the level count. Those are texture
+  coordinates written only on roofed parts, so every other GLB is byte for
+  byte what it was. The viewer's facade material (an extension of the
+  baked `StandardMaterial`, so light, shadow, fog and translucency stay)
+  draws window rows from them, only between the ground and the eave of a
+  building whose storeys the data gives. A GPU probe checks windows appear
+  on facades with levels, and not on roofs or on buildings without levels.
+  R1 is done; LOS parity fixtures against roofs are covered by the model's
+  tests.
 - **Rendering.** Generate roof meshes and per-face normals. Add semantic
   material classes (concrete, brick, metal roof, glass) with a procedural
   facade shader for window rows from the level count. This needs no textures,

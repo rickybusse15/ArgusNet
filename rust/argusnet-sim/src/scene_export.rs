@@ -441,10 +441,35 @@ pub fn write_glb_parts(path: &Path, parts: &[&MeshData], name: &str) -> Result<(
         } else {
             format!("{name}-{index}")
         };
+        let mut attributes = json!({"POSITION": first, "NORMAL": first + 1, "COLOR_0": first + 2});
+        // Texture coordinates, only on a part that has them (a roofed
+        // building, R1): appended after everything a part always had, so
+        // every other file is written byte for byte as before.
+        for (key, uvs) in [("TEXCOORD_0", &mesh.uvs), ("TEXCOORD_1", &mesh.uvs_b)] {
+            if uvs.is_empty() {
+                continue;
+            }
+            if uvs.len() != count {
+                return Err(format!(
+                    "{name}: {key} has {} values for {count} vertices",
+                    uvs.len()
+                ));
+            }
+            let payload = floats(uvs.iter().flatten().copied());
+            views.push(json!({
+                "buffer": 0, "byteOffset": bin.len(), "byteLength": payload.len(), "target": 34962,
+            }));
+            bin.extend_from_slice(&payload);
+            while !bin.len().is_multiple_of(4) {
+                bin.push(0);
+            }
+            attributes[key] = json!(accessors.len());
+            accessors.push(json!({"bufferView": views.len() - 1, "componentType": 5126, "count": count, "type": "VEC2"}));
+        }
         meshes.push(json!({
             "name": part_name,
             "primitives": [{
-                "attributes": {"POSITION": first, "NORMAL": first + 1, "COLOR_0": first + 2},
+                "attributes": attributes,
                 "indices": first + 3, "material": 0, "mode": 4,
             }],
         }));
@@ -579,6 +604,7 @@ mod tests {
             normals: vec![[0.0, 0.0, 1.0]; 3],
             colours: vec![[0.9, 0.9, 0.9, alpha]; 3],
             indices: vec![0, 1, 2],
+            ..MeshData::default()
         }
     }
 

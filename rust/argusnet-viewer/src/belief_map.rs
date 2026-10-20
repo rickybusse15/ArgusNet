@@ -533,6 +533,7 @@ fn finish_mesh(mesh: MeshData) -> Option<Mesh> {
         normals,
         colours,
         indices,
+        ..
     } = mesh;
     let uvs: Vec<[f32; 2]> = positions.iter().map(|p| [p[0], p[1]]).collect();
     // The palette is written in sRGB; vertex colours are linear.

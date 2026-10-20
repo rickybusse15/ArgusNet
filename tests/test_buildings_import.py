@@ -93,3 +93,20 @@ def test_lengths_are_read_in_metres() -> None:
     assert abs(parse_length_m("40 ft") - 12.192) < 1e-9
     assert parse_length_m("tall") is None
     assert parse_length_m("-3") is None
+
+
+def test_materials_are_classed_from_the_data_and_generic_otherwise(town: dict) -> None:
+    b = by_id(town)
+    assert (b["way/1"]["facade_material"], b["way/1"]["roof_material"]) == ("brick", "tiles")
+    assert (b["way/4"]["facade_material"], b["way/4"]["roof_material"]) == ("glass", "concrete")
+    assert (b["way/5"]["facade_material"], b["way/5"]["roof_material"]) == ("metal", "metal")
+    # An unknown material, and none at all: generic, never a guess.
+    assert b["way/7"]["facade_material"] == "generic"
+    assert (b["way/3"]["facade_material"], b["way/3"]["roof_material"]) == ("generic", "generic")
+
+
+def test_levels_are_kept_only_when_the_data_gives_them(town: dict) -> None:
+    b = by_id(town)
+    assert b["way/4"]["levels"] == 8.0
+    assert b["way/2"]["levels"] == 2.0
+    assert "levels" not in b["way/3"]

@@ -37,6 +37,13 @@
   to 2 and 0; the 2 left are deconfliction pushes. The reference is
   unchanged, and so are the 14 canonical replays.
 
+- Buildings drawn by material, with window rows (R1). Imported buildings
+  carry facade and roof material classes and their storeys. The scene
+  colours walls and roofs by class, and the viewer draws window rows on
+  facades whose storeys the data gives, none elsewhere. Unknown materials
+  draw in the layer's own colour. Nothing else changes: other GLBs are
+  byte-identical, and 14/14 replays are identical.
+
 - Real buildings in a run (R1). `scripts/import_buildings.py` turns
   GeoJSON or OSM footprints into an `argusnet.buildings` document: local
   metres around a recorded origin, heights and roofs from the tags, and

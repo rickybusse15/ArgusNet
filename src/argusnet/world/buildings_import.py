@@ -22,6 +22,13 @@ Heights and roofs follow the data and say when they do not:
   under-states it. Marked `tagged`, `default` or `unsupported:<why>`.
 * roof height: `roof:height`, else `roof:levels` x 3 m, else 40 % of the
   height up to 3 m.
+* materials: `building:material` and `roof:material` sorted into the classes
+  the viewer draws (facade: concrete, brick, glass, metal, wood, stone,
+  plaster; roof: tiles, slate, metal, concrete, membrane, glass, green), and
+  `generic` when the data does not say: nothing is drawn as brick that the
+  data did not call brick.
+* levels: `building:levels`, kept so the viewer can draw window rows; none
+  are drawn on a building whose levels the data does not give.
 * ridge: `roof:direction` (the way the slope faces, compass degrees or
   letters) gives the ridge square to it; `roof:orientation=across` turns it
   across the longest edge; otherwise the builder runs it along the longest
@@ -68,6 +75,43 @@ DEFAULT_HEIGHT_BY_TAG = {
     "school": 10.0,
 }
 DEFAULT_HEIGHT_M = 10.0
+FACADE_CLASSES = {
+    "concrete": "concrete",
+    "reinforced_concrete": "concrete",
+    "cement_block": "concrete",
+    "brick": "brick",
+    "glass": "glass",
+    "mirror": "glass",
+    "metal": "metal",
+    "steel": "metal",
+    "aluminium": "metal",
+    "wood": "wood",
+    "timber_framing": "wood",
+    "stone": "stone",
+    "sandstone": "stone",
+    "limestone": "stone",
+    "plaster": "plaster",
+    "render": "plaster",
+}
+ROOF_CLASSES = {
+    "roof_tiles": "tiles",
+    "tiles": "tiles",
+    "tile": "tiles",
+    "clay": "tiles",
+    "slate": "slate",
+    "metal": "metal",
+    "metal_sheet": "metal",
+    "tin": "metal",
+    "copper": "metal",
+    "zinc": "metal",
+    "concrete": "concrete",
+    "tar_paper": "membrane",
+    "asphalt": "membrane",
+    "bitumen": "membrane",
+    "glass": "glass",
+    "grass": "green",
+    "plants": "green",
+}
 COMPASS = {
     "N": 0.0,
     "NNE": 22.5,
@@ -299,6 +343,13 @@ def import_buildings(
             "height_source": height_source,
             "roof_source": roof_source,
         }
+        facade = FACADE_CLASSES.get(str(properties.get("building:material", "")).strip().lower())
+        roof_material = ROOF_CLASSES.get(str(properties.get("roof:material", "")).strip().lower())
+        building["facade_material"] = facade or "generic"
+        building["roof_material"] = roof_material or "generic"
+        levels = parse_levels(properties.get("building:levels"))
+        if levels is not None:
+            building["levels"] = levels
         if shape == "gabled":
             azimuth = ridge_azimuth_rad(properties, footprint)
             if azimuth is not None:
