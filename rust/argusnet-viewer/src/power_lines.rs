@@ -27,6 +27,23 @@
 //!
 //! Both are world structures, not overlays: no layer preset owns them, and
 //! the Runtime Overlays panel's Power Lines toggle hides and shows them.
+//!
+//! # Clearance corridors
+//!
+//! An optional overlay, off by default (the Clearance Corridors toggle,
+//! beside Power Lines; no preset owns it either), shows each span's
+//! clearance volume: everywhere within the line's clearance of a conductor's
+//! surface, which the safety engine's `structure_clearance` keeps flights
+//! out of and efficient_v1's routes keep out of: the union of a tube round
+//! each conductor, of the conductor radius plus the clearance, since the
+//! safety test measures to each conductor on its own. [`clearance_mesh`]
+//! sweeps each tube's circular section along every span, a section at each
+//! piece joint in [`section_basis`]'s plane; at a support between two spans
+//! both spans share one section, so the tube is unbroken round a turn, and
+//! it is closed at the line's two ends. It is drawn
+//! translucent and unlit, both faces, casting no shadow, built once per run
+//! with the wires.
+//!
 //! Picking ignores them ([`PresentationOnly`]). Each line in
 //! `meta.power_lines` is read on its own: one the model refuses is not
 //! drawn and its reason is logged once per run, and every other line is
@@ -57,6 +74,10 @@ pub const WIRE_MIN_WIDTH_PX: f32 = 1.6;
 pub const WIRE_COLOR: [f32; 4] = [0.78, 0.80, 0.80, 1.0];
 /// Towers: galvanised steel.
 pub const TOWER_COLOR: [f32; 3] = [0.56, 0.58, 0.58];
+/// Clearance corridors: a translucent amber, the caution colour.
+pub const CLEARANCE_COLOR: [f32; 4] = [1.0, 0.55, 0.05, 0.35];
+/// Segments round each conductor's clearance tube.
+pub const CLEARANCE_SEGMENTS: usize = 16;
 
 /// A wire vertex's far end: the other end of its piece.
 pub const ATTRIBUTE_WIRE_OTHER: MeshVertexAttribute =
@@ -164,6 +185,138 @@ pub fn wire_mesh(lines: &[PowerLine]) -> Option<Mesh> {
     )
 }
 
+fn point(p: [f64; 3]) -> Vec3 {
+    Vec3::from_array(p.map(|v| v as f32))
+}
+
+/// The direction the centre of `line`'s conductors runs at fraction `t` of
+/// span `span`.
+fn tangent(line: &PowerLine, span: usize, t: f64) -> Vec3 {
+    let (a, b) = if t >= 1.0 {
+        (t - 1e-3, t)
+    } else {
+        (t, t + 1e-3)
+    };
+    (point(line.conductor_at(span, 0.0, b)) - point(line.conductor_at(span, 0.0, a)))
+        .normalize_or(Vec3::X)
+}
+
+/// The plane a corridor's section lies in at fraction `t` of span `span`:
+/// across the line where its conductors hang (level), and square to that
+/// and to the line's direction, upward. At a support between two spans the
+/// direction is the mean of both spans', so both spans' sections there are
+/// one and the same, and their tubes join with no gap at a turn.
+pub fn section_basis(line: &PowerLine, span: usize, t: f64) -> (Vec3, Vec3) {
+    let last = line.supports.len() - 2;
+    let mut along = tangent(line, span, t);
+    if t <= 0.0 && span > 0 {
+        along = (along + tangent(line, span - 1, 1.0)).normalize_or(along);
+    } else if t >= 1.0 && span < last {
+        along = (along + tangent(line, span + 1, 0.0)).normalize_or(along);
+    }
+    let mut across =
+        point(line.conductor_at(span, 1.0, t)) - point(line.conductor_at(span, 0.0, t));
+    across.z = 0.0;
+    let across = across.normalize_or(Vec3::Y);
+    let mut up = along.cross(across).normalize_or(Vec3::Z);
+    if up.z < 0.0 {
+        up = -up;
+    }
+    (across, up)
+}
+
+/// The cross-section of conductor `offset_m`'s clearance tube at fraction
+/// `t` of span `span`: [`CLEARANCE_SEGMENTS`] points round the conductor,
+/// each the conductor radius plus the clearance from it, in
+/// [`section_basis`]'s plane, with the outward normal at each.
+pub fn clearance_ring(line: &PowerLine, span: usize, offset_m: f64, t: f64) -> Vec<(Vec3, Vec3)> {
+    let reach = (line.conductor_radius_m + line.clearance_m) as f32;
+    let centre = point(line.conductor_at(span, offset_m, t));
+    let (across, up) = section_basis(line, span, t);
+    (0..CLEARANCE_SEGMENTS)
+        .map(|j| {
+            let angle = std::f32::consts::TAU * j as f32 / CLEARANCE_SEGMENTS as f32;
+            let normal = across * angle.cos() + up * angle.sin();
+            (centre + normal * reach, normal)
+        })
+        .collect()
+}
+
+/// Every conductor of `lines` as its clearance tube (see the module docs):
+/// [`clearance_ring`]s at each piece joint of each span, joined, and closed
+/// at each line's two ends. Their union is the volume within the clearance
+/// of some conductor, which is what `structure_clearance` judges. `None`
+/// for no lines.
+pub fn clearance_mesh(lines: &[PowerLine]) -> Option<Mesh> {
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    let ring_len = CLEARANCE_SEGMENTS as u32;
+    for line in lines {
+        let last = line.supports.len() - 2;
+        for &offset_m in &line.conductor_offsets_m {
+            for span in 0..=last {
+                let (from, to) = (&line.supports[span], &line.supports[span + 1]);
+                let span_m = (to.xy_m[0] - from.xy_m[0]).hypot(to.xy_m[1] - from.xy_m[1]);
+                let count = (span_m / argusnet_world::powerline::MAX_PIECE_M)
+                    .ceil()
+                    .max(1.0) as usize;
+                let first_ring = positions.len() as u32;
+                for k in 0..=count {
+                    let t = k as f64 / count as f64;
+                    for (p, normal) in clearance_ring(line, span, offset_m, t) {
+                        positions.push(p.to_array());
+                        normals.push(normal.to_array());
+                    }
+                }
+                for k in 0..count as u32 {
+                    let (a, b) = (first_ring + k * ring_len, first_ring + (k + 1) * ring_len);
+                    for j in 0..ring_len {
+                        let next = (j + 1) % ring_len;
+                        indices.extend_from_slice(&[
+                            a + j,
+                            b + j,
+                            a + next,
+                            a + next,
+                            b + j,
+                            b + next,
+                        ]);
+                    }
+                }
+                // Closed at the line's two ends: a fan from the conductor.
+                let ends = [(span == 0).then_some(0.0), (span == last).then_some(1.0)];
+                for t in ends.into_iter().flatten() {
+                    let along = tangent(line, span, t);
+                    let normal = if t == 0.0 { -along } else { along };
+                    let base = positions.len() as u32;
+                    positions.push(point(line.conductor_at(span, offset_m, t)).to_array());
+                    normals.push(normal.to_array());
+                    for (p, _) in clearance_ring(line, span, offset_m, t) {
+                        positions.push(p.to_array());
+                        normals.push(normal.to_array());
+                    }
+                    for j in 0..ring_len {
+                        let next = (j + 1) % ring_len;
+                        indices.extend_from_slice(&[base, base + 1 + j, base + 1 + next]);
+                    }
+                }
+            }
+        }
+    }
+    if indices.is_empty() {
+        return None;
+    }
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_indices(Indices::U32(indices)),
+    )
+}
+
 /// A straight beam `thickness_m` square from `from` to `to`.
 fn beam(from: Vec3, to: Vec3, thickness_m: f32) -> Mesh {
     let along = to - from;
@@ -243,6 +396,8 @@ pub fn tower_transforms(line: &PowerLine) -> Vec<Transform> {
 pub enum PowerLinePart {
     Wires,
     Tower,
+    /// The clearance-corridor overlay.
+    Clearance,
 }
 
 /// The power lines drawn for the run in the replay.
@@ -254,9 +409,11 @@ pub struct PowerLines {
     meshes: Vec<Handle<Mesh>>,
     wire_material: Option<Handle<WireMaterial>>,
     tower_material: Option<Handle<StandardMaterial>>,
+    clearance_material: Option<Handle<StandardMaterial>>,
     lines: usize,
     towers: usize,
     pieces: usize,
+    corridors: usize,
     builds: u64,
     refused: Vec<String>,
 }
@@ -274,6 +431,11 @@ impl PowerLines {
     pub fn piece_count(&self) -> usize {
         self.pieces
     }
+    /// Spans whose clearance corridor is built (drawn when the overlay is
+    /// on).
+    pub fn corridor_count(&self) -> usize {
+        self.corridors
+    }
     /// How many times the geometry was built.
     pub fn builds(&self) -> u64 {
         self.builds
@@ -285,7 +447,8 @@ impl PowerLines {
 }
 
 /// Build the run's power lines once per run (a new epoch, or metadata
-/// arriving), and show or hide them with the Power Lines toggle.
+/// arriving), and show or hide them with the Power Lines toggle, and their
+/// clearance corridors with the Clearance Corridors toggle.
 #[allow(clippy::too_many_arguments)]
 pub fn sync_power_lines(
     mut commands: Commands,
@@ -295,15 +458,22 @@ pub fn sync_power_lines(
     mut meshes: ResMut<Assets<Mesh>>,
     mut wire_materials: ResMut<Assets<WireMaterial>>,
     mut tower_materials: ResMut<Assets<StandardMaterial>>,
-    mut shown: Query<&mut Visibility, With<PowerLinePart>>,
+    mut shown: Query<(&PowerLinePart, &mut Visibility)>,
 ) {
-    let visible = if visibility.power_lines {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
+    let shown_if = |on: bool| {
+        if on {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        }
     };
-    for mut v in &mut shown {
-        v.set_if_neq(visible);
+    let visible = shown_if(visibility.power_lines);
+    let corridors_visible = shown_if(visibility.power_line_clearance);
+    for (part, mut v) in &mut shown {
+        v.set_if_neq(match part {
+            PowerLinePart::Clearance => corridors_visible,
+            _ => visible,
+        });
     }
     let run = (
         replay.epoch(),
@@ -321,7 +491,7 @@ pub fn sync_power_lines(
     for handle in drawn.meshes.drain(..) {
         meshes.remove(&handle);
     }
-    (drawn.lines, drawn.towers, drawn.pieces) = (0, 0, 0);
+    (drawn.lines, drawn.towers, drawn.pieces, drawn.corridors) = (0, 0, 0, 0);
     // Each line is read on its own: a refused one is reported and the rest
     // are still drawn.
     let read = replay
@@ -371,6 +541,42 @@ pub fn sync_power_lines(
             ))
             .id(),
     );
+    if let Some(corridors) = clearance_mesh(&lines) {
+        let material = drawn
+            .clearance_material
+            .get_or_insert_with(|| {
+                tower_materials.add(StandardMaterial {
+                    base_color: Color::srgba(
+                        CLEARANCE_COLOR[0],
+                        CLEARANCE_COLOR[1],
+                        CLEARANCE_COLOR[2],
+                        CLEARANCE_COLOR[3],
+                    ),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Blend,
+                    double_sided: true,
+                    cull_mode: None,
+                    ..default()
+                })
+            })
+            .clone();
+        let handle = meshes.add(corridors);
+        drawn.meshes.push(handle.clone());
+        drawn.corridors = lines.iter().map(|line| line.supports.len() - 1).sum();
+        drawn.entities.push(
+            commands
+                .spawn((
+                    PowerLinePart::Clearance,
+                    PresentationOnly,
+                    bevy::light::NotShadowCaster,
+                    Mesh3d(handle),
+                    MeshMaterial3d(material),
+                    Transform::IDENTITY,
+                    corridors_visible,
+                ))
+                .id(),
+        );
+    }
     // One mesh per tower height and arm, shared by every tower that has it.
     let mut shared: HashMap<(u32, u32), Handle<Mesh>> = HashMap::new();
     for line in &lines {
@@ -583,8 +789,30 @@ mod tests {
                 .count(),
             3
         );
-        // Two tower heights, two shared meshes, plus the wires.
-        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 3);
+        // Two tower heights, two shared meshes, plus the wires and the
+        // corridors.
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 4);
+        // The corridors are built, two spans of them, and hidden: the
+        // overlay is off by default.
+        assert_eq!(app.world().resource::<PowerLines>().corridor_count(), 2);
+        assert_eq!(
+            all.iter()
+                .filter(|(p, v)| *p == PowerLinePart::Clearance && *v == Visibility::Hidden)
+                .count(),
+            1
+        );
+        // Its toggle shows the corridors and nothing else; Power Lines
+        // leaves them alone.
+        app.world_mut()
+            .resource_mut::<RuntimeOverlayVisibility>()
+            .power_line_clearance = true;
+        app.update();
+        for (part, visibility) in parts(&mut app) {
+            assert_eq!(visibility, Visibility::Inherited, "{part:?}");
+        }
+        app.world_mut()
+            .resource_mut::<RuntimeOverlayVisibility>()
+            .power_line_clearance = false;
 
         app.world_mut()
             .resource_mut::<RuntimeOverlayVisibility>()
@@ -629,8 +857,69 @@ mod tests {
         );
         assert_eq!(
             parts(&mut app).len(),
-            4,
-            "the good line's wires and three towers"
+            5,
+            "the good line's wires, three towers and its corridors"
         );
+    }
+
+    /// Every point of every section is exactly the conductor radius plus
+    /// the clearance from its own conductor, all round, in one flat section,
+    /// at every piece joint of both spans of a line that turns; and the
+    /// union is no wider than that: a point midway between two conductors
+    /// 4 m apart is on no tube's surface it is not inside.
+    #[test]
+    fn a_corridor_is_a_tube_round_each_conductor() {
+        let line = line();
+        let reach = 0.015 + 10.0;
+        for (span, count) in [(0, 40), (1, 30)] {
+            for k in 0..=count {
+                let t = k as f64 / count as f64;
+                for &offset in &line.conductor_offsets_m {
+                    let centre = point(line.conductor_at(span, offset, t));
+                    let ring = clearance_ring(&line, span, offset, t);
+                    assert_eq!(ring.len(), CLEARANCE_SEGMENTS);
+                    let (across, up) = section_basis(&line, span, t);
+                    let plane = across.cross(up);
+                    for (p, normal) in &ring {
+                        let d = (*p - centre).length();
+                        assert!((d - reach as f32).abs() < 1e-3, "{span} {t} {offset}: {d}");
+                        assert!((*p - centre).dot(plane).abs() < 1e-3);
+                        assert!((normal.length() - 1.0).abs() < 1e-5);
+                    }
+                }
+            }
+        }
+    }
+
+    /// At the support where the line turns, both spans' sections are the
+    /// same ring, conductor by conductor: the tubes join with no gap.
+    #[test]
+    fn corridors_join_at_a_turn() {
+        let line = line();
+        for &offset in &line.conductor_offsets_m {
+            let into = clearance_ring(&line, 0, offset, 1.0);
+            let out = clearance_ring(&line, 1, offset, 0.0);
+            for ((a, _), (b, _)) in into.iter().zip(&out) {
+                assert!((*a - *b).length() < 1e-3, "{offset}: {a} vs {b}");
+            }
+        }
+    }
+
+    /// The tubes: one ring per conductor per piece joint per span, quads
+    /// between rings, and a fan closing each tube at the line's two ends.
+    #[test]
+    fn a_corridor_mesh_is_closed_rings_along_each_span() {
+        let line = line();
+        let mesh = clearance_mesh(std::slice::from_ref(&line)).unwrap();
+        let ring = CLEARANCE_SEGMENTS;
+        let rings = (40 + 1) + (30 + 1);
+        let positions = float3(&mesh, Mesh::ATTRIBUTE_POSITION);
+        assert_eq!(positions.len(), 3 * (rings * ring + 2 * (1 + ring)));
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!("u32 indices");
+        };
+        assert_eq!(indices.len(), 3 * ((40 + 30) * ring * 6 + 2 * ring * 3));
+        assert!(indices.iter().all(|&i| (i as usize) < positions.len()));
+        assert!(clearance_mesh(&[]).is_none());
     }
 }

@@ -2,11 +2,12 @@
 
 **Status:** proposed 2026-10-12; updated 2026-10-20. R0 is done: the
 opacity fix (#222) and typed structure matching. R1 is done: building-v2
-roofs, the georeferenced import and material facades. R3 is in progress:
-the model, the safety clearance, lines in a run, drawing in the viewer,
-the planner's corridor and the guard against wires are done. R2 is in
-progress: the tree model and trees in a run are done. R4 and R5 are not
-started.
+roofs, the georeferenced import and material facades. R3 is done: the
+model, the safety clearance, lines in a run, drawing in the viewer, the
+planner's corridor, the guard against wires, sensing wires and the
+clearance-corridor overlay. R2 is in progress: the tree model, trees in a
+run and sensing through trees are done; flight round trees and drawing
+trees are not merged. R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -378,8 +379,28 @@ C8 (P2.6) and D2 (P5.1).
   and descending: learned too late to turn, and on the stage 1 path the
   previous slice found the planner does not route. Seed 7 and every
   reference run stay at 0, with all 8 POIs inspected and no physical
-  contact in any run. Runs without lines are unchanged. Next in R3: an
-  optional clearance-corridor overlay.
+  contact in any run. Runs without lines are unchanged.
+
+  *Done (clearance-corridor overlay):* a Clearance Corridors toggle beside
+  Power Lines in Runtime Overlays, off by default and owned by no preset,
+  shows each span's clearance volume from `meta.power_lines`: everywhere
+  within the line's clearance of a conductor's surface: the union of a tube
+  round each conductor, of its radius plus the clearance, since the safety
+  test measures to each conductor on its own (the gap between two widely
+  spaced wires is not drawn as inside). `clearance_mesh` sweeps each tube's
+  circular section along every span, a section at each piece joint; at a
+  support both spans share one section (its plane square to the mean of
+  their directions), so a tube is unbroken round a turn, and it is closed at
+  the line's ends. It is one translucent amber mesh per run, unlit, both
+  faces, casting no shadow. Unit tests check that every section point is
+  exactly that far from its own conductor, in one flat section, and that
+  both spans' sections are the same ring at a turn. A GPU probe checks, at Low, Standard and High, that
+  nothing is drawn by default, that the corridor is drawn 6 m over the
+  centre conductor at mid-span when the overlay is on, and that nothing is
+  drawn 150 m off the line. Nothing is left of R3 as planned. Two gaps found
+  on the way are recorded above: stage 1's own lanes and exploration flights
+  are not routed round lines, and a prior run never puts stage 1 through
+  the guard.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against
