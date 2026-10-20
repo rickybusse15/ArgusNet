@@ -50,8 +50,10 @@
 //! map untouched.
 
 use argusnet_planning::deconfliction::{
-    resolve_step, DeconflictionConfig, DeconflictionEvent, ExclusionZone, FlightCorridor, Proposal,
+    resolve_step_keeping, DeconflictionConfig, DeconflictionEvent, ExclusionZone, FlightCorridor,
+    Proposal,
 };
+use argusnet_world::powerline::PowerLine;
 
 use crate::simulation::{StageHandler, TickContext};
 use crate::stage::{StageError, StageOutcome};
@@ -62,6 +64,7 @@ use crate::stage::{StageError, StageOutcome};
 /// [`resolve_step`] never produces; production installs
 /// [`PlanningResolver`], which is `resolve_step` itself.
 pub trait ConflictResolver: std::fmt::Debug + Send {
+    #[allow(clippy::too_many_arguments)]
     fn resolve(
         &mut self,
         config: &DeconflictionConfig,
@@ -70,7 +73,50 @@ pub trait ConflictResolver: std::fmt::Debug + Send {
         zones: &[ExclusionZone],
         corridors: &[FlightCorridor],
         roles: &RoleTable,
+        clearance: &LineClearance,
     ) -> (Vec<Proposal>, Vec<DeconflictionEvent>);
+}
+
+/// The power lines a yielder's new position keeps its clearance from (R3),
+/// and where each platform was left last tick: the flight from there to the
+/// new position is what the safety monitor judges, so it is what is
+/// checked, swept ([`PowerLine::clearance_along`]). Empty, it binds nothing.
+#[derive(Debug, Clone, Default)]
+pub struct LineClearance {
+    lines: Vec<PowerLine>,
+    left_at: std::collections::BTreeMap<String, [f64; 3]>,
+}
+
+impl LineClearance {
+    pub fn new(
+        lines: Vec<PowerLine>,
+        left_at: std::collections::BTreeMap<String, [f64; 3]>,
+    ) -> Self {
+        Self { lines, left_at }
+    }
+
+    /// How far the flight from where `drone_id` was left to `position`
+    /// stays outside every line's clearance, metres: negative inside one,
+    /// infinite with no line near it. A platform with no last position is
+    /// judged where it would stand.
+    ///
+    /// The stage gives every platform one: where the safety monitor left
+    /// it, or, without one (its first tick, or a run without the monitor),
+    /// where it was proposed, so the push itself is swept.
+    pub fn margin(&self, drone_id: &str, position: [f64; 3]) -> f64 {
+        let from = self.left_at.get(drone_id).copied().unwrap_or(position);
+        self.lines
+            .iter()
+            .filter(|line| {
+                let near = line.bounds_xy_m();
+                from[0].max(position[0]) >= near.x_min_m
+                    && from[0].min(position[0]) <= near.x_max_m
+                    && from[1].max(position[1]) >= near.y_min_m
+                    && from[1].min(position[1]) <= near.y_max_m
+            })
+            .map(|line| line.clearance_along(from, position) - line.clearance_m)
+            .fold(f64::INFINITY, f64::min)
+    }
 }
 
 /// Platform roles, and the terrain floor they are clamped against.
@@ -158,8 +204,9 @@ impl ConflictResolver for PlanningResolver {
         zones: &[ExclusionZone],
         corridors: &[FlightCorridor],
         roles: &RoleTable,
+        clearance: &LineClearance,
     ) -> (Vec<Proposal>, Vec<DeconflictionEvent>) {
-        resolve_step(
+        resolve_step_keeping(
             config,
             proposals,
             timestamp_s,
@@ -167,6 +214,7 @@ impl ConflictResolver for PlanningResolver {
             |xy, z, min_agl_m| roles.clamp(xy, z, min_agl_m),
             zones,
             corridors,
+            |id, position| clearance.margin(id, position),
         )
     }
 }
@@ -194,6 +242,10 @@ pub struct DeconflictStage {
     /// world: a resolved position inside the ground or a structure is put
     /// back and recorded. `None` (every prior run) changes nothing.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// The power lines a yielder is never pushed into the clearance of
+    /// (R3), when its planner knows them. Empty (the reference, and a run
+    /// without a prior map) changes nothing.
+    power_lines: Vec<PowerLine>,
 }
 
 impl Default for DeconflictStage {
@@ -212,7 +264,23 @@ impl DeconflictStage {
             state: State::default(),
             resolver,
             guard: None,
+            power_lines: Vec::new(),
         }
+    }
+
+    /// Keep each yielder out of `lines`' clearance (R3): a push that would
+    /// take its flight since last tick within a line's clearance is refused,
+    /// and the next position the resolution would take is tried
+    /// ([`resolve_step_keeping`]). Where it was left is read from the safety
+    /// monitor, which judges that flight; without one, where it would
+    /// stand. Empty binds nothing.
+    pub fn set_power_lines(&mut self, lines: Vec<PowerLine>) {
+        self.power_lines = lines;
+    }
+
+    /// The power lines yielders are kept out of the clearance of.
+    pub fn power_lines(&self) -> &[PowerLine] {
+        &self.power_lines
     }
 
     /// Keep resolved positions out of the true ground and structures.
@@ -227,6 +295,11 @@ impl DeconflictStage {
     /// Whether adjusted positions are kept out of the ground and structures.
     pub fn is_guarded(&self) -> bool {
         self.guard.is_some()
+    }
+
+    /// The guard adjusted positions go through, if any.
+    pub fn physical_guard(&self) -> Option<&crate::belief_world::PhysicalGuard> {
+        self.guard.as_ref()
     }
 
     pub fn with_config(mut self, config: DeconflictionConfig) -> Self {
@@ -316,6 +389,25 @@ impl StageHandler for DeconflictStage {
             return Ok(StageOutcome::NoWork);
         }
 
+        let clearance = if self.power_lines.is_empty() {
+            LineClearance::default()
+        } else {
+            let safety = context
+                .stages
+                .get::<crate::safety::SafetyStage>(crate::stage::Stage::SafetyMonitor);
+            LineClearance::new(
+                self.power_lines.clone(),
+                proposals
+                    .iter()
+                    .map(|proposal| {
+                        let left_at = safety
+                            .and_then(|safety| safety.left_at(&proposal.drone_id))
+                            .unwrap_or(proposal.position);
+                        (proposal.drone_id.clone(), left_at)
+                    })
+                    .collect(),
+            )
+        };
         let (resolved, events) = {
             let State {
                 config,
@@ -331,6 +423,7 @@ impl StageHandler for DeconflictStage {
                 zones,
                 corridors,
                 roles,
+                &clearance,
             )
         };
 
@@ -350,9 +443,19 @@ impl StageHandler for DeconflictStage {
                     proposal.drone_id
                 )));
             };
+            // Swept from where it was proposed: the push can cross a wire.
             let position = match &self.guard {
                 Some(guard) => {
-                    guard.enforce(&proposal.drone_id, context.timestamp_s, proposal.position)
+                    let proposed = proposals
+                        .iter()
+                        .find(|p| p.drone_id == proposal.drone_id)
+                        .map_or(proposal.position, |p| p.position);
+                    guard.enforce_from(
+                        &proposal.drone_id,
+                        context.timestamp_s,
+                        proposed,
+                        proposal.position,
+                    )
                 }
                 None => proposal.position,
             };
@@ -453,6 +556,7 @@ mod tests {
             _zones: &[ExclusionZone],
             _corridors: &[FlightCorridor],
             _roles: &RoleTable,
+            _clearance: &LineClearance,
         ) -> (Vec<Proposal>, Vec<DeconflictionEvent>) {
             let mut moved = proposals.to_vec();
             for proposal in &mut moved {
@@ -475,6 +579,7 @@ mod tests {
             _zones: &[ExclusionZone],
             _corridors: &[FlightCorridor],
             _roles: &RoleTable,
+            _clearance: &LineClearance,
         ) -> (Vec<Proposal>, Vec<DeconflictionEvent>) {
             let mut moved = proposals.to_vec();
             moved[0].position[1] += 7.0;
@@ -519,6 +624,237 @@ mod tests {
         assert_ne!(before, after, "the resolution must reach the world");
     }
 
+    /// A wire along x, 12 m to the -y side of two drones closing head-on at
+    /// its height, with a 10 m clearance.
+    fn wire_beside() -> PowerLine {
+        use argusnet_world::powerline::Support;
+        let support = |x: f64| Support {
+            xy_m: [x, -12.0],
+            base_z_m: 0.0,
+            height_m: 60.0,
+        };
+        PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-100.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap()
+    }
+
+    /// R3: the yielder's push away from its peer would take it within the
+    /// wire's clearance, so it is pushed the other way; without the line
+    /// it goes toward the wire.
+    #[test]
+    fn a_push_toward_a_wire_goes_the_other_way() {
+        let drones = || {
+            vec![
+                node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
+                node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
+            ]
+        };
+        let yielded_y = |sim: &Simulation| {
+            sim.world()
+                .platforms()
+                .iter()
+                .find(|p| p.node_id == "drone-b")
+                .unwrap()
+                .position
+                .y
+        };
+        let mut free = rig(drones());
+        free.step().unwrap();
+        assert!(yielded_y(&free) < -1.0, "{}", yielded_y(&free));
+
+        let mut stage = DeconflictStage::new();
+        stage.set_power_lines(vec![wire_beside()]);
+        let mut kept = rig_with(drones(), stage);
+        kept.step().unwrap();
+        let y = yielded_y(&kept);
+        assert!((y + yielded_y(&free)).abs() < 1e-9, "mirrored: {y}");
+        let events = decon(&mut kept).take_events();
+        assert_eq!(events[0].resolution.as_str(), "lateral_offset");
+        let p = [10.0, y, 60.0];
+        assert!(!wire_beside().violated_by(p, p));
+    }
+
+    /// Without the safety monitor, the push itself is swept, from where the
+    /// yielder was proposed: one that lands clear of a wire 5 m to its side
+    /// but crosses it is refused for the one that keeps the most.
+    #[test]
+    fn without_the_monitor_the_push_itself_is_swept() {
+        use argusnet_world::powerline::Support;
+        let support = |x: f64| Support {
+            xy_m: [x, -5.0],
+            base_z_m: 0.0,
+            height_m: 60.0,
+        };
+        let wire = PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-100.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let mut stage = DeconflictStage::new();
+        stage.set_power_lines(vec![wire]);
+        let mut sim = rig_with(
+            vec![
+                node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
+                node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
+            ],
+            stage,
+        );
+        sim.step().unwrap();
+        let b = sim
+            .world()
+            .platforms()
+            .iter()
+            .find(|p| p.node_id == "drone-b")
+            .unwrap()
+            .position;
+        assert!(b.y > 1.0, "not across the wire: {b:?}");
+    }
+
+    /// The physical guard sweeps a push too: in a run whose planners know no
+    /// line, a push across a wire, landing clear beyond it, is stopped short
+    /// of the wire, not flown through.
+    #[test]
+    fn the_guard_stops_a_push_through_a_wire() {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::powerline::Support;
+        use argusnet_world::tiled::TiledTerrain;
+        let support = |x: f64| Support {
+            xy_m: [x, -5.0],
+            base_z_m: 0.0,
+            height_m: 60.0,
+        };
+        let wire = PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-100.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(
+                Arc::new(TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap()),
+                5.0,
+            ),
+            SharedObstacles::new(Arc::new(
+                ObstacleLayer::new(bounds, 400.0, Vec::new()).unwrap(),
+            )),
+            1.0,
+        )
+        .with_power_lines(&[wire]);
+        let mut stage = DeconflictStage::new();
+        stage.set_physical_guard(guard.clone());
+        let mut sim = rig_with(
+            vec![
+                node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
+                node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
+            ],
+            stage,
+        );
+        sim.step().unwrap();
+        let b = sim
+            .world()
+            .platforms()
+            .iter()
+            .find(|p| p.node_id == "drone-b")
+            .unwrap()
+            .position;
+        assert!(b.y > -5.0 + 1.0, "short of the wire: {b:?}");
+        assert!(!guard.take_contacts().is_empty());
+    }
+
+    /// The margin judges the flight from where the platform was left, swept:
+    /// both ends far from the wire, the flight between crosses it.
+    #[test]
+    fn the_line_margin_is_swept_from_where_the_platform_was_left() {
+        let line = wire_beside();
+        let left = [("d".to_string(), [0.0, -40.0, 60.0])]
+            .into_iter()
+            .collect();
+        let clearance = LineClearance::new(vec![line.clone()], left);
+        let margin = clearance.margin("d", [0.0, 20.0, 60.0]);
+        assert!(margin < -9.0, "{margin}");
+        // Never left anywhere: judged where it would stand, 7 m off.
+        let alone = clearance.margin("e", [0.0, -5.0, 60.0]);
+        assert!((alone - (7.0 - 0.02 - 10.0)).abs() < 1e-9, "{alone}");
+        // Beyond the line's clearance from above: not even measured.
+        assert_eq!(clearance.margin("e", [0.0, 20.0, 60.0]), f64::INFINITY);
+        assert_eq!(
+            LineClearance::default().margin("d", [0.0, -12.0, 60.0]),
+            f64::INFINITY
+        );
+    }
+    /// The flight judged is the one from where the safety monitor left the
+    /// platform last tick: drone-b was left on the far side of a wire, so
+    /// every push that lands clear of it still flies through its clearance
+    /// to get there. Each is refused, and the one keeping the most (the climb)
+    /// is taken; judged where it would stand, the first push would do.
+    #[test]
+    fn a_push_is_judged_from_where_the_safety_monitor_left_the_platform() {
+        use argusnet_world::powerline::Support;
+        let support = |x: f64| Support {
+            xy_m: [x, -30.0],
+            base_z_m: 0.0,
+            height_m: 60.0,
+        };
+        let wire = PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-100.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let mut stage = DeconflictStage::new();
+        stage.set_power_lines(vec![wire.clone()]);
+        let mut sim = rig_with(
+            vec![
+                node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
+                node("drone-b", true, [10.0, -41.0, 60.0], [0.0, 0.0, 0.0]),
+            ],
+            stage,
+        );
+        let mut safety = crate::safety::SafetyStage::new();
+        safety.set_enabled(true);
+        safety.set_power_lines(vec![wire]);
+        sim.set_stage_handler(Stage::SafetyMonitor, Box::new(safety))
+            .unwrap();
+        sim.step().unwrap();
+        assert!(decon(&mut sim).take_events().is_empty(), "41 m apart");
+        let left = sim
+            .stage::<crate::safety::SafetyStage>(Stage::SafetyMonitor)
+            .unwrap()
+            .left_at("drone-b")
+            .expect("kept with lines set");
+        assert!(left[1] < -40.0, "{left:?}");
+        let b = sim.world_mut().platform_mut("drone-b").unwrap();
+        b.position = Vector3::new(10.0, 0.0, 60.0);
+        b.velocity = Vector3::new(-5.0, 0.0, 0.0);
+        sim.step().unwrap();
+        let events = decon(&mut sim).take_events();
+        assert_eq!(events[0].yielding_drone_id, "drone-b");
+        assert_eq!(events[0].resolution.as_str(), "vertical_offset");
+    }
     /// Two platforms far apart are left alone, and the stage says so.
     #[test]
     fn well_separated_drones_are_left_alone() {
@@ -672,6 +1008,7 @@ mod tests {
                 _zones: &[ExclusionZone],
                 _corridors: &[FlightCorridor],
                 _roles: &RoleTable,
+                _clearance: &LineClearance,
             ) -> (Vec<Proposal>, Vec<DeconflictionEvent>) {
                 let mut moved = proposals.to_vec();
                 moved[0].drone_id = "ghost".to_string();
@@ -753,6 +1090,7 @@ mod tests {
                 _zones: &[ExclusionZone],
                 _corridors: &[FlightCorridor],
                 _roles: &RoleTable,
+                _clearance: &LineClearance,
             ) -> (Vec<Proposal>, Vec<DeconflictionEvent>) {
                 self.0.lock().unwrap().push(proposals.len());
                 (proposals.to_vec(), Vec::new())

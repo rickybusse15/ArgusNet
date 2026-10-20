@@ -346,14 +346,53 @@ pub fn resolve_step<R, T>(
     config: &DeconflictionConfig,
     proposals: &[Proposal],
     timestamp_s: f64,
-    mut role_of: R,
-    mut terrain_floor: T,
+    role_of: R,
+    terrain_floor: T,
     zones: &[ExclusionZone],
     corridors: &[FlightCorridor],
 ) -> (Vec<Proposal>, Vec<DeconflictionEvent>)
 where
     R: FnMut(&str) -> String,
     T: FnMut([f64; 2], f64, f64) -> Option<f64>,
+{
+    resolve_step_keeping(
+        config,
+        proposals,
+        timestamp_s,
+        role_of,
+        terrain_floor,
+        zones,
+        corridors,
+        |_, _| f64::INFINITY,
+    )
+}
+
+/// [`resolve_step`], with each position a yielder could be moved to judged
+/// by `margin(yielder_id, position)`: how far it stays outside what it must
+/// keep clear of (R3: a power line's clearance), negative when it is inside.
+///
+/// The positions are tried in the reference's order: the lateral push away
+/// from the peer, then its mirror (each only where the reference would take
+/// it), then the vertical offset, and last the vertical offset the other
+/// way. Each is clamped to the floor first. The first whose margin is not
+/// negative is taken; when none is, the one with the most margin is (the
+/// earliest of equals). With every margin infinite, or simply not negative,
+/// this is exactly `resolve_step`.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_step_keeping<R, T, M>(
+    config: &DeconflictionConfig,
+    proposals: &[Proposal],
+    timestamp_s: f64,
+    mut role_of: R,
+    mut terrain_floor: T,
+    zones: &[ExclusionZone],
+    corridors: &[FlightCorridor],
+    mut margin: M,
+) -> (Vec<Proposal>, Vec<DeconflictionEvent>)
+where
+    R: FnMut(&str) -> String,
+    T: FnMut([f64; 2], f64, f64) -> Option<f64>,
+    M: FnMut(&str, Vec3) -> f64,
 {
     let mut adjusted: Vec<Proposal> = proposals.to_vec();
     let mut events: Vec<DeconflictionEvent> = Vec::new();
@@ -459,47 +498,61 @@ where
             let still_close =
                 norm2([lateral_pred[0] - peer_pos[0], lateral_pred[1] - peer_pos[1]]) < min_sep;
 
-            let (mut new_pos, resolution) = if !still_close && !in_zone([lateral[0], lateral[1]]) {
-                (lateral, Resolution::LateralOffset)
+            let opposite = [
+                y.position[0] - push[0],
+                y.position[1] - push[1],
+                y.position[2],
+            ];
+            let opposite_pred = [
+                opposite[0] + y.velocity[0] * look,
+                opposite[1] + y.velocity[1] * look,
+            ];
+            let opposite_close = norm2([
+                opposite_pred[0] - peer_pos[0],
+                opposite_pred[1] - peer_pos[1],
+            ]) < min_sep;
+            // Inclusive: level platforms both climb.
+            let direction = if y.position[2] >= peer_pos[2] {
+                1.0
             } else {
-                let opposite = [
-                    y.position[0] - push[0],
-                    y.position[1] - push[1],
-                    y.position[2],
-                ];
-                let opposite_pred = [
-                    opposite[0] + y.velocity[0] * look,
-                    opposite[1] + y.velocity[1] * look,
-                ];
-                let opposite_close = norm2([
-                    opposite_pred[0] - peer_pos[0],
-                    opposite_pred[1] - peer_pos[1],
-                ]) < min_sep;
-                if !opposite_close && !in_zone([opposite[0], opposite[1]]) {
-                    (opposite, Resolution::LateralOffset)
-                } else {
-                    // Inclusive: level platforms both climb.
-                    let direction = if y.position[2] >= peer_pos[2] {
-                        1.0
-                    } else {
-                        -1.0
-                    };
-                    (
-                        [
-                            y.position[0],
-                            y.position[1],
-                            y.position[2] + direction * vert_sep,
-                        ],
-                        Resolution::VerticalOffset,
-                    )
-                }
+                -1.0
             };
-
-            if let Some(floor) =
-                terrain_floor([new_pos[0], new_pos[1]], new_pos[2], config.min_agl_m)
-            {
-                new_pos[2] = floor;
+            let vertical = |direction: f64| {
+                [
+                    y.position[0],
+                    y.position[1],
+                    y.position[2] + direction * vert_sep,
+                ]
+            };
+            // The reference's choice comes first: it is the first of these
+            // it would take.
+            let mut candidates = Vec::with_capacity(4);
+            if !still_close && !in_zone([lateral[0], lateral[1]]) {
+                candidates.push((lateral, Resolution::LateralOffset));
             }
+            if !opposite_close && !in_zone([opposite[0], opposite[1]]) {
+                candidates.push((opposite, Resolution::LateralOffset));
+            }
+            candidates.push((vertical(direction), Resolution::VerticalOffset));
+            candidates.push((vertical(-direction), Resolution::VerticalOffset));
+
+            let mut chosen: Option<(Vec3, Resolution, f64)> = None;
+            for (mut candidate, resolution) in candidates {
+                if let Some(floor) =
+                    terrain_floor([candidate[0], candidate[1]], candidate[2], config.min_agl_m)
+                {
+                    candidate[2] = floor;
+                }
+                let kept = margin(&yielder_id, candidate);
+                if kept >= 0.0 {
+                    chosen = Some((candidate, resolution, kept));
+                    break;
+                }
+                if chosen.as_ref().is_none_or(|best| kept > best.2) {
+                    chosen = Some((candidate, resolution, kept));
+                }
+            }
+            let (new_pos, resolution, _) = chosen.expect("the vertical offsets are always tried");
 
             let index = index_of(&adjusted, &yielder_id);
             adjusted[index].position = new_pos;

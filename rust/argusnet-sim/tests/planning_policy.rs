@@ -287,3 +287,110 @@ fn the_deconfliction_guard_follows_the_policy_alone() {
         .is_err());
     assert!(!guarded(&scan));
 }
+
+/// R3: under `efficient_v1` deconfliction's pushes and the rejoins keep
+/// the world's power lines' clearance, and the physical guard keeps off the
+/// wires; the reference knows no lines, and a run with no prior map forgets
+/// them with the rest of the map, whichever is set first.
+#[test]
+fn efficient_v1_keeps_power_lines_clear_and_the_reference_does_not() {
+    use argusnet_sim::belief_world::WorldKnowledge;
+    use argusnet_sim::deconflict::DeconflictStage;
+    use argusnet_sim::overrides::MissionOverrideStage;
+    use argusnet_sim::stage::Stage;
+    let path = format!(
+        "{}/../../tests/fixtures/scenario_bundle_scan.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture")).unwrap();
+    document["world"]["power_lines"] = serde_json::json!([{
+        "id": "line",
+        "supports": [
+            {"xy_m": [-300.0, 0.0], "base_z_m": 0.0, "height_m": 30.0},
+            {"xy_m": [300.0, 0.0], "base_z_m": 0.0, "height_m": 30.0}
+        ],
+        "conductor_offsets_m": [0.0],
+        "sag_ratio": 0.03,
+        "conductor_radius_m": 0.02,
+        "clearance_m": 10.0
+    }]);
+    let bundle = ScenarioBundle::from_json(&document.to_string()).expect("bundle parses");
+    let lines = |policy, knowledge| {
+        let mut run = assemble(&bundle).expect("assembles");
+        RunOptions {
+            planning_policy: policy,
+            world_knowledge: knowledge,
+            ..RunOptions::default()
+        }
+        .apply(&mut run, &bundle)
+        .expect("applies");
+        let decon = run
+            .sim
+            .stage::<DeconflictStage>(Stage::Deconflict)
+            .expect("installed")
+            .power_lines()
+            .len();
+        let rejoins = run
+            .sim
+            .stage::<MissionOverrideStage>(Stage::ApplyMissionOverrides)
+            .expect("installed")
+            .power_lines()
+            .count();
+        // Physics keeps off the wires wherever there is a guard.
+        let physics = run
+            .sim
+            .stage::<DeconflictStage>(Stage::Deconflict)
+            .unwrap()
+            .physical_guard()
+            .map(|guard| guard.power_line_count());
+        (decon, rejoins, physics)
+    };
+    assert_eq!(
+        lines(PlanningPolicy::EfficientV1, WorldKnowledge::Prior),
+        (1, 1, Some(1))
+    );
+    assert_eq!(
+        lines(PlanningPolicy::Reference, WorldKnowledge::Prior),
+        (0, 0, None)
+    );
+    assert_eq!(
+        lines(PlanningPolicy::EfficientV1, WorldKnowledge::NoPrior),
+        (0, 0, Some(1))
+    );
+    assert_eq!(
+        lines(PlanningPolicy::Reference, WorldKnowledge::NoPrior),
+        (0, 0, Some(1))
+    );
+    // The other order: the policy first, then a run with no prior map.
+    let mut run = assemble(&bundle).expect("assembles");
+    run.set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    run.set_world_knowledge(WorldKnowledge::NoPrior, Default::default())
+        .unwrap();
+    assert!(run
+        .sim
+        .stage::<DeconflictStage>(Stage::Deconflict)
+        .unwrap()
+        .power_lines()
+        .is_empty());
+    assert_eq!(
+        run.sim
+            .stage::<MissionOverrideStage>(Stage::ApplyMissionOverrides)
+            .unwrap()
+            .power_lines()
+            .count(),
+        0
+    );
+    // And back to the reference: the lines go with the policy's guard.
+    let mut run = assemble(&bundle).expect("assembles");
+    run.set_planning_policy(PlanningPolicy::EfficientV1)
+        .unwrap();
+    run.set_planning_policy(PlanningPolicy::Reference).unwrap();
+    assert!(run
+        .sim
+        .stage::<DeconflictStage>(Stage::Deconflict)
+        .unwrap()
+        .power_lines()
+        .is_empty());
+}

@@ -1622,40 +1622,54 @@ impl AssembledRun {
         self.sim.set_policy_algorithm(!policy.is_reference());
         self.guard_deconfliction(!policy.is_reference());
         let guard = self.guard.clone();
+        // Rejoins keep the lines' clearance under the policy's own guard: a
+        // run with no prior map has forgotten them.
+        let lines = if self.policy_guard {
+            self.world.power_lines.as_ref().clone()
+        } else {
+            Vec::new()
+        };
         if let Some(overrides) = self
             .sim
             .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
         {
             overrides.set_smooth_rejoin(!policy.is_reference());
             overrides.set_physical_guard(guard);
+            overrides.set_power_lines(lines);
         }
         Ok(has_driver)
     }
 
     /// A policy other than the reference routes round obstacles (P3) and
     /// keeps 8 m from them, and deconfliction's lateral push can reach
-    /// further: keep its adjusted positions out of the ground and out of
-    /// structures, as a run with no prior map already does. The reference
-    /// keeps its unguarded push, byte for byte. A run with no prior map
-    /// installs its own guard, which this never replaces or removes; the
-    /// policy's own guard is removed again when the policy goes back to the
-    /// reference, so a run's behaviour never depends on the order it was
-    /// configured in.
+    /// further: keep its adjusted positions out of the ground, out of
+    /// structures and off the wires, as a run with no prior map already
+    /// does, and keep its pushes out of each power line's clearance (R3).
+    /// The reference keeps its unguarded push, byte for byte. A run with no
+    /// prior map installs its own guard, which this never replaces or
+    /// removes (and its pushes know no lines: they are forgotten with the
+    /// prior map); the policy's own guard is removed again when the policy
+    /// goes back to the reference, so a run's behaviour never depends on the
+    /// order it was configured in.
     fn guard_deconfliction(&mut self, guarded: bool) {
         if guarded && self.guard.is_none() {
             let guard = crate::belief_world::PhysicalGuard::new(
                 self.world.terrain.clone(),
                 self.world.obstacles.clone(),
                 crate::belief_world::ExplorationConfig::default().contact_clearance_m,
-            );
+            )
+            .with_power_lines(&self.world.power_lines);
+            let lines = self.world.power_lines.as_ref().clone();
             if let Some(deconflict) = self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict) {
                 deconflict.set_physical_guard(guard.clone());
+                deconflict.set_power_lines(lines);
             }
             self.guard = Some(guard);
             self.policy_guard = true;
         } else if !guarded && self.policy_guard {
             if let Some(deconflict) = self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict) {
                 deconflict.clear_physical_guard();
+                deconflict.set_power_lines(Vec::new());
             }
             self.guard = None;
             self.policy_guard = false;
@@ -1834,7 +1848,8 @@ impl AssembledRun {
             self.world.terrain.clone(),
             self.world.obstacles.clone(),
             config.contact_clearance_m,
-        );
+        )
+        .with_power_lines(&self.world.power_lines);
 
         let controllers = self
             .sim
@@ -1884,6 +1899,8 @@ impl AssembledRun {
             .with_terrain(Arc::new(terrain.clone()));
         deconflict.set_roles(roles);
         deconflict.set_physical_guard(guard.clone());
+        // Nor are its pushes kept from lines it has not mapped.
+        deconflict.set_power_lines(Vec::new());
 
         if let Some(safety) = self.sim.stage_mut::<SafetyStage>(Stage::SafetyMonitor) {
             safety.set_terrain(Box::new(terrain));
@@ -1897,6 +1914,7 @@ impl AssembledRun {
             .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
         {
             overrides.set_physical_guard(Some(guard.clone()));
+            overrides.set_power_lines(Vec::new());
         }
         self.guard = Some(guard);
         self.policy_guard = false;

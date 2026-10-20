@@ -1,10 +1,12 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
-opacity fix (#222) and typed structure matching. R3 is in progress: the
-model, the safety clearance, lines in a run, drawing in the viewer and the
-planner's corridor are done. R2 is in progress: the tree model and trees in a run are done.
-R1, R4 and R5 are not started.
+**Status:** proposed 2026-10-12; updated 2026-10-20. R0 is done: the
+opacity fix (#222) and typed structure matching. R1 is done: building-v2
+roofs, the georeferenced import and material facades. R3 is in progress:
+the model, the safety clearance, lines in a run, drawing in the viewer,
+the planner's corridor and the guard against wires are done. R2 is in
+progress: the tree model and trees in a run are done. R4 and R5 are not
+started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -304,9 +306,46 @@ C8 (P2.6) and D2 (P5.1).
   scenarios, the only change is `persistent_long` seed 7 under
   efficient_v1: one POI flight now climbs over, and its 8 events go to 0.
   (These events judge the proposed flight. The blocking monitor's own
-  climbs keep every published position 19 m or more from a wire.) Next:
-  the guard swept against conductors (deconfliction pushes, rejoins and
-  override flights), then an optional clearance-corridor overlay.
+  climbs keep every published position 19 m or more from a wire.)
+
+  *Done (guard and deconfliction):* the physical guard knows the wires
+  (`PhysicalGuard::with_power_lines`). Each conductor piece is a capsule:
+  the conductor's radius, plus the guard's contact clearance, plus the
+  piece's sag error, round its chord, so it holds the true sagging wire
+  (`PowerLine::envelope`). `enforce` pushes a platform inside one straight
+  away from the wire to just past it. Where that would put it under the
+  floor, it lifts it straight up over the wire instead; physics never
+  pushes into the ground. `first_structure_hit` also meets the wires,
+  solved against each capsule (`capsule_entry`: ray against cylinder and
+  end spheres, not sampled), so a rejoin step stops short of a wire as it
+  does at a wall. Under efficient_v1 two planning rules use the lines'
+  own clearance. Deconfliction refuses a push whose flight since last
+  tick (from where the safety monitor left the platform, swept) comes
+  within a line's clearance, and tries the next position the reference
+  would take: the mirror, the vertical offset, then the vertical offset
+  the other way, or the one that keeps the most when all are refused
+  (`resolve_step_keeping`; `resolve_step` is it with no margin, so the
+  reference's parity cases are unchanged). A rejoin step that would come
+  within a known line's clearance stops short of it and climbs over. Both
+  are the planner's rules, not physics, so they record no contact. (A
+  rejoin holding the height it climbed to also gives up a path running
+  away faster than it flies, as one that did not climb does; it used to
+  chase it for ever.) The
+  reference and a run without a prior map know no lines; the physical
+  guard keeps off the wires in every run that has one.
+
+  Measured on `power_line_inspection` (the configuration above):
+  efficient_v1 seed 7 goes from 2 `structure_clearance` events to 0, all
+  8 POIs still inspected. Seed 42 and both reference runs are
+  byte-identical. With the alpine terrain preset instead, efficient_v1
+  seed 42 stays at 11: the 2 deconfliction pushes are gone, and a rejoin
+  starting where the monitor's abort clamp left it, not where its own
+  flight was, adds 2. That run and seed 7 (43 events, before and after)
+  also show what this slice does not cover. A drone's own **scan lane**
+  runs along the line at the wires' height, through them: stage 1's
+  lanes are not routed round lines, and a prior run never puts stage 1
+  through the guard. That is the next gap for the planner. Next in R3:
+  sensing wires, then an optional clearance-corridor overlay.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against

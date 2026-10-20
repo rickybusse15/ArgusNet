@@ -383,6 +383,17 @@ struct State {
     /// Keeps each rejoin step out of the ground and out of structures: the
     /// way back to a path can cross what lies between.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// The power lines a guarded rejoin keeps its clearance from (R3), when
+    /// its planner knows them.
+    lines: Vec<KnownLine>,
+}
+
+/// A power line a rejoin keeps clear of, with the space within its
+/// clearance cut once.
+#[derive(Debug, Clone)]
+struct KnownLine {
+    line: argusnet_world::powerline::PowerLine,
+    clearance: argusnet_world::powerline::ConductorEnvelope,
 }
 
 /// A write into stage 2's tables, queued by stage 9 and applied by the
@@ -447,6 +458,26 @@ impl MissionOverrideStage {
     /// `None` leaves the steps unguarded.
     pub fn set_physical_guard(&mut self, guard: Option<crate::belief_world::PhysicalGuard>) {
         self.state.guard = guard;
+    }
+
+    /// The power lines a guarded rejoin keeps its clearance from (R3): a
+    /// step that would come within a line's clearance stops short of it, as
+    /// at a structure, and the rejoin climbs over. It is the planner's rule,
+    /// not physics, so no contact is recorded. Empty (the reference, and a
+    /// run without a prior map) changes nothing.
+    pub fn set_power_lines(&mut self, lines: Vec<argusnet_world::powerline::PowerLine>) {
+        self.state.lines = lines
+            .into_iter()
+            .map(|line| KnownLine {
+                clearance: line.envelope(line.clearance_m),
+                line,
+            })
+            .collect();
+    }
+
+    /// The power lines guarded rejoins keep their clearance from.
+    pub fn power_lines(&self) -> impl Iterator<Item = &argusnet_world::powerline::PowerLine> {
+        self.state.lines.iter().map(|known| &known.line)
     }
 
     /// Where `node_id` is on its way back to its own path, if it is.
@@ -548,11 +579,13 @@ const REJOIN_MIN_CLOSING: f64 = 0.05;
 /// How far short of a structure a step that would meet it stops, metres.
 const REJOIN_STANDOFF_M: f64 = 0.5;
 
-/// `from` toward `to`, kept out of structures and the ground. A building or
-/// wall the step would meet, however thin, stops it [`REJOIN_STANDOFF_M`]
-/// short (the segment is intersected with each, not sampled); so does the
-/// first point within the guard's clearance of the ground, solved on the
-/// terrain's cells. A step nothing stops ends at `to`.
+/// `from` toward `to`, kept out of structures, wires and the ground. A
+/// building or wall the step would meet, however thin, or a power line's
+/// wire it would come within the guard's clearance of, stops it
+/// [`REJOIN_STANDOFF_M`] short (the segment is intersected with each, or
+/// solved against each wire piece's capsule, not sampled); so does the first
+/// point within the guard's clearance of the ground, solved on the terrain's
+/// cells. A step nothing stops ends at `to`.
 fn guarded_step(
     guard: &crate::belief_world::PhysicalGuard,
     node_id: &str,
@@ -600,6 +633,39 @@ fn guarded_to(
         None => to,
     };
     guard.enforce(node_id, timestamp_s, stop)
+}
+
+/// `from` toward `to` (a step the guard already let through), stopped
+/// [`REJOIN_STANDOFF_M`] short of where it would first come within a known
+/// line's clearance, solved on the line's pieces. Already within one, a step
+/// that does not bring it closer goes on, and one that does is held.
+fn clear_of_lines(lines: &[KnownLine], from: [f64; 3], to: [f64; 3]) -> [f64; 3] {
+    let mut stop = to;
+    for known in lines {
+        let line = &known.line;
+        if !line.violated_by(from, stop) {
+            continue;
+        }
+        if line.violated_by(from, from) {
+            if line.clearance_along(stop, stop) < line.clearance_along(from, from) {
+                stop = from;
+            }
+            continue;
+        }
+        let length = distance_3d(from, stop);
+        // The capsules hold everything within the clearance, so a flight
+        // that comes within it enters them.
+        let f = match known.clearance.first_entry(from, stop) {
+            Some(t) if length > 0.0 => ((t * length - REJOIN_STANDOFF_M) / length).max(0.0),
+            _ => 0.0,
+        };
+        stop = [
+            from[0] + (stop[0] - from[0]) * f,
+            from[1] + (stop[1] - from[1]) * f,
+            from[2] + (stop[2] - from[2]) * f,
+        ];
+    }
+    stop
 }
 
 fn distance_3d(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -682,11 +748,10 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         // A path running away from it at the rejoin speed or faster is never
         // caught: it takes its place on its path, as the reference has every
         // platform do, once nothing stands between. How fast the path runs
-        // is measured from where it was last tick.
-        if let (Some(last), true) = (
-            last_path,
-            distance > step_m && !shared.climbing.contains_key(node_id) && context.dt_s > 0.0,
-        ) {
+        // is measured from where it was last tick. So too while it holds the
+        // height it climbed to: that hold ends only within a step of the
+        // path, which one running away is never.
+        if let (Some(last), true) = (last_path, distance > step_m && context.dt_s > 0.0) {
             let away = [
                 (path[0] - at[0]) / distance,
                 (path[1] - at[1]) / distance,
@@ -699,6 +764,10 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
             let clear = shared.guard.as_ref().is_none_or(|guard| {
                 guard.first_structure_hit(*at, path).is_none()
                     && guard.first_ground_contact(*at, path).is_none()
+                    && shared
+                        .lines
+                        .iter()
+                        .all(|known| !known.line.violated_by(*at, path))
             });
             if receding >= (1.0 - REJOIN_MIN_CLOSING) * speed_mps && clear {
                 done.push(node_id.clone());
@@ -727,7 +796,10 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         };
         if let Some(guard) = &shared.guard {
             let tentative = next;
-            next = guarded_step(guard, node_id, context.timestamp_s, *at, tentative);
+            // The lines' clearance first: a step it stops never reaches the
+            // physical guard's smaller envelope, so records no contact.
+            let kept = clear_of_lines(&shared.lines, *at, tentative);
+            next = guarded_step(guard, node_id, context.timestamp_s, *at, kept);
             // Pushed back out of a structure on the direct line, it would
             // aim through the same one next tick: climb over it instead. (A
             // path that merely runs ahead of it is not a stall: the guard
@@ -739,13 +811,8 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
                 continue;
             }
             if pushed && distance_3d(next, path) >= distance - 0.25 * step_m {
-                let up = guarded_step(
-                    guard,
-                    node_id,
-                    context.timestamp_s,
-                    *at,
-                    [at[0], at[1], at[2] + step_m],
-                );
+                let up = clear_of_lines(&shared.lines, *at, [at[0], at[1], at[2] + step_m]);
+                let up = guarded_step(guard, node_id, context.timestamp_s, *at, up);
                 if up[2] > at[2] + 0.5 * step_m {
                     shared.climbing.insert(node_id.clone(), up[2]);
                     next = up;
@@ -766,6 +833,7 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
                                 at[1] + side * dx / across * step_m,
                                 at[2],
                             ];
+                            let aside = clear_of_lines(&shared.lines, *at, aside);
                             let stepped =
                                 guarded_step(guard, node_id, context.timestamp_s, *at, aside);
                             if distance_3d(stepped, *at) > 0.5 * step_m {
@@ -1350,6 +1418,204 @@ mod tests {
         assert!(ticks > 1, "it did not simply appear on its path");
     }
 
+    /// A wire across the rejoin's way, at its height, stops each step where
+    /// it would come within the guard's clearance of it, solved, not
+    /// sampled: no flight between two ticks passes within it, and the drone
+    /// climbs over and comes home.
+    #[test]
+    fn a_rejoin_does_not_fly_through_a_wire() {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::powerline::{PowerLine, Support};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        // A 100 m span square to the flight, sagging 2 m to 80 m, the
+        // drone's height, where it crosses.
+        let support = |y: f64| Support {
+            xy_m: [500.0, y],
+            base_z_m: 0.0,
+            height_m: 82.0,
+        };
+        let line = PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-50.0), support(50.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.02,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
+        let layer = ObstacleLayer::new(bounds, 200.0, Vec::new()).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer)),
+            2.0,
+        )
+        .with_power_lines(std::slice::from_ref(&line));
+        // Physics alone keeps it the guard's 2 m off; a planner that knows
+        // the line keeps its 10 m clearance on every step.
+        for (known, keep) in [(false, 2.0), (true, 10.0)] {
+            guard.take_contacts();
+            let mut sim = rejoin_rig(true);
+            ov(&mut sim).set_physical_guard(Some(guard.clone()));
+            if known {
+                ov(&mut sim).set_power_lines(vec![line.clone()]);
+            }
+            let mut last = position_of(&sim, "d0");
+            let mut closest = f64::INFINITY;
+            let mut ticks = 0;
+            while overridden(&sim).rejoining_at("d0").is_some() || ticks == 0 {
+                sim.step().expect("tick runs");
+                ticks += 1;
+                assert!(ticks < 400, "the rejoin stalled");
+                let p = position_of(&sim, "d0");
+                if overridden(&sim).rejoining_at("d0").is_some() {
+                    let kept = line.clearance_along([last.x, last.y, last.z], [p.x, p.y, p.z]);
+                    assert!(
+                        kept >= keep - 1e-6,
+                        "{kept} m from the wire at tick {ticks}"
+                    );
+                    closest = closest.min(kept);
+                }
+                last = p;
+            }
+            assert_eq!(position_of(&sim, "d0").x, 0.0);
+            // Each stops close to what it keeps, not far short of it.
+            assert!(closest < keep + REDIRECT_SPEED_MPS, "{known}: {closest}");
+            // Physics stops it when only physics knows the wire; the
+            // planner's clearance stops it first when it knows the line.
+            let contacts = guard.take_contacts();
+            assert_eq!(contacts.is_empty(), known, "{known}: {contacts:?}");
+        }
+    }
+    /// A 100 m span square to the rejoin's way at x = 500, sagging 2 m to
+    /// `crossing_z` where the way passes under it, and a guard over flat
+    /// ground that keeps 2 m off it.
+    fn wire_across(
+        crossing_z: f64,
+    ) -> (
+        argusnet_world::powerline::PowerLine,
+        crate::belief_world::PhysicalGuard,
+    ) {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::powerline::{PowerLine, Support};
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let support = |y: f64| Support {
+            xy_m: [500.0, y],
+            base_z_m: 0.0,
+            height_m: crossing_z + 2.0,
+        };
+        let line = PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-50.0), support(50.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.02,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let bounds = Bounds2d::new(-200.0, 1200.0, -600.0, 600.0);
+        let layer = ObstacleLayer::new(bounds, 200.0, Vec::new()).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer)),
+            2.0,
+        )
+        .with_power_lines(std::slice::from_ref(&line));
+        (line, guard)
+    }
+
+    /// Flown until its rejoin ends, every step's clearance from `line`.
+    fn rejoin_clearances(
+        sim: &mut Simulation,
+        line: &argusnet_world::powerline::PowerLine,
+    ) -> Vec<f64> {
+        let mut last = position_of(sim, "d0");
+        let mut kept = Vec::new();
+        let mut ticks = 0;
+        while overridden(sim).rejoining_at("d0").is_some() || ticks == 0 {
+            sim.step().expect("tick runs");
+            ticks += 1;
+            assert!(
+                ticks < 400,
+                "the rejoin stalled at {:?}",
+                position_of(sim, "d0")
+            );
+            let p = position_of(sim, "d0");
+            if overridden(sim).rejoining_at("d0").is_some() {
+                kept.push(line.clearance_along([last.x, last.y, last.z], [p.x, p.y, p.z]));
+            }
+            last = p;
+        }
+        kept
+    }
+
+    /// Released 5 m from a wire, inside its clearance, a rejoin that knows
+    /// the line never comes closer to it than it started, and gets home.
+    #[test]
+    fn a_rejoin_inside_a_lines_clearance_never_closes_on_the_wire() {
+        let (line, guard) = wire_across(80.0);
+        let mut sim = rejoin_rig_at(true, 505.0);
+        ov(&mut sim).set_physical_guard(Some(guard));
+        ov(&mut sim).set_power_lines(vec![line.clone()]);
+        let start = line.clearance_along([505.0, 0.0, 80.0], [505.0, 0.0, 80.0]);
+        let kept = rejoin_clearances(&mut sim, &line);
+        let closest = kept.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(closest >= start - 1e-6, "{closest} < {start}");
+        assert_eq!(position_of(&sim, "d0").x, 0.0);
+    }
+
+    /// A wire 4 m over the way home, inside its clearance but outside the
+    /// guard's: a rejoin that knows the line keeps the clearance on every
+    /// step, under the wire as well as past it, and gets home.
+    #[test]
+    fn a_rejoin_keeps_a_lines_clearance_under_a_wire_just_overhead() {
+        let (line, guard) = wire_across(84.0);
+        let mut sim = rejoin_rig(true);
+        ov(&mut sim).set_physical_guard(Some(guard.clone()));
+        ov(&mut sim).set_power_lines(vec![line.clone()]);
+        let kept = rejoin_clearances(&mut sim, &line);
+        let closest = kept.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(closest >= 10.0 - 1e-6, "{closest}");
+        assert_eq!(position_of(&sim, "d0").x, 0.0);
+        // The planner's clearance stopped it first: physics never had to.
+        let contacts = guard.take_contacts();
+        assert!(contacts.is_empty(), "{contacts:?}");
+    }
+
+    /// A path running away faster than the rejoin is taken at once only
+    /// when nothing stands between, a line's clearance included: with a
+    /// wire 5 m over the way, the drone flies on, clear of it, until past.
+    #[test]
+    fn a_receding_path_is_not_taken_through_a_lines_clearance() {
+        let (line, guard) = wire_across(85.0);
+        let mut sim = rejoin_rig(true);
+        sim.set_stage_handler(
+            Stage::SampleControllersAndBattery,
+            Box::new(Receding {
+                speed_mps: 40.0,
+                x_m: 0.0,
+            }),
+        )
+        .expect("stage 1 takes a handler");
+        ov(&mut sim).set_physical_guard(Some(guard));
+        ov(&mut sim).set_power_lines(vec![line.clone()]);
+        let kept = rejoin_clearances(&mut sim, &line);
+        assert!(kept.len() > 2, "taken through the clearance at once");
+        let closest = kept.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(closest >= 10.0 - 1e-6, "{closest}");
+    }
     /// Rejoins fly at the mission's redirect speed when one is set.
     #[test]
     fn a_rejoin_flies_at_the_missions_redirect_speed() {
