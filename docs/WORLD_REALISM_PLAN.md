@@ -79,8 +79,30 @@ C8 (P2.6) and D2 (P5.1).
   or pyramidal, with ridge direction and roof height). Line of sight,
   `first_hit` and collision intersect the roof triangles as well as the prism.
   The old `building-v1` stays as it is.
+  *Done (model, R1.1):* `building-v2` in `argusnet_world::obstacles`
+  (`Obstacle::building_v2`, metadata `eave_elevation_m`, `roof_shape`,
+  `ridge_azimuth_rad`). The roof is a set of planes and the solid ends at
+  the lowest: a gable is two, a hip or pyramid one per edge (convex
+  footprints only; others are refused). Point, ray, path-length and surface
+  queries clip against the planes exactly. The scene builder draws the same
+  solid: walls rising to the roof line (split where it turns) and one facet
+  per plane. Every other kind is unchanged, field and bytes (14/14 replays).
 - **The simulation sees what the viewer sees.** GIS buildings become
   `ObstaclePrimitive`s in the run, not just meshes.
+
+  *Done (import, R1.2):* `scripts/import_buildings.py`
+  (`argusnet.world.buildings_import`) writes an `argusnet.buildings` v1
+  document. It projects in float64 to local ENU around a recorded origin,
+  takes heights and roofs from the tags as above, and marks what it
+  estimated or could not model. It also checks each projected footprint's
+  area against its geodesic area (worst 3e-10 on the test town). The
+  native builder's `buildings_path` option replaces the procedural
+  buildings with the imported ones, each standing on the run's own ground,
+  and leaves out (and counts) any outside the map. The model refuses a bad
+  one by name. The bundle and the replay carry the georeference, the
+  document's hash and the counts, and the replay's `enu_origin` is the
+  buildings' own. DEM terrain under them is R5. Next: building materials
+  (R1.3).
 - **Rendering.** Generate roof meshes and per-face normals. Add semantic
   material classes (concrete, brick, metal roof, glass) with a procedural
   facade shader for window rows from the level count. This needs no textures,

@@ -1751,6 +1751,9 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
     if o.tree_inspection {
         document["tree_inspection"] = json!(true);
     }
+    if let Some(path) = &o.buildings_path {
+        document["buildings_path"] = json!(path);
+    }
     document
 }
 
