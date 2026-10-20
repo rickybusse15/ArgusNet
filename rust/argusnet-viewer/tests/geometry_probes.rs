@@ -670,3 +670,70 @@ fn power_lines_are_drawn_where_the_model_hangs_them_at_every_tier() {
         "the tower is not drawn at its support"
     );
 }
+
+/// R3: the clearance-corridor overlay is off by default. On, it is drawn
+/// round the wires (6 m over the centre conductor at mid-span, inside the
+/// 10 m clearance) and nowhere off the line (150 m north at the wire's
+/// height), at every quality tier; the wires are drawn either way.
+#[test]
+fn clearance_corridors_are_drawn_round_the_wires_only_when_asked_at_every_tier() {
+    if !gpu_tests() {
+        eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
+        return;
+    }
+    let scene = power_line_scene("power-line-clearance");
+    let line = power_line();
+    let pieces = line.pieces();
+    // The same mid-span as the wire probe: the span from x = -1000 to -800.
+    let mid = pieces[3 * 40 * 3 + 40 + 19].end_m;
+    let inside = [mid[0], mid[1], mid[2] + 6.0];
+    let off_line = [mid[0], mid[1] + 150.0, mid[2]];
+    let points = [inside, off_line];
+    let without = overlays(false, false, false);
+    assert!(
+        !without.power_line_clearance,
+        "the overlay is off by default"
+    );
+    let with = RuntimeOverlayVisibility {
+        power_line_clearance: true,
+        ..overlays(false, false, false)
+    };
+    for tier in [QualityTier::Low, QualityTier::Standard, QualityTier::High] {
+        let off = render_at(
+            &format!("clearance-off-{tier:?}"),
+            &scene,
+            CameraPreset::Isometric,
+            None,
+            tier,
+            without.clone(),
+            &[],
+            &points,
+        );
+        let on = render_at(
+            &format!("clearance-on-{tier:?}"),
+            &scene,
+            CameraPreset::Isometric,
+            None,
+            tier,
+            with.clone(),
+            &[],
+            &points,
+        );
+        for (label, i) in [("inside", 0), ("off-line", 1)] {
+            eprintln!(
+                "{tier:?} {label:>8}: off {:?} on {:?} diff {:.4}",
+                off[i],
+                on[i],
+                difference(on[i], off[i])
+            );
+        }
+        assert!(
+            difference(on[0], off[0]) > 0.03,
+            "{tier:?}: no corridor round the wire"
+        );
+        assert!(
+            difference(on[1], off[1]) < 0.005,
+            "{tier:?}: a corridor drawn off the line"
+        );
+    }
+}

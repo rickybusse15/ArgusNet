@@ -279,8 +279,10 @@ impl PowerLine {
 
     /// Where conductor `offset_m` hangs at fraction `t` (0 at support
     /// `span`, 1 at the next) of that span: between its attachments on the
-    /// two cross-arms, sagging below their chord.
-    fn conductor_at(&self, span: usize, offset_m: f64, t: f64) -> [f64; 3] {
+    /// two cross-arms, sagging below their chord. Any offset may be asked
+    /// for: every conductor hangs at the same height at `t`, displaced
+    /// across the line in proportion to its offset.
+    pub fn conductor_at(&self, span: usize, offset_m: f64, t: f64) -> [f64; 3] {
         let (from, to) = (&self.supports[span], &self.supports[span + 1]);
         let (arm_from, arm_to) = (self.cross_arm(span), self.cross_arm(span + 1));
         let start = [
