@@ -43,6 +43,12 @@ pub const CROWN_EXTINCTION_PER_M: f64 = 0.35;
 /// large crown, so a tree is listed in a few cells.
 pub const TREE_CELL_M: f64 = 16.0;
 
+/// The most cells a [`TreeLayer`] or a [`poisson_disk`] grid may hold: at
+/// 16 m cells, a square 65 km on a side. Beyond it the trees (or the
+/// bounds) are spread too far to index, and are refused rather than
+/// allocated.
+pub const MAX_GRID_CELLS: usize = 1 << 24;
+
 /// What kind of tree, which sets its shape when placed procedurally and how
 /// the viewer draws it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -139,6 +145,9 @@ pub enum TreeError {
     BadValue { id: String, field: &'static str },
     /// Two trees with one id.
     DuplicateId { id: String },
+    /// The trees are spread over more ground than a grid of
+    /// [`MAX_GRID_CELLS`] covers.
+    TooSpread { cells: f64 },
 }
 
 impl std::fmt::Display for TreeError {
@@ -146,6 +155,10 @@ impl std::fmt::Display for TreeError {
         match self {
             Self::BadValue { id, field } => write!(f, "{id}: {field} is out of range"),
             Self::DuplicateId { id } => write!(f, "{id}: two trees have this id"),
+            Self::TooSpread { cells } => write!(
+                f,
+                "the trees span {cells:.0} grid cells, more than {MAX_GRID_CELLS}"
+            ),
         }
     }
 }
@@ -190,6 +203,16 @@ impl Tree {
         }
         if !(self.leaf_density.is_finite() && (0.0..=1.0).contains(&self.leaf_density)) {
             return Err(bad("leaf_density"));
+        }
+        // Each value finite is not enough: what is derived from them (the
+        // top, the footprint) must be too.
+        let b = self.bounds_xy_m();
+        if !(self.top_z_m().is_finite()
+            && [b.x_min_m, b.x_max_m, b.y_min_m, b.y_max_m]
+                .iter()
+                .all(|v| v.is_finite()))
+        {
+            return Err(bad("extent"));
         }
         Ok(self)
     }
@@ -385,8 +408,18 @@ impl TreeLayer {
         if trees.is_empty() {
             (x_min, x_max, y_min, y_max) = (0.0, TREE_CELL_M, 0.0, TREE_CELL_M);
         }
-        let columns = (((x_max - x_min) / TREE_CELL_M).floor() as usize + 1).max(1);
-        let rows = (((y_max - y_min) / TREE_CELL_M).floor() as usize + 1).max(1);
+        // Counted in floats first: trees each finite can still be spread
+        // too far apart to grid.
+        let (columns, rows) = (
+            ((x_max - x_min) / TREE_CELL_M).floor() + 1.0,
+            ((y_max - y_min) / TREE_CELL_M).floor() + 1.0,
+        );
+        if columns * rows > MAX_GRID_CELLS as f64 {
+            return Err(TreeError::TooSpread {
+                cells: columns * rows,
+            });
+        }
+        let (columns, rows) = (columns as usize, rows as usize);
         let bounds = Bounds2d::new(
             x_min,
             x_min + columns as f64 * TREE_CELL_M,
@@ -605,12 +638,24 @@ impl TreeLayer {
 pub fn poisson_disk(bounds: Bounds2d, spacing_m: f64, attempts: usize, seed: u32) -> Vec<[f64; 2]> {
     let width = bounds.x_max_m - bounds.x_min_m;
     let height = bounds.y_max_m - bounds.y_min_m;
-    if !(spacing_m.is_finite() && spacing_m > 0.0 && width >= 0.0 && height >= 0.0) {
+    if !(spacing_m.is_finite()
+        && spacing_m > 0.0
+        && width.is_finite()
+        && height.is_finite()
+        && width >= 0.0
+        && height >= 0.0)
+    {
         return Vec::new();
     }
     let cell = spacing_m / std::f64::consts::SQRT_2;
-    let columns = (width / cell).ceil().max(1.0) as usize;
-    let rows = (height / cell).ceil().max(1.0) as usize;
+    let (columns, rows) = (
+        (width / cell).ceil().max(1.0),
+        (height / cell).ceil().max(1.0),
+    );
+    if columns * rows > MAX_GRID_CELLS as f64 {
+        return Vec::new();
+    }
+    let (columns, rows) = (columns as usize, rows as usize);
     let mut grid: Vec<Option<[f64; 2]>> = vec![None; columns * rows];
     let mut rng = NumpyRng::new(seed);
     let mut points = Vec::new();
@@ -977,6 +1022,12 @@ mod tests {
         );
         assert_eq!(one.trees(), two.trees());
         assert_eq!(one.trees()[0].id, "a");
+        // Each tree fine, but too far apart to grid: refused, not allocated.
+        let spread = TreeLayer::new(vec![at("a", -1e12, 0.0), at("b", 1e12, 1e12)]);
+        assert!(
+            matches!(spread, Err(TreeError::TooSpread { .. })),
+            "{spread:?}"
+        );
         let duplicate = TreeLayer::new(vec![at("a", 0.0, 0.0), at("a", 9.0, 0.0)]);
         assert_eq!(
             duplicate.unwrap_err(),
@@ -1107,6 +1158,11 @@ mod tests {
         assert!(poisson_disk(bounds, f64::NAN, 10, 1).is_empty());
         assert!(poisson_disk(Bounds2d::new(10.0, 0.0, 0.0, 10.0), 2.0, 10, 1).is_empty());
         assert!(poisson_disk(bounds, 2.0, 0, 1).is_empty());
+        // Unbounded, or too large to grid: nothing, not an allocation.
+        assert!(poisson_disk(Bounds2d::new(0.0, f64::INFINITY, 0.0, 10.0), 2.0, 10, 1).is_empty());
+        assert!(poisson_disk(Bounds2d::new(f64::NAN, 10.0, 0.0, 10.0), 2.0, 10, 1).is_empty());
+        assert!(poisson_disk(Bounds2d::new(0.0, 1e9, 0.0, 1e9), 2.0, 10, 1).is_empty());
+        assert!(poisson_disk(Bounds2d::new(-f64::MAX, f64::MAX, 0.0, 1.0), 2.0, 10, 1).is_empty());
     }
 
     #[test]
