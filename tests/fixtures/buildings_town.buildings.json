@@ -1,0 +1,315 @@
+{
+ "format": "argusnet.buildings",
+ "version": 1,
+ "georeference": {
+  "source_crs_id": "EPSG:4326",
+  "runtime_crs_id": "local-enu",
+  "origin_lat_deg": 45.999892,
+  "origin_lon_deg": 7.0,
+  "origin_h_m": 0.0
+ },
+ "source_sha256": "65bbe47232e213fd4b0b9b4093970aa87855a0e22fec4710b9809db526130981",
+ "summary": {
+  "buildings": 10,
+  "skipped_degenerate": 0,
+  "holes_ignored": 1,
+  "estimated_heights": 4,
+  "roofs_written_flat": 2,
+  "worst_footprint_area_error": 2.8501203694134187e-10
+ },
+ "buildings": [
+  {
+   "id": "way/1",
+   "footprint_xy_m": [
+    [
+     -80.13907427751691,
+     -28.002089363040824
+    ],
+    [
+     -68.11821313690007,
+     -28.002233784945957
+    ],
+    [
+     -68.11812480065564,
+     -20.000843570955332
+    ],
+    [
+     -80.13897035253544,
+     -20.00069914897128
+    ]
+   ],
+   "height_m": 9.0,
+   "eave_height_m": 6.0,
+   "roof_shape": "gabled",
+   "height_source": "measured",
+   "roof_source": "tagged",
+   "facade_material": "brick",
+   "roof_material": "tiles",
+   "levels": 2.0,
+   "ridge_azimuth_rad": 0.0
+  },
+  {
+   "id": "way/2",
+   "footprint_xy_m": [
+    [
+     -60.10430570966484,
+     -28.002317055560667
+    ],
+    [
+     -46.07996771136008,
+     -28.002437732507417
+    ],
+    [
+     -46.07989301527563,
+     -18.000699948073873
+    ],
+    [
+     -60.10420827990925,
+     -18.00057927102052
+    ]
+   ],
+   "height_m": 6.0,
+   "eave_height_m": 3.5999999999999996,
+   "roof_shape": "hipped",
+   "height_source": "levels",
+   "roof_source": "tagged",
+   "facade_material": "generic",
+   "roof_material": "generic",
+   "levels": 2.0
+  },
+  {
+   "id": "way/3",
+   "footprint_xy_m": [
+    [
+     -30.05215285545536,
+     -28.00253661581843
+    ],
+    [
+     -20.03476857046172,
+     -28.002577275470564
+    ],
+    [
+     -20.03473609385624,
+     -18.00083949057733
+    ],
+    [
+     -30.052104140676363,
+     -18.00079883150962
+    ]
+   ],
+   "height_m": 20.0,
+   "eave_height_m": 12.0,
+   "roof_shape": "pyramidal",
+   "height_source": "measured",
+   "roof_source": "tagged",
+   "facade_material": "generic",
+   "roof_material": "generic"
+  },
+  {
+   "id": "way/4",
+   "footprint_xy_m": [
+    [
+     -3.505151724425559e-11,
+     -28.002609802778974
+    ],
+    [
+     30.05215285543856,
+     -28.002536615665107
+    ],
+    [
+     30.05207978312601,
+     -12.999929879537312
+    ],
+    [
+     7.238654120556021e-13,
+     -13.000003065956392
+    ]
+   ],
+   "height_m": 24.0,
+   "eave_height_m": 24.0,
+   "roof_shape": "flat",
+   "height_source": "measured",
+   "roof_source": "tagged",
+   "facade_material": "glass",
+   "roof_material": "concrete",
+   "levels": 8.0
+  },
+  {
+   "id": "way/5",
+   "footprint_xy_m": [
+    [
+     40.0695371403907,
+     -28.002479692594164
+    ],
+    [
+     80.13907427747593,
+     -28.002089363329116
+    ],
+    [
+     80.13881446480404,
+     -7.998613637434542
+    ],
+    [
+     40.069407234014946,
+     -7.999003966055476
+    ]
+   ],
+   "height_m": 10.0,
+   "eave_height_m": 10.0,
+   "roof_shape": "flat",
+   "height_source": "default",
+   "roof_source": "default",
+   "facade_material": "metal",
+   "roof_material": "metal"
+  },
+  {
+   "id": "way/6",
+   "footprint_xy_m": [
+    [
+     -80.13855465132245,
+     12.004862721302437
+    ],
+    [
+     -60.10391598988821,
+     12.004635030174127
+    ],
+    [
+     -60.103838045569674,
+     20.00602575145427
+    ],
+    [
+     -72.12460565376242,
+     20.006154559139766
+    ],
+    [
+     -72.12451212050819,
+     28.00754538246607
+    ],
+    [
+     -80.13834679987175,
+     28.007644264729137
+    ]
+   ],
+   "height_m": 12.192,
+   "eave_height_m": 12.192,
+   "roof_shape": "flat",
+   "height_source": "measured",
+   "roof_source": "unsupported:non-convex-hipped",
+   "facade_material": "generic",
+   "roof_material": "generic"
+  },
+  {
+   "id": "way/7",
+   "footprint_xy_m": [
+    [
+     -40.06927732732682,
+     12.004472394317531
+    ],
+    [
+     -24.041566396528108,
+     12.004389124515402
+    ],
+    [
+     -24.04151963000025,
+     24.006475245027616
+    ],
+    [
+     -40.06919938309173,
+     24.006558514292042
+    ]
+   ],
+   "height_m": 12.0,
+   "eave_height_m": 12.0,
+   "roof_shape": "flat",
+   "height_source": "measured",
+   "roof_source": "unsupported:mansard",
+   "facade_material": "generic",
+   "roof_material": "generic"
+  },
+  {
+   "id": "way/8",
+   "footprint_xy_m": [
+    [
+     3.2091662660604925e-11,
+     12.004342285145794
+    ],
+    [
+     30.051957995483775,
+     12.004415471344512
+    ],
+    [
+     30.051899537456777,
+     24.00650159205015
+    ],
+    [
+     1.1566259061623896e-10,
+     24.00642840611679
+    ]
+   ],
+   "height_m": 11.0,
+   "eave_height_m": 8.0,
+   "roof_shape": "gabled",
+   "height_source": "measured",
+   "roof_source": "tagged",
+   "facade_material": "generic",
+   "roof_material": "generic",
+   "ridge_azimuth_rad": -1.5707938914727546
+  },
+  {
+   "id": "relation/9",
+   "footprint_xy_m": [
+    [
+     40.06927732717231,
+     12.004472394103601
+    ],
+    [
+     46.07966892604832,
+     12.004514354307721
+    ],
+    [
+     46.079624108180525,
+     18.005557386393967
+    ],
+    [
+     40.06923835513868,
+     18.00551542621434
+    ]
+   ],
+   "height_m": 3.0,
+   "eave_height_m": 3.0,
+   "roof_shape": "flat",
+   "height_source": "default",
+   "roof_source": "default",
+   "facade_material": "generic",
+   "roof_material": "generic"
+  },
+  {
+   "id": "relation/9#1",
+   "footprint_xy_m": [
+    [
+     48.08313279239897,
+     12.004529641924185
+    ],
+    [
+     54.09352439116057,
+     12.00457940880996
+    ],
+    [
+     54.0934717788087,
+     18.005622440866947
+    ],
+    [
+     48.08308602599476,
+     18.00557267467061
+    ]
+   ],
+   "height_m": 3.0,
+   "eave_height_m": 3.0,
+   "roof_shape": "flat",
+   "height_source": "default",
+   "roof_source": "default",
+   "facade_material": "generic",
+   "roof_material": "generic"
+  }
+ ]
+}

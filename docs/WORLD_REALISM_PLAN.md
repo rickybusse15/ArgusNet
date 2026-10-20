@@ -1,10 +1,13 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
-opacity fix (#222) and typed structure matching. R3 is done: the model,
-the safety clearance, lines in a run, drawing in the viewer, the planner's
-corridor, the guard against wires, sensing wires and the clearance-corridor
-overlay. R1, R2, R4 and R5 are not started.
+**Status:** proposed 2026-10-12; updated 2026-10-20. R0 is done: the
+opacity fix (#222) and typed structure matching. R1 is done: building-v2
+roofs, the georeferenced import and material facades. R3 is done: the
+model, the safety clearance, lines in a run, drawing in the viewer, the
+planner's corridor, the guard against wires, sensing wires and the
+clearance-corridor overlay. R2 is in progress: the tree model, trees in a
+run and sensing through trees are done; flight round trees and drawing
+trees are not merged. R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -79,8 +82,45 @@ C8 (P2.6) and D2 (P5.1).
   or pyramidal, with ridge direction and roof height). Line of sight,
   `first_hit` and collision intersect the roof triangles as well as the prism.
   The old `building-v1` stays as it is.
+  *Done (model, R1.1):* `building-v2` in `argusnet_world::obstacles`
+  (`Obstacle::building_v2`, metadata `eave_elevation_m`, `roof_shape`,
+  `ridge_azimuth_rad`). The roof is a set of planes and the solid ends at
+  the lowest: a gable is two, a hip or pyramid one per edge (convex
+  footprints only; others are refused). Point, ray, path-length and surface
+  queries clip against the planes exactly. The scene builder draws the same
+  solid: walls rising to the roof line (split where it turns) and one facet
+  per plane. Every other kind is unchanged, field and bytes (14/14 replays).
 - **The simulation sees what the viewer sees.** GIS buildings become
   `ObstaclePrimitive`s in the run, not just meshes.
+
+  *Done (import, R1.2):* `scripts/import_buildings.py`
+  (`argusnet.world.buildings_import`) writes an `argusnet.buildings` v1
+  document. It projects in float64 to local ENU around a recorded origin,
+  takes heights and roofs from the tags as above, and marks what it
+  estimated or could not model. It also checks each projected footprint's
+  area against its geodesic area (worst 3e-10 on the test town). The
+  native builder's `buildings_path` option replaces the procedural
+  buildings with the imported ones, each standing on the run's own ground,
+  and leaves out (and counts) any outside the map. The model refuses a bad
+  one by name. The bundle and the replay carry the georeference, the
+  document's hash and the counts, and the replay's `enu_origin` is the
+  buildings' own. DEM terrain under them is R5.
+
+  *Done (materials, R1.3):* the importer sorts `building:material` and
+  `roof:material` into classes (facade: concrete, brick, glass, metal,
+  wood, stone, plaster; roof: tiles, slate, metal, concrete, membrane,
+  glass, green), with `generic` when the data does not say. It keeps
+  `building:levels`. The scene builder colours walls and roofs by class
+  and gives walls window coordinates: storey above the building's ground,
+  metres along the wall, and the level count. Those are texture
+  coordinates written only on roofed parts, so every other GLB is byte for
+  byte what it was. The viewer's facade material (an extension of the
+  baked `StandardMaterial`, so light, shadow, fog and translucency stay)
+  draws window rows from them, only between the ground and the eave of a
+  building whose storeys the data gives. A GPU probe checks windows appear
+  on facades with levels, and not on roofs or on buildings without levels.
+  R1 is done; LOS parity fixtures against roofs are covered by the model's
+  tests.
 - **Rendering.** Generate roof meshes and per-face normals. Add semantic
   material classes (concrete, brick, metal roof, glass) with a procedural
   facade shader for window rows from the level count. This needs no textures,
@@ -107,6 +147,74 @@ C8 (P2.6) and D2 (P5.1).
 - **Rendering.** Instanced low-poly meshes per species, with impostors at
   distance. Seasonal foliage reuses `foliage_density_factor`. Wind sway is off
   by default (C6: effects need G2 evidence).
+
+  *Done (model):* `argusnet_world::trees` holds `Tree` (`tree-v1`): the
+  trunk's position and ground level, the tree's height, its crown base and
+  crown radius, its trunk radius, its species and its leaf density (0 bare
+  to 1 in full leaf). It is validated on construction and as read, so a
+  tree the model refuses is an error, never one that blocks nothing; every
+  value must be within what a tree can be (at most 200 m tall, a crown
+  radius of 100 m, a trunk radius of 20 m, 10,000 km from the origin), so
+  no derived value overflows. The
+  trunk is a vertical cylinder from the ground to the middle of the crown:
+  hard. The crown is an ellipsoid between the crown base and the top:
+  soft. `BlockerType::is_hard()` stays buildings and walls; trees answer
+  for themselves, part by part, so no new `BlockerType` was needed. Light
+  through a crown falls off as through a leaf canopy (Beer–Lambert):
+  `exp(-k · d · L)` over a chord `L`, with leaf density `d` and
+  `k = 0.35 /m` (`G · LAD` for a spherical leaf-angle distribution and a
+  leaf area density of 0.7 m²/m³). A 6 m chord at density 0.9 lets 15 %
+  through.
+
+  `TreeLayer` indexes trees on a 16 m grid, in id order so every answer is
+  the same whatever order they came in. It answers what a run asks: the
+  transmittance along a ray, the first trunk or crown a ray meets (or the
+  first trunk only), and the trunk or crown at a point. A ray walks the
+  grid cell by cell along its length and skips any cell it passes above
+  the highest tree in, so a scanner's 400 m rays over a forest cost what
+  the trees near them cost; a first-hit walk stops at the first cell past
+  which nothing nearer can lie. A test checks the walk against testing
+  every tree, on 400 rays in all directions over 60 random trees.
+
+  `poisson_disk` is the sampler procedural placement uses: points no two
+  closer than a spacing, seeded, drawn in a fixed order. Cells of side
+  `spacing / √2` are visited row by row, each drawing a fixed number of
+  candidates and keeping the first that is clear, so the stream of draws
+  depends on the seed and the grid alone and thinning the sample by land
+  cover moves no point kept.
+
+  *Done (in a run):* the bundle's `world` carries `trees`, each read
+  through the model's check (a tree it refuses, or two with one id, is a
+  bundle error), absent when there are none and left out of the bundle's
+  hash then. A bundle from data carries whatever trees it lists; the
+  builder's opt-in `trees` option scatters them. Over the land cover's
+  Forest cells every point of an 8 m Poisson-disk sample is kept, over
+  Scrub about one in three (mostly shrubs, the rest broadleaves no taller
+  than 12 m, so only forest has tall trees); none stands in a forest stand
+  (the stand is the aggregate for the trees inside it, so no crown is
+  dimmed twice) or in a building. Species follow the terrain preset
+  (alpine mostly conifer, jungle broadleaf and palm, the rest conifer and
+  broadleaf), and each tree's height, crown and trunk are drawn from its
+  species' ranges. Deciduous crowns (broadleaf, shrub) take the season's
+  `foliage_density_factor`; conifers and palms keep theirs. Snow paints
+  over forest in winter, but the trees are placed on the cover as it is
+  without snow, so they stay. The forest is part of the world, like the
+  land cover: seeded from the presets and the terrain's effective seed, not the run's
+  seed, so seeds 7 and 42 fly over one forest. A medium default map holds
+  about 7,800 trees; a map whose forest would hold more than 15,000 is
+  thinned evenly to that. The trees go into the replay's meta as `trees`.
+  Nothing in a run reads them yet: with `trees` on, every frame of a run is
+  the frame it was without them.
+
+  To measure the behaviour slices, the builder's opt-in `tree_inspection`
+  option stands the mission's POIs inside the canopy: beside the crowns of
+  tall forest trees, spread through the forest, at 16 m over the ground,
+  in no crown or building and at least 10 m inside the map, so a drone flying between
+  them passes through crowns. It cannot be combined with
+  `power_line_inspection`; each places the POIs. The
+  scenario: medium map, default terrain, 3 drones, 8 POIs, coverage
+  threshold 0.3, 240 s, `trees`, `tree_inspection`, `safety_blocking`. All
+  8 POIs are inspected (seed 7, efficient_v1).
 
 ### R3: power lines
 

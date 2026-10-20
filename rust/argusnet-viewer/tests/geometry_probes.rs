@@ -671,6 +671,93 @@ fn power_lines_are_drawn_where_the_model_hangs_them_at_every_tier() {
     );
 }
 
+/// A scene built in process (`argusnet_sim::scene_build`) around one roofed
+/// tower, 60 x 40 m, eave at 40 m, a 6 m gable: with `levels` storeys, or
+/// none given.
+fn facade_scene(name: &str, levels: Option<f64>) -> PathBuf {
+    let root = scratch(name);
+    let _ = std::fs::remove_dir_all(&root);
+    let mut tower = serde_json::json!({
+        "object_id": "tower", "kind": "building-v2", "blocker_type": "building",
+        "footprint_xy_m": [[-30.0, -20.0], [30.0, -20.0], [30.0, 20.0], [-30.0, 20.0]],
+        "base_elevation_m": 0.0, "eave_elevation_m": 40.0, "top_elevation_m": 46.0,
+        "roof_shape": "gabled", "facade_material": "concrete", "roof_material": "slate",
+    });
+    if let Some(levels) = levels {
+        tower["levels"] = serde_json::json!(levels);
+    }
+    let meta = serde_json::json!({
+        "scenario_name": name, "crs_id": "local-enu", "dt_s": 1.0, "schema_version": "2.0",
+        "environment_bounds_m": {"x_min_m": -300.0, "x_max_m": 300.0, "y_min_m": -300.0, "y_max_m": 300.0},
+        "terrain": {
+            "kind": "tiled-heightmap-v1", "base_resolution_m": 5.0,
+            "min_height_m": 0.0, "max_height_m": 0.0,
+            "viewer_mesh": {
+                "x_min_m": -300.0, "x_max_m": 300.0, "y_min_m": -300.0, "y_max_m": 300.0,
+                "rows": 2, "cols": 2, "heights_m": [[0.0, 0.0], [0.0, 0.0]]
+            }
+        },
+        "occluding_objects": [tower],
+    });
+    let replay = serde_json::json!({
+        "meta": meta,
+        "frames": [{"timestamp_s": 0.0, "tracks": [], "truths": [], "nodes": []}],
+    });
+    argusnet_sim::scene_build::build_scene(
+        &root,
+        &meta,
+        Some(&replay.to_string()),
+        serde_json::json!({"replay_source": "probe"}),
+    )
+    .expect("scene builds");
+    root
+}
+
+/// Window rows are drawn on a facade whose storeys the data gives, and on
+/// nothing else: the same tower without levels, and its roof, look the same
+/// either way.
+#[test]
+fn window_rows_are_drawn_only_where_the_data_gives_storeys() {
+    if !gpu_tests() {
+        eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
+        return;
+    }
+    // Mid-height on each face, and on the roof's ridge.
+    let points = [
+        [0.0, -20.0, 20.0],
+        [30.0, 0.0, 20.0],
+        [0.0, 20.0, 20.0],
+        [-30.0, 0.0, 20.0],
+        [0.0, 0.0, 46.0],
+    ];
+    let shown = overlays(false, false, false);
+    let plain = render(
+        "facade-plain",
+        &facade_scene("facade-plain", None),
+        CameraPreset::Close,
+        None,
+        shown.clone(),
+        &[],
+        &points,
+    );
+    let windows = render(
+        "facade-windows",
+        &facade_scene("facade-windows", Some(10.0)),
+        CameraPreset::Close,
+        None,
+        shown,
+        &[],
+        &points,
+    );
+    let differences: Vec<f32> = (0..5).map(|i| difference(plain[i], windows[i])).collect();
+    eprintln!("faces and roof: {differences:?}");
+    assert!(
+        differences[..4].iter().any(|d| *d > 0.02),
+        "no window rows on any visible face"
+    );
+    assert!(differences[4] < 0.005, "windows on the roof");
+}
+
 /// R3: the clearance-corridor overlay is off by default. On, it is drawn
 /// round the wires (6 m over the centre conductor at mid-span, inside the
 /// 10 m clearance) and nowhere off the line (150 m north at the wire's

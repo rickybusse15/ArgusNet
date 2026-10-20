@@ -183,6 +183,25 @@ unsupported `schema_version`, a `frame_count` that does not match) is refused,
 as Python refuses it. `argusnet-viewer --run <scenario>` builds one itself
 when no `--scene` is given.
 
+### Real buildings in a run (R1)
+
+Import building footprints (GeoJSON, or an OSM export as GeoJSON) into the
+run's local metres, then name the result in a scenario config:
+
+```bash
+python3 scripts/import_buildings.py town.geojson --out town.buildings.json
+```
+
+The importer projects the footprints around an origin (the centre of their
+extent, or `--origin LAT,LON`) and records it with the source CRS. Heights
+come from `height`, then `building:levels` x 3 m, then a default by building
+type, and roofs from `roof:shape` (flat, gabled, hipped, pyramidal). Each
+building says which; a roof it cannot model is written flat at the full
+height. In the config's `options`, set `"buildings_path": "town.buildings.json"`.
+The run then uses those buildings in place of the procedural ones, with
+their roofs, in line of sight, collision and the viewer, and its replay
+records the georeference.
+
 ### Start from no world knowledge
 
 By default the drones are given the true terrain and buildings. With
