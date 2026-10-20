@@ -467,13 +467,15 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         Vec::new()
     };
     // The world's, not the run's: seeded like the land cover, from the
-    // presets (and the terrain seed), so every run seed sees one forest.
+    // presets and the terrain's effective seed (the one it was built from,
+    // given or derived), so every run seed sees one forest and an equal
+    // terrain configuration the same forest.
     let trees = if options.trees {
         let seed = stable_seed(
             0,
             &[
                 SeedPart::Str("trees"),
-                SeedPart::Int(options.terrain_seed.unwrap_or(0)),
+                SeedPart::Int(terrain_config.effective_seed()),
                 SeedPart::Str(&options.terrain_preset),
                 SeedPart::Str(&options.map_preset),
                 SeedPart::Str(&scale_text),

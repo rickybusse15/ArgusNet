@@ -645,7 +645,10 @@ impl TreeLayer {
             }
             // Every tree a hit before `t1` could belong to is listed in a
             // cell already walked: the hit point is in the tree's bounds.
-            if best.as_ref().is_some_and(|hit| hit.t <= t1) {
+            // A hit exactly at `t1` is not settled yet: a tree whose bounds
+            // begin on that boundary is listed only in the next cell, and
+            // may tie it.
+            if best.as_ref().is_some_and(|hit| hit.t < t1) {
                 break;
             }
         }
