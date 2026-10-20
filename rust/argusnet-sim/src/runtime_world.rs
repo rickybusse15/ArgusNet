@@ -278,7 +278,21 @@ impl SharedVisibility {
         if !self.terrain.bounds.contains_xy(from[0], from[1]) {
             return hard;
         }
-        let end = hard.as_ref().map_or(to, |(_, point)| *point);
+        // Where the ray stops: at what it hit, or where it leaves the
+        // terrain, as `first_hit` cut it; a tree past the world's edge is
+        // never met.
+        let end = match &hard {
+            Some((_, point)) => *point,
+            None => {
+                let Some((_, t_end)) =
+                    visibility::clip([from[0], from[1]], [to[0], to[1]], self.terrain.bounds)
+                else {
+                    return None;
+                };
+                let t_end = (t_end - 1e-6).max(0.0);
+                std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t_end)
+            }
+        };
         let along =
             |t: f64| -> [f64; 3] { std::array::from_fn(|i| from[i] + (end[i] - from[i]) * t) };
         let mut stop = 1.0;
@@ -557,5 +571,41 @@ mod tests {
         assert_eq!(kind, "trunk");
         assert!((point[0] - 99.7).abs() < 1e-9, "{point:?}");
         assert_eq!(draws, 0, "the crown past the trunk takes no draw");
+    }
+
+    /// A ray that leaves the world meets no tree past its edge.
+    #[test]
+    fn no_tree_past_the_worlds_edge_returns() {
+        let (plain, _) = world(0.8);
+        let outside = Tree {
+            id: "outside".into(),
+            xy_m: [205.0, 100.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+            crown_base_m: 2.0,
+            crown_radius_m: 8.0,
+            trunk_radius_m: 0.3,
+            species: Species::Broadleaf,
+            leaf_density: 1.0,
+        };
+        let with = plain.with_trees(Arc::new(TreeLayer::new(vec![outside]).unwrap()));
+        // Level at 10 m eastward from x = 150: the crown reaches back to
+        // x = 197, inside; past x = 200 the ray has left the world.
+        let mut draws = 0;
+        let hit = with.first_return([150.0, 100.0, 10.0], [260.0, 100.0, 10.0], &mut || {
+            draws += 1;
+            0.0
+        });
+        assert_eq!(
+            hit.as_ref().map(|h| h.0.as_str()),
+            Some("canopy"),
+            "{hit:?}"
+        );
+        assert!(hit.unwrap().1[0] < 200.0);
+        // A draw that would stop it 13 m in, past the edge at x = 200: it
+        // has left the world, and returns nothing.
+        let hit = with.first_return([150.0, 100.0, 10.0], [260.0, 100.0, 10.0], &mut || 0.99);
+        assert_eq!(hit, None, "{hit:?}");
+        assert_eq!(draws, 1);
     }
 }
