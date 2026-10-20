@@ -2,8 +2,8 @@
 
 **Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
 opacity fix (#222) and typed structure matching. R3 is in progress: the
-model, the safety clearance, lines in a run, and drawing in the viewer are
-done. R1, R2, R4 and R5 are not started.
+model, the safety clearance, lines in a run, drawing in the viewer and the
+planner's corridor are done. R1, R2, R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -163,9 +163,44 @@ C8 (P2.6) and D2 (P5.1).
   26 m. Drones cruise at 100–260 m. So the physical guard against
   conductors (deconfliction pushes and override flights) would change
   nothing measurable yet. It matters once something flies low near a line:
-  inspection of the line itself, or the R5 town-edge scenario. Next: the
-  planner's corridor (P3 routes keep the clearance), then the guard swept
-  against conductors, and an optional clearance-corridor overlay.
+  inspection of the line itself, or the R5 town-edge scenario.
+
+  *Done (planner's corridor):* under efficient_v1 the POI, egress and
+  gap-fill flights keep every line's clearance (`mission_driver.rs`). Each
+  span is a corridor from above: a rectangle holding its conductors and
+  their clearance (plus 1 m), with a crossing height that clearance above
+  its higher support's attachment. A flight whose every leg already keeps
+  the clearance, by the swept test (`PowerLine::violated_by` on each leg,
+  never sampled), is flown as it was. Otherwise it is flown **over** the
+  wires: at least the crossing height over each corridor it crosses,
+  climbing to it at 1 in 8 where there is room (steeper when an end is
+  nearer) and coming down after, never lower than the straight flight
+  anywhere. A flight now carries a height at each corner for this
+  (`GotoHover::routed_over`; serialised only when set). Or it goes
+  **around** the line's ends: the planner routes round the corridors as
+  walls. A POI or egress flight takes whichever costs less energy, and the
+  journal records which (`route_power_lines`). A gap sweep only climbs
+  over; one that cannot keep the clearance is not flown. A route that can
+  do neither is flown as it was. Lines are part of the prior map: a
+  `--world-knowledge none` run forgets them with the obstacles. The
+  reference never reads them.
+
+  To measure it, the builder's opt-in `power_line_inspection` option puts
+  the mission's POIs along the line, 35 m off it on alternate sides at
+  32 m over the ground, so a drone flying between neighbours crosses the
+  wires low. On that scenario (medium map, default terrain, 3 drones,
+  8 POIs, coverage threshold 0.3, 240 s, `safety_blocking`),
+  `structure_clearance` events under efficient_v1 went from 69 to 2
+  (seed 7) and from 26 to 0 (seed 42). Both remaining events are
+  deconfliction pushing one drone sideways off another at a shared POI,
+  outside any planned route. All 8 POIs are inspected before and after.
+  The reference is byte-identical. With the line on in the canonical
+  scenarios, the only change is `persistent_long` seed 7 under
+  efficient_v1: one POI flight now climbs over, and its 8 events go to 0.
+  (These events judge the proposed flight. The blocking monitor's own
+  climbs keep every published position 19 m or more from a wire.) Next:
+  the guard swept against conductors (deconfliction pushes, rejoins and
+  override flights), then an optional clearance-corridor overlay.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against

@@ -83,7 +83,9 @@ const EPSILON_S: f64 = 1.0e-9;
 /// A routed flight (P3, `efficient_v1` only) also carries the corners of a
 /// route around obstacles, flown at constant speed along the polyline. A
 /// flight with no corners is exactly the reference's, and serialises exactly
-/// as it did, so every existing checkpoint reads back unchanged.
+/// as it did, so every existing checkpoint reads back unchanged. A routed
+/// flight that climbs over a power line (R3) also carries the height at each
+/// corner; one that does not serialises as it did.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GotoHover {
     start: [f64; 3],
@@ -95,6 +97,11 @@ pub struct GotoHover {
     /// for a straight flight.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     via_xy: Vec<[f64; 2]>,
+    /// The height at each corner, when the flight climbs over a power line
+    /// (R3): one per entry of `via_xy`. Empty when the height changes
+    /// linearly over the whole flight.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    via_z: Vec<f64>,
 }
 
 impl GotoHover {
@@ -113,6 +120,7 @@ impl GotoHover {
             t_start,
             t_arrive,
             via_xy: Vec::new(),
+            via_z: Vec::new(),
         }
     }
 
@@ -163,6 +171,34 @@ impl GotoHover {
         flight
     }
 
+    /// [`Self::routed`], with the height at each corner (R3), so a route can
+    /// climb over a power line and come down after it. The height changes
+    /// linearly along each leg, from the start's to the first corner's and
+    /// on to the target's; the flight time is still the horizontal length's,
+    /// as every redirect's is. With no heights this is exactly
+    /// [`Self::routed`].
+    ///
+    /// # Panics
+    ///
+    /// If `via_z` is neither empty nor one height per corner.
+    pub fn routed_over(
+        start: [f64; 3],
+        via_xy: Vec<[f64; 2]>,
+        via_z: Vec<f64>,
+        target_xy: [f64; 2],
+        target_z: f64,
+        t_start: f64,
+        speed_mps: f64,
+    ) -> Self {
+        assert!(
+            via_z.is_empty() || via_z.len() == via_xy.len(),
+            "one height per corner"
+        );
+        let mut flight = Self::routed(start, via_xy, target_xy, target_z, t_start, speed_mps);
+        flight.via_z = via_z;
+        flight
+    }
+
     /// The horizontal points flown through: the start, any corners, the
     /// target.
     fn path_xy(&self) -> Vec<[f64; 2]> {
@@ -189,6 +225,12 @@ impl GotoHover {
     /// straight flight.
     pub fn via_xy(&self) -> &[[f64; 2]] {
         &self.via_xy
+    }
+
+    /// The height at each corner; empty when the height changes linearly
+    /// over the whole flight.
+    pub fn via_z(&self) -> &[f64] {
+        &self.via_z
     }
 
     /// Position and velocity at `t`.
@@ -224,7 +266,8 @@ impl GotoHover {
     /// at the constant speed that covers it in the flight time. The velocity
     /// points along the leg being flown. Before `t_start` the position clamps
     /// to the start and the velocity is the first leg's, the straight
-    /// flight's quirk carried over.
+    /// flight's quirk carried over. With heights at the corners, the height
+    /// and its rate are the leg's own.
     fn sample_route(&self, t: f64) -> ([f64; 3], [f64; 3]) {
         let span = (self.t_arrive - self.t_start).max(EPSILON_S);
         let frac = ((t - self.t_start) / span).clamp(0.0, 1.0);
@@ -247,6 +290,22 @@ impl GotoHover {
             if left_m < leg_m || index == last {
                 let along = (left_m / leg_m).min(1.0);
                 let (ux, uy) = (dx / leg_m, dy / leg_m);
+                if !self.via_z.is_empty() {
+                    let height = |i: usize| match i {
+                        0 => self.start[2],
+                        i if i > self.via_z.len() => self.target_z,
+                        i => self.via_z[i - 1],
+                    };
+                    let (z0, z1) = (height(index), height(index + 1));
+                    return (
+                        [
+                            pair[0][0] + along * dx,
+                            pair[0][1] + along * dy,
+                            z0 + along * (z1 - z0),
+                        ],
+                        [ux * speed, uy * speed, (z1 - z0) / leg_m * speed],
+                    );
+                }
                 return (
                     [pair[0][0] + along * dx, pair[0][1] + along * dy, z],
                     [ux * speed, uy * speed, vz],
@@ -257,6 +316,11 @@ impl GotoHover {
         // Only rounding past the end of the last leg with any length gets
         // here (the corners are never all on the start, since `routed` keeps
         // corners only from a route that turns).
+        let z = if self.via_z.is_empty() {
+            z
+        } else {
+            self.target_z
+        };
         ([self.target_xy[0], self.target_xy[1], z], [0.0, 0.0, vz])
     }
 
@@ -1562,6 +1626,53 @@ mod tests {
         let back: GotoHover =
             serde_json::from_value(serde_json::to_value(&turned).unwrap()).unwrap();
         assert_eq!(back, turned, "a routed flight survives a checkpoint");
+    }
+
+    /// A flight with a height at each corner (R3) climbs and descends leg by
+    /// leg: 100 m east at 40 m up to 60 m, 100 m level, 100 m down to 40 m,
+    /// at 10 m/s. It survives a checkpoint, and without heights it is the
+    /// routed flight exactly.
+    #[test]
+    fn a_flight_with_corner_heights_climbs_leg_by_leg() {
+        let via = vec![[100.0, 0.0], [200.0, 0.0]];
+        let flight = GotoHover::routed_over(
+            [0.0, 0.0, 40.0],
+            via.clone(),
+            vec![60.0, 60.0],
+            [300.0, 0.0],
+            40.0,
+            0.0,
+            10.0,
+        );
+        assert_eq!(flight.t_arrive(), 30.0);
+        let (climbing, climb_velocity) = flight.sample(5.0);
+        assert!((climbing[0] - 50.0).abs() < 1e-9 && (climbing[2] - 50.0).abs() < 1e-9);
+        assert!((climb_velocity[2] - 2.0).abs() < 1e-9);
+        let (level, level_velocity) = flight.sample(15.0);
+        assert!((level[2] - 60.0).abs() < 1e-9 && level_velocity[2].abs() < 1e-9);
+        let (descending, descent_velocity) = flight.sample(25.0);
+        assert!((descending[2] - 50.0).abs() < 1e-9);
+        assert!((descent_velocity[2] + 2.0).abs() < 1e-9);
+        assert_eq!(flight.sample(30.0).0, [300.0, 0.0, 40.0]);
+
+        let back: GotoHover =
+            serde_json::from_value(serde_json::to_value(&flight).unwrap()).unwrap();
+        assert_eq!(back, flight, "the heights survive a checkpoint");
+        let plain = GotoHover::routed_over(
+            [0.0, 0.0, 40.0],
+            via.clone(),
+            Vec::new(),
+            [300.0, 0.0],
+            40.0,
+            0.0,
+            10.0,
+        );
+        assert_eq!(
+            plain,
+            GotoHover::routed([0.0, 0.0, 40.0], via, [300.0, 0.0], 40.0, 0.0, 10.0)
+        );
+        let text = serde_json::to_value(&plain).unwrap();
+        assert!(text.get("via_z").is_none(), "{text}");
     }
 
     /// `max(dist / speed, 1.0e-3)`. A drone standing on its own target still
