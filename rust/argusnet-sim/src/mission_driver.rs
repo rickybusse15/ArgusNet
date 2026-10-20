@@ -5552,6 +5552,30 @@ mod tests {
         assert!(decision.inputs.get("route_power_lines").is_none());
     }
 
+    /// A leg that climbs across a crown's keep-out is judged at the lower
+    /// end of its stretch over it: entering at 40 m and leaving at 50 m
+    /// over a crown that wants 48 m violates it, though it leaves above.
+    #[test]
+    fn a_climbing_leg_is_judged_at_its_lowest_over_the_crown() {
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        treed(&mut stage, vec![tree("tall", 300.0, 0.0, 45.0, 6.0)]);
+        let known = stage.obstacles.as_ref().expect("known obstacles");
+        let (start, end) = ([0.0, 0.0], [500.0, 0.0]);
+        // The keep-out spans x = 293..307; this leg is at 40.5 m and 51 m
+        // there.
+        let climbing = [([270.0, 0.0, 30.0], [320.0, 0.0, 55.0])];
+        assert!(known.violates_crowns(&climbing, start, end));
+        // The same leg descending is judged at its other end, as low.
+        let descending = [([320.0, 0.0, 55.0], [270.0, 0.0, 30.0])];
+        assert!(known.violates_crowns(&descending, start, end));
+        // Over it all the way, by the clearance: clear.
+        let over = [([270.0, 0.0, 48.0], [320.0, 0.0, 60.0])];
+        assert!(!known.violates_crowns(&over, start, end));
+        // Wide of it: clear at any height.
+        let wide = [([270.0, 20.0, 10.0], [320.0, 20.0, 10.0])];
+        assert!(!known.violates_crowns(&wide, start, end));
+    }
+
     /// R2: the reference never reads the trees; a flight already over the
     /// crowns, or wide of them, is flown as it was.
     #[test]
