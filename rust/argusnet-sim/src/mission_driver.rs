@@ -247,6 +247,14 @@ struct DriverCheckpoint {
     /// Drones sweeping holes (P4). Absent when none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     gap_fill: BTreeMap<String, GapFill>,
+    /// How many power-line spans the self-built map had at the last run
+    /// (R3). Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    mapped_wires: usize,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 /// A drone sweeping one hole in the coverage map (P4).
@@ -340,6 +348,21 @@ pub struct MissionDriverStage {
     /// whether a flight climbs over a power line or goes round its ends is
     /// priced on it (R3).
     route_model: BatteryModel,
+    /// In a run without a prior map under efficient_v1, the self-built map,
+    /// whose mapped wires flights keep their clearance from (R3). Scenario.
+    mapped: Option<crate::belief_world::BeliefHandle>,
+    /// How many mapped spans the routes were last given. Derived.
+    mapped_installed: usize,
+    /// Whether [`Self::obstacles`] was installed, empty, only to carry the
+    /// mapped wires. Derived.
+    mapped_layer: bool,
+    /// How many spans were mapped at the last run, so a run that maps more
+    /// replans the POI flights a new wire lies across. Checkpointed.
+    mapped_wires: usize,
+    /// The map's bounds, which an empty layer carrying mapped wires covers.
+    mapped_bounds: Option<Bounds2d>,
+    /// Whether this run mapped more wires than the last. Transient.
+    replan_for_wires: bool,
 }
 
 /// The obstacle layer the driver plans routes over (P3), with its planner.
@@ -1044,6 +1067,12 @@ impl MissionDriverStage {
             obstacles: None,
             terrain: None,
             route_model: BatteryModel::default(),
+            mapped: None,
+            mapped_installed: 0,
+            mapped_layer: false,
+            mapped_wires: 0,
+            mapped_bounds: None,
+            replan_for_wires: false,
         }
     }
 
@@ -1092,6 +1121,49 @@ impl MissionDriverStage {
             obstacles.around_this_run.borrow_mut().clear();
             obstacles.kept.borrow_mut().clear();
         }
+    }
+
+    /// Plan round the power lines `map` has mapped (R3), in a run without a
+    /// prior map: from each run on, POI, egress and gap-fill flights keep
+    /// the clearance of every span mapped so far, as a prior run's keep the
+    /// whole line's, and a POI flight a newly mapped wire lies across is
+    /// replanned from where the drone is (`poi_reroute`). Under efficient_v1
+    /// only; `None` (the default) maps nothing.
+    pub fn set_mapped_power_lines(
+        &mut self,
+        map: Option<crate::belief_world::BeliefHandle>,
+        bounds: Bounds2d,
+    ) {
+        self.mapped = map;
+        self.mapped_bounds = Some(bounds);
+    }
+
+    /// Whether flights keep clear of the wires a self-built map holds.
+    pub fn follows_mapped_power_lines(&self) -> bool {
+        self.mapped.is_some()
+    }
+
+    /// The spans the self-built map holds now, given to the routes when
+    /// they changed; whether more are mapped than at the last run.
+    fn follow_mapped_wires(&mut self) -> bool {
+        let (Some(map), Some(bounds)) = (&self.mapped, self.mapped_bounds) else {
+            return false;
+        };
+        let wires = Arc::clone(map.current().wires());
+        if wires.len() != self.mapped_installed {
+            if self.obstacles.is_none() {
+                // The routes plan round nothing else: no structure is known.
+                let empty = ObstacleLayer::new(bounds, 1000.0, Vec::new())
+                    .expect("an empty layer over the map's bounds");
+                self.set_known_obstacles(Some(Arc::new(empty)), bounds);
+                self.mapped_layer = true;
+            }
+            self.set_known_power_lines(wires.to_vec());
+            self.mapped_installed = wires.len();
+        }
+        let more = wires.len() > self.mapped_wires;
+        self.mapped_wires = wires.len();
+        more
     }
 
     /// The terrain a routed flight must stay above (P3). Without it a route
@@ -2040,6 +2112,50 @@ impl MissionDriverStage {
         self.policy
     }
 
+    /// A wire mapped since the last run may lie across a flight home (R3):
+    /// every drone flying home, on its own reserve or in the mission's
+    /// egress, flies home again from where it is, round what is mapped now,
+    /// when its way home must change for a line (`egress_reroute`). One whose
+    /// way home is clear keeps its flight.
+    fn replan_egress_for_wires(
+        &mut self,
+        mobile: &[(String, [f64; 3])],
+        phase: MissionPhase,
+        timestamp_s: f64,
+    ) {
+        let egress = matches!(phase, MissionPhase::Egress | MissionPhase::Complete);
+        for (id, position) in mobile {
+            if !(egress || self.homeward.contains(id)) {
+                continue;
+            }
+            let Some(home) = self.homes.get(id).copied() else {
+                continue;
+            };
+            let flight = self.flight(*position, home, timestamp_s);
+            if flight.lines.is_none() {
+                continue;
+            }
+            let mut inputs = serde_json::json!({ "position_m": position });
+            flight.record(&mut inputs);
+            self.override_commands
+                .push(OverrideCommand::SetEgress(id.clone(), flight.trajectory));
+            self.decisions.push(Decision {
+                kind: "egress_reroute",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason: "power_line_mapped",
+                detail: format!(
+                    "{id} flies home again from where it is: a power line mapped since the \
+                     last run lies across its way"
+                ),
+                inputs,
+                command: Some("set_egress"),
+            });
+        }
+    }
+
     /// Per-drone return home under efficient_v1 (P2). A drone whose battery
     /// is at or below its reserve home, from where it is now (the battery's
     /// own rule: `dynamic_reserve_wh` to its station), is routed home on its
@@ -2678,6 +2794,37 @@ impl MissionDriverStage {
                         inputs,
                         command: Some("set_poi"),
                     });
+                } else if self.replan_for_wires {
+                    // A wire mapped since the last run may lie across the
+                    // flight there: fly it again from here, round what is
+                    // mapped now.
+                    let poi_position = self
+                        .initial_pois
+                        .iter()
+                        .find(|p| p.poi_id == active)
+                        .expect("an assigned POI is one of the manager's")
+                        .position;
+                    let flight = self.flight(*position, poi_position, timestamp_s);
+                    if flight.lines.is_some() {
+                        let mut inputs = serde_json::json!({ "position_m": position });
+                        flight.record(&mut inputs);
+                        self.override_commands
+                            .push(OverrideCommand::SetPoi(id.clone(), flight.trajectory));
+                        self.decisions.push(Decision {
+                            kind: "poi_reroute",
+                            status: DecisionStatus::QueuedForNextTick,
+                            subject: Some(id.clone()),
+                            selected: Some(active.clone()),
+                            candidates: Vec::new(),
+                            reason: "power_line_mapped",
+                            detail: format!(
+                                "{id} flies to {active} again from where it is: a power line \
+                                 mapped since the last run lies across its way"
+                            ),
+                            inputs,
+                            command: Some("set_poi"),
+                        });
+                    }
                 }
             }
             // Handoff: a low drone with a POI passes it to the first fresh,
@@ -2860,6 +3007,13 @@ impl StageHandler for MissionDriverStage {
             });
         }
 
+        // The wires the self-built map holds now (R3), before any flight is
+        // planned this run.
+        self.replan_for_wires =
+            self.policy == PlanningPolicy::EfficientV1 && self.follow_mapped_wires();
+        if self.replan_for_wires {
+            self.replan_egress_for_wires(&mobile, phase, timestamp_s);
+        }
         if self.policy == PlanningPolicy::EfficientV1 {
             self.send_low_drones_home(&mobile, battery, timestamp_s);
         }
@@ -3063,6 +3217,7 @@ impl StageHandler for MissionDriverStage {
             policy: self.policy,
             homeward: self.homeward.clone(),
             gap_fill: self.gap_fill.clone(),
+            mapped_wires: self.mapped_wires,
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -3104,6 +3259,7 @@ impl StageHandler for MissionDriverStage {
         self.coordinator = decoded.coordinator;
         self.homeward = decoded.homeward;
         self.gap_fill = decoded.gap_fill;
+        self.mapped_wires = decoded.mapped_wires;
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -3149,6 +3305,12 @@ impl StageHandler for MissionDriverStage {
         self.coordinator = None;
         self.homeward.clear();
         self.gap_fill.clear();
+        if self.mapped_layer {
+            self.obstacles = None;
+            self.mapped_layer = false;
+        }
+        self.mapped_installed = 0;
+        self.mapped_wires = 0;
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -4573,6 +4735,186 @@ mod tests {
         flown_legs(start, &path, flight.via_z(), target[2])
     }
 
+    /// R3, a run without a prior map: flights know no line until one is
+    /// mapped. The run that maps one hands the routes the span and flies
+    /// again the POI flight it lies across, from where the drone is, over
+    /// the wires; later runs that map nothing new leave it be, and a reset
+    /// forgets the routes' knowledge again.
+    #[test]
+    fn a_mapped_wire_replans_the_poi_flight_it_lies_across() {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        let line = power_line(&[-600.0, -200.0, 200.0, 600.0], 45.0, &[-4.0, 0.0, 4.0]);
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let config = ExplorationConfig::default();
+        let mut grid = BeliefGrid::new(bounds, 10.0, 0.0).unwrap();
+        let map = BeliefHandle::new(grid.snapshot(&config));
+        let (battery, mut mobile) = fleet(&[("drone-a", 100.0)]);
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        stage.set_mapped_power_lines(Some(map.clone()), bounds);
+
+        assert!(!stage.follow_mapped_wires(), "nothing mapped yet");
+        assert!(!stage.knows_obstacles());
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let first = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(first.via_xy().is_empty(), "straight: no line is known");
+
+        // A scan near the line maps the span it crosses.
+        let mut scan = crate::range_scan::RangeScan {
+            node_id: "drone-a".into(),
+            timestamp_s: 1.0,
+            origin_m: [280.0, 0.0, 60.0],
+            returns: Vec::new(),
+            misses: 0,
+            wires: vec![crate::range_scan::WireReturn {
+                span: line.span_line(1),
+                point_m: [300.0, 0.0, 39.0],
+            }],
+        };
+        grid.integrate(&scan, 4);
+        map.publish(grid.snapshot(&config));
+        mobile[0].1 = [150.0, 0.0, mobile[0].1[2]];
+        stage.replan_for_wires = stage.follow_mapped_wires();
+        assert!(stage.replan_for_wires);
+        stage.inspect(5.0, 1.0, &mobile, &battery, &empty_map());
+        let again = poi_flight(&stage.take_override_commands(), "drone-a");
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_reroute")
+            .expect("replanned");
+        assert_eq!(decision.reason, "power_line_mapped");
+        assert_eq!(decision.inputs["route_power_lines"], "over");
+        let span = line.span_line(1);
+        for (from, to) in legs_of(&again, mobile[0].1) {
+            assert!(!span.violated_by(from, to), "{from:?} -> {to:?}");
+        }
+
+        // Nothing new: no replan, even with the scan seen again.
+        grid.integrate(&scan, 5);
+        map.publish(grid.snapshot(&config));
+        stage.replan_for_wires = stage.follow_mapped_wires();
+        assert!(!stage.replan_for_wires);
+        stage.inspect(6.0, 1.0, &mobile, &battery, &empty_map());
+        assert!(stage.take_override_commands().is_empty());
+
+        // A span mapped where the flight no longer crosses: no replan.
+        scan.wires[0].span = line.span_line(0);
+        grid.integrate(&scan, 6);
+        map.publish(grid.snapshot(&config));
+        mobile[0].1 = [450.0, 0.0, 40.0];
+        stage.replan_for_wires = stage.follow_mapped_wires();
+        assert!(stage.replan_for_wires);
+        stage.inspect(7.0, 1.0, &mobile, &battery, &empty_map());
+        assert!(stage.take_override_commands().is_empty());
+
+        // How many were mapped is checkpointed: a resumed run that maps no
+        // more replans nothing.
+        let state = StageHandler::checkpoint_state(&stage).unwrap();
+        assert_eq!(state["mapped_wires"], 2);
+        let mut resumed = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        resumed.set_mapped_power_lines(Some(map.clone()), bounds);
+        StageHandler::restore_state(&mut resumed, &state).unwrap();
+        assert!(!resumed.follow_mapped_wires());
+        assert!(
+            resumed.knows_obstacles(),
+            "the spans are given to the routes"
+        );
+
+        StageHandler::reset(&mut stage);
+        assert!(!stage.knows_obstacles(), "a reset forgets the mapped wires");
+    }
+    /// R3: a drone already flying home (on its own reserve, or in the
+    /// mission's egress) flies home again round a wire mapped across its way;
+    /// one whose way home is clear keeps its flight, and a drone still at
+    /// work is left to the POI replan.
+    #[test]
+    fn a_mapped_wire_replans_the_flights_home_it_lies_across() {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        let line = power_line(&[-600.0, -200.0, 200.0, 600.0], 45.0, &[-4.0, 0.0, 4.0]);
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let config = ExplorationConfig::default();
+        let mut grid = BeliefGrid::new(bounds, 10.0, 0.0).unwrap();
+        grid.know_wires(vec![line.span_line(1)]);
+        let homes: BTreeMap<String, [f64; 3]> = [
+            ("drone-a".to_string(), [0.0, 0.0, 40.0]),
+            ("drone-b".to_string(), [0.0, 0.0, 40.0]),
+            ("drone-c".to_string(), [0.0, 0.0, 40.0]),
+        ]
+        .into_iter()
+        .collect();
+        let mut stage = MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), homes);
+        stage.set_policy(PlanningPolicy::EfficientV1).unwrap();
+        stage.set_mapped_power_lines(Some(BeliefHandle::new(grid.snapshot(&config))), bounds);
+        assert!(stage.follow_mapped_wires());
+        // a: homeward beyond the line; b: homeward on the near side; c: at
+        // work beyond the line.
+        stage.homeward.insert("drone-a".into());
+        stage.homeward.insert("drone-b".into());
+        let mobile = vec![
+            ("drone-a".to_string(), [500.0, 0.0, 40.0]),
+            ("drone-b".to_string(), [100.0, 0.0, 40.0]),
+            ("drone-c".to_string(), [500.0, 0.0, 40.0]),
+        ];
+        stage.replan_egress_for_wires(&mobile, MissionPhase::Inspecting, 3.0);
+        let commands = stage.take_override_commands();
+        assert_eq!(commands.len(), 1, "{commands:?}");
+        let OverrideCommand::SetEgress(id, flight) = &commands[0] else {
+            panic!("{commands:?}");
+        };
+        assert_eq!(id, "drone-a");
+        let span = line.span_line(1);
+        for (from, to) in legs_of(flight, mobile[0].1) {
+            assert!(!span.violated_by(from, to), "{from:?} -> {to:?}");
+        }
+        let decision = &stage.decisions()[0];
+        assert_eq!(
+            (decision.kind, decision.reason),
+            ("egress_reroute", "power_line_mapped")
+        );
+        // In the mission's egress every drone flying home is replanned.
+        stage.decisions.clear();
+        stage.replan_egress_for_wires(&mobile, MissionPhase::Egress, 4.0);
+        let ids: Vec<String> = stage
+            .take_override_commands()
+            .into_iter()
+            .map(|c| match c {
+                OverrideCommand::SetEgress(id, _) => id,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["drone-a", "drone-c"]);
+    }
+    /// The run itself replans: one tick of a run whose map holds a span
+    /// across a homeward drone's way flies it home again.
+    #[test]
+    fn a_run_that_maps_a_wire_replans_the_flight_home() {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        use crate::stage::Stage;
+        let line = power_line(&[-600.0, -200.0, 200.0, 600.0], 45.0, &[-4.0, 0.0, 4.0]);
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let mut grid = BeliefGrid::new(bounds, 10.0, 0.0).unwrap();
+        grid.know_wires(vec![line.span_line(1)]);
+        let map = BeliefHandle::new(grid.snapshot(&ExplorationConfig::default()));
+        let mut sim = gate_rig_with(Vec::new(), Vec::new());
+        let homes = [("drone-1".to_string(), [480.0, 25.0, 10.0])]
+            .into_iter()
+            .collect();
+        let mut stage = MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), homes);
+        stage.set_policy(PlanningPolicy::EfficientV1).unwrap();
+        stage.set_mapped_power_lines(Some(map), bounds);
+        stage.homeward.insert("drone-1".into());
+        sim.set_stage_handler(Stage::EvaluateMissionTransitions, Box::new(stage))
+            .expect("stage 9");
+        sim.step().expect("tick runs");
+        assert!(
+            installed_driver(&sim)
+                .decisions()
+                .iter()
+                .any(|d| d.kind == "egress_reroute"),
+            "{:?}",
+            installed_driver(&sim).decisions()
+        );
+    }
     /// R3: under efficient_v1 a POI redirect whose straight line passes 7 m
     /// over a three-wire line climbs over it with the clearance and comes
     /// down to the POI, every leg clear of every wire by the swept test, and
@@ -5208,6 +5550,30 @@ mod tests {
             .expect("assigned");
         assert_eq!(decision.inputs["route_trees"], "over");
         assert!(decision.inputs.get("route_power_lines").is_none());
+    }
+
+    /// A leg that climbs across a crown's keep-out is judged at the lower
+    /// end of its stretch over it: entering at 40 m and leaving at 50 m
+    /// over a crown that wants 48 m violates it, though it leaves above.
+    #[test]
+    fn a_climbing_leg_is_judged_at_its_lowest_over_the_crown() {
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        treed(&mut stage, vec![tree("tall", 300.0, 0.0, 45.0, 6.0)]);
+        let known = stage.obstacles.as_ref().expect("known obstacles");
+        let (start, end) = ([0.0, 0.0], [500.0, 0.0]);
+        // The keep-out spans x = 293..307; this leg is at 40.5 m and 51 m
+        // there.
+        let climbing = [([270.0, 0.0, 30.0], [320.0, 0.0, 55.0])];
+        assert!(known.violates_crowns(&climbing, start, end));
+        // The same leg descending is judged at its other end, as low.
+        let descending = [([320.0, 0.0, 55.0], [270.0, 0.0, 30.0])];
+        assert!(known.violates_crowns(&descending, start, end));
+        // Over it all the way, by the clearance: clear.
+        let over = [([270.0, 0.0, 48.0], [320.0, 0.0, 60.0])];
+        assert!(!known.violates_crowns(&over, start, end));
+        // Wide of it: clear at any height.
+        let wide = [([270.0, 20.0, 10.0], [320.0, 20.0, 10.0])];
+        assert!(!known.violates_crowns(&wide, start, end));
     }
 
     /// R2: the reference never reads the trees; a flight already over the

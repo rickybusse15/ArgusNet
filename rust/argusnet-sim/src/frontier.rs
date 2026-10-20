@@ -274,6 +274,7 @@ mod tests {
                 origin_m: [0.0, 0.0, 100.0],
                 returns,
                 misses: 0,
+                wires: Vec::new(),
             },
             1,
         );

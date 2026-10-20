@@ -43,6 +43,9 @@ pub struct RuntimeOverlayVisibility {
     /// The run's trees (R2). A world structure, not an overlay: no layer
     /// preset owns it.
     pub trees: bool,
+    /// Each power-line span's clearance volume (R3): an overlay, off by
+    /// default.
+    pub power_line_clearance: bool,
 }
 
 /// The startup layers are the Operational preset's (`crate::layers`).
@@ -67,6 +70,7 @@ impl Default for RuntimeOverlayVisibility {
             trails: true,
             power_lines: true,
             trees: true,
+            power_line_clearance: false,
         }
     }
 }

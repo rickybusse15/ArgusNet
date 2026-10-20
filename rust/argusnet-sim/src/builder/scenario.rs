@@ -1629,12 +1629,16 @@ const TREE_INSPECTION_EDGE_M: f64 = 10.0;
 /// through the world's trees in id order (south to north), each with a POI
 /// beside its crown at [`TREE_INSPECTION_HOVER_AGL_M`]: the first of eight
 /// directions round the tree (east first, then anticlockwise) whose point
-/// is inside the map (by [`TREE_INSPECTION_EDGE_M`]) and in no crown. A
-/// tree with no such point gives way to the next in its share of the list;
-/// if none has one, the POI stands east of the first, held inside the map. Laid out from the trees alone, so the same for
-/// every seed. A POI that would stand in a building is pushed out of it.
+/// is inside the map (by [`TREE_INSPECTION_EDGE_M`]), in no crown and in no
+/// building (so it is not pushed off). A tree with no such point, or one
+/// already inspected, gives way to the next in the list; a world with too
+/// few such trees is refused. Laid out from the trees alone, so the same for
+/// every seed.
 fn tree_inspection_pois(ground: &Ground<'_>, count: usize) -> Result<Vec<Value>, BuildError> {
     use argusnet_world::trees::{Species, TreeLayer};
+    if count == 0 {
+        return Ok(Vec::new());
+    }
     let layer = TreeLayer::new(ground.world.trees.clone())
         .map_err(|error| BuildError::Invalid(error.to_string()))?;
     let tall: Vec<_> = layer
@@ -1658,18 +1662,6 @@ fn tree_inspection_pois(ground: &Ground<'_>, count: usize) -> Result<Vec<Value>,
             && xy[1] >= b.y_min_m + TREE_INSPECTION_EDGE_M
             && xy[1] <= b.y_max_m - TREE_INSPECTION_EDGE_M
     };
-    let clamp = |xy: [f64; 2]| {
-        [
-            xy[0].clamp(
-                b.x_min_m + TREE_INSPECTION_EDGE_M,
-                b.x_max_m - TREE_INSPECTION_EDGE_M,
-            ),
-            xy[1].clamp(
-                b.y_min_m + TREE_INSPECTION_EDGE_M,
-                b.y_max_m - TREE_INSPECTION_EDGE_M,
-            ),
-        ]
-    };
     // The first of eight points round `tree` beside its crown (east first,
     // then anticlockwise) inside the map and in no crown.
     let clear_beside = |tree: &argusnet_world::trees::Tree| {
@@ -1681,33 +1673,39 @@ fn tree_inspection_pois(ground: &Ground<'_>, count: usize) -> Result<Vec<Value>,
                 tree.xy_m[1] + reach * angle.sin(),
             ];
             let z = ground.height_at(xy[0], xy[1]) + TREE_INSPECTION_HOVER_AGL_M;
-            (inside(xy) && layer.crown_at([xy[0], xy[1], z]).is_none()).then_some(xy)
+            // Where it will stand: a point a building would push away (off
+            // its tree, maybe into another crown) is no clear point.
+            let stays = ground.push_outside(xy, TREE_INSPECTION_HOVER_AGL_M) == xy;
+            (stays && inside(xy) && layer.crown_at([xy[0], xy[1], z]).is_none()).then_some(xy)
         })
     };
-    let stride = tall.len() / count;
-    Ok((0..count)
-        .map(|i| {
-            // From the evenly spaced tree, on through its share of the list
-            // to the first with a clear point beside it; held inside the map
-            // beside the first when none has one.
-            let start = (2 * i + 1) * tall.len() / (2 * count);
-            let (tree, xy) = (start..(start + stride.max(1)).min(tall.len()))
-                .find_map(|k| clear_beside(tall[k]).map(|xy| (tall[k], xy)))
-                .unwrap_or_else(|| {
-                    let tree = tall[start];
-                    let reach = tree.crown_radius_m + TREE_INSPECTION_GAP_M;
-                    (tree, clamp([tree.xy_m[0] + reach, tree.xy_m[1]]))
-                });
-            let [x, y] = clamp(ground.push_outside(xy, TREE_INSPECTION_HOVER_AGL_M));
-            json!({
-                "poi_id": format!("poi-{i:02}"),
-                "name": format!("Tree {}", tree.id),
-                "position": [x, y, ground.height_at(x, y) + TREE_INSPECTION_HOVER_AGL_M],
-                "priority": (count - i) as i64,
-                "required_dwell_s": 15.0,
-            })
-        })
-        .collect())
+    let mut used = vec![false; tall.len()];
+    let mut pois = Vec::with_capacity(count);
+    for i in 0..count {
+        // From the evenly spaced tree, on through the list (round to its
+        // start) to the first not yet inspected with a clear point beside
+        // it, so every POI stands where it says.
+        let start = (2 * i + 1) * tall.len() / (2 * count);
+        let Some((k, xy)) = (0..tall.len())
+            .map(|step| (start + step) % tall.len())
+            .filter(|&k| !used[k])
+            .find_map(|k| clear_beside(tall[k]).map(|xy| (k, xy)))
+        else {
+            return Err(BuildError::Invalid(format!(
+                "tree_inspection found clear room beside only {i} trees, not {count}"
+            )));
+        };
+        used[k] = true;
+        let [x, y] = xy;
+        pois.push(json!({
+            "poi_id": format!("poi-{i:02}"),
+            "name": format!("Tree {}", tall[k].id),
+            "position": [x, y, ground.height_at(x, y) + TREE_INSPECTION_HOVER_AGL_M],
+            "priority": (count - i) as i64,
+            "required_dwell_s": 15.0,
+        }));
+    }
+    Ok(pois)
 }
 
 /// `scenario_replay_metadata`'s `scenario_options`.
@@ -1752,6 +1750,9 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
     }
     if o.tree_inspection {
         document["tree_inspection"] = json!(true);
+    }
+    if let Some(path) = &o.buildings_path {
+        document["buildings_path"] = json!(path);
     }
     document
 }

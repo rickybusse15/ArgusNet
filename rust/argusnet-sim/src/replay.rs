@@ -343,6 +343,10 @@ pub struct ReplayRangeScan {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub canopy: Vec<[f64; 3]>,
     pub misses: u32,
+    /// The nearest point of each power-line span the scan put points on
+    /// (R3). Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wire: Vec<[f64; 3]>,
 }
 
 /// Most returns per scan a replay frame carries. The frame's returns are a
@@ -370,6 +374,7 @@ impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
             structure: of(crate::range_scan::ReturnClass::Structure),
             canopy: of(crate::range_scan::ReturnClass::Canopy),
             misses: scan.misses,
+            wire: scan.wires.iter().map(|wire| dm(wire.point_m)).collect(),
         }
     }
 }

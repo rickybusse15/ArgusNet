@@ -67,6 +67,42 @@
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).
 
+- Viewer: a clearance-corridor overlay (R3). The Clearance Corridors toggle,
+  beside Power Lines in Runtime Overlays and off by default, shows each
+  span's clearance volume from `meta.power_lines`: a translucent amber tube
+  round each conductor, of its radius plus the clearance, unbroken round
+  the line's turns. A GPU probe checks it is drawn round the wires and nowhere off
+  the line, at every quality tier. No simulation change: 14/14 replays
+  identical.
+
+- Wires are sensed (R3). The range scanner reports a power-line span
+  only while one of its conductors is near enough for the scan's points to
+  land on it (30 m for a 3 cm wire at 1 mrad) and below the scanner; wires
+  never occlude. A `--world-knowledge none` run maps each span the first
+  time it is seen and, under efficient_v1, plans round the mapped spans as a
+  prior run plans round its lines (routes, deconfliction, rejoins), and flies
+  again a POI flight a newly mapped wire lies across (`poi_reroute`).
+  `--wire-prior` gives the map every span from the start. With no prior map
+  on `power_line_inspection` seed 42, efficient_v1's `structure_clearance`
+  events go from 47 to 8, and to 0 with the prior. The replay's range scans
+  carry each wire's nearest point (`wire`, absent when none). The reference,
+  runs without lines and the 14 canonical replays are unchanged.
+
+- The physical guard keeps platforms off power lines' wires, and
+  `efficient_v1` keeps deconfliction pushes and rejoins out of each line's
+  clearance (R3). Each conductor piece is a capsule holding the true
+  sagging wire; a platform inside is pushed straight off it, or lifted over
+  it where a push would go into the ground, and a guarded step stops at it,
+  solved ray against capsule. Deconfliction tries the mirror push, then
+  the vertical offsets, before one that comes within a line's clearance
+  (swept from where the safety monitor left the platform); a rejoin stops
+  short of a line's clearance and climbs over. A rejoin holding the height
+  it climbed to now also gives up a path running away faster than it flies
+  (it chased one for ever). On `power_line_inspection` seed 7 the last 2
+  `structure_clearance` events go to 0. The reference, efficient_v1 runs
+  without lines, the canonical scenarios with the builder line on, and the
+  14 canonical replays are unchanged.
+
 - `efficient_v1` routes keep power lines' clearance (R3, the planner's
   corridor). A POI, egress or gap-fill flight that would pass a line closer
   than its clearance, by the swept test on each leg, is flown over the
@@ -79,6 +115,28 @@
   and 42) `structure_clearance` events under efficient_v1 go from 69 and 26
   to 2 and 0; the 2 left are deconfliction pushes. The reference is
   unchanged, and so are the 14 canonical replays.
+
+- Buildings drawn by material, with window rows (R1). Imported buildings
+  carry facade and roof material classes and their storeys. The scene
+  colours walls and roofs by class, and the viewer draws window rows on
+  facades whose storeys the data gives, none elsewhere. Unknown materials
+  draw in the layer's own colour. Nothing else changes: other GLBs are
+  byte-identical, and 14/14 replays are identical.
+
+- Real buildings in a run (R1). `scripts/import_buildings.py` turns
+  GeoJSON or OSM footprints into an `argusnet.buildings` document: local
+  metres around a recorded origin, heights and roofs from the tags, and
+  every estimate marked. A scenario config's `buildings_path` option puts
+  them in the run in place of the procedural buildings, with their roofs,
+  standing on the run's terrain. The bundle and the replay record where on
+  Earth they are. Without the option nothing changes: 14/14 replays
+  identical.
+
+- World: `building-v2`, buildings with roofs (R1, first slice). Flat,
+  gabled, hipped and pyramidal roofs as planes over the footprint; line of
+  sight, collision and the range scanner's hits clip against them exactly,
+  and the scene builder draws the same solid. No run produces one yet:
+  14/14 replays identical.
 
 - Viewer: power lines are drawn (R3). The replay's `meta.power_lines`
   becomes lattice towers on their own ground, plus conductors drawn as
