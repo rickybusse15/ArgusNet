@@ -252,7 +252,9 @@ C8 (P2.6) and D2 (P5.1).
   lines are in a prior run. POI, egress and gap-fill routes keep their
   clearance, deconfliction and rejoins keep out of it, and a POI flight a
   newly mapped wire lies across is flown again from where the drone is
-  (`poi_reroute`). The opt-in wire-hazard prior (`--wire-prior`,
+  (`poi_reroute`), as is a flight home, on a drone's own reserve or in the
+  mission's egress (`egress_reroute`). The detection range never exceeds
+  the scanner's own `max_range_m`. The opt-in wire-hazard prior (`--wire-prior`,
   `ExplorationConfig::wire_prior`) gives the map every span from the
   start, as a utility's map of its corridors would. A span alone hangs
   as in its line, but where the line turns its outer conductors sit a

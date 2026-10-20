@@ -193,7 +193,9 @@ impl RangeScanner {
     pub fn with_power_lines(mut self, lines: &[PowerLine]) -> Self {
         let mut spans = Vec::new();
         for line in lines {
-            let range_m = wire_detection_range_m(line.conductor_radius_m);
+            // No further than the scanner reaches at all.
+            let range_m =
+                wire_detection_range_m(line.conductor_radius_m).min(self.config.max_range_m);
             let per_span = line.pieces_by_span();
             for (span, pieces) in per_span.into_iter().enumerate() {
                 let mut low_m = [f64::INFINITY; 3];
@@ -455,6 +457,18 @@ mod tests {
         let past = scan([-120.0, 0.0, 30.0]);
         let ids: Vec<&str> = past.wires.iter().map(|w| w.span.id.as_str()).collect();
         assert_eq!(ids, ["line#0"]);
+        // A scanner that reaches only 10 m sees the wire only that near.
+        let short = RangeScanner {
+            config: RangeScanConfig {
+                max_range_m: 10.0,
+                ..RangeScanConfig::default()
+            },
+            ..scanner_over_flat(&[])
+        }
+        .with_power_lines(&[wire()]);
+        let short_scan = |origin: [f64; 3]| short.scan("d", 0, 0.0, origin, [0.0; 3]).wires.len();
+        assert_eq!(short_scan([50.0, 0.0, 28.0]), 0, "20 m over the wire");
+        assert_eq!(short_scan([50.0, 0.0, 26.5]), 1, "9.5 m over the wire");
         // Under the wire, looking down: not seen.
         assert!(scan([50.0, 0.0, 10.0]).wires.is_empty());
         // Over the support, both spans are near.
