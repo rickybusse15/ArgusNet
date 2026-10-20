@@ -2,6 +2,16 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Flight among trees (R2). A trunk is hard to physics: collision, the
+  physical guard and guarded deconfliction push out of it as out of a
+  building, never below the terrain. A crown is soft, and each frame
+  records the trees a platform touched in the last tick, swept, as
+  `tree_contacts`. Under efficient_v1 a crown is a keep-out from above
+  (radius + 1 m) that POI, egress and gap-fill flights cross at least 3 m
+  over its top, climbing over as over power lines (`route_trees: "over"`).
+  On the tree scenario without the safety floor, crown contacts under
+  efficient_v1 fell from 254 to 22 and 243 to 30 (seeds 7, 42). The
+  reference flies as before, and the 14 canonical replays are unchanged.
 - Sensing through trees (R2). Line of sight crosses crowns: each dims it
   by Beer–Lambert on its leaf density, and a trunk stops it
   (`blocker_type` `"trunk"`). The range scanner returns from a crown with

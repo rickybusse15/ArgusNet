@@ -540,6 +540,52 @@ pub struct ReplayFrame {
     /// the belief had them somewhere they could not be.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub world_contacts: Vec<crate::belief_world::WorldContact>,
+    /// Platforms that touched a tree this tick (R2): each trunk or crown the
+    /// last tick's flight crossed. Recorded, never pushed out of: a crown is
+    /// soft, and a trunk the physics has already pushed clear of.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tree_contacts: Vec<ReplayTreeContact>,
+}
+
+/// One platform touching one tree in one tick (R2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayTreeContact {
+    pub node_id: String,
+    pub tree_id: String,
+    pub part: argusnet_world::trees::TreePart,
+}
+
+/// The trees each mobile platform touched in the last tick: the segment it
+/// flew, from where its velocity says it was a tick ago to where it is,
+/// against every trunk (swept: a trunk passed between two ticks counts) and
+/// every crown it crossed, in the order it met them. Stateless, so a
+/// resumed run records what the uninterrupted one would.
+pub fn tree_contacts(
+    trees: &argusnet_world::trees::TreeLayer,
+    nodes: &[argusnet_types::NodeState],
+    dt_s: f64,
+) -> Vec<ReplayTreeContact> {
+    use argusnet_world::trees::TreePart;
+    let mut contacts = Vec::new();
+    for node in nodes.iter().filter(|node| node.is_mobile) {
+        let to: [f64; 3] = std::array::from_fn(|i| node.position[i]);
+        let from: [f64; 3] = std::array::from_fn(|i| to[i] - node.velocity[i] * dt_s);
+        let mut met: Vec<(f64, TreePart, &str)> = trees
+            .crowns_along(from, to)
+            .into_iter()
+            .map(|(t0, _, tree)| (t0, TreePart::Crown, tree.id.as_str()))
+            .collect();
+        if let Some(hit) = trees.first_trunk_hit(from, to) {
+            met.push((hit.t, TreePart::Trunk, hit.tree.id.as_str()));
+        }
+        met.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+        contacts.extend(met.into_iter().map(|(_, part, id)| ReplayTreeContact {
+            node_id: node.node_id.clone(),
+            tree_id: id.to_string(),
+            part,
+        }));
+    }
+    contacts
 }
 
 /// A `SafetyValidationResult` as the reference writes it: the fused frame's
@@ -743,6 +789,7 @@ impl ReplayWriter {
             canopy_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
+            tree_contacts: Vec::new(),
         }
     }
 
@@ -1381,5 +1428,75 @@ mod tests {
         let document = ReplayWriter::new("unstamped", 0.1, 1).finish();
         let value = serde_json::to_value(&document).expect("serializes");
         assert!(value["meta"].get("generated_at_utc").is_none());
+    }
+}
+
+#[cfg(test)]
+mod tree_contact_tests {
+    use super::*;
+    use argusnet_world::trees::{Species, Tree, TreeLayer, TreePart};
+
+    fn node(
+        id: &str,
+        position: [f64; 3],
+        velocity: [f64; 3],
+        mobile: bool,
+    ) -> argusnet_types::NodeState {
+        let mut state: argusnet_types::NodeState = serde_json::from_value(serde_json::json!({
+            "node_id": id,
+            "position": position,
+            "velocity": velocity,
+            "is_mobile": mobile,
+            "timestamp_s": 0.0,
+            "health": 1.0,
+            "sensor_type": "optical",
+            "fov_half_angle_deg": 30.0,
+            "max_range_m": 100.0,
+        }))
+        .expect("node");
+        state.is_mobile = mobile;
+        state
+    }
+
+    /// The last tick's flight, from its velocity, against each crown and
+    /// trunk: swept, so a crown or trunk passed between ticks counts, in
+    /// the order met; a fixed node never touches one.
+    #[test]
+    fn contacts_are_the_trees_the_last_ticks_flight_crossed() {
+        let tree = |id: &str, x: f64| Tree {
+            id: id.into(),
+            xy_m: [x, 0.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+            crown_base_m: 8.0,
+            crown_radius_m: 3.0,
+            trunk_radius_m: 0.3,
+            species: Species::Broadleaf,
+            leaf_density: 0.8,
+        };
+        let layer = TreeLayer::new(vec![tree("a", 10.0), tree("b", 20.0)]).unwrap();
+        // At 14 m, from x = 0 to x = 28 in a 0.25 s tick: both crowns
+        // (and, inside each, its trunk, which reaches the crown's middle).
+        let flying = node("d", [28.0, 0.0, 14.0], [112.0, 0.0, 0.0], true);
+        let contacts = tree_contacts(&layer, &[flying], 0.25);
+        let seen: Vec<_> = contacts
+            .iter()
+            .map(|c| (c.tree_id.as_str(), c.part))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("a", TreePart::Crown),
+                ("a", TreePart::Trunk),
+                ("b", TreePart::Crown)
+            ]
+        );
+        // Over the trees, or a ground station inside a crown: nothing.
+        let high = node("d", [28.0, 0.0, 30.0], [112.0, 0.0, 0.0], true);
+        let fixed = node("g", [10.0, 0.0, 14.0], [0.0; 3], false);
+        assert!(tree_contacts(&layer, &[high, fixed], 0.25).is_empty());
+        // Hovering inside a crown is a contact every tick.
+        let hovering = node("d", [11.0, 0.0, 14.0], [0.0; 3], true);
+        assert_eq!(tree_contacts(&layer, &[hovering], 0.25).len(), 1);
     }
 }

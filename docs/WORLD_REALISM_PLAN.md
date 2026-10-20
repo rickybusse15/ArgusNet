@@ -6,8 +6,8 @@ roofs, the georeferenced import and material facades. R3 is done: the
 model, the safety clearance, lines in a run, drawing in the viewer, the
 planner's corridor, the guard against wires, sensing wires and the
 clearance-corridor overlay. R2 is in progress: the tree model, trees in a
-run and sensing through trees are done; flight round trees and drawing
-trees are not merged. R4 and R5 are not started.
+run, sensing through trees and flight round trees are done; drawing
+trees is not merged. R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -255,6 +255,40 @@ C8 (P2.6) and D2 (P5.1).
   trees, so the ground error rose a little (RMSE 0.17 → 0.22 m and 0.18 →
   0.21 m). All 8 POIs are inspected before and after, with no world
   contacts. With a prior map and no targets, every frame is unchanged.
+
+  *Done (flight):* a trunk is as hard as a building to physics. The run's
+  `SharedObstacles` carries the trees, so stage 1's collision, the
+  physical guard and guarded deconfliction push a platform out of a trunk,
+  straight away from its axis to its surface plus the margin, and clamp it
+  to the terrain after, as for any structure (never below it). The push is
+  by point, as for buildings: a platform passing a trunk between ticks is
+  recorded, not pushed. A crown is soft: nothing collides with it or is
+  pushed out of it. Each frame records every tree a mobile platform touched
+  in the last tick as `tree_contacts` (`node_id`, `tree_id`, `part`): the
+  segment it flew, from where its velocity puts it a tick ago, swept
+  against each trunk and crown. It is stateless, so a resumed run records
+  what a straight one does, and written only when there are some.
+
+  Under efficient_v1 a crown is a soft keep-out with vertical clearance:
+  its radius plus 1 m from above, crossed at least 3 m over its top. POI,
+  egress and gap-fill flights that would cross one lower climb over it,
+  with the power lines' "over" profile (a climb at 1 in 8 where there is
+  room, steeper when an end is near, never lower than the straight
+  flight), and the journal records `route_trees: "over"`. A keep-out that
+  holds a flight's end is left out: an end beside a crown cannot be above
+  it. A route round a line's ends must keep above the crowns too. Trees
+  are part of the prior map, forgotten with it in a `--world-knowledge
+  none` run. The reference never reads them.
+
+  On the tree scenario without `safety_blocking` (with it, the safety
+  floor holds every drone 50 m up, over every crown, so no platform
+  touches a tree under any policy), crown contacts under efficient_v1 went
+  from 254 to 22 (seed 7) and from 243 to 30 (seed 42); all 8 POI flights
+  climb over, and all 8 POIs are inspected. The contacts left are drones
+  still on launch pads under crowns, return flights after the mission,
+  egress, and hovering beside a POI's crown. Under the reference every
+  position is identical before and after, with the safety floor or
+  without it.
 
 ### R3: power lines
 

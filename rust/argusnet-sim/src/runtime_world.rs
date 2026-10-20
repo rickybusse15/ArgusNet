@@ -85,15 +85,35 @@ impl TerrainHeight for SharedTerrain {
     }
 }
 
-/// The obstacle layer, shared.
+/// The obstacle layer, shared, and the trunks of the world's trees (R2):
+/// a trunk is as hard as a building to a platform, so stage 1's collision
+/// and the physical guard push out of it, and a crown, which is soft, is
+/// never pushed out of.
 #[derive(Clone)]
 pub struct SharedObstacles {
     layer: Arc<ObstacleLayer>,
+    /// `None` when the world has no trees: every answer is then the
+    /// obstacle layer's alone, as before trees.
+    trees: Option<Arc<TreeLayer>>,
 }
 
 impl SharedObstacles {
     pub fn new(layer: Arc<ObstacleLayer>) -> Self {
-        Self { layer }
+        Self { layer, trees: None }
+    }
+
+    /// The same obstacles with the world's trees' trunks. An empty layer is
+    /// no trees.
+    pub fn with_trees(&self, trees: Arc<TreeLayer>) -> Self {
+        Self {
+            trees: (!trees.is_empty()).then_some(trees),
+            ..self.clone()
+        }
+    }
+
+    /// The trees, when the world has any.
+    pub fn trees(&self) -> Option<&Arc<TreeLayer>> {
+        self.trees.as_ref()
     }
 
     /// The layer itself, for a stage that plans routes over it.
@@ -103,12 +123,33 @@ impl SharedObstacles {
 }
 
 impl ObstacleSampler for SharedObstacles {
+    /// Out of a building or wall as before; else out of a trunk, straight
+    /// away from its axis to its surface plus the margin (at least 1 m, as
+    /// for a structure).
     fn push_clear(&self, point_m: [f64; 3], margin_m: f64) -> Option<[f64; 2]> {
-        WorldObstacles::new(&self.layer).push_clear(point_m, margin_m)
+        WorldObstacles::new(&self.layer)
+            .push_clear(point_m, margin_m)
+            .or_else(|| {
+                let tree = self.trees.as_ref()?.trunk_at(point_m)?;
+                let (dx, dy) = (point_m[0] - tree.xy_m[0], point_m[1] - tree.xy_m[1]);
+                let off = dx.hypot(dy);
+                // On the axis itself any way out is as short; east.
+                let (ux, uy) = if off > 1e-9 {
+                    (dx / off, dy / off)
+                } else {
+                    (1.0, 0.0)
+                };
+                let reach = tree.trunk_radius_m + margin_m.max(1.0);
+                Some([tree.xy_m[0] + ux * reach, tree.xy_m[1] + uy * reach])
+            })
     }
 
     fn collides(&self, point_m: [f64; 3]) -> bool {
         WorldObstacles::new(&self.layer).collides(point_m)
+            || self
+                .trees
+                .as_ref()
+                .is_some_and(|trees| trees.trunk_at(point_m).is_some())
     }
 }
 
@@ -568,6 +609,48 @@ mod tests {
         assert_eq!(kind, "trunk");
         assert!((point[0] - 99.7).abs() < 1e-9, "{point:?}");
         assert_eq!(draws, 0, "the crown past the trunk takes no draw");
+    }
+
+    /// A trunk is as hard as a building: inside it collides, and a push
+    /// moves straight out from its axis to its surface plus the margin
+    /// (at least 1 m). A crown is not: inside it nothing collides. With no
+    /// trees the obstacles are what they were.
+    #[test]
+    fn a_trunk_is_hard_and_a_crown_is_not() {
+        let bounds = Bounds2d::new(0.0, 200.0, 0.0, 200.0);
+        let layer = Arc::new(ObstacleLayer::new(bounds, 50.0, vec![]).unwrap());
+        let tree = Tree {
+            id: "t".into(),
+            xy_m: [100.0, 100.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+            crown_base_m: 8.0,
+            crown_radius_m: 5.0,
+            trunk_radius_m: 0.3,
+            species: Species::Broadleaf,
+            leaf_density: 0.8,
+        };
+        let plain = SharedObstacles::new(Arc::clone(&layer));
+        let empty = plain.with_trees(Arc::new(TreeLayer::new(vec![]).unwrap()));
+        assert!(empty.trees().is_none());
+        let with = plain.with_trees(Arc::new(TreeLayer::new(vec![tree]).unwrap()));
+        let inside = [100.1, 100.0, 5.0];
+        assert!(!plain.collides(inside));
+        assert_eq!(plain.push_clear(inside, 1.0), None);
+        assert!(with.collides(inside));
+        let pushed = with.push_clear(inside, 0.5).expect("pushed");
+        assert!(
+            (pushed[0] - 101.3).abs() < 1e-9 && (pushed[1] - 100.0).abs() < 1e-9,
+            "{pushed:?}"
+        );
+        assert!(!with.collides([pushed[0], pushed[1], 5.0]));
+        // On the axis: out to the east. A wider margin goes further.
+        let pushed = with.push_clear([100.0, 100.0, 5.0], 2.0).expect("pushed");
+        assert!((pushed[0] - 102.3).abs() < 1e-9, "{pushed:?}");
+        // In the crown, above the trunk's top, or beside it: soft or clear.
+        assert!(!with.collides([103.0, 100.0, 14.0]));
+        assert!(!with.collides([100.0, 100.0, 15.0]));
+        assert_eq!(with.push_clear([103.0, 100.0, 14.0], 1.0), None);
     }
 
     /// A ray that leaves the world meets no tree past its edge.

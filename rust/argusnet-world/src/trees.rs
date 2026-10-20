@@ -23,7 +23,8 @@
 //! This module is the model. A run's bundle carries trees in its world
 //! (`argusnet-sim`'s builder scatters them with the `trees` option), sight
 //! lines cross them (`visibility::los_with_trees`) and the range scanner
-//! returns from them; flight and drawing come in later slices.
+//! returns from them, physics treats trunks as hard and efficient_v1 keeps
+//! above crowns; drawing comes in a later slice.
 
 use serde::{Deserialize, Serialize};
 

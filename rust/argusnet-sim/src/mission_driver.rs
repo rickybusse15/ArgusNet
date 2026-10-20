@@ -46,6 +46,7 @@ use argusnet_types::Bounds2d;
 use argusnet_world::index::ObstacleLayer;
 use argusnet_world::obstacles::{BlockerType, Obstacle};
 use argusnet_world::powerline::PowerLine;
+use argusnet_world::trees::TreeLayer;
 
 use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingStage;
@@ -402,7 +403,21 @@ struct KnownObstacles {
     reaching_lines: RefCell<BTreeMap<i64, Option<Arc<ObstacleLayer>>>>,
     /// [`Self::this_run`] for routes round a line's ends.
     around_this_run: RefCell<BTreeMap<[u64; 6], Option<PlannerRoute>>>,
+    /// The trees whose crowns a flight keeps above (R2). `None` when the
+    /// world has none.
+    trees: Option<Arc<TreeLayer>>,
 }
+
+/// How far past a crown's radius its keep-out reaches, metres (R2).
+const CROWN_MARGIN_M: f64 = 1.0;
+/// How far over a crown's top a flight across its keep-out keeps, metres
+/// (R2): leaves are soft, so a small margin, not a wire's clearance.
+const CROWN_CLEARANCE_M: f64 = 3.0;
+/// How far under a keep-out's height a flight may pass and still count as
+/// over it, metres: a route raised to the height exactly at the keep-out's
+/// edge is split there, and the edge found again on the new leg can fall a
+/// rounding error inside.
+const CROWN_TOLERANCE_M: f64 = 1e-6;
 
 /// How far past a power line's own clearance a planned crossing keeps,
 /// metres (R3): room for the straight pieces' sag error and for rounding,
@@ -676,6 +691,81 @@ impl KnownObstacles {
         })
     }
 
+    /// Whether a flight has anything beyond the structures to keep clear
+    /// of: a power line or a crown.
+    fn guards_anything(&self) -> bool {
+        !self.lines.is_empty() || self.trees.is_some()
+    }
+
+    /// The crowns' keep-outs the leg from `p` to `q` crosses from above (R2),
+    /// each as the fractions of the leg over it and the height a flight
+    /// keeps there, in id order. A keep-out holding `start` or `end` (the
+    /// whole flight's ends) is left out: an end beside a crown cannot keep
+    /// above it, and touching leaves there is a contact, not a failure.
+    fn crown_stretches(
+        &self,
+        p: [f64; 2],
+        q: [f64; 2],
+        start: [f64; 2],
+        end: [f64; 2],
+    ) -> Vec<(f64, f64, f64)> {
+        let Some(trees) = &self.trees else {
+            return Vec::new();
+        };
+        let around = Bounds2d::new(
+            p[0].min(q[0]),
+            p[0].max(q[0]),
+            p[1].min(q[1]),
+            p[1].max(q[1]),
+        )
+        .expanded(CROWN_MARGIN_M);
+        let d = [q[0] - p[0], q[1] - p[1]];
+        let qa = d[0] * d[0] + d[1] * d[1];
+        trees
+            .near(around)
+            .into_iter()
+            .filter_map(|tree| {
+                let radius = tree.crown_radius_m + CROWN_MARGIN_M;
+                let holds =
+                    |x: [f64; 2]| (x[0] - tree.xy_m[0]).hypot(x[1] - tree.xy_m[1]) <= radius;
+                if holds(start) || holds(end) || qa <= 1e-18 {
+                    return None;
+                }
+                let r = [p[0] - tree.xy_m[0], p[1] - tree.xy_m[1]];
+                let qb = 2.0 * (r[0] * d[0] + r[1] * d[1]);
+                let qc = r[0] * r[0] + r[1] * r[1] - radius * radius;
+                let disc = qb * qb - 4.0 * qa * qc;
+                if disc <= 0.0 {
+                    return None;
+                }
+                let root = disc.sqrt();
+                let t0 = ((-qb - root) / (2.0 * qa)).max(0.0);
+                let t1 = ((-qb + root) / (2.0 * qa)).min(1.0);
+                (t0 < t1).then_some((t0, t1, tree.top_z_m() + CROWN_CLEARANCE_M))
+            })
+            .collect()
+    }
+
+    /// Whether any of `legs` (a flight from `start` to `end`) passes over a
+    /// crown's keep-out lower than its height (R2), by more than
+    /// [`CROWN_TOLERANCE_M`]. The height changes linearly along a leg, so
+    /// its lowest over a stretch is at an end of the stretch.
+    fn violates_crowns(
+        &self,
+        legs: &[([f64; 3], [f64; 3])],
+        start: [f64; 2],
+        end: [f64; 2],
+    ) -> bool {
+        legs.iter().any(|(from, to)| {
+            self.crown_stretches([from[0], from[1]], [to[0], to[1]], start, end)
+                .into_iter()
+                .any(|(t0, t1, z)| {
+                    let at = |t: f64| from[2] + (to[2] - from[2]) * t;
+                    at(t0).min(at(t1)) < z - CROWN_TOLERANCE_M
+                })
+        })
+    }
+
     /// [`Self::reaching`], with the corridors of the power lines too.
     fn reaching_lines(&self, floor_m: f64, clearance_m: f64) -> Option<Arc<ObstacleLayer>> {
         let band = (floor_m / ROUTE_HEIGHT_BAND_M).floor() as i64;
@@ -806,6 +896,9 @@ struct Corners {
     /// the structures alone would not: `"over"` or `"around"`. `None` when
     /// that route keeps it.
     lines: Option<&'static str>,
+    /// Whether the route climbs over crowns (R2) the route round the
+    /// structures would cross too low.
+    crowns: bool,
 }
 
 impl Corners {
@@ -816,6 +909,7 @@ impl Corners {
             length_m,
             heights: Vec::new(),
             lines: None,
+            crowns: false,
         }
     }
 
@@ -864,6 +958,8 @@ struct Flight {
     /// How the route keeps a power line's clearance, when it had to change
     /// to (R3).
     lines: Option<&'static str>,
+    /// Whether the route climbs over crowns (R2).
+    crowns: bool,
 }
 
 impl Flight {
@@ -875,6 +971,9 @@ impl Flight {
             fields.insert("route_waypoints".into(), serde_json::json!(corners));
             if let Some(lines) = self.lines {
                 fields.insert("route_power_lines".into(), serde_json::json!(lines));
+            }
+            if self.crowns {
+                fields.insert("route_trees".into(), serde_json::json!("over"));
             }
         }
     }
@@ -992,7 +1091,21 @@ impl MissionDriverStage {
             corridors: Vec::new(),
             reaching_lines: RefCell::new(BTreeMap::new()),
             around_this_run: RefCell::new(BTreeMap::new()),
+            trees: None,
         });
+    }
+
+    /// The trees whose crowns POI, egress and gap-fill flights keep above
+    /// under efficient_v1 (R2): a crown is a soft keep-out, its radius plus
+    /// [`CROWN_MARGIN_M`] from above, that a flight crosses at least
+    /// [`CROWN_CLEARANCE_M`] over its top. Part of the prior map, like the
+    /// power lines: set after [`Self::set_known_obstacles`], which forgets
+    /// them, and ignored without it. The reference never reads them.
+    pub fn set_known_trees(&mut self, trees: Arc<TreeLayer>) {
+        if let Some(obstacles) = &mut self.obstacles {
+            obstacles.trees = (!trees.is_empty()).then_some(trees);
+            obstacles.kept.borrow_mut().clear();
+        }
     }
 
     /// The power lines POI, egress and gap-fill flights keep their clearance
@@ -1136,12 +1249,16 @@ impl MissionDriverStage {
         if self.policy != PlanningPolicy::EfficientV1 {
             return corners;
         }
-        let Some(obstacles) = self.obstacles.as_ref().filter(|o| !o.lines.is_empty()) else {
+        let Some(obstacles) = self.obstacles.as_ref().filter(|o| o.guards_anything()) else {
             return corners;
         };
         let mut path = corners.as_ref().map_or_else(Vec::new, |c| c.via.clone());
         path.push([to[0], to[1]]);
-        if !obstacles.violates_lines(&flown_legs(from, &path, &[], to[2])) {
+        let legs = flown_legs(from, &path, &[], to[2]);
+        let (ends_from, ends_to) = ([from[0], from[1]], [to[0], to[1]]);
+        let lines = obstacles.violates_lines(&legs);
+        let crowns = obstacles.violates_crowns(&legs, ends_from, ends_to);
+        if !lines && !crowns {
             return corners;
         }
         let length_m = corners.as_ref().map_or_else(
@@ -1159,14 +1276,26 @@ impl MissionDriverStage {
                     via: path,
                     length_m,
                     heights,
-                    lines: Some("over"),
+                    lines: lines.then_some("over"),
+                    crowns,
                 }
             });
         let model = self.route_model;
         let cost = |c: &Corners| {
             model.travel_cost_wh(c.length_m) + c.climb_cost_wh(&model, from[2], to[2])
         };
-        match (over, self.around_lines(from, to)) {
+        // Round a line's ends only when it is a line to keep clear of, and
+        // the way round keeps above the crowns too.
+        let around = if lines {
+            self.around_lines(from, to).filter(|around| {
+                let mut path = around.via.clone();
+                path.push(ends_to);
+                !obstacles.violates_crowns(&flown_legs(from, &path, &[], to[2]), ends_from, ends_to)
+            })
+        } else {
+            None
+        };
+        match (over, around) {
             (Some(over), Some(around)) if cost(&around) < cost(&over) => Some(around),
             (Some(over), _) => Some(over),
             (None, Some(around)) => Some(around),
@@ -1216,8 +1345,28 @@ impl MissionDriverStage {
         // Each stretch over a corridor the linear flight is below, as
         // (onto, off, height, climb gradient, descent gradient).
         let mut stretches = Vec::new();
+        let ends = ([start[0], start[1]], points[points.len() - 1]);
         for (k, pair) in points.windows(2).enumerate() {
             let leg_m = along[k + 1] - along[k];
+            // Crowns (R2): their keep-outs never hold an end, so each has
+            // room to climb.
+            for (t0, t1, z) in obstacles.crown_stretches(pair[0], pair[1], ends.0, ends.1) {
+                let (a, b) = (along[k] + t0 * leg_m, along[k] + t1 * leg_m);
+                if z <= linear(a).min(linear(b)) {
+                    continue;
+                }
+                let up = if a > 1e-9 {
+                    LINE_RAMP_GRADIENT.max((z - z0) / a)
+                } else {
+                    LINE_RAMP_GRADIENT
+                };
+                let down = if b < length_m - 1e-9 {
+                    LINE_RAMP_GRADIENT.max((z - z1) / (length_m - b))
+                } else {
+                    LINE_RAMP_GRADIENT
+                };
+                stretches.push((a, b, z, up, down));
+            }
             for corridor in &obstacles.corridors {
                 let Some((t0, t1)) = corridor.clip(pair[0], pair[1]) else {
                     continue;
@@ -1314,6 +1463,7 @@ impl MissionDriverStage {
         corners.push(points[points.len() - 1]);
         let legs = flown_legs(start, &corners, &heights, end_z);
         if obstacles.violates_lines(&legs)
+            || obstacles.violates_crowns(&legs, ends.0, ends.1)
             || legs.iter().any(|(from, to)| obstacles.crosses(*from, *to))
         {
             return None;
@@ -1494,8 +1644,12 @@ impl MissionDriverStage {
         // on each leg: over a line the flight climbs, and one that cannot is
         // no plan.
         let mut heights = Vec::new();
-        if let Some(obstacles) = self.obstacles.as_ref().filter(|o| !o.lines.is_empty()) {
-            if obstacles.violates_lines(&flown_legs(position, &via, &[], z)) {
+        if let Some(obstacles) = self.obstacles.as_ref().filter(|o| o.guards_anything()) {
+            let legs = flown_legs(position, &via, &[], z);
+            let end = via[via.len() - 1];
+            if obstacles.violates_lines(&legs)
+                || obstacles.violates_crowns(&legs, [position[0], position[1]], end)
+            {
                 (via, heights) = self.over_lines(position, &via, z)?;
             }
         }
@@ -1903,6 +2057,7 @@ impl MissionDriverStage {
             Some(corners) => Flight {
                 route: Some((corners.length_m, corners.via.len())),
                 lines: corners.lines,
+                crowns: corners.crowns,
                 trajectory: GotoHover::routed_over(
                     start,
                     corners.via,
@@ -1916,6 +2071,7 @@ impl MissionDriverStage {
             None => Flight {
                 route: None,
                 lines: None,
+                crowns: false,
                 trajectory: GotoHover::redirect(
                     start,
                     [target[0], target[1]],
@@ -5316,5 +5472,216 @@ mod tests {
             "{refused:?}"
         );
         assert!(reference.check_state(&efficient_state).is_err());
+    }
+
+    /// A broadleaf on flat ground at `(x, y)`, `height_m` tall with a crown
+    /// of radius `radius_m` from half its height.
+    fn tree(id: &str, x: f64, y: f64, height_m: f64, radius_m: f64) -> argusnet_world::trees::Tree {
+        argusnet_world::trees::Tree {
+            id: id.to_string(),
+            xy_m: [x, y],
+            base_z_m: 0.0,
+            height_m,
+            crown_base_m: 0.5 * height_m,
+            crown_radius_m: radius_m,
+            trunk_radius_m: 0.4,
+            species: argusnet_world::trees::Species::Broadleaf,
+            leaf_density: 0.9,
+        }
+    }
+
+    fn treed(stage: &mut MissionDriverStage, trees: Vec<argusnet_world::trees::Tree>) {
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let layer = ObstacleLayer::new(bounds, 250.0, Vec::new()).expect("valid layer");
+        stage.set_known_obstacles(Some(Arc::new(layer)), bounds);
+        stage.set_known_trees(Arc::new(
+            argusnet_world::trees::TreeLayer::new(trees).expect("valid trees"),
+        ));
+    }
+
+    /// The lowest a flight's legs pass over the keep-out of `tree` (its
+    /// crown radius plus the margin, from above), `None` when no leg
+    /// crosses it.
+    fn lowest_over(
+        legs: &[([f64; 3], [f64; 3])],
+        tree: &argusnet_world::trees::Tree,
+    ) -> Option<f64> {
+        let radius = tree.crown_radius_m + CROWN_MARGIN_M;
+        let mut lowest: Option<f64> = None;
+        for (from, to) in legs {
+            for k in 0..=1000 {
+                let t = k as f64 / 1000.0;
+                let p: [f64; 3] = std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t);
+                if (p[0] - tree.xy_m[0]).hypot(p[1] - tree.xy_m[1]) <= radius {
+                    lowest = Some(lowest.map_or(p[2], |l: f64| l.min(p[2])));
+                }
+            }
+        }
+        lowest
+    }
+
+    /// R2: under efficient_v1 a POI redirect whose straight line would pass
+    /// through a 45 m tree's crown at 40 m climbs over it, 3 m above its
+    /// top all across its keep-out, and comes down to the POI; the journal
+    /// says so. A tree whose keep-out holds the POI itself is not climbed
+    /// over: an end beside a crown cannot be above it.
+    #[test]
+    fn efficient_v1_climbs_a_poi_redirect_over_a_crown() {
+        let tall = tree("tall", 300.0, 0.0, 45.0, 6.0);
+        let beside_poi = tree("beside", 503.0, 0.0, 30.0, 5.0);
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let start = mobile[0].1;
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        treed(&mut stage, vec![tall.clone(), beside_poi.clone()]);
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        assert!(!flight.via_z().is_empty(), "the flight climbs");
+        let legs = legs_of(&flight, start);
+        let over = lowest_over(&legs, &tall).expect("crosses the tall crown");
+        assert!(over >= 45.0 + CROWN_CLEARANCE_M - 1e-9, "{over}");
+        // Never lower than the straight flight.
+        assert!(flight.via_z().iter().all(|z| *z >= 40.0 - 1e-9));
+        let (arrived, _) = flight.sample(flight.t_arrive());
+        assert_eq!(arrived, [500.0, 0.0, 40.0]);
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .expect("assigned");
+        assert_eq!(decision.inputs["route_trees"], "over");
+        assert!(decision.inputs.get("route_power_lines").is_none());
+    }
+
+    /// A leg that climbs across a crown's keep-out is judged at the lower
+    /// end of its stretch over it: entering at 40 m and leaving at 50 m
+    /// over a crown that wants 48 m violates it, though it leaves above.
+    #[test]
+    fn a_climbing_leg_is_judged_at_its_lowest_over_the_crown() {
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        treed(&mut stage, vec![tree("tall", 300.0, 0.0, 45.0, 6.0)]);
+        let known = stage.obstacles.as_ref().expect("known obstacles");
+        let (start, end) = ([0.0, 0.0], [500.0, 0.0]);
+        // The keep-out spans x = 293..307; this leg is at 40.5 m and 51 m
+        // there.
+        let climbing = [([270.0, 0.0, 30.0], [320.0, 0.0, 55.0])];
+        assert!(known.violates_crowns(&climbing, start, end));
+        // The same leg descending is judged at its other end, as low.
+        let descending = [([320.0, 0.0, 55.0], [270.0, 0.0, 30.0])];
+        assert!(known.violates_crowns(&descending, start, end));
+        // Over it all the way, by the clearance: clear.
+        let over = [([270.0, 0.0, 48.0], [320.0, 0.0, 60.0])];
+        assert!(!known.violates_crowns(&over, start, end));
+        // Wide of it: clear at any height.
+        let wide = [([270.0, 20.0, 10.0], [320.0, 20.0, 10.0])];
+        assert!(!known.violates_crowns(&wide, start, end));
+    }
+
+    /// R2: the reference never reads the trees; a flight already over the
+    /// crowns, or wide of them, is flown as it was.
+    #[test]
+    fn only_a_flight_too_low_over_a_crown_changes() {
+        let tall = tree("tall", 300.0, 0.0, 45.0, 6.0);
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let straight = GotoHover::redirect(mobile[0].1, [500.0, 0.0], 40.0, 0.0, 28.0);
+        let mut reference = driver(vec![poi("poi-00", 500.0, 1)]);
+        treed(&mut reference, vec![tall.clone()]);
+        reference.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(
+            poi_flight(&reference.take_override_commands(), "drone-a"),
+            straight
+        );
+        // Wide of the crown (8 m off its keep-out) and over a short one.
+        for trees in [
+            vec![tree("wide", 300.0, 15.0, 45.0, 6.0)],
+            vec![tree("short", 300.0, 0.0, 30.0, 6.0)],
+        ] {
+            let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+            treed(&mut stage, trees);
+            stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+            assert_eq!(
+                poi_flight(&stage.take_override_commands(), "drone-a"),
+                straight
+            );
+        }
+    }
+
+    /// R2: a gap sweep across a crown too low climbs over it.
+    #[test]
+    fn crown_keep_outs_hold_no_end_and_stretch_over_the_crossing() {
+        let mut stage = efficient_driver(Vec::new());
+        treed(
+            &mut stage,
+            vec![
+                tree("a", 300.0, 0.0, 45.0, 6.0),
+                tree("b", 100.0, 0.0, 20.0, 5.0),
+            ],
+        );
+        let obstacles = stage.obstacles.as_ref().expect("known");
+        // From (0, 0) to (600, 0): the keep-out of "a" is 7 m round x = 300.
+        let stretches =
+            obstacles.crown_stretches([0.0, 0.0], [600.0, 0.0], [0.0, 0.0], [600.0, 0.0]);
+        assert_eq!(stretches.len(), 2);
+        let a = stretches
+            .iter()
+            .find(|s| (s.2 - 48.0).abs() < 1e-9)
+            .expect("a");
+        assert!((a.0 - 293.0 / 600.0).abs() < 1e-9 && (a.1 - 307.0 / 600.0).abs() < 1e-9);
+        // An end inside a keep-out drops that crown.
+        let from_b =
+            obstacles.crown_stretches([100.0, 0.0], [600.0, 0.0], [100.0, 0.0], [600.0, 0.0]);
+        assert_eq!(from_b.len(), 1);
+        // Violation is judged on the flown height over the stretch.
+        let low = [([0.0, 0.0, 40.0], [600.0, 0.0, 40.0])];
+        let high = [([0.0, 0.0, 49.0], [600.0, 0.0, 49.0])];
+        assert!(obstacles.violates_crowns(&low, [0.0, 0.0], [600.0, 0.0]));
+        assert!(!obstacles.violates_crowns(&high, [0.0, 0.0], [600.0, 0.0]));
+    }
+
+    /// R2: through a stand of crowns, uneven in height and overlapping, a
+    /// POI redirect from a low start to a higher POI climbs over every one
+    /// it crosses, 3 m over its top, however the route is split at their
+    /// edges.
+    #[test]
+    fn a_redirect_climbs_over_a_whole_stand() {
+        let mut rng = argusnet_world::numpy_rng::NumpyRng::new(5);
+        let stand: Vec<_> = (0..40)
+            .map(|k| {
+                tree(
+                    &format!("t{k:02}"),
+                    rng.uniform(160.0, 440.0),
+                    rng.uniform(-6.0, 6.0),
+                    rng.uniform(42.0, 55.0),
+                    rng.uniform(3.0, 7.0),
+                )
+            })
+            .collect();
+        let (battery, mobile) = fleet(&[("drone-a", 100.0)]);
+        let target = InspectionPoi {
+            position: [500.0, 0.0, 47.3],
+            ..poi("poi-00", 500.0, 1)
+        };
+        let mut stage = efficient_driver(vec![target]);
+        treed(&mut stage, stand.clone());
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        let flight = poi_flight(&stage.take_override_commands(), "drone-a");
+        let legs = legs_of(&flight, mobile[0].1);
+        let mut crossed = 0;
+        for tree in &stand {
+            if let Some(over) = lowest_over(&legs, tree) {
+                crossed += 1;
+                assert!(
+                    over >= tree.top_z_m() + CROWN_CLEARANCE_M - 1e-6,
+                    "{}: {over}",
+                    tree.id
+                );
+            }
+        }
+        assert!(crossed > 10, "{crossed}");
+        let decision = stage
+            .decisions()
+            .iter()
+            .find(|d| d.kind == "poi_assignment")
+            .expect("assigned");
+        assert_eq!(decision.inputs["route_trees"], "over");
     }
 }
