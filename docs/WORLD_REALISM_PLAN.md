@@ -112,7 +112,10 @@ C8 (P2.6) and D2 (P5.1).
   trunk's position and ground level, the tree's height, its crown base and
   crown radius, its trunk radius, its species and its leaf density (0 bare
   to 1 in full leaf). It is validated on construction and as read, so a
-  tree the model refuses is an error, never one that blocks nothing. The
+  tree the model refuses is an error, never one that blocks nothing; every
+  value must be within what a tree can be (at most 200 m tall, a crown
+  radius of 100 m, a trunk radius of 20 m, 10,000 km from the origin), so
+  no derived value overflows. The
   trunk is a vertical cylinder from the ground to the middle of the crown:
   hard. The crown is an ellipsoid between the crown base and the top:
   soft. `BlockerType::is_hard()` stays buildings and walls; trees answer

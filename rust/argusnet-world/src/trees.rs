@@ -49,6 +49,16 @@ pub const TREE_CELL_M: f64 = 16.0;
 /// allocated.
 pub const MAX_GRID_CELLS: usize = 1 << 24;
 
+/// The farthest a tree may stand from the origin, or its ground from the
+/// datum, metres: 10,000 km, any local frame on Earth.
+pub const MAX_COORDINATE_M: f64 = 1.0e7;
+/// The tallest a tree may be, metres (the tallest known is 116 m).
+pub const MAX_TREE_HEIGHT_M: f64 = 200.0;
+/// The widest a crown's radius may be, metres.
+pub const MAX_CROWN_RADIUS_M: f64 = 100.0;
+/// The widest a trunk's radius may be, metres.
+pub const MAX_TRUNK_RADIUS_M: f64 = 20.0;
+
 /// What kind of tree, which sets its shape when placed procedurally and how
 /// the viewer draws it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -174,19 +184,25 @@ pub enum TreePart {
 }
 
 impl Tree {
-    /// The tree, checked: every value finite, the height positive, the crown
-    /// base at or above the ground and below the top, the crown radius
-    /// positive, the trunk radius not negative and the leaf density in
-    /// `[0, 1]`.
+    /// The tree, checked: every value finite and within what a tree can be
+    /// ([`MAX_COORDINATE_M`], [`MAX_TREE_HEIGHT_M`], [`MAX_CROWN_RADIUS_M`],
+    /// [`MAX_TRUNK_RADIUS_M`]), the height positive, the crown base at or
+    /// above the ground and below the top, the crown radius positive, the
+    /// trunk radius not negative and the leaf density in `[0, 1]`.
     pub fn validated(self) -> Result<Self, TreeError> {
         let bad = |field| TreeError::BadValue {
             id: self.id.clone(),
             field,
         };
-        if !(self.xy_m.iter().all(|v| v.is_finite()) && self.base_z_m.is_finite()) {
+        // Within what a tree can be, so no value derived from them (a top,
+        // a footprint, a square in an intersection) can overflow.
+        let within = |v: f64, limit: f64| v.is_finite() && v.abs() <= limit;
+        if !(self.xy_m.iter().all(|v| within(*v, MAX_COORDINATE_M))
+            && within(self.base_z_m, MAX_COORDINATE_M))
+        {
             return Err(bad("position"));
         }
-        if !(self.height_m.is_finite() && self.height_m > 0.0) {
+        if !(within(self.height_m, MAX_TREE_HEIGHT_M) && self.height_m > 0.0) {
             return Err(bad("height_m"));
         }
         if !(self.crown_base_m.is_finite()
@@ -195,25 +211,14 @@ impl Tree {
         {
             return Err(bad("crown_base_m"));
         }
-        if !(self.crown_radius_m.is_finite() && self.crown_radius_m > 0.0) {
+        if !(within(self.crown_radius_m, MAX_CROWN_RADIUS_M) && self.crown_radius_m > 0.0) {
             return Err(bad("crown_radius_m"));
         }
-        if !(self.trunk_radius_m.is_finite() && self.trunk_radius_m >= 0.0) {
+        if !(within(self.trunk_radius_m, MAX_TRUNK_RADIUS_M) && self.trunk_radius_m >= 0.0) {
             return Err(bad("trunk_radius_m"));
         }
         if !(self.leaf_density.is_finite() && (0.0..=1.0).contains(&self.leaf_density)) {
             return Err(bad("leaf_density"));
-        }
-        // Each value finite is not enough: what is derived from them (the
-        // top, the crown's centre, the footprint) must be too.
-        let b = self.bounds_xy_m();
-        if !(self.top_z_m().is_finite()
-            && self.crown_centre_m()[2].is_finite()
-            && [b.x_min_m, b.x_max_m, b.y_min_m, b.y_max_m]
-                .iter()
-                .all(|v| v.is_finite()))
-        {
-            return Err(bad("extent"));
         }
         Ok(self)
     }
@@ -1027,7 +1032,7 @@ mod tests {
         assert_eq!(one.trees(), two.trees());
         assert_eq!(one.trees()[0].id, "a");
         // Each tree fine, but too far apart to grid: refused, not allocated.
-        let spread = TreeLayer::new(vec![at("a", -1e12, 0.0), at("b", 1e12, 1e12)]);
+        let spread = TreeLayer::new(vec![at("a", -1e7, 0.0), at("b", 1e7, 1e7)]);
         assert!(
             matches!(spread, Err(TreeError::TooSpread { .. })),
             "{spread:?}"
@@ -1108,39 +1113,62 @@ mod tests {
             }),
             "leaf_density"
         );
-        // Finite values whose top or footprint is not.
+        // Finite but beyond what a tree can be: refused, so nothing derived
+        // from them (a top, a footprint, a square) can overflow.
         assert_eq!(
             field(Tree {
-                xy_m: [f64::MAX, 0.0],
-                crown_radius_m: f64::MAX,
+                xy_m: [1.0e7 + 1.0, 0.0],
                 ..tree()
             }),
-            "extent"
+            "position"
         );
         assert_eq!(
             field(Tree {
-                base_z_m: f64::MAX,
-                height_m: f64::MAX,
-                crown_base_m: 0.0,
+                base_z_m: -9e307,
                 ..tree()
             }),
-            "extent"
+            "position"
         );
-        // Extremes whose top is finite have a finite crown centre too.
-        let extreme = Tree {
-            base_z_m: -9e307,
-            height_m: 1e308,
-            crown_base_m: 9e307,
+        assert_eq!(
+            field(Tree {
+                height_m: 201.0,
+                ..tree()
+            }),
+            "height_m"
+        );
+        assert_eq!(
+            field(Tree {
+                crown_radius_m: 101.0,
+                ..tree()
+            }),
+            "crown_radius_m"
+        );
+        assert_eq!(
+            field(Tree {
+                trunk_radius_m: 1e200,
+                ..tree()
+            }),
+            "trunk_radius_m"
+        );
+        // At every limit at once, the geometry stays finite and right.
+        let largest = Tree {
+            xy_m: [1.0e7, -1.0e7],
+            base_z_m: -1.0e7,
+            height_m: 200.0,
+            crown_base_m: 199.0,
+            crown_radius_m: 100.0,
+            trunk_radius_m: 20.0,
             ..tree()
         }
         .validated()
-        .expect("finite top");
-        let centre = extreme.crown_centre_m()[2];
-        assert!(
-            centre.is_finite() && centre > 0.0 && centre < extreme.top_z_m(),
-            "{centre}"
+        .expect("at the limits");
+        assert!(largest.crown_centre_m()[2].is_finite());
+        let outside = [1.0e7 + 25.0, -1.0e7, -1.0e7 + 50.0];
+        assert!(!largest.trunk_contains(outside));
+        assert_eq!(
+            largest.trunk_hit_t(outside, [outside[0], outside[1], -1.0e7 + 60.0]),
+            None
         );
-        assert!(extreme.trunk_top_z_m().is_finite());
         // The edges of each range are allowed.
         assert!(Tree {
             crown_base_m: 0.0,
