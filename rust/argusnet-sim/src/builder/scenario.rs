@@ -1431,6 +1431,11 @@ fn mission_document(
     let count = options.poi_count as usize;
     let hover = number(&["poi_hover_agl_m"]);
     let pois = match mission_profile {
+        _ if options.power_line_inspection && options.tree_inspection => {
+            return Err(BuildError::Invalid(
+                "power_line_inspection and tree_inspection each place the POIs; choose one".into(),
+            ));
+        }
         _ if options.power_line_inspection => {
             if mission_profile.is_some() {
                 return Err(BuildError::Invalid(
@@ -1616,13 +1621,17 @@ fn line_inspection_pois(ground: &Ground<'_>, line: &PowerLine, count: usize) -> 
 const TREE_INSPECTION_HOVER_AGL_M: f64 = 16.0;
 /// How far past a tree's crown a `tree_inspection` POI stands, metres.
 const TREE_INSPECTION_GAP_M: f64 = 1.5;
+/// How far inside the map's edge a `tree_inspection` POI stays, metres.
+const TREE_INSPECTION_EDGE_M: f64 = 10.0;
 
-/// `tree_inspection`'s POIs: `count` forest trees taller than the hover
-/// height by 4 m, evenly spaced through the world's trees in id order
-/// (south to north), each with a POI beside its crown at
-/// [`TREE_INSPECTION_HOVER_AGL_M`]: the first of eight directions round the
-/// tree (east first, then anticlockwise) whose point is in no crown, or
-/// east when every one is. Laid out from the trees alone, so the same for
+/// `tree_inspection`'s POIs: `count` trees taller than the hover height by
+/// 4 m (forest trees: over scrub none grows past 12 m), evenly spaced
+/// through the world's trees in id order (south to north), each with a POI
+/// beside its crown at [`TREE_INSPECTION_HOVER_AGL_M`]: the first of eight
+/// directions round the tree (east first, then anticlockwise) whose point
+/// is inside the map (by [`TREE_INSPECTION_EDGE_M`]) and in no crown. A
+/// tree with no such point gives way to the next in its share of the list;
+/// if none has one, the POI stands east of the first, held inside the map. Laid out from the trees alone, so the same for
 /// every seed. A POI that would stand in a building is pushed out of it.
 fn tree_inspection_pois(ground: &Ground<'_>, count: usize) -> Result<Vec<Value>, BuildError> {
     use argusnet_world::trees::{Species, TreeLayer};
@@ -1642,24 +1651,54 @@ fn tree_inspection_pois(ground: &Ground<'_>, count: usize) -> Result<Vec<Value>,
             tall.len()
         )));
     }
+    let b = &ground.world.bounds;
+    let inside = |xy: [f64; 2]| {
+        xy[0] >= b.x_min_m + TREE_INSPECTION_EDGE_M
+            && xy[0] <= b.x_max_m - TREE_INSPECTION_EDGE_M
+            && xy[1] >= b.y_min_m + TREE_INSPECTION_EDGE_M
+            && xy[1] <= b.y_max_m - TREE_INSPECTION_EDGE_M
+    };
+    let clamp = |xy: [f64; 2]| {
+        [
+            xy[0].clamp(
+                b.x_min_m + TREE_INSPECTION_EDGE_M,
+                b.x_max_m - TREE_INSPECTION_EDGE_M,
+            ),
+            xy[1].clamp(
+                b.y_min_m + TREE_INSPECTION_EDGE_M,
+                b.y_max_m - TREE_INSPECTION_EDGE_M,
+            ),
+        ]
+    };
+    // The first of eight points round `tree` beside its crown (east first,
+    // then anticlockwise) inside the map and in no crown.
+    let clear_beside = |tree: &argusnet_world::trees::Tree| {
+        let reach = tree.crown_radius_m + TREE_INSPECTION_GAP_M;
+        (0..8).find_map(|k| {
+            let angle = std::f64::consts::FRAC_PI_4 * k as f64;
+            let xy = [
+                tree.xy_m[0] + reach * angle.cos(),
+                tree.xy_m[1] + reach * angle.sin(),
+            ];
+            let z = ground.height_at(xy[0], xy[1]) + TREE_INSPECTION_HOVER_AGL_M;
+            (inside(xy) && layer.crown_at([xy[0], xy[1], z]).is_none()).then_some(xy)
+        })
+    };
+    let stride = tall.len() / count;
     Ok((0..count)
         .map(|i| {
-            let tree = tall[(2 * i + 1) * tall.len() / (2 * count)];
-            let reach = tree.crown_radius_m + TREE_INSPECTION_GAP_M;
-            let beside = |k: usize| {
-                let angle = std::f64::consts::FRAC_PI_4 * k as f64;
-                let xy = [
-                    tree.xy_m[0] + reach * angle.cos(),
-                    tree.xy_m[1] + reach * angle.sin(),
-                ];
-                let z = ground.height_at(xy[0], xy[1]) + TREE_INSPECTION_HOVER_AGL_M;
-                (xy, z)
-            };
-            let (xy, _) = (0..8)
-                .map(beside)
-                .find(|(xy, z)| layer.crown_at([xy[0], xy[1], *z]).is_none())
-                .unwrap_or_else(|| beside(0));
-            let [x, y] = ground.push_outside(xy, TREE_INSPECTION_HOVER_AGL_M);
+            // From the evenly spaced tree, on through its share of the list
+            // to the first with a clear point beside it; held inside the map
+            // beside the first when none has one.
+            let start = (2 * i + 1) * tall.len() / (2 * count);
+            let (tree, xy) = (start..(start + stride.max(1)).min(tall.len()))
+                .find_map(|k| clear_beside(tall[k]).map(|xy| (tall[k], xy)))
+                .unwrap_or_else(|| {
+                    let tree = tall[start];
+                    let reach = tree.crown_radius_m + TREE_INSPECTION_GAP_M;
+                    (tree, clamp([tree.xy_m[0] + reach, tree.xy_m[1]]))
+                });
+            let [x, y] = clamp(ground.push_outside(xy, TREE_INSPECTION_HOVER_AGL_M));
             json!({
                 "poi_id": format!("poi-{i:02}"),
                 "name": format!("Tree {}", tree.id),

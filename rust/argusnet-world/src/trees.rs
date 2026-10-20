@@ -206,9 +206,10 @@ impl Tree {
             return Err(bad("leaf_density"));
         }
         // Each value finite is not enough: what is derived from them (the
-        // top, the footprint) must be too.
+        // top, the crown's centre, the footprint) must be too.
         let b = self.bounds_xy_m();
         if !(self.top_z_m().is_finite()
+            && self.crown_centre_m()[2].is_finite()
             && [b.x_min_m, b.x_max_m, b.y_min_m, b.y_max_m]
                 .iter()
                 .all(|v| v.is_finite()))
@@ -228,7 +229,10 @@ impl Tree {
         [
             self.xy_m[0],
             self.xy_m[1],
-            self.base_z_m + 0.5 * (self.crown_base_m + self.height_m),
+            // The crown base plus its half-height, not the mean of base and
+            // top: each step stays between the ground and the top, so no
+            // intermediate overflows when those are finite.
+            self.base_z_m + self.crown_base_m + self.crown_half_height_m(),
         ]
     }
 
@@ -682,9 +686,12 @@ pub fn poisson_disk(bounds: Bounds2d, spacing_m: f64, attempts: usize, seed: u32
             let y0 = bounds.y_min_m + row as f64 * cell;
             let mut kept: Option<[f64; 2]> = None;
             for _ in 0..attempts {
+                // The last row and column may be cut short by the bounds:
+                // draw over the part inside, not over the whole cell and
+                // clamped (which would line points up on the edge).
                 let candidate = [
-                    (x0 + rng.random() * cell).min(bounds.x_max_m),
-                    (y0 + rng.random() * cell).min(bounds.y_max_m),
+                    x0 + rng.random() * cell.min(bounds.x_max_m - x0),
+                    y0 + rng.random() * cell.min(bounds.y_max_m - y0),
                 ];
                 if kept.is_some() {
                     continue;
@@ -1160,6 +1167,39 @@ mod tests {
             }),
             "leaf_density"
         );
+        // Finite values whose top or footprint is not.
+        assert_eq!(
+            field(Tree {
+                xy_m: [f64::MAX, 0.0],
+                crown_radius_m: f64::MAX,
+                ..tree()
+            }),
+            "extent"
+        );
+        assert_eq!(
+            field(Tree {
+                base_z_m: f64::MAX,
+                height_m: f64::MAX,
+                crown_base_m: 0.0,
+                ..tree()
+            }),
+            "extent"
+        );
+        // Extremes whose top is finite have a finite crown centre too.
+        let extreme = Tree {
+            base_z_m: -9e307,
+            height_m: 1e308,
+            crown_base_m: 9e307,
+            ..tree()
+        }
+        .validated()
+        .expect("finite top");
+        let centre = extreme.crown_centre_m()[2];
+        assert!(
+            centre.is_finite() && centre > 0.0 && centre < extreme.top_z_m(),
+            "{centre}"
+        );
+        assert!(extreme.trunk_top_z_m().is_finite());
         // The edges of each range are allowed.
         assert!(Tree {
             crown_base_m: 0.0,
@@ -1202,6 +1242,11 @@ mod tests {
             "{} points, {per_r2}",
             points.len()
         );
+        // A cut-short last row and column are drawn over, not clamped to
+        // the edge: no point lies on it.
+        assert!(points
+            .iter()
+            .all(|p| p[0] < bounds.x_max_m && p[1] < bounds.y_max_m));
         // Seeded: the same seed, the same points; another seed, others.
         assert_eq!(points, poisson_disk(bounds, 8.0, 12, 7));
         assert_ne!(points, poisson_disk(bounds, 8.0, 12, 8));

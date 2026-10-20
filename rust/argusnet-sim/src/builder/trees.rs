@@ -108,8 +108,11 @@ fn forest_mix(terrain_preset: &str) -> [f64; 2] {
 }
 
 /// The share of shrubs among what is kept over scrub; the rest are small
-/// broadleaves.
+/// broadleaves, no taller than [`SCRUB_TREE_MAX_HEIGHT_M`].
 const SCRUB_SHRUBS: f64 = 0.85;
+/// The tallest a broadleaf over scrub grows, metres: scrub is shrubs and
+/// small trees, so only forest has trees taller than this.
+pub const SCRUB_TREE_MAX_HEIGHT_M: f64 = 12.0;
 
 /// What a tree draws from the world it stands in.
 pub struct TreeGround<'a> {
@@ -208,7 +211,10 @@ pub fn build_trees(ground: &TreeGround<'_>, seed: u32) -> Vec<Tree> {
             } else {
                 Species::Broadleaf
             };
-            let s = shape(species);
+            let mut s = shape(species);
+            if !over_forest {
+                s.height_m.1 = s.height_m.1.min(SCRUB_TREE_MAX_HEIGHT_M);
+            }
             let lerp = |(lo, hi): (f64, f64), t: f64| lo + (hi - lo) * t;
             let height_m = cm(lerp(s.height_m, d[2]));
             let full_leaf = lerp(s.leaf_density, d[6]);
@@ -308,6 +314,9 @@ mod tests {
             let ground = world.terrain.height_at(tree.xy_m[0], tree.xy_m[1]);
             assert!((tree.base_z_m - ground).abs() < 0.05, "{}", tree.id);
             shrubs += usize::from(tree.species == Species::Shrub);
+            if class == LandCoverClass::Scrub as u8 {
+                assert!(tree.height_m <= SCRUB_TREE_MAX_HEIGHT_M, "{}", tree.id);
+            }
         }
         assert!(shrubs > 0);
         // Over scrub about one point in three is kept: the density there is
@@ -571,6 +580,19 @@ mod tests {
             built["presentation"]["scenario_options"]["tree_inspection"],
             json!(true)
         );
+        // Many POIs reach trees at the map's edge: each stays inside it.
+        let many = bundle(json!({"trees": true, "tree_inspection": true, "poi_count": 60}));
+        for poi in many["mission"]["pois"].as_array().expect("pois") {
+            let p: [f64; 3] = serde_json::from_value(poi["position"].clone()).expect("position");
+            let b = &world.bounds;
+            assert!(
+                p[0] >= b.x_min_m + 10.0
+                    && p[0] <= b.x_max_m - 10.0
+                    && p[1] >= b.y_min_m + 10.0
+                    && p[1] <= b.y_max_m - 10.0,
+                "{poi}"
+            );
+        }
         let config = |options: serde_json::Value| -> crate::builder::ScenarioConfig {
             serde_json::from_value(json!({
                 "format": "argusnet.scenario-config",
@@ -583,6 +605,8 @@ mod tests {
         for refused in [
             json!({"map_preset": "small", "tree_inspection": true}),
             json!({"map_preset": "small", "trees": true, "tree_inspection": true, "mission_mode": "target_tracking", "target_count": 1}),
+            json!({"map_preset": "small", "trees": true, "tree_inspection": true,
+                   "power_lines": true, "power_line_inspection": true}),
         ] {
             assert!(
                 crate::builder::build_bundle(&config(refused.clone())).is_err(),

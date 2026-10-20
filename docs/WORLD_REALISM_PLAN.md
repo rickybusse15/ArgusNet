@@ -146,7 +146,8 @@ C8 (P2.6) and D2 (P5.1).
   hash then. A bundle from data carries whatever trees it lists; the
   builder's opt-in `trees` option scatters them. Over the land cover's
   Forest cells every point of an 8 m Poisson-disk sample is kept, over
-  Scrub about one in three (mostly shrubs); none stands in a forest stand
+  Scrub about one in three (mostly shrubs, the rest broadleaves no taller
+  than 12 m, so only forest has tall trees); none stands in a forest stand
   (the stand is the aggregate for the trees inside it, so no crown is
   dimmed twice) or in a building. Species follow the terrain preset
   (alpine mostly conifer, jungle broadleaf and palm, the rest conifer and
@@ -157,15 +158,17 @@ C8 (P2.6) and D2 (P5.1).
   without snow, so they stay. The forest is part of the world, like the
   land cover: seeded from the presets and the terrain seed, not the run's
   seed, so seeds 7 and 42 fly over one forest. A medium default map holds
-  about 7,900 trees; a map whose forest would hold more than 15,000 is
+  about 7,800 trees; a map whose forest would hold more than 15,000 is
   thinned evenly to that. The trees go into the replay's meta as `trees`.
   Nothing in a run reads them yet: with `trees` on, every frame of a run is
   the frame it was without them.
 
   To measure the behaviour slices, the builder's opt-in `tree_inspection`
   option stands the mission's POIs inside the canopy: beside the crowns of
-  tall forest trees, spread through the forest, at 16 m over the ground and
-  in no crown, so a drone flying between them passes through crowns. The
+  tall forest trees, spread through the forest, at 16 m over the ground,
+  in no crown and at least 10 m inside the map, so a drone flying between
+  them passes through crowns. It cannot be combined with
+  `power_line_inspection`; each places the POIs. The
   scenario: medium map, default terrain, 3 drones, 8 POIs, coverage
   threshold 0.3, 240 s, `trees`, `tree_inspection`, `safety_blocking`. All
   8 POIs are inspected (seed 7, efficient_v1).
