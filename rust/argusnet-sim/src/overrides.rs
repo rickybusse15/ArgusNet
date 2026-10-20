@@ -796,8 +796,10 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         };
         if let Some(guard) = &shared.guard {
             let tentative = next;
-            next = guarded_step(guard, node_id, context.timestamp_s, *at, tentative);
-            next = clear_of_lines(&shared.lines, *at, next);
+            // The lines' clearance first: a step it stops never reaches the
+            // physical guard's smaller envelope, so records no contact.
+            let kept = clear_of_lines(&shared.lines, *at, tentative);
+            next = guarded_step(guard, node_id, context.timestamp_s, *at, kept);
             // Pushed back out of a structure on the direct line, it would
             // aim through the same one next tick: climb over it instead. (A
             // path that merely runs ahead of it is not a stall: the guard
@@ -809,14 +811,8 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
                 continue;
             }
             if pushed && distance_3d(next, path) >= distance - 0.25 * step_m {
-                let up = guarded_step(
-                    guard,
-                    node_id,
-                    context.timestamp_s,
-                    *at,
-                    [at[0], at[1], at[2] + step_m],
-                );
-                let up = clear_of_lines(&shared.lines, *at, up);
+                let up = clear_of_lines(&shared.lines, *at, [at[0], at[1], at[2] + step_m]);
+                let up = guarded_step(guard, node_id, context.timestamp_s, *at, up);
                 if up[2] > at[2] + 0.5 * step_m {
                     shared.climbing.insert(node_id.clone(), up[2]);
                     next = up;
@@ -837,9 +833,9 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
                                 at[1] + side * dx / across * step_m,
                                 at[2],
                             ];
+                            let aside = clear_of_lines(&shared.lines, *at, aside);
                             let stepped =
                                 guarded_step(guard, node_id, context.timestamp_s, *at, aside);
-                            let stepped = clear_of_lines(&shared.lines, *at, stepped);
                             if distance_3d(stepped, *at) > 0.5 * step_m {
                                 next = stepped;
                                 break;
@@ -1464,6 +1460,7 @@ mod tests {
         // Physics alone keeps it the guard's 2 m off; a planner that knows
         // the line keeps its 10 m clearance on every step.
         for (known, keep) in [(false, 2.0), (true, 10.0)] {
+            guard.take_contacts();
             let mut sim = rejoin_rig(true);
             ov(&mut sim).set_physical_guard(Some(guard.clone()));
             if known {
@@ -1490,6 +1487,10 @@ mod tests {
             assert_eq!(position_of(&sim, "d0").x, 0.0);
             // Each stops close to what it keeps, not far short of it.
             assert!(closest < keep + REDIRECT_SPEED_MPS, "{known}: {closest}");
+            // Physics stops it when only physics knows the wire; the
+            // planner's clearance stops it first when it knows the line.
+            let contacts = guard.take_contacts();
+            assert_eq!(contacts.is_empty(), known, "{known}: {contacts:?}");
         }
     }
     /// A 100 m span square to the rejoin's way at x = 500, sagging 2 m to
@@ -1582,12 +1583,15 @@ mod tests {
     fn a_rejoin_keeps_a_lines_clearance_under_a_wire_just_overhead() {
         let (line, guard) = wire_across(84.0);
         let mut sim = rejoin_rig(true);
-        ov(&mut sim).set_physical_guard(Some(guard));
+        ov(&mut sim).set_physical_guard(Some(guard.clone()));
         ov(&mut sim).set_power_lines(vec![line.clone()]);
         let kept = rejoin_clearances(&mut sim, &line);
         let closest = kept.iter().copied().fold(f64::INFINITY, f64::min);
         assert!(closest >= 10.0 - 1e-6, "{closest}");
         assert_eq!(position_of(&sim, "d0").x, 0.0);
+        // The planner's clearance stopped it first: physics never had to.
+        let contacts = guard.take_contacts();
+        assert!(contacts.is_empty(), "{contacts:?}");
     }
 
     /// A path running away faster than the rejoin is taken at once only

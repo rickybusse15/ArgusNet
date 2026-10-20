@@ -1011,6 +1011,10 @@ impl VisibilitySampler for BeliefVisibility {
     }
 }
 
+/// How far short of a wire's envelope [`PhysicalGuard::enforce_from`] stops
+/// a flight that would enter it, metres.
+const WIRE_STOP_SHORT_M: f64 = 0.01;
+
 /// Every `WorldContact::kind` the guard writes: out of the ground, out of a
 /// structure, and still inside one after the push limit. The replay schema
 /// lists the same (`tests/replay_vocabulary.rs`).
@@ -1122,6 +1126,50 @@ impl PhysicalGuard {
             self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[2], 0.0);
         }
         p
+    }
+
+    /// [`Self::enforce`] for a platform that flew from `from`: the flight is
+    /// swept against the wires first, since a wire is thin enough to pass
+    /// between two positions each clear of it. A flight that comes within
+    /// the guard's clearance of one is stopped just short of where it first
+    /// does (solved per piece, [`ConductorEnvelope::first_entry`]), and the
+    /// stop recorded; then the stop is enforced. One that starts inside an
+    /// envelope is left to `enforce` to push out. With no wires this is
+    /// `enforce`.
+    pub fn enforce_from(
+        &self,
+        node_id: &str,
+        timestamp_s: f64,
+        from: [f64; 3],
+        position: [f64; 3],
+    ) -> [f64; 3] {
+        let length = ((position[0] - from[0]).powi(2)
+            + (position[1] - from[1]).powi(2)
+            + (position[2] - from[2]).powi(2))
+        .sqrt();
+        let entry = self
+            .wires
+            .iter()
+            .filter_map(|wire| wire.first_entry(from, position))
+            .min_by(f64::total_cmp);
+        let stop = match entry {
+            Some(t) if t > 0.0 && length > 0.0 => {
+                let f = ((t * length - WIRE_STOP_SHORT_M) / length).max(0.0);
+                let stop = [
+                    from[0] + (position[0] - from[0]) * f,
+                    from[1] + (position[1] - from[1]) * f,
+                    from[2] + (position[2] - from[2]) * f,
+                ];
+                let correction = ((position[0] - stop[0]).powi(2)
+                    + (position[1] - stop[1]).powi(2)
+                    + (position[2] - stop[2]).powi(2))
+                .sqrt();
+                self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[1], correction);
+                stop
+            }
+            _ => position,
+        };
+        self.enforce(node_id, timestamp_s, stop)
     }
 
     /// The lowest a platform may be at `p`'s place: the guard's clearance
@@ -1517,6 +1565,31 @@ mod tests {
             contacts.iter().any(|c| c.kind == "unresolved"),
             "{contacts:?}"
         );
+    }
+
+    /// A flight across a wire between two positions each clear of it is
+    /// stopped just short of where it first comes within the clearance, and
+    /// the stop recorded; one that does not cross is `enforce` exactly.
+    #[test]
+    fn a_flight_through_a_wire_is_stopped_short_of_it() {
+        let guard = guard_over(None, &[wire(20.0)]);
+        let (from, to) = ([50.0, -10.0, 20.0], [50.0, 10.0, 20.0]);
+        let stopped = guard.enforce_from("d", 0.0, from, to);
+        assert!((stopped[1] - (-1.02 - 0.01)).abs() < 1e-9, "{stopped:?}");
+        assert_eq!([stopped[0], stopped[2]], [50.0, 20.0]);
+        let contacts = guard.take_contacts();
+        assert_eq!(contacts.len(), 1);
+        assert!((contacts[0].correction_m - (10.0 + 1.03)).abs() < 1e-9);
+        // Over it: as `enforce`.
+        let over = [50.0, 10.0, 25.0];
+        assert_eq!(guard.enforce_from("d", 0.0, [50.0, -10.0, 25.0], over), over);
+        assert!(guard.take_contacts().is_empty());
+        // From inside: `enforce` pushes it out.
+        let pushed = guard.enforce_from("d", 0.0, [50.0, 0.3, 20.0], [50.0, 0.3, 19.6]);
+        assert_eq!(pushed, guard.enforce("e", 0.0, [50.0, 0.3, 19.6]));
+        // Without wires, `enforce` whatever the flight.
+        let bare = guard_over(None, &[]);
+        assert_eq!(bare.enforce_from("d", 0.0, from, to), to);
     }
 
     /// Physics never pushes a platform into the ground: under a wire 1.5 m

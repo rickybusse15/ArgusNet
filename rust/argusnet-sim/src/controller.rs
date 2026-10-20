@@ -806,13 +806,22 @@ impl ControllerStage {
             if let Some(detail) = log.failure.borrow_mut().take() {
                 return Err(StageError::Invariant(format!("{node_id}: {detail}")));
             }
-            let position = match guard {
-                Some(guard) => guard.enforce(node_id, timestamp_s, position),
-                None => position,
-            };
             let platform = context.world.platform_mut(node_id).ok_or_else(|| {
                 StageError::Invariant(format!("controller {node_id} has no platform in the world"))
             })?;
+            // Swept from where it was: a wire is thin enough to fly through
+            // between two ticks.
+            let position = match guard {
+                Some(guard) => {
+                    let from = [
+                        platform.position.x,
+                        platform.position.y,
+                        platform.position.z,
+                    ];
+                    guard.enforce_from(node_id, timestamp_s, from, position)
+                }
+                None => position,
+            };
             guard_nominal(nominal, node_id, timestamp_s, position, velocity);
             platform.position = Vector3::new(position[0], position[1], position[2]);
             platform.velocity = Vector3::new(velocity[0], velocity[1], velocity[2]);

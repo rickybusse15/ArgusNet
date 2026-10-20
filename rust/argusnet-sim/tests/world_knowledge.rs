@@ -350,3 +350,93 @@ fn a_run_without_stage_eight_or_with_a_bad_config_is_refused() {
         .set_world_knowledge(WorldKnowledge::NoPrior, ExplorationConfig::default())
         .is_err());
 }
+
+/// R3: a wire is thin enough to fly through between two ticks, each
+/// position clear of it. Strung square across a drone's own path at its
+/// height, at the middle of a tick's flight, it stops the drone short of
+/// it (a recorded contact) instead of being flown through: no flight
+/// between two published positions passes through the wire.
+#[test]
+fn a_platform_never_flies_through_a_wire() {
+    let fixture = format!(
+        "{}/../../tests/fixtures/scenario_bundle_scan.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&fixture).expect("fixture");
+    let path_of = |frames: &[serde_json::Value], id: &str| -> Vec<[f64; 3]> {
+        frames
+            .iter()
+            .map(|frame| {
+                let node = frame["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|n| n["node_id"] == id)
+                    .unwrap();
+                let p = &node["position"];
+                [
+                    p[0].as_f64().unwrap(),
+                    p[1].as_f64().unwrap(),
+                    p[2].as_f64().unwrap(),
+                ]
+            })
+            .collect()
+    };
+    let without = frames(no_prior(&ScenarioBundle::from_json(&text).unwrap()));
+    let path = path_of(&without, "drone-east");
+    // The first tick it flies 10 m or more nearly level, after launch.
+    let k = (5..path.len() - 1)
+        .find(|&k| {
+            let (a, b) = (path[k], path[k + 1]);
+            (b[0] - a[0]).hypot(b[1] - a[1]) >= 10.0 && (b[2] - a[2]).abs() < 2.0
+        })
+        .expect("a level stretch");
+    let (a, b) = (path[k], path[k + 1]);
+    let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
+    let along = [(b[0] - a[0]), (b[1] - a[1])];
+    let norm = along[0].hypot(along[1]);
+    let across = [-along[1] / norm, along[0] / norm];
+    let support = |s: f64| {
+        serde_json::json!({
+            "xy_m": [mid[0] + across[0] * s, mid[1] + across[1] * s],
+            "base_z_m": mid[2] - 20.0,
+            "height_m": 20.0,
+        })
+    };
+    let mut document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    document["world"]["power_lines"] = serde_json::json!([{
+        "id": "across",
+        "supports": [support(-100.0), support(100.0)],
+        "conductor_offsets_m": [0.0],
+        "sag_ratio": 0.0,
+        "conductor_radius_m": 0.02,
+        "clearance_m": 10.0
+    }]);
+    let bundle = ScenarioBundle::from_json(&document.to_string()).unwrap();
+    let line = bundle_line(&document);
+    let replay = no_prior(&bundle).run_to_replay().unwrap();
+    let with: Vec<serde_json::Value> = replay
+        .frames
+        .iter()
+        .map(|frame| serde_json::to_value(frame).unwrap())
+        .collect();
+    assert!(
+        replay
+            .frames
+            .iter()
+            .flat_map(|frame| &frame.world_contacts)
+            .any(|contact| contact.node_id == "drone-east" && contact.kind == "structure"),
+        "the wire stopped it"
+    );
+    for id in ["drone-east", "drone-north"] {
+        let path = path_of(&with, id);
+        for (tick, pair) in path.windows(2).enumerate() {
+            let kept = line.clearance_along(pair[0], pair[1]);
+            assert!(kept >= 0.0, "{id} through the wire at tick {tick}: {kept}");
+        }
+    }
+}
+
+fn bundle_line(document: &serde_json::Value) -> argusnet_world::powerline::PowerLine {
+    serde_json::from_value(document["world"]["power_lines"][0].clone()).unwrap()
+}

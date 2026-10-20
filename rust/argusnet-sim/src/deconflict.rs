@@ -99,6 +99,10 @@ impl LineClearance {
     /// stays outside every line's clearance, metres: negative inside one,
     /// infinite with no line near it. A platform with no last position is
     /// judged where it would stand.
+    ///
+    /// The stage gives every platform one: where the safety monitor left
+    /// it, or, without one (its first tick, or a run without the monitor),
+    /// where it was proposed, so the push itself is swept.
     pub fn margin(&self, drone_id: &str, position: [f64; 3]) -> f64 {
         let from = self.left_at.get(drone_id).copied().unwrap_or(position);
         self.lines
@@ -395,9 +399,11 @@ impl StageHandler for DeconflictStage {
                 self.power_lines.clone(),
                 proposals
                     .iter()
-                    .filter_map(|proposal| {
-                        let left_at = safety?.left_at(&proposal.drone_id)?;
-                        Some((proposal.drone_id.clone(), left_at))
+                    .map(|proposal| {
+                        let left_at = safety
+                            .and_then(|safety| safety.left_at(&proposal.drone_id))
+                            .unwrap_or(proposal.position);
+                        (proposal.drone_id.clone(), left_at)
                     })
                     .collect(),
             )
@@ -437,9 +443,19 @@ impl StageHandler for DeconflictStage {
                     proposal.drone_id
                 )));
             };
+            // Swept from where it was proposed: the push can cross a wire.
             let position = match &self.guard {
                 Some(guard) => {
-                    guard.enforce(&proposal.drone_id, context.timestamp_s, proposal.position)
+                    let proposed = proposals
+                        .iter()
+                        .find(|p| p.drone_id == proposal.drone_id)
+                        .map_or(proposal.position, |p| p.position);
+                    guard.enforce_from(
+                        &proposal.drone_id,
+                        context.timestamp_s,
+                        proposed,
+                        proposal.position,
+                    )
                 }
                 None => proposal.position,
             };
@@ -663,6 +679,104 @@ mod tests {
         assert_eq!(events[0].resolution.as_str(), "lateral_offset");
         let p = [10.0, y, 60.0];
         assert!(!wire_beside().violated_by(p, p));
+    }
+
+    /// Without the safety monitor, the push itself is swept, from where the
+    /// yielder was proposed: one that lands clear of a wire 5 m to its side
+    /// but crosses it is refused for the one that keeps the most.
+    #[test]
+    fn without_the_monitor_the_push_itself_is_swept() {
+        use argusnet_world::powerline::Support;
+        let support = |x: f64| Support {
+            xy_m: [x, -5.0],
+            base_z_m: 0.0,
+            height_m: 60.0,
+        };
+        let wire = PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-100.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let mut stage = DeconflictStage::new();
+        stage.set_power_lines(vec![wire]);
+        let mut sim = rig_with(
+            vec![
+                node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
+                node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
+            ],
+            stage,
+        );
+        sim.step().unwrap();
+        let b = sim
+            .world()
+            .platforms()
+            .iter()
+            .find(|p| p.node_id == "drone-b")
+            .unwrap()
+            .position;
+        assert!(b.y > 1.0, "not across the wire: {b:?}");
+    }
+
+    /// The physical guard sweeps a push too: in a run whose planners know no
+    /// line, a push across a wire, landing clear beyond it, is stopped short
+    /// of the wire, not flown through.
+    #[test]
+    fn the_guard_stops_a_push_through_a_wire() {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::powerline::Support;
+        use argusnet_world::tiled::TiledTerrain;
+        let support = |x: f64| Support {
+            xy_m: [x, -5.0],
+            base_z_m: 0.0,
+            height_m: 60.0,
+        };
+        let wire = PowerLine {
+            id: "wire".into(),
+            supports: vec![support(-100.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let guard = PhysicalGuard::new(
+            SharedTerrain::new(
+                Arc::new(TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap()),
+                5.0,
+            ),
+            SharedObstacles::new(Arc::new(ObstacleLayer::new(bounds, 400.0, Vec::new()).unwrap())),
+            1.0,
+        )
+        .with_power_lines(&[wire]);
+        let mut stage = DeconflictStage::new();
+        stage.set_physical_guard(guard.clone());
+        let mut sim = rig_with(
+            vec![
+                node("drone-a", true, [0.0, 0.0, 60.0], [5.0, 0.0, 0.0]),
+                node("drone-b", true, [10.0, 0.0, 60.0], [-5.0, 0.0, 0.0]),
+            ],
+            stage,
+        );
+        sim.step().unwrap();
+        let b = sim
+            .world()
+            .platforms()
+            .iter()
+            .find(|p| p.node_id == "drone-b")
+            .unwrap()
+            .position;
+        assert!(b.y > -5.0 + 1.0, "short of the wire: {b:?}");
+        assert!(!guard.take_contacts().is_empty());
     }
 
     /// The margin judges the flight from where the platform was left, swept:
