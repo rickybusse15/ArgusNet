@@ -25,6 +25,7 @@
 //! heights and what is computed from them are compared within that bound.
 
 pub mod behaviors;
+pub mod buildings;
 pub mod environment;
 pub mod power_lines;
 pub mod scenario;
@@ -184,6 +185,11 @@ pub struct ScenarioOptions {
     /// profile. Off by default; written only when on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub power_line_inspection: bool,
+    /// R1: real buildings, an `argusnet.buildings` document
+    /// (`scripts/import_buildings.py`), in place of the procedural
+    /// buildings. Absent by default; written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buildings_path: Option<String>,
 }
 
 impl Default for ScenarioOptions {
@@ -362,6 +368,9 @@ pub struct BuiltWorld {
     pub land_cover_resolution_m: f64,
     /// Empty unless the `power_lines` option asks for them.
     pub power_lines: Vec<argusnet_world::powerline::PowerLine>,
+    /// With `buildings_path`: the georeference, the document's hash and the
+    /// counts. `None` otherwise.
+    pub buildings: Option<Value>,
 }
 
 /// `build_terrain_layer` + `build_default_environment`.
@@ -399,7 +408,7 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
     )
     .map_err(BuildError::Invalid)?;
 
-    let environment = build_environment(
+    let mut environment = build_environment(
         &terrain,
         scale,
         bounds,
@@ -407,6 +416,19 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         &options.terrain_preset,
         options.clean_terrain,
     );
+    // Real buildings in place of the procedural ones (R1).
+    let buildings = match &options.buildings_path {
+        None => None,
+        Some(path) => {
+            let (document, hash) = buildings::load(path)?;
+            let placed = buildings::place(&document, hash, &terrain, bounds)?;
+            environment
+                .obstacles
+                .retain(|obstacle| obstacle.blocker_type != "building");
+            environment.obstacles.extend(placed.obstacles);
+            Some(placed.record)
+        }
+    };
     let obstacles: Vec<Obstacle> = environment
         .obstacles
         .iter()
@@ -457,6 +479,7 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         land_cover,
         land_cover_resolution_m,
         power_lines,
+        buildings,
     })
 }
 
@@ -511,6 +534,9 @@ impl BuiltWorld {
         // the bundle it was before lines existed.
         if !self.power_lines.is_empty() {
             world["power_lines"] = json!(self.power_lines);
+        }
+        if let Some(buildings) = &self.buildings {
+            world["buildings"] = buildings.clone();
         }
         world
     }
@@ -681,6 +707,9 @@ impl BuiltWorld {
         if !self.power_lines.is_empty() {
             map.insert("power_lines".into(), json!(self.power_lines));
         }
+        if let Some(buildings) = &self.buildings {
+            map.insert("buildings".into(), buildings.clone());
+        }
         map.insert("crs_id".into(), json!("local-enu"));
         map.insert("environment_bounds_m".into(), bounds_document(self.bounds));
         map.insert("terrain_summary".into(), self.terrain_summary());
@@ -697,7 +726,22 @@ impl BuiltWorld {
         map.insert("land_cover_legend".into(), legend);
         map.insert(
             "enu_origin".into(),
-            json!({"latitude_deg": 37.7749, "longitude_deg": -122.4194, "altitude_m": 0.0}),
+            // Real buildings bring their own origin: the run stands where
+            // they do. Otherwise the reference's fixed one.
+            match self
+                .buildings
+                .as_ref()
+                .and_then(|record| record.get("georeference"))
+            {
+                Some(georeference) => json!({
+                    "latitude_deg": georeference["origin_lat_deg"],
+                    "longitude_deg": georeference["origin_lon_deg"],
+                    "altitude_m": georeference["origin_h_m"],
+                }),
+                None => {
+                    json!({"latitude_deg": 37.7749, "longitude_deg": -122.4194, "altitude_m": 0.0})
+                }
+            },
         );
         map
     }

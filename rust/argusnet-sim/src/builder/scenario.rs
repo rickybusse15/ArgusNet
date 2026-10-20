@@ -1630,6 +1630,9 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
     if o.power_line_inspection {
         document["power_line_inspection"] = json!(true);
     }
+    if let Some(path) = &o.buildings_path {
+        document["buildings_path"] = json!(path);
+    }
     document
 }
 
