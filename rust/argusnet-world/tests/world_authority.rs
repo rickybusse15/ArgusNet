@@ -294,4 +294,25 @@ fn crowns_dim_a_sight_line_and_a_trunk_stops_it() {
     let beside = los(Some(&one), [1.0, 24.0, 5.0], [39.0, 24.0, 5.0]);
     assert!(beside.visible);
     assert_eq!(beside.transmittance, 1.0);
+
+    // A wall nearer than the trunk is what stops the ray, and a trunk
+    // nearer than a wall is.
+    let wall = |x: f64| {
+        Obstacle::wall_segment("w", BlockerType::Wall, [x, 10.0], [x, 30.0], 0.5, 0.0, 30.0)
+            .unwrap()
+    };
+    for (x, kind) in [(10.0, "wall"), (30.0, "trunk")] {
+        let walls = ObstacleLayer::new(bounds(), 10.0, vec![wall(x)]).unwrap();
+        let v = visibility::los_with_trees(
+            &t,
+            &walls,
+            Some(&one),
+            [1.0, 20.0, 5.0],
+            [39.0, 20.0, 5.0],
+            &profile,
+            0,
+            1.0,
+        );
+        assert_eq!(v.blocker_type, kind);
+    }
 }
