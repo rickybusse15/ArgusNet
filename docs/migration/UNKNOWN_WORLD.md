@@ -354,5 +354,7 @@ they are not mistaken for done:
   truth plus noise, the localizer's own model, and it is separate from the
   world map. It matters once positioning is degraded (F2).
 
-The structure classes are exact, and vegetation returns are dropped. A
-segmentation error model and canopy handling come later.
+The structure classes are exact. Forest stands' returns are dropped; a
+tree's crown returns as canopy (soft structure, never occupied) with the
+probability its leaves stop the ray, and its trunk as structure (R2). A
+segmentation error model comes later.

@@ -12,13 +12,17 @@
 //! point and a class, nothing more:
 //!
 //! - **Ground**: the ray met terrain.
-//! - **Structure**: it met a building or wall.
+//! - **Structure**: it met a building, a wall or a tree's trunk.
+//! - **Canopy**: it was stopped by leaves in a tree's crown (R2): soft
+//!   structure, something to keep clear of but not a wall.
 //!
 //! The class models ground segmentation on the scanner's point cloud, which a
 //! real system computes from the cloud itself. This model takes it from the
-//! world exactly. Vegetation returns are dropped: they are neither ground nor
-//! something a platform must not fly into (the obstacle model already lets
-//! platforms pass through foliage).
+//! world exactly. A crown returns with the probability its leaves stop the
+//! ray (one minus its transmittance, [`SharedVisibility::first_return`]), so
+//! some rays reach the ground under a tree and some come back from its top.
+//! Forest stands' returns are still dropped: a stand is an aggregate with no
+//! surface to return from.
 
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +106,7 @@ impl RangeScanConfig {
 pub enum ReturnClass {
     Ground,
     Structure,
+    Canopy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -164,6 +169,16 @@ impl RangeScanner {
             ],
         );
         let max_range = self.config.max_range_m;
+        // Crowns draw from a stream of their own, keyed the same way, so a
+        // world without trees draws exactly what it drew before them.
+        let mut canopy = DeterministicRng::keyed(
+            0,
+            &[
+                SeedPart::Str(node_id),
+                SeedPart::Str("range-scan-canopy"),
+                SeedPart::Int(tick as i64),
+            ],
+        );
         let mut returns = Vec::new();
         let mut misses = 0u32;
         for direction in self.config.directions(heading) {
@@ -175,13 +190,17 @@ impl RangeScanner {
             // Drawn for every ray, hit or not, so one ray's outcome never
             // shifts another's noise.
             let noise = rng.normal(0.0, self.config.range_noise_m.max(0.0));
-            let Some((kind, point)) = self.world.first_hit(origin_m, end) else {
+            let Some((kind, point)) = self
+                .world
+                .first_return(origin_m, end, &mut || canopy.uniform())
+            else {
                 misses += 1;
                 continue;
             };
             let class = match kind.as_str() {
                 "terrain" => ReturnClass::Ground,
-                "building" | "wall" => ReturnClass::Structure,
+                "building" | "wall" | "trunk" => ReturnClass::Structure,
+                "canopy" => ReturnClass::Canopy,
                 _ => {
                     misses += 1;
                     continue;

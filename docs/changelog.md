@@ -2,6 +2,17 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Sensing through trees (R2). Line of sight crosses crowns: each dims it
+  by Beer–Lambert on its leaf density, and a trunk stops it
+  (`blocker_type` `"trunk"`). The range scanner returns from a crown with
+  the probability its leaves stop the ray (one minus its transmittance),
+  from a stream of draws of its own, and from a trunk as structure. The
+  no-prior belief keeps canopy as soft structure (seen, never occupied),
+  written to the replay as `canopy_updates`, range-scan `canopy` points and
+  `belief.canopy_cells`, each only when there are some. With trees on,
+  observations in the canonical target scenarios fell by up to 29 %; a
+  no-prior run over the tree scenario maps about 7,100 canopy cells. The 14
+  canonical replays are unchanged.
 - Trees in a run (R2). The bundle's `world` carries `trees` (`tree-v1`),
   each validated as read, absent when there are none and left out of the
   bundle's hash then. The builder's opt-in `trees` option scatters them

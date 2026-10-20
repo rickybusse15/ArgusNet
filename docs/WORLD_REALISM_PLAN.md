@@ -3,7 +3,7 @@
 **Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
 opacity fix (#222) and typed structure matching. R3 is in progress: the
 model, the safety clearance, lines in a run, drawing in the viewer and the
-planner's corridor are done. R2 is in progress: the tree model and trees in a run are done.
+planner's corridor are done. R2 is in progress: the tree model, trees in a run and sensing through crowns are done.
 R1, R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
@@ -169,6 +169,46 @@ C8 (P2.6) and D2 (P5.1).
   scenario: medium map, default terrain, 3 drones, 8 POIs, coverage
   threshold 0.3, 240 s, `trees`, `tree_inspection`, `safety_blocking`. All
   8 POIs are inspected (seed 7, efficient_v1).
+
+  *Done (sensing):* line of sight goes through trees
+  (`visibility::los_with_trees`, which is `los` exactly without them). A
+  trunk stops the ray like a building (`blocker_type` `"trunk"`). Each
+  crown crossed dims it by its optical depth, multiplied into the forest
+  stands' transmittance, and counts as vegetation for the first hit, so
+  three dense crowns in a row fall under the hard-block threshold. The run's
+  `SharedVisibility` carries the world's trees, so bearing sensors, follow
+  controllers and every other sight line see them. With trees added to the
+  canonical target scenarios, observations over the run fell:
+  `intercept_stress` 2810 → 2601 and 2888 → 2569 (seeds 7, 42),
+  `sar_person_search` 205 → 186 and 104 → 74, `search_acquisition`
+  1246 → 1246 and 1013 → 968.
+
+  The range scanner returns from trees (`SharedVisibility::first_return`).
+  A trunk returns as structure. A crown is leaves with gaps: at each crown
+  a ray enters, in order, one uniform draw `u` stops it `-ln(1 − u)/(k·d)`
+  metres in, and if that is inside the crown and short of anything harder
+  it returns a **canopy** point there; otherwise the ray goes on. So a crown
+  returns with probability one minus the transmittance `los` gives it
+  (checked over 20,000 draws to within 1 %). The draws come from a stream of
+  their own, keyed by node and tick, and are never made in a world without
+  trees. The belief map keeps canopy as soft structure: per cell, the
+  highest canopy return and a count. It marks the cell seen but never
+  occupied, so nothing collides with a crown. Canopy rows go to the replay
+  as `canopy_updates` (`[i, j, top_cm]`, each replacing the cell's last,
+  written when first seen or moved 10 cm), the frame's range-scan sample
+  carries `canopy` points, and `mapping_state.belief.canopy_cells` counts
+  them. Each is written only when there are some, and the canopy arrays
+  are allocated at the first canopy return, so a run without trees
+  checkpoints as before. A believed structure on a trunk's cell counts as
+  right in `structure_precision`; recall stays the buildings' and walls'.
+
+  On the tree scenario with no prior map (`--world-knowledge none`,
+  efficient_v1), the belief went from dropping the canopy to holding 7,144
+  and 7,111 canopy cells (seeds 7, 42) of 15,246, with 52 and 50 trunk cells
+  believed structure (precision 1.0). Fewer rays reach the ground under
+  trees, so the ground error rose a little (RMSE 0.16 → 0.20 m and 0.17 →
+  0.21 m). All 8 POIs are inspected before and after. With a prior map and
+  no targets, every frame is unchanged.
 
 ### R3: power lines
 

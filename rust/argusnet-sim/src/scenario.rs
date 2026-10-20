@@ -735,9 +735,10 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
 
     let terrain = Arc::new(terrain);
     let obstacles = Arc::new(obstacles);
+    let trees = Arc::new(trees);
     Ok(BuiltWorld {
         power_lines: Arc::new(power_lines),
-        trees: Arc::new(trees),
+        trees: Arc::clone(&trees),
         terrain: SharedTerrain::new(Arc::clone(&terrain), world.terrain.base_resolution_m),
         obstacles: SharedObstacles::new(Arc::clone(&obstacles)),
         visibility: SharedVisibility::new(
@@ -746,7 +747,8 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
             land_cover,
             Arc::new(world.visibility_profile.clone()),
             world.los_terrain_clearance_m,
-        ),
+        )
+        .with_trees(Arc::clone(&trees)),
     })
 }
 
@@ -822,6 +824,11 @@ pub struct AssembledRun {
     /// Which belief cells a true building or wall covers, for the replay's
     /// evaluation figures. Never read by the run.
     true_structures: Vec<bool>,
+    /// Which belief cells a tree's trunk stands in (R2), empty in a world
+    /// without trees. A trunk returns as structure, so a believed structure
+    /// there is right; but a scanner seldom sees a thin trunk, so recall
+    /// stays the buildings' and walls'. Never read by the run.
+    true_trunks: Vec<bool>,
     /// Each drone's task changes (P0), rebuilt from every committed tick and
     /// written as `meta.assignment_history`. Not checkpointed: like the
     /// frames, a resumed run's history starts at its checkpoint.
@@ -963,6 +970,7 @@ fn belief_stats(
     occupied_probability: f64,
     terrain: Option<&SharedTerrain>,
     true_structures: &[bool],
+    true_trunks: &[bool],
 ) -> crate::replay::ReplayBeliefStats {
     let (nx, ny) = grid.dimensions();
     let mut squared = 0.0;
@@ -996,7 +1004,10 @@ fn belief_stats(
         for i in 0..nx {
             if believed(i, j) {
                 believed_n += 1;
-                believed_right += u64::from(near(i, j, &truly));
+                let right = |i: usize, j: usize| {
+                    truly(i, j) || true_trunks.get(j * nx + i).copied().unwrap_or(false)
+                };
+                believed_right += u64::from(near(i, j, &right));
             }
             if truly(i, j) {
                 true_n += 1;
@@ -1015,6 +1026,7 @@ fn belief_stats(
         structure_cells: believed_n,
         structure_precision: (believed_n > 0).then(|| believed_right as f64 / believed_n as f64),
         structure_recall: (true_n > 0).then(|| true_found as f64 / true_n as f64),
+        canopy_cells: grid.canopy_cells() as u64,
     }
 }
 
@@ -1398,6 +1410,7 @@ pub fn assemble_with(
         guard: None,
         policy_guard: false,
         true_structures: Vec::new(),
+        true_trunks: Vec::new(),
         assignments: Default::default(),
     })
 }
@@ -1806,6 +1819,20 @@ impl AssembledRun {
                 )
             })
             .collect();
+        if !self.world.trees.is_empty() {
+            let mut trunks = vec![false; nx * ny];
+            for tree in self.world.trees.trees() {
+                let i = ((tree.xy_m[0] - self.map_bounds_m.x_min_m) / resolution_m).floor();
+                let j = ((tree.xy_m[1] - self.map_bounds_m.y_min_m) / resolution_m).floor();
+                if tree.trunk_radius_m > 0.0
+                    && (0.0..nx as f64).contains(&i)
+                    && (0.0..ny as f64).contains(&j)
+                {
+                    trunks[j as usize * nx + i as usize] = true;
+                }
+            }
+            self.true_trunks = trunks;
+        }
         let scanner = crate::range_scan::RangeScanner::new(
             config.scan.clone(),
             self.world.visibility.clone(),
@@ -2327,6 +2354,11 @@ impl AssembledRun {
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
             .map(MappingStage::take_belief_updates)
             .unwrap_or_default();
+        let canopy_updates = self
+            .sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .map(MappingStage::take_canopy_updates)
+            .unwrap_or_default();
         let Some(mapping) = self.mapping() else {
             return;
         };
@@ -2343,6 +2375,7 @@ impl AssembledRun {
                         config.occupied_probability,
                         self.report.terrain.as_ref(),
                         &self.true_structures,
+                        &self.true_trunks,
                     )
                 },
             ),
@@ -2353,6 +2386,7 @@ impl AssembledRun {
             .map(crate::replay::ReplayRangeScan::from)
             .collect();
         frame.belief_updates = belief_updates;
+        frame.canopy_updates = canopy_updates;
         frame.inspection_events = mapping
             .inspection_events()
             .into_iter()
