@@ -440,6 +440,126 @@ pub fn extrusion_mesh(
     mesh
 }
 
+/// `polygon` cut to where `f(x, y) = a x + b y + c <= 0` (Sutherland-Hodgman
+/// against one half-plane).
+fn clip_to_half_plane(polygon: &[[f64; 2]], [a, b, c]: [f64; 3]) -> Vec<[f64; 2]> {
+    let f = |p: [f64; 2]| a * p[0] + b * p[1] + c;
+    let mut out = Vec::with_capacity(polygon.len() + 2);
+    for i in 0..polygon.len() {
+        let (p, q) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+        let (fp, fq) = (f(p), f(q));
+        if fp <= 0.0 {
+            out.push(p);
+        }
+        if (fp < 0.0 && fq > 0.0) || (fp > 0.0 && fq < 0.0) {
+            let t = fp / (fp - fq);
+            out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+        }
+    }
+    out.dedup_by(|x, y| (x[0] - y[0]).hypot(x[1] - y[1]) < 1.0e-9);
+    out
+}
+
+/// A `building-v2`: walls from `wall_base_z_m` up to the roof along every
+/// edge (a gable end rises to its peak), and one facet per roof plane,
+/// where that plane is the lowest: the solid the simulation intersects,
+/// drawn. `footprint` and `roof` come from the model
+/// ([`argusnet_world::obstacles::Obstacle::building_v2`]).
+pub fn roofed_mesh(
+    footprint: &[[f64; 2]],
+    wall_base_z_m: f64,
+    roof: &argusnet_world::obstacles::Roof,
+    colour: [f32; 4],
+) -> MeshData {
+    let mut mesh = MeshData::default();
+    if footprint.len() < 3 || roof.planes.is_empty() {
+        return mesh;
+    }
+    let ccw: Vec<[f64; 2]> = if polygon_area(footprint) < 0.0 {
+        footprint.iter().rev().copied().collect()
+    } else {
+        footprint.to_vec()
+    };
+    let plane_at = |[a, b, c]: [f64; 3], p: [f64; 2]| a * p[0] + b * p[1] + c;
+    // Roof facets.
+    for (k, &plane) in roof.planes.iter().enumerate() {
+        let mut facet = ccw.clone();
+        for (j, &other) in roof.planes.iter().enumerate() {
+            if j != k && !facet.is_empty() {
+                facet = clip_to_half_plane(
+                    &facet,
+                    [
+                        plane[0] - other[0],
+                        plane[1] - other[1],
+                        plane[2] - other[2],
+                    ],
+                );
+            }
+        }
+        if facet.len() < 3 || polygon_area(&facet).abs() < 1.0e-6 {
+            continue;
+        }
+        let start = mesh.positions.len() as u32;
+        let normal = normalize([-plane[0], -plane[1], 1.0]);
+        for p in &facet {
+            mesh.positions
+                .push([p[0] as f32, p[1] as f32, plane_at(plane, *p) as f32]);
+            mesh.normals.push(normal);
+            mesh.colours.push(colour);
+        }
+        mesh.indices
+            .extend(triangulate_polygon(&facet).into_iter().map(|i| i + start));
+    }
+    // Walls, split wherever the roof line kinks along an edge.
+    let wall_start = mesh.positions.len();
+    let mut wall_positions = Vec::new();
+    let mut wall_indices = Vec::new();
+    for i in 0..ccw.len() {
+        let (s, e) = (ccw[i], ccw[(i + 1) % ccw.len()]);
+        let at = |t: f64| [s[0] + (e[0] - s[0]) * t, s[1] + (e[1] - s[1]) * t];
+        let mut cuts = vec![0.0, 1.0];
+        for (j, &pj) in roof.planes.iter().enumerate() {
+            for &pk in &roof.planes[j + 1..] {
+                let (d0, d1) = (
+                    plane_at(pj, s) - plane_at(pk, s),
+                    plane_at(pj, e) - plane_at(pk, e),
+                );
+                if (d0 < 0.0 && d1 > 0.0) || (d0 > 0.0 && d1 < 0.0) {
+                    // Only where the two planes are the roof there: other
+                    // planes crossing above it leave the roof line straight.
+                    let t = d0 / (d0 - d1);
+                    let p = at(t);
+                    if (plane_at(pj, p) - roof.height_at(p[0], p[1])).abs() < 1.0e-9 {
+                        cuts.push(t);
+                    }
+                }
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|x, y| (*x - *y).abs() < 1.0e-9);
+        for pair in cuts.windows(2) {
+            let (p, q) = (at(pair[0]), at(pair[1]));
+            let (zp, zq) = (roof.height_at(p[0], p[1]), roof.height_at(q[0], q[1]));
+            let base = wall_positions.len() as u32;
+            wall_positions.extend_from_slice(&[
+                [p[0] as f32, p[1] as f32, wall_base_z_m as f32],
+                [q[0] as f32, q[1] as f32, wall_base_z_m as f32],
+                [q[0] as f32, q[1] as f32, zq as f32],
+                [p[0] as f32, p[1] as f32, zp as f32],
+            ]);
+            wall_indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+    let wall_normals = triangle_normals(&wall_positions, &wall_indices);
+    mesh.colours
+        .extend(std::iter::repeat_n(colour, wall_positions.len()));
+    mesh.positions.extend(wall_positions);
+    mesh.normals.extend(wall_normals);
+    mesh.indices
+        .extend(wall_indices.into_iter().map(|i| i + wall_start as u32));
+    mesh
+}
+
 /// A style entry from `_scene_style.default_style`, for the ids a built scene
 /// uses.
 fn style(id: &str) -> Option<Value> {
@@ -532,7 +652,30 @@ pub fn obstacle_layers(
             _ => "buildings",
         };
         let colour = style_colour(layer);
-        let mesh = if let Some(footprint) = object.get("footprint_xy_m").filter(|v| v.is_array()) {
+        let roofed = (object.get("kind").and_then(Value::as_str) == Some("building-v2"))
+            .then(|| {
+                serde_json::from_value::<argusnet_world::obstacles::ObstacleMetadata>(
+                    object.clone(),
+                )
+                .map_err(|error| format!("building-v2: {error}"))
+                .and_then(|metadata| metadata.into_obstacle().map_err(|e| e.to_string()))
+            })
+            .transpose()?;
+        let mesh = if let Some(building) = roofed {
+            // The model's own roof, walls reaching down to the lowest ground
+            // under the footprint as every other solid's do.
+            let argusnet_world::obstacles::ObstacleShape::Polygon { footprint_xy_m } =
+                &building.shape
+            else {
+                return Err(format!("{}: building-v2 without a footprint", building.id));
+            };
+            let lowest = footprint_xy_m
+                .iter()
+                .map(|p| grid.height_at(p[0], p[1]))
+                .fold(f64::INFINITY, f64::min);
+            let roof = building.roof.as_ref().expect("building-v2 has a roof");
+            roofed_mesh(footprint_xy_m, building.base_z_m.min(lowest), roof, colour)
+        } else if let Some(footprint) = object.get("footprint_xy_m").filter(|v| v.is_array()) {
             let footprint = footprint_pairs(footprint)?;
             let heights: Vec<f64> = footprint
                 .iter()
@@ -951,6 +1094,87 @@ mod tests {
             );
         }
         assert_eq!(walls, 8);
+    }
+
+    /// Projected area of a mesh's upward-facing triangles.
+    fn roof_area(mesh: &MeshData) -> f64 {
+        mesh.indices
+            .chunks(3)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                0.5 * (((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) as f64)
+            })
+            .filter(|area| *area > 0.0)
+            .sum()
+    }
+
+    /// A building-v2 is drawn as the model's solid: its roof facets tile the
+    /// footprint and lie on the model's roof, and a gable end's wall rises
+    /// to the ridge (split where the roof line turns).
+    #[test]
+    fn a_roofed_building_is_drawn_as_the_model_solid() {
+        use argusnet_world::obstacles::{Obstacle, ObstacleShape, RoofShape};
+        let footprint = vec![[0.0, 0.0], [20.0, 0.0], [20.0, 10.0], [0.0, 10.0]];
+        for (shape, walls) in [
+            (RoofShape::Gabled, 6),
+            (RoofShape::Hipped, 4),
+            (RoofShape::Pyramidal, 4),
+            (RoofShape::Flat, 4),
+        ] {
+            let height = if shape == RoofShape::Flat { 0.0 } else { 5.0 };
+            let b = Obstacle::building_v2("b", footprint.clone(), 2.0, 10.0, shape, height, None)
+                .unwrap();
+            let roof = b.roof.as_ref().unwrap();
+            let ObstacleShape::Polygon { footprint_xy_m } = &b.shape else {
+                unreachable!()
+            };
+            let mesh = roofed_mesh(footprint_xy_m, 0.0, roof, [1.0; 4]);
+            assert!(
+                (roof_area(&mesh) - 200.0).abs() < 1e-3,
+                "{shape:?}: {}",
+                roof_area(&mesh)
+            );
+            // Every roof vertex on the model's roof; the walls from the base.
+            let mut wall_quads = 0;
+            for chunk in mesh.positions.chunks(1) {
+                let p = chunk[0];
+                if p[2] == 0.0 {
+                    wall_quads += 1;
+                    continue;
+                }
+                let z = roof.height_at(p[0] as f64, p[1] as f64);
+                assert!((p[2] as f64 - z).abs() < 1e-3, "{shape:?}: {p:?} vs {z}");
+            }
+            assert_eq!(wall_quads / 2, walls, "{shape:?}: wall pieces");
+            let top = mesh.positions.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
+            assert!(
+                (top as f64 - b.top_z_m).abs() < 1e-3,
+                "{shape:?}: top {top}"
+            );
+        }
+    }
+
+    #[test]
+    fn building_v2_metadata_is_drawn_with_its_roof() {
+        let meta = meta();
+        let grid = HeightGrid::from_viewer_mesh(&meta["terrain"]["viewer_mesh"]).unwrap();
+        let object = json!({
+            "object_id": "roofed", "kind": "building-v2", "blocker_type": "building",
+            "footprint_xy_m": [[90.0, 90.0], [110.0, 90.0], [110.0, 100.0], [90.0, 100.0]],
+            "base_elevation_m": 20.0, "eave_elevation_m": 28.0, "top_elevation_m": 33.0,
+            "roof_shape": "gabled",
+        });
+        let layers = obstacle_layers(std::slice::from_ref(&object), &grid).unwrap();
+        let mesh = &layers[0].1[0];
+        let top = mesh.positions.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
+        let low = mesh.positions.iter().map(|p| p[2]).fold(f32::MAX, f32::min);
+        assert_eq!(top, 33.0, "the ridge, not a padded prism top");
+        assert!(low <= 20.0, "walls reach the ground");
+        let mut bad = object;
+        bad["roof_shape"] = json!("mansard");
+        assert!(obstacle_layers(&[bad], &grid)
+            .unwrap_err()
+            .contains("mansard"));
     }
 
     #[test]

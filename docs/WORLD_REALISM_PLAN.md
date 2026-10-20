@@ -79,6 +79,15 @@ C8 (P2.6) and D2 (P5.1).
   or pyramidal, with ridge direction and roof height). Line of sight,
   `first_hit` and collision intersect the roof triangles as well as the prism.
   The old `building-v1` stays as it is.
+  *Done (model, R1.1):* `building-v2` in `argusnet_world::obstacles`
+  (`Obstacle::building_v2`, metadata `eave_elevation_m`, `roof_shape`,
+  `ridge_azimuth_rad`). The roof is a set of planes and the solid ends at
+  the lowest: a gable is two, a hip or pyramid one per edge (convex
+  footprints only; others are refused). Point, ray, path-length and surface
+  queries clip against the planes exactly. The scene builder draws the same
+  solid: walls rising to the roof line (split where it turns) and one facet
+  per plane. Every other kind is unchanged, field and bytes (14/14 replays).
+  Next: the georeferenced import, so a run carries `building-v2`.
 - **The simulation sees what the viewer sees.** GIS buildings become
   `ObstaclePrimitive`s in the run, not just meshes.
 - **Rendering.** Generate roof meshes and per-face normals. Add semantic
