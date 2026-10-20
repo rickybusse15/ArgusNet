@@ -7,8 +7,8 @@
 //! pair sees an earlier pair's adjustment.
 
 use argusnet_planning::deconfliction::{
-    resolve_step, role_priority, yielder, DeconflictionConfig, ExclusionZone, FlightCorridor,
-    Proposal, DEFAULT_ROLE_PRIORITY,
+    resolve_step, resolve_step_keeping, role_priority, yielder, DeconflictionConfig, ExclusionZone,
+    FlightCorridor, Proposal, DEFAULT_ROLE_PRIORITY,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -109,6 +109,18 @@ fn run(
     Vec<Proposal>,
     Vec<argusnet_planning::deconfliction::DeconflictionEvent>,
 ) {
+    run_keeping(case, None::<fn(&str, [f64; 3]) -> f64>)
+}
+
+/// A case through `resolve_step`, or through `resolve_step_keeping` with
+/// `margin`.
+fn run_keeping(
+    case: &Case,
+    margin: Option<impl FnMut(&str, [f64; 3]) -> f64>,
+) -> (
+    Vec<Proposal>,
+    Vec<argusnet_planning::deconfliction::DeconflictionEvent>,
+) {
     let config = DeconflictionConfig {
         min_separation_m: f(&case.config.min_separation_m),
         look_ahead_s: f(&case.config.look_ahead_s),
@@ -157,15 +169,123 @@ fn run(
         .collect();
     let terrain = case.terrain_height_m.as_ref().map(|h| f(h));
 
-    resolve_step(
-        &config,
+    let role_of = |id: &str| case.roles.get(id).cloned().unwrap_or_default();
+    let floor = |_xy, z: f64, min_agl| terrain.map(|height| z.max(height + min_agl));
+    match margin {
+        None => resolve_step(
+            &config,
+            &proposals,
+            f(&case.timestamp_s),
+            role_of,
+            floor,
+            &zones,
+            &corridors,
+        ),
+        Some(margin) => resolve_step_keeping(
+            &config,
+            &proposals,
+            f(&case.timestamp_s),
+            role_of,
+            floor,
+            &zones,
+            &corridors,
+            margin,
+        ),
+    }
+}
+
+/// A margin that never binds (none negative, however small) changes no
+/// case, bit for bit: the reference's choice is tried first.
+#[test]
+fn a_margin_that_never_binds_changes_nothing() {
+    for case in load().cases.iter() {
+        let reference = run(case);
+        for kept in [f64::INFINITY, 0.0, 1e-300] {
+            assert_eq!(
+                run_keeping(case, Some(|_: &str, _: [f64; 3]| kept)),
+                reference,
+                "{} with margin {kept}",
+                case.name
+            );
+        }
+    }
+}
+
+/// Two drones level and head-on, 10 m apart: `bravo` yields, pushed to
+/// its left (+y) by default, and the margin decides when that is refused.
+fn head_on(
+    margin: impl FnMut(&str, [f64; 3]) -> f64,
+) -> (
+    Vec<Proposal>,
+    Vec<argusnet_planning::deconfliction::DeconflictionEvent>,
+) {
+    let proposals = vec![
+        Proposal {
+            drone_id: "alpha".into(),
+            position: [0.0, 0.0, 100.0],
+            velocity: [5.0, 0.0, 0.0],
+        },
+        Proposal {
+            drone_id: "bravo".into(),
+            position: [10.0, 0.0, 100.0],
+            velocity: [-5.0, 0.0, 0.0],
+        },
+    ];
+    resolve_step_keeping(
+        &DeconflictionConfig::default(),
         &proposals,
-        f(&case.timestamp_s),
-        |id| case.roles.get(id).cloned().unwrap_or_default(),
-        |_xy, z, min_agl| terrain.map(|height| z.max(height + min_agl)),
-        &zones,
-        &corridors,
+        0.0,
+        |_| String::new(),
+        |_, z, _| Some(z),
+        &[],
+        &[],
+        margin,
     )
+}
+
+/// Each refusal falls through to the next position the reference would
+/// take, then to the vertical offset the other way; with every position
+/// refused, the one that keeps the most is taken.
+#[test]
+fn a_binding_margin_moves_the_yielder_to_the_next_position() {
+    let free = head_on(|_, _| f64::INFINITY);
+    let bravo = free.0[1].position;
+    assert_eq!(free.1[0].yielding_drone_id, "bravo");
+    assert_eq!(free.1[0].resolution.as_str(), "lateral_offset");
+    // Left of heading -x is -y; the reference's first push.
+    let push = bravo[1];
+    assert!(push.abs() > 1.0, "{bravo:?}");
+    // Refuse that side: the mirror.
+    let mirror = head_on(|_, p| if p[1] * push > 0.0 { -1.0 } else { 1.0 });
+    assert_eq!(mirror.0[1].position, [10.0, -push, 100.0]);
+    assert_eq!(mirror.1[0].resolution.as_str(), "lateral_offset");
+    // Refuse both sides: up by the vertical separation.
+    let up = head_on(|_, p| if p[1] != 0.0 { -1.0 } else { 1.0 });
+    assert_eq!(up.0[1].position, [10.0, 0.0, 120.0]);
+    assert_eq!(up.1[0].resolution.as_str(), "vertical_offset");
+    // Refuse up too: down.
+    let down = head_on(|_, p| if p[2] < 100.0 { 1.0 } else { -1.0 });
+    assert_eq!(down.0[1].position, [10.0, 0.0, 80.0]);
+    assert_eq!(down.1[0].resolution.as_str(), "vertical_offset");
+    // Refuse everything: the least refused, the mirror here.
+    let least = head_on(|_, p| if p[1] * push < 0.0 { -0.5 } else { -2.0 });
+    assert_eq!(least.0[1].position, [10.0, -push, 100.0]);
+    // A margin of exactly nothing is kept: the reference's push, not the
+    // mirror that keeps more.
+    let edge = head_on(|_, p| if p[1] * push > 0.0 { 0.0 } else { 5.0 });
+    assert_eq!(edge, free);
+    // Equals: the earliest, the reference's own push.
+    let tie = head_on(|_, _| -1.0);
+    assert_eq!(tie, free);
+    // The margin is asked about the yielder only.
+    let asked = std::cell::RefCell::new(Vec::new());
+    head_on(|id, _| {
+        asked.borrow_mut().push(id.to_string());
+        -1.0
+    });
+    assert!(asked.borrow().iter().all(|id| id == "bravo"));
+    // The alpha drone is never moved.
+    assert_eq!(least.0[0], free.0[0]);
 }
 
 #[test]

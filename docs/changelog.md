@@ -24,6 +24,21 @@
   60 m/s after launch go from 4 to 0. Checkpoint policy version 11. The
   reference is unchanged (14/14 replays).
 
+- The physical guard keeps platforms off power lines' wires, and
+  `efficient_v1` keeps deconfliction pushes and rejoins out of each line's
+  clearance (R3). Each conductor piece is a capsule holding the true
+  sagging wire; a platform inside is pushed straight off it, or lifted over
+  it where a push would go into the ground, and a guarded step stops at it,
+  solved ray against capsule. Deconfliction tries the mirror push, then
+  the vertical offsets, before one that comes within a line's clearance
+  (swept from where the safety monitor left the platform); a rejoin stops
+  short of a line's clearance and climbs over. A rejoin holding the height
+  it climbed to now also gives up a path running away faster than it flies
+  (it chased one for ever). On `power_line_inspection` seed 7 the last 2
+  `structure_clearance` events go to 0. The reference, efficient_v1 runs
+  without lines, the canonical scenarios with the builder line on, and the
+  14 canonical replays are unchanged.
+
 - `efficient_v1` routes keep power lines' clearance (R3, the planner's
   corridor). A POI, egress or gap-fill flight that would pass a line closer
   than its clearance, by the swept test on each leg, is flown over the

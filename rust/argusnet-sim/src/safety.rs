@@ -267,6 +267,12 @@ impl SafetyStage {
         self.state.previous_positions.clear();
     }
 
+    /// Where the monitor left `node_id` last tick (what it allowed), which
+    /// this tick's flight is judged from; kept only with power lines set.
+    pub fn left_at(&self, node_id: &str) -> Option<[f64; 3]> {
+        self.state.previous_positions.get(node_id).copied()
+    }
+
     /// The terrain the reference samples under each platform.
     pub fn set_terrain(&mut self, terrain: Box<dyn TerrainHeight>) {
         self.state.terrain = terrain;
