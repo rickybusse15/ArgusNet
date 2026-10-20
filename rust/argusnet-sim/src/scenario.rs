@@ -805,6 +805,12 @@ pub struct AssembledRun {
     /// Whether `guard` is the planning policy's (P3) rather than a run with
     /// no prior map's.
     policy_guard: bool,
+    /// Whether the planning policy is one that keeps power lines' clearance
+    /// (R3): any but the reference.
+    keeps_lines: bool,
+    /// In a run without a prior map, the self-built map, whose wires the
+    /// planners keep clear of under such a policy (R3).
+    belief: Option<crate::belief_world::BeliefHandle>,
     /// Which belief cells a true building or wall covers, for the replay's
     /// evaluation figures. Never read by the run.
     true_structures: Vec<bool>,
@@ -1383,6 +1389,8 @@ pub fn assemble_with(
         world,
         guard: None,
         policy_guard: false,
+        keeps_lines: false,
+        belief: None,
         true_structures: Vec::new(),
         assignments: Default::default(),
     })
@@ -1607,6 +1615,7 @@ impl AssembledRun {
         // with no mission driver changes too, and its checkpoints say so.
         self.sim.set_policy_algorithm(!policy.is_reference());
         self.guard_deconfliction(!policy.is_reference());
+        self.keeps_lines = !policy.is_reference();
         let guard = self.guard.clone();
         // Rejoins keep the lines' clearance under the policy's own guard: a
         // run with no prior map has forgotten them.
@@ -1623,7 +1632,32 @@ impl AssembledRun {
             overrides.set_physical_guard(guard);
             overrides.set_power_lines(lines);
         }
+        self.plan_round_mapped_wires();
         Ok(has_driver)
+    }
+
+    /// In a run without a prior map, under a policy that keeps power lines'
+    /// clearance, the planners (stages 2, 3 and 9) keep clear of the wires
+    /// the run has mapped (R3); otherwise of none. Called whichever of the
+    /// policy and the world knowledge is set last.
+    fn plan_round_mapped_wires(&mut self) {
+        let map = self.belief.clone().filter(|_| self.keeps_lines);
+        let bounds = self.map_bounds_m;
+        if let Some(driver) = self
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+        {
+            driver.set_mapped_power_lines(map.clone(), bounds);
+        }
+        if let Some(deconflict) = self.sim.stage_mut::<DeconflictStage>(Stage::Deconflict) {
+            deconflict.set_mapped_power_lines(map.clone());
+        }
+        if let Some(overrides) = self
+            .sim
+            .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
+        {
+            overrides.set_mapped_power_lines(map);
+        }
     }
 
     /// A policy other than the reference routes round obstacles (P3) and
@@ -1793,7 +1827,17 @@ impl AssembledRun {
             return Err("world knowledge is set before the first tick".into());
         }
         config.validate()?;
-        let grid = BeliefGrid::new(self.map_bounds_m, config.resolution_m, self.launch_floor_m)?;
+        let mut grid =
+            BeliefGrid::new(self.map_bounds_m, config.resolution_m, self.launch_floor_m)?;
+        if config.wire_prior {
+            grid.know_wires(
+                self.world
+                    .power_lines
+                    .iter()
+                    .flat_map(|line| (0..line.supports.len() - 1).map(|k| line.span_line(k)))
+                    .collect(),
+            );
+        }
         let resolution_m = config.resolution_m;
         let (nx, ny) = grid.dimensions();
         self.true_structures = (0..nx * ny)
@@ -1809,7 +1853,8 @@ impl AssembledRun {
         let scanner = crate::range_scan::RangeScanner::new(
             config.scan.clone(),
             self.world.visibility.clone(),
-        )?;
+        )?
+        .with_power_lines(&self.world.power_lines);
         let summary = serde_json::json!({
             "knowledge": knowledge.as_str(),
             "exploration": &config,
@@ -1904,6 +1949,8 @@ impl AssembledRun {
         }
         self.guard = Some(guard);
         self.policy_guard = false;
+        self.belief = Some(handle);
+        self.plan_round_mapped_wires();
         self.extend_replay_meta([("world_knowledge".to_string(), summary)]);
         Ok(())
     }

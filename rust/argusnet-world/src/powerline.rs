@@ -18,8 +18,8 @@
 //! (efficient_v1, over the wires or round a line's ends), the physical guard
 //! keeps platforms off the wires ([`PowerLine::envelope`], each piece a
 //! capsule met by [`capsule_entry`]) and the viewer draws it (supports at
-//! [`PowerLine::cross_arm`], conductors from [`PowerLine::pieces`]); sensing
-//! comes in a later slice.
+//! [`PowerLine::cross_arm`], conductors from [`PowerLine::pieces`]); the
+//! range scanner reports a span ([`PowerLine::span_line`]) when it is near.
 
 use serde::{Deserialize, Serialize};
 
@@ -325,6 +325,36 @@ impl PowerLine {
             }
         }
         pieces
+    }
+
+    /// [`Self::pieces`], span by span: every conductor's pieces of span
+    /// `k` at index `k`.
+    pub fn pieces_by_span(&self) -> Vec<Vec<ConductorPiece>> {
+        let mut spans = vec![Vec::new(); self.supports.len() - 1];
+        let mut pieces = self.pieces().into_iter();
+        for (span, pair) in self.supports.windows(2).enumerate() {
+            let count = (horizontal(pair[0].xy_m, pair[1].xy_m) / MAX_PIECE_M)
+                .ceil()
+                .max(1.0) as usize;
+            spans[span].extend(pieces.by_ref().take(count * self.conductor_offsets_m.len()));
+        }
+        spans
+    }
+
+    /// The span from support `span` to the next, alone: a line of those two
+    /// supports, with this line's conductors, sag, radius and clearance.
+    /// Its cross-arms are square to the span, so at a support where this
+    /// line turns its outer conductors sit a little off this line's (the
+    /// offset times one minus the cosine of half the turn).
+    pub fn span_line(&self, span: usize) -> PowerLine {
+        PowerLine {
+            id: format!("{}#{span}", self.id),
+            supports: self.supports[span..=span + 1].to_vec(),
+            conductor_offsets_m: self.conductor_offsets_m.clone(),
+            sag_ratio: self.sag_ratio,
+            conductor_radius_m: self.conductor_radius_m,
+            clearance_m: self.clearance_m,
+        }
     }
 
     /// The lowest point of any conductor, metres above datum: each span's
@@ -1275,6 +1305,28 @@ mod tests {
                 assert!(pushes < 4, "{x}: {p:?}");
             }
             assert!(!envelope.contains(p), "{x}");
+        }
+    }
+
+    /// The pieces span by span are the pieces in order, and a span alone is
+    /// that span: on a straight line its pieces are exactly the line's.
+    #[test]
+    fn a_span_alone_hangs_as_it_does_in_its_line() {
+        let mut long = line();
+        long.supports.push(Support {
+            xy_m: [250.0, 0.0],
+            base_z_m: 5.0,
+            height_m: 25.0,
+        });
+        long.conductor_offsets_m = vec![-2.0, 2.0];
+        let by_span = long.pieces_by_span();
+        assert_eq!(by_span.len(), 2);
+        assert_eq!(by_span.concat(), long.pieces());
+        for (k, pieces) in by_span.iter().enumerate() {
+            let alone = long.span_line(k);
+            assert_eq!(alone.id, format!("line-a#{k}"));
+            assert_eq!(&alone.pieces(), pieces, "span {k}");
+            assert!(alone.clone().validated().is_ok());
         }
     }
 }
