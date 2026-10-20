@@ -1425,3 +1425,73 @@ mod tests {
         assert!(value["meta"].get("generated_at_utc").is_none());
     }
 }
+
+#[cfg(test)]
+mod tree_contact_tests {
+    use super::*;
+    use argusnet_world::trees::{Species, Tree, TreeLayer, TreePart};
+
+    fn node(
+        id: &str,
+        position: [f64; 3],
+        velocity: [f64; 3],
+        mobile: bool,
+    ) -> argusnet_types::NodeState {
+        let mut state: argusnet_types::NodeState = serde_json::from_value(serde_json::json!({
+            "node_id": id,
+            "position": position,
+            "velocity": velocity,
+            "is_mobile": mobile,
+            "timestamp_s": 0.0,
+            "health": 1.0,
+            "sensor_type": "optical",
+            "fov_half_angle_deg": 30.0,
+            "max_range_m": 100.0,
+        }))
+        .expect("node");
+        state.is_mobile = mobile;
+        state
+    }
+
+    /// The last tick's flight, from its velocity, against each crown and
+    /// trunk: swept, so a crown or trunk passed between ticks counts, in
+    /// the order met; a fixed node never touches one.
+    #[test]
+    fn contacts_are_the_trees_the_last_ticks_flight_crossed() {
+        let tree = |id: &str, x: f64| Tree {
+            id: id.into(),
+            xy_m: [x, 0.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+            crown_base_m: 8.0,
+            crown_radius_m: 3.0,
+            trunk_radius_m: 0.3,
+            species: Species::Broadleaf,
+            leaf_density: 0.8,
+        };
+        let layer = TreeLayer::new(vec![tree("a", 10.0), tree("b", 20.0)]).unwrap();
+        // At 14 m, from x = 0 to x = 28 in a 0.25 s tick: both crowns
+        // (and, inside each, its trunk, which reaches the crown's middle).
+        let flying = node("d", [28.0, 0.0, 14.0], [112.0, 0.0, 0.0], true);
+        let contacts = tree_contacts(&layer, &[flying], 0.25);
+        let seen: Vec<_> = contacts
+            .iter()
+            .map(|c| (c.tree_id.as_str(), c.part))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("a", TreePart::Crown),
+                ("a", TreePart::Trunk),
+                ("b", TreePart::Crown)
+            ]
+        );
+        // Over the trees, or a ground station inside a crown: nothing.
+        let high = node("d", [28.0, 0.0, 30.0], [112.0, 0.0, 0.0], true);
+        let fixed = node("g", [10.0, 0.0, 14.0], [0.0; 3], false);
+        assert!(tree_contacts(&layer, &[high, fixed], 0.25).is_empty());
+        // Hovering inside a crown is a contact every tick.
+        let hovering = node("d", [11.0, 0.0, 14.0], [0.0; 3], true);
+        assert_eq!(tree_contacts(&layer, &[hovering], 0.25).len(), 1);
+    }
+}

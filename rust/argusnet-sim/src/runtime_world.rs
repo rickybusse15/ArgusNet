@@ -134,7 +134,11 @@ impl ObstacleSampler for SharedObstacles {
                 let (dx, dy) = (point_m[0] - tree.xy_m[0], point_m[1] - tree.xy_m[1]);
                 let off = dx.hypot(dy);
                 // On the axis itself any way out is as short; east.
-                let (ux, uy) = if off > 1e-9 { (dx / off, dy / off) } else { (1.0, 0.0) };
+                let (ux, uy) = if off > 1e-9 {
+                    (dx / off, dy / off)
+                } else {
+                    (1.0, 0.0)
+                };
                 let reach = tree.trunk_radius_m + margin_m.max(1.0);
                 Some([tree.xy_m[0] + ux * reach, tree.xy_m[1] + uy * reach])
             })
@@ -594,5 +598,47 @@ mod tests {
         assert_eq!(kind, "trunk");
         assert!((point[0] - 99.7).abs() < 1e-9, "{point:?}");
         assert_eq!(draws, 0, "the crown past the trunk takes no draw");
+    }
+
+    /// A trunk is as hard as a building: inside it collides, and a push
+    /// moves straight out from its axis to its surface plus the margin
+    /// (at least 1 m). A crown is not: inside it nothing collides. With no
+    /// trees the obstacles are what they were.
+    #[test]
+    fn a_trunk_is_hard_and_a_crown_is_not() {
+        let bounds = Bounds2d::new(0.0, 200.0, 0.0, 200.0);
+        let layer = Arc::new(ObstacleLayer::new(bounds, 50.0, vec![]).unwrap());
+        let tree = Tree {
+            id: "t".into(),
+            xy_m: [100.0, 100.0],
+            base_z_m: 0.0,
+            height_m: 20.0,
+            crown_base_m: 8.0,
+            crown_radius_m: 5.0,
+            trunk_radius_m: 0.3,
+            species: Species::Broadleaf,
+            leaf_density: 0.8,
+        };
+        let plain = SharedObstacles::new(Arc::clone(&layer));
+        let empty = plain.with_trees(Arc::new(TreeLayer::new(vec![]).unwrap()));
+        assert!(empty.trees().is_none());
+        let with = plain.with_trees(Arc::new(TreeLayer::new(vec![tree]).unwrap()));
+        let inside = [100.1, 100.0, 5.0];
+        assert!(!plain.collides(inside));
+        assert_eq!(plain.push_clear(inside, 1.0), None);
+        assert!(with.collides(inside));
+        let pushed = with.push_clear(inside, 0.5).expect("pushed");
+        assert!(
+            (pushed[0] - 101.3).abs() < 1e-9 && (pushed[1] - 100.0).abs() < 1e-9,
+            "{pushed:?}"
+        );
+        assert!(!with.collides([pushed[0], pushed[1], 5.0]));
+        // On the axis: out to the east. A wider margin goes further.
+        let pushed = with.push_clear([100.0, 100.0, 5.0], 2.0).expect("pushed");
+        assert!((pushed[0] - 102.3).abs() < 1e-9, "{pushed:?}");
+        // In the crown, above the trunk's top, or beside it: soft or clear.
+        assert!(!with.collides([103.0, 100.0, 14.0]));
+        assert!(!with.collides([100.0, 100.0, 15.0]));
+        assert_eq!(with.push_clear([103.0, 100.0, 14.0], 1.0), None);
     }
 }
