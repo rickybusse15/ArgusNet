@@ -392,7 +392,11 @@ fn a_platform_never_flies_through_a_wire() {
         })
         .expect("a level stretch");
     let (a, b) = (path[k], path[k + 1]);
-    let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
+    let mid = [
+        (a[0] + b[0]) / 2.0,
+        (a[1] + b[1]) / 2.0,
+        (a[2] + b[2]) / 2.0,
+    ];
     let along = [(b[0] - a[0]), (b[1] - a[1])];
     let norm = along[0].hypot(along[1]);
     let across = [-along[1] / norm, along[0] / norm];

@@ -1582,7 +1582,10 @@ mod tests {
         assert!((contacts[0].correction_m - (10.0 + 1.03)).abs() < 1e-9);
         // Over it: as `enforce`.
         let over = [50.0, 10.0, 25.0];
-        assert_eq!(guard.enforce_from("d", 0.0, [50.0, -10.0, 25.0], over), over);
+        assert_eq!(
+            guard.enforce_from("d", 0.0, [50.0, -10.0, 25.0], over),
+            over
+        );
         assert!(guard.take_contacts().is_empty());
         // From inside: `enforce` pushes it out.
         let pushed = guard.enforce_from("d", 0.0, [50.0, 0.3, 20.0], [50.0, 0.3, 19.6]);

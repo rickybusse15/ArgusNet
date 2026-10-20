@@ -812,3 +812,4 @@ pub mod powerline;
 pub mod raster;
 pub mod semantic;
 pub mod terrain_grid;
+pub mod trees;

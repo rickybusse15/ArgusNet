@@ -754,7 +754,9 @@ mod tests {
                 Arc::new(TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap()),
                 5.0,
             ),
-            SharedObstacles::new(Arc::new(ObstacleLayer::new(bounds, 400.0, Vec::new()).unwrap())),
+            SharedObstacles::new(Arc::new(
+                ObstacleLayer::new(bounds, 400.0, Vec::new()).unwrap(),
+            )),
             1.0,
         )
         .with_power_lines(&[wire]);

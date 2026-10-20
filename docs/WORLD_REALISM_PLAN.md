@@ -3,7 +3,8 @@
 **Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
 opacity fix (#222) and typed structure matching. R3 is in progress: the
 model, the safety clearance, lines in a run, drawing in the viewer, the
-planner's corridor and the guard against wires are done. R1, R2, R4 and R5 are not started.
+planner's corridor and the guard against wires are done. R2 is in
+progress: the tree model is done. R1, R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -78,8 +79,30 @@ C8 (P2.6) and D2 (P5.1).
   or pyramidal, with ridge direction and roof height). Line of sight,
   `first_hit` and collision intersect the roof triangles as well as the prism.
   The old `building-v1` stays as it is.
+  *Done (model, R1.1):* `building-v2` in `argusnet_world::obstacles`
+  (`Obstacle::building_v2`, metadata `eave_elevation_m`, `roof_shape`,
+  `ridge_azimuth_rad`). The roof is a set of planes and the solid ends at
+  the lowest: a gable is two, a hip or pyramid one per edge (convex
+  footprints only; others are refused). Point, ray, path-length and surface
+  queries clip against the planes exactly. The scene builder draws the same
+  solid: walls rising to the roof line (split where it turns) and one facet
+  per plane. Every other kind is unchanged, field and bytes (14/14 replays).
 - **The simulation sees what the viewer sees.** GIS buildings become
   `ObstaclePrimitive`s in the run, not just meshes.
+
+  *Done (import, R1.2):* `scripts/import_buildings.py`
+  (`argusnet.world.buildings_import`) writes an `argusnet.buildings` v1
+  document. It projects in float64 to local ENU around a recorded origin,
+  takes heights and roofs from the tags as above, and marks what it
+  estimated or could not model. It also checks each projected footprint's
+  area against its geodesic area (worst 3e-10 on the test town). The
+  native builder's `buildings_path` option replaces the procedural
+  buildings with the imported ones, each standing on the run's own ground,
+  and leaves out (and counts) any outside the map. The model refuses a bad
+  one by name. The bundle and the replay carry the georeference, the
+  document's hash and the counts, and the replay's `enu_origin` is the
+  buildings' own. DEM terrain under them is R5. Next: building materials
+  (R1.3).
 - **Rendering.** Generate roof meshes and per-face normals. Add semantic
   material classes (concrete, brick, metal roof, glass) with a procedural
   facade shader for window rows from the level count. This needs no textures,
@@ -106,6 +129,41 @@ C8 (P2.6) and D2 (P5.1).
 - **Rendering.** Instanced low-poly meshes per species, with impostors at
   distance. Seasonal foliage reuses `foliage_density_factor`. Wind sway is off
   by default (C6: effects need G2 evidence).
+
+  *Done (model):* `argusnet_world::trees` holds `Tree` (`tree-v1`): the
+  trunk's position and ground level, the tree's height, its crown base and
+  crown radius, its trunk radius, its species and its leaf density (0 bare
+  to 1 in full leaf). It is validated on construction and as read, so a
+  tree the model refuses is an error, never one that blocks nothing; every
+  value must be within what a tree can be (at most 200 m tall, a crown
+  radius of 100 m, a trunk radius of 20 m, 10,000 km from the origin), so
+  no derived value overflows. The
+  trunk is a vertical cylinder from the ground to the middle of the crown:
+  hard. The crown is an ellipsoid between the crown base and the top:
+  soft. `BlockerType::is_hard()` stays buildings and walls; trees answer
+  for themselves, part by part, so no new `BlockerType` was needed. Light
+  through a crown falls off as through a leaf canopy (Beer–Lambert):
+  `exp(-k · d · L)` over a chord `L`, with leaf density `d` and
+  `k = 0.35 /m` (`G · LAD` for a spherical leaf-angle distribution and a
+  leaf area density of 0.7 m²/m³). A 6 m chord at density 0.9 lets 15 %
+  through.
+
+  `TreeLayer` indexes trees on a 16 m grid, in id order so every answer is
+  the same whatever order they came in. It answers what a run asks: the
+  transmittance along a ray, the first trunk or crown a ray meets (or the
+  first trunk only), and the trunk or crown at a point. A ray walks the
+  grid cell by cell along its length and skips any cell it passes above
+  the highest tree in, so a scanner's 400 m rays over a forest cost what
+  the trees near them cost; a first-hit walk stops at the first cell past
+  which nothing nearer can lie. A test checks the walk against testing
+  every tree, on 400 rays in all directions over 60 random trees.
+
+  `poisson_disk` is the sampler procedural placement uses: points no two
+  closer than a spacing, seeded, drawn in a fixed order. Cells of side
+  `spacing / √2` are visited row by row, each drawing a fixed number of
+  candidates and keeping the first that is clear, so the stream of draws
+  depends on the seed and the grid alone and thinning the sample by land
+  cover moves no point kept.
 
 ### R3: power lines
 

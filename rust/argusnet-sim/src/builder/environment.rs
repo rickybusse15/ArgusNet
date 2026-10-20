@@ -168,6 +168,17 @@ fn cylinder(id: &str, cx: f64, cy: f64, radius: f64, base_z: f64, top_z: f64) ->
     }
 }
 
+/// An imported building (R1, `buildings_path`): its metadata as written
+/// (`building-v2`), and its footprint for sampling.
+pub fn imported_building(metadata: Value, footprint: Vec<[f64; 2]>) -> BuiltObstacle {
+    BuiltObstacle {
+        metadata,
+        blocker_type: "building",
+        footprint: Some(footprint),
+        centre: None,
+    }
+}
+
 /// `BuildingPrism`: a polygon prism whose blocker is always `building`.
 fn building_prism(id: &str, footprint: Vec<[f64; 2]>, base_z: f64, top_z: f64) -> BuiltObstacle {
     BuiltObstacle {

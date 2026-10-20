@@ -2,6 +2,17 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- World: a tree model (R2, first slice). `argusnet_world::trees` holds
+  `Tree` (`tree-v1`): position, ground level, height, crown base, crown
+  radius, trunk radius, species (conifer, broadleaf, palm, shrub) and leaf
+  density, validated on construction and as read. The trunk is a vertical
+  cylinder to the middle of the crown (hard); the crown is an ellipsoid
+  (soft) whose light falls off by Beer–Lambert, `exp(-0.35 · density ·
+  chord)`. `TreeLayer` indexes trees on a 16 m grid and walks a ray through
+  it cell by cell (transmittance, first trunk or crown met, what is at a
+  point), skipping cells the ray passes above. `poisson_disk` is the
+  seeded, fixed-order sampler procedural placement will use. Nothing in a
+  run reads it yet; the 14 canonical replays are unchanged.
 - `efficient_v1` fills the holes that hold a scan open (P4, first slice).
   Each drone loops its own sector, so the seams between sectors stay
   uncovered, and once coverage passes the threshold those enclosed holes
@@ -51,6 +62,21 @@
   and 42) `structure_clearance` events under efficient_v1 go from 69 and 26
   to 2 and 0; the 2 left are deconfliction pushes. The reference is
   unchanged, and so are the 14 canonical replays.
+
+- Real buildings in a run (R1). `scripts/import_buildings.py` turns
+  GeoJSON or OSM footprints into an `argusnet.buildings` document: local
+  metres around a recorded origin, heights and roofs from the tags, and
+  every estimate marked. A scenario config's `buildings_path` option puts
+  them in the run in place of the procedural buildings, with their roofs,
+  standing on the run's terrain. The bundle and the replay record where on
+  Earth they are. Without the option nothing changes: 14/14 replays
+  identical.
+
+- World: `building-v2`, buildings with roofs (R1, first slice). Flat,
+  gabled, hipped and pyramidal roofs as planes over the footprint; line of
+  sight, collision and the range scanner's hits clip against them exactly,
+  and the scene builder draws the same solid. No run produces one yet:
+  14/14 replays identical.
 
 - Viewer: power lines are drawn (R3). The replay's `meta.power_lines`
   becomes lattice towers on their own ground, plus conductors drawn as
