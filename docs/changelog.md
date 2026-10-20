@@ -26,9 +26,9 @@
 
 - Viewer: a clearance-corridor overlay (R3). The Clearance Corridors toggle,
   beside Power Lines in Runtime Overlays and off by default, shows each
-  span's clearance volume from `meta.power_lines`: a translucent amber tube,
-  the conductors' spread across the line widened by their radius plus the
-  clearance. A GPU probe checks it is drawn round the wires and nowhere off
+  span's clearance volume from `meta.power_lines`: a translucent amber tube
+  round each conductor, of its radius plus the clearance, unbroken round
+  the line's turns. A GPU probe checks it is drawn round the wires and nowhere off
   the line, at every quality tier. No simulation change: 14/14 replays
   identical.
 

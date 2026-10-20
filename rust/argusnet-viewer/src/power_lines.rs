@@ -34,14 +34,16 @@
 //! beside Power Lines; no preset owns it either), shows each span's
 //! clearance volume: everywhere within the line's clearance of a conductor's
 //! surface, which the safety engine's `structure_clearance` keeps flights
-//! out of and efficient_v1's routes keep out of. Across the line a span's
-//! conductors lie on one level segment, the cross-arm's, so the volume's
-//! cross-section is that segment widened by the conductor radius plus the
-//! clearance: a stadium. [`clearance_mesh`] sweeps it along the span at
-//! every piece joint, square to the span, with the segment where the
-//! conductors hang there; it is closed at the line's two ends. It is drawn
+//! out of and efficient_v1's routes keep out of: the union of a tube round
+//! each conductor, of the conductor radius plus the clearance, since the
+//! safety test measures to each conductor on its own. [`clearance_mesh`]
+//! sweeps each tube's circular section along every span, a section at each
+//! piece joint in [`section_basis`]'s plane; at a support between two spans
+//! both spans share one section, so the tube is unbroken round a turn, and
+//! it is closed at the line's two ends. It is drawn
 //! translucent and unlit, both faces, casting no shadow, built once per run
 //! with the wires.
+//!
 //! Picking ignores them ([`PresentationOnly`]). Each line in
 //! `meta.power_lines` is read on its own: one the model refuses is not
 //! drawn and its reason is logged once per run, and every other line is
@@ -74,8 +76,8 @@ pub const WIRE_COLOR: [f32; 4] = [0.78, 0.80, 0.80, 1.0];
 pub const TOWER_COLOR: [f32; 3] = [0.56, 0.58, 0.58];
 /// Clearance corridors: a translucent amber, the caution colour.
 pub const CLEARANCE_COLOR: [f32; 4] = [1.0, 0.55, 0.05, 0.35];
-/// Segments in each half-circle end of a corridor's cross-section.
-pub const CLEARANCE_HALF_SEGMENTS: usize = 8;
+/// Segments round each conductor's clearance tube.
+pub const CLEARANCE_SEGMENTS: usize = 16;
 
 /// A wire vertex's far end: the other end of its piece.
 pub const ATTRIBUTE_WIRE_OTHER: MeshVertexAttribute =
@@ -183,126 +185,120 @@ pub fn wire_mesh(lines: &[PowerLine]) -> Option<Mesh> {
     )
 }
 
-/// The level segment `line`'s conductors hang on at fraction `t` of span
-/// `span`, across the line: from the lowest offset's conductor to the
-/// highest's.
-pub fn conductor_segment(line: &PowerLine, span: usize, t: f64) -> ([f64; 3], [f64; 3]) {
-    let (low, high) = line
-        .conductor_offsets_m
-        .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &o| {
-            (lo.min(o), hi.max(o))
-        });
-    (
-        line.conductor_at(span, low, t),
-        line.conductor_at(span, high, t),
-    )
+fn point(p: [f64; 3]) -> Vec3 {
+    Vec3::from_array(p.map(|v| v as f32))
 }
 
-/// The cross-section of `line`'s clearance volume at fraction `t` of span
-/// `span`: a closed loop of `2 * (CLEARANCE_HALF_SEGMENTS + 1)` points, each
-/// the conductor radius plus the clearance from [`conductor_segment`] there,
-/// in the plane square to the span (a half-circle round each end of the
-/// segment, joined by its two sides), and the outward normal at each.
-pub fn clearance_ring(line: &PowerLine, span: usize, t: f64) -> Vec<(Vec3, Vec3)> {
-    let reach = (line.conductor_radius_m + line.clearance_m) as f32;
-    let (low, high) = conductor_segment(line, span, t);
-    let (low, high) = (
-        Vec3::from_array(low.map(|v| v as f32)),
-        Vec3::from_array(high.map(|v| v as f32)),
-    );
-    // Across the line, level: the cross-arm's direction at t.
-    let mut across = Vec3::from_array(line.conductor_at(span, 1.0, t).map(|v| v as f32))
-        - Vec3::from_array(line.conductor_at(span, 0.0, t).map(|v| v as f32));
+/// The direction the centre of `line`'s conductors runs at fraction `t` of
+/// span `span`.
+fn tangent(line: &PowerLine, span: usize, t: f64) -> Vec3 {
+    let (a, b) = if t >= 1.0 {
+        (t - 1e-3, t)
+    } else {
+        (t, t + 1e-3)
+    };
+    (point(line.conductor_at(span, 0.0, b)) - point(line.conductor_at(span, 0.0, a)))
+        .normalize_or(Vec3::X)
+}
+
+/// The plane a corridor's section lies in at fraction `t` of span `span`:
+/// across the line where its conductors hang (level), and square to that
+/// and to the line's direction, upward. At a support between two spans the
+/// direction is the mean of both spans', so both spans' sections there are
+/// one and the same, and their tubes join with no gap at a turn.
+pub fn section_basis(line: &PowerLine, span: usize, t: f64) -> (Vec3, Vec3) {
+    let last = line.supports.len() - 2;
+    let mut along = tangent(line, span, t);
+    if t <= 0.0 && span > 0 {
+        along = (along + tangent(line, span - 1, 1.0)).normalize_or(along);
+    } else if t >= 1.0 && span < last {
+        along = (along + tangent(line, span + 1, 0.0)).normalize_or(along);
+    }
+    let mut across =
+        point(line.conductor_at(span, 1.0, t)) - point(line.conductor_at(span, 0.0, t));
     across.z = 0.0;
     let across = across.normalize_or(Vec3::Y);
-    // Along the span, and square to both: the section's "up".
-    let (a, b) = (
-        Vec3::from_array(
-            line.conductor_at(span, 0.0, (t - 1e-3).max(0.0))
-                .map(|v| v as f32),
-        ),
-        Vec3::from_array(
-            line.conductor_at(span, 0.0, (t + 1e-3).min(1.0))
-                .map(|v| v as f32),
-        ),
-    );
-    let along = (b - a).normalize_or(Vec3::X);
     let mut up = along.cross(across).normalize_or(Vec3::Z);
     if up.z < 0.0 {
         up = -up;
     }
-    let half = CLEARANCE_HALF_SEGMENTS;
-    let mut ring = Vec::with_capacity(2 * (half + 1));
-    for (centre, start) in [
-        (high, -std::f32::consts::FRAC_PI_2),
-        (low, std::f32::consts::FRAC_PI_2),
-    ] {
-        for j in 0..=half {
-            let angle = start + std::f32::consts::PI * j as f32 / half as f32;
-            let normal = across * angle.cos() + up * angle.sin();
-            ring.push((centre + normal * reach, normal));
-        }
-    }
-    ring
+    (across, up)
 }
 
-/// Every span of `lines` as its clearance volume (see the module docs): a
-/// tube of [`clearance_ring`]s at each piece joint, closed at each line's
-/// ends. `None` for no lines.
+/// The cross-section of conductor `offset_m`'s clearance tube at fraction
+/// `t` of span `span`: [`CLEARANCE_SEGMENTS`] points round the conductor,
+/// each the conductor radius plus the clearance from it, in
+/// [`section_basis`]'s plane, with the outward normal at each.
+pub fn clearance_ring(line: &PowerLine, span: usize, offset_m: f64, t: f64) -> Vec<(Vec3, Vec3)> {
+    let reach = (line.conductor_radius_m + line.clearance_m) as f32;
+    let centre = point(line.conductor_at(span, offset_m, t));
+    let (across, up) = section_basis(line, span, t);
+    (0..CLEARANCE_SEGMENTS)
+        .map(|j| {
+            let angle = std::f32::consts::TAU * j as f32 / CLEARANCE_SEGMENTS as f32;
+            let normal = across * angle.cos() + up * angle.sin();
+            (centre + normal * reach, normal)
+        })
+        .collect()
+}
+
+/// Every conductor of `lines` as its clearance tube (see the module docs):
+/// [`clearance_ring`]s at each piece joint of each span, joined, and closed
+/// at each line's two ends. Their union is the volume within the clearance
+/// of some conductor, which is what `structure_clearance` judges. `None`
+/// for no lines.
 pub fn clearance_mesh(lines: &[PowerLine]) -> Option<Mesh> {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    let ring_len = 2 * (CLEARANCE_HALF_SEGMENTS + 1);
+    let ring_len = CLEARANCE_SEGMENTS as u32;
     for line in lines {
         let last = line.supports.len() - 2;
-        for span in 0..=last {
-            let (from, to) = (&line.supports[span], &line.supports[span + 1]);
-            let span_m = (to.xy_m[0] - from.xy_m[0]).hypot(to.xy_m[1] - from.xy_m[1]);
-            let count = (span_m / argusnet_world::powerline::MAX_PIECE_M)
-                .ceil()
-                .max(1.0) as usize;
-            let first_ring = positions.len() as u32;
-            for k in 0..=count {
-                for (point, normal) in clearance_ring(line, span, k as f64 / count as f64) {
-                    positions.push(point.to_array());
+        for &offset_m in &line.conductor_offsets_m {
+            for span in 0..=last {
+                let (from, to) = (&line.supports[span], &line.supports[span + 1]);
+                let span_m = (to.xy_m[0] - from.xy_m[0]).hypot(to.xy_m[1] - from.xy_m[1]);
+                let count = (span_m / argusnet_world::powerline::MAX_PIECE_M)
+                    .ceil()
+                    .max(1.0) as usize;
+                let first_ring = positions.len() as u32;
+                for k in 0..=count {
+                    let t = k as f64 / count as f64;
+                    for (p, normal) in clearance_ring(line, span, offset_m, t) {
+                        positions.push(p.to_array());
+                        normals.push(normal.to_array());
+                    }
+                }
+                for k in 0..count as u32 {
+                    let (a, b) = (first_ring + k * ring_len, first_ring + (k + 1) * ring_len);
+                    for j in 0..ring_len {
+                        let next = (j + 1) % ring_len;
+                        indices.extend_from_slice(&[
+                            a + j,
+                            b + j,
+                            a + next,
+                            a + next,
+                            b + j,
+                            b + next,
+                        ]);
+                    }
+                }
+                // Closed at the line's two ends: a fan from the conductor.
+                let ends = [(span == 0).then_some(0.0), (span == last).then_some(1.0)];
+                for t in ends.into_iter().flatten() {
+                    let along = tangent(line, span, t);
+                    let normal = if t == 0.0 { -along } else { along };
+                    let base = positions.len() as u32;
+                    positions.push(point(line.conductor_at(span, offset_m, t)).to_array());
                     normals.push(normal.to_array());
-                }
-            }
-            for k in 0..count as u32 {
-                let (a, b) = (
-                    first_ring + k * ring_len as u32,
-                    first_ring + (k + 1) * ring_len as u32,
-                );
-                for j in 0..ring_len as u32 {
-                    let next = (j + 1) % ring_len as u32;
-                    indices.extend_from_slice(&[a + j, b + j, a + next, a + next, b + j, b + next]);
-                }
-            }
-            // Closed at the line's two ends: a fan from the section's
-            // centre.
-            let ends = [(span == 0).then_some(0.0), (span == last).then_some(1.0)];
-            for t in ends.into_iter().flatten() {
-                let ring = clearance_ring(line, span, t);
-                let (low, high) = conductor_segment(line, span, t);
-                let centre = Vec3::from_array(low.map(|v| v as f32))
-                    .lerp(Vec3::from_array(high.map(|v| v as f32)), 0.5);
-                // Out of the line's end, along its span.
-                let along = Vec3::from_array(line.conductor_at(span, 0.0, 1.0).map(|v| v as f32))
-                    - Vec3::from_array(line.conductor_at(span, 0.0, 0.0).map(|v| v as f32));
-                let along = along.normalize_or(Vec3::X);
-                let normal = if t == 0.0 { -along } else { along };
-                let base = positions.len() as u32;
-                positions.push(centre.to_array());
-                normals.push(normal.to_array());
-                for (point, _) in &ring {
-                    positions.push(point.to_array());
-                    normals.push(normal.to_array());
-                }
-                for j in 0..ring_len as u32 {
-                    let next = (j + 1) % ring_len as u32;
-                    indices.extend_from_slice(&[base, base + 1 + j, base + 1 + next]);
+                    for (p, _) in clearance_ring(line, span, offset_m, t) {
+                        positions.push(p.to_array());
+                        normals.push(normal.to_array());
+                    }
+                    for j in 0..ring_len {
+                        let next = (j + 1) % ring_len;
+                        indices.extend_from_slice(&[base, base + 1 + j, base + 1 + next]);
+                    }
                 }
             }
         }
@@ -866,72 +862,63 @@ mod tests {
         );
     }
 
-    /// Every point of a corridor's cross-section is exactly the conductor
-    /// radius plus the clearance from the segment the conductors hang on
-    /// there, all round, in one flat section, at every piece joint of both
-    /// spans; and both spans' sections meet at the support between them.
+    /// Every point of every section is exactly the conductor radius plus
+    /// the clearance from its own conductor, all round, in one flat section,
+    /// at every piece joint of both spans of a line that turns; and the
+    /// union is no wider than that: a point midway between two conductors
+    /// 4 m apart is on no tube's surface it is not inside.
     #[test]
-    fn a_corridor_is_the_clearance_round_the_conductors_everywhere() {
-        use argusnet_world::powerline::segment_distance;
+    fn a_corridor_is_a_tube_round_each_conductor() {
         let line = line();
         let reach = 0.015 + 10.0;
         for (span, count) in [(0, 40), (1, 30)] {
             for k in 0..=count {
                 let t = k as f64 / count as f64;
-                let (low, high) = conductor_segment(&line, span, t);
-                // The segment holds every conductor there.
                 for &offset in &line.conductor_offsets_m {
-                    let c = line.conductor_at(span, offset, t);
-                    assert!(segment_distance(c, c, low, high) < 1e-9);
-                }
-                let ring = clearance_ring(&line, span, t);
-                assert_eq!(ring.len(), 2 * (CLEARANCE_HALF_SEGMENTS + 1));
-                for (point, normal) in &ring {
-                    let p = point.to_array().map(f64::from);
-                    let d = segment_distance(p, p, low, high);
-                    assert!((d - reach).abs() < 1e-3, "{span} {t}: {d}");
-                    assert!((normal.length() - 1.0).abs() < 1e-5);
-                }
-                // One flat section holding the conductors' segment: every
-                // point, and both ends of the segment, on one plane.
-                let (p0, p1, p2) = (
-                    ring[0].0,
-                    ring[CLEARANCE_HALF_SEGMENTS / 2].0,
-                    ring[CLEARANCE_HALF_SEGMENTS + 3].0,
-                );
-                let plane = (p1 - p0).cross(p2 - p0).normalize();
-                for point in ring.iter().map(|(p, _)| *p).chain([
-                    Vec3::from_array(low.map(|v| v as f32)),
-                    Vec3::from_array(high.map(|v| v as f32)),
-                ]) {
-                    let off = (point - p0).dot(plane);
-                    assert!(off.abs() < 1e-2, "{span} {t}: {off}");
+                    let centre = point(line.conductor_at(span, offset, t));
+                    let ring = clearance_ring(&line, span, offset, t);
+                    assert_eq!(ring.len(), CLEARANCE_SEGMENTS);
+                    let (across, up) = section_basis(&line, span, t);
+                    let plane = across.cross(up);
+                    for (p, normal) in &ring {
+                        let d = (*p - centre).length();
+                        assert!((d - reach as f32).abs() < 1e-3, "{span} {t} {offset}: {d}");
+                        assert!((*p - centre).dot(plane).abs() < 1e-3);
+                        assert!((normal.length() - 1.0).abs() < 1e-5);
+                    }
                 }
             }
         }
-        // The two spans' sections at the support between them hold the same
-        // conductors.
-        let (a0, a1) = conductor_segment(&line, 0, 1.0);
-        let (b0, b1) = conductor_segment(&line, 1, 0.0);
-        for (p, q) in [(a0, b0), (a1, b1)] {
-            assert!(segment_distance(p, p, q, q) < 1e-9, "{p:?} {q:?}");
+    }
+
+    /// At the support where the line turns, both spans' sections are the
+    /// same ring, conductor by conductor: the tubes join with no gap.
+    #[test]
+    fn corridors_join_at_a_turn() {
+        let line = line();
+        for &offset in &line.conductor_offsets_m {
+            let into = clearance_ring(&line, 0, offset, 1.0);
+            let out = clearance_ring(&line, 1, offset, 0.0);
+            for ((a, _), (b, _)) in into.iter().zip(&out) {
+                assert!((*a - *b).length() < 1e-3, "{offset}: {a} vs {b}");
+            }
         }
     }
 
-    /// The tube: one ring per piece joint per span, quads between rings, and
-    /// a fan closing each of the line's two ends.
+    /// The tubes: one ring per conductor per piece joint per span, quads
+    /// between rings, and a fan closing each tube at the line's two ends.
     #[test]
     fn a_corridor_mesh_is_closed_rings_along_each_span() {
         let line = line();
         let mesh = clearance_mesh(std::slice::from_ref(&line)).unwrap();
-        let ring = 2 * (CLEARANCE_HALF_SEGMENTS + 1);
+        let ring = CLEARANCE_SEGMENTS;
         let rings = (40 + 1) + (30 + 1);
         let positions = float3(&mesh, Mesh::ATTRIBUTE_POSITION);
-        assert_eq!(positions.len(), rings * ring + 2 * (1 + ring));
+        assert_eq!(positions.len(), 3 * (rings * ring + 2 * (1 + ring)));
         let Some(Indices::U32(indices)) = mesh.indices() else {
             panic!("u32 indices");
         };
-        assert_eq!(indices.len(), (40 + 30) * ring * 6 + 2 * ring * 3);
+        assert_eq!(indices.len(), 3 * ((40 + 30) * ring * 6 + 2 * ring * 3));
         assert!(indices.iter().all(|&i| (i as usize) < positions.len()));
         assert!(clearance_mesh(&[]).is_none());
     }

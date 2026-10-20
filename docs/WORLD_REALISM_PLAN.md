@@ -276,15 +276,17 @@ C8 (P2.6) and D2 (P5.1).
   *Done (clearance-corridor overlay):* a Clearance Corridors toggle beside
   Power Lines in Runtime Overlays, off by default and owned by no preset,
   shows each span's clearance volume from `meta.power_lines`: everywhere
-  within the line's clearance of a conductor's surface. A span's conductors
-  lie across the line on one level segment, so the volume's cross-section is
-  that segment widened by the conductor radius plus the clearance: a
-  stadium. `clearance_mesh` sweeps it along each span, a section at every
-  piece joint holding the conductors' segment there, closed at the line's
-  ends. It is one translucent amber mesh per run, unlit, both faces, casting
-  no shadow. Unit tests check that every section point is exactly that far
-  from the conductors' segment, in one flat section, and that the spans meet
-  at their supports. A GPU probe checks, at Low, Standard and High, that
+  within the line's clearance of a conductor's surface: the union of a tube
+  round each conductor, of its radius plus the clearance, since the safety
+  test measures to each conductor on its own (the gap between two widely
+  spaced wires is not drawn as inside). `clearance_mesh` sweeps each tube's
+  circular section along every span, a section at each piece joint; at a
+  support both spans share one section (its plane square to the mean of
+  their directions), so a tube is unbroken round a turn, and it is closed at
+  the line's ends. It is one translucent amber mesh per run, unlit, both
+  faces, casting no shadow. Unit tests check that every section point is
+  exactly that far from its own conductor, in one flat section, and that
+  both spans' sections are the same ring at a turn. A GPU probe checks, at Low, Standard and High, that
   nothing is drawn by default, that the corridor is drawn 6 m over the
   centre conductor at mid-span when the overlay is on, and that nothing is
   drawn 150 m off the line. Nothing is left of R3 as planned. Two gaps found
