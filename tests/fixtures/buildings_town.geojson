@@ -9,7 +9,10 @@
     "height": "9 m",
     "roof:shape": "gabled",
     "roof:height": "3",
-    "roof:direction": "S"
+    "roof:direction": "S",
+    "building:material": "brick",
+    "roof:material": "roof_tiles",
+    "building:levels": "2"
    },
    "geometry": {
     "type": "Polygon",
@@ -118,7 +121,10 @@
     "@id": "way/4",
     "building": "apartments",
     "height": "24",
-    "roof:shape": "flat"
+    "roof:shape": "flat",
+    "building:material": "glass",
+    "roof:material": "concrete",
+    "building:levels": "8"
    },
    "geometry": {
     "type": "Polygon",
@@ -152,7 +158,9 @@
    "type": "Feature",
    "properties": {
     "@id": "way/5",
-    "building": "warehouse"
+    "building": "warehouse",
+    "building:material": "metal",
+    "roof:material": "metal"
    },
    "geometry": {
     "type": "Polygon",
@@ -232,7 +240,8 @@
     "@id": "way/7",
     "building": "commercial",
     "height": "12",
-    "roof:shape": "mansard"
+    "roof:shape": "mansard",
+    "building:material": "marzipan"
    },
    "geometry": {
     "type": "Polygon",

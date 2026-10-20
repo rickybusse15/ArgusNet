@@ -2,6 +2,7 @@ pub mod app;
 pub mod belief_map;
 pub mod belief_render;
 pub mod bindings;
+pub mod building_material;
 pub mod camera_control;
 pub mod glyphs;
 pub mod headless;
