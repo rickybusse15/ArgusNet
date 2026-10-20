@@ -212,6 +212,20 @@ def ridge_azimuth_rad(properties: Mapping[str, object], footprint) -> float | No
     return None
 
 
+def centre_longitude(lons: Sequence[float]) -> float:
+    """The middle of the footprints' longitudes, in [-180, 180).
+
+    Unwrapped around the first longitude, so a town astride the antimeridian
+    (179.999 and -179.999) centres at 180, not at 0 on the far side of the
+    Earth. Footprints span far less than half the globe, so unwrapping each
+    to within 180 degrees of the first keeps them contiguous.
+    """
+    first = lons[0]
+    unwrapped = [first + math.remainder(lon - first, 360.0) for lon in lons]
+    middle = 0.5 * (min(unwrapped) + max(unwrapped))
+    return (middle + 180.0) % 360.0 - 180.0
+
+
 def _ring(coordinates: Sequence[Sequence[float]]) -> list[list[float]]:
     ring = [list(map(float, point[:2])) for point in coordinates]
     if len(ring) > 1 and ring[0] == ring[-1]:
@@ -299,10 +313,7 @@ def import_buildings(
     if origin is None:
         lons = [lon for *_, lonlat, _ in features for lon, _ in lonlat]
         lats = [lat for *_, lonlat, _ in features for _, lat in lonlat]
-        origin = (
-            round(0.5 * (min(lats) + max(lats)), 7),
-            round(0.5 * (min(lons) + max(lons)), 7),
-        )
+        origin = (round(0.5 * (min(lats) + max(lats)), 7), round(centre_longitude(lons), 7))
     enu_origin = ENUOrigin(latitude_deg=origin[0], longitude_deg=origin[1], altitude_m=0.0)
     geod = Geod(ellps="WGS84")
 

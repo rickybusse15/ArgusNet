@@ -110,3 +110,46 @@ def test_levels_are_kept_only_when_the_data_gives_them(town: dict) -> None:
     assert b["way/4"]["levels"] == 8.0
     assert b["way/2"]["levels"] == 2.0
     assert "levels" not in b["way/3"]
+
+
+def test_a_town_astride_the_antimeridian_centres_on_it(tmp_path: Path) -> None:
+    # A 20 x 20 m footprint whose corners sit either side of 180 degrees.
+    d_lon = 10.0 / (111_320.0 * math.cos(math.radians(-17.0)))
+    d_lat = 10.0 / 111_132.0
+    ring = [
+        [180.0 - d_lon, -17.0 - d_lat],
+        [-180.0 + d_lon, -17.0 - d_lat],
+        [-180.0 + d_lon, -17.0 + d_lat],
+        [180.0 - d_lon, -17.0 + d_lat],
+    ]
+    path = tmp_path / "dateline.geojson"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"building": "house", "height": "6"},
+                        "geometry": {"type": "Polygon", "coordinates": [ring + [ring[0]]]},
+                    }
+                ],
+            }
+        )
+    )
+    document = import_buildings(path)
+    assert abs(abs(document["georeference"]["origin_lon_deg"]) - 180.0) < 1e-6
+    footprint = document["buildings"][0]["footprint_xy_m"]
+    xs = [p[0] for p in footprint]
+    ys = [p[1] for p in footprint]
+    # Centred on the origin and 20 m across, not half a world wide.
+    assert abs(max(xs) - min(xs) - 20.0) < 0.1 and abs(max(ys) - min(ys) - 20.0) < 0.1
+    assert abs(sum(xs) / 4) < 0.1
+
+
+def test_longitudes_centre_on_the_short_arc() -> None:
+    from argusnet.world.buildings_import import centre_longitude
+
+    assert abs(centre_longitude([7.0, 7.2]) - 7.1) < 1e-12
+    assert abs(abs(centre_longitude([179.9, -179.9])) - 180.0) < 1e-9
+    assert abs(centre_longitude([-179.9, -179.7]) + 179.8) < 1e-9
