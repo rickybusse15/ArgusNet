@@ -216,3 +216,103 @@ fn clipped_dda_parameters_stay_in_original_ray_space() {
         assert!((c.3 - c.2 - 1.0 / 6.0).abs() < 1e-12);
     }
 }
+
+/// A 20 m broadleaf at `(x, 20)` on flat ground: crown 8–20 m up (centre
+/// 14 m, half-height 6 m), radius 5 m, a 0.3 m trunk to 14 m.
+fn tree(id: &str, x: f64, leaf_density: f64) -> argusnet_world::trees::Tree {
+    argusnet_world::trees::Tree {
+        id: id.into(),
+        xy_m: [x, 20.0],
+        base_z_m: 0.0,
+        height_m: 20.0,
+        crown_base_m: 8.0,
+        crown_radius_m: 5.0,
+        trunk_radius_m: 0.3,
+        species: argusnet_world::trees::Species::Broadleaf,
+        leaf_density,
+    }
+}
+
+#[test]
+fn crowns_dim_a_sight_line_and_a_trunk_stops_it() {
+    use argusnet_world::trees::{TreeLayer, CROWN_EXTINCTION_PER_M};
+    let t = terrain(vec![vec![0.0; 5]; 5]);
+    let profile = VisibilityProfile::default();
+    let los = |trees: Option<&TreeLayer>, a: [f64; 3], b: [f64; 3]| {
+        visibility::los_with_trees(&t, &empty(), trees, a, b, &profile, 0, 1.0)
+    };
+    let one = TreeLayer::new(vec![tree("a", 20.0, 0.5)]).unwrap();
+    // Level through the crown's centre: a 10 m chord at density 0.5.
+    let through = los(Some(&one), [1.0, 20.0, 14.5], [39.0, 20.0, 14.5]);
+    let chord = 2.0 * (25.0_f64 - 25.0 * (0.5_f64 / 6.0).powi(2)).sqrt();
+    let expected = (-CROWN_EXTINCTION_PER_M * 0.5 * chord).exp();
+    assert!(through.visible, "{through:?}");
+    assert!(
+        (through.transmittance - expected).abs() < 1e-12,
+        "{through:?}"
+    );
+    assert_eq!(through.blocker_type, "none");
+    // The first vegetation met is the crown's near surface.
+    let entry = through.first_hit_range_m.expect("vegetation met");
+    assert!((entry - (20.0 - chord / 2.0 - 1.0)).abs() < 1e-9, "{entry}");
+    // Over the crown, nothing; without trees, exactly `los`.
+    let over = los(Some(&one), [1.0, 20.0, 25.0], [39.0, 20.0, 25.0]);
+    assert_eq!(over.transmittance, 1.0);
+    let plain = visibility::los(
+        &t,
+        &empty(),
+        [1.0, 20.0, 14.5],
+        [39.0, 20.0, 14.5],
+        &profile,
+        0,
+        1.0,
+    );
+    let none = los(None, [1.0, 20.0, 14.5], [39.0, 20.0, 14.5]);
+    assert_eq!(format!("{plain:?}"), format!("{none:?}"));
+    let empty_layer = TreeLayer::new(vec![]).unwrap();
+    let empty_trees = los(Some(&empty_layer), [1.0, 20.0, 14.5], [39.0, 20.0, 14.5]);
+    assert_eq!(format!("{plain:?}"), format!("{empty_trees:?}"));
+
+    // Three dense crowns in a row fall under the hard-block threshold.
+    let row = TreeLayer::new(vec![
+        tree("a", 8.0, 1.0),
+        tree("b", 20.0, 1.0),
+        tree("c", 32.0, 1.0),
+    ])
+    .unwrap();
+    let dark = los(Some(&row), [1.0, 20.0, 14.5], [39.0, 20.0, 14.5]);
+    assert!(!dark.visible);
+    assert_eq!(dark.blocker_type, "vegetation");
+    assert_eq!(dark.detection_multiplier, 0.0);
+
+    // Under the crown, at trunk height: the trunk stops the ray.
+    let trunk = los(Some(&one), [1.0, 20.0, 5.0], [39.0, 20.0, 5.0]);
+    assert!(!trunk.visible);
+    assert_eq!(trunk.blocker_type, "trunk");
+    assert!((trunk.first_hit_range_m.unwrap() - (19.0 - 0.3)).abs() < 1e-9);
+    // Beside it, clear.
+    let beside = los(Some(&one), [1.0, 24.0, 5.0], [39.0, 24.0, 5.0]);
+    assert!(beside.visible);
+    assert_eq!(beside.transmittance, 1.0);
+
+    // A wall nearer than the trunk is what stops the ray, and a trunk
+    // nearer than a wall is.
+    let wall = |x: f64| {
+        Obstacle::wall_segment("w", BlockerType::Wall, [x, 10.0], [x, 30.0], 0.5, 0.0, 30.0)
+            .unwrap()
+    };
+    for (x, kind) in [(10.0, "wall"), (30.0, "trunk")] {
+        let walls = ObstacleLayer::new(bounds(), 10.0, vec![wall(x)]).unwrap();
+        let v = visibility::los_with_trees(
+            &t,
+            &walls,
+            Some(&one),
+            [1.0, 20.0, 5.0],
+            [39.0, 20.0, 5.0],
+            &profile,
+            0,
+            1.0,
+        );
+        assert_eq!(v.blocker_type, kind);
+    }
+}

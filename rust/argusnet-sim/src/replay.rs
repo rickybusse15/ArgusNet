@@ -321,6 +321,13 @@ pub struct ReplayBeliefStats {
     /// without any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure_recall: Option<f64>,
+    /// Cells with a canopy return (R2). Written only when there are some.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub canopy_cells: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// A sample of one platform's range returns this tick, rounded to the
@@ -332,6 +339,9 @@ pub struct ReplayRangeScan {
     pub ground: Vec<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub structure: Vec<[f64; 3]>,
+    /// Returns from tree crowns (R2), written only when there are some.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub canopy: Vec<[f64; 3]>,
     pub misses: u32,
     /// The nearest point of each power-line span the scan put points on
     /// (R3). Absent when none.
@@ -362,6 +372,7 @@ impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
             origin_m: dm(scan.origin_m),
             ground: of(crate::range_scan::ReturnClass::Ground),
             structure: of(crate::range_scan::ReturnClass::Structure),
+            canopy: of(crate::range_scan::ReturnClass::Canopy),
             misses: scan.misses,
             wire: scan.wires.iter().map(|wire| dm(wire.point_m)).collect(),
         }
@@ -518,6 +529,10 @@ pub struct ReplayFrame {
     /// so applying the frames in order rebuilds the map.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub belief_updates: Vec<crate::belief_world::BeliefCellUpdate>,
+    /// The belief's canopy cells this tick changed (R2): soft structure
+    /// seen from tree crowns. Each row replaces the cell's last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub canopy_updates: Vec<crate::belief_world::CanopyCellUpdate>,
     /// This tick's range returns, per mobile platform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub range_scans: Vec<ReplayRangeScan>,
@@ -725,6 +740,7 @@ impl ReplayWriter {
             target_metadata: Vec::new(),
             safety_events: Vec::new(),
             belief_updates: Vec::new(),
+            canopy_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
         }

@@ -208,6 +208,23 @@ pub struct BeliefGrid {
     /// Cells touched since the replay last took them.
     #[serde(skip)]
     changed: BTreeSet<usize>,
+    /// Canopy evidence (R2): per cell, the highest canopy return (meaningful
+    /// where any landed; never NaN, so a checkpoint is plain JSON) and how
+    /// many landed. Soft structure: a crown is something to
+    /// keep clear of, not a wall, so it never makes a cell occupied. Empty
+    /// until the first canopy return lands, so a run in a world without
+    /// trees checkpoints exactly as it did before them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    canopy_top_m: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    canopy_count: Vec<u32>,
+    /// Each cell's canopy top as the replay last showed it, cm
+    /// ([`ShownCell::NONE`] for none). Checkpointed like `shown`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    canopy_shown_cm: Vec<i32>,
+    /// Cells with canopy returns since the replay last took them.
+    #[serde(skip)]
+    canopy_changed: BTreeSet<usize>,
     /// What snapshots share, kept current as returns land. Derived: rebuilt
     /// from the grid after a restore or a reset.
     #[serde(skip)]
@@ -261,6 +278,10 @@ impl BeliefGrid {
             prior_wires: Vec::new(),
             wires_view: None,
             changed: BTreeSet::new(),
+            canopy_top_m: Vec::new(),
+            canopy_count: Vec::new(),
+            canopy_shown_cm: Vec::new(),
+            canopy_changed: BTreeSet::new(),
             views: None,
         })
     }
@@ -309,6 +330,10 @@ impl BeliefGrid {
         self.last_seen_tick.fill(-1);
         self.shown.fill(ShownCell::default());
         self.changed.clear();
+        self.canopy_top_m = Vec::new();
+        self.canopy_count = Vec::new();
+        self.canopy_shown_cm = Vec::new();
+        self.canopy_changed.clear();
         self.views = None;
         self.reset_wires();
     }
@@ -440,6 +465,22 @@ impl BeliefGrid {
                     self.log_odds[index] =
                         (self.log_odds[index] + LOG_ODDS_STRUCTURE).min(LOG_ODDS_LIMIT);
                 }
+                ReturnClass::Canopy => {
+                    if self.canopy_count.is_empty() {
+                        let cells = self.cell_count();
+                        self.canopy_top_m = vec![0.0; cells];
+                        self.canopy_count = vec![0; cells];
+                        self.canopy_shown_cm = vec![ShownCell::NONE; cells];
+                    }
+                    let top = &mut self.canopy_top_m[index];
+                    *top = if self.canopy_count[index] == 0 {
+                        hit.point_m[2]
+                    } else {
+                        top.max(hit.point_m[2])
+                    };
+                    self.canopy_count[index] += 1;
+                    self.canopy_changed.insert(index);
+                }
             }
             self.touch(index, tick);
         }
@@ -448,6 +489,37 @@ impl BeliefGrid {
     /// Cells with any return.
     pub fn known_cells(&self) -> usize {
         self.last_seen_tick.iter().filter(|t| **t >= 0).count()
+    }
+
+    /// The highest canopy return in cell `(i, j)`, if any landed there.
+    pub fn canopy_top_ij(&self, i: usize, j: usize) -> Option<f64> {
+        let index = j * self.nx + i;
+        (self.canopy_count.get(index).copied().unwrap_or(0) > 0).then(|| self.canopy_top_m[index])
+    }
+
+    /// Cells with a canopy return.
+    pub fn canopy_cells(&self) -> usize {
+        self.canopy_count.iter().filter(|&&n| n > 0).count()
+    }
+
+    /// The cells whose shown canopy top changed since the last call, as
+    /// replay rows in cell order: when first seen, or moved by
+    /// [`SHOWN_GROUND_STEP_CM`] or more.
+    pub fn take_changed_canopy(&mut self) -> Vec<CanopyCellUpdate> {
+        let mut rows = Vec::new();
+        for index in std::mem::take(&mut self.canopy_changed) {
+            let now = (self.canopy_top_m[index] * 100.0).round() as i32;
+            let was = self.canopy_shown_cm[index];
+            if was == ShownCell::NONE || (now - was).abs() >= SHOWN_GROUND_STEP_CM {
+                self.canopy_shown_cm[index] = now;
+                rows.push(CanopyCellUpdate(
+                    (index % self.nx) as u32,
+                    (index / self.nx) as u32,
+                    now,
+                ));
+            }
+        }
+        rows
     }
 
     /// Cells believed occupied by a structure, at `threshold`.
@@ -652,6 +724,11 @@ pub struct BeliefCellUpdate(
     pub u8,
     pub u8,
 );
+
+/// One cell's canopy top as the replay shows it (R2): `(i, j, top_cm)`.
+/// Each row replaces the cell's last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanopyCellUpdate(pub u32, pub u32, pub i32);
 
 /// The smallest ground or structure move, cm, worth a replay row.
 pub const SHOWN_GROUND_STEP_CM: i32 = 10;
@@ -1485,6 +1562,56 @@ mod tests {
         assert!(
             BeliefVisibility::new(handle, 0.0).is_visible([5.0, 45.0, 85.0], [95.0, 45.0, 85.0])
         );
+    }
+
+    /// Canopy returns are soft structure: the cell is seen and keeps its
+    /// highest crown, shown to the replay when first seen or moved 10 cm,
+    /// but it is never occupied, so nothing collides with it. A grid that
+    /// never saw a crown checkpoints without a canopy key.
+    #[test]
+    fn canopy_returns_are_seen_but_never_occupied() {
+        let config = ExplorationConfig::default();
+        let mut belief = grid();
+        let plain = serde_json::to_string(&belief).unwrap();
+        assert!(!plain.contains("canopy"), "{plain}");
+        let crown = |z: f64| RangeReturn {
+            point_m: [45.0, 45.0, z],
+            class: ReturnClass::Canopy,
+        };
+        belief.integrate(&scan(vec![crown(70.0), crown(72.0), crown(71.0)]), 0);
+        assert_eq!(belief.canopy_cells(), 1);
+        assert_eq!(belief.canopy_top_ij(4, 4), Some(72.0));
+        assert_eq!(belief.canopy_top_ij(5, 4), None);
+        assert_eq!(belief.known_cells(), 1);
+        assert!(!belief.is_structure_ij(4, 4, config.occupied_probability));
+        assert_eq!(
+            belief.take_changed_canopy(),
+            vec![CanopyCellUpdate(4, 4, 7200)]
+        );
+        assert!(belief.take_changed_canopy().is_empty());
+        // The belief row says only that the cell is seen and not occupied:
+        // no ground, no structure.
+        assert_eq!(
+            belief.take_changed_cells(config.occupied_probability),
+            vec![BeliefCellUpdate(4, 4, None, None, 0, 0)]
+        );
+        // A lower return, or one 5 cm higher, changes nothing shown; 10 cm does.
+        belief.integrate(&scan(vec![crown(60.0), crown(72.05)]), 1);
+        assert!(belief.take_changed_canopy().is_empty());
+        belief.integrate(&scan(vec![crown(72.15)]), 2);
+        assert_eq!(
+            belief.take_changed_canopy(),
+            vec![CanopyCellUpdate(4, 4, 7215)]
+        );
+        let handle = BeliefHandle::new(belief.snapshot(&config));
+        assert!(!BeliefObstacles::new(handle).collides([45.0, 45.0, 65.0]));
+        // Through a checkpoint, and gone with a clear.
+        let back: BeliefGrid =
+            serde_json::from_str(&serde_json::to_string(&belief).unwrap()).unwrap();
+        assert_eq!(back.canopy_top_ij(4, 4), Some(72.15));
+        belief.clear();
+        assert_eq!(belief.canopy_cells(), 0);
+        assert_eq!(serde_json::to_string(&belief).unwrap(), plain);
     }
 
     #[test]

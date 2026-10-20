@@ -1,5 +1,7 @@
 //! Two-level DDA visibility and probabilistic detection, in metres and ENU.
-use crate::{index::ObstacleLayer, obstacles::Bounds2d, tiled::TiledTerrain, TerrainQuery};
+use crate::{
+    index::ObstacleLayer, obstacles::Bounds2d, tiled::TiledTerrain, trees::TreeLayer, TerrainQuery,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 fn point(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
@@ -201,6 +203,27 @@ pub fn los(
     land_cover: i32,
     clearance: f64,
 ) -> VisibilityResult {
+    los_with_trees(
+        terrain, obstacles, None, a, b, profile, land_cover, clearance,
+    )
+}
+
+/// [`los`] through a world with trees (R2). A trunk stops the ray like a
+/// building (`blocker_type` `"trunk"`); each crown it crosses dims it by
+/// its optical depth, multiplied into the forest stands' transmittance, and
+/// counts as vegetation for the first hit. With no trees, or an empty
+/// layer, this is [`los`] exactly.
+#[allow(clippy::too_many_arguments)]
+pub fn los_with_trees(
+    terrain: &TiledTerrain,
+    obstacles: &ObstacleLayer,
+    trees: Option<&TreeLayer>,
+    a: [f64; 3],
+    b: [f64; 3],
+    profile: &VisibilityProfile,
+    land_cover: i32,
+    clearance: f64,
+) -> VisibilityResult {
     let distance = (0..3).map(|i| (b[i] - a[i]).powi(2)).sum::<f64>().sqrt();
     if distance <= 1e-9 {
         return VisibilityResult::default();
@@ -250,6 +273,22 @@ pub fn los(
             {
                 nearest = Some((t, o.blocker_type.as_str().into()));
             }
+        }
+    }
+    if let Some(trees) = trees.filter(|trees| !trees.is_empty()) {
+        if let Some(hit) = trees.first_trunk_hit(a, b) {
+            if nearest.as_ref().is_none_or(|(v, _)| hit.t < *v) {
+                nearest = Some((hit.t, "trunk".into()));
+            }
+        }
+        let crowns = trees.crowns_along(a, b);
+        if let Some(&(entry, _, _)) = crowns.first() {
+            vegetation = Some(vegetation.map_or(entry, |v| v.min(entry)));
+            let depth: f64 = crowns
+                .iter()
+                .map(|(_, _, tree)| tree.crown_optical_depth(a, b))
+                .sum();
+            transmittance *= (-depth).exp();
         }
     }
     if let Some((t, kind)) = nearest {

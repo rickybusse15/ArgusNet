@@ -351,6 +351,59 @@ fn a_run_without_stage_eight_or_with_a_bad_config_is_refused() {
         .is_err());
 }
 
+/// R2: in a world with trees the scanner's canopy returns reach the
+/// belief and the replay (canopy rows, range-scan canopy points, the count
+/// of canopy cells), trunk returns count as right structure, and the run
+/// still resumes exactly from a checkpoint.
+#[test]
+fn a_forest_maps_as_canopy_and_resumes_exactly() {
+    let config: argusnet_sim::builder::ScenarioConfig = serde_json::from_value(serde_json::json!({
+        "format": "argusnet.scenario-config",
+        "version": 1,
+        "duration_s": 40.0,
+        "options": {"map_preset": "small", "terrain_preset": "jungle_canopy", "trees": true},
+    }))
+    .unwrap();
+    let built = argusnet_sim::builder::build_bundle(&config).unwrap();
+    let bundle = ScenarioBundle::from_json(&built.to_string()).unwrap();
+    let frames = frames(no_prior(&bundle));
+    let rows: usize = frames
+        .iter()
+        .map(|f| f["canopy_updates"].as_array().map_or(0, Vec::len))
+        .sum();
+    let points: usize = frames
+        .iter()
+        .flat_map(|f| f["range_scans"].as_array().cloned().unwrap_or_default())
+        .map(|s| s["canopy"].as_array().map_or(0, Vec::len))
+        .sum();
+    let last = &frames.last().unwrap()["mapping_state"]["belief"];
+    assert!(rows > 0 && points > 0, "{rows} rows, {points} points");
+    assert!(last["canopy_cells"].as_u64().unwrap() > 0, "{last}");
+    // No building or wall stands on the jungle map: every believed
+    // structure is a trunk, and right.
+    assert!(last["structure_cells"].as_u64().unwrap() > 0, "{last}");
+    assert_eq!(last["structure_precision"].as_f64(), Some(1.0), "{last}");
+
+    let straight = frames;
+    let at = straight.len() / 2;
+    let mut original = no_prior(&bundle);
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+    assert!(text.contains("canopy_top_m"), "the canopy is checkpointed");
+    let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    let mut resumed = no_prior(&bundle);
+    resumed.restore(&checkpoint).expect("restore accepted");
+    let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
+        .map(|_| {
+            resumed.step().unwrap();
+            serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(rest, straight[at..]);
+}
+
 /// R3: a wire is thin enough to fly through between two ticks, each
 /// position clear of it. Strung square across a drone's own path at its
 /// height, at the middle of a tick's flight, it stops the drone short of

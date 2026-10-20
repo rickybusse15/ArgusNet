@@ -21,8 +21,9 @@
 //! seeded, fixed-order sampler procedural placement scatters trees with.
 //!
 //! This module is the model. A run's bundle carries trees in its world
-//! (`argusnet-sim`'s builder scatters them with the `trees` option);
-//! sensing, flight and drawing come in later slices.
+//! (`argusnet-sim`'s builder scatters them with the `trees` option), sight
+//! lines cross them (`visibility::los_with_trees`) and the range scanner
+//! returns from them; flight and drawing come in later slices.
 
 use serde::{Deserialize, Serialize};
 
@@ -581,6 +582,22 @@ impl TreeLayer {
         (-self.optical_depth_along(a, b)).exp()
     }
 
+    /// The crowns the segment from `a` to `b` passes through, each as the
+    /// fractions of the segment inside it, in order of entry (then id).
+    pub fn crowns_along(&self, a: [f64; 3], b: [f64; 3]) -> Vec<(f64, f64, &Tree)> {
+        let mut crowns: Vec<(f64, f64, &Tree)> = self
+            .candidates(a, b)
+            .into_iter()
+            .filter_map(|i| {
+                let tree = &self.trees[i as usize];
+                tree.crown_interval(a, b).map(|(t0, t1)| (t0, t1, tree))
+            })
+            .collect();
+        // Candidates come in id order, so a stable sort keeps ties by id.
+        crowns.sort_by(|x, y| x.0.total_cmp(&y.0));
+        crowns
+    }
+
     /// The first trunk or crown the segment from `a` to `b` meets, nearest
     /// first (a trunk before a crown at the same point, then id order).
     /// Walks the grid in order along the segment and stops at the first cell
@@ -864,6 +881,45 @@ mod tests {
             layer.transmittance_along([-10.0, 0.0, 125.0], [40.0, 0.0, 125.0]),
             1.0
         );
+    }
+
+    #[test]
+    fn crowns_along_a_ray_come_in_order_of_entry() {
+        let layer = TreeLayer::new(vec![
+            at("c", 40.0, 0.0),
+            at("a", 0.0, 0.0),
+            at("b", 20.0, 0.0),
+            at("off", 0.0, 30.0),
+        ])
+        .expect("layer");
+        let ids = |a: [f64; 3], b: [f64; 3]| -> Vec<String> {
+            layer
+                .crowns_along(a, b)
+                .into_iter()
+                .map(|c| c.2.id.clone())
+                .collect()
+        };
+        assert_eq!(
+            ids([-10.0, 0.0, 114.0], [50.0, 0.0, 114.0]),
+            ["a", "b", "c"]
+        );
+        assert_eq!(
+            ids([50.0, 0.0, 114.0], [-10.0, 0.0, 114.0]),
+            ["c", "b", "a"]
+        );
+        let crowns = layer.crowns_along([-10.0, 0.0, 114.0], [50.0, 0.0, 114.0]);
+        assert!(close(crowns[0].0, 5.0 / 60.0) && close(crowns[0].1, 15.0 / 60.0));
+        assert!(layer
+            .crowns_along([-10.0, 0.0, 130.0], [50.0, 0.0, 130.0])
+            .is_empty());
+        // Two crowns entered at once keep id order.
+        let twins = TreeLayer::new(vec![at("y", 0.0, 0.0), at("x", 0.0, 0.0)]).expect("layer");
+        let order: Vec<_> = twins
+            .crowns_along([-10.0, 0.0, 114.0], [10.0, 0.0, 114.0])
+            .into_iter()
+            .map(|c| c.2.id.as_str())
+            .collect();
+        assert_eq!(order, ["x", "y"]);
     }
 
     #[test]
