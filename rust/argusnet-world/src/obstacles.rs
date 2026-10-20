@@ -250,20 +250,12 @@ fn roof_planes(
         RoofShape::Hipped => {
             // One plane per edge at one pitch, rising from the eave inward:
             // a hip roof, whose ridge runs where the opposite slopes meet.
-            // The pitch brings the narrowest span's middle to the ridge
-            // height, and no higher anywhere: a convex footprint's inradius
-            // is never more than half its narrowest width.
+            // The roof over a point is the eave plus the pitch times its
+            // distance to the nearest edge, so it peaks at the footprint's
+            // inradius: the pitch brings exactly that to the ridge height.
             let ccw = counter_clockwise(footprint);
             let edges = inward_edges(&ccw);
-            let width = edges
-                .iter()
-                .map(|(p, n)| {
-                    ccw.iter()
-                        .map(|v| n[0] * (v[0] - p[0]) + n[1] * (v[1] - p[1]))
-                        .fold(0.0_f64, f64::max)
-                })
-                .fold(f64::INFINITY, f64::min);
-            let k = roof_height_m / (0.5 * width);
+            let k = roof_height_m / chebyshev_inradius(&edges);
             edges
                 .iter()
                 .map(|(p, n)| {
@@ -294,6 +286,50 @@ fn roof_planes(
                 .collect()
         }
     }
+}
+
+/// The radius of the largest circle inside a convex polygon given as
+/// `(point on edge, inward unit normal)` per edge: the most a point's
+/// distance to its nearest edge can be. A linear program in the centre and
+/// radius, solved exactly: its optimum has three edges active, so every
+/// triple of edges is solved and the best one that keeps clear of every
+/// other edge wins. Footprints have few edges, so this stays cheap.
+pub fn chebyshev_inradius(edges: &[([f64; 2], [f64; 2])]) -> f64 {
+    let n = edges.len();
+    let distance =
+        |c: [f64; 2], (p, m): &([f64; 2], [f64; 2])| m[0] * (c[0] - p[0]) + m[1] * (c[1] - p[1]);
+    let mut best = 0.0_f64;
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                // m · c - r = m · p for each of the three edges.
+                let rows = [edges[i], edges[j], edges[k]]
+                    .map(|(p, m)| [m[0], m[1], -1.0, m[0] * p[0] + m[1] * p[1]]);
+                let det = |a: [f64; 3], b: [f64; 3], c: [f64; 3]| {
+                    a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                        + a[2] * (b[0] * c[1] - b[1] * c[0])
+                };
+                let col = |q: usize| [rows[0][q], rows[1][q], rows[2][q]];
+                let d = det(col(0), col(1), col(2));
+                if d.abs() <= 1e-12 {
+                    continue;
+                }
+                let (x, y, r) = (
+                    det(col(3), col(1), col(2)) / d,
+                    det(col(0), col(3), col(2)) / d,
+                    det(col(0), col(1), col(3)) / d,
+                );
+                if r > best
+                    && edges
+                        .iter()
+                        .all(|edge| distance([x, y], edge) >= r - 1e-9 * r.max(1.0))
+                {
+                    best = r;
+                }
+            }
+        }
+    }
+    best
 }
 
 /// The area centroid of a simple polygon.
@@ -1847,6 +1883,21 @@ mod roof_tests {
         for p in [[10.0, 5.0], [7.0, 5.0], [13.0, 4.0]] {
             assert!(roof.height_at(p[0], p[1]) <= 15.0 + 1e-9);
         }
+        // A footprint that is not centrally symmetric still reaches the
+        // ridge, at its incentre: a 3-4-5 triangle's inradius is 1, so a
+        // right triangle with legs 30 and 40 m has an inradius of 10 m,
+        // at (10, 10).
+        let triangle = vec![[0.0, 0.0], [30.0, 0.0], [0.0, 40.0]];
+        let t =
+            Obstacle::building_v2("t", triangle, 0.0, 10.0, RoofShape::Hipped, 5.0, None).unwrap();
+        let peak = t.roof.as_ref().unwrap();
+        assert!(close(peak.height_at(10.0, 10.0), 15.0));
+        assert!(peak.height_at(9.0, 11.0) < 15.0);
+        assert_eq!(t.top_z_m, 15.0);
+        // The ridge height is what a ray at it meets.
+        assert!(t
+            .first_hit_t([10.0, -10.0, 14.99], [10.0, 50.0, 14.99])
+            .is_some());
         // Either winding gives the same roof.
         let mut reversed = rectangle();
         reversed.reverse();
@@ -1858,6 +1909,24 @@ mod roof_tests {
                 roof.height_at(p[0], p[1])
             ));
         }
+    }
+
+    #[test]
+    fn the_inradius_is_the_largest_circle_inside() {
+        let edges = |polygon: Vec<[f64; 2]>| inward_edges(&counter_clockwise(&polygon));
+        assert!(close(chebyshev_inradius(&edges(rectangle())), 5.0));
+        assert!(close(
+            chebyshev_inradius(&edges(vec![[0.0, 0.0], [30.0, 0.0], [0.0, 40.0]])),
+            10.0
+        ));
+        // A regular hexagon of side 2: its apothem, √3.
+        let hexagon: Vec<[f64; 2]> = (0..6)
+            .map(|i| {
+                let a = std::f64::consts::FRAC_PI_3 * i as f64;
+                [2.0 * a.cos(), 2.0 * a.sin()]
+            })
+            .collect();
+        assert!(close(chebyshev_inradius(&edges(hexagon)), 3f64.sqrt()));
     }
 
     #[test]
