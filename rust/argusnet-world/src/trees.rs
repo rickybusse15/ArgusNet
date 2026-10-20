@@ -206,9 +206,10 @@ impl Tree {
             return Err(bad("leaf_density"));
         }
         // Each value finite is not enough: what is derived from them (the
-        // top, the footprint) must be too.
+        // top, the crown's centre, the footprint) must be too.
         let b = self.bounds_xy_m();
         if !(self.top_z_m().is_finite()
+            && self.crown_centre_m()[2].is_finite()
             && [b.x_min_m, b.x_max_m, b.y_min_m, b.y_max_m]
                 .iter()
                 .all(|v| v.is_finite()))
@@ -228,7 +229,10 @@ impl Tree {
         [
             self.xy_m[0],
             self.xy_m[1],
-            self.base_z_m + 0.5 * (self.crown_base_m + self.height_m),
+            // The crown base plus its half-height, not the mean of base and
+            // top: each step stays between the ground and the top, so no
+            // intermediate overflows when those are finite.
+            self.base_z_m + self.crown_base_m + self.crown_half_height_m(),
         ]
     }
 
@@ -1105,6 +1109,39 @@ mod tests {
             }),
             "leaf_density"
         );
+        // Finite values whose top or footprint is not.
+        assert_eq!(
+            field(Tree {
+                xy_m: [f64::MAX, 0.0],
+                crown_radius_m: f64::MAX,
+                ..tree()
+            }),
+            "extent"
+        );
+        assert_eq!(
+            field(Tree {
+                base_z_m: f64::MAX,
+                height_m: f64::MAX,
+                crown_base_m: 0.0,
+                ..tree()
+            }),
+            "extent"
+        );
+        // Extremes whose top is finite have a finite crown centre too.
+        let extreme = Tree {
+            base_z_m: -9e307,
+            height_m: 1e308,
+            crown_base_m: 9e307,
+            ..tree()
+        }
+        .validated()
+        .expect("finite top");
+        let centre = extreme.crown_centre_m()[2];
+        assert!(
+            centre.is_finite() && centre > 0.0 && centre < extreme.top_z_m(),
+            "{centre}"
+        );
+        assert!(extreme.trunk_top_z_m().is_finite());
         // The edges of each range are allowed.
         assert!(Tree {
             crown_base_m: 0.0,
