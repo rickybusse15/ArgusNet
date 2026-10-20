@@ -40,6 +40,9 @@ pub struct RuntimeOverlayVisibility {
     /// The run's power lines, towers and conductors (R3). A world
     /// structure, not an overlay: no layer preset owns it.
     pub power_lines: bool,
+    /// The run's trees (R2). A world structure, not an overlay: no layer
+    /// preset owns it.
+    pub trees: bool,
 }
 
 /// The startup layers are the Operational preset's (`crate::layers`).
@@ -63,6 +66,7 @@ impl Default for RuntimeOverlayVisibility {
             land_cover_tint: true,
             trails: true,
             power_lines: true,
+            trees: true,
         }
     }
 }

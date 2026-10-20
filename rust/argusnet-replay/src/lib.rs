@@ -170,6 +170,14 @@ pub struct PowerLinesRead {
     pub refused: Vec<String>,
 }
 
+/// What [`ReplayDocument::trees`] read: the trees the model accepts, and
+/// one reason per tree it refused.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TreesRead {
+    pub trees: Vec<argusnet_world::trees::Tree>,
+    pub refused: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReplayDocument {
     pub meta: Option<Value>,
@@ -208,6 +216,28 @@ impl ReplayDocument {
             Some(_) => read
                 .refused
                 .push("meta.power_lines: not a list of lines".to_string()),
+        }
+        read
+    }
+
+    /// The run's trees (`meta.trees`, R2), each read through the model's
+    /// own check on its own: one the model refuses is reported with its
+    /// index and reason, and every other tree is still read.
+    pub fn trees(&self) -> TreesRead {
+        let mut read = TreesRead::default();
+        match self.meta.as_ref().and_then(|m| m.get("trees")) {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(trees)) => {
+                for (index, tree) in trees.iter().enumerate() {
+                    match serde_json::from_value(tree.clone()) {
+                        Ok(tree) => read.trees.push(tree),
+                        Err(error) => read.refused.push(format!("meta.trees[{index}]: {error}")),
+                    }
+                }
+            }
+            Some(_) => read
+                .refused
+                .push("meta.trees: not a list of trees".to_string()),
         }
         read
     }
@@ -916,6 +946,38 @@ mod tests {
     /// line: absent is no lines, a valid line is read, and one the model
     /// refuses is reported with its index and reason without hiding the
     /// valid lines beside it.
+    #[test]
+    fn trees_are_read_checked_one_by_one() {
+        let replay = |trees: serde_json::Value| -> ReplayDocument {
+            serde_json::from_value(json!({"meta": {"trees": trees}, "frames": []})).unwrap()
+        };
+        let none: ReplayDocument =
+            serde_json::from_value(json!({"meta": {}, "frames": []})).unwrap();
+        assert_eq!(none.trees(), super::TreesRead::default());
+        let tree = json!({
+            "id": "t", "xy_m": [1.0, 2.0], "base_z_m": 0.0, "height_m": 20.0,
+            "crown_base_m": 8.0, "crown_radius_m": 4.0, "trunk_radius_m": 0.3,
+            "species": "conifer", "leaf_density": 0.8
+        });
+        let mut bad = tree.clone();
+        bad["leaf_density"] = json!(3.0);
+        let read = replay(json!([tree.clone(), bad, tree])).trees();
+        assert_eq!(read.trees.len(), 2);
+        assert_eq!(read.refused.len(), 1);
+        assert!(
+            read.refused[0].starts_with("meta.trees[1]"),
+            "{:?}",
+            read.refused
+        );
+        assert!(
+            read.refused[0].contains("leaf_density"),
+            "{:?}",
+            read.refused
+        );
+        let odd = replay(json!({"t": 1}));
+        assert_eq!(odd.trees().refused, ["meta.trees: not a list of trees"]);
+    }
+
     #[test]
     fn power_lines_are_read_checked_one_by_one() {
         let replay = |lines: serde_json::Value| -> ReplayDocument {
