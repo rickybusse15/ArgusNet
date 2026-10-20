@@ -28,6 +28,7 @@ pub mod behaviors;
 pub mod environment;
 pub mod power_lines;
 pub mod scenario;
+pub mod trees;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -184,6 +185,18 @@ pub struct ScenarioOptions {
     /// profile. Off by default; written only when on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub power_line_inspection: bool,
+    /// R2: scatter trees (`tree-v1`) over the map's forest and scrub. Off
+    /// by default, so every existing scenario's world is unchanged; written
+    /// only when on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub trees: bool,
+    /// R2: inspect among the `trees` from inside the canopy. The mission's
+    /// POIs stand beside forest trees, below the crown tops, so a drone
+    /// flying from one to the next passes through crowns. Needs `trees` and
+    /// a `scan_map_inspect` mission without a profile. Off by default;
+    /// written only when on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tree_inspection: bool,
 }
 
 impl Default for ScenarioOptions {
@@ -362,6 +375,8 @@ pub struct BuiltWorld {
     pub land_cover_resolution_m: f64,
     /// Empty unless the `power_lines` option asks for them.
     pub power_lines: Vec<argusnet_world::powerline::PowerLine>,
+    /// Empty unless the `trees` option asks for them.
+    pub trees: Vec<argusnet_world::trees::Tree>,
 }
 
 /// `build_terrain_layer` + `build_default_environment`.
@@ -431,19 +446,63 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
             SeedPart::Str(&scale_text),
         ],
     );
-    let land_cover = build_land_cover_layer(LandCoverRequest {
-        terrain: &terrain,
-        obstacles: &obstacles,
-        patches: &environment.patches,
-        resolution_m: land_cover_resolution_m,
-        season: season_from_month(options.season_month).map_err(BuildError::Invalid)?,
-        terrain_preset: &options.terrain_preset,
-        seed: i64::from(land_cover_seed),
-        suppress_vegetation: options.clean_terrain,
-    })
-    .map_err(BuildError::Invalid)?;
+    let season = season_from_month(options.season_month).map_err(BuildError::Invalid)?;
+    let cover_for = |season| {
+        build_land_cover_layer(LandCoverRequest {
+            terrain: &terrain,
+            obstacles: &obstacles,
+            patches: &environment.patches,
+            resolution_m: land_cover_resolution_m,
+            season,
+            terrain_preset: &options.terrain_preset,
+            seed: i64::from(land_cover_seed),
+            suppress_vegetation: options.clean_terrain,
+        })
+        .map_err(BuildError::Invalid)
+    };
+    let land_cover = cover_for(season)?;
     let power_lines = if options.power_lines {
         power_lines::build_power_lines(&terrain, bounds, &obstacles)
+    } else {
+        Vec::new()
+    };
+    // The world's, not the run's: seeded like the land cover, from the
+    // presets (and the terrain seed), so every run seed sees one forest.
+    let trees = if options.trees {
+        let seed = stable_seed(
+            0,
+            &[
+                SeedPart::Str("trees"),
+                SeedPart::Int(options.terrain_seed.unwrap_or(0)),
+                SeedPart::Str(&options.terrain_preset),
+                SeedPart::Str(&options.map_preset),
+                SeedPart::Str(&scale_text),
+            ],
+        );
+        // Snow paints over forest in winter, but the trees stay: they are
+        // placed on the cover as it is without snow.
+        let snowless;
+        let placement_cover = if season.snow_cover {
+            snowless = cover_for(argusnet_world::land_cover_build::SeasonalVariation {
+                snow_cover: false,
+                ..season
+            })?;
+            &snowless
+        } else {
+            &land_cover
+        };
+        trees::build_trees(
+            &trees::TreeGround {
+                terrain: &terrain,
+                bounds,
+                land_cover: placement_cover,
+                land_cover_resolution_m,
+                obstacles: &obstacles,
+                season,
+                terrain_preset: &options.terrain_preset,
+            },
+            seed,
+        )
     } else {
         Vec::new()
     };
@@ -457,6 +516,7 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         land_cover,
         land_cover_resolution_m,
         power_lines,
+        trees,
     })
 }
 
@@ -511,6 +571,9 @@ impl BuiltWorld {
         // the bundle it was before lines existed.
         if !self.power_lines.is_empty() {
             world["power_lines"] = json!(self.power_lines);
+        }
+        if !self.trees.is_empty() {
+            world["trees"] = json!(self.trees);
         }
         world
     }
@@ -680,6 +743,9 @@ impl BuiltWorld {
         );
         if !self.power_lines.is_empty() {
             map.insert("power_lines".into(), json!(self.power_lines));
+        }
+        if !self.trees.is_empty() {
+            map.insert("trees".into(), json!(self.trees));
         }
         map.insert("crs_id".into(), json!("local-enu"));
         map.insert("environment_bounds_m".into(), bounds_document(self.bounds));

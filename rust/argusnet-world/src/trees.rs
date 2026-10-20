@@ -20,8 +20,9 @@
 //! a forest cost what the trees near them cost. [`poisson_disk`] is the
 //! seeded, fixed-order sampler procedural placement scatters trees with.
 //!
-//! This module is the model. Placement in a run, sensing, flight and
-//! drawing come in later slices.
+//! This module is the model. A run's bundle carries trees in its world
+//! (`argusnet-sim`'s builder scatters them with the `trees` option);
+//! sensing, flight and drawing come in later slices.
 
 use serde::{Deserialize, Serialize};
 

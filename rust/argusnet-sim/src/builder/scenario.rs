@@ -1188,6 +1188,10 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
         return Err(BuildError::Invalid(
             "power_line_inspection needs mission_mode scan_map_inspect".into(),
         ));
+    } else if options.tree_inspection {
+        return Err(BuildError::Invalid(
+            "tree_inspection needs mission_mode scan_map_inspect".into(),
+        ));
     } else {
         None
     };
@@ -1440,6 +1444,19 @@ fn mission_document(
             };
             line_inspection_pois(ground, line, count)
         }
+        _ if options.tree_inspection => {
+            if mission_profile.is_some() {
+                return Err(BuildError::Invalid(
+                    "tree_inspection places its own POIs; it takes no mission profile".into(),
+                ));
+            }
+            if ground.world.trees.is_empty() {
+                return Err(BuildError::Invalid(
+                    "tree_inspection needs the trees option".into(),
+                ));
+            }
+            tree_inspection_pois(ground, count)?
+        }
         Some(profile) => profile_pois(ground, profile, map_extent_m(bounds), count, hover),
         None => generated_pois(ground, bounds, count, hover, seed),
     };
@@ -1593,6 +1610,67 @@ fn line_inspection_pois(ground: &Ground<'_>, line: &PowerLine, count: usize) -> 
         .collect()
 }
 
+/// How high over the ground a `tree_inspection` POI hovers, metres: inside
+/// the canopy (forest trees stand 10–28 m), so a flight between POIs at
+/// this height passes through crowns.
+const TREE_INSPECTION_HOVER_AGL_M: f64 = 16.0;
+/// How far past a tree's crown a `tree_inspection` POI stands, metres.
+const TREE_INSPECTION_GAP_M: f64 = 1.5;
+
+/// `tree_inspection`'s POIs: `count` forest trees taller than the hover
+/// height by 4 m, evenly spaced through the world's trees in id order
+/// (south to north), each with a POI beside its crown at
+/// [`TREE_INSPECTION_HOVER_AGL_M`]: the first of eight directions round the
+/// tree (east first, then anticlockwise) whose point is in no crown, or
+/// east when every one is. Laid out from the trees alone, so the same for
+/// every seed. A POI that would stand in a building is pushed out of it.
+fn tree_inspection_pois(ground: &Ground<'_>, count: usize) -> Result<Vec<Value>, BuildError> {
+    use argusnet_world::trees::{Species, TreeLayer};
+    let layer = TreeLayer::new(ground.world.trees.clone())
+        .map_err(|error| BuildError::Invalid(error.to_string()))?;
+    let tall: Vec<_> = layer
+        .trees()
+        .iter()
+        .filter(|tree| {
+            tree.species != Species::Shrub && tree.height_m > TREE_INSPECTION_HOVER_AGL_M + 4.0
+        })
+        .collect();
+    if tall.len() < count {
+        return Err(BuildError::Invalid(format!(
+            "tree_inspection needs {count} forest trees taller than {} m; the world has {}",
+            TREE_INSPECTION_HOVER_AGL_M + 4.0,
+            tall.len()
+        )));
+    }
+    Ok((0..count)
+        .map(|i| {
+            let tree = tall[(2 * i + 1) * tall.len() / (2 * count)];
+            let reach = tree.crown_radius_m + TREE_INSPECTION_GAP_M;
+            let beside = |k: usize| {
+                let angle = std::f64::consts::FRAC_PI_4 * k as f64;
+                let xy = [
+                    tree.xy_m[0] + reach * angle.cos(),
+                    tree.xy_m[1] + reach * angle.sin(),
+                ];
+                let z = ground.height_at(xy[0], xy[1]) + TREE_INSPECTION_HOVER_AGL_M;
+                (xy, z)
+            };
+            let (xy, _) = (0..8)
+                .map(beside)
+                .find(|(xy, z)| layer.crown_at([xy[0], xy[1], *z]).is_none())
+                .unwrap_or_else(|| beside(0));
+            let [x, y] = ground.push_outside(xy, TREE_INSPECTION_HOVER_AGL_M);
+            json!({
+                "poi_id": format!("poi-{i:02}"),
+                "name": format!("Tree {}", tree.id),
+                "position": [x, y, ground.height_at(x, y) + TREE_INSPECTION_HOVER_AGL_M],
+                "priority": (count - i) as i64,
+                "required_dwell_s": 15.0,
+            })
+        })
+        .collect())
+}
+
 /// `scenario_replay_metadata`'s `scenario_options`.
 fn scenario_options_document(o: &ScenarioOptions) -> Value {
     let mut document = json!({
@@ -1629,6 +1707,12 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
     }
     if o.power_line_inspection {
         document["power_line_inspection"] = json!(true);
+    }
+    if o.trees {
+        document["trees"] = json!(true);
+    }
+    if o.tree_inspection {
+        document["tree_inspection"] = json!(true);
     }
     document
 }
