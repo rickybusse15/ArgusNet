@@ -740,7 +740,7 @@ pub fn build_world(world: &WorldDocument) -> Result<BuiltWorld, BundleError> {
         power_lines: Arc::new(power_lines),
         trees: Arc::clone(&trees),
         terrain: SharedTerrain::new(Arc::clone(&terrain), world.terrain.base_resolution_m),
-        obstacles: SharedObstacles::new(Arc::clone(&obstacles)),
+        obstacles: SharedObstacles::new(Arc::clone(&obstacles)).with_trees(Arc::clone(&trees)),
         visibility: SharedVisibility::new(
             terrain,
             obstacles,
@@ -1332,6 +1332,7 @@ pub fn assemble_with(
         // And its power lines, which those flights keep their clearance
         // from (R3); none in a world without them.
         driver.set_known_power_lines(world.power_lines.as_ref().clone());
+        driver.set_known_trees(Arc::clone(&world.trees));
         driver.set_known_terrain(Some(Arc::new(world.terrain.clone())));
         // Read back off the constructed driver, so a caller (and the wiring
         // test) sees what the stage was actually given.
@@ -2348,6 +2349,10 @@ impl AssembledRun {
 
         if let Some(guard) = &self.guard {
             frame.world_contacts = guard.take_contacts();
+        }
+        if !self.world.trees.is_empty() {
+            frame.tree_contacts =
+                crate::replay::tree_contacts(&self.world.trees, platforms, self.dt_s);
         }
         let belief_updates = self
             .sim

@@ -85,15 +85,35 @@ impl TerrainHeight for SharedTerrain {
     }
 }
 
-/// The obstacle layer, shared.
+/// The obstacle layer, shared, and the trunks of the world's trees (R2):
+/// a trunk is as hard as a building to a platform, so stage 1's collision
+/// and the physical guard push out of it, and a crown, which is soft, is
+/// never pushed out of.
 #[derive(Clone)]
 pub struct SharedObstacles {
     layer: Arc<ObstacleLayer>,
+    /// `None` when the world has no trees: every answer is then the
+    /// obstacle layer's alone, as before trees.
+    trees: Option<Arc<TreeLayer>>,
 }
 
 impl SharedObstacles {
     pub fn new(layer: Arc<ObstacleLayer>) -> Self {
-        Self { layer }
+        Self { layer, trees: None }
+    }
+
+    /// The same obstacles with the world's trees' trunks. An empty layer is
+    /// no trees.
+    pub fn with_trees(&self, trees: Arc<TreeLayer>) -> Self {
+        Self {
+            trees: (!trees.is_empty()).then_some(trees),
+            ..self.clone()
+        }
+    }
+
+    /// The trees, when the world has any.
+    pub fn trees(&self) -> Option<&Arc<TreeLayer>> {
+        self.trees.as_ref()
     }
 
     /// The layer itself, for a stage that plans routes over it.
@@ -103,12 +123,29 @@ impl SharedObstacles {
 }
 
 impl ObstacleSampler for SharedObstacles {
+    /// Out of a building or wall as before; else out of a trunk, straight
+    /// away from its axis to its surface plus the margin (at least 1 m, as
+    /// for a structure).
     fn push_clear(&self, point_m: [f64; 3], margin_m: f64) -> Option<[f64; 2]> {
-        WorldObstacles::new(&self.layer).push_clear(point_m, margin_m)
+        WorldObstacles::new(&self.layer)
+            .push_clear(point_m, margin_m)
+            .or_else(|| {
+                let tree = self.trees.as_ref()?.trunk_at(point_m)?;
+                let (dx, dy) = (point_m[0] - tree.xy_m[0], point_m[1] - tree.xy_m[1]);
+                let off = dx.hypot(dy);
+                // On the axis itself any way out is as short; east.
+                let (ux, uy) = if off > 1e-9 { (dx / off, dy / off) } else { (1.0, 0.0) };
+                let reach = tree.trunk_radius_m + margin_m.max(1.0);
+                Some([tree.xy_m[0] + ux * reach, tree.xy_m[1] + uy * reach])
+            })
     }
 
     fn collides(&self, point_m: [f64; 3]) -> bool {
         WorldObstacles::new(&self.layer).collides(point_m)
+            || self
+                .trees
+                .as_ref()
+                .is_some_and(|trees| trees.trunk_at(point_m).is_some())
     }
 }
 

@@ -46,6 +46,7 @@ use argusnet_types::Bounds2d;
 use argusnet_world::index::ObstacleLayer;
 use argusnet_world::obstacles::{BlockerType, Obstacle};
 use argusnet_world::powerline::PowerLine;
+use argusnet_world::trees::TreeLayer;
 
 use crate::battery::{stage_one_battery, BatteryStage};
 use crate::mapping::MappingStage;
@@ -379,7 +380,16 @@ struct KnownObstacles {
     reaching_lines: RefCell<BTreeMap<i64, Option<Arc<ObstacleLayer>>>>,
     /// [`Self::this_run`] for routes round a line's ends.
     around_this_run: RefCell<BTreeMap<[u64; 6], Option<PlannerRoute>>>,
+    /// The trees whose crowns a flight keeps above (R2). `None` when the
+    /// world has none.
+    trees: Option<Arc<TreeLayer>>,
 }
+
+/// How far past a crown's radius its keep-out reaches, metres (R2).
+const CROWN_MARGIN_M: f64 = 1.0;
+/// How far over a crown's top a flight across its keep-out keeps, metres
+/// (R2): leaves are soft, so a small margin, not a wire's clearance.
+const CROWN_CLEARANCE_M: f64 = 3.0;
 
 /// How far past a power line's own clearance a planned crossing keeps,
 /// metres (R3): room for the straight pieces' sag error and for rounding,
@@ -653,6 +663,77 @@ impl KnownObstacles {
         })
     }
 
+    /// Whether a flight has anything beyond the structures to keep clear
+    /// of: a power line or a crown.
+    fn guards_anything(&self) -> bool {
+        !self.lines.is_empty() || self.trees.is_some()
+    }
+
+    /// The crowns' keep-outs the leg from `p` to `q` crosses from above (R2),
+    /// each as the fractions of the leg over it and the height a flight
+    /// keeps there, in id order. A keep-out holding `start` or `end` (the
+    /// whole flight's ends) is left out: an end beside a crown cannot keep
+    /// above it, and touching leaves there is a contact, not a failure.
+    fn crown_stretches(
+        &self,
+        p: [f64; 2],
+        q: [f64; 2],
+        start: [f64; 2],
+        end: [f64; 2],
+    ) -> Vec<(f64, f64, f64)> {
+        let Some(trees) = &self.trees else {
+            return Vec::new();
+        };
+        let around = Bounds2d::new(p[0].min(q[0]), p[0].max(q[0]), p[1].min(q[1]), p[1].max(q[1]))
+            .expanded(CROWN_MARGIN_M);
+        let d = [q[0] - p[0], q[1] - p[1]];
+        let qa = d[0] * d[0] + d[1] * d[1];
+        trees
+            .near(around)
+            .into_iter()
+            .filter_map(|tree| {
+                let radius = tree.crown_radius_m + CROWN_MARGIN_M;
+                let holds = |x: [f64; 2]| {
+                    (x[0] - tree.xy_m[0]).hypot(x[1] - tree.xy_m[1]) <= radius
+                };
+                if holds(start) || holds(end) || qa <= 1e-18 {
+                    return None;
+                }
+                let r = [p[0] - tree.xy_m[0], p[1] - tree.xy_m[1]];
+                let qb = 2.0 * (r[0] * d[0] + r[1] * d[1]);
+                let qc = r[0] * r[0] + r[1] * r[1] - radius * radius;
+                let disc = qb * qb - 4.0 * qa * qc;
+                if disc <= 0.0 {
+                    return None;
+                }
+                let root = disc.sqrt();
+                let t0 = ((-qb - root) / (2.0 * qa)).max(0.0);
+                let t1 = ((-qb + root) / (2.0 * qa)).min(1.0);
+                (t0 < t1).then_some((t0, t1, tree.top_z_m() + CROWN_CLEARANCE_M))
+            })
+            .collect()
+    }
+
+    /// Whether any of `legs` (a flight from `start` to `end`) passes over a
+    /// crown's keep-out lower than its height (R2). The height changes
+    /// linearly along a leg, so its lowest over a stretch is at an end of
+    /// the stretch.
+    fn violates_crowns(
+        &self,
+        legs: &[([f64; 3], [f64; 3])],
+        start: [f64; 2],
+        end: [f64; 2],
+    ) -> bool {
+        legs.iter().any(|(from, to)| {
+            self.crown_stretches([from[0], from[1]], [to[0], to[1]], start, end)
+                .into_iter()
+                .any(|(t0, t1, z)| {
+                    let at = |t: f64| from[2] + (to[2] - from[2]) * t;
+                    at(t0).min(at(t1)) < z
+                })
+        })
+    }
+
     /// [`Self::reaching`], with the corridors of the power lines too.
     fn reaching_lines(&self, floor_m: f64, clearance_m: f64) -> Option<Arc<ObstacleLayer>> {
         let band = (floor_m / ROUTE_HEIGHT_BAND_M).floor() as i64;
@@ -783,6 +864,9 @@ struct Corners {
     /// the structures alone would not: `"over"` or `"around"`. `None` when
     /// that route keeps it.
     lines: Option<&'static str>,
+    /// Whether the route climbs over crowns (R2) the route round the
+    /// structures would cross too low.
+    crowns: bool,
 }
 
 impl Corners {
@@ -793,6 +877,7 @@ impl Corners {
             length_m,
             heights: Vec::new(),
             lines: None,
+            crowns: false,
         }
     }
 
@@ -841,6 +926,8 @@ struct Flight {
     /// How the route keeps a power line's clearance, when it had to change
     /// to (R3).
     lines: Option<&'static str>,
+    /// Whether the route climbs over crowns (R2).
+    crowns: bool,
 }
 
 impl Flight {
@@ -852,6 +939,9 @@ impl Flight {
             fields.insert("route_waypoints".into(), serde_json::json!(corners));
             if let Some(lines) = self.lines {
                 fields.insert("route_power_lines".into(), serde_json::json!(lines));
+            }
+            if self.crowns {
+                fields.insert("route_trees".into(), serde_json::json!("over"));
             }
         }
     }
@@ -963,7 +1053,21 @@ impl MissionDriverStage {
             corridors: Vec::new(),
             reaching_lines: RefCell::new(BTreeMap::new()),
             around_this_run: RefCell::new(BTreeMap::new()),
+            trees: None,
         });
+    }
+
+    /// The trees whose crowns POI, egress and gap-fill flights keep above
+    /// under efficient_v1 (R2): a crown is a soft keep-out, its radius plus
+    /// [`CROWN_MARGIN_M`] from above, that a flight crosses at least
+    /// [`CROWN_CLEARANCE_M`] over its top. Part of the prior map, like the
+    /// power lines: set after [`Self::set_known_obstacles`], which forgets
+    /// them, and ignored without it. The reference never reads them.
+    pub fn set_known_trees(&mut self, trees: Arc<TreeLayer>) {
+        if let Some(obstacles) = &mut self.obstacles {
+            obstacles.trees = (!trees.is_empty()).then_some(trees);
+            obstacles.kept.borrow_mut().clear();
+        }
     }
 
     /// The power lines POI, egress and gap-fill flights keep their clearance
@@ -1064,12 +1168,16 @@ impl MissionDriverStage {
         if self.policy != PlanningPolicy::EfficientV1 {
             return corners;
         }
-        let Some(obstacles) = self.obstacles.as_ref().filter(|o| !o.lines.is_empty()) else {
+        let Some(obstacles) = self.obstacles.as_ref().filter(|o| o.guards_anything()) else {
             return corners;
         };
         let mut path = corners.as_ref().map_or_else(Vec::new, |c| c.via.clone());
         path.push([to[0], to[1]]);
-        if !obstacles.violates_lines(&flown_legs(from, &path, &[], to[2])) {
+        let legs = flown_legs(from, &path, &[], to[2]);
+        let (ends_from, ends_to) = ([from[0], from[1]], [to[0], to[1]]);
+        let lines = obstacles.violates_lines(&legs);
+        let crowns = obstacles.violates_crowns(&legs, ends_from, ends_to);
+        if !lines && !crowns {
             return corners;
         }
         let length_m = corners.as_ref().map_or_else(
@@ -1087,14 +1195,26 @@ impl MissionDriverStage {
                     via: path,
                     length_m,
                     heights,
-                    lines: Some("over"),
+                    lines: lines.then_some("over"),
+                    crowns,
                 }
             });
         let model = self.route_model;
         let cost = |c: &Corners| {
             model.travel_cost_wh(c.length_m) + c.climb_cost_wh(&model, from[2], to[2])
         };
-        match (over, self.around_lines(from, to)) {
+        // Round a line's ends only when it is a line to keep clear of, and
+        // the way round keeps above the crowns too.
+        let around = if lines {
+            self.around_lines(from, to).filter(|around| {
+                let mut path = around.via.clone();
+                path.push(ends_to);
+                !obstacles.violates_crowns(&flown_legs(from, &path, &[], to[2]), ends_from, ends_to)
+            })
+        } else {
+            None
+        };
+        match (over, around) {
             (Some(over), Some(around)) if cost(&around) < cost(&over) => Some(around),
             (Some(over), _) => Some(over),
             (None, Some(around)) => Some(around),
@@ -1144,8 +1264,28 @@ impl MissionDriverStage {
         // Each stretch over a corridor the linear flight is below, as
         // (onto, off, height, climb gradient, descent gradient).
         let mut stretches = Vec::new();
+        let ends = ([start[0], start[1]], points[points.len() - 1]);
         for (k, pair) in points.windows(2).enumerate() {
             let leg_m = along[k + 1] - along[k];
+            // Crowns (R2): their keep-outs never hold an end, so each has
+            // room to climb.
+            for (t0, t1, z) in obstacles.crown_stretches(pair[0], pair[1], ends.0, ends.1) {
+                let (a, b) = (along[k] + t0 * leg_m, along[k] + t1 * leg_m);
+                if z <= linear(a).min(linear(b)) {
+                    continue;
+                }
+                let up = if a > 1e-9 {
+                    LINE_RAMP_GRADIENT.max((z - z0) / a)
+                } else {
+                    LINE_RAMP_GRADIENT
+                };
+                let down = if b < length_m - 1e-9 {
+                    LINE_RAMP_GRADIENT.max((z - z1) / (length_m - b))
+                } else {
+                    LINE_RAMP_GRADIENT
+                };
+                stretches.push((a, b, z, up, down));
+            }
             for corridor in &obstacles.corridors {
                 let Some((t0, t1)) = corridor.clip(pair[0], pair[1]) else {
                     continue;
@@ -1242,6 +1382,7 @@ impl MissionDriverStage {
         corners.push(points[points.len() - 1]);
         let legs = flown_legs(start, &corners, &heights, end_z);
         if obstacles.violates_lines(&legs)
+            || obstacles.violates_crowns(&legs, ends.0, ends.1)
             || legs.iter().any(|(from, to)| obstacles.crosses(*from, *to))
         {
             return None;
@@ -1422,8 +1563,12 @@ impl MissionDriverStage {
         // on each leg: over a line the flight climbs, and one that cannot is
         // no plan.
         let mut heights = Vec::new();
-        if let Some(obstacles) = self.obstacles.as_ref().filter(|o| !o.lines.is_empty()) {
-            if obstacles.violates_lines(&flown_legs(position, &via, &[], z)) {
+        if let Some(obstacles) = self.obstacles.as_ref().filter(|o| o.guards_anything()) {
+            let legs = flown_legs(position, &via, &[], z);
+            let end = via[via.len() - 1];
+            if obstacles.violates_lines(&legs)
+                || obstacles.violates_crowns(&legs, [position[0], position[1]], end)
+            {
                 (via, heights) = self.over_lines(position, &via, z)?;
             }
         }
@@ -1831,6 +1976,7 @@ impl MissionDriverStage {
             Some(corners) => Flight {
                 route: Some((corners.length_m, corners.via.len())),
                 lines: corners.lines,
+                crowns: corners.crowns,
                 trajectory: GotoHover::routed_over(
                     start,
                     corners.via,
@@ -1844,6 +1990,7 @@ impl MissionDriverStage {
             None => Flight {
                 route: None,
                 lines: None,
+                crowns: false,
                 trajectory: GotoHover::redirect(
                     start,
                     [target[0], target[1]],

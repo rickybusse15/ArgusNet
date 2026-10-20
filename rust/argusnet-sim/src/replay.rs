@@ -535,6 +535,52 @@ pub struct ReplayFrame {
     /// the belief had them somewhere they could not be.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub world_contacts: Vec<crate::belief_world::WorldContact>,
+    /// Platforms that touched a tree this tick (R2): each trunk or crown the
+    /// last tick's flight crossed. Recorded, never pushed out of: a crown is
+    /// soft, and a trunk the physics has already pushed clear of.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tree_contacts: Vec<ReplayTreeContact>,
+}
+
+/// One platform touching one tree in one tick (R2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayTreeContact {
+    pub node_id: String,
+    pub tree_id: String,
+    pub part: argusnet_world::trees::TreePart,
+}
+
+/// The trees each mobile platform touched in the last tick: the segment it
+/// flew, from where its velocity says it was a tick ago to where it is,
+/// against every trunk (swept: a trunk passed between two ticks counts) and
+/// every crown it crossed, in the order it met them. Stateless, so a
+/// resumed run records what the uninterrupted one would.
+pub fn tree_contacts(
+    trees: &argusnet_world::trees::TreeLayer,
+    nodes: &[argusnet_types::NodeState],
+    dt_s: f64,
+) -> Vec<ReplayTreeContact> {
+    use argusnet_world::trees::TreePart;
+    let mut contacts = Vec::new();
+    for node in nodes.iter().filter(|node| node.is_mobile) {
+        let to: [f64; 3] = std::array::from_fn(|i| node.position[i]);
+        let from: [f64; 3] = std::array::from_fn(|i| to[i] - node.velocity[i] * dt_s);
+        let mut met: Vec<(f64, TreePart, &str)> = trees
+            .crowns_along(from, to)
+            .into_iter()
+            .map(|(t0, _, tree)| (t0, TreePart::Crown, tree.id.as_str()))
+            .collect();
+        if let Some(hit) = trees.first_trunk_hit(from, to) {
+            met.push((hit.t, TreePart::Trunk, hit.tree.id.as_str()));
+        }
+        met.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+        contacts.extend(met.into_iter().map(|(_, part, id)| ReplayTreeContact {
+            node_id: node.node_id.clone(),
+            tree_id: id.to_string(),
+            part,
+        }));
+    }
+    contacts
 }
 
 /// A `SafetyValidationResult` as the reference writes it: the fused frame's
@@ -738,6 +784,7 @@ impl ReplayWriter {
             canopy_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
+            tree_contacts: Vec::new(),
         }
     }
 
