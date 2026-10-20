@@ -375,6 +375,10 @@ mod tests {
         assert_eq!(one.trees, two.trees);
         let other_terrain = world(json!({"terrain_seed": 3}));
         assert_ne!(one.trees, other_terrain.trees);
+        // The seed the terrain was built from, given or derived, is the
+        // forest's: naming the derived one changes nothing.
+        let derived = one.terrain_config.effective_seed();
+        assert_eq!(one.trees, world(json!({"terrain_seed": derived})).trees);
         let off = build_world(
             &serde_json::from_value::<ScenarioOptions>(
                 json!({"map_preset": "small", "terrain_preset": "default"}),
@@ -580,10 +584,19 @@ mod tests {
             built["presentation"]["scenario_options"]["tree_inspection"],
             json!(true)
         );
-        // Many POIs reach trees at the map's edge: each stays inside it.
-        let many = bundle(json!({"trees": true, "tree_inspection": true, "poi_count": 60}));
+        // Many POIs reach trees at the map's edge and among buildings: each
+        // stays inside the map, in no crown, 1.5 m off its own tree's crown.
+        let many = bundle(json!({"trees": true, "tree_inspection": true, "poi_count": 100}));
         for poi in many["mission"]["pois"].as_array().expect("pois") {
             let p: [f64; 3] = serde_json::from_value(poi["position"].clone()).expect("position");
+            assert!(layer.crown_at(p).is_none(), "{poi}");
+            let id = poi["name"]
+                .as_str()
+                .expect("name")
+                .trim_start_matches("Tree ");
+            let tree = layer.trees().iter().find(|t| t.id == id).expect("its tree");
+            let gap = (p[0] - tree.xy_m[0]).hypot(p[1] - tree.xy_m[1]) - tree.crown_radius_m;
+            assert!((gap - 1.5).abs() < 1e-6, "{poi}: {gap}");
             let b = &world.bounds;
             assert!(
                 p[0] >= b.x_min_m + 10.0
@@ -602,6 +615,9 @@ mod tests {
             }))
             .expect("config")
         };
+        // No POIs asked for, none placed.
+        let none = bundle(json!({"trees": true, "tree_inspection": true, "poi_count": 0}));
+        assert_eq!(none["mission"]["pois"], json!([]));
         for refused in [
             json!({"map_preset": "small", "tree_inspection": true}),
             json!({"map_preset": "small", "trees": true, "tree_inspection": true, "mission_mode": "target_tracking", "target_count": 1}),
