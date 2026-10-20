@@ -15,10 +15,11 @@
 //!
 //! This module is the model. The safety engine judges flights against it
 //! (`structure_clearance`), the mission planner's routes keep its clearance
-//! (efficient_v1, over the wires or round a line's ends) and the viewer
-//! draws it (supports at [`PowerLine::cross_arm`], conductors from
-//! [`PowerLine::pieces`]); the physical guard and sensing come in later
-//! slices.
+//! (efficient_v1, over the wires or round a line's ends), the physical guard
+//! keeps platforms off the wires ([`PowerLine::envelope`], each piece a
+//! capsule met by [`capsule_entry`]) and the viewer draws it (supports at
+//! [`PowerLine::cross_arm`], conductors from [`PowerLine::pieces`]); the
+//! range scanner reports a span ([`PowerLine::span_line`]) when it is near.
 
 use serde::{Deserialize, Serialize};
 
@@ -278,8 +279,10 @@ impl PowerLine {
 
     /// Where conductor `offset_m` hangs at fraction `t` (0 at support
     /// `span`, 1 at the next) of that span: between its attachments on the
-    /// two cross-arms, sagging below their chord.
-    fn conductor_at(&self, span: usize, offset_m: f64, t: f64) -> [f64; 3] {
+    /// two cross-arms, sagging below their chord. Any offset may be asked
+    /// for: every conductor hangs at the same height at `t`, displaced
+    /// across the line in proportion to its offset.
+    pub fn conductor_at(&self, span: usize, offset_m: f64, t: f64) -> [f64; 3] {
         let (from, to) = (&self.supports[span], &self.supports[span + 1]);
         let (arm_from, arm_to) = (self.cross_arm(span), self.cross_arm(span + 1));
         let start = [
@@ -324,6 +327,36 @@ impl PowerLine {
             }
         }
         pieces
+    }
+
+    /// [`Self::pieces`], span by span: every conductor's pieces of span
+    /// `k` at index `k`.
+    pub fn pieces_by_span(&self) -> Vec<Vec<ConductorPiece>> {
+        let mut spans = vec![Vec::new(); self.supports.len() - 1];
+        let mut pieces = self.pieces().into_iter();
+        for (span, pair) in self.supports.windows(2).enumerate() {
+            let count = (horizontal(pair[0].xy_m, pair[1].xy_m) / MAX_PIECE_M)
+                .ceil()
+                .max(1.0) as usize;
+            spans[span].extend(pieces.by_ref().take(count * self.conductor_offsets_m.len()));
+        }
+        spans
+    }
+
+    /// The span from support `span` to the next, alone: a line of those two
+    /// supports, with this line's conductors, sag, radius and clearance.
+    /// Its cross-arms are square to the span, so at a support where this
+    /// line turns its outer conductors sit a little off this line's (the
+    /// offset times one minus the cosine of half the turn).
+    pub fn span_line(&self, span: usize) -> PowerLine {
+        PowerLine {
+            id: format!("{}#{span}", self.id),
+            supports: self.supports[span..=span + 1].to_vec(),
+            conductor_offsets_m: self.conductor_offsets_m.clone(),
+            sag_ratio: self.sag_ratio,
+            conductor_radius_m: self.conductor_radius_m,
+            clearance_m: self.clearance_m,
+        }
     }
 
     /// The lowest point of any conductor, metres above datum: each span's
@@ -388,6 +421,257 @@ impl PowerLine {
     pub fn violated_by(&self, from: [f64; 3], to: [f64; 3]) -> bool {
         self.clearance_along(from, to) < self.clearance_m
     }
+
+    /// The space within `margin_m` of a conductor's surface, as capsules
+    /// cut once for repeated queries (the physical guard asks every tick).
+    pub fn envelope(&self, margin_m: f64) -> ConductorEnvelope {
+        ConductorEnvelope::new(self.pieces(), self.conductor_radius_m + margin_m)
+    }
+}
+
+/// How far past an envelope's surface a push puts a point, metres, so that
+/// rounding never leaves it a hair inside.
+const PUSH_PAST_M: f64 = 1e-6;
+
+/// The space within a margin of a line's conductors ([`PowerLine::envelope`]):
+/// a capsule round each straight piece, of the conductor's radius plus the
+/// margin plus the piece's sag error. The true wire hangs within its sag error
+/// of the piece, so the capsules hold everything within the margin of it:
+/// conservative by at most the sag error (millimetres), never short.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConductorEnvelope {
+    pieces: Vec<ConductorPiece>,
+    /// The conductor's radius plus the margin; each capsule adds its own
+    /// piece's sag error.
+    radius_m: f64,
+    /// Corners of a box holding every capsule.
+    low_m: [f64; 3],
+    high_m: [f64; 3],
+}
+
+impl ConductorEnvelope {
+    fn new(pieces: Vec<ConductorPiece>, radius_m: f64) -> Self {
+        let mut low_m = [f64::INFINITY; 3];
+        let mut high_m = [f64::NEG_INFINITY; 3];
+        for piece in &pieces {
+            let reach = radius_m + piece.sag_error_m;
+            for axis in 0..3 {
+                low_m[axis] = low_m[axis].min(piece.start_m[axis].min(piece.end_m[axis]) - reach);
+                high_m[axis] = high_m[axis].max(piece.start_m[axis].max(piece.end_m[axis]) + reach);
+            }
+        }
+        Self {
+            pieces,
+            radius_m,
+            low_m,
+            high_m,
+        }
+    }
+
+    fn capsule_radius(&self, piece: &ConductorPiece) -> f64 {
+        self.radius_m + piece.sag_error_m
+    }
+
+    /// Whether the box round `from`–`to` meets the envelope's box.
+    fn near(&self, from: [f64; 3], to: [f64; 3]) -> bool {
+        (0..3).all(|axis| {
+            from[axis].max(to[axis]) >= self.low_m[axis]
+                && from[axis].min(to[axis]) <= self.high_m[axis]
+        })
+    }
+
+    /// Whether `point` is inside the envelope.
+    pub fn contains(&self, point: [f64; 3]) -> bool {
+        self.near(point, point)
+            && self.pieces.iter().any(|piece| {
+                segment_distance(point, point, piece.start_m, piece.end_m)
+                    < self.capsule_radius(piece)
+            })
+    }
+
+    /// Where the segment from `from` to `to` first enters the envelope, as a
+    /// fraction of its length: solved against each piece's capsule
+    /// ([`capsule_entry`]), so a wire passed between two ends far from it is
+    /// still met. `Some(0.0)` when `from` is already inside; `None` when the
+    /// segment never enters.
+    pub fn first_entry(&self, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+        if !self.near(from, to) {
+            return None;
+        }
+        self.pieces
+            .iter()
+            .filter_map(|piece| {
+                capsule_entry(
+                    from,
+                    to,
+                    piece.start_m,
+                    piece.end_m,
+                    self.capsule_radius(piece),
+                )
+            })
+            .min_by(f64::total_cmp)
+    }
+
+    /// `point` pushed straight out of the capsule it is deepest in, away
+    /// from the nearest point of that piece, to just past its surface; up
+    /// (square to the piece) when it is on the piece itself. `None` when it
+    /// is in no capsule. The push can land in a neighbouring capsule, where
+    /// two pieces meet at an angle: push again.
+    pub fn push_out(&self, point: [f64; 3]) -> Option<[f64; 3]> {
+        if !self.near(point, point) {
+            return None;
+        }
+        let (piece, nearest, _) = self
+            .pieces
+            .iter()
+            .map(|piece| {
+                let nearest = closest_on_segment(point, piece.start_m, piece.end_m);
+                let gap = sub(point, nearest);
+                (
+                    piece,
+                    nearest,
+                    self.capsule_radius(piece) - dot(gap, gap).sqrt(),
+                )
+            })
+            .filter(|&(_, _, depth)| depth > 0.0)
+            .max_by(|a, b| a.2.total_cmp(&b.2))?;
+        let mut away = sub(point, nearest);
+        let mut length = dot(away, away).sqrt();
+        if length < 1e-9 {
+            // On the wire: up, less whatever of up lies along the piece.
+            let along = sub(piece.end_m, piece.start_m);
+            let along_sq = dot(along, along);
+            let k = if along_sq > 0.0 {
+                along[2] / along_sq
+            } else {
+                0.0
+            };
+            away = [-along[0] * k, -along[1] * k, 1.0 - along[2] * k];
+            length = dot(away, away).sqrt();
+            if length < 1e-9 {
+                // A vertical piece: any square direction will do.
+                away = [1.0, 0.0, 0.0];
+                length = 1.0;
+            }
+        }
+        let reach = self.capsule_radius(piece) + PUSH_PAST_M;
+        Some([
+            nearest[0] + away[0] / length * reach,
+            nearest[1] + away[1] / length * reach,
+            nearest[2] + away[2] / length * reach,
+        ])
+    }
+
+    /// `point` raised straight up to the lowest height above it that is
+    /// outside the envelope: out of every capsule it is in, and out of any
+    /// that raises it into, solved on each capsule. `None` when it is in
+    /// none.
+    pub fn lift_out(&self, point: [f64; 3]) -> Option<[f64; 3]> {
+        let mut lifted = point;
+        let mut moved = false;
+        // Each pass leaves every capsule it was in; at most every piece.
+        for _ in 0..=self.pieces.len() {
+            let mut top = lifted[2];
+            for piece in &self.pieces {
+                let radius = self.capsule_radius(piece);
+                if segment_distance(lifted, lifted, piece.start_m, piece.end_m) >= radius {
+                    continue;
+                }
+                // Down from above the capsule, its first surface is the
+                // top of it over this point.
+                let above = piece.start_m[2].max(piece.end_m[2]) + radius + 1.0;
+                let from = [lifted[0], lifted[1], above];
+                if let Some(t) = capsule_entry(from, lifted, piece.start_m, piece.end_m, radius) {
+                    top = top.max(above - t * (above - lifted[2]));
+                }
+            }
+            if top <= lifted[2] {
+                break;
+            }
+            lifted[2] = top + PUSH_PAST_M;
+            moved = true;
+        }
+        moved.then_some(lifted)
+    }
+}
+
+/// The point of segment `a`–`b` nearest `p`.
+pub fn closest_on_segment(p: [f64; 3], a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    let ab = sub(b, a);
+    let length_sq = dot(ab, ab);
+    let t = if length_sq > 0.0 {
+        (dot(sub(p, a), ab) / length_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    [a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t]
+}
+
+/// Where the segment from `from` to `to` first comes within `radius` of the
+/// segment `a`–`b`, as a fraction of its length: its entry into the capsule
+/// round `a`–`b`, solved, not sampled. `Some(0.0)` when `from` is already
+/// within; `None` when it never comes within.
+///
+/// A capsule is a cylinder round `a`–`b` capped by a sphere at each end, and
+/// the first entry into it is the earliest of: entering the cylinder's side
+/// between the ends, or entering either sphere (a flat cap lies inside its
+/// sphere, so the sphere is entered first). Each is a quadratic in the
+/// distance flown. A flight within 1e-12 of parallel to the piece is taken
+/// to enter only through the ends: it misses the side by less than the
+/// piece's length times that angle (micrometres).
+pub fn capsule_entry(
+    from: [f64; 3],
+    to: [f64; 3],
+    a: [f64; 3],
+    b: [f64; 3],
+    radius: f64,
+) -> Option<f64> {
+    if segment_distance(from, from, a, b) < radius {
+        return Some(0.0);
+    }
+    let flown = sub(to, from);
+    let length = dot(flown, flown).sqrt();
+    if length == 0.0 {
+        return None;
+    }
+    let unit = [flown[0] / length, flown[1] / length, flown[2] / length];
+    // Starting outside the capsule, it starts outside each part of it.
+    let mut first = f64::INFINITY;
+    for centre in [a, b] {
+        let offset = sub(from, centre);
+        let half_b = dot(unit, offset);
+        let c = dot(offset, offset) - radius * radius;
+        let h = half_b * half_b - c;
+        if h >= 0.0 {
+            let s = -half_b - h.sqrt();
+            if (0.0..=length).contains(&s) {
+                first = first.min(s);
+            }
+        }
+    }
+    let axis = sub(b, a);
+    let axis_sq = dot(axis, axis);
+    if axis_sq > 0.0 {
+        let offset = sub(from, a);
+        let along_unit = dot(axis, unit);
+        let along_offset = dot(axis, offset);
+        let qa = axis_sq - along_unit * along_unit;
+        if qa > 1e-12 * axis_sq {
+            let qb = axis_sq * dot(unit, offset) - along_offset * along_unit;
+            let qc = axis_sq * dot(offset, offset)
+                - along_offset * along_offset
+                - radius * radius * axis_sq;
+            let h = qb * qb - qa * qc;
+            if h >= 0.0 {
+                let s = (-qb - h.sqrt()) / qa;
+                let y = along_offset + s * along_unit;
+                if (0.0..=length).contains(&s) && (0.0..=axis_sq).contains(&y) {
+                    first = first.min(s);
+                }
+            }
+        }
+    }
+    first.is_finite().then(|| first / length)
 }
 
 fn horizontal(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -817,5 +1101,234 @@ mod tests {
         let text = serde_json::to_string(&line).expect("serialises");
         let back: PowerLine = serde_json::from_str(&text).expect("parses");
         assert_eq!(back, line);
+    }
+
+    /// The builder's single wire with no sag: a straight capsule of radius
+    /// 0.01 + `margin`, along x from 0 to 100 at 20 m.
+    fn taut() -> PowerLine {
+        let mut taut = line();
+        taut.sag_ratio = 0.0;
+        taut
+    }
+
+    /// Entering the envelope is solved: across the wire, straight down onto
+    /// it, along it into its end, and at an angle into the end's sphere, each
+    /// where the geometry says; from inside it is at once; over it, never.
+    #[test]
+    fn a_flight_enters_a_wires_envelope_where_it_is_solved() {
+        let envelope = taut().envelope(1.0);
+        let r = 1.01;
+        let entry = |from, to| envelope.first_entry(from, to);
+        let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-12);
+        // Across, level: in at y = -r.
+        assert!(close(
+            entry([50.0, -10.0, 20.0], [50.0, 10.0, 20.0]),
+            (10.0 - r) / 20.0
+        ));
+        // Down onto it: in at z = 20 + r.
+        assert!(close(
+            entry([50.0, 0.0, 30.0], [50.0, 0.0, 10.0]),
+            (10.0 - r) / 20.0
+        ));
+        // Along its axis from beyond its end: in at x = -r.
+        assert!(close(
+            entry([-10.0, 0.0, 20.0], [10.0, 0.0, 20.0]),
+            (10.0 - r) / 20.0
+        ));
+        // At 45° up into its end: in r short of the end point.
+        let length = 5.0 * 2f64.sqrt();
+        assert!(close(
+            entry([-5.0, 0.0, 15.0], [0.0, 0.0, 20.0]),
+            1.0 - r / length
+        ));
+        // Starting inside.
+        assert_eq!(entry([50.0, 0.5, 20.0], [50.0, 10.0, 20.0]), Some(0.0));
+        // Over it with 0.5 m to spare, and stopping short of it.
+        assert_eq!(entry([50.0, -10.0, 21.51], [50.0, 10.0, 21.51]), None);
+        assert_eq!(entry([50.0, -10.0, 20.0], [50.0, -1.02, 20.0]), None);
+        // Nearly along it, closing on it at 1 in 40, into its side.
+        assert!(close(
+            capsule_entry(
+                [10.0, 2.0, 20.0],
+                [90.0, 0.0, 20.0],
+                [0.0, 0.0, 20.0],
+                [100.0, 0.0, 20.0],
+                r
+            ),
+            (2.0 - r) / 2.0
+        ));
+        // Far away: not even near its box.
+        assert_eq!(entry([500.0, 0.0, 20.0], [600.0, 0.0, 20.0]), None);
+    }
+
+    /// Against dense sampling, on segments thrown at a tilted capsule from
+    /// every side: the solved entry is on the surface, nothing before it is
+    /// inside, and a segment that samples inside is never solved as a miss.
+    #[test]
+    fn capsule_entry_agrees_with_dense_sampling() {
+        let (a, b, radius) = ([0.0, 0.0, 0.0], [4.0, 1.0, 2.0], 1.3);
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64 * 12.0 - 4.0
+        };
+        let at = |from: [f64; 3], to: [f64; 3], t: f64| {
+            [
+                from[0] + (to[0] - from[0]) * t,
+                from[1] + (to[1] - from[1]) * t,
+                from[2] + (to[2] - from[2]) * t,
+            ]
+        };
+        let mut hits = 0;
+        for _ in 0..2000 {
+            let from = [next(), next(), next()];
+            let to = [next(), next(), next()];
+            let gap = |t: f64| {
+                let p = at(from, to, t);
+                segment_distance(p, p, a, b)
+            };
+            let solved = capsule_entry(from, to, a, b, radius);
+            let samples = 4000;
+            let first_inside = (0..=samples)
+                .map(|k| k as f64 / samples as f64)
+                .find(|&t| gap(t) < radius);
+            match solved {
+                Some(t) => {
+                    hits += 1;
+                    assert!(t > 0.0 || gap(0.0) < radius);
+                    if t > 0.0 {
+                        assert!((gap(t) - radius).abs() < 1e-9, "{from:?} {to:?} {t}");
+                    }
+                    let inside = first_inside.expect("sampling finds it too");
+                    // Sampling finds it no earlier than the solve, and within
+                    // a sample of it unless it only grazes.
+                    assert!(inside >= t - 1e-12, "{from:?} {to:?} {t} vs {inside}");
+                }
+                None => assert!(
+                    first_inside.is_none(),
+                    "{from:?} {to:?} missed at {first_inside:?}"
+                ),
+            }
+        }
+        assert!(hits > 200, "the fixture hits the capsule often: {hits}");
+    }
+
+    /// The pieces are chords of a sagging wire: the envelope holds everything
+    /// within the margin of the true curve, and is wider by about twice a
+    /// piece's sag error at most.
+    #[test]
+    fn the_envelope_holds_the_true_sagging_wire() {
+        let line = line();
+        let (margin, r) = (1.0, 0.01);
+        let envelope = line.envelope(margin);
+        let error = 0.03 * 100.0 / 400.0;
+        // The true wire over x, and its surface plus margin under and over it.
+        let wire_z = |x: f64| {
+            let t = x / 100.0;
+            20.0 - 12.0 * t * (1.0 - t)
+        };
+        for x in [2.5, 31.25, 50.0, 52.5, 97.5] {
+            let reach = r + margin - 1e-6;
+            assert!(envelope.contains([x, 0.0, wire_z(x) - reach]), "{x} under");
+            assert!(envelope.contains([x, 0.0, wire_z(x) + reach]), "{x} over");
+            // Straight down onto it, met no lower than its true top.
+            let t = envelope
+                .first_entry([x, 0.0, 40.0], [x, 0.0, 0.0])
+                .expect("met");
+            let met = 40.0 - 40.0 * t;
+            // The true top over x: the highest point within the reach of
+            // any point of the true wire, sampled densely along it.
+            let reach = r + margin;
+            let truth = (0..=200_000)
+                .map(|k| x - reach + 2.0 * reach * k as f64 / 200_000.0)
+                .map(|xs| wire_z(xs) + (reach * reach - (x - xs).powi(2)).max(0.0).sqrt())
+                .fold(f64::NEG_INFINITY, f64::max);
+            assert!(met >= truth - 1e-7, "{x}: {met} < {truth}");
+            // Wider by the chord's height over the curve and the capsule's
+            // extra radius, each at most the sag error, the radius read
+            // vertically through a wire sloping at most 0.12 (1/cos < 1.01).
+            assert!(
+                met <= truth + 2.0 * error * 1.01 + 1e-7,
+                "{x}: {met} vs {truth}"
+            );
+        }
+    }
+
+    /// A point inside is pushed straight away from the wire to just past the
+    /// surface; one on the wire itself is pushed up. Raised, it goes to the
+    /// lowest height clear above it.
+    #[test]
+    fn a_point_is_pushed_out_of_the_envelope_and_lifted_over_it() {
+        let envelope = taut().envelope(1.0);
+        let r = 1.01;
+        let under = envelope.push_out([50.0, 0.0, 19.5]).expect("inside");
+        assert!(
+            (under[2] - (20.0 - r)).abs() < 1e-5 && under[0] == 50.0,
+            "{under:?}"
+        );
+        assert!(!envelope.contains(under));
+        let side = envelope.push_out([30.0, 0.6, 20.8]).expect("inside");
+        let d = segment_distance(side, side, [0.0, 0.0, 20.0], [100.0, 0.0, 20.0]);
+        assert!((d - r).abs() < 1e-5, "{d}");
+        // The push is along the line from the wire: same direction.
+        assert!(
+            (side[1] / (side[2] - 20.0) - 0.6 / 0.8).abs() < 1e-9,
+            "{side:?}"
+        );
+        let on = envelope.push_out([50.0, 0.0, 20.0]).expect("inside");
+        assert!(
+            (on[2] - (20.0 + r)).abs() < 1e-5 && on[1].abs() < 1e-12,
+            "{on:?}"
+        );
+        assert_eq!(envelope.push_out([50.0, 0.0, 22.0]), None);
+
+        let lifted = envelope.lift_out([50.0, 0.5, 19.5]).expect("inside");
+        let top = 20.0 + (r * r - 0.25f64).sqrt();
+        assert!((lifted[2] - top).abs() < 1e-5, "{lifted:?} vs {top}");
+        assert_eq!([lifted[0], lifted[1]], [50.0, 0.5]);
+        assert!(!envelope.contains(lifted));
+        assert_eq!(envelope.lift_out([50.0, 1.5, 19.5]), None);
+    }
+
+    /// Where two pieces meet at an angle, a push out of one can land in the
+    /// next; pushing again settles it within a few pushes.
+    #[test]
+    fn pushes_settle_where_pieces_meet() {
+        let envelope = line().envelope(1.0);
+        for x in [5.0, 50.0, 95.0] {
+            let wire = line().pieces()[(x / 5.0) as usize - 1].end_m;
+            let mut p = [x, 0.0, wire[2] - 0.2];
+            let mut pushes = 0;
+            while let Some(out) = envelope.push_out(p) {
+                p = out;
+                pushes += 1;
+                assert!(pushes < 4, "{x}: {p:?}");
+            }
+            assert!(!envelope.contains(p), "{x}");
+        }
+    }
+
+    /// The pieces span by span are the pieces in order, and a span alone is
+    /// that span: on a straight line its pieces are exactly the line's.
+    #[test]
+    fn a_span_alone_hangs_as_it_does_in_its_line() {
+        let mut long = line();
+        long.supports.push(Support {
+            xy_m: [250.0, 0.0],
+            base_z_m: 5.0,
+            height_m: 25.0,
+        });
+        long.conductor_offsets_m = vec![-2.0, 2.0];
+        let by_span = long.pieces_by_span();
+        assert_eq!(by_span.len(), 2);
+        assert_eq!(by_span.concat(), long.pieces());
+        for (k, pieces) in by_span.iter().enumerate() {
+            let alone = long.span_line(k);
+            assert_eq!(alone.id, format!("line-a#{k}"));
+            assert_eq!(&alone.pieces(), pieces, "span {k}");
+            assert!(alone.clone().validated().is_ok());
+        }
     }
 }

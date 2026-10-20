@@ -1,10 +1,13 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12; updated 2026-10-19. R0 is done: the
-opacity fix (#222) and typed structure matching. R3 is in progress: the
-model, the safety clearance, lines in a run, drawing in the viewer and the
-planner's corridor are done. R2 is in progress: the tree model, trees in a run and sensing through crowns are done.
-R1, R4 and R5 are not started.
+**Status:** proposed 2026-10-12; updated 2026-10-20. R0 is done: the
+opacity fix (#222) and typed structure matching. R1 is done: building-v2
+roofs, the georeferenced import and material facades. R3 is done: the
+model, the safety clearance, lines in a run, drawing in the viewer, the
+planner's corridor, the guard against wires, sensing wires and the
+clearance-corridor overlay. R2 is in progress: the tree model, trees in a
+run and sensing through trees are done; flight round trees and drawing
+trees are not merged. R4 and R5 are not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -101,8 +104,23 @@ C8 (P2.6) and D2 (P5.1).
   and leaves out (and counts) any outside the map. The model refuses a bad
   one by name. The bundle and the replay carry the georeference, the
   document's hash and the counts, and the replay's `enu_origin` is the
-  buildings' own. DEM terrain under them is R5. Next: building materials
-  (R1.3).
+  buildings' own. DEM terrain under them is R5.
+
+  *Done (materials, R1.3):* the importer sorts `building:material` and
+  `roof:material` into classes (facade: concrete, brick, glass, metal,
+  wood, stone, plaster; roof: tiles, slate, metal, concrete, membrane,
+  glass, green), with `generic` when the data does not say. It keeps
+  `building:levels`. The scene builder colours walls and roofs by class
+  and gives walls window coordinates: storey above the building's ground,
+  metres along the wall, and the level count. Those are texture
+  coordinates written only on roofed parts, so every other GLB is byte for
+  byte what it was. The viewer's facade material (an extension of the
+  baked `StandardMaterial`, so light, shadow, fog and translucency stay)
+  draws window rows from them, only between the ground and the eave of a
+  building whose storeys the data gives. A GPU probe checks windows appear
+  on facades with levels, and not on roofs or on buildings without levels.
+  R1 is done; LOS parity fixtures against roofs are covered by the model's
+  tests.
 - **Rendering.** Generate roof meshes and per-face normals. Add semantic
   material classes (concrete, brick, metal roof, glass) with a procedural
   facade shader for window rows from the level count. This needs no textures,
@@ -329,9 +347,100 @@ C8 (P2.6) and D2 (P5.1).
   scenarios, the only change is `persistent_long` seed 7 under
   efficient_v1: one POI flight now climbs over, and its 8 events go to 0.
   (These events judge the proposed flight. The blocking monitor's own
-  climbs keep every published position 19 m or more from a wire.) Next:
-  the guard swept against conductors (deconfliction pushes, rejoins and
-  override flights), then an optional clearance-corridor overlay.
+  climbs keep every published position 19 m or more from a wire.)
+
+  *Done (guard and deconfliction):* the physical guard knows the wires
+  (`PhysicalGuard::with_power_lines`). Each conductor piece is a capsule:
+  the conductor's radius, plus the guard's contact clearance, plus the
+  piece's sag error, round its chord, so it holds the true sagging wire
+  (`PowerLine::envelope`). `enforce` pushes a platform inside one straight
+  away from the wire to just past it. Where that would put it under the
+  floor, it lifts it straight up over the wire instead; physics never
+  pushes into the ground. `first_structure_hit` also meets the wires,
+  solved against each capsule (`capsule_entry`: ray against cylinder and
+  end spheres, not sampled), so a rejoin step stops short of a wire as it
+  does at a wall. Under efficient_v1 two planning rules use the lines'
+  own clearance. Deconfliction refuses a push whose flight since last
+  tick (from where the safety monitor left the platform, swept) comes
+  within a line's clearance, and tries the next position the reference
+  would take: the mirror, the vertical offset, then the vertical offset
+  the other way, or the one that keeps the most when all are refused
+  (`resolve_step_keeping`; `resolve_step` is it with no margin, so the
+  reference's parity cases are unchanged). A rejoin step that would come
+  within a known line's clearance stops short of it and climbs over. Both
+  are the planner's rules, not physics, so they record no contact. (A
+  rejoin holding the height it climbed to also gives up a path running
+  away faster than it flies, as one that did not climb does; it used to
+  chase it for ever.) The
+  reference and a run without a prior map know no lines; the physical
+  guard keeps off the wires in every run that has one.
+
+  Measured on `power_line_inspection` (the configuration above):
+  efficient_v1 seed 7 goes from 2 `structure_clearance` events to 0, all
+  8 POIs still inspected. Seed 42 and both reference runs are
+  byte-identical. With the alpine terrain preset instead, efficient_v1
+  seed 42 stays at 11: the 2 deconfliction pushes are gone, and a rejoin
+  starting where the monitor's abort clamp left it, not where its own
+  flight was, adds 2. That run and seed 7 (43 events, before and after)
+  also show what this slice does not cover. A drone's own **scan lane**
+  runs along the line at the wires' height, through them: stage 1's
+  lanes are not routed round lines, and a prior run never puts stage 1
+  through the guard. That is the next gap for the planner.
+
+  *Done (sensing):* the range scanner sees wires (`range_scan.rs`). A wire
+  never stops a ray: the ground behind it still returns. A scanner puts
+  points on a conductor only while its points are no further apart than
+  the wire is thick. So a span is reported (a `WireReturn`: the span as
+  fitted, `PowerLine::span_line`, and its nearest point) only while one of
+  its conductors is within `2 r / WIRE_RESOLUTION_RAD` (1 mrad, so 30 m for
+  the builder's 3 cm wire) and below the scanner, whose fan looks down. A
+  `--world-knowledge none` run maps a span the first time a scan sees it
+  (`BeliefGrid::wires`, checkpointed, published with each snapshot), and
+  learns wires late: on the inspection scenario the first is seen 58–85 s
+  in. Under efficient_v1 the mapped spans are hazards, as the prior map's
+  lines are in a prior run. POI, egress and gap-fill routes keep their
+  clearance, deconfliction and rejoins keep out of it, and a POI flight a
+  newly mapped wire lies across is flown again from where the drone is
+  (`poi_reroute`), as is a flight home, on a drone's own reserve or in the
+  mission's egress (`egress_reroute`). The detection range never exceeds
+  the scanner's own `max_range_m`. The opt-in wire-hazard prior (`--wire-prior`,
+  `ExplorationConfig::wire_prior`) gives the map every span from the
+  start, as a utility's map of its corridors would. A span alone hangs
+  as in its line, but where the line turns its outer conductors sit a
+  little off (their offset times one minus the cosine of half the turn).
+  The replay's range scans carry each wire's nearest point (`wire`).
+
+  Measured with no prior map on `power_line_inspection` (the configuration
+  above), efficient_v1, seed 42: `structure_clearance` events go from 47
+  (wires never sensed) to 8 (sensed and mapped), and to 0 with the
+  wire-hazard prior, which is as many as the same run with a prior map
+  has. The 8 left are one drone crossing a span 1.25 s after a scan
+  first mapped it, on stage 1's own exploration flight, already 23 m off
+  and descending: learned too late to turn, and on the stage 1 path the
+  previous slice found the planner does not route. Seed 7 and every
+  reference run stay at 0, with all 8 POIs inspected and no physical
+  contact in any run. Runs without lines are unchanged.
+
+  *Done (clearance-corridor overlay):* a Clearance Corridors toggle beside
+  Power Lines in Runtime Overlays, off by default and owned by no preset,
+  shows each span's clearance volume from `meta.power_lines`: everywhere
+  within the line's clearance of a conductor's surface: the union of a tube
+  round each conductor, of its radius plus the clearance, since the safety
+  test measures to each conductor on its own (the gap between two widely
+  spaced wires is not drawn as inside). `clearance_mesh` sweeps each tube's
+  circular section along every span, a section at each piece joint; at a
+  support both spans share one section (its plane square to the mean of
+  their directions), so a tube is unbroken round a turn, and it is closed at
+  the line's ends. It is one translucent amber mesh per run, unlit, both
+  faces, casting no shadow. Unit tests check that every section point is
+  exactly that far from its own conductor, in one flat section, and that
+  both spans' sections are the same ring at a turn. A GPU probe checks, at Low, Standard and High, that
+  nothing is drawn by default, that the corridor is drawn 6 m over the
+  centre conductor at mid-span when the overlay is on, and that nothing is
+  drawn 150 m off the line. Nothing is left of R3 as planned. Two gaps found
+  on the way are recorded above: stage 1's own lanes and exploration flights
+  are not routed round lines, and a prior run never puts stage 1 through
+  the guard.
 - **Collision and clearance.** The catenary is approximated as a chain of
   capsules, with a clearance buffer that depends on voltage. The test is
   **swept**: the segment a drone flies between two ticks is checked against

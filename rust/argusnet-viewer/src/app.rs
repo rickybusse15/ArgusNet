@@ -450,6 +450,7 @@ fn run_inner(
             GradientSkyPlugin,
             crate::marker_meshes::MarkerMeshPlugin,
             crate::power_lines::PowerLinePlugin,
+            crate::building_material::BuildingMaterialPlugin,
             TerrainMaterialPlugin,
             crate::terrain_rasters::TerrainRastersPlugin,
         ))
@@ -979,6 +980,11 @@ fn spawn_base_layers(
         // scene that names its ground something else still gets the material.
         if is_terrain_layer(scene_package, &layer.style_id) {
             commands.entity(entity).insert(TerrainLayerRoot);
+        }
+        if crate::building_material::is_building_layer(scene_package, &layer.style_id) {
+            commands
+                .entity(entity)
+                .insert(crate::building_material::BuildingLayerRoot);
         }
         layer_entities
             .entities_by_layer

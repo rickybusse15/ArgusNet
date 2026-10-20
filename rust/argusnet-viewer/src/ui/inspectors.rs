@@ -1331,6 +1331,10 @@ pub(super) fn section_runtime_overlays(
         ui.checkbox(&mut runtime_visibility.trails, "Trails");
         ui.checkbox(&mut runtime_visibility.power_lines, "Power Lines");
         ui.checkbox(
+            &mut runtime_visibility.power_line_clearance,
+            "Clearance Corridors",
+        );
+        ui.checkbox(
             &mut runtime_visibility.show_covariance_ellipsoids,
             "Covariance Ellipsoids",
         );

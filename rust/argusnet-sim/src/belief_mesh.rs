@@ -53,6 +53,13 @@ pub struct MeshData {
     pub normals: Vec<[f32; 3]>,
     pub colours: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
+    /// Texture coordinates (`TEXCOORD_0`), one per vertex, or none. Only a
+    /// roofed building has them (R1): its level coordinate and the distance
+    /// along its wall, for the viewer's window rows.
+    pub uvs: Vec<[f32; 2]>,
+    /// Second texture coordinates (`TEXCOORD_1`), or none: a roofed
+    /// building's level count, so windows stop at the eave.
+    pub uvs_b: Vec<[f32; 2]>,
 }
 
 impl MeshData {

@@ -24,10 +24,11 @@
 //!    margin. With nothing seen nearby it is the launch floor plus the
 //!    margin. So platforms climb out over unseen ground and settle to their
 //!    working height as the map fills under them.
-//! 5. **Physics stays true.** A platform cannot be inside the ground or a
-//!    building, whatever its map says. The [`PhysicalGuard`] holds the true
-//!    world for that one purpose. It puts a platform back above the ground or
-//!    outside the structure and records a [`WorldContact`]. A contact means
+//! 5. **Physics stays true.** A platform cannot be inside the ground, a
+//!    building or a power line's wire, whatever its map says. The
+//!    [`PhysicalGuard`] holds the true world for that one purpose. It puts a
+//!    platform back above the ground or outside the structure or the wire and
+//!    records a [`WorldContact`]. A contact means
 //!    the map led a platform somewhere it could not be. The count is the
 //!    measure of how safe flying on the belief was.
 //!
@@ -35,10 +36,11 @@
 //! publishes the same snapshot and plans identically. The handle and the
 //! samplers are derived: they hold no state of their own.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use argusnet_types::Bounds2d;
+use argusnet_world::powerline::{ConductorEnvelope, PowerLine};
 use serde::{Deserialize, Serialize};
 
 use crate::follow_path::VisibilitySampler;
@@ -94,6 +96,12 @@ pub struct ExplorationConfig {
     /// measure what the truth was worth.
     #[serde(default)]
     pub pursuit: PursuitSource,
+    /// The wire-hazard prior (R3): every power line's spans are known from
+    /// the start, as a utility's map of its corridors would give them, so
+    /// the run plans round them before any scan has seen one. Off (the
+    /// default) learns each span only from the scanners.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wire_prior: bool,
 }
 
 fn default_explore() -> bool {
@@ -123,6 +131,7 @@ impl Default for ExplorationConfig {
             scan: RangeScanConfig::default(),
             explore: true,
             pursuit: PursuitSource::default(),
+            wire_prior: false,
         }
     }
 }
@@ -184,6 +193,18 @@ pub struct BeliefGrid {
     /// when what it shows changes. Checkpointed: a resumed run must write
     /// the rows the uninterrupted run would.
     shown: Vec<ShownCell>,
+    /// The power-line spans the scanners have put points on (R3), by the
+    /// fitted span's id (`line#k`). Absent when none, so a checkpoint without
+    /// lines is unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    wires: BTreeMap<String, PowerLine>,
+    /// The spans known before sensing: the opt-in wire-hazard prior. A reset
+    /// goes back to them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    prior_wires: Vec<PowerLine>,
+    /// [`Self::wires`] as snapshots share them. Derived.
+    #[serde(skip)]
+    wires_view: Option<Arc<Vec<PowerLine>>>,
     /// Cells touched since the replay last took them.
     #[serde(skip)]
     changed: BTreeSet<usize>,
@@ -253,6 +274,9 @@ impl BeliefGrid {
             last_seen_tick: vec![-1; cells],
             launch_floor_m,
             shown: vec![ShownCell::default(); cells],
+            wires: BTreeMap::new(),
+            prior_wires: Vec::new(),
+            wires_view: None,
             changed: BTreeSet::new(),
             canopy_top_m: Vec::new(),
             canopy_count: Vec::new(),
@@ -260,6 +284,28 @@ impl BeliefGrid {
             canopy_changed: BTreeSet::new(),
             views: None,
         })
+    }
+
+    /// Know `spans` before sensing (the wire-hazard prior, R3): mapped from
+    /// the start, and again after a reset. Each is one span of a line
+    /// ([`PowerLine::span_line`]).
+    pub fn know_wires(&mut self, spans: Vec<PowerLine>) {
+        self.prior_wires = spans;
+        self.reset_wires();
+    }
+
+    fn reset_wires(&mut self) {
+        self.wires = self
+            .prior_wires
+            .iter()
+            .map(|span| (span.id.clone(), span.clone()))
+            .collect();
+        self.wires_view = None;
+    }
+
+    /// The spans mapped so far.
+    pub fn wires(&self) -> impl Iterator<Item = &PowerLine> {
+        self.wires.values()
     }
 
     pub fn dimensions(&self) -> (usize, usize) {
@@ -289,6 +335,7 @@ impl BeliefGrid {
         self.canopy_shown_cm = Vec::new();
         self.canopy_changed.clear();
         self.views = None;
+        self.reset_wires();
     }
 
     /// Whether `other` covers the same cells (for a checkpoint's check).
@@ -387,8 +434,15 @@ impl BeliefGrid {
         }
     }
 
-    /// Fuse one platform's scan, in return order.
+    /// Fuse one platform's scan, in return order. A wire span is mapped the
+    /// first time a scan puts points on it.
     pub fn integrate(&mut self, scan: &RangeScan, tick: u64) {
+        for wire in &scan.wires {
+            if !self.wires.contains_key(&wire.span.id) {
+                self.wires.insert(wire.span.id.clone(), wire.span.clone());
+                self.wires_view = None;
+            }
+        }
         for hit in &scan.returns {
             let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
                 continue;
@@ -592,6 +646,10 @@ impl BeliefGrid {
             ground: Arc::clone(&views.ground),
             stand_in,
             structure_top: Arc::clone(&views.structure),
+            wires: Arc::clone(
+                self.wires_view
+                    .get_or_insert_with(|| Arc::new(self.wires.values().cloned().collect())),
+            ),
         };
         self.views = Some(views);
         snapshot
@@ -728,9 +786,17 @@ pub struct BeliefSnapshot {
     stand_in: Vec<f64>,
     /// NaN where the cell is not believed occupied.
     structure_top: Arc<Vec<f64>>,
+    /// The power-line spans mapped so far (R3), in id order.
+    wires: Arc<Vec<PowerLine>>,
 }
 
 impl BeliefSnapshot {
+    /// The power-line spans mapped when this snapshot was taken (R3): the
+    /// wires a run without a prior map plans round.
+    pub fn wires(&self) -> &Arc<Vec<PowerLine>> {
+        &self.wires
+    }
+
     fn ij(&self, x_m: f64, y_m: f64) -> (usize, usize) {
         let i = ((x_m - self.x_min_m) / self.resolution_m).floor();
         let j = ((y_m - self.y_min_m) / self.resolution_m).floor();
@@ -1086,6 +1152,10 @@ impl VisibilitySampler for BeliefVisibility {
     }
 }
 
+/// How far short of a wire's envelope [`PhysicalGuard::enforce_from`] stops
+/// a flight that would enter it, metres.
+const WIRE_STOP_SHORT_M: f64 = 0.01;
+
 /// Every `WorldContact::kind` the guard writes: out of the ground, out of a
 /// structure, and still inside one after the push limit. The replay schema
 /// lists the same (`tests/replay_vocabulary.rs`).
@@ -1108,6 +1178,9 @@ pub struct PhysicalGuard {
     terrain: SharedTerrain,
     obstacles: SharedObstacles,
     clearance_m: f64,
+    /// Each power line's conductors, out to the clearance from their
+    /// surface (R3). Empty in a world without lines.
+    wires: Arc<Vec<ConductorEnvelope>>,
     contacts: Arc<Mutex<Vec<WorldContact>>>,
 }
 
@@ -1116,6 +1189,7 @@ impl std::fmt::Debug for PhysicalGuard {
         formatter
             .debug_struct("PhysicalGuard")
             .field("clearance_m", &self.clearance_m)
+            .field("wires", &self.wires.len())
             .finish()
     }
 }
@@ -1126,12 +1200,31 @@ impl PhysicalGuard {
             terrain,
             obstacles,
             clearance_m,
+            wires: Arc::new(Vec::new()),
             contacts: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// `position` moved out of the ground and out of any structure, with a
-    /// contact recorded for each move.
+    /// The guard, also keeping platforms out of `lines`' conductors: the
+    /// guard's clearance from each wire's surface, the wire's own radius
+    /// added (R3).
+    pub fn with_power_lines(mut self, lines: &[PowerLine]) -> Self {
+        self.wires = Arc::new(
+            lines
+                .iter()
+                .map(|line| line.envelope(self.clearance_m))
+                .collect(),
+        );
+        self
+    }
+
+    /// How many power lines' wires the guard keeps platforms off.
+    pub fn power_line_count(&self) -> usize {
+        self.wires.len()
+    }
+
+    /// `position` moved out of the ground, out of any structure and away
+    /// from any wire, with a contact recorded for each move.
     pub fn enforce(&self, node_id: &str, timestamp_s: f64, position: [f64; 3]) -> [f64; 3] {
         let mut p = position;
         // A push out of one structure can land in the next: push again, up
@@ -1148,30 +1241,106 @@ impl PhysicalGuard {
                 p[1] = xy[1];
                 self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[1], correction);
             }
-            let floor = TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m;
+            let wired = self.out_of_wire(p);
+            if let Some(out) = wired {
+                let correction =
+                    ((out[0] - p[0]).powi(2) + (out[1] - p[1]).powi(2) + (out[2] - p[2]).powi(2))
+                        .sqrt();
+                p = out;
+                self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[1], correction);
+            }
+            let floor = self.floor_at(p);
             let raised = p[2] < floor;
             if raised {
                 self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[0], floor - p[2]);
                 p[2] = floor;
             }
-            // Settled only when neither moved it: a lift alone can put it
-            // into a structure whose base was above it.
-            if pushed.is_none() && !raised {
+            // Settled only when nothing moved it: a lift alone can put it
+            // into a structure whose base was above it, or into a wire.
+            if pushed.is_none() && wired.is_none() && !raised {
                 break;
             }
         }
         // Overlapping structures can bounce it between them past the limit;
         // that is recorded, not passed off as a clear position.
-        if self.obstacles.collides(p) {
+        if self.obstacles.collides(p) || self.wires.iter().any(|wire| wire.contains(p)) {
             self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[2], 0.0);
         }
         p
     }
 
+    /// [`Self::enforce`] for a platform that flew from `from`: the flight is
+    /// swept against the wires first, since a wire is thin enough to pass
+    /// between two positions each clear of it. A flight that comes within
+    /// the guard's clearance of one is stopped just short of where it first
+    /// does (solved per piece, [`ConductorEnvelope::first_entry`]), and the
+    /// stop recorded; then the stop is enforced. One that starts inside an
+    /// envelope is left to `enforce` to push out. With no wires this is
+    /// `enforce`.
+    pub fn enforce_from(
+        &self,
+        node_id: &str,
+        timestamp_s: f64,
+        from: [f64; 3],
+        position: [f64; 3],
+    ) -> [f64; 3] {
+        let length = ((position[0] - from[0]).powi(2)
+            + (position[1] - from[1]).powi(2)
+            + (position[2] - from[2]).powi(2))
+        .sqrt();
+        let entry = self
+            .wires
+            .iter()
+            .filter_map(|wire| wire.first_entry(from, position))
+            .min_by(f64::total_cmp);
+        let stop = match entry {
+            Some(t) if t > 0.0 && length > 0.0 => {
+                let f = ((t * length - WIRE_STOP_SHORT_M) / length).max(0.0);
+                let stop = [
+                    from[0] + (position[0] - from[0]) * f,
+                    from[1] + (position[1] - from[1]) * f,
+                    from[2] + (position[2] - from[2]) * f,
+                ];
+                let correction = ((position[0] - stop[0]).powi(2)
+                    + (position[1] - stop[1]).powi(2)
+                    + (position[2] - stop[2]).powi(2))
+                .sqrt();
+                self.record(node_id, timestamp_s, WORLD_CONTACT_KINDS[1], correction);
+                stop
+            }
+            _ => position,
+        };
+        self.enforce(node_id, timestamp_s, stop)
+    }
+
+    /// The lowest a platform may be at `p`'s place: the guard's clearance
+    /// over the ground.
+    fn floor_at(&self, p: [f64; 3]) -> f64 {
+        TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m
+    }
+
+    /// `p` out of the first wire's envelope it is in: pushed straight away
+    /// from the wire, or, when that would put it under the floor, lifted
+    /// straight up over the wire instead. Physics never pushes a platform
+    /// into the ground. `None` when it is in no wire's envelope. A push can
+    /// land in the next piece where two meet at an angle, or in another
+    /// line; the caller pushes again.
+    fn out_of_wire(&self, p: [f64; 3]) -> Option<[f64; 3]> {
+        let wire = self.wires.iter().find(|wire| wire.contains(p))?;
+        let pushed = wire.push_out(p)?;
+        if pushed[2] >= self.floor_at(pushed) {
+            Some(pushed)
+        } else {
+            wire.lift_out(p)
+        }
+    }
+
     /// Where the segment from `from` to `to` first meets a building or a
-    /// wall, as a fraction of its length: intersected with each structure
-    /// near it, so one thinner than any sampling step is still met. `None`
-    /// when it meets none.
+    /// wall, or comes within the guard's clearance of a wire, as a fraction
+    /// of its length: intersected with each structure near it, so one
+    /// thinner than any sampling step is still met, and solved against each
+    /// wire piece's capsule ([`ConductorEnvelope::first_entry`]), counting
+    /// how far the wire can sag below the piece. `None` when it meets none.
     pub fn first_structure_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
         let layer = self.obstacles.layer();
         let around = argusnet_types::Bounds2d::new(
@@ -1186,6 +1355,11 @@ impl PhysicalGuard {
             .into_iter()
             .filter(|obstacle| obstacle.blocker_type.is_hard())
             .filter_map(|obstacle| obstacle.surface_hit_t(from, to))
+            .chain(
+                self.wires
+                    .iter()
+                    .filter_map(|wire| wire.first_entry(from, to)),
+            )
             .min_by(f64::total_cmp)
     }
 
@@ -1243,6 +1417,7 @@ mod tests {
             origin_m: [0.0, 0.0, 100.0],
             returns,
             misses: 0,
+            wires: Vec::new(),
         }
     }
 
@@ -1477,6 +1652,239 @@ mod tests {
         let back: BeliefGrid = serde_json::from_str(&text).unwrap();
         assert!(back.same_layout(&belief));
         assert_eq!(back.ground_ij(2, 3), Some(70.0));
+    }
+    /// R3: a span is mapped the first time a scan puts points on it, and
+    /// published with the snapshot; a reset forgets it, but not the spans
+    /// known beforehand; a grid without wires checkpoints as it always did.
+    #[test]
+    fn wires_are_mapped_as_scans_see_them() {
+        let config = ExplorationConfig::default();
+        let span = |k: usize| {
+            let mut line = wire(20.0);
+            line.supports.push(argusnet_world::powerline::Support {
+                xy_m: [200.0, 0.0],
+                base_z_m: 0.0,
+                height_m: 20.0,
+            });
+            line.span_line(k)
+        };
+        let mut belief = grid();
+        let plain = serde_json::to_value(&belief).unwrap();
+        assert!(plain.get("wires").is_none() && plain.get("prior_wires").is_none());
+        assert!(belief.snapshot(&config).wires().is_empty());
+
+        let mut seen = scan(Vec::new());
+        seen.wires = vec![crate::range_scan::WireReturn {
+            span: span(1),
+            point_m: [150.0, 0.0, 20.0],
+        }];
+        belief.integrate(&seen, 3);
+        belief.integrate(&seen, 4);
+        let first = belief.snapshot(&config);
+        assert_eq!(first.wires().as_slice(), [span(1)]);
+        // Unchanged, the snapshots share one list.
+        assert!(Arc::ptr_eq(first.wires(), belief.snapshot(&config).wires()));
+        // Round trip with the wire.
+        let back: BeliefGrid =
+            serde_json::from_str(&serde_json::to_string(&belief).unwrap()).unwrap();
+        assert_eq!(back.wires().cloned().collect::<Vec<_>>(), [span(1)]);
+
+        belief.clear();
+        assert!(belief.snapshot(&config).wires().is_empty());
+        belief.know_wires(vec![span(0)]);
+        belief.integrate(&seen, 5);
+        assert_eq!(
+            belief.snapshot(&config).wires().as_slice(),
+            [span(0), span(1)]
+        );
+        belief.clear();
+        assert_eq!(belief.snapshot(&config).wires().as_slice(), [span(0)]);
+    }
+
+    /// One wire along x from 0 to 100, `height_m` up on flat ground at 0,
+    /// with no sag: 2 cm radius, 10 m clearance.
+    fn wire(height_m: f64) -> PowerLine {
+        use argusnet_world::powerline::Support;
+        let support = |x: f64| Support {
+            xy_m: [x, 0.0],
+            base_z_m: 0.0,
+            height_m,
+        };
+        PowerLine {
+            id: "wire".into(),
+            supports: vec![support(0.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap()
+    }
+
+    /// A guard with a 1 m clearance over flat ground at 0, with `building`
+    /// if any, and `lines`.
+    fn guard_over(
+        building: Option<argusnet_world::obstacles::Obstacle>,
+        lines: &[PowerLine],
+    ) -> PhysicalGuard {
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(-200.0, 200.0, -200.0, 200.0);
+        let layer = ObstacleLayer::new(bounds, 400.0, building.into_iter().collect()).unwrap();
+        let terrain = TiledTerrain::new(bounds, 8, 5.0, 0.0, Vec::new()).unwrap();
+        PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 5.0),
+            SharedObstacles::new(Arc::new(layer)),
+            1.0,
+        )
+        .with_power_lines(lines)
+    }
+
+    /// A platform within the guard's clearance of a wire is pushed straight
+    /// away from it, to the wire's radius plus the clearance, and the push
+    /// is a recorded contact. Clear of it, nothing moves.
+    #[test]
+    fn the_guard_pushes_a_platform_off_a_wire() {
+        let guard = guard_over(None, &[wire(20.0)]);
+        let reach = 0.02 + 1.0;
+        let settled = guard.enforce("d", 0.0, [50.0, 0.3, 19.6]);
+        let gap = argusnet_world::powerline::segment_distance(
+            settled,
+            settled,
+            [0.0, 0.0, 20.0],
+            [100.0, 0.0, 20.0],
+        );
+        assert!((gap - reach).abs() < 1e-5, "{settled:?}: {gap}");
+        // Straight away: the same direction from the wire as before.
+        assert!(((settled[1]) / (20.0 - settled[2]) - 0.3 / 0.4).abs() < 1e-9);
+        let contacts = guard.take_contacts();
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
+        assert_eq!(contacts[0].kind, "structure");
+        assert!((contacts[0].correction_m - (reach - 0.5)).abs() < 1e-5);
+        // Just outside the clearance: left alone.
+        let clear = [50.0, 0.0, 20.0 - reach - 1e-3];
+        assert_eq!(guard.enforce("d", 0.0, clear), clear);
+        assert!(guard.take_contacts().is_empty());
+    }
+
+    /// Where a sagging wire's pieces meet at an angle, a push out of one can
+    /// land in the next; the guard pushes again until it is clear of both,
+    /// and records nothing unresolved.
+    #[test]
+    fn the_guard_settles_a_platform_where_wire_pieces_meet() {
+        let mut sagging = wire(20.0);
+        sagging.sag_ratio = 0.05;
+        let guard = guard_over(None, std::slice::from_ref(&sagging));
+        let envelope = sagging.envelope(1.0);
+        for piece in sagging.pieces().iter().step_by(4) {
+            let joint = piece.end_m;
+            for dz in [-0.9, -0.3, 0.3, 0.9] {
+                let settled = guard.enforce("d", 0.0, [joint[0], 0.0, joint[2] + dz]);
+                assert!(!envelope.contains(settled), "{joint:?} {dz}: {settled:?}");
+            }
+        }
+        assert!(guard.take_contacts().iter().all(|c| c.kind != "unresolved"));
+    }
+
+    /// Two wires closer together than the guard's reach either side leave
+    /// no clear place between them: pushed back and forth until the limit,
+    /// it is recorded unresolved, not passed off as clear.
+    #[test]
+    fn the_guard_records_a_platform_it_cannot_free_from_two_wires() {
+        let mut beside = wire(20.0);
+        beside.id = "beside".into();
+        for support in &mut beside.supports {
+            support.xy_m[1] = 1.5;
+        }
+        let guard = guard_over(None, &[wire(20.0), beside]);
+        guard.enforce("d", 0.0, [50.0, 0.75, 20.0]);
+        let contacts = guard.take_contacts();
+        assert!(
+            contacts.iter().any(|c| c.kind == "unresolved"),
+            "{contacts:?}"
+        );
+    }
+
+    /// A flight across a wire between two positions each clear of it is
+    /// stopped just short of where it first comes within the clearance, and
+    /// the stop recorded; one that does not cross is `enforce` exactly.
+    #[test]
+    fn a_flight_through_a_wire_is_stopped_short_of_it() {
+        let guard = guard_over(None, &[wire(20.0)]);
+        let (from, to) = ([50.0, -10.0, 20.0], [50.0, 10.0, 20.0]);
+        let stopped = guard.enforce_from("d", 0.0, from, to);
+        assert!((stopped[1] - (-1.02 - 0.01)).abs() < 1e-9, "{stopped:?}");
+        assert_eq!([stopped[0], stopped[2]], [50.0, 20.0]);
+        let contacts = guard.take_contacts();
+        assert_eq!(contacts.len(), 1);
+        assert!((contacts[0].correction_m - (10.0 + 1.03)).abs() < 1e-9);
+        // Over it: as `enforce`.
+        let over = [50.0, 10.0, 25.0];
+        assert_eq!(
+            guard.enforce_from("d", 0.0, [50.0, -10.0, 25.0], over),
+            over
+        );
+        assert!(guard.take_contacts().is_empty());
+        // From inside: `enforce` pushes it out.
+        let pushed = guard.enforce_from("d", 0.0, [50.0, 0.3, 20.0], [50.0, 0.3, 19.6]);
+        assert_eq!(pushed, guard.enforce("e", 0.0, [50.0, 0.3, 19.6]));
+        // Without wires, `enforce` whatever the flight.
+        let bare = guard_over(None, &[]);
+        assert_eq!(bare.enforce_from("d", 0.0, from, to), to);
+    }
+
+    /// Physics never pushes a platform into the ground: under a wire 1.5 m
+    /// up, a push down would end under the 1 m floor, so it is lifted
+    /// straight over the wire instead.
+    #[test]
+    fn the_guard_lifts_a_platform_over_a_low_wire_rather_than_into_the_ground() {
+        let guard = guard_over(None, &[wire(1.5)]);
+        let settled = guard.enforce("d", 0.0, [50.0, 0.0, 1.2]);
+        assert_eq!([settled[0], settled[1]], [50.0, 0.0]);
+        assert!((settled[2] - (1.5 + 1.02)).abs() < 1e-5, "{settled:?}");
+        assert!(guard.take_contacts().iter().all(|c| c.kind == "structure"));
+        // Off to the side it is pushed out sideways (and down, where that
+        // keeps it over the floor); wherever it starts, it ends over the
+        // floor and clear of the wire.
+        let envelope = wire(1.5).envelope(1.0);
+        for z in [1.0, 1.3, 1.49, 1.5, 1.6, 2.4] {
+            let settled = guard.enforce("d", 0.0, [50.0, 0.4, z]);
+            assert!(settled[2] >= 1.0, "{z}: {settled:?}");
+            assert!(!envelope.contains(settled), "{z}: {settled:?}");
+        }
+    }
+
+    /// A step toward a wire stops where it first comes within the guard's
+    /// clearance of it, solved: a 20 m step across the wire is stopped
+    /// 1.02 m short of it, though neither end is near it. The nearer of a
+    /// building and a wire stops it.
+    #[test]
+    fn a_step_stops_at_a_wires_envelope_exactly() {
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        let guard = guard_over(None, &[wire(20.0)]);
+        let (from, to) = ([50.0, -10.0, 20.0], [50.0, 10.0, 20.0]);
+        let t = guard.first_structure_hit(from, to).expect("met");
+        assert!((t - (10.0 - 1.02) / 20.0).abs() < 1e-12, "{t}");
+        // Over it with room to spare: not met.
+        assert_eq!(
+            guard.first_structure_hit([50.0, -10.0, 21.1], [50.0, 10.0, 21.1]),
+            None
+        );
+        let wall = Obstacle::polygon_prism(
+            "wall",
+            BlockerType::Building,
+            vec![[49.0, -6.0], [51.0, -6.0], [51.0, -5.0], [49.0, -5.0]],
+            0.0,
+            40.0,
+        )
+        .unwrap();
+        let guarded = guard_over(Some(wall), &[wire(20.0)]);
+        let t = guarded.first_structure_hit(from, to).expect("met");
+        assert!((t - 4.0 / 20.0).abs() < 1e-12, "{t}");
+        // A guard without lines meets no wire.
+        assert_eq!(guard_over(None, &[]).first_structure_hit(from, to), None);
     }
     /// A push out of one structure can land in the next; the guard pushes
     /// again until the point is clear (the reference's fixture).
