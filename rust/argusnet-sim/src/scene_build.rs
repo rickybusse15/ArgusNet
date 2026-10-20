@@ -1325,6 +1325,10 @@ mod tests {
         assert!(attributes(0).get("TEXCOORD_0").is_none());
         assert!(attributes(1).get("TEXCOORD_0").is_some());
         assert!(attributes(1).get("TEXCOORD_1").is_some());
+        // Marked, so the viewer reads them as window coordinates; the plain
+        // part carries no marker.
+        assert!(gltf["meshes"][0].get("extras").is_none());
+        assert_eq!(gltf["meshes"][1]["extras"], json!({"argusnet_facade": 1}));
     }
 
     #[test]

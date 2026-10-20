@@ -388,6 +388,11 @@ pub fn write_glb(path: &Path, mesh: &MeshData, name: &str) -> Result<(), String>
 /// alpha otherwise, and `BLEND` is its only translucent mode, with straight
 /// colours -- and is single-sided: its parts are closed solids, so culling
 /// their back faces keeps a far wall from blending over a near one.
+/// The glTF mesh `extras` key that marks a part carrying a roofed
+/// building's window coordinates (R1), and its version.
+pub const FACADE_EXTRAS_KEY: &str = "argusnet_facade";
+pub const FACADE_EXTRAS_VERSION: u32 = 1;
+
 pub fn write_glb_parts(path: &Path, parts: &[&MeshData], name: &str) -> Result<(), String> {
     fn floats(values: impl IntoIterator<Item = f32>) -> Vec<u8> {
         values.into_iter().flat_map(f32::to_le_bytes).collect()
@@ -466,13 +471,19 @@ pub fn write_glb_parts(path: &Path, parts: &[&MeshData], name: &str) -> Result<(
             attributes[key] = json!(accessors.len());
             accessors.push(json!({"bufferView": views.len() - 1, "componentType": 5126, "count": count, "type": "VEC2"}));
         }
-        meshes.push(json!({
+        let mut gltf_mesh = json!({
             "name": part_name,
             "primitives": [{
                 "attributes": attributes,
                 "indices": first + 3, "material": 0, "mode": 4,
             }],
-        }));
+        });
+        // A part with window coordinates says so explicitly, so the viewer
+        // never reads some other file's texture coordinates as storeys.
+        if !mesh.uvs.is_empty() {
+            gltf_mesh["extras"] = json!({ FACADE_EXTRAS_KEY: FACADE_EXTRAS_VERSION });
+        }
+        meshes.push(gltf_mesh);
         nodes.push(json!({"mesh": index, "name": part_name}));
     }
     let translucent = parts

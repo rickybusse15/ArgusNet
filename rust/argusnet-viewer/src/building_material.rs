@@ -8,12 +8,16 @@
 //! the GLB carried, extended to draw window rows from those, so lighting,
 //! shadows, fog and the layer's translucency stay what they were.
 //!
-//! It is applied only to meshes that carry both coordinate sets. Every other
+//! It is applied only to parts the scene builder marked as facades (glTF
+//! mesh `extras` `{"argusnet_facade": 1}`) that also carry both coordinate
+//! sets: texture coordinates in some other file are never read as storeys.
+//! Every other
 //! building, wall and part keeps its baked material untouched, and no
 //! windows are drawn on a building whose storeys the data does not give
 //! (VIEWER_UI §18: no plausible lies).
 
 use bevy::asset::embedded_asset;
+use bevy::gltf::GltfMeshExtras;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
@@ -83,6 +87,19 @@ pub fn has_facade_coordinates(mesh: &Mesh) -> bool {
     mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some() && mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_some()
 }
 
+/// Whether a glTF mesh's `extras` mark it as the scene builder's facade, in
+/// the version this viewer reads.
+pub fn is_marked_facade(extras: Option<&GltfMeshExtras>) -> bool {
+    extras
+        .and_then(|extras| serde_json::from_str::<serde_json::Value>(&extras.value).ok())
+        .and_then(|value| {
+            value
+                .get(argusnet_sim::scene_export::FACADE_EXTRAS_KEY)?
+                .as_u64()
+        })
+        == Some(u64::from(argusnet_sim::scene_export::FACADE_EXTRAS_VERSION))
+}
+
 pub struct BuildingMaterialPlugin;
 
 impl Plugin for BuildingMaterialPlugin {
@@ -99,7 +116,11 @@ fn apply_facades_system(
     asset_server: Res<AssetServer>,
     roots: Query<(Entity, &WorldAssetRoot), (With<BuildingLayerRoot>, Without<FacadesApplied>)>,
     children: Query<&Children>,
-    parts: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>)>,
+    parts: Query<(
+        &Mesh3d,
+        &MeshMaterial3d<StandardMaterial>,
+        Option<&GltfMeshExtras>,
+    )>,
     meshes: Res<Assets<Mesh>>,
     standard_materials: Res<Assets<StandardMaterial>>,
     mut building_materials: ResMut<Assets<BuildingMaterial>>,
@@ -115,11 +136,12 @@ fn apply_facades_system(
             if let Ok(node_children) = children.get(entity) {
                 stack.extend(node_children.iter());
             }
-            let Ok((mesh, material)) = parts.get(entity) else {
+            let Ok((mesh, material, extras)) = parts.get(entity) else {
                 continue;
             };
             seen += 1;
-            if !meshes.get(&mesh.0).is_some_and(has_facade_coordinates) {
+            if !is_marked_facade(extras) || !meshes.get(&mesh.0).is_some_and(has_facade_coordinates)
+            {
                 continue;
             }
             let base = standard_materials
@@ -166,5 +188,21 @@ mod tests {
         assert!(!has_facade_coordinates(&one));
         let both = one.with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.0f32; 2]; 3]);
         assert!(has_facade_coordinates(&both));
+    }
+
+    /// Only the scene builder's own marker, in this version, makes a facade:
+    /// a lightmapped file's two coordinate sets alone do not.
+    #[test]
+    fn only_marked_parts_are_facades() {
+        let extras = |value: &str| GltfMeshExtras {
+            value: value.to_string(),
+        };
+        assert!(!is_marked_facade(None));
+        assert!(is_marked_facade(Some(&extras(r#"{"argusnet_facade": 1}"#))));
+        assert!(!is_marked_facade(Some(&extras(
+            r#"{"argusnet_facade": 2}"#
+        ))));
+        assert!(!is_marked_facade(Some(&extras(r#"{"lightmap": true}"#))));
+        assert!(!is_marked_facade(Some(&extras("not json"))));
     }
 }
