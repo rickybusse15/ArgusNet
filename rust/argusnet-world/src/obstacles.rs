@@ -118,6 +118,240 @@ pub enum ObstacleShape {
 }
 
 // ---------------------------------------------------------------------------
+// Roofs (`building-v2`, R1)
+// ---------------------------------------------------------------------------
+
+/// The roof shapes `building-v2` models: OSM's `roof:shape` values for the
+/// four most common roofs. Anything else is imported as flat at the ridge
+/// height, which over-states the solid (conservative), never under-states it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoofShape {
+    Flat,
+    Gabled,
+    Hipped,
+    Pyramidal,
+}
+
+impl RoofShape {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "flat" => Some(Self::Flat),
+            "gabled" => Some(Self::Gabled),
+            "hipped" => Some(Self::Hipped),
+            "pyramidal" => Some(Self::Pyramidal),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Gabled => "gabled",
+            Self::Hipped => "hipped",
+            Self::Pyramidal => "pyramidal",
+        }
+    }
+}
+
+/// A building's roof: the walls rise to `eave_z_m`, and over the footprint
+/// the solid ends at the lowest of `planes`, each `z = a x + b y + c`
+/// (`[a, b, c]`). A gable is the lower of two planes meeting at the ridge, a
+/// hip or pyramid the lowest of one plane per edge. Every query clips
+/// against the planes exactly: a ray, a point or a flight is inside the
+/// building only under its roof, never in the air beside a slope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Roof {
+    pub shape: RoofShape,
+    pub eave_z_m: f64,
+    pub planes: Vec<[f64; 3]>,
+}
+
+impl Roof {
+    /// The roof's height over `(x_m, y_m)`, metres above datum.
+    pub fn height_at(&self, x_m: f64, y_m: f64) -> f64 {
+        self.planes
+            .iter()
+            .map(|[a, b, c]| a * x_m + b * y_m + c)
+            .fold(f64::INFINITY, f64::min)
+    }
+}
+
+/// Whether `footprint` turns the same way at every vertex (collinear
+/// vertices allowed).
+pub fn is_convex(footprint: &[[f64; 2]]) -> bool {
+    let n = footprint.len();
+    let mut sign = 0.0_f64;
+    for i in 0..n {
+        let (a, b, c) = (footprint[i], footprint[(i + 1) % n], footprint[(i + 2) % n]);
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        if cross.abs() <= 1e-12 {
+            continue;
+        }
+        if sign == 0.0 {
+            sign = cross.signum();
+        } else if cross.signum() != sign {
+            return false;
+        }
+    }
+    true
+}
+
+/// `footprint` counter-clockwise.
+fn counter_clockwise(footprint: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    if signed_polygon_area(footprint) < 0.0 {
+        footprint.iter().rev().copied().collect()
+    } else {
+        footprint.to_vec()
+    }
+}
+
+/// Each edge of a counter-clockwise footprint as `(start, inward unit
+/// normal)`; zero-length edges are skipped.
+fn inward_edges(ccw: &[[f64; 2]]) -> Vec<([f64; 2], [f64; 2])> {
+    (0..ccw.len())
+        .filter_map(|i| {
+            let (p, q) = (ccw[i], ccw[(i + 1) % ccw.len()]);
+            let length = (q[0] - p[0]).hypot(q[1] - p[1]);
+            (length > EPSILON_M).then(|| (p, [-(q[1] - p[1]) / length, (q[0] - p[0]) / length]))
+        })
+        .collect()
+}
+
+/// The roof planes for `shape` over `footprint`, rising `roof_height_m`
+/// above `eave_z_m`.
+fn roof_planes(
+    footprint: &[[f64; 2]],
+    eave_z_m: f64,
+    shape: RoofShape,
+    roof_height_m: f64,
+    ridge_azimuth_rad: f64,
+) -> Vec<[f64; 3]> {
+    let top = eave_z_m + roof_height_m;
+    match shape {
+        RoofShape::Flat => vec![[0.0, 0.0, top]],
+        RoofShape::Gabled => {
+            // Across the ridge: the footprint's extent along `across`, the
+            // ridge at its middle, each side falling to the eave at its edge.
+            let across = [-ridge_azimuth_rad.sin(), ridge_azimuth_rad.cos()];
+            let u = |p: &[f64; 2]| across[0] * p[0] + across[1] * p[1];
+            let (lo, hi) = footprint
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+                    (lo.min(u(p)), hi.max(u(p)))
+                });
+            let (mid, half) = (0.5 * (lo + hi), 0.5 * (hi - lo));
+            let k = roof_height_m / half;
+            vec![
+                [-k * across[0], -k * across[1], top + k * mid],
+                [k * across[0], k * across[1], top - k * mid],
+            ]
+        }
+        RoofShape::Hipped => {
+            // One plane per edge at one pitch, rising from the eave inward:
+            // a hip roof, whose ridge runs where the opposite slopes meet.
+            // The pitch brings the narrowest span's middle to the ridge
+            // height, and no higher anywhere: a convex footprint's inradius
+            // is never more than half its narrowest width.
+            let ccw = counter_clockwise(footprint);
+            let edges = inward_edges(&ccw);
+            let width = edges
+                .iter()
+                .map(|(p, n)| {
+                    ccw.iter()
+                        .map(|v| n[0] * (v[0] - p[0]) + n[1] * (v[1] - p[1]))
+                        .fold(0.0_f64, f64::max)
+                })
+                .fold(f64::INFINITY, f64::min);
+            let k = roof_height_m / (0.5 * width);
+            edges
+                .iter()
+                .map(|(p, n)| {
+                    [
+                        k * n[0],
+                        k * n[1],
+                        eave_z_m - k * (n[0] * p[0] + n[1] * p[1]),
+                    ]
+                })
+                .collect()
+        }
+        RoofShape::Pyramidal => {
+            // One face per edge, from the edge at the eave to the apex over
+            // the footprint's centroid.
+            let ccw = counter_clockwise(footprint);
+            let apex = polygon_centroid(&ccw);
+            inward_edges(&ccw)
+                .iter()
+                .map(|(p, n)| {
+                    let d = n[0] * (apex[0] - p[0]) + n[1] * (apex[1] - p[1]);
+                    let k = roof_height_m / d;
+                    [
+                        k * n[0],
+                        k * n[1],
+                        eave_z_m - k * (n[0] * p[0] + n[1] * p[1]),
+                    ]
+                })
+                .collect()
+        }
+    }
+}
+
+/// The area centroid of a simple polygon.
+pub fn polygon_centroid(polygon: &[[f64; 2]]) -> [f64; 2] {
+    let n = polygon.len();
+    let (mut cx, mut cy, mut twice_area) = (0.0, 0.0, 0.0);
+    for i in 0..n {
+        let (p, q) = (polygon[i], polygon[(i + 1) % n]);
+        let cross = p[0] * q[1] - q[0] * p[1];
+        twice_area += cross;
+        cx += (p[0] + q[0]) * cross;
+        cy += (p[1] + q[1]) * cross;
+    }
+    if twice_area.abs() <= f64::EPSILON {
+        let (sx, sy) = polygon
+            .iter()
+            .fold((0.0, 0.0), |(sx, sy), p| (sx + p[0], sy + p[1]));
+        return [sx / n as f64, sy / n as f64];
+    }
+    [cx / (3.0 * twice_area), cy / (3.0 * twice_area)]
+}
+
+/// The direction of a footprint's longest edge, radians from +x: where a
+/// gable's ridge runs when the data does not say.
+pub fn longest_edge_azimuth(footprint: &[[f64; 2]]) -> f64 {
+    let n = footprint.len();
+    (0..n)
+        .map(|i| {
+            let (p, q) = (footprint[i], footprint[(i + 1) % n]);
+            (
+                (q[0] - p[0]).hypot(q[1] - p[1]),
+                (q[1] - p[1]).atan2(q[0] - p[0]),
+            )
+        })
+        .fold(
+            (0.0, 0.0),
+            |best, edge| if edge.0 > best.0 { edge } else { best },
+        )
+        .1
+}
+
+/// Narrow `[lo, hi]` to where `f0 + f1 t >= 0`.
+fn clip_half_line(lo: &mut f64, hi: &mut f64, f0: f64, f1: f64) {
+    if f1.abs() <= 1e-15 {
+        if f0 < 0.0 {
+            *hi = f64::NEG_INFINITY;
+        }
+        return;
+    }
+    let root = -f0 / f1;
+    if f1 > 0.0 {
+        *lo = lo.max(root);
+    } else {
+        *hi = hi.min(root);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Obstacle
 // ---------------------------------------------------------------------------
 
@@ -134,6 +368,11 @@ pub struct Obstacle {
     /// The `kind` tag the scene metadata used, retained so an obstacle can be
     /// attributed back to the primitive that produced it.
     pub kind: String,
+    /// A `building-v2` roof. `None` for every other kind, whose queries keep
+    /// the prism rules they always had (and whose serialised form is
+    /// unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roof: Option<Roof>,
 }
 
 /// Rejected construction input.
@@ -145,6 +384,10 @@ pub enum ObstacleError {
     NonPositiveHeight,
     /// A radius, length, width or thickness was zero or negative.
     NonPositiveExtent { field: &'static str },
+    /// A hipped or pyramidal roof over a footprint that is not convex: its
+    /// faces are not one plane per edge, so it is refused rather than
+    /// modelled wrong.
+    NonConvexRoof { shape: &'static str },
 }
 
 impl std::fmt::Display for ObstacleError {
@@ -156,6 +399,9 @@ impl std::fmt::Display for ObstacleError {
             ),
             Self::NonPositiveHeight => write!(f, "top_z_m must be greater than base_z_m"),
             Self::NonPositiveExtent { field } => write!(f, "{field} must be greater than zero"),
+            Self::NonConvexRoof { shape } => {
+                write!(f, "a {shape} roof needs a convex footprint")
+            }
         }
     }
 }
@@ -187,7 +433,59 @@ impl Obstacle {
             top_z_m,
             density: None,
             kind: "polygon-prism-v1".to_string(),
+            roof: None,
         })
+    }
+
+    /// A `building-v2`: walls from `base_z_m` up to `eave_z_m`, then a roof
+    /// `roof_height_m` tall. A gabled roof's ridge runs along
+    /// `ridge_azimuth_rad` (radians from +x; the footprint's longest edge when
+    /// `None`); hipped and pyramidal roofs need a convex footprint. The
+    /// obstacle's `top_z_m` is the ridge height.
+    pub fn building_v2(
+        id: impl Into<String>,
+        footprint_xy_m: Vec<[f64; 2]>,
+        base_z_m: f64,
+        eave_z_m: f64,
+        shape: RoofShape,
+        roof_height_m: f64,
+        ridge_azimuth_rad: Option<f64>,
+    ) -> Result<Self, ObstacleError> {
+        if !(roof_height_m.is_finite() && roof_height_m >= 0.0) {
+            return Err(ObstacleError::NonPositiveExtent {
+                field: "roof_height_m",
+            });
+        }
+        if shape != RoofShape::Flat && roof_height_m <= 0.0 {
+            return Err(ObstacleError::NonPositiveExtent {
+                field: "roof_height_m",
+            });
+        }
+        let mut obstacle = Self::polygon_prism(
+            id,
+            BlockerType::Building,
+            footprint_xy_m,
+            base_z_m,
+            eave_z_m,
+        )?;
+        let ObstacleShape::Polygon { footprint_xy_m } = &obstacle.shape else {
+            unreachable!("a prism has a polygon");
+        };
+        if matches!(shape, RoofShape::Hipped | RoofShape::Pyramidal) && !is_convex(footprint_xy_m) {
+            return Err(ObstacleError::NonConvexRoof {
+                shape: shape.as_str(),
+            });
+        }
+        let azimuth = ridge_azimuth_rad.unwrap_or_else(|| longest_edge_azimuth(footprint_xy_m));
+        let planes = roof_planes(footprint_xy_m, eave_z_m, shape, roof_height_m, azimuth);
+        obstacle.top_z_m = eave_z_m + roof_height_m;
+        obstacle.kind = "building-v2".to_string();
+        obstacle.roof = Some(Roof {
+            shape,
+            eave_z_m,
+            planes,
+        });
+        Ok(obstacle)
     }
 
     /// A stand of trees: a polygonal prism that attenuates rather than blocks.
@@ -315,6 +613,7 @@ impl Obstacle {
             top_z_m,
             density: None,
             kind: "cylinder-v1".to_string(),
+            roof: None,
         })
     }
 
@@ -351,6 +650,11 @@ impl Obstacle {
     pub fn point_inside(&self, x_m: f64, y_m: f64, z_m: f64) -> bool {
         if z_m < self.base_z_m - EPSILON_M || z_m > self.top_z_m + EPSILON_M {
             return false;
+        }
+        if let Some(roof) = &self.roof {
+            if z_m > roof.height_at(x_m, y_m) + EPSILON_M {
+                return false;
+            }
         }
         match &self.shape {
             ObstacleShape::Polygon { footprint_xy_m } => {
@@ -393,6 +697,8 @@ impl Obstacle {
     /// each footprint interval is cut to the part between the base and the
     /// top first.
     pub fn surface_hit_t(&self, origin: [f64; 3], target: [f64; 3]) -> Option<f64> {
+        // A roofed solid's intervals are already exact in 3D, so the cut
+        // below leaves them as they are: the first starts on its surface.
         let dz = target[2] - origin[2];
         let mut intervals = self.inside_intervals(origin, target);
         intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -475,6 +781,9 @@ impl Obstacle {
 
     /// Sub-intervals of `origin -> target`, in `t`, that lie inside the solid.
     fn inside_intervals(&self, origin: [f64; 3], target: [f64; 3]) -> Vec<(f64, f64)> {
+        if let (Some(roof), ObstacleShape::Polygon { footprint_xy_m }) = (&self.roof, &self.shape) {
+            return self.roofed_intervals(roof, footprint_xy_m, origin, target);
+        }
         match &self.shape {
             ObstacleShape::Polygon { footprint_xy_m } => segment_polygon_intervals(
                 [origin[0], origin[1]],
@@ -496,6 +805,43 @@ impl Obstacle {
                 .into_iter()
                 .collect(),
         }
+    }
+
+    /// Inside a roofed solid: within the footprint, above the base and under
+    /// every roof plane. Each bound is linear along the segment, so each
+    /// footprint interval is cut exactly, not tested for overlap.
+    fn roofed_intervals(
+        &self,
+        roof: &Roof,
+        footprint_xy_m: &[[f64; 2]],
+        origin: [f64; 3],
+        target: [f64; 3],
+    ) -> Vec<(f64, f64)> {
+        let d = [
+            target[0] - origin[0],
+            target[1] - origin[1],
+            target[2] - origin[2],
+        ];
+        segment_polygon_intervals(
+            [origin[0], origin[1]],
+            [target[0], target[1]],
+            footprint_xy_m,
+        )
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let (mut lo, mut hi) = (start, end);
+            clip_half_line(&mut lo, &mut hi, origin[2] - self.base_z_m, d[2]);
+            for [a, b, c] in &roof.planes {
+                clip_half_line(
+                    &mut lo,
+                    &mut hi,
+                    a * origin[0] + b * origin[1] + c - origin[2],
+                    a * d[0] + b * d[1] - d[2],
+                );
+            }
+            (lo <= hi).then_some((lo, hi))
+        })
+        .collect()
     }
 
     fn cylinder_interval(
@@ -716,6 +1062,17 @@ pub struct ObstacleMetadata {
     pub radius_m: Option<f64>,
     #[serde(default)]
     pub density: Option<f64>,
+    /// `building-v2`: where the walls end and the roof begins; the roof
+    /// rises from here to `top_elevation_m`.
+    #[serde(default)]
+    pub eave_elevation_m: Option<f64>,
+    /// `building-v2`: `flat`, `gabled`, `hipped` or `pyramidal`.
+    #[serde(default)]
+    pub roof_shape: Option<String>,
+    /// `building-v2`, gabled: the ridge's direction, radians from +x. The
+    /// footprint's longest edge when absent.
+    #[serde(default)]
+    pub ridge_azimuth_rad: Option<f64>,
 }
 
 /// How a scene stored a footprint.
@@ -753,6 +1110,10 @@ pub enum MetadataError {
         object_id: String,
         source: ObstacleError,
     },
+    UnknownRoofShape {
+        object_id: String,
+        roof_shape: String,
+    },
 }
 
 impl std::fmt::Display for MetadataError {
@@ -769,6 +1130,10 @@ impl std::fmt::Display for MetadataError {
                 "{object_id}: footprint_xy_m has {values} values, which is not a whole number of xy pairs"
             ),
             Self::Invalid { object_id, source } => write!(f, "{object_id}: {source}"),
+            Self::UnknownRoofShape {
+                object_id,
+                roof_shape,
+            } => write!(f, "{object_id}: unknown roof_shape {roof_shape:?}"),
         }
     }
 }
@@ -854,6 +1219,29 @@ impl ObstacleMetadata {
                     self.base_elevation_m,
                     self.top_elevation_m,
                     self.density.unwrap_or(0.35),
+                )
+                .map_err(invalid)
+            }
+            "building-v2" => {
+                let footprint = self.footprint_pairs()?;
+                let eave = self.require(self.eave_elevation_m, "eave_elevation_m")?;
+                let shape_name = self.roof_shape.clone().ok_or(MetadataError::MissingField {
+                    object_id: self.object_id.clone(),
+                    field: "roof_shape",
+                })?;
+                let shape =
+                    RoofShape::parse(&shape_name).ok_or(MetadataError::UnknownRoofShape {
+                        object_id: self.object_id.clone(),
+                        roof_shape: shape_name,
+                    })?;
+                Obstacle::building_v2(
+                    self.object_id.clone(),
+                    footprint,
+                    self.base_elevation_m,
+                    eave,
+                    shape,
+                    self.top_elevation_m - eave,
+                    self.ridge_azimuth_rad,
                 )
                 .map_err(invalid)
             }
@@ -1346,5 +1734,231 @@ mod metadata_tests {
         assert!(!hard(r#""vegetation""#));
         assert!(!hard(r#""Building""#));
         assert!(!hard(r#""tower""#));
+    }
+}
+
+#[cfg(test)]
+mod roof_tests {
+    use super::*;
+
+    /// 20 m along x, 10 m along y; walls to 10 m, a 5 m roof.
+    fn rectangle() -> Vec<[f64; 2]> {
+        vec![[0.0, 0.0], [20.0, 0.0], [20.0, 10.0], [0.0, 10.0]]
+    }
+
+    fn gabled() -> Obstacle {
+        Obstacle::building_v2("g", rectangle(), 0.0, 10.0, RoofShape::Gabled, 5.0, None).unwrap()
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn a_gable_falls_from_its_ridge_to_the_eaves() {
+        let g = gabled();
+        let roof = g.roof.as_ref().unwrap();
+        // The ridge runs along the longest edge (x), over y = 5.
+        assert!(close(roof.height_at(10.0, 5.0), 15.0));
+        assert!(close(roof.height_at(3.0, 0.0), 10.0));
+        assert!(close(roof.height_at(17.0, 10.0), 10.0));
+        assert!(close(roof.height_at(10.0, 2.5), 12.5));
+        assert_eq!(g.top_z_m, 15.0);
+        assert_eq!(g.kind, "building-v2");
+        // Under the slope it is solid, beside it it is air.
+        assert!(g.point_inside(10.0, 1.0, 10.5));
+        assert!(!g.point_inside(10.0, 1.0, 12.0));
+        assert!(g.point_inside(10.0, 5.0, 14.9));
+    }
+
+    /// The plan's validation case: a gabled roof blocks a ray that a
+    /// flat-roofed prism at the eave lets through, and lets through a ray
+    /// beside its ridge that a prism at the ridge height would block.
+    #[test]
+    fn a_gable_occludes_what_a_flat_roof_lets_through_and_no_more() {
+        let g = gabled();
+        let eave_prism =
+            Obstacle::polygon_prism("p", BlockerType::Building, rectangle(), 0.0, 10.0).unwrap();
+        let ridge_prism =
+            Obstacle::polygon_prism("p", BlockerType::Building, rectangle(), 0.0, 15.0).unwrap();
+        // Along the ridge, 2 m under it.
+        let (a, b) = ([-10.0, 5.0, 13.0], [30.0, 5.0, 13.0]);
+        assert!(g.first_hit_t(a, b).is_some());
+        assert!(eave_prism.first_hit_t(a, b).is_none());
+        assert!(close(g.path_length_inside(a, b), 20.0));
+        // Over the slope near the eave (roof 11 m there), at 13 m.
+        let (a, b) = ([-10.0, 1.0, 13.0], [30.0, 1.0, 13.0]);
+        assert!(g.first_hit_t(a, b).is_none());
+        assert!(ridge_prism.first_hit_t(a, b).is_some());
+        assert_eq!(g.path_length_inside(a, b), 0.0);
+    }
+
+    /// A building on raised ground: a ray under its base passes, one
+    /// through its walls does not.
+    #[test]
+    fn a_ray_under_the_base_passes() {
+        let raised =
+            Obstacle::building_v2("r", rectangle(), 4.0, 10.0, RoofShape::Gabled, 5.0, None)
+                .unwrap();
+        assert!(raised
+            .first_hit_t([-10.0, 5.0, 3.0], [30.0, 5.0, 3.0])
+            .is_none());
+        assert!(!raised.point_inside(10.0, 5.0, 3.0));
+        assert!(close(
+            raised.path_length_inside([-10.0, 5.0, 5.0], [30.0, 5.0, 5.0]),
+            20.0
+        ));
+        // A ray climbing out from under it enters at the base.
+        let t = raised
+            .first_hit_t([10.0, 5.0, 0.0], [10.0, 5.0, 20.0])
+            .unwrap();
+        assert!(close(t, 0.2));
+    }
+
+    /// A ray coming down onto the slope lands where it meets the slope,
+    /// solved, not where it crosses the footprint.
+    #[test]
+    fn a_ray_lands_on_the_slope() {
+        let g = gabled();
+        // y = -10 + 15 t, z = 30 - 20 t; the near slope is z = 10 + y, met
+        // at 30 - 20 t = 15 t, t = 6/7.
+        let (a, b) = ([10.0, -10.0, 30.0], [10.0, 5.0, 10.0]);
+        assert!(close(g.surface_hit_t(a, b).unwrap(), 6.0 / 7.0));
+        assert!(close(g.first_hit_t(a, b).unwrap(), 6.0 / 7.0));
+        // A ray that passes over the ridge misses entirely.
+        assert!(g
+            .surface_hit_t([10.0, -10.0, 16.0], [10.0, 20.0, 16.0])
+            .is_none());
+    }
+
+    #[test]
+    fn a_hip_roof_has_a_ridge_and_sloping_ends() {
+        let h = Obstacle::building_v2("h", rectangle(), 0.0, 10.0, RoofShape::Hipped, 5.0, None)
+            .unwrap();
+        let roof = h.roof.as_ref().unwrap();
+        // The narrow span (10 m) brings the middle to the ridge height; the
+        // ridge runs from x = 5 to 15, and the ends slope down to the eave.
+        assert!(close(roof.height_at(10.0, 5.0), 15.0));
+        assert!(close(roof.height_at(5.0, 5.0), 15.0));
+        assert!(close(roof.height_at(2.0, 5.0), 12.0));
+        assert!(close(roof.height_at(0.0, 5.0), 10.0));
+        assert!(close(roof.height_at(10.0, 1.0), 11.0));
+        // Never above the ridge.
+        for p in [[10.0, 5.0], [7.0, 5.0], [13.0, 4.0]] {
+            assert!(roof.height_at(p[0], p[1]) <= 15.0 + 1e-9);
+        }
+        // Either winding gives the same roof.
+        let mut reversed = rectangle();
+        reversed.reverse();
+        let r =
+            Obstacle::building_v2("h", reversed, 0.0, 10.0, RoofShape::Hipped, 5.0, None).unwrap();
+        for p in [[2.0, 5.0], [10.0, 1.0], [17.0, 8.0]] {
+            assert!(close(
+                r.roof.as_ref().unwrap().height_at(p[0], p[1]),
+                roof.height_at(p[0], p[1])
+            ));
+        }
+    }
+
+    #[test]
+    fn a_pyramid_rises_to_an_apex_over_the_centroid() {
+        let square = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let p =
+            Obstacle::building_v2("p", square, 0.0, 10.0, RoofShape::Pyramidal, 6.0, None).unwrap();
+        let roof = p.roof.as_ref().unwrap();
+        assert!(close(roof.height_at(5.0, 5.0), 16.0));
+        assert!(close(roof.height_at(2.5, 5.0), 13.0));
+        assert!(close(roof.height_at(0.0, 3.0), 10.0));
+    }
+
+    #[test]
+    fn a_flat_roof_is_the_prism_it_always_was() {
+        let f =
+            Obstacle::building_v2("f", rectangle(), 0.0, 10.0, RoofShape::Flat, 0.0, None).unwrap();
+        assert_eq!(f.top_z_m, 10.0);
+        assert!(f.point_inside(10.0, 5.0, 9.9));
+        assert!(!f.point_inside(10.0, 5.0, 10.1));
+        assert!(close(
+            f.path_length_inside([-10.0, 5.0, 5.0], [30.0, 5.0, 5.0]),
+            20.0
+        ));
+    }
+
+    #[test]
+    fn roofs_that_cannot_be_modelled_are_refused() {
+        let l_shape = vec![
+            [0.0, 0.0],
+            [20.0, 0.0],
+            [20.0, 10.0],
+            [10.0, 10.0],
+            [10.0, 20.0],
+            [0.0, 20.0],
+        ];
+        for shape in [RoofShape::Hipped, RoofShape::Pyramidal] {
+            assert_eq!(
+                Obstacle::building_v2("l", l_shape.clone(), 0.0, 10.0, shape, 4.0, None),
+                Err(ObstacleError::NonConvexRoof {
+                    shape: shape.as_str()
+                })
+            );
+        }
+        // A gable over an L is still one surface.
+        assert!(
+            Obstacle::building_v2("l", l_shape, 0.0, 10.0, RoofShape::Gabled, 4.0, None).is_ok()
+        );
+        assert!(
+            Obstacle::building_v2("g", rectangle(), 0.0, 10.0, RoofShape::Gabled, 0.0, None)
+                .is_err()
+        );
+        assert!(
+            Obstacle::building_v2("g", rectangle(), 0.0, 10.0, RoofShape::Flat, -1.0, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn building_v2_is_read_from_metadata_and_other_kinds_serialise_as_before() {
+        let read = |extra: serde_json::Value| {
+            let mut entry = serde_json::json!({
+                "object_id": "b", "kind": "building-v2", "blocker_type": "building",
+                "footprint_xy_m": [[0.0, 0.0], [20.0, 0.0], [20.0, 10.0], [0.0, 10.0]],
+                "base_elevation_m": 0.0, "top_elevation_m": 15.0,
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                entry[k] = v.clone();
+            }
+            serde_json::from_value::<ObstacleMetadata>(entry)
+                .unwrap()
+                .into_obstacle()
+        };
+        let built =
+            read(serde_json::json!({"eave_elevation_m": 10.0, "roof_shape": "gabled"})).unwrap();
+        assert_eq!(built, gabled_with_id("b"));
+        assert!(matches!(
+            read(serde_json::json!({"roof_shape": "gabled"})),
+            Err(MetadataError::MissingField {
+                field: "eave_elevation_m",
+                ..
+            })
+        ));
+        assert!(matches!(
+            read(serde_json::json!({"eave_elevation_m": 10.0, "roof_shape": "mansard"})),
+            Err(MetadataError::UnknownRoofShape { .. })
+        ));
+        // An explicit ridge direction across the short side.
+        let across = read(serde_json::json!({
+            "eave_elevation_m": 10.0, "roof_shape": "gabled",
+            "ridge_azimuth_rad": std::f64::consts::FRAC_PI_2,
+        }))
+        .unwrap();
+        assert!(close(across.roof.unwrap().height_at(10.0, 1.0), 15.0));
+        // Every other obstacle serialises exactly as before: no roof key.
+        let prism =
+            Obstacle::polygon_prism("p", BlockerType::Building, rectangle(), 0.0, 10.0).unwrap();
+        assert!(!serde_json::to_string(&prism).unwrap().contains("roof"));
+    }
+
+    fn gabled_with_id(id: &str) -> Obstacle {
+        Obstacle::building_v2(id, rectangle(), 0.0, 10.0, RoofShape::Gabled, 5.0, None).unwrap()
     }
 }

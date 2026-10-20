@@ -37,6 +37,12 @@
   to 2 and 0; the 2 left are deconfliction pushes. The reference is
   unchanged, and so are the 14 canonical replays.
 
+- World: `building-v2`, buildings with roofs (R1, first slice). Flat,
+  gabled, hipped and pyramidal roofs as planes over the footprint; line of
+  sight, collision and the range scanner's hits clip against them exactly,
+  and the scene builder draws the same solid. No run produces one yet:
+  14/14 replays identical.
+
 - Viewer: power lines are drawn (R3). The replay's `meta.power_lines`
   becomes lattice towers on their own ground, plus conductors drawn as
   screen-space lines at least 1.6 px wide, so a 3 cm wire never vanishes
