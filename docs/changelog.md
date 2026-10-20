@@ -2,6 +2,17 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- World: a tree model (R2, first slice). `argusnet_world::trees` holds
+  `Tree` (`tree-v1`): position, ground level, height, crown base, crown
+  radius, trunk radius, species (conifer, broadleaf, palm, shrub) and leaf
+  density, validated on construction and as read. The trunk is a vertical
+  cylinder to the middle of the crown (hard); the crown is an ellipsoid
+  (soft) whose light falls off by Beer–Lambert, `exp(-0.35 · density ·
+  chord)`. `TreeLayer` indexes trees on a 16 m grid and walks a ray through
+  it cell by cell (transmittance, first trunk or crown met, what is at a
+  point), skipping cells the ray passes above. `poisson_disk` is the
+  seeded, fixed-order sampler procedural placement will use. Nothing in a
+  run reads it yet; the 14 canonical replays are unchanged.
 - `efficient_v1` fills the holes that hold a scan open (P4, first slice).
   Each drone loops its own sector, so the seams between sectors stay
   uncovered, and once coverage passes the threshold those enclosed holes
