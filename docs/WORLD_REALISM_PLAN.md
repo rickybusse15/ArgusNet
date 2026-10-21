@@ -650,7 +650,20 @@ C8 (P2.6) and D2 (P5.1).
   linear however many trees are mapped. The procedural line is not built when a
   features file is given. Anything outside the map, inside a structure or
   refused by the model is counted in the record. All 19 mutants are killed.
-  Next: one pipeline and the canonical town (R5.3).
+
+  *Done (one pipeline, R5.3a):* `scripts/import_world.py` runs the three
+  importers around one origin (given, or the DEM's centre) into one folder:
+  terrain, buildings and features documents, a `scenario.json` naming them,
+  and a `world.json` manifest. The manifest holds the origin, each file's
+  and each source's SHA-256, the importers' summaries, and a `world_id`
+  hashed from the files. The extract is split by the `building` tag, since
+  the buildings importer reads every polygon as a building. With
+  `--argusnet-rs` it also runs the scenario and packages the scene. Tests
+  cover one origin with or without `--origin`, the split, the same data
+  giving the same world, and an end-to-end run.
+  Not done: the canonical real-world scenario (R5.3b), which needs a real
+  DEM and OSM extract of a small town edge with a transmission line, and
+  the optional LiDAR canopy and building-height model.
 
 ## Order and size
 

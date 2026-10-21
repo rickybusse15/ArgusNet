@@ -252,6 +252,23 @@ features file, these lines replace the procedural one. Asked-for scattered
 trees keep 8 m from mapped ones. Anything outside the map or inside a
 building is left out and counted in the replay's `features` record.
 
+### A real place in one step (R5)
+
+With a DEM and one OSM extract (GeoJSON) of the same place, one command
+runs all three importers around one origin:
+
+```bash
+python3 scripts/import_world.py dem.tif town.geojson --map-preset medium --out worlds/town --argusnet-rs target/release/argusnet-rs
+```
+
+`worlds/town` then holds the terrain, buildings and features documents, a
+`scenario.json` that names them, and a `world.json` manifest. The manifest
+has the origin, every file's hash and a `world_id`, so the same data is
+always the same world. With `--argusnet-rs` the folder also gets the run
+(`replay.json`) and its scene (`scene/`). Open it with
+`argusnet-viewer --scene worlds/town/scene`. The origin is `--origin`, or
+the DEM's centre.
+
 ### Start from no world knowledge
 
 By default the drones are given the true terrain and buildings. With

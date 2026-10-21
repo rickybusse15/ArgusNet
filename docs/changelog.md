@@ -9,6 +9,10 @@
   nothing is invented. Roads run through forests, buildings stay urban,
   trees grow only in mapped forests, and the procedural walls and forest
   stands are dropped. Every real layer must share one origin.
+- A real place in one step (R5). `scripts/import_world.py` turns a DEM and
+  one OSM extract into a runnable world folder: every layer around one
+  origin, a scenario config, and a manifest with a content-hashed
+  `world_id`. Optionally it also runs the scenario and packages the scene.
 - Mapped trees and power lines (R5). The features document carries OSM
   trees (points and tree rows) and power lines, with their tagged sizes,
   tower heights, cables and voltage. The run stands them on its ground in
