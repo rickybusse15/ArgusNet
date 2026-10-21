@@ -202,7 +202,7 @@ The run then uses those buildings in place of the procedural ones, with
 their roofs, in line of sight, collision and the viewer, and its replay
 records the georeference.
 
-### Real terrain
+### Real terrain in a run (R5)
 
 A DEM (a single-band GeoTIFF) becomes the run's terrain the same way. Import
 it for the run's map preset, with the buildings' origin so the two line up:
