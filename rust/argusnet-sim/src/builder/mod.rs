@@ -27,6 +27,7 @@
 pub mod behaviors;
 pub mod buildings;
 pub mod environment;
+pub mod features;
 pub mod power_lines;
 pub mod scenario;
 pub mod terrain_import;
@@ -37,8 +38,8 @@ use serde_json::{json, Map, Value};
 
 use argusnet_world::land_cover_build::CoverGrid;
 use argusnet_world::landscape::{
-    build_land_cover_layer, build_terrain_layer, season_from_month, BuiltTerrain, LandCoverRequest,
-    TerrainBuildConfig, TerrainSource,
+    build_data_land_cover, build_land_cover_layer, build_terrain_layer, season_from_month,
+    BuiltTerrain, LandCoverRequest, TerrainBuildConfig, TerrainSource,
 };
 use argusnet_world::noise::Bounds2D;
 use argusnet_world::obstacles::{Obstacle, ObstacleMetadata};
@@ -204,6 +205,12 @@ pub struct ScenarioOptions {
     /// buildings. Absent by default; written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub buildings_path: Option<String>,
+    /// R5: real land cover, an `argusnet.features` document
+    /// (`scripts/import_features.py`): water, land use and roads, painted
+    /// in place of the procedural land cover. Absent by default; written
+    /// only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features_path: Option<String>,
     /// R5: real terrain, an `argusnet.terrain` document
     /// (`scripts/import_terrain.py`) on this map preset's grid, in place of
     /// the procedural terrain. Absent by default; written only when set.
@@ -395,6 +402,9 @@ pub struct BuiltWorld {
     /// With `terrain_path`: the georeference and the document's hashes.
     /// `None` otherwise.
     pub terrain_import: Option<Value>,
+    /// With `features_path`: the georeference, the document's hashes and
+    /// the polygons by class. `None` otherwise.
+    pub features: Option<Value>,
 }
 
 /// `build_terrain_layer` + `build_default_environment`.
@@ -442,6 +452,16 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         .map_err(BuildError::Invalid)?,
     };
 
+    // Every real layer must stand in one frame: each origin is checked
+    // against the first layer's.
+    let mut origins: Vec<(&str, f64, f64)> = Vec::new();
+    if let Some((_, (document, _))) = &imported_terrain {
+        origins.push((
+            "terrain_path",
+            document.georeference.origin_lat_deg,
+            document.georeference.origin_lon_deg,
+        ));
+    }
     let mut environment = build_environment(
         &terrain,
         scale,
@@ -455,12 +475,11 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         None => None,
         Some(path) => {
             let (document, hash) = buildings::load(path)?;
-            if let Some((_, (terrain_document, _))) = &imported_terrain {
-                terrain_import::check_same_origin(
-                    &terrain_document.georeference,
-                    &document.georeference,
-                )?;
-            }
+            origins.push((
+                "buildings_path",
+                document.georeference.origin_lat_deg,
+                document.georeference.origin_lon_deg,
+            ));
             let placed = buildings::place(&document, hash, &terrain, bounds)?;
             environment
                 .obstacles
@@ -469,6 +488,29 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
             Some(placed.record)
         }
     };
+    // Real land cover (R5): the data's, with none of the procedural
+    // environment's invented walls or forest stands (its patches are never
+    // read: the data's cover is painted from the document alone).
+    let features = match &options.features_path {
+        None => None,
+        Some(path) => {
+            let (document, hash) = features::load(path)?;
+            origins.push((
+                "features_path",
+                document.georeference.origin_lat_deg,
+                document.georeference.origin_lon_deg,
+            ));
+            environment
+                .obstacles
+                .retain(|o| o.blocker_type != "wall" && o.blocker_type != "vegetation");
+            Some((document, hash))
+        }
+    };
+    if let Some(first) = origins.first() {
+        for other in &origins[1..] {
+            features::check_same_origin(*first, *other)?;
+        }
+    }
     let obstacles: Vec<Obstacle> = environment
         .obstacles
         .iter()
@@ -495,6 +537,15 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
     );
     let season = season_from_month(options.season_month).map_err(BuildError::Invalid)?;
     let cover_for = |season| {
+        if let Some((document, _)) = &features {
+            return build_data_land_cover(
+                &terrain,
+                &obstacles,
+                &features::painted(document, season),
+                land_cover_resolution_m,
+            )
+            .map_err(BuildError::Invalid);
+        }
         build_land_cover_layer(LandCoverRequest {
             terrain: &terrain,
             obstacles: &obstacles,
@@ -569,6 +620,7 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         buildings,
         terrain_import: imported_terrain
             .map(|(_, (document, hash))| terrain_import::record(&document, hash)),
+        features: features.map(|(document, hash)| features::record(&document, hash)),
     })
 }
 
@@ -632,6 +684,9 @@ impl BuiltWorld {
         }
         if let Some(terrain_import) = &self.terrain_import {
             world["terrain_import"] = terrain_import.clone();
+        }
+        if let Some(features) = &self.features {
+            world["features"] = features.clone();
         }
         world
     }
@@ -823,6 +878,9 @@ impl BuiltWorld {
         if let Some(terrain_import) = &self.terrain_import {
             map.insert("terrain_import".into(), terrain_import.clone());
         }
+        if let Some(features) = &self.features {
+            map.insert("features".into(), features.clone());
+        }
         map.insert("crs_id".into(), json!("local-enu"));
         map.insert("environment_bounds_m".into(), bounds_document(self.bounds));
         map.insert("terrain_summary".into(), self.terrain_summary());
@@ -839,14 +897,15 @@ impl BuiltWorld {
         map.insert("land_cover_legend".into(), legend);
         map.insert(
             "enu_origin".into(),
-            // Real terrain or buildings bring their own origin: the run
-            // stands where they do. The terrain's first, whose altitude is
-            // the heights' offset (with both, their origins are checked
-            // equal). Otherwise the reference's fixed one.
+            // Real terrain, buildings or features bring their own origin:
+            // the run stands where they do. The terrain's first, whose
+            // altitude is the heights' offset (the layers' origins are
+            // checked equal). Otherwise the reference's fixed one.
             match self
                 .terrain_import
                 .as_ref()
                 .or(self.buildings.as_ref())
+                .or(self.features.as_ref())
                 .and_then(|record| record.get("georeference"))
             {
                 Some(georeference) => json!({

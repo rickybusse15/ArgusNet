@@ -1757,6 +1757,9 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
     if let Some(path) = &o.terrain_path {
         document["terrain_path"] = json!(path);
     }
+    if let Some(path) = &o.features_path {
+        document["features_path"] = json!(path);
+    }
     document
 }
 

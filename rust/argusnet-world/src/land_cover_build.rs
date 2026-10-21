@@ -511,6 +511,66 @@ pub fn overlay_cover_polygons(
     Ok(())
 }
 
+/// Paint each polygon over the grid, in order, **assigning** its class and
+/// its density: what the data says is what is there (R5). Unlike
+/// [`overlay_cover_polygons`], a road painted through forest clears the
+/// foliage. Cells count as inside on the boundary, as there, and each
+/// polygon only visits the cells under its bounding box.
+pub fn paint_cover_polygons(
+    grid: &mut CoverGrid,
+    xx: &[f64],
+    yy: &[f64],
+    polygons: &[CoverPolygon],
+) -> Result<(), &'static str> {
+    let cells = grid.rows.checked_mul(grid.cols).ok_or("grid too large")?;
+    if grid.classes.len() != cells || grid.density.len() != cells {
+        return Err("grid rasters do not match its shape");
+    }
+    if xx.len() != cells || yy.len() != cells || cells == 0 {
+        return Err("coordinate grids must match the cover grid");
+    }
+    // Cell centres are a regular row-major (y, x) lattice.
+    let x0 = xx[0];
+    let y0 = yy[0];
+    let dx = if grid.cols > 1 { xx[1] - x0 } else { 1.0 };
+    let dy = if grid.rows > 1 {
+        yy[grid.cols] - y0
+    } else {
+        1.0
+    };
+    let range = |low: f64, high: f64, start: f64, step: f64, count: usize| {
+        let first = ((low - start) / step).floor().max(0.0) as usize;
+        let last = (((high - start) / step).ceil().max(0.0) as usize).min(count - 1);
+        first..=last
+    };
+    for polygon in polygons {
+        let points = &polygon.polygon_xy_m;
+        if points.len() < 3 {
+            continue;
+        }
+        let (mut xmin, mut xmax, mut ymin, mut ymax) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for [x, y] in points {
+            xmin = xmin.min(*x);
+            xmax = xmax.max(*x);
+            ymin = ymin.min(*y);
+            ymax = ymax.max(*y);
+        }
+        if xmax < x0 - dx || ymax < y0 - dy {
+            continue;
+        }
+        for row in range(ymin, ymax, y0, dy, grid.rows) {
+            for col in range(xmin, xmax, x0, dx, grid.cols) {
+                let k = row * grid.cols + col;
+                if point_in_polygon([xx[k], yy[k]], points) {
+                    grid.classes[k] = polygon.cover_class as u8;
+                    grid.density[k] = polygon.cover_density;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The overlay as the reference runs it: **every obstacle, then every patch**.
 ///
 /// The order is load-bearing and is not a detail of iteration. A patch exists
@@ -536,6 +596,80 @@ pub fn apply_land_cover_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Painting assigns, where the overlay keeps the larger density; and
+    /// the bounding-box walk paints exactly the cells a full scan would.
+    #[test]
+    fn painting_assigns_and_visits_only_what_a_full_scan_would() {
+        let (rows, cols, res) = (23usize, 31usize, 10.0);
+        let mut xx = Vec::new();
+        let mut yy = Vec::new();
+        for row in 0..rows {
+            for col in 0..cols {
+                xx.push(-150.0 + (col as f64 + 0.5) * res);
+                yy.push(-110.0 + (row as f64 + 0.5) * res);
+            }
+        }
+        let forest = || CoverGrid {
+            rows,
+            cols,
+            classes: vec![LandCoverClass::Forest as u8; rows * cols],
+            density: vec![190; rows * cols],
+        };
+        let road = CoverPolygon {
+            polygon_xy_m: vec![
+                [-200.0, -12.0],
+                [200.0, -12.0],
+                [200.0, 12.0],
+                [-200.0, 12.0],
+            ],
+            cover_class: LandCoverClass::Road,
+            cover_density: 0,
+        };
+        let mut painted = forest();
+        paint_cover_polygons(&mut painted, &xx, &yy, std::slice::from_ref(&road)).unwrap();
+        let mut overlaid = forest();
+        overlay_cover_polygons(&mut overlaid, &xx, &yy, std::slice::from_ref(&road)).unwrap();
+        assert_eq!(painted.classes, overlaid.classes);
+        let on_road: Vec<usize> = (0..rows * cols)
+            .filter(|k| painted.classes[*k] == LandCoverClass::Road as u8)
+            .collect();
+        assert!(!on_road.is_empty());
+        assert!(on_road.iter().all(|k| painted.density[*k] == 0));
+        assert!(on_road.iter().all(|k| overlaid.density[*k] == 190));
+
+        // Odd shapes, some partly or wholly off the grid.
+        let shapes = [
+            vec![[-140.0, -100.0], [-20.0, -90.0], [-80.0, 30.0]],
+            vec![[100.0, 50.0], [400.0, 50.0], [400.0, 300.0], [100.0, 300.0]],
+            vec![[-500.0, -500.0], [-400.0, -500.0], [-450.0, -400.0]],
+            vec![[0.0, 0.0], [60.0, 10.0], [10.0, 60.0], [30.0, 20.0]],
+            vec![
+                [-155.0, -115.0],
+                [155.0, -115.0],
+                [155.0, -105.0],
+                [-155.0, -105.0],
+            ],
+        ];
+        for (i, shape) in shapes.into_iter().enumerate() {
+            let polygon = CoverPolygon {
+                polygon_xy_m: shape,
+                cover_class: LandCoverClass::Water,
+                cover_density: 7,
+            };
+            let mut fast = forest();
+            paint_cover_polygons(&mut fast, &xx, &yy, std::slice::from_ref(&polygon)).unwrap();
+            let mut full = forest();
+            for k in 0..rows * cols {
+                if point_in_polygon([xx[k], yy[k]], &polygon.polygon_xy_m) {
+                    full.classes[k] = polygon.cover_class as u8;
+                    full.density[k] = polygon.cover_density;
+                }
+            }
+            assert_eq!(fast.classes, full.classes, "shape {i}");
+            assert_eq!(fast.density, full.density, "shape {i}");
+        }
+    }
     use crate::semantic::terrain_profile_for_preset;
 
     fn summer() -> SeasonalVariation {
