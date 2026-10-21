@@ -4,8 +4,9 @@ The viewer builds scene packages in Rust (`argusnet_sim::scene_build`), so a
 prior-world run needs no Python interpreter. This checks the Rust package
 against the Python one for the same replay: the same manifest, styles and
 environment, and per layer the same vertices, normals and colours (to float
-rounding; each Rust building carries a slight tint of its own) and the same triangles in the same order and winding, every one
-facing the way its normals point (the terrain faces up).
+rounding; each Rust building carries a slight tint of its own) and the same
+triangles in the same order and winding, every one facing the way its
+normals point (the terrain faces up).
 """
 
 from __future__ import annotations
