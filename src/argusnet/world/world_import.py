@@ -14,6 +14,9 @@ what a run needs into one folder:
   `world_id` hashed from the files' hashes, so two imports of the same data
   are the same world.
 
+The extract may be GeoJSON or an Overpass API answer (`out geom`), which is
+converted first and kept as `osm.geojson` (`argusnet.world.overpass`).
+
 The origin is the one given, or the DEM's centre. Every file is imported
 around it, so the builder's one-origin check holds by construction. The
 extract is split by the `building` tag: features with one (other than
@@ -31,6 +34,7 @@ from pathlib import Path
 
 from .buildings_import import import_buildings, write_buildings
 from .features_import import import_features, write_features
+from .overpass import convert as convert_overpass
 from .terrain_import import import_terrain, write_terrain
 
 FORMAT = "argusnet.world-import"
@@ -44,6 +48,12 @@ def _sha256(path: Path) -> str:
 def is_building(properties: Mapping[str, object]) -> bool:
     value = str(properties.get("building", "")).strip().lower()
     return value not in ("", "no")
+
+
+def is_overpass_answer(path: Path) -> bool:
+    """Whether `path` is an Overpass API answer rather than GeoJSON."""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    return isinstance(document, Mapping) and "elements" in document and "type" not in document
 
 
 def split_buildings(osm_path: str | Path, out_path: Path) -> int:
@@ -82,6 +92,10 @@ def import_world(
     return the manifest (also written as `world.json`)."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    source_osm = Path(osm_path)
+    if is_overpass_answer(source_osm):
+        osm_path = out / "osm.geojson"
+        convert_overpass(source_osm, osm_path)
 
     terrain = import_terrain(dem_path, map_preset=map_preset, origin=origin, source_crs=dem_crs)
     georeference = terrain["georeference"]
@@ -141,7 +155,7 @@ def import_world(
         "files": {
             name: {"path": path.name, "sha256": hashes[name]} for name, path in files.items()
         },
-        "sources": {"dem_sha256": _sha256(Path(dem_path)), "osm_sha256": _sha256(Path(osm_path))},
+        "sources": {"dem_sha256": _sha256(Path(dem_path)), "osm_sha256": _sha256(source_osm)},
         "scenario": "scenario.json",
         "summaries": summaries,
     }

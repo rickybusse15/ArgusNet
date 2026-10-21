@@ -47,5 +47,8 @@ def test_render_fixtures_declares_the_g2_and_realism_fixtures():
         "realism_dense_low_pitch",
         "realism_large",
         "realism_large_close",
+        "realism_real",
+        "realism_real_close",
+        "realism_real_low_pitch",
     }
     assert module.TIERS == ("low", "standard", "high")
