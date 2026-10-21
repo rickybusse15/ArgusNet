@@ -611,8 +611,27 @@ C8 (P2.6) and D2 (P5.1).
   axis-aligned, 30-degree-rotated and point-registered rasters, where an
   axis-by-axis projection misses by decimetres. An end-to-end test runs
   `argusnet-rs sim` on an imported DEM. Canonical replays are unchanged.
-  Next: OSM water, roads, land use, trees and power lines through the same
-  georeference (R5.2); one pipeline and the canonical town (R5.3).
+  *Done (real land cover, R5.2a):* `scripts/import_features.py` turns OSM
+  GeoJSON into an `argusnet.features` v1 document through the buildings'
+  georeference, as polygons in painting order:
+  - open, then urban land use;
+  - then natural cover: wetland, forest, scrub, rock, glacier;
+  - then water, with rivers, canals and streams at their width;
+  - then vehicle roads at width, else lanes x 3.5 m, else a default by class.
+
+  Tunnels, bridges, untagged features and holes are skipped and counted.
+  The builder's `features_path` option builds the land cover from the data
+  (`landscape::build_data_land_cover`). Where the data says nothing, the
+  ground is open, or rock above 0.52 rad. The polygons are painted by
+  assignment, so a road clears a forest, and the obstacles go last, so
+  buildings stay urban. The procedural walls and forest stands are dropped,
+  and asked-for trees grow only in mapped forest. One origin check covers
+  every real layer. The tests cover cover from data, invented cover
+  dropped, buildings on top, trees only in forest, the record, refusals,
+  and an end-to-end run; all 12 mutants are killed. A DEM, the features
+  and the synthetic town's buildings run together on the regional map.
+  Next: OSM trees and power lines (R5.2b); one pipeline and the canonical
+  town (R5.3).
 
 ## Order and size
 
