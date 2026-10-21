@@ -533,6 +533,14 @@ C8 (P2.6) and D2 (P5.1).
   (R3) already share one mesh per species and per height, and the trees
   switch to impostors past 2 km.
 
+  *Done (the impostor seam, R4.3, C8):* a GPU probe stands two identical
+  trees toward the scene's centre, 1850 m and 2150 m from the Close
+  camera, either side of the 2 km switch from meshes to impostor. Both are
+  drawn, and they differ by under a quarter of what either adds to its
+  window (measured 0.09 against 0.66). An impostor a third its size, or in
+  the trunk's colour, fails it. The headless probe output now records the
+  camera's position, so probes can place things by distance.
+
 ### R5: real-world scene ingestion
 
 - One offline pipeline: DEM (GeoTIFF) + OSM (buildings, trees, power, roads,

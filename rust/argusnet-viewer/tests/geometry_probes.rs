@@ -924,3 +924,126 @@ fn trees_are_drawn_where_the_model_stands_them_at_every_tier() {
         }
     }
 }
+
+/// Where the camera was in a [`render`] named `name`.
+fn camera_of(name: &str) -> [f64; 3] {
+    let dir = std::env::temp_dir().join(format!(
+        "argusnet-geometry-{name}-out-{}",
+        std::process::id()
+    ));
+    let document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("probes.json")).unwrap()).unwrap();
+    [0, 1, 2].map(|k| document["camera_m"][k].as_f64().unwrap())
+}
+
+/// R4 (C8): the impostor seam. Two identical trees stand on the ground
+/// toward the scene's centre, one 1850 m from the Close camera (inside the
+/// 2 km switch: trunk and crown meshes) and one 2150 m (the impostor). Both
+/// are drawn, and they look alike: the switch does not pop.
+#[test]
+fn a_tree_looks_alike_either_side_of_the_impostor_seam() {
+    if !gpu_tests() {
+        eprintln!("skipped: set ARGUSNET_GPU_TESTS=1 to render");
+        return;
+    }
+    use argusnet_world::trees::{Species, Tree};
+    let ground_z = 18.0;
+    // Where the Close camera stands over the probe scene.
+    let plain = scene("seam-camera", 400.0, None);
+    render(
+        "seam-camera",
+        &plain,
+        CameraPreset::Close,
+        None,
+        overlays(false, false, false),
+        &[],
+        &[],
+    );
+    let camera = camera_of("seam-camera");
+    // Toward the scene's centre, on the ground, at a 3-D distance `d` from
+    // the camera to the tree's crown.
+    let crown_up = 15.0 + 12.5;
+    let toward = {
+        let (dx, dy) = (-camera[0], -camera[1]);
+        let n = dx.hypot(dy);
+        [dx / n, dy / n]
+    };
+    let at = |d: f64| {
+        let drop = camera[2] - (ground_z + crown_up);
+        let across = (d * d - drop * drop).sqrt();
+        [
+            camera[0] + toward[0] * across,
+            camera[1] + toward[1] * across,
+        ]
+    };
+    let tree = |id: &str, xy: [f64; 2]| {
+        Tree {
+            id: id.into(),
+            xy_m: xy,
+            base_z_m: ground_z,
+            height_m: 40.0,
+            crown_base_m: 15.0,
+            crown_radius_m: 15.0,
+            trunk_radius_m: 0.8,
+            species: Species::Broadleaf,
+            leaf_density: 1.0,
+        }
+        .validated()
+        .unwrap()
+    };
+    let (near, far) = (tree("near", at(1850.0)), tree("far", at(2150.0)));
+    eprintln!("camera {camera:?}; near {:?} far {:?}", near.xy_m, far.xy_m);
+    let root = scene("seam", 400.0, None);
+    let path = root.join("replay/replay.json");
+    let mut replay: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    replay["meta"]["trees"] = serde_json::to_value(vec![near.clone(), far.clone()]).unwrap();
+    std::fs::write(&path, replay.to_string()).unwrap();
+    let points = [near.crown_centre_m(), far.crown_centre_m()];
+    let off = render(
+        "seam-off",
+        &root,
+        CameraPreset::Close,
+        None,
+        RuntimeOverlayVisibility {
+            trees: false,
+            ..overlays(false, false, false)
+        },
+        &[],
+        &points,
+    );
+    let on = render(
+        "seam-on",
+        &root,
+        CameraPreset::Close,
+        None,
+        overlays(false, false, false),
+        &[],
+        &points,
+    );
+    eprintln!(
+        "near: off {:?} on {:?}; far: off {:?} on {:?}; near vs far {:.4}",
+        off[0],
+        on[0],
+        off[1],
+        on[1],
+        difference(on[0], on[1])
+    );
+    assert!(
+        difference(on[0], off[0]) > 0.03,
+        "the near tree is not drawn"
+    );
+    assert!(
+        difference(on[1], off[1]) > 0.03,
+        "the far tree is not drawn"
+    );
+    // Alike: the two differ by under a quarter of what either tree adds to
+    // its window (the far one is smaller on screen, 300 m further off).
+    let added = difference(on[0], off[0]).min(difference(on[1], off[1]));
+    assert!(
+        difference(on[0], on[1]) < 0.25 * added,
+        "the impostor pops: near {:?} vs far {:?}",
+        on[0],
+        on[1]
+    );
+}

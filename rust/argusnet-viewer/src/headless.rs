@@ -922,6 +922,9 @@ fn write_probes(
     std::fs::write(
         &request.output,
         serde_json::to_string(&serde_json::json!({
+            // Where the camera is, so a probe can place things at a
+            // distance from it (R4: the impostor seam).
+            "camera_m": transform.translation().to_array(),
             "points": points,
             "clicks": clicks,
             "selected": key_json(
