@@ -541,7 +541,7 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
             return build_data_land_cover(
                 &terrain,
                 &obstacles,
-                &features::painted(document, season),
+                &features::painted(document, season, land_cover_resolution_m),
                 land_cover_resolution_m,
             )
             .map_err(BuildError::Invalid);

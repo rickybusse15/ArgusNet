@@ -56,10 +56,34 @@ pub struct Georeference {
 pub struct LandCoverFeature {
     pub id: String,
     pub class: String,
-    pub polygon_xy_m: Vec<[f64; 2]>,
-    /// The line's width when the polygon is a segment of one, metres.
+    /// An area's outer ring. Either this or a line segment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polygon_xy_m: Option<Vec<[f64; 2]>>,
+    /// A line's segment, start and end, painted [`width_m`] wide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_xy_m: Option<[[f64; 2]; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width_m: Option<f64>,
+}
+
+/// A line segment as the land cover paints it: a rectangle `width_m`
+/// across, but never narrower than `resolution_m` x sqrt(2), with its ends
+/// extended by half that width. Then every cell the segment's centre line
+/// crosses has its centre inside (a cell's centre is at most half its
+/// diagonal from any point of the cell), so a road narrower than a cell is
+/// never lost between cell centres.
+pub fn segment_polygon(line: [[f64; 2]; 2], width_m: f64, resolution_m: f64) -> Vec<[f64; 2]> {
+    let [[x0, y0], [x1, y1]] = line;
+    let half = 0.5 * width_m.max(resolution_m * std::f64::consts::SQRT_2);
+    let length = (x1 - x0).hypot(y1 - y0);
+    let (dx, dy) = ((x1 - x0) / length * half, (y1 - y0) / length * half);
+    let (nx, ny) = (-dy, dx);
+    vec![
+        [x0 - dx - nx, y0 - dy - ny],
+        [x1 + dx - nx, y1 + dy - ny],
+        [x1 + dx + nx, y1 + dy + ny],
+        [x0 - dx + nx, y0 - dy + ny],
+    ]
 }
 
 /// One mapped tree, its sizes when tagged.
@@ -170,16 +194,29 @@ pub fn load(path: &str) -> Result<(FeaturesDocument, u64), BuildError> {
                 feature.id, feature.class
             )));
         }
-        if feature.polygon_xy_m.len() < 3
-            || feature
-                .polygon_xy_m
-                .iter()
-                .any(|[x, y]| !x.is_finite() || !y.is_finite())
-        {
-            return Err(invalid(format!(
-                "feature {}: a polygon needs at least 3 finite points",
-                feature.id
-            )));
+        let finite = |points: &[[f64; 2]]| points.iter().flatten().all(|v| v.is_finite());
+        match (&feature.polygon_xy_m, &feature.line_xy_m, feature.width_m) {
+            (Some(polygon), None, _) if polygon.len() >= 3 && finite(polygon) => {}
+            (Some(_), None, _) => {
+                return Err(invalid(format!(
+                    "feature {}: a polygon needs at least 3 finite points",
+                    feature.id
+                )))
+            }
+            (None, Some(line), Some(width))
+                if finite(line) && line[0] != line[1] && width.is_finite() && width > 0.0 => {}
+            (None, Some(_), _) => {
+                return Err(invalid(format!(
+                    "feature {}: a line needs two distinct finite points and a positive width",
+                    feature.id
+                )))
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "feature {}: needs either polygon_xy_m or line_xy_m",
+                    feature.id
+                )))
+            }
         }
     }
     for tree in &document.trees {
@@ -279,8 +316,12 @@ pub struct Placed {
     pub trees_outside_map: usize,
     pub trees_in_structure: usize,
     pub trees_refused: usize,
-    pub lines_outside_map: usize,
+    /// Lines with no run of two supports inside the map and clear of
+    /// structures.
+    pub lines_without_a_clear_run: usize,
     pub lines_refused: usize,
+    /// Supports inside a building or wall: each splits its line there.
+    pub supports_in_structure: usize,
 }
 
 fn inside(bounds: MapBounds, xy: [f64; 2]) -> bool {
@@ -298,8 +339,9 @@ fn in_structure(obstacles: &[Obstacle], xy: [f64; 2]) -> bool {
 }
 
 /// Stand the data's trees and lines on `terrain` inside `bounds`. A line
-/// crossing the map's edge keeps each run of its supports inside the map
-/// with two or more (`id`, then `id#1`, ...).
+/// keeps each run of two or more supports that are inside the map and
+/// clear of buildings and walls (`id`, then `id#1`, ...): a support off
+/// the map or inside a structure splits it, so no wire runs into either.
 pub fn place(
     document: &FeaturesDocument,
     terrain: &BuiltTerrain,
@@ -335,7 +377,10 @@ pub fn place(
         let kind = line_kind(&line.kind).expect("checked on load");
         let mut runs: Vec<Vec<Support>> = vec![Vec::new()];
         for support in &line.supports {
-            if inside(bounds, support.xy_m) {
+            let on_map = inside(bounds, support.xy_m);
+            let blocked = on_map && in_structure(obstacles, support.xy_m);
+            placed.supports_in_structure += usize::from(blocked);
+            if on_map && !blocked {
                 runs.last_mut().expect("one run").push(Support {
                     xy_m: support.xy_m,
                     base_z_m: terrain.height_at(support.xy_m[0], support.xy_m[1]),
@@ -347,7 +392,7 @@ pub fn place(
         }
         let runs: Vec<Vec<Support>> = runs.into_iter().filter(|run| run.len() >= 2).collect();
         if runs.is_empty() {
-            placed.lines_outside_map += 1;
+            placed.lines_without_a_clear_run += 1;
             continue;
         }
         for (k, supports) in runs.into_iter().enumerate() {
@@ -372,16 +417,29 @@ pub fn place(
     placed
 }
 
-/// The document's polygons as the land cover paints them in `season`, in
-/// the document's order.
-pub fn painted(document: &FeaturesDocument, season: SeasonalVariation) -> Vec<CoverPolygon> {
+/// The document's polygons as the land cover paints them in `season` on
+/// cells `resolution_m` across, in the document's order.
+pub fn painted(
+    document: &FeaturesDocument,
+    season: SeasonalVariation,
+    resolution_m: f64,
+) -> Vec<CoverPolygon> {
     document
         .land_cover
         .iter()
         .map(|feature| {
             let class = cover_class(&feature.class).expect("checked on load");
+            let polygon_xy_m = match (&feature.polygon_xy_m, feature.line_xy_m) {
+                (Some(polygon), _) => polygon.clone(),
+                (None, Some(line)) => segment_polygon(
+                    line,
+                    feature.width_m.expect("checked on load"),
+                    resolution_m,
+                ),
+                (None, None) => unreachable!("checked on load"),
+            };
             CoverPolygon {
-                polygon_xy_m: feature.polygon_xy_m.clone(),
+                polygon_xy_m,
                 cover_class: class,
                 cover_density: cover_density(class, season),
             }
@@ -430,9 +488,10 @@ pub fn record(document: &FeaturesDocument, hash: u64, placed: &Placed) -> Value 
         },
         "power_lines": placed.power_lines.len(),
         "power_lines_left_out": {
-            "outside_map": placed.lines_outside_map,
+            "without_a_clear_run": placed.lines_without_a_clear_run,
             "refused": placed.lines_refused,
         },
+        "power_line_supports_in_structure": placed.supports_in_structure,
     })
 }
 
@@ -470,7 +529,7 @@ mod tests {
                 {"id": "way/2", "class": "forest", "polygon_xy_m": square(150.0, -150.0, 120.0)},
                 {"id": "way/3", "class": "water", "polygon_xy_m": square(-200.0, 150.0, 40.0)},
                 {"id": "way/4/0", "class": "road", "width_m": 10.0,
-                 "polygon_xy_m": [[0.0, -155.0], [320.0, -155.0], [320.0, -145.0], [0.0, -145.0]]},
+                 "line_xy_m": [[5.0, -150.0], [315.0, -150.0]]},
             ],
             "source_sha256": "cd",
         })
@@ -543,6 +602,34 @@ mod tests {
         let (class, density) = class_at(&winter, 100.0, -100.0);
         assert_eq!(class, LandCoverClass::Forest);
         assert!(density < 190, "winter foliage {density}");
+    }
+
+    /// A line narrower than a cell still marks every cell it crosses: a
+    /// 3 m track along y = 0 runs between the cell centres at y = -5 and
+    /// 5, and paints both rows. A line wider than that keeps its own width.
+    #[test]
+    fn narrow_lines_mark_every_cell_they_cross() {
+        let mut document = document();
+        document["land_cover"] = json!([
+            {"id": "track", "class": "road", "width_m": 3.0,
+             "line_xy_m": [[-200.0, 0.0], [200.0, 0.0]]},
+            {"id": "river", "class": "water", "width_m": 30.0,
+             "line_xy_m": [[-200.0, 200.0], [200.0, 200.0]]},
+        ]);
+        let path = write("narrow", &document);
+        let world = build_world(&options(json!({"features_path": path}))).unwrap();
+        assert_eq!(world.land_cover_resolution_m, 10.0);
+        assert_eq!(class_at(&world, 100.0, -2.0).0, LandCoverClass::Road);
+        assert_eq!(class_at(&world, 100.0, 2.0).0, LandCoverClass::Road);
+        assert_eq!(class_at(&world, 100.0, -12.0).0, LandCoverClass::Open);
+        assert_eq!(class_at(&world, 100.0, 212.0).0, LandCoverClass::Water);
+        assert_eq!(class_at(&world, 100.0, 188.0).0, LandCoverClass::Water);
+        assert_eq!(class_at(&world, 100.0, 222.0).0, LandCoverClass::Open);
+        let wide = segment_polygon([[0.0, 0.0], [10.0, 0.0]], 30.0, 10.0);
+        assert_eq!(
+            wide,
+            [[-15.0, -15.0], [25.0, -15.0], [25.0, 15.0], [-15.0, 15.0]]
+        );
     }
 
     /// The procedural environment's invented walls, forest stands and
@@ -667,6 +754,12 @@ mod tests {
             {"id": "way/32", "kind": "minor_line", "supports": [
                 {"xy_m": [900.0, 0.0]}, {"xy_m": [950.0, 0.0]},
             ]},
+            // Through a building: split there, its two halves too short.
+            {"id": "way/33", "kind": "minor_line", "supports": [
+                {"xy_m": [building_xy[0] - 40.0, building_xy[1]]},
+                {"xy_m": building_xy},
+                {"xy_m": [building_xy[0] + 40.0, building_xy[1]]},
+            ]},
         ]);
         document
     }
@@ -755,7 +848,8 @@ mod tests {
     /// the procedural line is not built even when asked for.
     #[test]
     fn mapped_lines_replace_the_procedural_one() {
-        let path = write("lines", &with_trees_and_lines([0.0, 0.0]));
+        let centre = a_building_centre(&build_world(&options(json!({}))).unwrap());
+        let path = write("lines", &with_trees_and_lines(centre));
         let world = build_world(&options(
             json!({"features_path": path, "power_lines": true}),
         ))
@@ -781,8 +875,9 @@ mod tests {
         assert_eq!(record["power_lines"], json!(3));
         assert_eq!(
             record["power_lines_left_out"],
-            json!({"outside_map": 1, "refused": 0})
+            json!({"without_a_clear_run": 2, "refused": 0})
         );
+        assert_eq!(record["power_line_supports_in_structure"], json!(1));
         // Without features the same option builds the procedural line.
         let plain = build_world(&options(json!({"power_lines": true}))).unwrap();
         assert_eq!(plain.power_lines[0].id, "powerline-transmission");
@@ -825,6 +920,19 @@ mod tests {
         kind["power_lines"] = json!([{"id": "w", "kind": "cable", "supports": []}]);
         let message = error(options(json!({"features_path": write("kind", &kind)})));
         assert!(message.contains("unknown kind"), "{message}");
+        let mut line = document();
+        line["land_cover"][3]["width_m"] = json!(0.0);
+        let message = error(options(json!({"features_path": write("zero", &line)})));
+        assert!(message.contains("positive width"), "{message}");
+        let mut neither = document();
+        neither["land_cover"][3] = json!({"id": "x", "class": "road"});
+        let message = error(options(
+            json!({"features_path": write("neither", &neither)}),
+        ));
+        assert!(
+            message.contains("either polygon_xy_m or line_xy_m"),
+            "{message}"
+        );
         let mut other = document();
         other["format"] = json!("argusnet.terrain");
         let message = error(options(json!({"features_path": write("other", &other)})));

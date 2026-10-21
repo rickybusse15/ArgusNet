@@ -141,14 +141,11 @@ impl TreeGround<'_> {
     }
 
     /// Whether `xy` is inside a forest stand's footprint, a trunk there
-    /// would stand inside a building or wall, or a standing tree is closer
-    /// than the spacing.
-    fn taken(&self, xy: [f64; 2]) -> bool {
-        if self
-            .existing
-            .iter()
-            .any(|tree| (tree.xy_m[0] - xy[0]).hypot(tree.xy_m[1] - xy[1]) < SPACING_M)
-        {
+    /// would stand inside a building or wall, or a standing tree
+    /// (`standing`, the index of [`TreeGround::existing`]) is closer than
+    /// the spacing.
+    fn taken(&self, xy: [f64; 2], standing: &TrunkGrid) -> bool {
+        if standing.near(xy) {
             return true;
         }
         self.obstacles.iter().any(|obstacle| {
@@ -172,6 +169,46 @@ impl TreeGround<'_> {
     }
 }
 
+/// Standing trunks bucketed into cells [`SPACING_M`] across, so a point
+/// asks only the 3 x 3 cells around it: building the scatter stays linear
+/// in its candidates however many trees the data maps.
+pub struct TrunkGrid(std::collections::HashMap<(i64, i64), Vec<[f64; 2]>>);
+
+impl TrunkGrid {
+    fn cell(xy: [f64; 2]) -> (i64, i64) {
+        (
+            (xy[0] / SPACING_M).floor() as i64,
+            (xy[1] / SPACING_M).floor() as i64,
+        )
+    }
+
+    pub fn new(trees: &[Tree]) -> Self {
+        let mut cells: std::collections::HashMap<(i64, i64), Vec<[f64; 2]>> =
+            std::collections::HashMap::new();
+        for tree in trees {
+            cells
+                .entry(Self::cell(tree.xy_m))
+                .or_default()
+                .push(tree.xy_m);
+        }
+        Self(cells)
+    }
+
+    /// Whether a trunk stands closer than [`SPACING_M`] to `xy`.
+    pub fn near(&self, xy: [f64; 2]) -> bool {
+        let (cx, cy) = Self::cell(xy);
+        (cx - 1..=cx + 1).any(|x| {
+            (cy - 1..=cy + 1).any(|y| {
+                self.0.get(&(x, y)).is_some_and(|trunks| {
+                    trunks
+                        .iter()
+                        .any(|t| (t[0] - xy[0]).hypot(t[1] - xy[1]) < SPACING_M)
+                })
+            })
+        })
+    }
+}
+
 /// The world's trees, scattered over its forest and scrub, seeded by
 /// `seed`, in id order (`tree-00000`, …, south to north and west to east
 /// within a row of the sample).
@@ -183,6 +220,7 @@ pub fn build_trees(ground: &TreeGround<'_>, seed: u32) -> Vec<Tree> {
         ground.bounds.y_max_m,
     );
     let points = poisson_disk(bounds, SPACING_M, ATTEMPTS, seed);
+    let standing = TrunkGrid::new(ground.existing);
     // A second stream for each point's fate and shape, a fixed number of
     // draws per point, so the sample and the shapes are independent.
     let mut rng = NumpyRng::new(seed ^ 0x5eed_7ee5);
@@ -199,7 +237,7 @@ pub fn build_trees(ground: &TreeGround<'_>, seed: u32) -> Vec<Tree> {
         } else {
             false
         };
-        if keep && !ground.taken(xy) {
+        if keep && !ground.taken(xy, &standing) {
             kept.push((xy, draws));
         }
     }
@@ -342,6 +380,41 @@ mod tests {
         let row =
             (((xy[1] - world.bounds.y_min_m) / res).floor().max(0.0) as usize).min(grid.rows - 1);
         grid.classes[row * grid.cols + column]
+    }
+
+    /// The grid answers as a full scan would, across cell edges and signs.
+    #[test]
+    fn the_trunk_grid_finds_what_a_scan_finds() {
+        let trunk = |x: f64, y: f64| Tree {
+            id: format!("{x},{y}"),
+            xy_m: [x, y],
+            base_z_m: 0.0,
+            height_m: 10.0,
+            crown_base_m: 3.0,
+            crown_radius_m: 2.0,
+            trunk_radius_m: 0.2,
+            species: Species::Broadleaf,
+            leaf_density: 0.8,
+        };
+        let trees: Vec<Tree> = [
+            (0.0, 0.0),
+            (7.9, -0.1),
+            (-16.0, 8.0),
+            (40.0, 40.0),
+            (-0.5, -7.99),
+        ]
+        .iter()
+        .map(|(x, y)| trunk(*x, *y))
+        .collect();
+        let grid = TrunkGrid::new(&trees);
+        let mut rng = NumpyRng::new(11);
+        for _ in 0..4000 {
+            let xy = [rng.random() * 80.0 - 30.0, rng.random() * 80.0 - 30.0];
+            let scan = trees
+                .iter()
+                .any(|t| (t.xy_m[0] - xy[0]).hypot(t.xy_m[1] - xy[1]) < SPACING_M);
+            assert_eq!(grid.near(xy), scan, "at {xy:?}");
+        }
     }
 
     #[test]

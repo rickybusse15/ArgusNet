@@ -21,7 +21,7 @@ import pytest
 pytest.importorskip("pyproj")
 
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu  # noqa: E402
-from argusnet.world.features_import import import_features, segment_rectangles  # noqa: E402
+from argusnet.world.features_import import import_features, segments  # noqa: E402
 
 ORIGIN = (45.999892, 7.0)
 M_PER_DEG_LAT = 111_132.0
@@ -145,27 +145,25 @@ def test_polygons_land_in_the_run_frame(tmp_path: Path) -> None:
     np.testing.assert_allclose(forest["polygon_xy_m"][0], [-250, 0], atol=1.0)
 
 
-def test_lines_are_drawn_at_their_width(tmp_path: Path) -> None:
+def test_lines_are_written_as_segments_with_their_width(tmp_path: Path) -> None:
     document = import_features(extract(tmp_path / "town.geojson"), origin=ORIGIN)
     by_id = {entry["id"]: entry for entry in document["land_cover"]}
     # `lanes=2` -> 7 m; `width=9 m`; a river's `width=20`.
     assert by_id["way/10/0"]["width_m"] == 7.0
     assert by_id["way/11"]["width_m"] == 9.0
     assert by_id["way/20"]["width_m"] == 20.0
-    for key, width in (("way/10/0", 7.0), ("way/11", 9.0), ("way/20", 20.0)):
-        polygon = np.array(by_id[key]["polygon_xy_m"])
-        across = np.linalg.norm(polygon[3] - polygon[0])
-        assert across == pytest.approx(width, abs=1e-2)
+    np.testing.assert_allclose(by_id["way/10/0"]["line_xy_m"], [[-300, -100], [0, -100]], atol=1.0)
+    np.testing.assert_allclose(by_id["way/10/1"]["line_xy_m"], [[0, -100], [0, 200]], atol=1.0)
+    assert "polygon_xy_m" not in by_id["way/11"]
+    assert "line_xy_m" not in by_id["way/23"]
 
 
-def test_segments_overlap_at_their_joints() -> None:
-    first, second = segment_rectangles([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]], 4.0)
-    # Each runs half the width past its ends: the corner square is covered.
-    xs = [p[0] for p in first]
-    assert min(xs) == -2.0 and max(xs) == 12.0
-    ys = [p[1] for p in second]
-    assert min(ys) == -2.0 and max(ys) == 12.0
-    assert segment_rectangles([[1.0, 1.0], [1.0, 1.0]], 3.0) == []
+def test_segments_skip_zero_length_ones() -> None:
+    assert segments([[0, 0], [10, 0], [10, 0], [10, 10]]) == [
+        [[0.0, 0.0], [10.0, 0.0]],
+        [[10.0, 0.0], [10.0, 10.0]],
+    ]
+    assert segments([[1.0, 1.0], [1.0, 1.0]]) == []
 
 
 def test_the_default_origin_is_the_extracts_centre(tmp_path: Path) -> None:

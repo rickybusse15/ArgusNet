@@ -28,9 +28,11 @@ is skipped and counted, never guessed:
   else `lanes` x 3.5 m, else a default by class. Tunnels and bridges are
   left out, so a road does not paint over a river it crosses.
 
-Lines become one rectangle per segment, with square ends half the width
-long so the joints close. Polygons keep their outer ring. Holes are ignored
-and counted: an island in a mapped lake reads as water.
+Lines are written as their segments (`line_xy_m`) with their width: the
+builder paints each as a rectangle at least as wide as the land cover's
+cells need, so a 3 m track still marks every cell it crosses. Polygons keep
+their outer ring. Holes are ignored and counted: an island in a mapped lake
+reads as water.
 
 Painting order is the document's order: open, then urban, then the natural
 classes, then water, then roads, each in the file's order. So a road runs
@@ -185,28 +187,13 @@ def line_class(properties: Mapping[str, object]) -> tuple[str, float] | None:
     return None
 
 
-def segment_rectangles(
-    points: Sequence[Sequence[float]], width_m: float
-) -> list[list[list[float]]]:
-    """One rectangle per segment of the line, `width_m` across, its ends
-    extended by half the width so consecutive segments overlap at joints."""
-    half = width_m * 0.5
-    rectangles = []
-    for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False):
-        length = math.hypot(x1 - x0, y1 - y0)
-        if length <= 0.0:
-            continue
-        dx, dy = (x1 - x0) / length * half, (y1 - y0) / length * half
-        nx, ny = -dy, dx
-        rectangles.append(
-            [
-                [x0 - dx - nx, y0 - dy - ny],
-                [x1 + dx - nx, y1 + dy - ny],
-                [x1 + dx + nx, y1 + dy + ny],
-                [x0 - dx + nx, y0 - dy + ny],
-            ]
-        )
-    return rectangles
+def segments(points: Sequence[Sequence[float]]) -> list[list[list[float]]]:
+    """The line's segments of non-zero length, as [start, end] pairs."""
+    return [
+        [[float(x0), float(y0)], [float(x1), float(y1)]]
+        for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False)
+        if math.hypot(x1 - x0, y1 - y0) > 0.0
+    ]
 
 
 def _lines(geometry: Mapping[str, object]) -> list[list[list[float]]]:
@@ -432,20 +419,24 @@ def import_features(
     counts: dict[str, int] = {}
     for _, _, feature_id, cover, source, line_width in sorted(pending, key=lambda p: (p[0], p[1])):
         xy = local(source)
-        if line_width is None:
-            polygons = [xy] if len(xy) >= 3 and abs(_area(xy)) > 0.0 else []
-        else:
-            polygons = segment_rectangles(xy, line_width)
-        if not polygons:
+        shapes = (
+            ([xy] if len(xy) >= 3 and abs(_area(xy)) > 0.0 else [])
+            if line_width is None
+            else segments(xy)
+        )
+        if not shapes:
             skipped["degenerate"] += 1
             continue
-        for k, polygon in enumerate(polygons):
+        for k, shape in enumerate(shapes):
             entry: dict[str, object] = {
-                "id": feature_id if len(polygons) == 1 else f"{feature_id}/{k}",
+                "id": feature_id if len(shapes) == 1 else f"{feature_id}/{k}",
                 "class": cover,
-                "polygon_xy_m": [[round(x, 3), round(y, 3)] for x, y in polygon],
             }
-            if line_width is not None:
+            rounded = [[round(x, 3), round(y, 3)] for x, y in shape]
+            if line_width is None:
+                entry["polygon_xy_m"] = rounded
+            else:
+                entry["line_xy_m"] = rounded
                 entry["width_m"] = line_width
             land_cover.append(entry)
         counts[cover] = counts.get(cover, 0) + 1
