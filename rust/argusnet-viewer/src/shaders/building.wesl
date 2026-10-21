@@ -5,7 +5,8 @@
 // the scene builder's window coordinates get it (building_material.rs):
 // TEXCOORD_0 is (storey above the building's ground, metres along the
 // wall), TEXCOORD_1.x the level count, or -1 where the data gave no storeys
-// and on roofs. Windows are drawn only between the ground and the eave of a
+// and on roofs, and TEXCOORD_1.y the material class's code (R4), which sets
+// the surface's roughness and metalness. Windows are drawn only between the ground and the eave of a
 // building whose storeys are known: none are invented.
 
 import bevy_pbr::render::forward_io::{VertexOutput, FragmentOutput};
@@ -19,6 +20,9 @@ struct FacadeSettings {
     /// column; z: window height as a share of a storey; w: sill height as a
     /// share of a storey.
     window: vec4<f32>,
+    /// Per material code (R4): x roughness, y metalness, z 1 when the class
+    /// sets them.
+    surfaces: array<vec4<f32>, 24>,
 }
 
 @group(3) @binding(100) var<uniform> facade: FacadeSettings;
@@ -33,6 +37,14 @@ fn band(phase: f32, lo: f32, hi: f32) -> f32 {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
+
+    // The material class's surface (R4), for walls and roofs alike.
+    let code = u32(clamp(round(in.uv_b.y), 0.0, 23.0));
+    let surface = facade.surfaces[code];
+    if surface.z > 0.5 {
+        pbr_input.material.perceptual_roughness = surface.x;
+        pbr_input.material.metallic = surface.y;
+    }
 
     let storey = in.uv.x;
     let levels = in.uv_b.x;

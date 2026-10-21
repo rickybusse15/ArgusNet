@@ -39,10 +39,42 @@ pub const WINDOW_WIDTH: f32 = 0.55;
 pub const WINDOW_HEIGHT: f32 = 0.45;
 pub const WINDOW_SILL: f32 = 0.30;
 
+/// Entries in the surface table: material codes 0..`SURFACES`.
+pub const SURFACES: usize = 24;
+
+/// How each material class's surface responds to light (R4), by its code
+/// (`argusnet_sim::scene_build::material_code`): perceptual roughness and
+/// metalness, and whether the class sets them at all. Generic (0) and any
+/// unused code keep the baked material's own. Metalness stays low: the
+/// scene has no environment map, and a fully metallic surface with nothing
+/// to reflect renders black, which would misstate the material.
+pub fn surface(code: u32) -> Option<(f32, f32)> {
+    Some(match code {
+        1 => (0.85, 0.0),   // concrete
+        2 => (0.90, 0.0),   // brick
+        3 => (0.08, 0.0),   // glass: smooth, a dielectric
+        4 => (0.40, 0.30),  // metal cladding
+        5 => (0.80, 0.0),   // wood
+        6 => (0.85, 0.0),   // stone
+        7 => (0.90, 0.0),   // plaster
+        11 => (0.80, 0.0),  // roof tiles
+        12 => (0.50, 0.0),  // slate
+        13 => (0.35, 0.30), // metal roof
+        14 => (0.85, 0.0),  // concrete roof
+        15 => (0.95, 0.0),  // membrane
+        16 => (0.08, 0.0),  // glass roof
+        17 => (1.00, 0.0),  // green roof
+        _ => return None,
+    })
+}
+
 #[derive(Clone, Debug, ShaderType, Reflect)]
 pub struct FacadeSettings {
     pub window_color: Vec4,
     pub window: Vec4,
+    /// Per material code: x roughness, y metalness, z 1 when the class sets
+    /// them (see [`surface`]).
+    pub surfaces: [Vec4; SURFACES],
 }
 
 impl Default for FacadeSettings {
@@ -50,6 +82,11 @@ impl Default for FacadeSettings {
         Self {
             window_color: WINDOW_COLOR,
             window: Vec4::new(WINDOW_SPACING_M, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_SILL),
+            surfaces: std::array::from_fn(|code| {
+                surface(code as u32).map_or(Vec4::ZERO, |(roughness, metallic)| {
+                    Vec4::new(roughness, metallic, 1.0, 0.0)
+                })
+            }),
         }
     }
 }
@@ -188,6 +225,42 @@ mod tests {
         assert!(!has_facade_coordinates(&one));
         let both = one.with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, vec![[0.0f32; 2]; 3]);
         assert!(has_facade_coordinates(&both));
+    }
+
+    /// Every class the scene builder can write has a surface, within the
+    /// table; generic keeps the baked one.
+    #[test]
+    fn every_material_class_has_a_surface_in_the_table() {
+        use argusnet_sim::scene_build::{material_code, MaterialPart};
+        let settings = FacadeSettings::default();
+        for (part, classes) in [
+            (
+                MaterialPart::Facade,
+                &[
+                    "concrete", "brick", "glass", "metal", "wood", "stone", "plaster",
+                ][..],
+            ),
+            (
+                MaterialPart::Roof,
+                &[
+                    "tiles", "slate", "metal", "concrete", "membrane", "glass", "green",
+                ][..],
+            ),
+        ] {
+            for class in classes {
+                let code = material_code(part, class) as usize;
+                assert!(code < SURFACES, "{class}");
+                assert_eq!(settings.surfaces[code].z, 1.0, "{class}");
+            }
+        }
+        assert_eq!(settings.surfaces[0].z, 0.0, "generic keeps its own");
+        // Glass is smooth and metal metallic; masonry is rough and not.
+        assert!(surface(3).unwrap().0 < 0.2 && surface(4).unwrap().1 > 0.0);
+        // Never so metallic that, with no environment to reflect, it goes black.
+        assert!((0..SURFACES as u32)
+            .filter_map(surface)
+            .all(|(_, m)| m <= 0.5));
+        assert!(surface(2).unwrap().0 > 0.8 && surface(2).unwrap().1 == 0.0);
     }
 
     /// Only the scene builder's own marker, in this version, makes a facade:

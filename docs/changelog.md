@@ -2,6 +2,12 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Viewer: material classes set the surface, not only the colour (R4).
+  Glass facades are smooth, masonry rough, and metal cladding and roofs
+  moderately metallic. Generic keeps the layer's surface. Water in the
+  land cover is drawn smooth. A unit test keeps every class the scene
+  builder writes in the viewer's table, and keeps metalness low enough
+  that, with no environment map, nothing renders black.
 - Viewer: trees are drawn (R2). Trunks and crowns from one shared mesh
   per species, crowns coloured by leaf density (bare to full leaf), and
   crossed-quad impostors past 2 km, switched by the renderer's visibility

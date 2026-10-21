@@ -472,6 +472,11 @@ pub struct BuildingLook {
     pub base_z_m: f64,
     /// Storeys between the ground and the eave, when the data gives them.
     pub levels: Option<f64>,
+    /// The facade's and the roof's material class codes (R4,
+    /// [`material_code`]): how the viewer's surfaces respond to light. 0 is
+    /// generic.
+    pub facade_code: u32,
+    pub roof_code: u32,
 }
 
 impl BuildingLook {
@@ -482,8 +487,41 @@ impl BuildingLook {
             roof: colour,
             base_z_m,
             levels: None,
+            facade_code: 0,
+            roof_code: 0,
         }
     }
+}
+
+/// The material classes' codes (R4), stable: a roofed building's walls and
+/// roof carry theirs in `TEXCOORD_1.y`, and the viewer looks up how the
+/// surface responds to light (roughness, metalness) by it. 0 is generic or
+/// unknown: the surface the layer always had.
+pub fn material_code(part: MaterialPart, class: &str) -> u32 {
+    match (part, class) {
+        (MaterialPart::Facade, "concrete") => 1,
+        (MaterialPart::Facade, "brick") => 2,
+        (MaterialPart::Facade, "glass") => 3,
+        (MaterialPart::Facade, "metal") => 4,
+        (MaterialPart::Facade, "wood") => 5,
+        (MaterialPart::Facade, "stone") => 6,
+        (MaterialPart::Facade, "plaster") => 7,
+        (MaterialPart::Roof, "tiles") => 11,
+        (MaterialPart::Roof, "slate") => 12,
+        (MaterialPart::Roof, "metal") => 13,
+        (MaterialPart::Roof, "concrete") => 14,
+        (MaterialPart::Roof, "membrane") => 15,
+        (MaterialPart::Roof, "glass") => 16,
+        (MaterialPart::Roof, "green") => 17,
+        _ => 0,
+    }
+}
+
+/// Which part of a building a material class is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterialPart {
+    Facade,
+    Roof,
 }
 
 /// A facade material class's colour (sRGB, as the style's): `None` for
@@ -569,7 +607,7 @@ pub fn roofed_mesh(
             mesh.normals.push(normal);
             mesh.colours.push(look.roof);
             mesh.uvs.push([-1.0, 0.0]);
-            mesh.uvs_b.push([-1.0, 0.0]);
+            mesh.uvs_b.push([-1.0, look.roof_code as f32]);
         }
         mesh.indices
             .extend(triangulate_polygon(&facet).into_iter().map(|i| i + start));
@@ -629,7 +667,8 @@ pub fn roofed_mesh(
                 [storey(zq), along_q],
                 [storey(zp), along_p],
             ]);
-            mesh.uvs_b.extend(std::iter::repeat_n([levels, 0.0], 4));
+            mesh.uvs_b
+                .extend(std::iter::repeat_n([levels, look.facade_code as f32], 4));
         }
     }
     let wall_normals = triangle_normals(&wall_positions, &wall_indices);
@@ -768,6 +807,14 @@ pub fn obstacle_layers(
                 roof: classed("roof_material", roof_colour),
                 base_z_m: building.base_z_m,
                 levels: object.get("levels").and_then(Value::as_f64),
+                facade_code: object
+                    .get("facade_material")
+                    .and_then(Value::as_str)
+                    .map_or(0, |class| material_code(MaterialPart::Facade, class)),
+                roof_code: object
+                    .get("roof_material")
+                    .and_then(Value::as_str)
+                    .map_or(0, |class| material_code(MaterialPart::Roof, class)),
             };
             roofed_mesh(footprint_xy_m, building.base_z_m.min(lowest), roof, &look)
         } else if let Some(footprint) = object.get("footprint_xy_m").filter(|v| v.is_array()) {
@@ -1290,9 +1337,11 @@ mod tests {
                 // A roof facet.
                 assert_eq!(&c[..3], &slate[..]);
                 assert_eq!((uv[0], uv_b[0]), (-1.0, -1.0));
+                assert_eq!(uv_b[1], material_code(MaterialPart::Roof, "slate") as f32);
             } else {
                 assert_eq!(&c[..3], &brick[..]);
                 assert_eq!(uv_b[0], 3.0);
+                assert_eq!(uv_b[1], material_code(MaterialPart::Facade, "brick") as f32);
                 // Three storeys between 20 and 29 m: a storey every 3 m.
                 assert!((uv[0] - (p[2] - 20.0) / 3.0).abs() < 1e-4, "{p:?} {uv:?}");
             }
@@ -1303,6 +1352,24 @@ mod tests {
             .iter()
             .zip(&mesh.positions)
             .any(|(uv, p)| p[2] == 29.0 && (uv[0] - 3.0).abs() < 1e-4));
+        // Codes are stable and distinct, generic is 0.
+        let facades = [
+            "concrete", "brick", "glass", "metal", "wood", "stone", "plaster",
+        ];
+        let roofs = [
+            "tiles", "slate", "metal", "concrete", "membrane", "glass", "green",
+        ];
+        let mut codes: Vec<u32> = facades
+            .iter()
+            .map(|c| material_code(MaterialPart::Facade, c))
+            .chain(roofs.iter().map(|c| material_code(MaterialPart::Roof, c)))
+            .collect();
+        assert!(codes.iter().all(|c| *c > 0));
+        codes.sort();
+        codes.dedup();
+        assert_eq!(codes.len(), 14);
+        assert_eq!(material_code(MaterialPart::Facade, "generic"), 0);
+        assert_eq!(material_code(MaterialPart::Roof, "marzipan"), 0);
         let unknown = obstacle_layers(&[object(None)], &grid).unwrap();
         assert!(unknown[0].1[0].uvs.iter().all(|uv| uv[0] == -1.0));
 

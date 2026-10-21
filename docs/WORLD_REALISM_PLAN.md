@@ -521,6 +521,18 @@ C8 (P2.6) and D2 (P5.1).
   - perceptual-diff probes at LOD seams (C8);
   - a probe that wires and towers are present at every quality tier.
 
+  *Done (materials, R4.2):* each material class sets how its surface
+  responds to light, not only its colour. The scene builder writes a stable
+  class code on every roofed building's walls and roof (`material_code`).
+  The facade material looks up roughness and metalness by it: glass is
+  smooth, masonry rough, and metal moderately metallic. Metalness stays at
+  or below 0.5, because the scene has no environment map and a fully
+  metallic surface with nothing to reflect renders black. Generic keeps
+  the baked surface. Water in the land cover (the legend's `water` code)
+  is drawn smooth, so it takes the sky's highlight. Trees (R2) and towers
+  (R3) already share one mesh per species and per height, and the trees
+  switch to impostors past 2 km.
+
 ### R5: real-world scene ingestion
 
 - One offline pipeline: DEM (GeoTIFF) + OSM (buildings, trees, power, roads,

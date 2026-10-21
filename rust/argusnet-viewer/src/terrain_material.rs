@@ -98,7 +98,8 @@ pub struct TerrainSettings {
     pub band_strength: f32,
     /// `x_min`, `y_min`, cell size, tint strength.
     pub land_cover_grid: Vec4,
-    /// Columns, rows, and 1 when a raster is bound.
+    /// Columns, rows, 1 when a raster is bound, and the water code plus
+    /// one (0 for none): water is drawn smooth and reflective (R4).
     pub land_cover_dims: UVec4,
     /// Each class code's colour; alpha 0 draws no tint.
     pub land_cover_palette: [Vec4; PALETTE_SIZE],
