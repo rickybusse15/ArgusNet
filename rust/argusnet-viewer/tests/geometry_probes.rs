@@ -491,12 +491,13 @@ fn built_scene(name: &str) -> PathBuf {
     root
 }
 
-/// R0: the overlay GLBs blend, so a building drawn at its styled opacity
-/// (0.45) shows the ground through it. The same building with the GLB's
-/// `alphaMode` removed -- glTF's default, `OPAQUE`, which is how every overlay
-/// was drawn before -- hides it: the roof pixels differ.
+/// R0: the overlay GLBs blend, so a building drawn see-through (Runtime
+/// Overlays' toggle) at its styled opacity (0.45) shows the ground through
+/// it. By default buildings are solid: drawn just as the same building with
+/// the GLB's `alphaMode` removed (glTF's default, `OPAQUE`), and unlike the
+/// see-through one.
 #[test]
-fn a_building_is_drawn_at_its_styled_opacity() {
+fn a_building_is_solid_unless_drawn_see_through() {
     if !gpu_tests() {
         return;
     }
@@ -516,24 +517,34 @@ fn a_building_is_drawn_at_its_styled_opacity() {
     std::fs::write(&glb, patched).unwrap();
 
     let roof = [[0.0, 0.0, 40.0], [40.0, -40.0, 40.0], [-40.0, 40.0, 40.0]];
-    let probe = |name: &str, scene: &Path| {
+    let probe = |name: &str, scene: &Path, see_through: bool| {
         render(
             name,
             scene,
             CameraPreset::TopDown,
             None,
-            overlays(false, false, false),
+            RuntimeOverlayVisibility {
+                see_through_buildings: see_through,
+                ..overlays(false, false, false)
+            },
             &[],
             &roof,
         )
     };
-    let blend = probe("alpha-blend", &blended);
-    let solid = probe("alpha-opaque", &opaque);
-    for (point, (b, s)) in roof.iter().zip(blend.iter().zip(&solid)) {
-        let d = difference(*b, *s);
+    let blend = probe("alpha-blend", &blended, true);
+    let default = probe("alpha-default", &blended, false);
+    let solid = probe("alpha-opaque", &opaque, true);
+    for (i, point) in roof.iter().enumerate() {
+        let (b, d, s) = (blend[i], default[i], solid[i]);
+        let see_through = difference(b, s);
         assert!(
-            d > 0.08,
-            "at {point:?} the blended roof {b:?} is not distinguishable from the opaque {s:?} ({d})"
+            see_through > 0.08,
+            "at {point:?} the see-through roof {b:?} is not distinguishable from the opaque {s:?} ({see_through})"
+        );
+        let by_default = difference(d, s);
+        assert!(
+            by_default < 0.02,
+            "at {point:?} the default roof {d:?} is not drawn solid like {s:?} ({by_default})"
         );
     }
 }

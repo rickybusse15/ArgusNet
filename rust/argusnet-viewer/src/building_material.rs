@@ -19,6 +19,7 @@
 use bevy::asset::embedded_asset;
 use bevy::gltf::GltfMeshExtras;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
@@ -143,7 +144,10 @@ impl Plugin for BuildingMaterialPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/building.wesl");
         app.add_plugins(MaterialPlugin::<BuildingMaterial>::default())
-            .add_systems(Update, apply_facades_system);
+            .add_systems(
+                Update,
+                (apply_facades_system, sync_building_opacity).chain(),
+            );
     }
 }
 
@@ -192,7 +196,7 @@ fn apply_facades_system(
             commands
                 .entity(entity)
                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                .insert(MeshMaterial3d(facade));
+                .insert((MeshMaterial3d(facade), BakedFrom(material.0.id())));
             converted += 1;
         }
         // The glTF's entities appear a frame or more after it loads: wait
@@ -202,6 +206,112 @@ fn apply_facades_system(
         }
         debug!("facades on {converted} of {seen} building mesh(es)");
         commands.entity(root).insert(FacadesApplied);
+    }
+}
+
+/// The baked material a facade was copied from, whose styled alpha mode
+/// it keeps.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+struct BakedFrom(AssetId<StandardMaterial>);
+
+/// Which opacity a building part's material was last set to, and which
+/// material that was (the facade swaps it).
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+struct OpacitySet {
+    see_through: bool,
+    material: AssetId<StandardMaterial>,
+    facade: Option<AssetId<BuildingMaterial>>,
+}
+
+/// The alpha mode a building is drawn with: the scene's styled one when
+/// see-through is asked for, otherwise opaque (solid by default).
+pub fn building_alpha_mode(styled: AlphaMode, see_through: bool) -> AlphaMode {
+    if see_through {
+        styled
+    } else {
+        AlphaMode::Opaque
+    }
+}
+
+/// Buildings are solid unless Runtime Overlays asks for see-through
+/// buildings: then each part is drawn at its scene's styled translucency
+/// (the overlay GLB's `BLEND` and its vertex alpha), so what is behind a
+/// building shows. Set once per part and change, never per frame.
+///
+/// Parts share materials, so the styled mode is kept per baked material,
+/// read before this system first changes it; a facade takes the mode of
+/// the baked material it was copied from.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn sync_building_opacity(
+    mut commands: Commands,
+    visibility: Res<crate::state::RuntimeOverlayVisibility>,
+    roots: Query<Entity, With<BuildingLayerRoot>>,
+    children: Query<&Children>,
+    parts: Query<(
+        Option<&MeshMaterial3d<StandardMaterial>>,
+        Option<&MeshMaterial3d<BuildingMaterial>>,
+        Option<&BakedFrom>,
+        Option<&OpacitySet>,
+    )>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    mut facades: ResMut<Assets<BuildingMaterial>>,
+    mut styled: Local<HashMap<AssetId<StandardMaterial>, AlphaMode>>,
+    mut styled_facades: Local<HashMap<AssetId<BuildingMaterial>, AlphaMode>>,
+) {
+    let see_through = visibility.see_through_buildings;
+    for root in &roots {
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            if let Ok(node_children) = children.get(entity) {
+                stack.extend(node_children.iter());
+            }
+            let Ok((plain, facade, baked_from, set)) = parts.get(entity) else {
+                continue;
+            };
+            let current = OpacitySet {
+                see_through,
+                material: plain.map_or(AssetId::default(), |m| m.0.id()),
+                facade: facade.map(|m| m.0.id()),
+            };
+            if plain.is_none() && facade.is_none() || set == Some(&current) {
+                continue;
+            }
+            let mut styled_of = |id: AssetId<StandardMaterial>| -> Option<AlphaMode> {
+                if let Some(mode) = styled.get(&id) {
+                    return Some(*mode);
+                }
+                let mode = standard.get(id)?.alpha_mode;
+                styled.insert(id, mode);
+                Some(mode)
+            };
+            let plain_styled = plain.and_then(|m| styled_of(m.0.id()));
+            let facade_styled = facade.and_then(|m| {
+                let id = m.0.id();
+                if let Some(mode) = styled_facades.get(&id) {
+                    return Some(*mode);
+                }
+                let mode = baked_from
+                    .and_then(|b| styled_of(b.0))
+                    .or_else(|| facades.get(id).map(|f| f.base.alpha_mode))?;
+                styled_facades.insert(id, mode);
+                Some(mode)
+            });
+            if plain_styled.is_none() && facade_styled.is_none() {
+                // Not loaded yet: try again next frame.
+                continue;
+            }
+            if let (Some(m), Some(mode)) = (facade, facade_styled) {
+                if let Some(mut material) = facades.get_mut(&m.0) {
+                    material.base.alpha_mode = building_alpha_mode(mode, see_through);
+                }
+            }
+            if let (Some(m), Some(mode)) = (plain, plain_styled) {
+                if let Some(mut material) = standard.get_mut(&m.0) {
+                    material.alpha_mode = building_alpha_mode(mode, see_through);
+                }
+            }
+            commands.entity(entity).insert(current);
+        }
     }
 }
 
@@ -261,6 +371,76 @@ mod tests {
             .filter_map(surface)
             .all(|(_, m)| m <= 0.5));
         assert!(surface(2).unwrap().0 > 0.8 && surface(2).unwrap().1 == 0.0);
+    }
+
+    #[test]
+    fn buildings_are_solid_unless_see_through_is_asked_for() {
+        assert_eq!(
+            building_alpha_mode(AlphaMode::Blend, false),
+            AlphaMode::Opaque
+        );
+        assert_eq!(
+            building_alpha_mode(AlphaMode::Blend, true),
+            AlphaMode::Blend
+        );
+        assert_eq!(
+            building_alpha_mode(AlphaMode::Opaque, true),
+            AlphaMode::Opaque
+        );
+        assert!(!crate::state::RuntimeOverlayVisibility::default().see_through_buildings);
+    }
+
+    /// A building part without the facade (a GLB the scene builder did not
+    /// mark) keeps its plain material, which is set solid too, put back to
+    /// the scene's mode when see-through is asked for, and left alone after.
+    #[test]
+    fn a_plain_building_part_follows_the_toggle() {
+        let mut app = App::new();
+        app.init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<BuildingMaterial>>()
+            .init_resource::<crate::state::RuntimeOverlayVisibility>()
+            .add_systems(Update, sync_building_opacity);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                alpha_mode: AlphaMode::Blend,
+                ..Default::default()
+            });
+        // Two parts share the material, as the scene builder's walls do: the
+        // second must not take the first's opaque setting as its style.
+        let part = app.world_mut().spawn(MeshMaterial3d(handle.clone())).id();
+        let other = app.world_mut().spawn(MeshMaterial3d(handle.clone())).id();
+        app.world_mut()
+            .spawn(BuildingLayerRoot)
+            .add_children(&[part, other]);
+        let mode = |app: &App| {
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&handle)
+                .unwrap()
+                .alpha_mode
+        };
+        app.update();
+        assert_eq!(mode(&app), AlphaMode::Opaque);
+        app.world_mut()
+            .resource_mut::<crate::state::RuntimeOverlayVisibility>()
+            .see_through_buildings = true;
+        app.update();
+        assert_eq!(mode(&app), AlphaMode::Blend);
+        // Set once: a later change to the material is not overwritten.
+        app.world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .get_mut(&handle)
+            .unwrap()
+            .alpha_mode = AlphaMode::Mask(0.5);
+        app.update();
+        assert_eq!(mode(&app), AlphaMode::Mask(0.5));
+        app.world_mut()
+            .resource_mut::<crate::state::RuntimeOverlayVisibility>()
+            .see_through_buildings = false;
+        app.update();
+        assert_eq!(mode(&app), AlphaMode::Opaque);
     }
 
     /// Only the scene builder's own marker, in this version, makes a facade:

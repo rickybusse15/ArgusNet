@@ -54,7 +54,9 @@ C8 (P2.6) and D2 (P5.1).
   `BLEND`, and its colours are stored straight, not premultiplied. Any
   premultiplication the renderer wants happens after import. A headless probe
   checks building translucency
-  (`geometry_probes::a_building_is_drawn_at_its_styled_opacity`).
+  (`geometry_probes::a_building_is_solid_unless_drawn_see_through`). Since
+  the R4 look pass, buildings are drawn solid by default, and the styled
+  translucency is what the See-through Buildings toggle shows.
 - **Done.** Name the world-model shapes explicitly, so each consumer matches
   on a shape, not on a `kind` string. Shapes were already the
   `ObstacleShape` enum (polygon, cylinder) for `los`, `first_hit`,
@@ -549,6 +551,35 @@ C8 (P2.6) and D2 (P5.1).
   ([record](performance/r4-frame-budget-2026-10-21.md)). Shadows stay on
   at Standard and above. Not done: lighting and fog tuned against a real
   scene, which needs R5's real-world scene.
+
+  *Done (the look pass, R4.4, after a maintainer review):*
+  - **Trees.** Each species has its own shape inside the model's crown:
+    lobed broadleaf clusters, five serrated conifer tiers, palm fronds with
+    leaflets, low shrub mounds. Trunks taper. Facets are flat-shaded and
+    jittered, lighter towards the top. Each tree takes one of four mesh
+    variants, one of three tints and its own turn from its id
+    (deterministic), and impostors are cut to each species' silhouette.
+    A test holds every vertex of every species and variant inside the
+    crown.
+  - **Buildings.** Plain procedural buildings take the same flat-roofed
+    path as imported ones, so every building gets the facade surface, with
+    a slight tint of its own. The facade shader adds a soft mottle, walls
+    darker towards the ground, and, where storeys are known, floor slabs, a
+    cornice and paned windows (taller on the ground floor), plus tile,
+    slate and metal-seam courses on pitched roofs. Wall data is now
+    TEXCOORD_0 = (height above the building's ground, along the wall) and
+    TEXCOORD_1 = (storey height, or -1 on a roof; class + 32 x (8 x
+    levels), so a fractional count such as 2.5 storeys is kept).
+  - **Solid buildings.** Buildings are opaque by default, so the detail is
+    not washed out and they cast shadows. A See-through Buildings toggle in
+    Runtime Overlays draws them at the scene's styled translucency, to see
+    drones behind them. Scene files are unchanged: the viewer switches each
+    building material's alpha mode, once per part and change. A GPU probe
+    checks the default matches the opaque building and the toggle shows the
+    ground through it.
+  - **Budget after the look pass:** the same realism fixtures, solid
+    buildings and new trees, stay under budget on the D-5 machine: worst p95
+    7.0 ms, p99 8.2 ms, max 9.3 ms, no stall, over 45 runs.
 
 ### R5: real-world scene ingestion
 

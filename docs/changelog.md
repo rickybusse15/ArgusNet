@@ -2,6 +2,20 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Viewer look pass (R4), after a maintainer review:
+  - Trees are no longer a ball on a stick. Each species has its own shape
+    (lobed broadleaf, tiered conifer, palm fronds, shrub mounds) inside
+    the model's crown, on a tapered trunk, flat-shaded for texture. Each
+    tree has one of four variants, three tints and its own turn, all from
+    its id. Impostors follow each species' silhouette.
+  - Buildings: every building gets the facade surface and a tint of its
+    own, with weathering, and, where storeys are known, floor slabs, a
+    cornice and paned windows. Pitched roofs show tile, slate or metal
+    seams.
+  - Buildings are solid by default. A See-through Buildings toggle in
+    Runtime Overlays draws them at the styled translucency, to see drones
+    behind them. Scene files are unchanged.
+
 - R4 frame budget recorded on the D-5 reference machine (Apple M5 Pro):
   the realism fixtures, including 15,000 trees, stay under p95 16.7 ms in
   every tier (worst 6.3 ms; p99 8.0 ms; no stall), over 75 quiesced runs
