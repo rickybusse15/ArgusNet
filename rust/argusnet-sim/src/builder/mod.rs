@@ -29,6 +29,7 @@ pub mod buildings;
 pub mod environment;
 pub mod power_lines;
 pub mod scenario;
+pub mod terrain_import;
 pub mod trees;
 
 use serde::{Deserialize, Serialize};
@@ -203,6 +204,11 @@ pub struct ScenarioOptions {
     /// buildings. Absent by default; written only when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub buildings_path: Option<String>,
+    /// R5: real terrain, an `argusnet.terrain` document
+    /// (`scripts/import_terrain.py`) on this map preset's grid, in place of
+    /// the procedural terrain. Absent by default; written only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain_path: Option<String>,
 }
 
 impl Default for ScenarioOptions {
@@ -386,6 +392,9 @@ pub struct BuiltWorld {
     /// With `buildings_path`: the georeference, the document's hash and the
     /// counts. `None` otherwise.
     pub buildings: Option<Value>,
+    /// With `terrain_path`: the georeference and the document's hashes.
+    /// `None` otherwise.
+    pub terrain_import: Option<Value>,
 }
 
 /// `build_terrain_layer` + `build_default_environment`.
@@ -411,17 +420,27 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         tile_size_cells: TILE_SIZE_CELLS,
         ground_plane_m: 0.0,
     };
-    let terrain = build_terrain_layer(
-        &terrain_config,
-        Bounds2D {
-            x_min_m: bounds.x_min_m,
-            x_max_m: bounds.x_max_m,
-            y_min_m: bounds.y_min_m,
-            y_max_m: bounds.y_max_m,
-        },
-        TerrainSource::Procedural,
-    )
-    .map_err(BuildError::Invalid)?;
+    // Real terrain in place of the procedural one (R5), else the preset's.
+    let imported_terrain = match &options.terrain_path {
+        None => None,
+        Some(path) => Some((path, terrain_import::load(path)?)),
+    };
+    let terrain = match &imported_terrain {
+        Some((path, (document, _))) => {
+            terrain_import::terrain(path, document, &options.map_preset, bounds, &terrain_config)?
+        }
+        None => build_terrain_layer(
+            &terrain_config,
+            Bounds2D {
+                x_min_m: bounds.x_min_m,
+                x_max_m: bounds.x_max_m,
+                y_min_m: bounds.y_min_m,
+                y_max_m: bounds.y_max_m,
+            },
+            TerrainSource::Procedural,
+        )
+        .map_err(BuildError::Invalid)?,
+    };
 
     let mut environment = build_environment(
         &terrain,
@@ -436,6 +455,12 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         None => None,
         Some(path) => {
             let (document, hash) = buildings::load(path)?;
+            if let Some((_, (terrain_document, _))) = &imported_terrain {
+                terrain_import::check_same_origin(
+                    &terrain_document.georeference,
+                    &document.georeference,
+                )?;
+            }
             let placed = buildings::place(&document, hash, &terrain, bounds)?;
             environment
                 .obstacles
@@ -542,6 +567,8 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         power_lines,
         trees,
         buildings,
+        terrain_import: imported_terrain
+            .map(|(_, (document, hash))| terrain_import::record(&document, hash)),
     })
 }
 
@@ -602,6 +629,9 @@ impl BuiltWorld {
         }
         if let Some(buildings) = &self.buildings {
             world["buildings"] = buildings.clone();
+        }
+        if let Some(terrain_import) = &self.terrain_import {
+            world["terrain_import"] = terrain_import.clone();
         }
         world
     }
@@ -678,7 +708,7 @@ impl BuiltWorld {
             .collect();
         let profile = self.terrain.profile;
         let config = &self.terrain_config;
-        json!({
+        let mut summary = json!({
             "kind": "tiled-heightmap-v1",
             "base_resolution_m": terrain.base_resolution_m,
             "tile_size_cells": terrain.tile_size_cells,
@@ -711,7 +741,19 @@ impl BuiltWorld {
                 "semantic_masks": names,
                 "mask_coverage_fraction": coverage,
             },
-        })
+        });
+        // An imported terrain says so, and where it came from, instead of
+        // the generator it did not use.
+        if let Some(terrain_import) = &self.terrain_import {
+            summary["source"] = json!({
+                "source": "dem-import",
+                "preset": config.terrain_preset,
+                "import": terrain_import,
+                "semantic_masks": names,
+                "mask_coverage_fraction": summary["mask_coverage_fraction"].clone(),
+            });
+        }
+        summary
     }
 
     /// `TerrainLayer.viewer_mesh`: the terrain sampled on a `linspace` grid of
@@ -778,6 +820,9 @@ impl BuiltWorld {
         if let Some(buildings) = &self.buildings {
             map.insert("buildings".into(), buildings.clone());
         }
+        if let Some(terrain_import) = &self.terrain_import {
+            map.insert("terrain_import".into(), terrain_import.clone());
+        }
         map.insert("crs_id".into(), json!("local-enu"));
         map.insert("environment_bounds_m".into(), bounds_document(self.bounds));
         map.insert("terrain_summary".into(), self.terrain_summary());
@@ -794,11 +839,14 @@ impl BuiltWorld {
         map.insert("land_cover_legend".into(), legend);
         map.insert(
             "enu_origin".into(),
-            // Real buildings bring their own origin: the run stands where
-            // they do. Otherwise the reference's fixed one.
+            // Real terrain or buildings bring their own origin: the run
+            // stands where they do. The terrain's first, whose altitude is
+            // the heights' offset (with both, their origins are checked
+            // equal). Otherwise the reference's fixed one.
             match self
-                .buildings
+                .terrain_import
                 .as_ref()
+                .or(self.buildings.as_ref())
                 .and_then(|record| record.get("georeference"))
             {
                 Some(georeference) => json!({

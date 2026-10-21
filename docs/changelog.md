@@ -2,6 +2,15 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Real terrain from a DEM (R5). `scripts/import_terrain.py` turns a GeoTIFF
+  into an `argusnet.terrain` document on a map preset's height grid,
+  around the same origin as the buildings importer. Each cell is placed
+  through the DEM's own CRS, so rotated rasters and grid convergence line
+  up. The new scenario option `terrain_path` builds the run on it. Trees,
+  power lines and buildings stand on the real ground; buildings and
+  terrain must share an origin. The replay records the import and its
+  georeference. Without the option nothing changes.
+
 - Viewer look pass (R4), after a maintainer review:
   - Trees are no longer a ball on a stick. Each species has its own shape
     (lobed broadleaf, tiered conifer, palm fronds, shrub mounds) inside

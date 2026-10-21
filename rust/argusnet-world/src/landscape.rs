@@ -193,18 +193,80 @@ pub fn build_terrain_layer(
         detail_strength: config.detail_strength,
         ground_plane_m: config.ground_plane_m,
     })?;
+    tile_terrain(
+        config,
+        bounds_xy_m,
+        grid.heights_m,
+        grid.masks,
+        grid.profile,
+    )
+}
 
+/// A terrain from heights made elsewhere: an imported DEM (R5,
+/// `argusnet.terrain`), already on the grid [`grid_values`] gives
+/// `bounds_xy_m` at the config's resolution, rows walking y.
+///
+/// It carries no semantic masks: water, roads and the rest come from the
+/// data, not from the shape of the ground, so every mask is empty, as the
+/// reference's DEM source leaves them. The preset still picks the profile
+/// the land cover is classified with.
+///
+/// [`grid_values`]: crate::noise::grid_values
+pub fn terrain_from_heights(
+    config: &TerrainBuildConfig,
+    bounds_xy_m: Bounds2D,
+    heights_m: Grid,
+) -> Result<BuiltTerrain, String> {
+    config.validate()?;
+    let (x_values, y_values) = crate::noise::grid_values(bounds_xy_m, config.resolution_m());
+    if heights_m.nx != y_values.len() || heights_m.ny != x_values.len() {
+        return Err(format!(
+            "imported heights are {} by {}; the map's grid at {} m is {} by {}",
+            heights_m.nx,
+            heights_m.ny,
+            config.resolution_m(),
+            y_values.len(),
+            x_values.len()
+        ));
+    }
+    if let Some(low) = heights_m
+        .values
+        .iter()
+        .find(|h| !h.is_finite() || **h < config.ground_plane_m)
+    {
+        return Err(format!(
+            "imported heights must be finite and at or above the ground plane ({} m), got {low}",
+            config.ground_plane_m
+        ));
+    }
+    let empty = || Mask::filled(heights_m.nx, heights_m.ny, false);
+    let masks = SemanticMasks {
+        water: empty(),
+        ridge: empty(),
+        valley: empty(),
+        steep_slope: empty(),
+        lowland: empty(),
+        road: empty(),
+    };
+    let profile = terrain_profile_for_preset(&config.terrain_preset);
+    tile_terrain(config, bounds_xy_m, heights_m, masks, profile)
+}
+
+/// Tile a height grid into the runtime's terrain, keeping the grid.
+fn tile_terrain(
+    config: &TerrainBuildConfig,
+    bounds_xy_m: Bounds2D,
+    heights_m: Grid,
+    masks: SemanticMasks,
+    profile: TerrainProfile,
+) -> Result<BuiltTerrain, String> {
+    let resolution_m = config.resolution_m();
     // `heights_m` is axis-0-major with axis 0 = y, so `nx` counts ROWS and
     // `ny` counts COLUMNS despite the names. `TiledTerrain::from_grid` wants
     // rows of columns, so the reshape is a row split and moves no element.
-    let rows = grid.heights_m.nx;
-    let cols = grid.heights_m.ny;
-    let row_major: Vec<Vec<f64>> = grid
-        .heights_m
-        .values
-        .chunks(cols)
-        .map(<[f64]>::to_vec)
-        .collect();
+    let rows = heights_m.nx;
+    let cols = heights_m.ny;
+    let row_major: Vec<Vec<f64>> = heights_m.values.chunks(cols).map(<[f64]>::to_vec).collect();
     debug_assert_eq!(row_major.len(), rows);
 
     let tiled = TiledTerrain::from_grid(
@@ -223,9 +285,9 @@ pub fn build_terrain_layer(
 
     Ok(BuiltTerrain {
         tiled,
-        masks: grid.masks,
-        source_heights_m: grid.heights_m,
-        profile: grid.profile,
+        masks,
+        source_heights_m: heights_m,
+        profile,
         bounds_xy_m,
         resolution_m,
         ground_plane_m: config.ground_plane_m,

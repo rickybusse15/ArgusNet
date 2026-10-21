@@ -591,6 +591,29 @@ C8 (P2.6) and D2 (P5.1).
 - **One canonical real-world scenario** (a small town edge with a transmission
   line), used for parity, performance and visual probes.
 
+  *Done (real terrain, R5.1):* `scripts/import_terrain.py` resamples a
+  GeoTIFF DEM onto a map preset's own height grid, in the local ENU frame
+  around the same origin the buildings importer uses, and writes an
+  `argusnet.terrain` v1 document. Every cell is placed by inverse
+  projection (ENU to WGS84 to the DEM's CRS, then the GeoTIFF affine's
+  inverse), not axis by axis. That handles rotated rasters and grid
+  convergence, and honours `PixelIsArea` and `PixelIsPoint`. Heights are
+  elevation less `origin_h_m` (the lowest ground rounded down, less 2 m).
+  The native builder's `terrain_path` option tiles the document in place
+  of the procedural terrain, with no semantic masks invented from the
+  ground's shape. It refuses another preset's grid and heights below the
+  ground plane, and requires the same origin as `buildings_path`. The
+  bundle and the replay record it (`terrain_import`, and `terrain_summary`
+  source `dem-import`), and the run's `enu_origin` is the terrain's.
+
+  Tests use plane DEMs in UTM 11N, 2 degrees off the central meridian.
+  Imported heights equal the plane at each cell's true position for
+  axis-aligned, 30-degree-rotated and point-registered rasters, where an
+  axis-by-axis projection misses by decimetres. An end-to-end test runs
+  `argusnet-rs sim` on an imported DEM. Canonical replays are unchanged.
+  Next: OSM water, roads, land use, trees and power lines through the same
+  georeference (R5.2); one pipeline and the canonical town (R5.3).
+
 ## Order and size
 
 | Phase | Depends on | Size | Changes canonical replays? |
