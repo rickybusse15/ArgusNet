@@ -517,6 +517,25 @@ pub fn material_code(part: MaterialPart, class: &str) -> u32 {
     }
 }
 
+/// How many material codes fit below one level in [`pack_class_levels`].
+pub const LEVELS_STRIDE: f32 = 32.0;
+
+/// A material class code and a level count in one texture coordinate:
+/// `code + LEVELS_STRIDE * levels` (codes stay below the stride). Exact in
+/// f32 for any building the data could hold.
+pub fn pack_class_levels(code: u32, levels: f64) -> f32 {
+    code as f32 + LEVELS_STRIDE * levels.max(0.0).round() as f32
+}
+
+/// A building's own slight variation of its colour (R4): a value factor
+/// from its id, the same every run, so a street is not one colour.
+pub fn building_tint(id: &str) -> f32 {
+    let h = id.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    0.9 + 0.18 * ((h % 1000) as f32 / 999.0)
+}
+
 /// Which part of a building a material class is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterialPart {
@@ -559,12 +578,12 @@ pub fn roof_colour(class: &str) -> Option<[f32; 3]> {
 /// drawn. `footprint` and `roof` come from the model
 /// ([`argusnet_world::obstacles::Obstacle::building_v2`]).
 ///
-/// Every vertex carries texture coordinates for the viewer's window rows:
-/// on a wall, its height above the building's ground in storeys and its
-/// distance along the wall in metres (`TEXCOORD_0`), and the level count
-/// (`TEXCOORD_1`). A roof, or a building whose storeys the data does not
-/// give, carries -1 there: no windows are drawn that the data did not
-/// imply.
+/// Every vertex carries texture coordinates for the viewer's facade:
+/// `TEXCOORD_0` its height above the building's own ground and (on a wall)
+/// its distance along the wall, metres; `TEXCOORD_1` the storey height,
+/// metres (0 when the data gives no storeys: no windows are drawn that the
+/// data did not imply; -1 on a roof), and the material class and level
+/// count packed by [`pack_class_levels`].
 pub fn roofed_mesh(
     footprint: &[[f64; 2]],
     wall_base_z_m: f64,
@@ -606,8 +625,10 @@ pub fn roofed_mesh(
                 .push([p[0] as f32, p[1] as f32, plane_at(plane, *p) as f32]);
             mesh.normals.push(normal);
             mesh.colours.push(look.roof);
-            mesh.uvs.push([-1.0, 0.0]);
-            mesh.uvs_b.push([-1.0, look.roof_code as f32]);
+            mesh.uvs
+                .push([(plane_at(plane, *p) - look.base_z_m) as f32, 0.0]);
+            mesh.uvs_b
+                .push([-1.0, pack_class_levels(look.roof_code, 0.0)]);
         }
         mesh.indices
             .extend(triangulate_polygon(&facet).into_iter().map(|i| i + start));
@@ -620,11 +641,14 @@ pub fn roofed_mesh(
         .levels
         .filter(|levels| *levels > 0.0)
         .map(|levels| (roof.eave_z_m - look.base_z_m) / levels);
-    let storey = |z: f64| level_height.map_or(-1.0, |h| ((z - look.base_z_m) / h) as f32);
-    let levels = look
-        .levels
-        .filter(|_| level_height.is_some())
-        .unwrap_or(-1.0) as f32;
+    let height = |z: f64| (z - look.base_z_m) as f32;
+    let storey_m = level_height.unwrap_or(0.0) as f32;
+    let packed = pack_class_levels(
+        look.facade_code,
+        look.levels
+            .filter(|_| level_height.is_some())
+            .unwrap_or(0.0),
+    );
     for i in 0..ccw.len() {
         let (s, e) = (ccw[i], ccw[(i + 1) % ccw.len()]);
         let at = |t: f64| [s[0] + (e[0] - s[0]) * t, s[1] + (e[1] - s[1]) * t];
@@ -662,13 +686,13 @@ pub fn roofed_mesh(
             ]);
             wall_indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             mesh.uvs.extend_from_slice(&[
-                [storey(wall_base_z_m), along_p],
-                [storey(wall_base_z_m), along_q],
-                [storey(zq), along_q],
-                [storey(zp), along_p],
+                [height(wall_base_z_m), along_p],
+                [height(wall_base_z_m), along_q],
+                [height(zq), along_q],
+                [height(zp), along_p],
             ]);
             mesh.uvs_b
-                .extend(std::iter::repeat_n([levels, look.facade_code as f32], 4));
+                .extend(std::iter::repeat_n([storey_m, packed], 4));
         }
     }
     let wall_normals = triangle_normals(&wall_positions, &wall_indices);
@@ -795,12 +819,14 @@ pub fn obstacle_layers(
                 .map(|p| grid.height_at(p[0], p[1]))
                 .fold(f64::INFINITY, f64::min);
             let roof = building.roof.as_ref().expect("building-v2 has a roof");
+            let tint = building_tint(&building.id);
             let classed = |key: &str, palette: fn(&str) -> Option<[f32; 3]>| {
-                object
+                let [r, g, b, a] = object
                     .get(key)
                     .and_then(Value::as_str)
                     .and_then(palette)
-                    .map_or(colour, |[r, g, b]| [r, g, b, colour[3]])
+                    .map_or(colour, |[r, g, b]| [r, g, b, colour[3]]);
+                [r * tint, g * tint, b * tint, a]
             };
             let look = BuildingLook {
                 facade: classed("facade_material", facade_colour),
@@ -828,7 +854,30 @@ pub fn obstacle_layers(
                 heights.iter().copied().fold(f64::NEG_INFINITY, f64::max),
             );
             let (base, top) = solid_elevations(object, lo, hi);
-            extrusion_mesh(&footprint, base, top, colour)
+            if layer == "buildings" {
+                // A plain building as a flat-roofed building-v2: the same
+                // solid, drawn with the facade's surface (R4) in its own
+                // slight tint; no storeys, so no windows.
+                let id = object
+                    .get("object_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let tint = building_tint(id);
+                let tinted = [
+                    colour[0] * tint,
+                    colour[1] * tint,
+                    colour[2] * tint,
+                    colour[3],
+                ];
+                let roof = argusnet_world::obstacles::Roof {
+                    shape: argusnet_world::obstacles::RoofShape::Flat,
+                    eave_z_m: top,
+                    planes: vec![[0.0, 0.0, top]],
+                };
+                roofed_mesh(&footprint, base, &roof, &BuildingLook::plain(tinted, base))
+            } else {
+                extrusion_mesh(&footprint, base, top, colour)
+            }
         } else if object.get("kind").and_then(Value::as_str) == Some("cylinder-v1") {
             let get = |key: &str| {
                 object
@@ -1333,25 +1382,35 @@ mod tests {
             .zip(&mesh.normals)
             .zip(mesh.colours.iter().zip(mesh.uvs.iter().zip(&mesh.uvs_b)))
         {
+            let tint = building_tint("b");
+            let tinted = |c: [f32; 3]| c.map(|v| v * tint);
+            // Every vertex: its height above the building's ground (20 m).
+            assert!((uv[0] - (p[2] - 20.0)).abs() < 1e-4, "{p:?} {uv:?}");
             if n[2].abs() > 0.5 {
-                // A roof facet.
-                assert_eq!(&c[..3], &slate[..]);
-                assert_eq!((uv[0], uv_b[0]), (-1.0, -1.0));
-                assert_eq!(uv_b[1], material_code(MaterialPart::Roof, "slate") as f32);
+                // A roof facet: marked, its class and no levels.
+                assert_eq!(&c[..3], &tinted(slate)[..]);
+                assert_eq!(uv_b[0], -1.0);
+                assert_eq!(
+                    uv_b[1],
+                    pack_class_levels(material_code(MaterialPart::Roof, "slate"), 0.0)
+                );
             } else {
-                assert_eq!(&c[..3], &brick[..]);
+                // A wall: three storeys between 20 and 29 m, 3 m each.
+                assert_eq!(&c[..3], &tinted(brick)[..]);
                 assert_eq!(uv_b[0], 3.0);
-                assert_eq!(uv_b[1], material_code(MaterialPart::Facade, "brick") as f32);
-                // Three storeys between 20 and 29 m: a storey every 3 m.
-                assert!((uv[0] - (p[2] - 20.0) / 3.0).abs() < 1e-4, "{p:?} {uv:?}");
+                assert_eq!(
+                    uv_b[1],
+                    pack_class_levels(material_code(MaterialPart::Facade, "brick"), 3.0)
+                );
             }
         }
-        // At the eave, the third storey ends.
-        assert!(mesh
-            .uvs
-            .iter()
-            .zip(&mesh.positions)
-            .any(|(uv, p)| p[2] == 29.0 && (uv[0] - 3.0).abs() < 1e-4));
+        // The packing keeps both: class 2 and 3 levels.
+        assert_eq!(pack_class_levels(2, 3.0), 2.0 + 3.0 * LEVELS_STRIDE);
+        // A building's tint is its own and the same every run, within 10 %.
+        assert_eq!(building_tint("b"), building_tint("b"));
+        let tints: Vec<f32> = (0..50).map(|i| building_tint(&format!("b{i}"))).collect();
+        assert!(tints.iter().all(|t| (0.9..=1.08).contains(t)));
+        assert!(tints.iter().any(|t| *t < 0.95) && tints.iter().any(|t| *t > 1.03));
         // Codes are stable and distinct, generic is 0.
         let facades = [
             "concrete", "brick", "glass", "metal", "wood", "stone", "plaster",
@@ -1370,8 +1429,9 @@ mod tests {
         assert_eq!(codes.len(), 14);
         assert_eq!(material_code(MaterialPart::Facade, "generic"), 0);
         assert_eq!(material_code(MaterialPart::Roof, "marzipan"), 0);
+        // Without storeys: no storey height on any wall, so no windows.
         let unknown = obstacle_layers(&[object(None)], &grid).unwrap();
-        assert!(unknown[0].1[0].uvs.iter().all(|uv| uv[0] == -1.0));
+        assert!(unknown[0].1[0].uvs_b.iter().all(|uv| uv[0] <= 0.0));
 
         // In the file: texture coordinates on this part only.
         let dir = std::env::temp_dir().join(format!("argusnet-look-{}", std::process::id()));
