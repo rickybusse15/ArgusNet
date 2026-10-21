@@ -194,8 +194,11 @@ def import_terrain(
     inverse = np.linalg.inv(linear)
 
     if origin is None:
+        # The middle of the samples, wherever the raster type puts them:
+        # (cols / 2, rows / 2) for PixelIsArea, half a pixel less for
+        # PixelIsPoint, whose samples span 0..cols - 1.
         rows, cols = heights.shape
-        centre = affine @ np.array([cols * 0.5, rows * 0.5, 1.0])
+        centre = affine @ np.array([offset + (cols - 1) * 0.5, offset + (rows - 1) * 0.5, 1.0])
         lon, lat = to_wgs84.transform(float(centre[0]), float(centre[1]))
         origin = (round(float(lat), 7), round(float(lon), 7))
     enu_origin = ENUOrigin(latitude_deg=origin[0], longitude_deg=origin[1], altitude_m=0.0)

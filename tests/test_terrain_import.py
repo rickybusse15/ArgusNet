@@ -276,3 +276,16 @@ def test_a_run_stands_on_the_imported_dem(tmp_path: Path) -> None:
         (-1, -1): (-1, -1),
     }.items():
         assert mesh[i, j] == pytest.approx(heights[r, c], abs=1e-6)
+
+
+def test_a_point_registered_dems_default_origin_is_its_samples_centre(tmp_path: Path) -> None:
+    """PixelIsPoint samples span 0..cols - 1 in raster space, so their
+    middle is half a pixel (5 m here) west and north of the corner extent's."""
+    dem = write_dem(tmp_path / "dem.tif", affine=aligned(), shape=(120, 120), point=True)
+    document = import_terrain(dem, map_preset="small")
+    lon, lat = pyproj.Transformer.from_crs("EPSG:32611", "EPSG:4326", always_xy=True).transform(
+        CENTRE[0] - 5.0, CENTRE[1] + 5.0
+    )
+    georeference = document["georeference"]
+    assert georeference["origin_lat_deg"] == pytest.approx(lat, abs=2e-7)
+    assert georeference["origin_lon_deg"] == pytest.approx(lon, abs=2e-7)
