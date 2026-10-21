@@ -576,6 +576,9 @@ C8 (P2.6) and D2 (P5.1).
     building material's alpha mode, once per part and change. A GPU probe
     checks the default matches the opaque building and the toggle shows the
     ground through it.
+  - **Budget after the look pass:** the same realism fixtures, solid
+    buildings and new trees, stay under budget on the D-5 machine: worst p95
+    7.0 ms, p99 8.2 ms, max 9.3 ms, no stall, over 45 runs.
 
 ### R5: real-world scene ingestion
 
