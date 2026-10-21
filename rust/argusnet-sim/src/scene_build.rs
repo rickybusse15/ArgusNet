@@ -517,14 +517,21 @@ pub fn material_code(part: MaterialPart, class: &str) -> u32 {
     }
 }
 
-/// How many material codes fit below one level in [`pack_class_levels`].
+/// How many material codes fit below one step of the level count in
+/// [`pack_class_levels`].
 pub const LEVELS_STRIDE: f32 = 32.0;
 
+/// Steps per storey in [`pack_class_levels`]: a level count such as 2.5
+/// (`building:levels=2.5`) is kept, to an eighth of a storey.
+pub const LEVEL_STEPS: f64 = 8.0;
+
 /// A material class code and a level count in one texture coordinate:
-/// `code + LEVELS_STRIDE * levels` (codes stay below the stride). Exact in
-/// f32 for any building the data could hold.
+/// `code + LEVELS_STRIDE * round(levels * LEVEL_STEPS)` (codes stay below
+/// the stride). Fractional counts survive, so the shader's eave is the one
+/// the storey height was divided by. Exact in f32 for any building the
+/// data could hold.
 pub fn pack_class_levels(code: u32, levels: f64) -> f32 {
-    code as f32 + LEVELS_STRIDE * levels.max(0.0).round() as f32
+    code as f32 + LEVELS_STRIDE * (levels.max(0.0) * LEVEL_STEPS).round() as f32
 }
 
 /// A building's own slight variation of its colour (R4): a value factor
@@ -1404,8 +1411,18 @@ mod tests {
                 );
             }
         }
-        // The packing keeps both: class 2 and 3 levels.
-        assert_eq!(pack_class_levels(2, 3.0), 2.0 + 3.0 * LEVELS_STRIDE);
+        // The packing keeps both: class 2 and 3 levels, and a fractional
+        // count as the data gives it.
+        assert_eq!(pack_class_levels(2, 3.0), 2.0 + 3.0 * 8.0 * LEVELS_STRIDE);
+        let unpack = |packed: f32| {
+            let steps = (packed / LEVELS_STRIDE).floor();
+            (
+                packed - steps * LEVELS_STRIDE,
+                f64::from(steps) / LEVEL_STEPS,
+            )
+        };
+        assert_eq!(unpack(pack_class_levels(5, 2.5)), (5.0, 2.5));
+        assert_eq!(unpack(pack_class_levels(23, 120.0)), (23.0, 120.0));
         // A building's tint is its own and the same every run, within 10 %.
         assert_eq!(building_tint("b"), building_tint("b"));
         let tints: Vec<f32> = (0..50).map(|i| building_tint(&format!("b{i}"))).collect();

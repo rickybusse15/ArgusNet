@@ -5,7 +5,8 @@
 // builder marked as facades get it (building_material.rs). It reads:
 // TEXCOORD_0 = (height above the building's own ground, metres along the
 // wall); TEXCOORD_1 = (storey height in metres, 0 when the data gives no
-// storeys and -1 on a roof; material class + 32 * level count).
+// storeys and -1 on a roof; material class + 32 * (8 * level count), so a
+// count such as 2.5 is kept to an eighth of a storey).
 //
 // Every surface: the class's roughness and metalness, and a soft mottle.
 // Walls: darker toward the ground; with known storeys, floor slabs, a
@@ -70,15 +71,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // What the scene builder wrote (scene_build::roofed_mesh): the height
     // above the building's own ground and the distance along the wall
     // (TEXCOORD_0), the storey height (0 unknown, -1 on a roof) and the
-    // material class and level count packed as class + 32 * levels
+    // material class and level count packed as class + 32 * (8 * levels)
     // (TEXCOORD_1).
     let height = in.uv.x;
     let along = in.uv.y;
     let storey_m = in.uv_b.x;
     let on_roof = storey_m < -0.5;
     let packed = max(round(in.uv_b.y), 0.0);
-    let levels = floor(packed / 32.0);
-    let code = u32(clamp(packed - 32.0 * levels, 0.0, 23.0));
+    let steps = floor(packed / 32.0);
+    let levels = steps / 8.0;
+    let code = u32(clamp(packed - 32.0 * steps, 0.0, 23.0));
 
     // The material class's surface (R4), for walls and roofs alike.
     let surface = facade.surfaces[code];
@@ -126,8 +128,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
                 // Floor slabs between storeys, and the cornice at the eave.
                 shade *= 0.86 + 0.14 * band(storey, 0.04, 1.0);
                 // Windows; taller on the ground floor (a shopfront),
-                // each split into two panes by a mullion.
+                // each split into two panes by a mullion. Only in whole
+                // storeys: a part storey (2.5 levels) has none in its top.
                 let ground = storey < 1.0;
+                let whole = select(0.0, 1.0, floor(storey) + 1.0 <= eave + 1.0e-3);
                 let sill = select(facade.window.w, 0.12, ground);
                 let tall = select(facade.window.z, 0.68, ground);
                 let column = along / max(facade.window.x, 0.5);
@@ -135,6 +139,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
                 let window = band(storey, sill, sill + tall)
                     * band(column, 0.5 - half, 0.5 + half)
                     * (1.0 - band(column * 2.0, 0.47, 0.53))
+                    * whole
                     * facade.window_color.a;
                 let base = pbr_input.material.base_color;
                 pbr_input.material.base_color = vec4<f32>(

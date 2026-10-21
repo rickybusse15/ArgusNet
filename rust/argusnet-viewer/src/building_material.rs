@@ -19,6 +19,7 @@
 use bevy::asset::embedded_asset;
 use bevy::gltf::GltfMeshExtras;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
@@ -195,7 +196,7 @@ fn apply_facades_system(
             commands
                 .entity(entity)
                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                .insert(MeshMaterial3d(facade));
+                .insert((MeshMaterial3d(facade), BakedFrom(material.0.id())));
             converted += 1;
         }
         // The glTF's entities appear a frame or more after it loads: wait
@@ -208,10 +209,10 @@ fn apply_facades_system(
     }
 }
 
-/// The alpha mode a building part was given by its scene (its styled
-/// translucency), kept the first time the opacity is set.
+/// The baked material a facade was copied from, whose styled alpha mode
+/// it keeps.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
-struct StyledAlphaMode(AlphaMode);
+struct BakedFrom(AssetId<StandardMaterial>);
 
 /// Which opacity a building part's material was last set to, and which
 /// material that was (the facade swaps it).
@@ -236,6 +237,10 @@ pub fn building_alpha_mode(styled: AlphaMode, see_through: bool) -> AlphaMode {
 /// buildings: then each part is drawn at its scene's styled translucency
 /// (the overlay GLB's `BLEND` and its vertex alpha), so what is behind a
 /// building shows. Set once per part and change, never per frame.
+///
+/// Parts share materials, so the styled mode is kept per baked material,
+/// read before this system first changes it; a facade takes the mode of
+/// the baked material it was copied from.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_building_opacity(
     mut commands: Commands,
@@ -245,11 +250,13 @@ fn sync_building_opacity(
     parts: Query<(
         Option<&MeshMaterial3d<StandardMaterial>>,
         Option<&MeshMaterial3d<BuildingMaterial>>,
-        Option<&StyledAlphaMode>,
+        Option<&BakedFrom>,
         Option<&OpacitySet>,
     )>,
     mut standard: ResMut<Assets<StandardMaterial>>,
     mut facades: ResMut<Assets<BuildingMaterial>>,
+    mut styled: Local<HashMap<AssetId<StandardMaterial>, AlphaMode>>,
+    mut styled_facades: Local<HashMap<AssetId<BuildingMaterial>, AlphaMode>>,
 ) {
     let see_through = visibility.see_through_buildings;
     for root in &roots {
@@ -258,7 +265,7 @@ fn sync_building_opacity(
             if let Ok(node_children) = children.get(entity) {
                 stack.extend(node_children.iter());
             }
-            let Ok((plain, facade, styled, set)) = parts.get(entity) else {
+            let Ok((plain, facade, baked_from, set)) = parts.get(entity) else {
                 continue;
             };
             let current = OpacitySet {
@@ -269,26 +276,39 @@ fn sync_building_opacity(
             if plain.is_none() && facade.is_none() || set == Some(&current) {
                 continue;
             }
-            // The scene's own mode, kept from the first time this part is
-            // seen (a facade copies the baked material, so it carries it).
-            let baked = facade
-                .and_then(|m| facades.get(&m.0))
-                .map(|m| m.base.alpha_mode)
-                .or_else(|| plain.and_then(|m| standard.get(&m.0)).map(|m| m.alpha_mode));
-            let styled = match (styled, baked) {
-                (Some(styled), _) => styled.0,
-                (None, Some(mode)) => {
-                    commands.entity(entity).insert(StyledAlphaMode(mode));
-                    mode
+            let mut styled_of = |id: AssetId<StandardMaterial>| -> Option<AlphaMode> {
+                if let Some(mode) = styled.get(&id) {
+                    return Some(*mode);
                 }
-                (None, None) => continue,
+                let mode = standard.get(id)?.alpha_mode;
+                styled.insert(id, mode);
+                Some(mode)
             };
-            let mode = building_alpha_mode(styled, see_through);
-            if let Some(mut material) = facade.and_then(|m| facades.get_mut(&m.0)) {
-                material.base.alpha_mode = mode;
+            let plain_styled = plain.and_then(|m| styled_of(m.0.id()));
+            let facade_styled = facade.and_then(|m| {
+                let id = m.0.id();
+                if let Some(mode) = styled_facades.get(&id) {
+                    return Some(*mode);
+                }
+                let mode = baked_from
+                    .and_then(|b| styled_of(b.0))
+                    .or_else(|| facades.get(id).map(|f| f.base.alpha_mode))?;
+                styled_facades.insert(id, mode);
+                Some(mode)
+            });
+            if plain_styled.is_none() && facade_styled.is_none() {
+                // Not loaded yet: try again next frame.
+                continue;
             }
-            if let Some(mut material) = plain.and_then(|m| standard.get_mut(&m.0)) {
-                material.alpha_mode = mode;
+            if let (Some(m), Some(mode)) = (facade, facade_styled) {
+                if let Some(mut material) = facades.get_mut(&m.0) {
+                    material.base.alpha_mode = building_alpha_mode(mode, see_through);
+                }
+            }
+            if let (Some(m), Some(mode)) = (plain, plain_styled) {
+                if let Some(mut material) = standard.get_mut(&m.0) {
+                    material.alpha_mode = building_alpha_mode(mode, see_through);
+                }
             }
             commands.entity(entity).insert(current);
         }
@@ -387,10 +407,13 @@ mod tests {
                 alpha_mode: AlphaMode::Blend,
                 ..Default::default()
             });
+        // Two parts share the material, as the scene builder's walls do: the
+        // second must not take the first's opaque setting as its style.
         let part = app.world_mut().spawn(MeshMaterial3d(handle.clone())).id();
+        let other = app.world_mut().spawn(MeshMaterial3d(handle.clone())).id();
         app.world_mut()
             .spawn(BuildingLayerRoot)
-            .add_children(&[part]);
+            .add_children(&[part, other]);
         let mode = |app: &App| {
             app.world()
                 .resource::<Assets<StandardMaterial>>()

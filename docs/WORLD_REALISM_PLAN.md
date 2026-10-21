@@ -568,7 +568,8 @@ C8 (P2.6) and D2 (P5.1).
     cornice and paned windows (taller on the ground floor), plus tile,
     slate and metal-seam courses on pitched roofs. Wall data is now
     TEXCOORD_0 = (height above the building's ground, along the wall) and
-    TEXCOORD_1 = (storey height, or -1 on a roof; class + 32 x levels).
+    TEXCOORD_1 = (storey height, or -1 on a roof; class + 32 x (8 x
+    levels), so a fractional count such as 2.5 storeys is kept).
   - **Solid buildings.** Buildings are opaque by default, so the detail is
     not washed out and they cast shadows. A See-through Buildings toggle in
     Runtime Overlays draws them at the scene's styled translucency, to see

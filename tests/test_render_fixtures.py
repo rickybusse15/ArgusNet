@@ -30,11 +30,22 @@ def test_high_entity_scene_adds_distinct_tracks(tmp_path):
         assert after["nodes"] == before["nodes"]
 
 
-def test_render_fixtures_declares_the_five_g2_fixtures():
+def test_render_fixtures_declares_the_g2_and_realism_fixtures():
     spec = importlib.util.spec_from_file_location(
         "render_fixtures", ROOT / "scripts/render_fixtures.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert set(module.FIXTURES) == {"overview", "close", "low_pitch", "split", "high_entity"}
+    assert set(module.FIXTURES) == {
+        "overview",
+        "close",
+        "low_pitch",
+        "split",
+        "high_entity",
+        "realism_dense",
+        "realism_dense_close",
+        "realism_dense_low_pitch",
+        "realism_large",
+        "realism_large_close",
+    }
     assert module.TIERS == ("low", "standard", "high")

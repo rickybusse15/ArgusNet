@@ -4,7 +4,7 @@ The viewer builds scene packages in Rust (`argusnet_sim::scene_build`), so a
 prior-world run needs no Python interpreter. This checks the Rust package
 against the Python one for the same replay: the same manifest, styles and
 environment, and per layer the same vertices, normals and colours (to float
-rounding) and the same triangles in the same order and winding, every one
+rounding; each Rust building carries a slight tint of its own) and the same triangles in the same order and winding, every one
 facing the way its normals point (the terrain faces up).
 """
 
@@ -41,7 +41,7 @@ def _glb(path: Path) -> tuple[dict[str, np.ndarray], np.ndarray]:
     def accessor(index: int) -> np.ndarray:
         acc = document["accessors"][index]
         view = document["bufferViews"][acc["bufferView"]]
-        width = {"VEC3": 3, "VEC4": 4, "SCALAR": 1}[acc["type"]]
+        width = {"VEC2": 2, "VEC3": 3, "VEC4": 4, "SCALAR": 1}[acc["type"]]
         dtype = {5126: np.float32, 5125: np.uint32}[acc["componentType"]]
         offset = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
         return np.frombuffer(
@@ -136,7 +136,11 @@ def test_the_rust_scene_package_matches_the_python_one(tmp_path: Path) -> None:
     for layer in python_manifest["layers"]:
         python_mesh, python_indices = _glb(python_root / layer["asset_path"])
         rust_mesh, rust_indices = _glb(rust_root / layer["asset_path"])
+        if layer["id"] == "buildings":
+            _assert_tinted(rust_mesh["COLOR_0"], python_mesh["COLOR_0"])
         for attribute in ("POSITION", "NORMAL", "COLOR_0"):
+            if layer["id"] == "buildings" and attribute == "COLOR_0":
+                continue
             np.testing.assert_allclose(
                 rust_mesh[attribute],
                 python_mesh[attribute],
@@ -145,6 +149,17 @@ def test_the_rust_scene_package_matches_the_python_one(tmp_path: Path) -> None:
             )
         np.testing.assert_array_equal(rust_indices, python_indices, err_msg=layer["id"])
         _assert_faces_follow_normals(python_mesh, python_indices, layer["id"])
+
+
+def _assert_tinted(rust: np.ndarray, python: np.ndarray) -> None:
+    """Rust gives each building a slight tint of its own (x0.9-1.08 of the
+    styled colour, the same on every channel); the alpha is the style's."""
+    np.testing.assert_allclose(rust[:, 3], python[:, 3], atol=1.0e-4, err_msg="buildings alpha")
+    ratio = rust[:, :3].astype(np.float64) / python[:, :3].astype(np.float64)
+    np.testing.assert_allclose(
+        ratio, ratio[:, :1].repeat(3, axis=1), atol=2.0e-3, err_msg="buildings tint is grey"
+    )
+    assert np.all((ratio >= 0.9 - 1.0e-3) & (ratio <= 1.08 + 1.0e-3)), ratio
 
 
 def _assert_faces_follow_normals(
