@@ -6,8 +6,9 @@ roofs, the georeferenced import and material facades. R3 is done: the
 model, the safety clearance, lines in a run, drawing in the viewer, the
 planner's corridor, the guard against wires, sensing wires and the
 clearance-corridor overlay. R2 is done: the tree model, trees in a run,
-sensing through trees, flight round trees and drawing trees. R4 and R5
-are not started.
+sensing through trees, flight round trees and drawing trees. R4 is done
+but for lighting tuned against a real scene, which waits for R5. R5 is
+not started.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
@@ -540,6 +541,14 @@ C8 (P2.6) and D2 (P5.1).
   window (measured 0.09 against 0.66). An impostor a third its size, or in
   the trunk's colour, fails it. The headless probe output now records the
   camera's position, so probes can place things by distance.
+
+  *Done (frame budget, R4.1):* on the D-5 reference machine (Apple M5 Pro),
+  the realism fixtures stay under the budget in every tier: worst p95
+  6.3 ms, p99 8.0 ms, no stall, over 75 quiesced runs at 1280x720,
+  including a regional map with 15,000 trees
+  ([record](performance/r4-frame-budget-2026-10-21.md)). Shadows stay on
+  at Standard and above. Not done: lighting and fog tuned against a real
+  scene, which needs R5's real-world scene.
 
 ### R5: real-world scene ingestion
 

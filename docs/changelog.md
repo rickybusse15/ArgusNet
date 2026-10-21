@@ -2,6 +2,10 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- R4 frame budget recorded on the D-5 reference machine (Apple M5 Pro):
+  the realism fixtures, including 15,000 trees, stay under p95 16.7 ms in
+  every tier (worst 6.3 ms; p99 8.0 ms; no stall), over 75 quiesced runs
+  (docs/performance/r4-frame-budget-2026-10-21.md).
 - Viewer: material classes set the surface, not only the colour (R4).
   Glass facades are smooth, masonry rough, and metal cladding and roofs
   moderately metallic. Generic keeps the layer's surface. Water in the

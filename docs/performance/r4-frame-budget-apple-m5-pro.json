@@ -1,0 +1,2789 @@
+{
+ "kind": "argusnet.g2-fixtures",
+ "version": 1,
+ "machine": {
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "processor": "arm"
+ },
+ "commit": "32ba948fea496450095bd777f43a42f228bb8b0e",
+ "frames_per_run": 120,
+ "repeats": 5,
+ "high_entity_count": 400,
+ "runs": [
+  {
+   "fixture": "realism_dense",
+   "tier": "low",
+   "repeat": 0,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "be7b5222fbe59cbd3fc6783dd94acd26bc7042797d7185632ba9ae0fdde35b86",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.0954999923706055,
+    "mean_ms": 2.3730523586273193,
+    "p50_ms": 2.334083080291748,
+    "p95_ms": 2.8466670513153076,
+    "p99_ms": 2.982416868209839,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.018285123631358147,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 14
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "low",
+   "repeat": 1,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "be7b5222fbe59cbd3fc6783dd94acd26bc7042797d7185632ba9ae0fdde35b86",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.535542011260986,
+    "mean_ms": 2.426731586456299,
+    "p50_ms": 2.3711671829223633,
+    "p95_ms": 3.0315420627593994,
+    "p99_ms": 3.4045422077178955,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014534084126353264,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "low",
+   "repeat": 2,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "be7b5222fbe59cbd3fc6783dd94acd26bc7042797d7185632ba9ae0fdde35b86",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.6116249561309814,
+    "mean_ms": 2.356935977935791,
+    "p50_ms": 2.3348329067230225,
+    "p95_ms": 2.7243330478668213,
+    "p99_ms": 3.3182499408721924,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014839832670986652,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 14
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "low",
+   "repeat": 3,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "be7b5222fbe59cbd3fc6783dd94acd26bc7042797d7185632ba9ae0fdde35b86",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.704166889190674,
+    "mean_ms": 2.3695712089538574,
+    "p50_ms": 2.319667100906372,
+    "p95_ms": 2.8416669368743896,
+    "p99_ms": 3.453000068664551,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014554458670318127,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 14
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "low",
+   "repeat": 4,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "be7b5222fbe59cbd3fc6783dd94acd26bc7042797d7185632ba9ae0fdde35b86",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.002667427062988,
+    "mean_ms": 2.363529920578003,
+    "p50_ms": 2.3396668434143066,
+    "p95_ms": 2.7796249389648438,
+    "p99_ms": 2.988042116165161,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014824916608631611,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 14
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "standard",
+   "repeat": 0,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "79bdd4fb026cab5c269e443c11cecc456e4374fe1ea065a40a403ed4449f3084",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.657833099365234,
+    "mean_ms": 3.0719876289367676,
+    "p50_ms": 3.0114171504974365,
+    "p95_ms": 3.920250177383423,
+    "p99_ms": 4.515625,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01695675030350685,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "standard",
+   "repeat": 1,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "79bdd4fb026cab5c269e443c11cecc456e4374fe1ea065a40a403ed4449f3084",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.363290786743164,
+    "mean_ms": 3.140383720397949,
+    "p50_ms": 3.101541042327881,
+    "p95_ms": 3.630542039871216,
+    "p99_ms": 3.9606246948242188,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014948667027056217,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "standard",
+   "repeat": 2,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "79bdd4fb026cab5c269e443c11cecc456e4374fe1ea065a40a403ed4449f3084",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.598124980926514,
+    "mean_ms": 3.0663363933563232,
+    "p50_ms": 3.0415000915527344,
+    "p95_ms": 3.5547080039978027,
+    "p99_ms": 3.8034579753875732,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015098333358764648,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "standard",
+   "repeat": 3,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "79bdd4fb026cab5c269e443c11cecc456e4374fe1ea065a40a403ed4449f3084",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.731832981109619,
+    "mean_ms": 3.408674478530884,
+    "p50_ms": 3.36270809173584,
+    "p95_ms": 4.15024995803833,
+    "p99_ms": 5.3454999923706055,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014956332743167877,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "standard",
+   "repeat": 4,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "79bdd4fb026cab5c269e443c11cecc456e4374fe1ea065a40a403ed4449f3084",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.63429069519043,
+    "mean_ms": 3.8890581130981445,
+    "p50_ms": 3.7569169998168945,
+    "p95_ms": 5.055124759674072,
+    "p99_ms": 6.453750133514404,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01656774990260601,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "high",
+   "repeat": 0,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "9b114c66f76905d9fb90a7ce9848cd39dab21d7aa439ea6aeb8024d14c0cf84a",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.22616720199585,
+    "mean_ms": 4.3301100730896,
+    "p50_ms": 4.2520833015441895,
+    "p95_ms": 5.682000160217285,
+    "p99_ms": 6.210833549499512,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.017180541530251503,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "high",
+   "repeat": 1,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "9b114c66f76905d9fb90a7ce9848cd39dab21d7aa439ea6aeb8024d14c0cf84a",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.491708755493164,
+    "mean_ms": 3.7635738849639893,
+    "p50_ms": 3.707791805267334,
+    "p95_ms": 4.305208206176758,
+    "p99_ms": 5.48799991607666,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.0175095833837986,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "high",
+   "repeat": 2,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "9b114c66f76905d9fb90a7ce9848cd39dab21d7aa439ea6aeb8024d14c0cf84a",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.537999629974365,
+    "mean_ms": 3.788332223892212,
+    "p50_ms": 3.6982500553131104,
+    "p95_ms": 4.426167011260986,
+    "p99_ms": 5.2060418128967285,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015256499871611595,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "high",
+   "repeat": 3,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "9b114c66f76905d9fb90a7ce9848cd39dab21d7aa439ea6aeb8024d14c0cf84a",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.984624862670898,
+    "mean_ms": 3.810584306716919,
+    "p50_ms": 3.712082862854004,
+    "p95_ms": 5.059625148773193,
+    "p99_ms": 5.299999713897705,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015339083969593048,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense",
+   "tier": "high",
+   "repeat": 4,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "9b114c66f76905d9fb90a7ce9848cd39dab21d7aa439ea6aeb8024d14c0cf84a",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.660749912261963,
+    "mean_ms": 3.759845733642578,
+    "p50_ms": 3.7375831604003906,
+    "p95_ms": 4.483583927154541,
+    "p99_ms": 5.34970760345459,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015100416727364063,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "low",
+   "repeat": 0,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "6aeeb0bb330473e30060b7b7c005b079fc5c86cc8c5c0f7e1ece783133ff63a2",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.234874963760376,
+    "mean_ms": 2.3630309104919434,
+    "p50_ms": 2.3381659984588623,
+    "p95_ms": 2.768582820892334,
+    "p99_ms": 3.14595890045166,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015030166134238243,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "low",
+   "repeat": 1,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "6aeeb0bb330473e30060b7b7c005b079fc5c86cc8c5c0f7e1ece783133ff63a2",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.213667154312134,
+    "mean_ms": 2.369568347930908,
+    "p50_ms": 2.341707944869995,
+    "p95_ms": 2.6932919025421143,
+    "p99_ms": 3.153540849685669,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014661208726465702,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 83
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "low",
+   "repeat": 2,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "6aeeb0bb330473e30060b7b7c005b079fc5c86cc8c5c0f7e1ece783133ff63a2",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.491374969482422,
+    "mean_ms": 2.4372775554656982,
+    "p50_ms": 2.370832920074463,
+    "p95_ms": 2.908874988555908,
+    "p99_ms": 3.3868749141693115,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01452591735869646,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 1560
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "low",
+   "repeat": 3,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "0bae8d72b10edb06c0d63d0802d7e3b3324a205a54ed2582f8526519a707d281",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.7814579010009766,
+    "mean_ms": 2.426039695739746,
+    "p50_ms": 2.375584125518799,
+    "p95_ms": 2.8625409603118896,
+    "p99_ms": 3.433332920074463,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01664550043642521,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 564
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "low",
+   "repeat": 4,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "0bae8d72b10edb06c0d63d0802d7e3b3324a205a54ed2582f8526519a707d281",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.4078328609466553,
+    "mean_ms": 2.394801378250122,
+    "p50_ms": 2.3557498455047607,
+    "p95_ms": 2.79954195022583,
+    "p99_ms": 3.37945818901062,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014839917421340942,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 14
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "standard",
+   "repeat": 0,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "1875d8902b5cfca6fb3867321ea079915f80893f7b03ea9822888bed321960d5",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.950374603271484,
+    "mean_ms": 3.5159220695495605,
+    "p50_ms": 3.4656670093536377,
+    "p95_ms": 4.158999919891357,
+    "p99_ms": 4.886582851409912,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015146750025451183,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "standard",
+   "repeat": 1,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "1875d8902b5cfca6fb3867321ea079915f80893f7b03ea9822888bed321960d5",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.841875076293945,
+    "mean_ms": 3.548623561859131,
+    "p50_ms": 3.459291934967041,
+    "p95_ms": 4.506249904632568,
+    "p99_ms": 6.811291694641113,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014909083023667336,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "standard",
+   "repeat": 2,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "1875d8902b5cfca6fb3867321ea079915f80893f7b03ea9822888bed321960d5",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.268125057220459,
+    "mean_ms": 3.4481589794158936,
+    "p50_ms": 3.459583044052124,
+    "p95_ms": 3.9240000247955322,
+    "p99_ms": 4.111041069030762,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015326875261962414,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "standard",
+   "repeat": 3,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "1875d8902b5cfca6fb3867321ea079915f80893f7b03ea9822888bed321960d5",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.943624973297119,
+    "mean_ms": 3.440905809402466,
+    "p50_ms": 3.4465830326080322,
+    "p95_ms": 3.807999849319458,
+    "p99_ms": 4.877417087554932,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015307458117604256,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "standard",
+   "repeat": 4,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "1875d8902b5cfca6fb3867321ea079915f80893f7b03ea9822888bed321960d5",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.0229997634887695,
+    "mean_ms": 3.4822347164154053,
+    "p50_ms": 3.443666934967041,
+    "p95_ms": 3.9045419692993164,
+    "p99_ms": 5.410249710083008,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01477841567248106,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "high",
+   "repeat": 0,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "96aa3e6120df587c42be95e6c588f1baacc2cfd067157ff87504deba426b2a6d",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.641332626342773,
+    "mean_ms": 4.026144027709961,
+    "p50_ms": 4.0265421867370605,
+    "p95_ms": 4.615916728973389,
+    "p99_ms": 5.295000076293945,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014866874553263187,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "high",
+   "repeat": 1,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "96aa3e6120df587c42be95e6c588f1baacc2cfd067157ff87504deba426b2a6d",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.079583168029785,
+    "mean_ms": 4.0413899421691895,
+    "p50_ms": 4.027708053588867,
+    "p95_ms": 4.447207927703857,
+    "p99_ms": 6.883416652679443,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015054709278047085,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "high",
+   "repeat": 2,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "96aa3e6120df587c42be95e6c588f1baacc2cfd067157ff87504deba426b2a6d",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.2768330574035645,
+    "mean_ms": 4.06033992767334,
+    "p50_ms": 3.9810407161712646,
+    "p95_ms": 4.679999828338623,
+    "p99_ms": 6.515833854675293,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015344415791332722,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "high",
+   "repeat": 3,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "96aa3e6120df587c42be95e6c588f1baacc2cfd067157ff87504deba426b2a6d",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.346707820892334,
+    "mean_ms": 4.024170875549316,
+    "p50_ms": 4.019708633422852,
+    "p95_ms": 4.692915916442871,
+    "p99_ms": 5.0044169425964355,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015724457800388336,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_close",
+   "tier": "high",
+   "repeat": 4,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "96aa3e6120df587c42be95e6c588f1baacc2cfd067157ff87504deba426b2a6d",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.453415870666504,
+    "mean_ms": 4.028811454772949,
+    "p50_ms": 4.027041912078857,
+    "p95_ms": 4.653666973114014,
+    "p99_ms": 6.842458248138428,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015325040556490421,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "low",
+   "repeat": 0,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "32753e4b639a0dd88f3c35a08252b5f0fe35d6bd73cdd86470c6427bcc98f012",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.168041944503784,
+    "mean_ms": 2.305119752883911,
+    "p50_ms": 2.2659168243408203,
+    "p95_ms": 2.663249969482422,
+    "p99_ms": 3.097166061401367,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014766291715204716,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "low",
+   "repeat": 1,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "052f7441ac6bde915af4a5d14cd930727a8429d1b7412cbf644276ef60542fd8",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.5379998683929443,
+    "mean_ms": 2.3113083839416504,
+    "p50_ms": 2.284374952316284,
+    "p95_ms": 2.6839170455932617,
+    "p99_ms": 3.3464999198913574,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01474504079669714,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "low",
+   "repeat": 2,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "d1653da44eb06df4abe13777fe2e4b0feb9f3263681da7ec1e01c2915146d51f",
+   "summary": {
+    "frames": 120,
+    "max_ms": 2.96875,
+    "mean_ms": 2.317391872406006,
+    "p50_ms": 2.2926249504089355,
+    "p95_ms": 2.7228331565856934,
+    "p99_ms": 2.8398330211639404,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014480000361800194,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 870
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "low",
+   "repeat": 3,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "0e1e0237b68577444adec41aeaf7494819e58ed1b116514b54b8c2306c1d19de",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.129499912261963,
+    "mean_ms": 2.509711980819702,
+    "p50_ms": 2.4237499237060547,
+    "p95_ms": 3.279959201812744,
+    "p99_ms": 4.589625358581543,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01474370900541544,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "low",
+   "repeat": 4,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "32753e4b639a0dd88f3c35a08252b5f0fe35d6bd73cdd86470c6427bcc98f012",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.692749977111816,
+    "mean_ms": 3.0807113647460938,
+    "p50_ms": 2.8378748893737793,
+    "p95_ms": 4.4930419921875,
+    "p99_ms": 5.27695894241333,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.016907958313822746,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 1598
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "standard",
+   "repeat": 0,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "08651bad09cc3b5f970b1c51c78636e3e8bce5908d3d6f843da5d6bba041bdef",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.383542060852051,
+    "mean_ms": 3.6750028133392334,
+    "p50_ms": 3.4521660804748535,
+    "p95_ms": 4.879666805267334,
+    "p99_ms": 6.855082988739014,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.017012376338243484,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "standard",
+   "repeat": 1,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "08651bad09cc3b5f970b1c51c78636e3e8bce5908d3d6f843da5d6bba041bdef",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.414207935333252,
+    "mean_ms": 3.800034284591675,
+    "p50_ms": 3.702457904815674,
+    "p95_ms": 5.126166343688965,
+    "p99_ms": 6.186666965484619,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.017233168706297874,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "standard",
+   "repeat": 2,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "08651bad09cc3b5f970b1c51c78636e3e8bce5908d3d6f843da5d6bba041bdef",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.843832969665527,
+    "mean_ms": 3.166684150695801,
+    "p50_ms": 3.0562500953674316,
+    "p95_ms": 4.074290752410889,
+    "p99_ms": 4.780083179473877,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.0189047921448946,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "standard",
+   "repeat": 3,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "08651bad09cc3b5f970b1c51c78636e3e8bce5908d3d6f843da5d6bba041bdef",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.155457973480225,
+    "mean_ms": 3.0438573360443115,
+    "p50_ms": 3.0081660747528076,
+    "p95_ms": 3.462834119796753,
+    "p99_ms": 4.072207927703857,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015053083188831806,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "standard",
+   "repeat": 4,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "08651bad09cc3b5f970b1c51c78636e3e8bce5908d3d6f843da5d6bba041bdef",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.794250011444092,
+    "mean_ms": 3.2726428508758545,
+    "p50_ms": 3.16854190826416,
+    "p95_ms": 4.234624862670898,
+    "p99_ms": 5.220916271209717,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01535124983638525,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "high",
+   "repeat": 0,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "160122d39c3f16e68de7c10bf24f775243011f9d9e516433f1d17d9e6e546e54",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.942458152770996,
+    "mean_ms": 3.8365867137908936,
+    "p50_ms": 3.689500093460083,
+    "p95_ms": 5.100540637969971,
+    "p99_ms": 6.831124782562256,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.014820707961916924,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "high",
+   "repeat": 1,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "160122d39c3f16e68de7c10bf24f775243011f9d9e516433f1d17d9e6e546e54",
+   "summary": {
+    "frames": 120,
+    "max_ms": 8.024499893188477,
+    "mean_ms": 4.307933330535889,
+    "p50_ms": 4.203833103179932,
+    "p95_ms": 5.623790740966797,
+    "p99_ms": 6.659499645233154,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015865834429860115,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "high",
+   "repeat": 2,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "160122d39c3f16e68de7c10bf24f775243011f9d9e516433f1d17d9e6e546e54",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.998291969299316,
+    "mean_ms": 4.125733852386475,
+    "p50_ms": 4.041208744049072,
+    "p95_ms": 5.348917007446289,
+    "p99_ms": 5.962832927703857,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.017962541431188583,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "high",
+   "repeat": 3,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "160122d39c3f16e68de7c10bf24f775243011f9d9e516433f1d17d9e6e546e54",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.917791843414307,
+    "mean_ms": 4.254312992095947,
+    "p50_ms": 4.095333099365234,
+    "p95_ms": 5.806041717529297,
+    "p99_ms": 6.6879167556762695,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.01587437465786934,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_dense_low_pitch",
+   "tier": "high",
+   "repeat": 4,
+   "camera": "low-pitch",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "41b644203563c40e5d287446b44911d29179f57baa243f40c438ef2a0cc730cb",
+   "image_sha256": "160122d39c3f16e68de7c10bf24f775243011f9d9e516433f1d17d9e6e546e54",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.734208106994629,
+    "mean_ms": 4.029487609863281,
+    "p50_ms": 3.87233304977417,
+    "p95_ms": 5.627791881561279,
+    "p99_ms": 6.451834201812744,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.015628082677721977,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "low",
+   "repeat": 0,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "bebb48ebfd16be207c9231d3f96bf01b8eb6aeb0661ca5b99573b99e646df77c",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.303709030151367,
+    "mean_ms": 2.7356960773468018,
+    "p50_ms": 2.6490421295166016,
+    "p95_ms": 3.5972089767456055,
+    "p99_ms": 3.7143750190734863,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.051040831953287125,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "low",
+   "repeat": 1,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "2ee2dcb334d04dd863d7072d7146ad4a57d7ef8613c51a04a026efdd3ad986e5",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.3001251220703125,
+    "mean_ms": 2.760690927505493,
+    "p50_ms": 2.6274588108062744,
+    "p95_ms": 3.9360411167144775,
+    "p99_ms": 4.561208248138428,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05113641545176506,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "low",
+   "repeat": 2,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "a3d750643cb4993b914ca44385dca611fa27f84b0533c99d1682867f5579c370",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.905457973480225,
+    "mean_ms": 2.688093900680542,
+    "p50_ms": 2.5802500247955322,
+    "p95_ms": 3.6170830726623535,
+    "p99_ms": 3.9120829105377197,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.051383208483457565,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "low",
+   "repeat": 3,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "5b76af8fb0a19e3ad259c9007dfeb88485fc1a8d51beec9345fc4f270d25c48e",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.9997501373291016,
+    "mean_ms": 2.530687093734741,
+    "p50_ms": 2.500332832336426,
+    "p95_ms": 3.0765419006347656,
+    "p99_ms": 3.7887909412384033,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05088966339826584,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "low",
+   "repeat": 4,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "c3e1de4dca667f5664759305a47799cf5e3804ec737b74f1f0b39e7fc7273b95",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.679042100906372,
+    "mean_ms": 2.5251243114471436,
+    "p50_ms": 2.482041835784912,
+    "p95_ms": 3.130125045776367,
+    "p99_ms": 3.6224172115325928,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05067054554820061,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "standard",
+   "repeat": 0,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "6cb3a1b4e4d07e03ad3a8bd58dbb48229c0031f3140ff268bd1e6e4f13569117",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.931250095367432,
+    "mean_ms": 3.271674156188965,
+    "p50_ms": 3.224958896636963,
+    "p95_ms": 4.7596659660339355,
+    "p99_ms": 5.250959396362305,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05057845637202263,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "standard",
+   "repeat": 1,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "6cb3a1b4e4d07e03ad3a8bd58dbb48229c0031f3140ff268bd1e6e4f13569117",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.231082916259766,
+    "mean_ms": 3.2402279376983643,
+    "p50_ms": 3.221458911895752,
+    "p95_ms": 3.93133282661438,
+    "p99_ms": 5.032083988189697,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05077395960688591,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "standard",
+   "repeat": 2,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "6cb3a1b4e4d07e03ad3a8bd58dbb48229c0031f3140ff268bd1e6e4f13569117",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.333540916442871,
+    "mean_ms": 3.292182445526123,
+    "p50_ms": 3.2612080574035645,
+    "p95_ms": 4.740749835968018,
+    "p99_ms": 5.140292167663574,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05130000039935112,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "standard",
+   "repeat": 3,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "6cb3a1b4e4d07e03ad3a8bd58dbb48229c0031f3140ff268bd1e6e4f13569117",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.8401665687561035,
+    "mean_ms": 3.2951855659484863,
+    "p50_ms": 3.2343339920043945,
+    "p95_ms": 3.7738749980926514,
+    "p99_ms": 4.892709255218506,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05135808512568474,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "standard",
+   "repeat": 4,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "6cb3a1b4e4d07e03ad3a8bd58dbb48229c0031f3140ff268bd1e6e4f13569117",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.957666873931885,
+    "mean_ms": 3.2962489128112793,
+    "p50_ms": 3.2818751335144043,
+    "p95_ms": 3.9937081336975098,
+    "p99_ms": 5.562334060668945,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05206812545657158,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "high",
+   "repeat": 0,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "9757c7402eec2860ed46d0404081daa51561141b9a51dc7c225f81c068c6c013",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.437708854675293,
+    "mean_ms": 3.9694409370422363,
+    "p50_ms": 3.899540901184082,
+    "p95_ms": 5.8552093505859375,
+    "p99_ms": 6.24570894241333,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05126800015568733,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "high",
+   "repeat": 1,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "9757c7402eec2860ed46d0404081daa51561141b9a51dc7c225f81c068c6c013",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.405250072479248,
+    "mean_ms": 3.9336366653442383,
+    "p50_ms": 3.93149995803833,
+    "p95_ms": 4.860083103179932,
+    "p99_ms": 6.197667121887207,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.051488664001226425,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "high",
+   "repeat": 2,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "9757c7402eec2860ed46d0404081daa51561141b9a51dc7c225f81c068c6c013",
+   "summary": {
+    "frames": 120,
+    "max_ms": 9.54758358001709,
+    "mean_ms": 3.9084410667419434,
+    "p50_ms": 3.9051249027252197,
+    "p95_ms": 5.4076666831970215,
+    "p99_ms": 6.10575008392334,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05090203881263733,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "high",
+   "repeat": 3,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "9757c7402eec2860ed46d0404081daa51561141b9a51dc7c225f81c068c6c013",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.5894999504089355,
+    "mean_ms": 3.921797752380371,
+    "p50_ms": 3.8982081413269043,
+    "p95_ms": 5.806041717529297,
+    "p99_ms": 6.3067498207092285,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05095912516117096,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large",
+   "tier": "high",
+   "repeat": 4,
+   "camera": "isometric",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "9757c7402eec2860ed46d0404081daa51561141b9a51dc7c225f81c068c6c013",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.372833251953125,
+    "mean_ms": 3.94706392288208,
+    "p50_ms": 3.907583236694336,
+    "p95_ms": 5.266000270843506,
+    "p99_ms": 5.900415897369385,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05111716687679291,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "low",
+   "repeat": 0,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "73beb71dbc3dcc03d598021bf5c35c827a5d25149d88b65303b68443d4069dac",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.416584014892578,
+    "mean_ms": 2.5916459560394287,
+    "p50_ms": 2.5828750133514404,
+    "p95_ms": 2.884124994277954,
+    "p99_ms": 3.762583017349243,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05100604146718979,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "low",
+   "repeat": 1,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "718e5a8d3f4c9b83e01b09b2112f7e3508fefd8edd93af536772f6b118372f6b",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.934499740600586,
+    "mean_ms": 2.586638927459717,
+    "p50_ms": 2.567457914352417,
+    "p95_ms": 3.572499990463257,
+    "p99_ms": 3.918416738510132,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05129437521100044,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "low",
+   "repeat": 2,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "a07cbab07148bab7739b0ce7a057b0fe20386b7f0e2792a892dfc51b9b929929",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.9956672191619873,
+    "mean_ms": 2.5792551040649414,
+    "p50_ms": 2.540916919708252,
+    "p95_ms": 3.150834083557129,
+    "p99_ms": 3.939458131790161,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05122120678424835,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "low",
+   "repeat": 3,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "9ce6a9f32e0ac96fd973844541632ef2a09e0002bc856225bf65dcd70ab00866",
+   "summary": {
+    "frames": 120,
+    "max_ms": 4.0679168701171875,
+    "mean_ms": 2.607464075088501,
+    "p50_ms": 2.5849997997283936,
+    "p95_ms": 2.887666940689087,
+    "p99_ms": 3.874666929244995,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05068762227892876,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "low",
+   "repeat": 4,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "789dbf8fcc588acd5517aac1836c30ad7172e829459c73f37e4dfc1517c8fd29",
+   "summary": {
+    "frames": 120,
+    "max_ms": 3.9299581050872803,
+    "mean_ms": 2.6078670024871826,
+    "p50_ms": 2.584041118621826,
+    "p95_ms": 3.2861671447753906,
+    "p99_ms": 3.9272499084472656,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05064324662089348,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 2000
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "standard",
+   "repeat": 0,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "33fb264df3170f2a41b0e56e2e5112bc060a4d1a72ec508ef0ffea9ffeefbfff",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.999125003814697,
+    "mean_ms": 4.6555304527282715,
+    "p50_ms": 4.459208965301514,
+    "p95_ms": 6.285458564758301,
+    "p99_ms": 7.947208404541016,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.052657585591077805,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "standard",
+   "repeat": 1,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "33fb264df3170f2a41b0e56e2e5112bc060a4d1a72ec508ef0ffea9ffeefbfff",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.03000020980835,
+    "mean_ms": 4.49721622467041,
+    "p50_ms": 4.489292144775391,
+    "p95_ms": 5.676624774932861,
+    "p99_ms": 6.458582878112793,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05772516876459122,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "standard",
+   "repeat": 2,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "33fb264df3170f2a41b0e56e2e5112bc060a4d1a72ec508ef0ffea9ffeefbfff",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.4886250495910645,
+    "mean_ms": 3.894930362701416,
+    "p50_ms": 3.881500005722046,
+    "p95_ms": 4.382332801818848,
+    "p99_ms": 5.819667339324951,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.053910039365291595,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "standard",
+   "repeat": 3,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "33fb264df3170f2a41b0e56e2e5112bc060a4d1a72ec508ef0ffea9ffeefbfff",
+   "summary": {
+    "frames": 120,
+    "max_ms": 6.720458984375,
+    "mean_ms": 4.021373748779297,
+    "p50_ms": 3.9365408420562744,
+    "p95_ms": 4.593042373657227,
+    "p99_ms": 6.378749847412109,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05346887558698654,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "standard",
+   "repeat": 4,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "33fb264df3170f2a41b0e56e2e5112bc060a4d1a72ec508ef0ffea9ffeefbfff",
+   "summary": {
+    "frames": 120,
+    "max_ms": 5.566291809082031,
+    "mean_ms": 4.021377086639404,
+    "p50_ms": 3.9363341331481934,
+    "p95_ms": 4.856916904449463,
+    "p99_ms": 5.428040981292725,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05333820730447769,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "high",
+   "repeat": 0,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "bca7afde42381c92457089a0a8bb57be1c9f742e01b6e2e64a33140384737447",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.5143327713012695,
+    "mean_ms": 4.697423458099365,
+    "p50_ms": 4.582624912261963,
+    "p95_ms": 5.96375036239624,
+    "p99_ms": 7.426791667938232,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.053813330829143524,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "high",
+   "repeat": 1,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "bca7afde42381c92457089a0a8bb57be1c9f742e01b6e2e64a33140384737447",
+   "summary": {
+    "frames": 120,
+    "max_ms": 9.958084106445312,
+    "mean_ms": 4.788868427276611,
+    "p50_ms": 4.672957897186279,
+    "p95_ms": 5.615084171295166,
+    "p99_ms": 8.032875061035156,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05411720648407936,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "high",
+   "repeat": 2,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "bca7afde42381c92457089a0a8bb57be1c9f742e01b6e2e64a33140384737447",
+   "summary": {
+    "frames": 120,
+    "max_ms": 7.264249801635742,
+    "mean_ms": 4.490903377532959,
+    "p50_ms": 4.4614577293396,
+    "p95_ms": 5.148082733154297,
+    "p99_ms": 6.583166599273682,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05219250172376633,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "high",
+   "repeat": 3,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "bca7afde42381c92457089a0a8bb57be1c9f742e01b6e2e64a33140384737447",
+   "summary": {
+    "frames": 120,
+    "max_ms": 9.269749641418457,
+    "mean_ms": 4.81679630279541,
+    "p50_ms": 4.755917072296143,
+    "p95_ms": 6.049249649047852,
+    "p99_ms": 7.284374713897705,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.05268075317144394,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  },
+  {
+   "fixture": "realism_large_close",
+   "tier": "high",
+   "repeat": 4,
+   "camera": "close",
+   "view_mode": "real-world",
+   "viewport": [
+    1280,
+    720
+   ],
+   "scene_sha256": "90c88bc982829b38c66040477f28003d53371fdf0b9125e7c951ee7a2061069f",
+   "image_sha256": "bca7afde42381c92457089a0a8bb57be1c9f742e01b6e2e64a33140384737447",
+   "summary": {
+    "frames": 120,
+    "max_ms": 8.10341739654541,
+    "mean_ms": 4.607802391052246,
+    "p50_ms": 4.503417015075684,
+    "p95_ms": 5.454209327697754,
+    "p99_ms": 7.972291469573975,
+    "stalls_over_100ms": 0
+   },
+   "warmup": {
+    "assets_s": 0.057544708251953125,
+    "drawn_at_frame": 2,
+    "frames_waiting_assets": 1,
+    "settle_frames": 13
+   },
+   "profile": "release",
+   "renderer_class": "hardware",
+   "adapter": {
+    "backend": "Metal",
+    "device_type": "IntegratedGpu",
+    "driver": "",
+    "driver_info": "",
+    "name": "Apple M5 Pro"
+   }
+  }
+ ]
+}
