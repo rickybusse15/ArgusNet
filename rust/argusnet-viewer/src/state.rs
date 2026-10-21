@@ -46,6 +46,10 @@ pub struct RuntimeOverlayVisibility {
     /// Each power-line span's clearance volume (R3): an overlay, off by
     /// default.
     pub power_line_clearance: bool,
+    /// Buildings drawn at the scene's styled translucency, so drones and
+    /// tracks behind them show through. Off by default: buildings are
+    /// solid. No layer preset owns it.
+    pub see_through_buildings: bool,
 }
 
 /// The startup layers are the Operational preset's (`crate::layers`).
@@ -71,6 +75,7 @@ impl Default for RuntimeOverlayVisibility {
             power_lines: true,
             trees: true,
             power_line_clearance: false,
+            see_through_buildings: false,
         }
     }
 }
