@@ -623,7 +623,9 @@ C8 (P2.6) and D2 (P5.1).
   The builder's `features_path` option builds the land cover from the data
   (`landscape::build_data_land_cover`). Where the data says nothing, the
   ground is open, or rock above 0.52 rad. The polygons are painted by
-  assignment, so a road clears a forest, and the obstacles go last, so
+  assignment, so a road clears a forest. Lines, written as segments with a
+  width, are painted at least sqrt(2) cells wide, so a road narrower than a
+  cell still marks every cell it crosses. The obstacles go last, so
   buildings stay urban. The procedural walls and forest stands are dropped,
   and asked-for trees grow only in mapped forest. One origin check covers
   every real layer. The tests cover cover from data, invented cover
@@ -642,8 +644,10 @@ C8 (P2.6) and D2 (P5.1).
   tags, else its species' middle values, with no draws. Its scattered trees
   keep the spacing from mapped ones. Lines stand on the run's ground with
   the kind's defaults: support height, arm width, sag, conductor radius,
-  and clearance by voltage. A line that leaves the map keeps each run of
-  two or more supports inside it. The procedural line is not built when a
+  and clearance by voltage. A support off the map or inside a building
+  splits its line, which keeps each run of two or more clear supports.
+  Mapped trunks are indexed on a grid, so the scatter's spacing check stays
+  linear however many trees are mapped. The procedural line is not built when a
   features file is given. Anything outside the map, inside a structure or
   refused by the model is counted in the record. All 19 mutants are killed.
   Next: one pipeline and the canonical town (R5.3).
