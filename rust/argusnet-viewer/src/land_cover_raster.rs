@@ -62,6 +62,9 @@ pub struct LandCoverRaster {
     pub classes: Vec<u8>,
     /// Each code's colour; alpha 0 for a code with none, which draws no tint.
     pub palette: [Vec4; PALETTE_SIZE],
+    /// The code the legend names `water`, if any: drawn as a smooth,
+    /// reflective surface (R4).
+    pub water_code: Option<u8>,
     layer: LandCoverLayer,
 }
 
@@ -115,7 +118,13 @@ impl LandCoverRaster {
             }
         }
 
+        let water_code = document
+            .legend
+            .get("water")
+            .copied()
+            .filter(|code| (*code as usize) < PALETTE_SIZE);
         Ok(Self {
+            water_code,
             x_min_m: bounds.x_min_m,
             y_min_m: bounds.y_min_m,
             resolution_m: resolution,
@@ -226,6 +235,7 @@ mod tests {
     fn the_palette_follows_the_legend_and_unnamed_codes_draw_nothing() {
         let raster = LandCoverRaster::from_document(document(72.0)).unwrap();
         assert_eq!(raster.palette[2], Vec4::new(0.1, 0.6, 0.2, 0.7));
+        assert_eq!(raster.water_code, Some(3), "water, from the legend");
         assert_eq!(raster.palette[3].z, 0.9);
         assert_eq!(
             raster.palette[0],

@@ -243,7 +243,13 @@ pub fn sync_terrain_rasters_system(
                         raster.resolution_m as f32,
                         0.0,
                     ),
-                    UVec4::new(raster.cols as u32, raster.rows as u32, 1, 0),
+                    // w: the water code plus one (0 for none), R4.
+                    UVec4::new(
+                        raster.cols as u32,
+                        raster.rows as u32,
+                        1,
+                        raster.water_code.map_or(0, |code| u32::from(code) + 1),
+                    ),
                     raster.palette,
                 ));
             }

@@ -218,6 +218,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let code = min(textureLoad(land_cover, cell, 0).r, 15u);
             let class_color = terrain.land_cover_palette[code];
             tint = mix(tint, class_color.rgb, class_color.a * terrain.land_cover_grid.w);
+            // Water is a smooth surface that mirrors the sky (R4); every
+            // other class keeps the terrain's own roughness.
+            if terrain.land_cover_dims.w > 0u && code == terrain.land_cover_dims.w - 1u {
+                pbr_input.material.perceptual_roughness = 0.08;
+            }
         }
     }
 
