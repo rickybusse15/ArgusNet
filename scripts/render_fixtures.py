@@ -12,6 +12,13 @@ reference hardware (VERIFICATION_AND_ROLLOUT.md §5, decision D-5). The
 manifest says which it was.
 
     python scripts/render_fixtures.py OUT_DIR --viewer target/release/argusnet-viewer
+
+The realism fixtures (R4) render worlds the native builder makes, with
+buildings, power lines and trees, and need `--argusnet-rs`:
+
+    python scripts/render_fixtures.py OUT --viewer target/release/argusnet-viewer \
+        --argusnet-rs target/release/argusnet-rs --fixtures realism_dense realism_large \
+        --width 1280 --height 720 --repeats 5
 """
 
 from __future__ import annotations
@@ -35,6 +42,33 @@ FIXTURES = {
     "low_pitch": ("base", "low-pitch", "real-world"),
     "split": ("base", "isometric", "split"),
     "high_entity": ("load", "isometric", "real-world"),
+    # R4: a dense block grid with a power line and scattered trees, from
+    # three cameras; and a regional map with 15,000 trees (the builder's cap).
+    "realism_dense": ("dense", "isometric", "real-world"),
+    "realism_dense_close": ("dense", "close", "real-world"),
+    "realism_dense_low_pitch": ("dense", "low-pitch", "real-world"),
+    "realism_large": ("large", "isometric", "real-world"),
+    "realism_large_close": ("large", "close", "real-world"),
+}
+DEFAULT_FIXTURES = ("overview", "close", "low_pitch", "split", "high_entity")
+# The worlds the realism fixtures render: scenario-config options.
+REALISM_WORLDS = {
+    "dense": {
+        "map_preset": "medium",
+        "terrain_preset": "urban_dense",
+        "trees": True,
+        "power_lines": True,
+        "drone_count": 6,
+        "poi_count": 8,
+    },
+    "large": {
+        "map_preset": "regional",
+        "terrain_preset": "alpine",
+        "trees": True,
+        "power_lines": True,
+        "drone_count": 16,
+        "poi_count": 8,
+    },
 }
 TIERS = ("low", "standard", "high")
 HIGH_ENTITY_COUNT = 400
@@ -51,6 +85,28 @@ def scene_hash(scene: Path) -> str:
     return digest.hexdigest()
 
 
+def build_realism_scene(argusnet_rs: Path, world: str, out: Path) -> None:
+    """Run a 30 s scenario of `world` and package its scene in `out`."""
+    config = out.with_suffix(".config.json")
+    replay = out.with_suffix(".replay.json")
+    config.write_text(
+        json.dumps(
+            {
+                "format": "argusnet.scenario-config",
+                "version": 1,
+                "seed": 7,
+                "duration_s": 30.0,
+                "options": REALISM_WORLDS[world],
+            }
+        )
+    )
+    for command in (
+        [str(argusnet_rs), "sim", "--quiet", "--config", str(config), "--replay", str(replay)],
+        [str(argusnet_rs), "build-scene", "--replay", str(replay), "--output", str(out)],
+    ):
+        subprocess.run(command, check=True, capture_output=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -63,20 +119,38 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=650)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--tiers", nargs="+", default=list(TIERS), choices=TIERS)
-    parser.add_argument("--fixtures", nargs="+", default=list(FIXTURES), choices=list(FIXTURES))
+    parser.add_argument(
+        "--fixtures", nargs="+", default=list(DEFAULT_FIXTURES), choices=list(FIXTURES)
+    )
+    parser.add_argument(
+        "--argusnet-rs", type=Path, help="the native CLI, to build the realism fixtures' worlds"
+    )
+    parser.add_argument(
+        "--repeats", type=int, default=1, help="runs per fixture and tier (protocol: 5)"
+    )
     args = parser.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
     scenes = {"base": args.out / "scene-base", "load": args.out / "scene-load"}
-    prepare(scenes["base"])
-    prepare(scenes["load"], HIGH_ENTITY_COUNT)
+    needed = {FIXTURES[f][0] for f in args.fixtures}
+    if "base" in needed:
+        prepare(scenes["base"])
+    if "load" in needed:
+        prepare(scenes["load"], HIGH_ENTITY_COUNT)
+    for world in REALISM_WORLDS:
+        if world in needed:
+            if args.argusnet_rs is None:
+                parser.error(f"the {world} realism fixtures need --argusnet-rs")
+            scenes[world] = args.out / f"scene-{world}"
+            build_realism_scene(args.argusnet_rs, world, scenes[world])
 
     runs = []
     for fixture in args.fixtures:
         scene_key, camera, view_mode = FIXTURES[fixture]
         scene = scenes[scene_key]
-        for tier in args.tiers:
-            still = args.out / f"{fixture}-{tier}.png"
+        for tier, repeat in [(t, r) for t in args.tiers for r in range(args.repeats)]:
+            suffix = f"-{repeat}" if args.repeats > 1 else ""
+            still = args.out / f"{fixture}-{tier}{suffix}.png"
             command = [
                 str(args.viewer),
                 "--scene",
@@ -108,6 +182,7 @@ def main() -> int:
                 {
                     "fixture": fixture,
                     "tier": tier,
+                    "repeat": repeat,
                     "camera": camera,
                     "view_mode": view_mode,
                     "viewport": stats["viewport"],
@@ -134,7 +209,11 @@ def main() -> int:
             "platform": platform.platform(),
             "processor": platform.processor() or platform.machine(),
         },
+        "commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True
+        ).stdout.strip(),
         "frames_per_run": args.frames,
+        "repeats": args.repeats,
         "high_entity_count": HIGH_ENTITY_COUNT,
         "runs": runs,
     }
