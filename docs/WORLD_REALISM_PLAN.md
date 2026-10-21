@@ -630,8 +630,23 @@ C8 (P2.6) and D2 (P5.1).
   dropped, buildings on top, trees only in forest, the record, refusals,
   and an end-to-end run; all 12 mutants are killed. A DEM, the features
   and the synthetic town's buildings run together on the regional map.
-  Next: OSM trees and power lines (R5.2b); one pipeline and the canonical
-  town (R5.3).
+
+  *Done (mapped trees and power lines, R5.2b):* the features document also
+  carries:
+  - `natural=tree` points and `natural=tree_row` lines, a tree every 8 m,
+    with species from `leaf_type` or a palm genus;
+  - `power=line` and `minor_line` ways, with tower or pole heights, `cables`
+    and `voltage`.
+
+  The builder stands each tree where it was mapped, sizing it from its
+  tags, else its species' middle values, with no draws. Its scattered trees
+  keep the spacing from mapped ones. Lines stand on the run's ground with
+  the kind's defaults: support height, arm width, sag, conductor radius,
+  and clearance by voltage. A line that leaves the map keeps each run of
+  two or more supports inside it. The procedural line is not built when a
+  features file is given. Anything outside the map, inside a structure or
+  refused by the model is counted in the record. All 19 mutants are killed.
+  Next: one pipeline and the canonical town (R5.3).
 
 ## Order and size
 

@@ -9,6 +9,11 @@
   nothing is invented. Roads run through forests, buildings stay urban,
   trees grow only in mapped forests, and the procedural walls and forest
   stands are dropped. Every real layer must share one origin.
+- Mapped trees and power lines (R5). The features document carries OSM
+  trees (points and tree rows) and power lines, with their tagged sizes,
+  tower heights, cables and voltage. The run stands them on its ground in
+  place of the procedural line, keeps scattered trees 8 m from mapped ones,
+  and counts anything it leaves out.
 - Real terrain from a DEM (R5). `scripts/import_terrain.py` turns a GeoTIFF
   into an `argusnet.terrain` document on a map preset's height grid,
   around the same origin as the buildings importer. Each cell is placed

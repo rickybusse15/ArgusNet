@@ -11,6 +11,13 @@
 //! replaces them. Trees, when asked for, are scattered over the data's
 //! forests.
 //!
+//! Trees and power lines (R5.2b) are the data's too. Each tree stands
+//! where it was mapped, sized by its tags or by its species' middle values.
+//! Asked-for scattered trees keep clear of it. Each power line's supports
+//! stand on the run's ground, and the procedural line is not built. A tree
+//! or line outside the map, inside a structure, or that the model refuses
+//! is left out and counted, never moved.
+//!
 //! Every layer of a run must share one origin: a features file whose origin
 //! differs from the terrain's or the buildings' fails the build by name.
 //! The georeference, the document's hash and the counts go into the bundle
@@ -20,7 +27,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use argusnet_world::land_cover_build::{CoverPolygon, LandCoverClass, SeasonalVariation};
+use argusnet_world::landscape::BuiltTerrain;
+use argusnet_world::obstacles::Obstacle;
+use argusnet_world::powerline::{PowerLine, Support};
+use argusnet_world::trees::{Species, Tree};
 
+use super::environment::MapBounds;
 use super::BuildError;
 
 pub const FEATURES_FORMAT: &str = "argusnet.features";
@@ -50,12 +62,50 @@ pub struct LandCoverFeature {
     pub width_m: Option<f64>,
 }
 
+/// One mapped tree, its sizes when tagged.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportedTree {
+    pub id: String,
+    pub xy_m: [f64; 2],
+    pub species: String,
+    #[serde(default)]
+    pub height_m: Option<f64>,
+    #[serde(default)]
+    pub crown_radius_m: Option<f64>,
+    #[serde(default)]
+    pub trunk_radius_m: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportedSupport {
+    pub xy_m: [f64; 2],
+    /// Its top cross-arm above the ground, when a tower or pole is tagged.
+    #[serde(default)]
+    pub height_m: Option<f64>,
+}
+
+/// One mapped power line: `line` (transmission) or `minor_line`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportedPowerLine {
+    pub id: String,
+    pub kind: String,
+    pub supports: Vec<ImportedSupport>,
+    #[serde(default)]
+    pub cables: Option<u32>,
+    #[serde(default)]
+    pub voltage_v: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FeaturesDocument {
     pub format: String,
     pub version: u32,
     pub georeference: Georeference,
     pub land_cover: Vec<LandCoverFeature>,
+    #[serde(default)]
+    pub trees: Vec<ImportedTree>,
+    #[serde(default)]
+    pub power_lines: Vec<ImportedPowerLine>,
     #[serde(default)]
     pub source_sha256: String,
     #[serde(default)]
@@ -132,7 +182,194 @@ pub fn load(path: &str) -> Result<(FeaturesDocument, u64), BuildError> {
             )));
         }
     }
+    for tree in &document.trees {
+        if tree_species(&tree.species).is_none() {
+            return Err(invalid(format!(
+                "tree {}: unknown species {:?}",
+                tree.id, tree.species
+            )));
+        }
+    }
+    for line in &document.power_lines {
+        if line_kind(&line.kind).is_none() {
+            return Err(invalid(format!(
+                "power line {}: unknown kind {:?}",
+                line.id, line.kind
+            )));
+        }
+    }
     Ok((document, crate::config::fnv1a(&bytes)))
+}
+
+pub fn tree_species(name: &str) -> Option<Species> {
+    Some(match name {
+        "conifer" => Species::Conifer,
+        "broadleaf" => Species::Broadleaf,
+        "palm" => Species::Palm,
+        "shrub" => Species::Shrub,
+        _ => return None,
+    })
+}
+
+/// What a mapped line's kind gives where the tags do not: support height,
+/// cross-arm width, sag ratio, conductor radius and clearance (metres but
+/// the ratio).
+pub struct LineKind {
+    pub support_height_m: f64,
+    pub arm_m: f64,
+    pub sag_ratio: f64,
+    pub conductor_radius_m: f64,
+    pub clearance_m: f64,
+}
+
+pub fn line_kind(name: &str) -> Option<LineKind> {
+    match name {
+        // As the procedural transmission line.
+        "line" => Some(LineKind {
+            support_height_m: 30.0,
+            arm_m: 8.0,
+            sag_ratio: 0.03,
+            conductor_radius_m: 0.015,
+            clearance_m: 10.0,
+        }),
+        "minor_line" => Some(LineKind {
+            support_height_m: 10.0,
+            arm_m: 1.6,
+            sag_ratio: 0.02,
+            conductor_radius_m: 0.006,
+            clearance_m: 4.0,
+        }),
+        _ => None,
+    }
+}
+
+/// How far a platform keeps from a line of `voltage_v`, metres: 10 at
+/// 110 kV and over, 6 at 33 kV and over, 4 below; the kind's when the
+/// voltage is not tagged.
+pub fn clearance_m(kind: &LineKind, voltage_v: Option<f64>) -> f64 {
+    match voltage_v {
+        Some(v) if v >= 110_000.0 => 10.0,
+        Some(v) if v >= 33_000.0 => 6.0,
+        Some(_) => 4.0,
+        None => kind.clearance_m,
+    }
+}
+
+/// `count` conductors (1 to 12) spread evenly across an arm `arm_m` wide,
+/// to the millimetre; one hangs on the line.
+pub fn conductor_offsets(count: u32, arm_m: f64) -> Vec<f64> {
+    let count = count.clamp(1, 12);
+    if count == 1 {
+        return vec![0.0];
+    }
+    (0..count)
+        .map(|k| {
+            let offset = -0.5 * arm_m + arm_m * f64::from(k) / f64::from(count - 1);
+            // To the millimetre, as the bundle carries it.
+            (offset * 1000.0).round() / 1000.0
+        })
+        .collect()
+}
+
+/// What the data's trees and lines became, and what was left out.
+#[derive(Debug, Default)]
+pub struct Placed {
+    pub trees: Vec<Tree>,
+    pub power_lines: Vec<PowerLine>,
+    pub trees_outside_map: usize,
+    pub trees_in_structure: usize,
+    pub trees_refused: usize,
+    pub lines_outside_map: usize,
+    pub lines_refused: usize,
+}
+
+fn inside(bounds: MapBounds, xy: [f64; 2]) -> bool {
+    xy[0] >= bounds.x_min_m
+        && xy[0] <= bounds.x_max_m
+        && xy[1] >= bounds.y_min_m
+        && xy[1] <= bounds.y_max_m
+}
+
+fn in_structure(obstacles: &[Obstacle], xy: [f64; 2]) -> bool {
+    obstacles.iter().any(|obstacle| {
+        obstacle.blocker_type.is_hard()
+            && obstacle.point_inside(xy[0], xy[1], 0.5 * (obstacle.base_z_m + obstacle.top_z_m))
+    })
+}
+
+/// Stand the data's trees and lines on `terrain` inside `bounds`. A line
+/// crossing the map's edge keeps each run of its supports inside the map
+/// with two or more (`id`, then `id#1`, ...).
+pub fn place(
+    document: &FeaturesDocument,
+    terrain: &BuiltTerrain,
+    bounds: MapBounds,
+    obstacles: &[Obstacle],
+    season: SeasonalVariation,
+) -> Placed {
+    let mut placed = Placed::default();
+    for tree in &document.trees {
+        if !inside(bounds, tree.xy_m) {
+            placed.trees_outside_map += 1;
+            continue;
+        }
+        if in_structure(obstacles, tree.xy_m) {
+            placed.trees_in_structure += 1;
+            continue;
+        }
+        let species = tree_species(&tree.species).expect("checked on load");
+        let built = super::trees::imported_tree(
+            &tree.id,
+            tree.xy_m,
+            species,
+            (tree.height_m, tree.crown_radius_m, tree.trunk_radius_m),
+            terrain,
+            season,
+        );
+        match built.validated() {
+            Ok(tree) => placed.trees.push(tree),
+            Err(_) => placed.trees_refused += 1,
+        }
+    }
+    for line in &document.power_lines {
+        let kind = line_kind(&line.kind).expect("checked on load");
+        let mut runs: Vec<Vec<Support>> = vec![Vec::new()];
+        for support in &line.supports {
+            if inside(bounds, support.xy_m) {
+                runs.last_mut().expect("one run").push(Support {
+                    xy_m: support.xy_m,
+                    base_z_m: terrain.height_at(support.xy_m[0], support.xy_m[1]),
+                    height_m: support.height_m.unwrap_or(kind.support_height_m),
+                });
+            } else if !runs.last().expect("one run").is_empty() {
+                runs.push(Vec::new());
+            }
+        }
+        let runs: Vec<Vec<Support>> = runs.into_iter().filter(|run| run.len() >= 2).collect();
+        if runs.is_empty() {
+            placed.lines_outside_map += 1;
+            continue;
+        }
+        for (k, supports) in runs.into_iter().enumerate() {
+            let built = PowerLine {
+                id: if k == 0 {
+                    line.id.clone()
+                } else {
+                    format!("{}#{k}", line.id)
+                },
+                supports,
+                conductor_offsets_m: conductor_offsets(line.cables.unwrap_or(3), kind.arm_m),
+                sag_ratio: kind.sag_ratio,
+                conductor_radius_m: kind.conductor_radius_m,
+                clearance_m: clearance_m(&kind, line.voltage_v),
+            };
+            match built.validated() {
+                Ok(line) => placed.power_lines.push(line),
+                Err(_) => placed.lines_refused += 1,
+            }
+        }
+    }
+    placed
 }
 
 /// The document's polygons as the land cover paints them in `season`, in
@@ -166,8 +403,9 @@ pub fn check_same_origin(
     Ok(())
 }
 
-/// The bundle's and the replay's record.
-pub fn record(document: &FeaturesDocument, hash: u64) -> Value {
+/// The bundle's and the replay's record: the source, the polygons by
+/// class, and what became of the data's trees and lines.
+pub fn record(document: &FeaturesDocument, hash: u64, placed: &Placed) -> Value {
     let mut by_class = serde_json::Map::new();
     for feature in &document.land_cover {
         let count = by_class
@@ -184,6 +422,17 @@ pub fn record(document: &FeaturesDocument, hash: u64) -> Value {
         "content_fnv1a": format!("{hash:016x}"),
         "source_sha256": document.source_sha256,
         "land_cover_polygons": by_class,
+        "trees": placed.trees.len(),
+        "trees_left_out": {
+            "outside_map": placed.trees_outside_map,
+            "in_structure": placed.trees_in_structure,
+            "refused": placed.trees_refused,
+        },
+        "power_lines": placed.power_lines.len(),
+        "power_lines_left_out": {
+            "outside_map": placed.lines_outside_map,
+            "refused": placed.lines_refused,
+        },
     })
 }
 
@@ -393,6 +642,167 @@ mod tests {
         assert!(plain.features.is_none());
     }
 
+    /// Mapped trees and lines (R5.2b) around the forest of [`document`].
+    fn with_trees_and_lines(building_xy: [f64; 2]) -> Value {
+        let mut document = document();
+        document["trees"] = json!([
+            {"id": "node/1", "xy_m": [100.0, -100.0], "species": "broadleaf",
+             "height_m": 15.0, "crown_radius_m": 3.0, "trunk_radius_m": 0.3},
+            {"id": "node/2", "xy_m": [200.0, -200.0], "species": "conifer"},
+            {"id": "node/3", "xy_m": [5000.0, 0.0], "species": "broadleaf"},
+            {"id": "node/4", "xy_m": building_xy, "species": "broadleaf"},
+            {"id": "node/5", "xy_m": [-100.0, -250.0], "species": "palm", "height_m": 500.0},
+        ]);
+        document["power_lines"] = json!([
+            {"id": "way/30", "kind": "line", "cables": 6, "voltage_v": 66000.0, "supports": [
+                {"xy_m": [-300.0, 300.0]},
+                {"xy_m": [-100.0, 300.0], "height_m": 40.0},
+                {"xy_m": [100.0, 300.0]},
+            ]},
+            {"id": "way/31", "kind": "minor_line", "supports": [
+                {"xy_m": [-300.0, -300.0]}, {"xy_m": [-200.0, -300.0]},
+                {"xy_m": [-200.0, -900.0]},
+                {"xy_m": [0.0, -300.0]}, {"xy_m": [100.0, -300.0]},
+            ]},
+            {"id": "way/32", "kind": "minor_line", "supports": [
+                {"xy_m": [900.0, 0.0]}, {"xy_m": [950.0, 0.0]},
+            ]},
+        ]);
+        document
+    }
+
+    fn a_building_centre(world: &BuiltWorld) -> [f64; 2] {
+        let building = world
+            .obstacles
+            .iter()
+            .find(|o| o.blocker_type == "building")
+            .unwrap();
+        let footprint = building.metadata["footprint_xy_m"].as_array().unwrap();
+        let n = footprint.len() as f64;
+        let (sx, sy) = footprint.iter().fold((0.0, 0.0), |(sx, sy), p| {
+            (sx + p[0].as_f64().unwrap(), sy + p[1].as_f64().unwrap())
+        });
+        [sx / n, sy / n]
+    }
+
+    /// Each mapped tree stands where it was mapped, on the ground, sized by
+    /// its tags or its species' middle values; those outside the map, in a
+    /// building or refused by the model are counted, never moved.
+    #[test]
+    fn mapped_trees_stand_where_they_were_mapped() {
+        let centre = a_building_centre(&build_world(&options(json!({}))).unwrap());
+        let path = write("mapped-trees", &with_trees_and_lines(centre));
+        let world = build_world(&options(json!({"features_path": path}))).unwrap();
+        let ids: Vec<&str> = world.trees.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["node/1", "node/2"]);
+        let tagged = &world.trees[0];
+        assert_eq!(tagged.xy_m, [100.0, -100.0]);
+        assert_eq!(
+            (
+                tagged.height_m,
+                tagged.crown_radius_m,
+                tagged.trunk_radius_m
+            ),
+            (15.0, 3.0, 0.3)
+        );
+        assert!((tagged.base_z_m - world.terrain.height_at(100.0, -100.0)).abs() < 1e-3);
+        // The conifer's middle: 21 m tall, crown 0.185 of it, trunk 0.012
+        // of it, evergreen in the middle of its density.
+        let conifer = &world.trees[1];
+        assert_eq!(conifer.height_m, 21.0);
+        assert_eq!(conifer.crown_radius_m, 3.89);
+        assert_eq!(conifer.trunk_radius_m, 0.25);
+        assert_eq!(conifer.crown_base_m, 5.25);
+        assert_eq!(conifer.leaf_density, 0.83);
+        // A mapped broadleaf thins in winter, by the season's foliage.
+        assert_eq!(tagged.leaf_density, 0.88);
+        let winter =
+            build_world(&options(json!({"features_path": path, "season_month": 1}))).unwrap();
+        assert!(winter.trees[0].leaf_density < 0.88);
+        assert_eq!(winter.trees[1].leaf_density, 0.83);
+        let record = features_record(&world);
+        assert_eq!(record["trees"], json!(2));
+        assert_eq!(
+            record["trees_left_out"],
+            json!({"outside_map": 1, "in_structure": 1, "refused": 1})
+        );
+    }
+
+    fn features_record(world: &BuiltWorld) -> Value {
+        world.features.clone().expect("a features record")
+    }
+
+    /// Asked-for scattered trees keep the spacing from a mapped one.
+    #[test]
+    fn the_scatter_keeps_clear_of_mapped_trees() {
+        let path = write("scatter", &with_trees_and_lines([0.0, 0.0]));
+        let world = build_world(&options(json!({"features_path": path, "trees": true}))).unwrap();
+        assert!(world.trees.len() > 10);
+        let mapped = &world.trees[0];
+        assert_eq!(mapped.id, "node/1");
+        for tree in world.trees.iter().filter(|t| t.id.starts_with("tree-")) {
+            let apart = (tree.xy_m[0] - mapped.xy_m[0]).hypot(tree.xy_m[1] - mapped.xy_m[1]);
+            assert!(
+                apart >= 8.0,
+                "{} is {apart} m from the mapped tree",
+                tree.id
+            );
+        }
+    }
+
+    /// Mapped lines stand on the ground with their tagged heights and the
+    /// kind's defaults; a line that leaves the map keeps its runs inside;
+    /// the procedural line is not built even when asked for.
+    #[test]
+    fn mapped_lines_replace_the_procedural_one() {
+        let path = write("lines", &with_trees_and_lines([0.0, 0.0]));
+        let world = build_world(&options(
+            json!({"features_path": path, "power_lines": true}),
+        ))
+        .unwrap();
+        let ids: Vec<&str> = world.power_lines.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(ids, ["way/30", "way/31", "way/31#1"]);
+        let main = &world.power_lines[0];
+        let heights: Vec<f64> = main.supports.iter().map(|s| s.height_m).collect();
+        assert_eq!(heights, [30.0, 40.0, 30.0]);
+        for support in &main.supports {
+            let ground = world.terrain.height_at(support.xy_m[0], support.xy_m[1]);
+            assert!((support.base_z_m - ground).abs() < 1e-9);
+        }
+        assert_eq!(main.conductor_offsets_m, [-4.0, -2.4, -0.8, 0.8, 2.4, 4.0]);
+        // 66 kV: 6 m, not the transmission default of 10.
+        assert_eq!(main.clearance_m, 6.0);
+        let minor = &world.power_lines[1];
+        assert_eq!(minor.supports.len(), 2);
+        assert_eq!(minor.conductor_offsets_m, [-0.8, 0.0, 0.8]);
+        assert_eq!(minor.clearance_m, 4.0);
+        assert_eq!(world.power_lines[2].supports[0].xy_m, [0.0, -300.0]);
+        let record = features_record(&world);
+        assert_eq!(record["power_lines"], json!(3));
+        assert_eq!(
+            record["power_lines_left_out"],
+            json!({"outside_map": 1, "refused": 0})
+        );
+        // Without features the same option builds the procedural line.
+        let plain = build_world(&options(json!({"power_lines": true}))).unwrap();
+        assert_eq!(plain.power_lines[0].id, "powerline-transmission");
+    }
+
+    #[test]
+    fn conductors_spread_across_the_arm_and_clearance_follows_voltage() {
+        assert_eq!(conductor_offsets(1, 8.0), [0.0]);
+        assert_eq!(conductor_offsets(3, 8.0), [-4.0, 0.0, 4.0]);
+        assert_eq!(conductor_offsets(0, 8.0), [0.0]);
+        assert_eq!(conductor_offsets(40, 8.0).len(), 12);
+        let line = line_kind("line").unwrap();
+        let minor = line_kind("minor_line").unwrap();
+        assert_eq!(clearance_m(&minor, Some(110_000.0)), 10.0);
+        assert_eq!(clearance_m(&line, Some(33_000.0)), 6.0);
+        assert_eq!(clearance_m(&line, Some(32_999.0)), 4.0);
+        assert_eq!(clearance_m(&line, None), 10.0);
+        assert_eq!(clearance_m(&minor, None), 4.0);
+    }
+
     #[test]
     fn a_feature_the_runtime_cannot_paint_is_refused() {
         let mut unknown = document();
@@ -405,6 +815,16 @@ mod tests {
         thin["land_cover"][1]["polygon_xy_m"] = json!([[0.0, 0.0], [1.0, 1.0]]);
         let message = error(options(json!({"features_path": write("thin", &thin)})));
         assert!(message.contains("at least 3"), "{message}");
+        let mut species = document();
+        species["trees"] = json!([{"id": "n", "xy_m": [0.0, 0.0], "species": "fern"}]);
+        let message = error(options(
+            json!({"features_path": write("species", &species)}),
+        ));
+        assert!(message.contains("unknown species"), "{message}");
+        let mut kind = document();
+        kind["power_lines"] = json!([{"id": "w", "kind": "cable", "supports": []}]);
+        let message = error(options(json!({"features_path": write("kind", &kind)})));
+        assert!(message.contains("unknown kind"), "{message}");
         let mut other = document();
         other["format"] = json!("argusnet.terrain");
         let message = error(options(json!({"features_path": write("other", &other)})));

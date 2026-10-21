@@ -123,6 +123,9 @@ pub struct TreeGround<'a> {
     pub obstacles: &'a [Obstacle],
     pub season: SeasonalVariation,
     pub terrain_preset: &'a str,
+    /// Trees already standing (the data's, R5): no scattered trunk comes
+    /// closer to one than the scatter's spacing.
+    pub existing: &'a [Tree],
 }
 
 impl TreeGround<'_> {
@@ -137,9 +140,17 @@ impl TreeGround<'_> {
         grid.classes[row * grid.cols + column]
     }
 
-    /// Whether `xy` is inside a forest stand's footprint, or a trunk there
-    /// would stand inside a building or wall.
+    /// Whether `xy` is inside a forest stand's footprint, a trunk there
+    /// would stand inside a building or wall, or a standing tree is closer
+    /// than the spacing.
     fn taken(&self, xy: [f64; 2]) -> bool {
+        if self
+            .existing
+            .iter()
+            .any(|tree| (tree.xy_m[0] - xy[0]).hypot(tree.xy_m[1] - xy[1]) < SPACING_M)
+        {
+            return true;
+        }
         self.obstacles.iter().any(|obstacle| {
             if !obstacle.bounds_xy_m().contains_xy(xy[0], xy[1]) {
                 return false;
@@ -237,6 +248,44 @@ pub fn build_trees(ground: &TreeGround<'_>, seed: u32) -> Vec<Tree> {
             }
         })
         .collect()
+}
+
+/// A tree the data gives (R5): where it stands and its species, with its
+/// height, crown radius and trunk radius when tagged. What is not tagged is
+/// the middle of the species' ranges, with no draw, so a tree is the same
+/// on every run. Its crown base is the middle share of its height. A
+/// deciduous crown thins with the season. Not yet checked against the
+/// model: the caller validates it.
+pub fn imported_tree(
+    id: &str,
+    xy: [f64; 2],
+    species: Species,
+    tagged: (Option<f64>, Option<f64>, Option<f64>),
+    terrain: &BuiltTerrain,
+    season: SeasonalVariation,
+) -> Tree {
+    let (height, crown, trunk) = tagged;
+    let s = shape(species);
+    let mid = |(lo, hi): (f64, f64)| 0.5 * (lo + hi);
+    let height_m = cm(height.unwrap_or_else(|| mid(s.height_m)));
+    let full_leaf = mid(s.leaf_density);
+    let leaf_density = if s.deciduous {
+        full_leaf * season.foliage_density_factor
+    } else {
+        full_leaf
+    };
+    Tree {
+        id: id.to_string(),
+        xy_m: [cm(xy[0]), cm(xy[1])],
+        base_z_m: mm(terrain.height_at(xy[0], xy[1])),
+        height_m,
+        crown_base_m: cm(height_m * mid(s.crown_base)),
+        crown_radius_m: cm(crown.unwrap_or(height_m * mid(s.crown_radius))),
+        trunk_radius_m: cm(trunk
+            .unwrap_or((height_m * s.trunk_radius).clamp(s.trunk_radius_m.0, s.trunk_radius_m.1))),
+        species,
+        leaf_density: cm(leaf_density).clamp(0.0, 1.0),
+    }
 }
 
 /// At most `cap` of `items`, chosen evenly: the `cap` with the lowest

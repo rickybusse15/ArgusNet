@@ -242,6 +242,16 @@ buildings stay urban, and asked-for trees grow only in the mapped forests.
 The procedural environment's walls and forest stands are dropped. Every
 real layer must share one origin.
 
+The same file carries mapped trees (`natural=tree` points, `natural=tree_row`
+lines) and power lines (`power=line|minor_line`, a support at each vertex).
+A tree keeps its tagged `height`, `diameter_crown` and `circumference`, and
+otherwise takes its species' typical size. A support takes the `height` of a
+tower or pole mapped on it, or 30 m (line) or 10 m (minor line). `cables`
+sets the conductors and `voltage` the clearance a drone keeps. With a
+features file, these lines replace the procedural one. Asked-for scattered
+trees keep 8 m from mapped ones. Anything outside the map or inside a
+building is left out and counted in the replay's `features` record.
+
 ### Start from no world knowledge
 
 By default the drones are given the true terrain and buildings. With

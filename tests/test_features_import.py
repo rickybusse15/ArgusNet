@@ -115,7 +115,12 @@ def test_tags_become_land_cover_in_painting_order(tmp_path: Path) -> None:
         "way/11",
     ]
     summary = document["summary"]
-    assert summary["skipped"] == {"untagged": 2, "tunnel_or_bridge": 2, "degenerate": 0}
+    assert summary["skipped"] == {
+        "untagged": 2,
+        "tunnel_or_bridge": 2,
+        "degenerate": 0,
+        "underground_cable": 0,
+    }
     assert summary["holes_ignored"] == 1
     assert summary["features_by_class"] == {
         "forest": 1,
@@ -186,7 +191,7 @@ def test_an_extract_with_no_land_cover_is_refused(tmp_path: Path) -> None:
             }
         )
     )
-    with pytest.raises(ValueError, match="no land-cover features"):
+    with pytest.raises(ValueError, match="no land-cover, tree or power-line features"):
         import_features(path, origin=ORIGIN)
 
 
@@ -237,3 +242,73 @@ def test_a_run_paints_the_imported_land_cover(tmp_path: Path) -> None:
         "water": 2,
     }
     assert meta["enu_origin"]["latitude_deg"] == ORIGIN[0]
+
+
+def trees_and_lines(path: Path) -> Path:
+    tower = lonlat(0, 300)
+    features = [
+        feature(
+            {
+                "natural": "tree",
+                "leaf_type": "needleleaved",
+                "height": "12 m",
+                "diameter_crown": "6",
+                "circumference": "1.2",
+            },
+            "Point",
+            lonlat(10, 20),
+            "node/1",
+        ),
+        feature({"natural": "tree", "genus": "Phoenix"}, "Point", lonlat(-10, 20), "node/2"),
+        feature({"natural": "tree"}, "Point", lonlat(0, -20), "node/3"),
+        feature({"natural": "tree_row"}, "LineString", [lonlat(0, 50), lonlat(21, 50)], "way/4"),
+        feature({"natural": "tree_row"}, "LineString", [lonlat(0, 60), lonlat(18, 60)], "way/5"),
+        feature(
+            {"power": "line", "cables": "3", "voltage": "110000;20000"},
+            "LineString",
+            [lonlat(-200, 300), tower, lonlat(200, 300)],
+            "way/6",
+        ),
+        feature({"power": "tower", "height": "42"}, "Point", tower, "node/7"),
+        feature({"power": "pole"}, "Point", lonlat(-200, 300), "node/8"),
+        feature({"power": "minor_line"}, "LineString", [lonlat(0, 0), lonlat(0, 0)], "way/9"),
+        feature({"power": "cable"}, "LineString", [lonlat(0, 0), lonlat(9, 0)], "way/10"),
+    ]
+    path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    return path
+
+
+def test_mapped_trees_keep_their_tags_and_leave_the_rest_to_the_builder(tmp_path: Path) -> None:
+    document = import_features(trees_and_lines(tmp_path / "t.geojson"), origin=ORIGIN)
+    trees = {tree["id"]: tree for tree in document["trees"]}
+    conifer = trees["node/1"]
+    assert conifer["species"] == "conifer"
+    assert conifer["height_m"] == 12.0 and conifer["crown_radius_m"] == 3.0
+    assert conifer["trunk_radius_m"] == pytest.approx(1.2 / (2 * math.pi), abs=1e-3)
+    np.testing.assert_allclose(conifer["xy_m"], [10, 20], atol=0.5)
+    assert trees["node/2"]["species"] == "palm"
+    plain = trees["node/3"]
+    assert plain["species"] == "broadleaf"
+    assert set(plain) == {"id", "xy_m", "species"}
+    # A 21 m row: 0, 8, 16 and its end; an 18 m one ends 2 m past 16: not
+    # a tree closer than half the spacing.
+    row = [t for t in document["trees"] if t["id"].startswith("way/4/")]
+    xs = [t["xy_m"][0] for t in row]
+    np.testing.assert_allclose(xs, [0, 8, 16, 21], atol=0.05)
+    assert len([t for t in document["trees"] if t["id"].startswith("way/5/")]) == 3
+
+
+def test_mapped_lines_take_tower_heights_cables_and_voltage(tmp_path: Path) -> None:
+    document = import_features(trees_and_lines(tmp_path / "t.geojson"), origin=ORIGIN)
+    (line,) = document["power_lines"]
+    assert line["id"] == "way/6" and line["kind"] == "line"
+    assert line["cables"] == 3 and line["voltage_v"] == 110000.0
+    supports = line["supports"]
+    assert [s.get("height_m") for s in supports] == [None, 42.0, None]
+    np.testing.assert_allclose(supports[1]["xy_m"], [0, 300], atol=0.5)
+    summary = document["summary"]
+    assert summary["power_lines"] == 1 and summary["power_line_supports_with_height"] == 1
+    # A line with one distinct support, and an underground cable.
+    assert summary["skipped"]["degenerate"] == 1
+    assert summary["skipped"]["underground_cable"] == 1
+    assert document["land_cover"] == []

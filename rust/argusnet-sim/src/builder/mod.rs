@@ -559,11 +559,19 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         .map_err(BuildError::Invalid)
     };
     let land_cover = cover_for(season)?;
-    let power_lines = if options.power_lines {
-        power_lines::build_power_lines(&terrain, bounds, &obstacles)
-    } else {
-        Vec::new()
+    // The data's trees and lines (R5.2b) stand where they were mapped; with
+    // a features file the procedural line is not built.
+    let placed = features
+        .as_ref()
+        .map(|(document, _)| features::place(document, &terrain, bounds, &obstacles, season));
+    let power_lines = match &placed {
+        Some(placed) => placed.power_lines.clone(),
+        None if options.power_lines => power_lines::build_power_lines(&terrain, bounds, &obstacles),
+        None => Vec::new(),
     };
+    let mapped_trees: &[argusnet_world::trees::Tree] = placed
+        .as_ref()
+        .map_or(&[], |placed| placed.trees.as_slice());
     // The world's, not the run's: seeded like the land cover, from the
     // presets and the terrain's effective seed (the one it was built from,
     // given or derived), so every run seed sees one forest and an equal
@@ -600,12 +608,15 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
                 obstacles: &obstacles,
                 season,
                 terrain_preset: &options.terrain_preset,
+                existing: mapped_trees,
             },
             seed,
         )
     } else {
         Vec::new()
     };
+    let trees: Vec<argusnet_world::trees::Tree> =
+        mapped_trees.iter().cloned().chain(trees).collect();
 
     Ok(BuiltWorld {
         scale,
@@ -620,7 +631,9 @@ pub fn build_world(options: &ScenarioOptions) -> Result<BuiltWorld, BuildError> 
         buildings,
         terrain_import: imported_terrain
             .map(|(_, (document, hash))| terrain_import::record(&document, hash)),
-        features: features.map(|(document, hash)| features::record(&document, hash)),
+        features: features
+            .zip(placed)
+            .map(|((document, hash), placed)| features::record(&document, hash, &placed)),
     })
 }
 
