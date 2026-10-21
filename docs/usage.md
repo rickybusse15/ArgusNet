@@ -202,6 +202,26 @@ The run then uses those buildings in place of the procedural ones, with
 their roofs, in line of sight, collision and the viewer, and its replay
 records the georeference.
 
+### Real terrain
+
+A DEM (a single-band GeoTIFF) becomes the run's terrain the same way. Import
+it for the run's map preset, with the buildings' origin so the two line up:
+
+```bash
+python3 scripts/import_terrain.py dem.tif --map-preset medium --out town.terrain.json --origin 47.6,-122.3
+```
+
+The importer samples the DEM at each cell of that preset's height grid,
+placing every cell through the DEM's own CRS, so a rotated raster or a CRS
+whose grid north is not true north still lines up. It refuses a DEM that
+does not cover the whole map. Heights are the DEM's elevations less an
+offset that puts the lowest ground 2 m above the ground plane; the offset
+is recorded as the origin's altitude. In the config's `options`, set
+`"terrain_path": "town.terrain.json"` with the same `map_preset`. Trees,
+power lines and buildings then stand on the real ground. With
+`buildings_path` too, both files must share an origin, or the build fails
+and says so.
+
 ### Start from no world knowledge
 
 By default the drones are given the true terrain and buildings. With
