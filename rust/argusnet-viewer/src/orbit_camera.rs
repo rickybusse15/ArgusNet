@@ -79,6 +79,7 @@ pub fn update_orbit_camera(
     contexts: Option<EguiContexts>,
     windows: Query<&Window, With<PrimaryWindow>>,
     view_mode: Res<ViewMode>,
+    ui_state: Option<Res<crate::state::ViewerUiState>>,
     control: Option<Res<crate::camera_control::CameraControl>>,
     mut query: Query<(
         &mut OrbitCamera,
@@ -125,12 +126,16 @@ pub fn update_orbit_camera(
         })
         .unwrap_or(false);
 
-    // Route input to the pane under the cursor. In Split mode the left half drives
-    // the main camera and the right half drives the reconstruction camera; in every
-    // other mode only the main camera is active and takes the whole window.
+    // Route input to the pane under the cursor. In Split mode the left half of
+    // the canvas drives the main camera and the right half the reconstruction
+    // camera; in every other mode only the main camera is active and takes the
+    // whole window.
     let window = windows.single().ok();
     let cursor = window.and_then(|w| w.cursor_position());
-    let half_width = window.map(|w| w.width() * 0.5).unwrap_or(f32::MAX);
+    let half_width = match ui_state.as_ref().and_then(|state| state.canvas_rect) {
+        Some([x0, _, x1, _]) => 0.5 * (x0 + x1),
+        None => window.map(|w| w.width() * 0.5).unwrap_or(f32::MAX),
+    };
     let cursor_over_recon =
         matches!(*view_mode, ViewMode::Split) && cursor.map(|c| c.x >= half_width).unwrap_or(false);
 

@@ -426,7 +426,7 @@ fn run_inner(
             auto_create_primary_context: false,
             ..default()
         })
-        .add_systems(Startup, attach_ui_to_main_camera.after(setup_world))
+        .add_systems(Startup, spawn_ui_camera.after(setup_world))
         // bevy_egui 0.42 replaced `EguiSet::BeginPass` inside `Update` with a
         // dedicated schedule that runs between egui's begin/end pass, so UI
         // systems must be registered there rather than ordered within `Update`.
@@ -1016,13 +1016,30 @@ fn merged_layer_visibility(
     layer_visibility
 }
 
-/// Put the egui shell's context on the main camera (windowed runs only).
-fn attach_ui_to_main_camera(mut commands: Commands, main: Query<Entity, With<MainCamera>>) {
-    for camera in &main {
-        commands
-            .entity(camera)
-            .insert(bevy_egui::PrimaryEguiContext);
-    }
+/// The camera the operator shell is drawn by (windowed runs only).
+#[derive(Component)]
+pub struct UiCamera;
+
+/// The render layer nothing is on: the UI camera draws egui alone.
+pub const UI_LAYER: usize = 31;
+
+/// Give the egui shell a camera of its own: the whole window, drawn after
+/// every world camera, rendering no world layer. On the main camera the
+/// shell took that camera's viewport for the window, so Split, which halves
+/// the main camera's viewport, squeezed the whole shell into the left half.
+fn spawn_ui_camera(mut commands: Commands) {
+    commands.spawn((
+        UiCamera,
+        Camera2d,
+        Camera {
+            order: 100,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        Msaa::Off,
+        RenderLayers::layer(UI_LAYER),
+        bevy_egui::PrimaryEguiContext,
+    ));
 }
 
 fn advance_playback_system(time: Res<Time>, mut replay_state: ResMut<ReplayState>) {
@@ -1071,22 +1088,60 @@ fn keyboard_playback_system(
 
 /// Adjusts camera viewports when ViewMode::Split is active.
 /// Left half → main perspective camera; right half → top-down reconstruction camera.
+/// The main and reconstruction cameras' viewports in Split: the left and
+/// right halves of the shell's canvas (`[x0, y0, x1, y1]`, logical
+/// points, at `scale` physical pixels per point), or of the whole `w` by
+/// `h` target when there is no shell (headless). Clamped to the target.
+pub fn split_viewports(
+    canvas: Option<[f32; 4]>,
+    scale: f32,
+    w: u32,
+    h: u32,
+) -> (Viewport, Viewport) {
+    let [x0, y0, x1, y1] = canvas
+        .map(|c| c.map(|v| (v * scale).round().max(0.0) as u32))
+        .unwrap_or([0, 0, w, h]);
+    let (x0, x1) = (x0.min(w), x1.clamp(x0.min(w), w));
+    let (y0, y1) = (y0.min(h), y1.clamp(y0.min(h), h));
+    let half = ((x1 - x0) / 2).max(1);
+    let height = (y1 - y0).max(1);
+    (
+        Viewport {
+            physical_position: UVec2::new(x0, y0),
+            physical_size: UVec2::new(half, height),
+            ..default()
+        },
+        Viewport {
+            physical_position: UVec2::new(x0 + half, y0),
+            physical_size: UVec2::new(half, height),
+            ..default()
+        },
+    )
+}
+
 fn sync_split_viewports_system(
     view_mode: Res<ViewMode>,
+    ui_state: Res<crate::state::ViewerUiState>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     headless_target: Option<Res<HeadlessTarget>>,
     mut main_cam: Query<&mut Camera, (With<MainCamera>, Without<ReconstructionCamera>)>,
     mut recon_cam: Query<&mut Camera, With<ReconstructionCamera>>,
 ) {
-    // Headless has no window, so the offscreen image supplies the extent the
-    // two cameras split between them.
-    let (w, h) = match headless_target.as_ref() {
-        Some(target) => (target.width, target.height),
+    // Headless has no window (and no shell), so the offscreen image supplies
+    // the extent the two cameras split between them; a window splits the
+    // canvas its shell leaves.
+    let (w, h, scale, canvas) = match headless_target.as_ref() {
+        Some(target) => (target.width, target.height, 1.0, None),
         None => {
             let Ok(window) = windows.single() else {
                 return;
             };
-            (window.physical_width(), window.physical_height())
+            (
+                window.physical_width(),
+                window.physical_height(),
+                window.scale_factor(),
+                ui_state.canvas_rect,
+            )
         }
     };
     let Ok(mut main) = main_cam.single_mut() else {
@@ -1097,17 +1152,10 @@ fn sync_split_viewports_system(
     };
 
     if *view_mode == ViewMode::Split {
-        main.viewport = Some(Viewport {
-            physical_position: UVec2::ZERO,
-            physical_size: UVec2::new(w / 2, h),
-            ..default()
-        });
+        let (left, right) = split_viewports(canvas, scale, w, h);
+        main.viewport = Some(left);
         main.is_active = true;
-        recon.viewport = Some(Viewport {
-            physical_position: UVec2::new(w / 2, 0),
-            physical_size: UVec2::new(w / 2, h),
-            ..default()
-        });
+        recon.viewport = Some(right);
         recon.is_active = true;
     } else {
         main.viewport = None;
@@ -2645,10 +2693,11 @@ fn reframe_camera_for_scene(
 mod tests {
     /// View mode cycles with `M` in a scene with no replay: before P2.4b the
     /// key sat after the "no replay" return and did nothing there.
-    /// The shell's context goes on the main camera, never on the
-    /// reconstruction camera, whatever order they were spawned in.
+    /// The shell's context is on a camera of its own, covering the whole
+    /// window and drawn last, never on a world camera: Split halves the
+    /// world cameras' viewports and must not halve the shell.
     #[test]
-    fn the_ui_context_is_on_the_main_camera() {
+    fn the_ui_context_is_on_its_own_full_window_camera() {
         use bevy::prelude::*;
         let mut app = App::new();
         let recon = app
@@ -2659,11 +2708,37 @@ mod tests {
             .world_mut()
             .spawn((Camera::default(), super::MainCamera))
             .id();
-        app.add_systems(Update, super::attach_ui_to_main_camera);
+        app.add_systems(Update, super::spawn_ui_camera);
         app.update();
-        let world = app.world();
-        assert!(world.get::<bevy_egui::PrimaryEguiContext>(main).is_some());
+        let world = app.world_mut();
+        assert!(world.get::<bevy_egui::PrimaryEguiContext>(main).is_none());
         assert!(world.get::<bevy_egui::PrimaryEguiContext>(recon).is_none());
+        let mut ui = world.query_filtered::<&Camera, With<super::UiCamera>>();
+        let camera = ui.single(world).unwrap();
+        assert!(camera.viewport.is_none(), "the whole window");
+        assert!(camera.order > 1, "after the world cameras");
+    }
+
+    /// Split halves the canvas the shell leaves, not the window: the world
+    /// on the left of it, the reconstruction on the right, in physical
+    /// pixels.
+    #[test]
+    fn split_halves_the_canvas() {
+        use bevy::math::UVec2;
+        // A canvas from (194, 92) to (1188, 800) logical, at scale 2.
+        let (main, recon) =
+            super::split_viewports(Some([194.0, 92.0, 1188.0, 800.0]), 2.0, 2880, 1800);
+        assert_eq!(main.physical_position, UVec2::new(388, 184));
+        assert_eq!(main.physical_size, UVec2::new(994, 1416));
+        assert_eq!(recon.physical_position, UVec2::new(388 + 994, 184));
+        assert_eq!(recon.physical_size, UVec2::new(994, 1416));
+        // No shell (headless): the halves of the target.
+        let (main, recon) = super::split_viewports(None, 1.0, 650, 480);
+        assert_eq!(
+            (main.physical_position, main.physical_size),
+            (UVec2::ZERO, UVec2::new(325, 480))
+        );
+        assert_eq!(recon.physical_position, UVec2::new(325, 0));
     }
 
     #[test]
