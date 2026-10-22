@@ -91,3 +91,23 @@ def test_a_multipolygon_keeps_its_holes_in_the_right_ring() -> None:
     with_hole = [p for p in polygons if len(p) == 2]
     assert len(with_hole) == 1 and with_hole[0][0][0] == [0.0, 0.0]
     assert collection["argusnet_overpass"]["skipped"] == 1
+
+
+def test_a_multipolygon_with_an_unclosed_inner_ring_is_skipped() -> None:
+    big = g((0, 0), (10, 0), (10, 10), (0, 10), (0, 0))
+    answer = {
+        "elements": [
+            {
+                "type": "relation",
+                "id": 11,
+                "tags": {"type": "multipolygon", "natural": "water"},
+                "members": [
+                    {"role": "outer", "geometry": big},
+                    {"role": "inner", "geometry": g((2, 2), (4, 2), (4, 4))},
+                ],
+            }
+        ]
+    }
+    collection = to_geojson(answer)
+    assert collection["features"] == []
+    assert collection["argusnet_overpass"]["skipped"] == 1

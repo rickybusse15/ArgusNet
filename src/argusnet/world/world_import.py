@@ -7,12 +7,13 @@ what a run needs into one folder:
 * `buildings.json` (`argusnet.buildings`): the extract's buildings, when it
   has any;
 * `features.json` (`argusnet.features`): its land cover, trees and power
-  lines, when it has any;
+  lines, empty when it maps none (so nothing procedural stands in);
 * `scenario.json`: a scenario config naming all three, with trees on;
 * `world.json` (`argusnet.world-import`): the manifest. It holds the origin,
   each file's SHA-256 and the sources', each importer's summary, and a
-  `world_id` hashed from the files' hashes, so two imports of the same data
-  are the same world.
+  `world_id` hashed from the files' hashes and the options that shape the
+  built world (map and terrain presets, origin), so the same data imported
+  the same way is the same world, and anything else is not.
 
 The extract may be GeoJSON or an Overpass API answer (`out geom`), which is
 converted first and kept as `osm.geojson` (`argusnet.world.overpass`).
@@ -113,16 +114,14 @@ def import_world(
         summaries["buildings"] = buildings["summary"]
     building_source.unlink()
 
-    try:
-        features = import_features(osm_path, origin=shared, source_crs=osm_crs)
-    except ValueError as error:
-        if "no land-cover" not in str(error):
-            raise
-        features = None
-    if features is not None:
-        files["features"] = out / "features.json"
-        write_features(features, files["features"])
-        summaries["features"] = features["summary"]
+    # Always written, empty when the extract maps nothing but buildings: a
+    # features file makes the land cover the data's, so the builder never
+    # falls back to procedural cover, walls, forest or scattered trees for a
+    # real place.
+    features = import_features(osm_path, origin=shared, source_crs=osm_crs, allow_empty=True)
+    files["features"] = out / "features.json"
+    write_features(features, files["features"])
+    summaries["features"] = features["summary"]
 
     options: dict[str, object] = {
         "map_preset": map_preset,
@@ -143,9 +142,16 @@ def import_world(
     (out / "scenario.json").write_text(json.dumps(scenario, indent=1) + "\n", encoding="utf-8")
 
     hashes = {name: _sha256(path) for name, path in files.items()}
-    world_id = hashlib.sha256(
-        "".join(f"{name}:{hashes[name]}\n" for name in sorted(hashes)).encode()
-    ).hexdigest()
+    # Everything that decides the built world: the files, and the options
+    # the builder reads beside them (the run's seed is not one: the world's
+    # trees and cover are seeded from the terrain, not the run).
+    identity = {
+        "files": {name: hashes[name] for name in sorted(hashes)},
+        "map_preset": map_preset,
+        "terrain_preset": terrain_preset,
+        "origin": list(shared),
+    }
+    world_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     manifest: dict[str, object] = {
         "format": FORMAT,
         "version": VERSION,

@@ -48,23 +48,29 @@ def feature(tags: dict, kind: str, coordinates: list, fid: str) -> dict:
     }
 
 
-def extract(path: Path, *, with_buildings: bool = True) -> Path:
-    features = [
-        feature({"landuse": "forest"}, "Polygon", square(-150, 150, 100), "way/1"),
-        feature({"natural": "water"}, "Polygon", square(150, 150, 50), "way/2"),
-        feature({"highway": "secondary"}, "LineString", [lonlat(-300, 0), lonlat(300, 0)], "way/3"),
-        feature(
-            {"power": "line", "voltage": "132000"},
-            "LineString",
-            [lonlat(-300, -250), lonlat(0, -250), lonlat(300, -250)],
-            "way/4",
-        ),
-        feature({"power": "tower", "height": "36"}, "Point", lonlat(0, -250), "node/5"),
-        feature({"natural": "tree", "height": "14"}, "Point", lonlat(40, 60), "node/6"),
-        feature(
-            {"natural": "tree", "leaf_type": "needleleaved"}, "Point", lonlat(60, 60), "node/7"
-        ),
-    ]
+def extract(path: Path, *, with_buildings: bool = True, only_buildings: bool = False) -> Path:
+    features = (
+        []
+        if only_buildings
+        else [
+            feature({"landuse": "forest"}, "Polygon", square(-150, 150, 100), "way/1"),
+            feature({"natural": "water"}, "Polygon", square(150, 150, 50), "way/2"),
+            feature(
+                {"highway": "secondary"}, "LineString", [lonlat(-300, 0), lonlat(300, 0)], "way/3"
+            ),
+            feature(
+                {"power": "line", "voltage": "132000"},
+                "LineString",
+                [lonlat(-300, -250), lonlat(0, -250), lonlat(300, -250)],
+                "way/4",
+            ),
+            feature({"power": "tower", "height": "36"}, "Point", lonlat(0, -250), "node/5"),
+            feature({"natural": "tree", "height": "14"}, "Point", lonlat(40, 60), "node/6"),
+            feature(
+                {"natural": "tree", "leaf_type": "needleleaved"}, "Point", lonlat(60, 60), "node/7"
+            ),
+        ]
+    )
     if with_buildings:
         features += [
             feature(
@@ -87,12 +93,22 @@ def extract(path: Path, *, with_buildings: bool = True) -> Path:
     return path
 
 
-def place(tmp_path: Path, name: str = "world", **kwargs: object) -> tuple[Path, dict]:
+def place(
+    tmp_path: Path, name: str = "world", terrain_preset: str = "urban_flat", **kwargs: object
+) -> tuple[Path, dict]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     dem = write_dem(tmp_path / "dem.tif", affine=aligned(), shape=(120, 120))
     osm = extract(tmp_path / f"{name}.geojson", **kwargs)  # type: ignore[arg-type]
     out = tmp_path / name
-    return out, import_world(dem, osm, out, map_preset="small", origin=ORIGIN, duration_s=6.0)
+    return out, import_world(
+        dem,
+        osm,
+        out,
+        map_preset="small",
+        origin=ORIGIN,
+        terrain_preset=terrain_preset,
+        duration_s=6.0,
+    )
 
 
 def load(path: Path) -> dict:
@@ -200,3 +216,41 @@ def test_without_an_origin_every_layer_takes_the_dems_centre(tmp_path: Path) -> 
     assert len(set(origins.values())) == 1, origins
     east_m = (origins["terrain"][1] - ORIGIN[1]) * M_PER_DEG_LON
     assert east_m == pytest.approx(100.0, abs=2.0)
+
+
+def test_the_world_id_covers_what_shapes_the_world(tmp_path: Path) -> None:
+    _, first = place(tmp_path / "a")
+    _, alpine = place(tmp_path / "b", terrain_preset="alpine")
+    assert alpine["world_id"] != first["world_id"]
+    assert alpine["files"] == first["files"]
+
+
+def test_an_extract_of_only_buildings_still_says_what_is_there(tmp_path: Path) -> None:
+    """No land cover, trees or lines mapped: an empty features file is
+    written and named, so the builder paints open ground and invents no
+    forest, walls or trees."""
+    out, manifest = place(tmp_path, only_buildings=True)
+    features = load(out / "features.json")
+    assert features["land_cover"] == features["trees"] == features["power_lines"] == []
+    assert Path(load(out / "scenario.json")["options"]["features_path"]).exists()
+    assert "features" in manifest["files"]
+    binary = Path(__file__).resolve().parent.parent / "target" / "debug" / "argusnet-rs"
+    if not binary.exists():
+        pytest.skip("argusnet-rs is not built (cargo build -p argusnet-cli)")
+    replay = out / "replay.json"
+    subprocess.run(
+        [
+            str(binary),
+            "sim",
+            "--quiet",
+            "--config",
+            str(out / "scenario.json"),
+            "--replay",
+            str(replay),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    meta = load(replay)
+    assert meta["meta"].get("trees", []) == []
+    assert meta["meta"]["buildings"]["buildings"] == 2

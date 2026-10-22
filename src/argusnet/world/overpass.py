@@ -116,8 +116,10 @@ def to_geojson(answer: Mapping[str, object]) -> dict[str, object]:
             outer = [_coords(m.get("geometry") or []) for m in members if m.get("role") == "outer"]
             inner = [_coords(m.get("geometry") or []) for m in members if m.get("role") == "inner"]
             outers, unclosed_outer = stitch(outer)
-            inners, _ = stitch(inner)
-            if not outers or unclosed_outer:
+            inners, unclosed_inner = stitch(inner)
+            # An inner ring that cannot be closed would fill an island or a
+            # courtyard: the relation is skipped, never drawn without it.
+            if not outers or unclosed_outer or unclosed_inner:
                 skipped += 1
                 continue
             polygons: list[list[list[list[float]]]] = [[ring] for ring in outers]
