@@ -2,6 +2,12 @@
 
 use super::*;
 
+/// Power lines and trees are the run's true world. In a run that maps
+/// the world for itself they start hidden, like the scene's layers.
+const TRUE_WORLD_NOTE: &str =
+    "The run's true world. In a self-built run (no prior world) this starts \
+     hidden: turn it on to compare with what the drones mapped.";
+
 pub(super) fn diagnostic_node_table(ui: &mut egui::Ui, replay_state: &ReplayState) {
     let Some(frame) = replay_state.current_frame() else {
         return;
@@ -1329,12 +1335,14 @@ pub(super) fn section_runtime_overlays(
         );
         ui.checkbox(&mut runtime_visibility.launch_lines, "Launch Lines");
         ui.checkbox(&mut runtime_visibility.trails, "Trails");
-        ui.checkbox(&mut runtime_visibility.power_lines, "Power Lines");
+        ui.checkbox(&mut runtime_visibility.power_lines, "Power Lines")
+            .on_hover_text(TRUE_WORLD_NOTE);
         ui.checkbox(
             &mut runtime_visibility.see_through_buildings,
             "See-through Buildings",
         );
-        ui.checkbox(&mut runtime_visibility.trees, "Trees");
+        ui.checkbox(&mut runtime_visibility.trees, "Trees")
+            .on_hover_text(TRUE_WORLD_NOTE);
         ui.checkbox(
             &mut runtime_visibility.power_line_clearance,
             "Clearance Corridors",
@@ -1458,4 +1466,5 @@ pub(super) fn section_mission_zones(
 
 // ---------------------------------------------------------------------------
 // Section: Keyboard Shortcuts
+
 // ---------------------------------------------------------------------------
