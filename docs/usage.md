@@ -222,6 +222,36 @@ power lines and buildings then stand on the real ground. With
 `buildings_path` too, both files must share an origin, or the build fails
 and says so.
 
+### Real land cover in a run (R5)
+
+Water, land use and roads come from OSM (or any GeoJSON with OSM's tags):
+
+```bash
+python3 scripts/import_features.py town.geojson --out town.features.json --origin 47.6,-122.3
+```
+
+Polygons tagged as water, wetland, forest, scrub, rock, glacier, urban land
+use or open ground become that land cover. Rivers, canals and streams are
+drawn at their `width`, and vehicle roads at their `width`, their `lanes` x
+3.5 m, or a default by class. Tunnels and bridges are left out. Anything
+else is skipped and counted in the summary. In the config's `options`, set
+`"features_path": "town.features.json"`. The run's land cover is then the
+data's: open where the data says nothing, rock where the ground is steeper
+than about 30 degrees, and nothing invented. Roads run through forests,
+buildings stay urban, and asked-for trees grow only in the mapped forests.
+The procedural environment's walls and forest stands are dropped. Every
+real layer must share one origin.
+
+The same file carries mapped trees (`natural=tree` points, `natural=tree_row`
+lines) and power lines (`power=line|minor_line`, a support at each vertex).
+A tree keeps its tagged `height`, `diameter_crown` and `circumference`, and
+otherwise takes its species' typical size. A support takes the `height` of a
+tower or pole mapped on it, or 30 m (line) or 10 m (minor line). `cables`
+sets the conductors and `voltage` the clearance a drone keeps. With a
+features file, these lines replace the procedural one. Asked-for scattered
+trees keep 8 m from mapped ones. Anything outside the map or inside a
+building is left out and counted in the replay's `features` record.
+
 ### Start from no world knowledge
 
 By default the drones are given the true terrain and buildings. With

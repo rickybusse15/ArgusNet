@@ -41,8 +41,9 @@
 
 use crate::grid_ops::{Grid, Mask};
 use crate::land_cover_build::{
-    apply_land_cover_overlay, classify_land_cover, sample_mask_to_grid, CoverGrid, CoverMask,
-    LandCoverInputs, LandCoverPatch, SampledMasks, SeasonalVariation,
+    apply_land_cover_overlay, classify_land_cover, paint_cover_polygons, sample_mask_to_grid,
+    CoverGrid, CoverMask, CoverPolygon, LandCoverClass, LandCoverInputs, LandCoverPatch,
+    SampledMasks, SeasonalVariation,
 };
 use crate::noise::{fbm, stable_seed, Bounds2D, FbmConfig};
 use crate::obstacles::Obstacle;
@@ -405,6 +406,46 @@ pub fn build_land_cover_layer(request: LandCoverRequest<'_>) -> Result<CoverGrid
     Ok(grid)
 }
 
+/// Slopes steeper than this are rock where the data says nothing: the
+/// classifier's own rocky slope.
+pub const DATA_ROCKY_SLOPE_RAD: f64 = 0.52;
+
+/// Land cover from data (R5, `argusnet.features`), not from the terrain's
+/// noise: no forest, rock band, snow or water is invented.
+///
+/// Where the data says nothing the ground is open, or rock where it is
+/// steeper than [`DATA_ROCKY_SLOPE_RAD`]. Then `painted` is painted in
+/// order, each polygon assigning its class and density
+/// ([`paint_cover_polygons`]). Then the obstacles go over it as the
+/// reference lays them (buildings as urban), so a coarse land-use polygon
+/// never erases a mapped building.
+pub fn build_data_land_cover(
+    terrain: &BuiltTerrain,
+    obstacles: &[Obstacle],
+    painted: &[CoverPolygon],
+    resolution_m: f64,
+) -> Result<CoverGrid, String> {
+    if !resolution_m.is_finite() || resolution_m <= 0.0 {
+        return Err("land-cover resolution must be finite and positive".into());
+    }
+    let (rows, cols, xx, yy) = cover_cell_centres(terrain.bounds_xy_m, resolution_m);
+    let mut grid = CoverGrid {
+        rows,
+        cols,
+        classes: vec![LandCoverClass::Open as u8; rows * cols],
+        density: vec![0; rows * cols],
+    };
+    for k in 0..rows * cols {
+        if terrain.slope_rad_at(xx[k], yy[k]) > DATA_ROCKY_SLOPE_RAD {
+            grid.classes[k] = LandCoverClass::Rocky as u8;
+            grid.density[k] = 60;
+        }
+    }
+    paint_cover_polygons(&mut grid, &xx, &yy, painted)?;
+    apply_land_cover_overlay(&mut grid, &xx, &yy, obstacles, &[], false)?;
+    Ok(grid)
+}
+
 /// The land-cover resolution the reference derives when none is given.
 pub fn default_land_cover_resolution_m(terrain_resolution_m: f64) -> f64 {
     (terrain_resolution_m * LAND_COVER_TERRAIN_MULTIPLE).max(LAND_COVER_MIN_RESOLUTION_M)
@@ -466,4 +507,65 @@ pub fn build_landscape(
         land_cover,
         land_cover_resolution_m: cover_resolution,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A terrain flat west of x = 0 and climbing at 0.8 (38 degrees) east.
+    fn ramp() -> BuiltTerrain {
+        let bounds = Bounds2D {
+            x_min_m: -100.0,
+            x_max_m: 100.0,
+            y_min_m: -100.0,
+            y_max_m: 100.0,
+        };
+        let config = TerrainBuildConfig {
+            terrain_resolution_m: Some(5.0),
+            ..TerrainBuildConfig::default()
+        };
+        let (xs, ys) = crate::noise::grid_values(bounds, 5.0);
+        let values = ys
+            .iter()
+            .flat_map(|_| xs.iter().map(|x| 10.0 + 0.8 * x.max(0.0)))
+            .collect();
+        terrain_from_heights(
+            &config,
+            bounds,
+            Grid::new(ys.len(), xs.len(), values).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn cell(grid: &CoverGrid, x: f64, y: f64) -> (u8, u8) {
+        let col = ((x + 100.0) / 10.0).floor() as usize;
+        let row = ((y + 100.0) / 10.0).floor() as usize;
+        let k = row * grid.cols + col;
+        (grid.classes[k], grid.density[k])
+    }
+
+    /// Where the data says nothing: open on the flat, rock on the steep;
+    /// what it paints wins over both; nothing else is invented.
+    #[test]
+    fn data_land_cover_is_open_or_steep_rock_unless_painted() {
+        let terrain = ramp();
+        let forest = CoverPolygon {
+            polygon_xy_m: vec![[40.0, 40.0], [90.0, 40.0], [90.0, 90.0], [40.0, 90.0]],
+            cover_class: LandCoverClass::Forest,
+            cover_density: 150,
+        };
+        let grid = build_data_land_cover(&terrain, &[], &[forest], 10.0).unwrap();
+        assert_eq!(cell(&grid, -55.0, 0.0), (LandCoverClass::Open as u8, 0));
+        assert_eq!(cell(&grid, 55.0, 0.0), (LandCoverClass::Rocky as u8, 60));
+        assert_eq!(cell(&grid, 65.0, 65.0), (LandCoverClass::Forest as u8, 150));
+        let only: std::collections::BTreeSet<u8> = grid.classes.iter().copied().collect();
+        let expected: std::collections::BTreeSet<u8> = [
+            LandCoverClass::Open as u8,
+            LandCoverClass::Rocky as u8,
+            LandCoverClass::Forest as u8,
+        ]
+        .into();
+        assert_eq!(only, expected);
+    }
 }

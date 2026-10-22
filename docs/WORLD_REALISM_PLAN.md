@@ -611,8 +611,46 @@ C8 (P2.6) and D2 (P5.1).
   axis-aligned, 30-degree-rotated and point-registered rasters, where an
   axis-by-axis projection misses by decimetres. An end-to-end test runs
   `argusnet-rs sim` on an imported DEM. Canonical replays are unchanged.
-  Next: OSM water, roads, land use, trees and power lines through the same
-  georeference (R5.2); one pipeline and the canonical town (R5.3).
+  *Done (real land cover, R5.2a):* `scripts/import_features.py` turns OSM
+  GeoJSON into an `argusnet.features` v1 document through the buildings'
+  georeference, as polygons in painting order:
+  - open, then urban land use;
+  - then natural cover: wetland, forest, scrub, rock, glacier;
+  - then water, with rivers, canals and streams at their width;
+  - then vehicle roads at width, else lanes x 3.5 m, else a default by class.
+
+  Tunnels, bridges, untagged features and holes are skipped and counted.
+  The builder's `features_path` option builds the land cover from the data
+  (`landscape::build_data_land_cover`). Where the data says nothing, the
+  ground is open, or rock above 0.52 rad. The polygons are painted by
+  assignment, so a road clears a forest. Lines, written as segments with a
+  width, are painted at least sqrt(2) cells wide, so a road narrower than a
+  cell still marks every cell it crosses. The obstacles go last, so
+  buildings stay urban. The procedural walls and forest stands are dropped,
+  and asked-for trees grow only in mapped forest. One origin check covers
+  every real layer. The tests cover cover from data, invented cover
+  dropped, buildings on top, trees only in forest, the record, refusals,
+  and an end-to-end run; all 12 mutants are killed. A DEM, the features
+  and the synthetic town's buildings run together on the regional map.
+
+  *Done (mapped trees and power lines, R5.2b):* the features document also
+  carries:
+  - `natural=tree` points and `natural=tree_row` lines, a tree every 8 m,
+    with species from `leaf_type` or a palm genus;
+  - `power=line` and `minor_line` ways, with tower or pole heights, `cables`
+    and `voltage`.
+
+  The builder stands each tree where it was mapped, sizing it from its
+  tags, else its species' middle values, with no draws. Its scattered trees
+  keep the spacing from mapped ones. Lines stand on the run's ground with
+  the kind's defaults: support height, arm width, sag, conductor radius,
+  and clearance by voltage. A support off the map or inside a building
+  splits its line, which keeps each run of two or more clear supports.
+  Mapped trunks are indexed on a grid, so the scatter's spacing check stays
+  linear however many trees are mapped. The procedural line is not built when a
+  features file is given. Anything outside the map, inside a structure or
+  refused by the model is counted in the record. All 19 mutants are killed.
+  Next: one pipeline and the canonical town (R5.3).
 
 ## Order and size
 

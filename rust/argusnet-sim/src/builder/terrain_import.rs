@@ -21,15 +21,11 @@ use argusnet_world::grid_ops::Grid;
 use argusnet_world::landscape::{terrain_from_heights, BuiltTerrain, TerrainBuildConfig};
 use argusnet_world::noise::Bounds2D;
 
-use super::buildings::Georeference as BuildingsGeoreference;
 use super::environment::MapBounds;
 use super::BuildError;
 
 pub const TERRAIN_FORMAT: &str = "argusnet.terrain";
 pub const TERRAIN_VERSION: u32 = 1;
-/// The most two origins may differ and still be one frame, degrees (about
-/// a millimetre).
-const ORIGIN_TOLERANCE_DEG: f64 = 1e-8;
 
 /// Where the document's local frame is on Earth, and its vertical offset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -142,27 +138,6 @@ pub fn terrain(
         heights,
     )
     .map_err(invalid)
-}
-
-/// Real buildings and real terrain must be in one frame.
-pub fn check_same_origin(
-    terrain: &Georeference,
-    buildings: &BuildingsGeoreference,
-) -> Result<(), BuildError> {
-    let apart = (terrain.origin_lat_deg - buildings.origin_lat_deg)
-        .abs()
-        .max((terrain.origin_lon_deg - buildings.origin_lon_deg).abs());
-    if apart > ORIGIN_TOLERANCE_DEG {
-        return Err(BuildError::Invalid(format!(
-            "terrain_path and buildings_path have different origins ({}, {} and {}, {}): \
-             import both with the same --origin",
-            terrain.origin_lat_deg,
-            terrain.origin_lon_deg,
-            buildings.origin_lat_deg,
-            buildings.origin_lon_deg
-        )));
-    }
-    Ok(())
 }
 
 /// The bundle's and the replay's record of the terrain a world stands on.
