@@ -218,6 +218,11 @@ pub fn sync_belief_map_system(
 ) {
     let layout = replay.document.as_ref().and_then(|doc| doc.belief_grid());
     if layout != view.layout || replay.epoch() != view.epoch {
+        // Another run: its truth is hidden afresh. A seek within the run
+        // keeps the epoch, and with it whatever the viewer turned back on.
+        if replay.epoch() != view.epoch {
+            view.truth_hidden = false;
+        }
         view.forget(&mut commands);
         view.layout = layout;
         view.epoch = replay.epoch();
@@ -973,6 +978,17 @@ mod tests {
         }
         app.update();
         assert_eq!(overlays(&app), (true, false, true));
+        // A seek within the run keeps them.
+        app.world_mut().resource_mut::<ReplayState>().step_to(1);
+        app.update();
+        assert_eq!(overlays(&app), (true, false, true));
+        // Another self-built run hides its truth afresh.
+        let next = app.world().resource::<ReplayState>().document.clone();
+        app.world_mut()
+            .resource_mut::<ReplayState>()
+            .begin_epoch(next);
+        app.update();
+        assert_eq!(overlays(&app), (false, false, false));
     }
 
     fn row(i: u32, j: u32, ground_cm: Option<i32>) -> BeliefCellRow {
