@@ -97,10 +97,6 @@ struct State {
     wind_mps: Option<[f64; 3]>,
     warned: BTreeSet<String>,
     events: Vec<BatteryEvent>,
-    /// Under `flown_v1`, where each mobile platform ended the last committed
-    /// tick, recorded at commit ([`BatteryStage::record_flown`]) and charged
-    /// by the next run. Checkpointed: a resumed world does not hold it.
-    flown: Option<Vec<(String, [f64; 3])>>,
 }
 
 impl BatteryStage {
@@ -188,31 +184,43 @@ impl BatteryStage {
     }
 
     /// Take the events the last run produced, leaving none behind.
-    /// Under `flown_v1`, record where each mobile platform ended the tick
-    /// just committed -- after overrides, deconfliction and safety -- for the
-    /// next tick to charge. Called by the simulation at commit. Does nothing
-    /// under another profile.
-    pub fn record_flown(&mut self, world: &crate::world::TickWorld) {
-        if self.state.profile != EnergyProfile::FlownV1 {
+    /// Under `flown_v1`, charge each platform for the tick just committed:
+    /// motion from where the last tick left it to where this one did (after
+    /// overrides, deconfliction and safety), plus hover for the rest of the
+    /// tick, and publish its fraction. Called by the simulation at commit,
+    /// so every tick, the last included, is charged for what it flew. The
+    /// first tick is measured from nowhere: hover alone. Does nothing under
+    /// another profile.
+    pub fn charge_flown(&mut self, world: &mut crate::world::TickWorld, dt_s: f64) {
+        let shared = &mut self.state;
+        if shared.profile != EnergyProfile::FlownV1 {
             return;
         }
-        self.state.flown = Some(
-            world
-                .platforms()
-                .iter()
-                .filter(|platform| platform.is_mobile)
-                .map(|platform| {
-                    (
-                        platform.node_id.clone(),
-                        [
-                            platform.position.x,
-                            platform.position.y,
-                            platform.position.z,
-                        ],
-                    )
-                })
-                .collect(),
-        );
+        let model = shared.model;
+        for platform in world.platforms_mut() {
+            if !platform.is_mobile {
+                continue;
+            }
+            let Some(state) = shared.states.get(&platform.node_id).copied() else {
+                continue;
+            };
+            let position = [
+                platform.position.x,
+                platform.position.y,
+                platform.position.z,
+            ];
+            let previous = shared
+                .previous_positions
+                .get(&platform.node_id)
+                .copied()
+                .unwrap_or(None);
+            let drawn = state.consume(model.tick_cost_wh(previous, position, dt_s));
+            shared.states.insert(platform.node_id.clone(), drawn);
+            shared
+                .previous_positions
+                .insert(platform.node_id.clone(), Some(position));
+            platform.battery_fraction = Some(drawn.fraction_of(model.capacity_wh));
+        }
     }
 
     pub fn take_events(&mut self) -> Vec<BatteryEvent> {
@@ -293,10 +301,6 @@ struct BatteryCheckpoint {
     /// Absent for legacy, so a legacy checkpoint is unchanged (D-3).
     #[serde(default, skip_serializing_if = "EnergyProfile::is_legacy")]
     energy_profile: EnergyProfile,
-    /// Under `flown_v1`, where each platform ended the checkpointed tick.
-    /// Absent otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    flown: Option<Vec<(String, [f64; 3])>>,
 }
 
 impl StageHandler for BatteryStage {
@@ -314,11 +318,7 @@ impl StageHandler for BatteryStage {
 
         // Declaration order, which §4 asks for: several reference stages break
         // ties by position in this list.
-        // Under `flown_v1`, where the platforms ended the last tick. Before
-        // any tick has been committed, where they are now: the first tick
-        // draws hover alone, and the second is measured from here.
-        let flown = shared.flown.take();
-        let sampled: Vec<(String, [f64; 3])> = flown.unwrap_or_else(|| {
+        let sampled: Vec<(String, [f64; 3])> = {
             context
                 .world
                 .platforms()
@@ -335,7 +335,7 @@ impl StageHandler for BatteryStage {
                     )
                 })
                 .collect()
-        });
+        };
 
         for (node_id, position) in sampled {
             // `if not ns.is_mobile or ns.node_id not in _battery_states`.
@@ -356,9 +356,13 @@ impl StageHandler for BatteryStage {
                 (EnergyProfile::Legacy, Some(previous)) => {
                     Some(model.segment_cost_wh(previous, position))
                 }
-                (EnergyProfile::PhysicalV1 | EnergyProfile::FlownV1, previous) => {
+                (EnergyProfile::PhysicalV1, previous) => {
                     Some(model.tick_cost_wh(previous, position, context.dt_s))
                 }
+                // Charged at commit, on what was flown (`charge_flown`):
+                // nothing here but the reserve check on the ledger as the
+                // last tick left it.
+                (EnergyProfile::FlownV1, _) => Some(0.0),
             };
             if let Some(cost_wh) = cost_wh {
                 let drawn = shared
@@ -403,7 +407,11 @@ impl StageHandler for BatteryStage {
             // Outside the `if`, exactly as the reference has it: the position
             // is recorded on every tick, including the one that charged
             // nothing. Moving this inside would make the first two ticks free.
-            shared.previous_positions.insert(node_id, Some(position));
+            // Under `flown_v1` the previous position is the flown one, which
+            // only the commit sees.
+            if shared.profile != EnergyProfile::FlownV1 {
+                shared.previous_positions.insert(node_id, Some(position));
+            }
         }
 
         // Publish the fraction onto the fleet, mirroring the reference's
@@ -462,7 +470,6 @@ impl StageHandler for BatteryStage {
         for previous in shared.previous_positions.values_mut() {
             *previous = None;
         }
-        shared.flown = None;
         shared.warned.clear();
         shared.events.clear();
     }
@@ -478,7 +485,6 @@ impl StageHandler for BatteryStage {
             previous_positions: shared.previous_positions.clone(),
             warned: shared.warned.clone(),
             energy_profile: shared.profile,
-            flown: shared.flown.clone(),
         };
         Some(serde_json::to_value(state).expect("battery checkpoint serialises"))
     }
@@ -532,7 +538,6 @@ impl StageHandler for BatteryStage {
             .collect();
         shared.previous_positions = decoded.previous_positions;
         shared.warned = decoded.warned;
-        shared.flown = decoded.flown;
         shared.events.clear();
         Ok(())
     }

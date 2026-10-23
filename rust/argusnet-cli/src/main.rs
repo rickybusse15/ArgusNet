@@ -211,7 +211,7 @@ struct SimArgs {
     /// the reference does; `physical_v1` also charges hover power for the part
     /// of each tick not spent moving; `flown_v1` charges the same on where
     /// each platform actually flew (after overrides, deconfliction and
-    /// safety), one tick late, not on its controller's nominal position (F5).
+    /// safety), charged as each tick commits, not on its controller's nominal position (F5).
     #[arg(long, value_enum, default_value = "legacy")]
     energy_profile: EnergyProfileArg,
     /// Who allocates the mission's POIs (P1): `reference` is the reference's

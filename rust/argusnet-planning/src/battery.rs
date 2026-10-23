@@ -23,7 +23,7 @@
 /// charges hover power for the part of each tick not spent moving; see
 /// [`BatteryModel::tick_cost_wh`]. `FlownV1` charges the same per-tick cost
 /// on where the platform actually flew (after overrides, deconfliction and
-/// safety), one tick late, rather than on its controller's nominal position
+/// safety), charged as each tick commits, rather than on its controller's nominal position
 /// (F5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

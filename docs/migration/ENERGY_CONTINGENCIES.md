@@ -90,23 +90,26 @@ is the same for both variants and is not a difference between them.
 
 `--energy-profile flown_v1` (CLI and viewer `--run`) charges the same per-tick
 cost as `physical_v1` (motion, plus hover for the rest of the tick), but on
-where each platform actually flew. At each commit, stage 10 records where every
-mobile platform ended the tick, after overrides, deconfliction and safety
-(`BatteryStage::record_flown`). The next tick's stage 1 charges the motion from
-the tick before to there. The charge is one tick late. The first tick draws hover
-alone, and the second is measured from where the first tick's controllers put
-each platform. The recorded positions are
-checkpointed, because a resumed world does not hold them: stage 1 rebuilds
-platforms each tick.
+where each platform actually flew. At each commit, stage 10 charges every
+mobile platform for the tick (`BatteryStage::charge_flown`): the motion from
+where the last tick left it to where this one did, after overrides,
+deconfliction and safety, plus hover for the rest of the tick. It also publishes
+the fraction before the snapshot is taken. Every tick, the last one included, is
+charged for what it flew; an earlier draft charged one tick late and never
+charged the final tick. The first tick draws hover alone. Stage 1 draws nothing
+under this profile, and keeps only its reserve check on the ledger. The flown
+positions are the battery's previous positions, which are already
+checkpointed.
 
 Evidence:
 - `rust/argusnet-sim/tests/flown_energy.rs`: on the scan fixture, every tick's
-  draw equals the cost of the motion the replay shows, to 1e-9 Wh, including
-  ticks where a drone sits still (hover alone). Under `physical_v1` the ledger
+  draw equals the cost of the motion the replay shows, to 1e-9 Wh, from the
+  first frame (hover alone) to the last. That includes ticks where a drone sits
+  still, which draw hover alone. Under `physical_v1` the ledger
   and the flown path disagree. A `flown_v1` run resumes frame for frame from a
   checkpoint, and a `physical_v1` run refuses it.
 - `contingency.rs`: the drone cut to 100.5 Wh that goes home on its reserve
-  ends the run with 0 Wh under `physical_v1` and 69.3 Wh under `flown_v1`.
+  ends the run with 0 Wh under `physical_v1` and 69.4 Wh under `flown_v1`.
 
 The other profiles are unchanged: 14/14 replays identical, lifecycle equal.
 

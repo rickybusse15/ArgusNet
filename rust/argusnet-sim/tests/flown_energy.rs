@@ -74,17 +74,21 @@ fn flown(replay: &serde_json::Value) -> Vec<(String, Track)> {
 }
 
 /// The ticks at which the ledger's draw differs from the per-tick cost of
-/// the flown motion (the end of tick k-2 to the end of tick k-1), and how
-/// many ticks the drones sat still. From tick 2 on: tick 1 is measured from
-/// where tick 0's controllers put each drone, before anything was flown.
+/// the flown motion, and how many ticks the drones sat still. Tick k draws
+/// the motion from the end of tick k-1 to the end of tick k, the last tick
+/// included; tick 0, with nothing flown before it, draws hover alone.
 fn mismatches(replay: &serde_json::Value) -> (usize, usize) {
     let model = reference_battery_model();
     let dt = replay["meta"]["dt_s"].as_f64().unwrap_or(1.0);
     let (mut wrong, mut still) = (0, 0);
     for (_, samples) in flown(replay) {
-        for k in 2..samples.len() {
+        let first = (1.0 - samples[0].1) * model.capacity_wh;
+        if (first - model.tick_cost_wh(None, samples[0].0, dt)).abs() > 1e-9 {
+            wrong += 1;
+        }
+        for k in 1..samples.len() {
             let drawn = (samples[k - 1].1 - samples[k].1) * model.capacity_wh;
-            let (from, to) = (samples[k - 2].0, samples[k - 1].0);
+            let (from, to) = (samples[k - 1].0, samples[k].0);
             let expected = model.tick_cost_wh(Some(from), to, dt);
             if from == to {
                 still += 1;

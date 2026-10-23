@@ -12,7 +12,7 @@
   own reserve return. See `docs/migration/ENERGY_CONTINGENCIES.md`.
 - Energy charged on the flown position (F5). `--energy-profile flown_v1`
   charges motion and hover on where each platform actually flew (after
-  overrides, deconfliction and safety), one tick late. Under the other
+  overrides, deconfliction and safety), at the commit of each tick. Under the other
   profiles, a drone held at home by an override is still billed for the
   lanes its controller would fly.
 
