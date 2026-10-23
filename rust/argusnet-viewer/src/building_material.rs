@@ -172,6 +172,13 @@ fn apply_facades_system(
         }
         let mut seen = 0usize;
         let mut converted = 0usize;
+        // One facade material per baked material, shared by every part
+        // that used it, so the renderer batches them: a material per part
+        // made each of a real town's ~600 buildings its own draw (R5).
+        let mut shared: std::collections::HashMap<
+            AssetId<StandardMaterial>,
+            Handle<BuildingMaterial>,
+        > = std::collections::HashMap::new();
         let mut stack = vec![root];
         while let Some(entity) = stack.pop() {
             if let Ok(node_children) = children.get(entity) {
@@ -185,14 +192,12 @@ fn apply_facades_system(
             {
                 continue;
             }
-            let base = standard_materials
-                .get(&material.0)
-                .cloned()
-                .unwrap_or_default();
-            let facade = building_materials.add(BuildingMaterial {
-                base,
-                extension: FacadeExtension::default(),
-            });
+            let facade = shared_facade(
+                &mut shared,
+                &material.0,
+                &standard_materials,
+                &mut building_materials,
+            );
             commands
                 .entity(entity)
                 .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -207,6 +212,26 @@ fn apply_facades_system(
         debug!("facades on {converted} of {seen} building mesh(es)");
         commands.entity(root).insert(FacadesApplied);
     }
+}
+
+/// The facade material for parts baked with `baked`: made once from it,
+/// then shared from `shared` by every part that used it.
+fn shared_facade(
+    shared: &mut std::collections::HashMap<AssetId<StandardMaterial>, Handle<BuildingMaterial>>,
+    baked: &Handle<StandardMaterial>,
+    standard_materials: &Assets<StandardMaterial>,
+    building_materials: &mut Assets<BuildingMaterial>,
+) -> Handle<BuildingMaterial> {
+    shared
+        .entry(baked.id())
+        .or_insert_with(|| {
+            let base = standard_materials.get(baked).cloned().unwrap_or_default();
+            building_materials.add(BuildingMaterial {
+                base,
+                extension: FacadeExtension::default(),
+            })
+        })
+        .clone()
 }
 
 /// The baked material a facade was copied from, whose styled alpha mode
@@ -371,6 +396,31 @@ mod tests {
             .filter_map(surface)
             .all(|(_, m)| m <= 0.5));
         assert!(surface(2).unwrap().0 > 0.8 && surface(2).unwrap().1 == 0.0);
+    }
+
+    /// Parts baked with one material share one facade material (so the
+    /// renderer batches them); another baked material gets its own, a copy
+    /// of it.
+    #[test]
+    fn parts_baked_alike_share_one_facade() {
+        let mut standard = Assets::<StandardMaterial>::default();
+        let mut facades = Assets::<BuildingMaterial>::default();
+        let walls = standard.add(StandardMaterial {
+            perceptual_roughness: 0.7,
+            ..Default::default()
+        });
+        let other = standard.add(StandardMaterial {
+            perceptual_roughness: 0.2,
+            ..Default::default()
+        });
+        let mut shared = std::collections::HashMap::new();
+        let a = shared_facade(&mut shared, &walls, &standard, &mut facades);
+        let b = shared_facade(&mut shared, &walls, &standard, &mut facades);
+        let c = shared_facade(&mut shared, &other, &standard, &mut facades);
+        assert_eq!(a.id(), b.id());
+        assert_ne!(a.id(), c.id());
+        assert_eq!(facades.len(), 2);
+        assert_eq!(facades.get(&c).unwrap().base.perceptual_roughness, 0.2);
     }
 
     #[test]

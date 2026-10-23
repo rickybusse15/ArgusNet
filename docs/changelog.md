@@ -9,6 +9,18 @@
   nothing is invented. Roads run through forests, buildings stay urban,
   trees grow only in mapped forests, and the procedural walls and forest
   stands are dropped. Every real layer must share one origin.
+- The canonical real-world scenario (R5): West Pleasant View, Colorado,
+  from a committed USGS 3DEP DEM and OSM extract with attribution
+  (tests/fixtures/real/west_pleasant_view). Its import and run are pinned
+  by recorded counts, and the realism render fixtures include it.
+  `import_world` reads Overpass answers directly.
+- Viewer: building facades share one material per baked material instead
+  of one per part. A real town's ~600 buildings fell from p95 21 ms to
+  4 ms, pixel-identical.
+- A real place in one step (R5). `scripts/import_world.py` turns a DEM and
+  one OSM extract into a runnable world folder: every layer around one
+  origin, a scenario config, and a manifest with a content-hashed
+  `world_id`. Optionally it also runs the scenario and packages the scene.
 - Mapped trees and power lines (R5). The features document carries OSM
   trees (points and tree rows) and power lines, with their tagged sizes,
   tower heights, cables and voltage. The run stands them on its ground in

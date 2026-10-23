@@ -650,7 +650,54 @@ C8 (P2.6) and D2 (P5.1).
   linear however many trees are mapped. The procedural line is not built when a
   features file is given. Anything outside the map, inside a structure or
   refused by the model is counted in the record. All 19 mutants are killed.
-  Next: one pipeline and the canonical town (R5.3).
+
+  *Done (one pipeline, R5.3a):* `scripts/import_world.py` runs the three
+  importers around one origin (given, or the DEM's centre) into one folder:
+  terrain, buildings and features documents, a `scenario.json` naming them,
+  and a `world.json` manifest. The manifest holds the origin, each file's
+  and each source's SHA-256, the importers' summaries, and a `world_id`
+  hashed from the files. The extract is split by the `building` tag, since
+  the buildings importer reads every polygon as a building. With
+  `--argusnet-rs` it also runs the scenario and packages the scene. Tests
+  cover one origin with or without `--origin`, the split, the same data
+  giving the same world, and an end-to-end run.
+  The extract may also be an Overpass API answer (`out geom`), converted by
+  `argusnet.world.overpass`. Tagged nodes become points; ways become
+  polygons or lines by their tags; multipolygons are stitched, with their
+  holes.
+
+  *Done (the canonical real-world scenario, R5.3b):* West Pleasant View,
+  Colorado. It is a foothills edge between Golden and Lakewood, crossed by
+  a 230/115 kV double-circuit line, on the medium map around
+  39.7340 N, 105.1782 W. The sources are committed with their
+  attribution and exact requests (`tests/fixtures/real/west_pleasant_view`):
+  - a USGS 3DEP DEM at 5 m (public domain);
+  - an OSM Overpass extract (ODbL).
+
+  `canonical.json` holds the parameters and the counts the import and the
+  run must give. On import: 918 buildings, 436 trees, 1 line, 508 roads,
+  76 water features, and ground 1748-1787 m. In the run: 592 buildings
+  and 209 trees inside the map, and the line on 6 supports. A test checks
+  those counts and the sources' hashes. The render fixtures `realism_real`,
+  `realism_real_close` and `realism_real_low_pitch` render it.
+
+  The scenario found a real cost the synthetic worlds hid. The viewer made
+  a facade material for every building part, so the town's ~600 buildings
+  were each a separate draw. On this place that meant p95 21 ms against
+  4 ms without buildings. Facades now share one material per baked
+  material, and the image is pixel-identical. Over 45 runs (all realism
+  fixtures, 1280x720, every tier), the worst p95 is 6.0 ms, the worst p99
+  6.9 ms and the worst frame 10.3 ms, with no stall. This was measured
+  under CI load on the D-5 machine.
+
+  Seen, not yet done:
+  - a double-circuit line's six conductors spread across one arm, rather
+    than stacked as on the real towers (the line model has offsets across
+    only), so at distance they merge into one pale ribbon;
+  - most mapped buildings carry no height, so they take defaults (909 of
+    918);
+  - the optional LiDAR canopy and building-height model would fix both
+    heights; it is not done.
 
 ## Order and size
 
