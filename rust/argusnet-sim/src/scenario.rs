@@ -2534,6 +2534,10 @@ impl AssembledRun {
                     completion_time_s: status.completion_time_s,
                     dwell_accumulated_s: status.dwell_accumulated_s,
                     position: Some(*position),
+                    unassigned_reason: report
+                        .unassigned
+                        .contains(&status.poi_id)
+                        .then(|| "no_affordable_drone".to_string()),
                 })
                 .collect(),
             completed_poi_count: report.completed_count,

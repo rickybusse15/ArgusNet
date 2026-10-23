@@ -215,7 +215,10 @@ struct SimArgs {
     /// Who allocates the mission's POIs (P1): `reference` is the reference's
     /// greedy, fleet-order assignment; `efficient_v1` assigns every free drone
     /// against every pending POI at once, on trip and dwell energy within the
-    /// reserve home. Recorded in the replay's `meta.planning_policy`.
+    /// reserve home; `contingency_v1` is `efficient_v1` that hands work on
+    /// when a drone can no longer afford to finish it and fly home, takes
+    /// new work only with a margin, and reports a POI no drone can afford as
+    /// unassigned (F5). Recorded in the replay's `meta.planning_policy`.
     #[arg(long, value_enum, default_value = "reference")]
     planning_policy: PlanningPolicyArg,
     /// Model timestamped delivery (B4): fusion ingests the evidence acquired
@@ -320,6 +323,8 @@ enum PlanningPolicyArg {
     Reference,
     #[value(name = "efficient_v1")]
     EfficientV1,
+    #[value(name = "contingency_v1")]
+    ContingencyV1,
 }
 
 /// The energy profile, delivery and faults the flags ask for, applied by
@@ -337,6 +342,9 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             }
             PlanningPolicyArg::EfficientV1 => {
                 argusnet_planning::allocation::PlanningPolicy::EfficientV1
+            }
+            PlanningPolicyArg::ContingencyV1 => {
+                argusnet_planning::allocation::PlanningPolicy::ContingencyV1
             }
         },
         delivery: args.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {

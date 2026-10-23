@@ -124,8 +124,9 @@ struct RunOptionArgs {
     /// `legacy` charges motion only; `physical_v1` also charges hover power.
     #[arg(long, value_parser = ["legacy", "physical_v1"], default_value = "legacy", requires = "run")]
     energy_profile: String,
-    /// Who allocates the mission's POIs (P1): `reference` or `efficient_v1`.
-    #[arg(long, value_parser = ["reference", "efficient_v1"], default_value = "reference", requires = "run")]
+    /// Who allocates the mission's POIs (P1): `reference`, `efficient_v1`,
+    /// or `contingency_v1` (F5).
+    #[arg(long, value_parser = ["reference", "efficient_v1", "contingency_v1"], default_value = "reference", requires = "run")]
     planning_policy: String,
     /// Fuse the evidence acquired this many seconds ago (B4). Omit for the
     /// legacy same-tick path.
@@ -179,6 +180,7 @@ impl RunOptionArgs {
             },
             planning_policy: match self.planning_policy.as_str() {
                 "efficient_v1" => argusnet_sim::run_options::PlanningPolicy::EfficientV1,
+                "contingency_v1" => argusnet_sim::run_options::PlanningPolicy::ContingencyV1,
                 _ => argusnet_sim::run_options::PlanningPolicy::Reference,
             },
             delivery: self.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {
