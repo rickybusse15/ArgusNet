@@ -139,6 +139,10 @@
   "required_objectives_met": 1,
   "required_objectives_total": 1,
   "schema_version": "argusnet.mission-assurance/v1",
+  "source_binding": {
+    "encoding": "argusnet.canonical-json/1",
+    "sha256": "ea8be1d366180a0fa399c217a364ed09261bd77e78382e6f537f0d381e8ce86e"
+  },
   "source_replay_sha256": "7655786bb96ac89095285ac859dbcde5f40ca00dfb2f9afa19c50725493ccc06",
   "status": "completed",
   "terminal_phase": "complete",

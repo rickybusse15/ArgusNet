@@ -1,0 +1,58 @@
+{
+ "meta": {
+  "scenario_name": "Ørsted–café ✈",
+  "dt_s": 0.25,
+  "seed": 7,
+  "big": 123456789012345678,
+  "escapes": "tab\there \"quoted\" back\\slash \u0001 ctrl / slash",
+  "zero": -0.0,
+  "tiny": [
+   1e-05,
+   9.99e-05,
+   1.5e-06,
+   -3.1e-08,
+   5e-324,
+   0.0001,
+   0.0001
+  ],
+  "huge": [
+   1e+16,
+   1.5e+16,
+   1.7976931348623157e+308,
+   12345678.9
+  ],
+  "nested": {
+   "b": [
+    true,
+    false,
+    null
+   ],
+   "a": {
+    "z": 1,
+    "Z": 2,
+    "é": 3,
+    "e": 4
+   }
+  }
+ },
+ "summary": {},
+ "frames": [
+  {
+   "timestamp_s": 0.0,
+   "nodes": [
+    {
+     "node_id": "drone",
+     "position": [
+      -1.25,
+      3.0,
+      1e-07
+     ]
+    }
+   ]
+  },
+  {
+   "timestamp_s": 0.25,
+   "nodes": []
+  }
+ ]
+}

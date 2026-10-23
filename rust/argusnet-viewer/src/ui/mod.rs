@@ -161,8 +161,13 @@ pub fn viewer_ui_system(
     let root = &mut root;
 
     let viewport = context.viewport_rect();
-    let layout =
-        ShellLayout::for_viewport(viewport.width(), viewport.height(), ui_state.drawer_open);
+    // Review's report is the rail, so the rail does not collapse there.
+    let layout = ShellLayout::for_workspace(
+        viewport.width(),
+        viewport.height(),
+        ui_state.drawer_open,
+        ui_state.workspace == crate::state::Workspace::Review,
+    );
     let alerts = collect_alerts(&replay_state, &mission_zones);
     let frame_count = replay_state.frame_count();
     let sim = sim.and_then(|sim| sim.0);

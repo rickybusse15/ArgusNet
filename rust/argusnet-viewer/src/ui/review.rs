@@ -38,7 +38,11 @@ pub struct ReviewReport {
     pub objectives: Vec<ReviewItem>,
     pub completion: Option<f64>,
     pub energy_reserve_min: Option<f64>,
+    /// The first [`EVENTS_SHOWN`] recorded events: only what is drawn is
+    /// built, however many the report holds.
     pub events: Vec<ReviewItem>,
+    /// How many events the report holds in all.
+    pub events_total: usize,
     pub unavailable_fields: Vec<String>,
 }
 
@@ -97,6 +101,7 @@ fn review_report(report: &MissionAssurance, frame_count: usize) -> ReviewReport 
     let events = report
         .events
         .iter()
+        .take(EVENTS_SHOWN)
         .map(|event| ReviewItem {
             title: event.kind.replace('_', " "),
             detail: format!(
@@ -118,6 +123,7 @@ fn review_report(report: &MissionAssurance, frame_count: usize) -> ReviewReport 
         completion: report.completion_rate,
         energy_reserve_min: report.energy_reserve_min,
         events,
+        events_total: report.events.len(),
         unavailable_fields: report.unavailable_fields.clone(),
     }
 }
@@ -169,14 +175,14 @@ pub(super) fn review_rail(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
         percent(report.energy_reserve_min)
     ));
     let mut jump = None;
-    let mut section = |ui: &mut egui::Ui, title: &str, items: &[ReviewItem], limit: usize| {
-        egui::CollapsingHeader::new(format!("{title} ({})", items.len()))
+    let mut section = |ui: &mut egui::Ui, title: &str, items: &[ReviewItem], total: usize| {
+        egui::CollapsingHeader::new(format!("{title} ({total})"))
             .default_open(title == "Findings")
             .show(ui, |ui| {
                 if items.is_empty() {
                     ui.small("None recorded.");
                 }
-                for item in items.iter().take(limit) {
+                for item in items {
                     let response = ui
                         .add_enabled(item.frame.is_some(), egui::Button::new(&item.title).small())
                         .on_hover_text(&item.detail);
@@ -187,17 +193,22 @@ pub(super) fn review_rail(ui: &mut egui::Ui, replay_state: &mut ReplayState) {
                     }
                     ui.small(&item.detail);
                 }
-                if items.len() > limit {
+                if total > items.len() {
                     ui.small(format!(
                         "… and {} more in assurance.json",
-                        items.len() - limit
+                        total - items.len()
                     ));
                 }
             });
     };
-    section(ui, "Findings", &report.findings, usize::MAX);
-    section(ui, "Objectives", &report.objectives, usize::MAX);
-    section(ui, "Events", &report.events, EVENTS_SHOWN);
+    section(ui, "Findings", &report.findings, report.findings.len());
+    section(
+        ui,
+        "Objectives",
+        &report.objectives,
+        report.objectives.len(),
+    );
+    section(ui, "Events", &report.events, report.events_total);
     egui::CollapsingHeader::new(format!("Unavailable ({})", report.unavailable_fields.len())).show(
         ui,
         |ui| {
@@ -218,11 +229,19 @@ mod tests {
     use super::*;
 
     fn document(summary: serde_json::Value) -> ReplayDocument {
-        serde_json::from_value(serde_json::json!({
+        let mut value = serde_json::json!({
             "summary": summary,
             "frames": [{"timestamp_s": 0.0}, {"timestamp_s": 1.0}],
-        }))
-        .unwrap()
+        });
+        // Bound to these frames, as a package binds its replay; loaded the
+        // way the viewer loads a scene's replay, which checks the binding.
+        let binding = crate::replay::source_sha256(&value);
+        if let Some(report) = value["summary"].get_mut("mission_assurance") {
+            if report.get("source_binding").is_some() {
+                report["source_binding"]["sha256"] = serde_json::json!(binding);
+            }
+        }
+        ReplayDocument::try_from(value).unwrap()
     }
 
     /// The shared Python fixture: a client package's own report.
@@ -271,6 +290,38 @@ mod tests {
         assert!(
             matches!(review_view(Some(&doc)), ReviewState::Invalid(why) if why.contains("version"))
         );
+    }
+
+    /// A report whose replay changed after it was made is not shown as that
+    /// replay's: Review says it failed its checks.
+    #[test]
+    fn a_report_for_other_frames_is_invalid() {
+        let mut value = serde_json::json!({
+            "summary": {"mission_assurance": report()},
+            "frames": [{"timestamp_s": 0.0}, {"timestamp_s": 1.0}],
+        });
+        value["summary"]["mission_assurance"]["source_binding"]["sha256"] =
+            serde_json::json!(crate::replay::source_sha256(&value));
+        value["frames"][1]["timestamp_s"] = serde_json::json!(2.0);
+        let doc = ReplayDocument::try_from(value).unwrap();
+        assert!(matches!(
+            review_view(Some(&doc)),
+            ReviewState::Invalid(why) if why.contains("does not describe this replay")
+        ));
+    }
+
+    /// A report with thousands of events builds only what Review draws.
+    #[test]
+    fn only_the_shown_events_are_built() {
+        let mut many = report();
+        let event = many["events"][0].clone();
+        many["events"] = serde_json::json!(vec![event; 5000]);
+        let doc = document(serde_json::json!({ "mission_assurance": many }));
+        let ReviewState::Report(view) = review_view(Some(&doc)) else {
+            panic!("a report");
+        };
+        assert_eq!(view.events.len(), EVENTS_SHOWN);
+        assert_eq!(view.events_total, 5000);
     }
 
     /// A pointer past the replay's frames is not a jump.

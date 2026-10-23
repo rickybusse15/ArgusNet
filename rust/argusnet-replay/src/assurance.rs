@@ -9,6 +9,11 @@ pub struct MissionAssurance {
     pub schema_version: String,
     pub source_replay_sha256: String,
     pub status: String,
+    /// The source in an encoding a reader can rebuild from the replay it
+    /// loaded ([`CANONICAL_ENCODING`]): checked by [`verify_source_binding`]
+    /// before the report is trusted.
+    #[serde(default)]
+    pub source_binding: Option<SourceBinding>,
     /// The F1 outcome record (`argusnet.mission-outcome/1`), when the
     /// producer carries it: how the run ended and why.
     #[serde(default)]
@@ -22,6 +27,103 @@ pub struct MissionAssurance {
     pub events: Vec<AssuranceEvent>,
     pub unavailable_fields: Vec<String>,
     pub localization_timeout_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SourceBinding {
+    pub encoding: String,
+    pub sha256: String,
+}
+
+/// `argusnet.canonical-json/1`: compact JSON, object keys sorted, strings
+/// and numbers exactly as serde_json writes them. The Python producer
+/// writes the same bytes (`argusnet.evaluation.assurance.canonical_json`).
+pub const CANONICAL_ENCODING: &str = "argusnet.canonical-json/1";
+
+/// `value` in [`CANONICAL_ENCODING`].
+pub fn canonical_json(value: &serde_json::Value) -> String {
+    fn write(value: &serde_json::Value, out: &mut String) {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, key) in keys.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(key).expect("a string encodes"));
+                    out.push(':');
+                    write(&map[key], out);
+                }
+                out.push('}');
+            }
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write(item, out);
+                }
+                out.push(']');
+            }
+            other => out.push_str(&serde_json::to_string(other).expect("a scalar encodes")),
+        }
+    }
+    let mut out = String::new();
+    write(value, &mut out);
+    out
+}
+
+/// The SHA-256, as lowercase hex, of `replay`'s source: the replay less its
+/// report and less a summary that held nothing else, in [`CANONICAL_ENCODING`].
+pub fn source_sha256(replay: &serde_json::Value) -> String {
+    let mut source = replay.clone();
+    if let Some(object) = source.as_object_mut() {
+        let empty = match object.get_mut("summary") {
+            Some(serde_json::Value::Object(summary)) => {
+                summary.remove("mission_assurance");
+                summary.is_empty()
+            }
+            _ => false,
+        };
+        if empty {
+            object.remove("summary");
+        }
+    }
+    let digest = ring::digest::digest(&ring::digest::SHA256, canonical_json(&source).as_bytes());
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Whether `report` describes `replay`, the document it was loaded with: its
+/// source binding must be present, in an encoding this reader knows, and
+/// match. A report edited onto other frames, or frames edited after it, fail.
+pub fn verify_source_binding(
+    report: &MissionAssurance,
+    replay: &serde_json::Value,
+) -> Result<(), String> {
+    let binding = report.source_binding.as_ref().ok_or(
+        "the report carries no source binding, so it cannot be checked against this replay",
+    )?;
+    if binding.encoding != CANONICAL_ENCODING {
+        return Err(format!(
+            "unknown source binding encoding {:?}",
+            binding.encoding
+        ));
+    }
+    if binding.sha256 != source_sha256(replay) {
+        return Err(
+            "the report does not describe this replay: its frames or metadata changed after \
+             the package was made"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// How a run ended and every reason why (F1), each with how many frames or
@@ -160,6 +262,66 @@ mod tests {
             .unwrap();
         assert_eq!(met.first_frame(1), Some(0));
         assert_eq!(met.first_frame(0), None);
+    }
+
+    /// The Python producer and this reader write the same canonical bytes:
+    /// both hash the shared fixture (floats tiny and huge, -0, a 64-bit
+    /// integer, Unicode, escapes, nested keys, an empty summary) alike.
+    #[test]
+    fn the_canonical_encoding_matches_the_python_producer() {
+        let replay: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/canonical_json_fixture.json"
+        ))
+        .unwrap();
+        let expected = include_str!("../../../tests/fixtures/canonical_json_fixture.sha256");
+        assert_eq!(source_sha256(&replay), expected.trim());
+    }
+
+    /// A report loads with the replay it describes, and fails against frames
+    /// or metadata changed after it was made, or without a binding.
+    #[test]
+    fn a_report_is_checked_against_the_replay_it_is_loaded_with() {
+        let mut replay: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/canonical_json_fixture.json"
+        ))
+        .unwrap();
+        let mut report: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/mission_assurance_fixture.json"
+        ))
+        .unwrap();
+        // Frames the typed reader accepts; the binding is this reader's
+        // hash, which the test above holds equal to the Python producer's.
+        for frame in replay["frames"].as_array_mut().unwrap() {
+            frame["nodes"] = serde_json::json!([]);
+        }
+        report["source_binding"]["sha256"] = serde_json::json!(source_sha256(&replay));
+        replay["summary"] = serde_json::json!({ "mission_assurance": report });
+        let load = |replay: &serde_json::Value| {
+            crate::ReplayDocument::try_from(replay.clone())
+                .unwrap()
+                .mission_assurance
+                .unwrap()
+        };
+        assert!(load(&replay).is_ok());
+
+        let mut edited = replay.clone();
+        edited["frames"][1]["timestamp_s"] = serde_json::json!(0.5);
+        let why = load(&edited).unwrap_err();
+        assert!(why.contains("does not describe this replay"), "{why}");
+
+        let mut appended = replay.clone();
+        appended["frames"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"timestamp_s": 0.5}));
+        assert!(load(&appended).is_err());
+
+        let mut unbound = replay.clone();
+        unbound["summary"]["mission_assurance"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_binding");
+        assert!(load(&unbound).unwrap_err().contains("no source binding"));
     }
 
     #[test]
