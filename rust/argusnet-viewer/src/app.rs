@@ -468,6 +468,7 @@ fn run_inner(
             .chain()
             .before(sync_fog_to_camera_system),
     );
+    app.init_resource::<crate::projection::CanvasScale>();
     app.add_systems(
         Update,
         (
@@ -475,6 +476,8 @@ fn run_inner(
                 .after(crate::orbit_camera::update_orbit_camera)
                 .after(crate::camera_control::drive_main_camera_system),
             crate::projection::draw_section_cut_system
+                .after(crate::projection::apply_projection_system),
+            crate::projection::update_canvas_scale_system
                 .after(crate::projection::apply_projection_system),
         ),
     );

@@ -2,6 +2,11 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Viewer: one belief/truth switch and a scale bar (console parity V3). The
+  Mission drawer opens with *World: Drones' map | True world*, which sets
+  every truth-bearing layer at once. Truth is refused in live operation.
+  The status line shows a scale bar at the camera's focus.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;
