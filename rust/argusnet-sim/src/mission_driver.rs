@@ -2538,35 +2538,52 @@ impl MissionDriverStage {
             let (dx, dy) = (poi[0] - position[0], poi[1] - position[1]);
             (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
         };
+        // To a fixed point: a teammate that gives the POI up (homeward, or
+        // unable to finish itself) shares none of the dwell, which can leave
+        // a drone that relied on it unable to finish too. The set only
+        // grows, so this ends.
         let mut cannot = BTreeSet::new();
-        for (id, position) in mobile {
-            let Some(held) = self.pois.assignment_for(id) else {
-                continue;
-            };
-            let Some(poi) = active.iter().find(|poi| poi.poi_id == held) else {
-                continue;
-            };
-            let sharing = mobile
-                .iter()
-                .filter(|(other, other_position)| {
-                    other != id
-                        && self.pois.assignment_for(other) == Some(held)
-                        && in_range(other_position, poi.position)
-                })
-                .count();
-            let hover_s = poi.remaining_dwell_s.max(0.0) / (sharing + 1) as f64;
-            let trip_wh = if in_range(position, poi.position) {
-                0.0
-            } else {
-                self.trip_cost_wh(&model, *position, poi.position)
-            };
-            let spent_wh = trip_wh + model.hover_power_w * hover_s / 3600.0;
-            let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
-            if remaining_wh - spent_wh < self.reserve_for(&model, id, poi.position, wind) {
-                cannot.insert(id.clone());
+        loop {
+            let leaving = |other: &String| cannot.contains(other) || self.homeward.contains(other);
+            let mut newly = Vec::new();
+            for (id, position) in mobile {
+                if cannot.contains(id) {
+                    continue;
+                }
+                let Some(held) = self.pois.assignment_for(id) else {
+                    continue;
+                };
+                let Some(poi) = active.iter().find(|poi| poi.poi_id == held) else {
+                    continue;
+                };
+                let sharing = mobile
+                    .iter()
+                    .filter(|(other, other_position)| {
+                        other != id
+                            && !leaving(other)
+                            && self.pois.assignment_for(other) == Some(held)
+                            && in_range(other_position, poi.position)
+                    })
+                    .count();
+                let hover_s = poi.remaining_dwell_s.max(0.0) / (sharing + 1) as f64;
+                let trip_wh = if in_range(position, poi.position) {
+                    0.0
+                } else {
+                    self.trip_cost_wh(&model, *position, poi.position)
+                };
+                let spent_wh = trip_wh + model.hover_power_w * hover_s / 3600.0;
+                let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
+                if remaining_wh - spent_wh < self.reserve_for(&model, id, poi.position, wind) {
+                    newly.push(id.clone());
+                }
             }
+            // Added after the pass, so one pass judges a whole team on the
+            // same teammates.
+            if newly.is_empty() {
+                return cannot;
+            }
+            cannot.extend(newly);
         }
-        cannot
     }
 
     /// Under contingency_v1 (F5), mark the pending POIs that no drone still
@@ -4587,6 +4604,35 @@ mod tests {
         assert_eq!(left.reason, "low_battery_teammate");
         assert!(stage.pois.leads("drone-a"), "the lead keeps it");
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
+    }
+
+    /// F5: a teammate that cannot finish shares none of the dwell, so a
+    /// drone that could afford the POI only with it cannot either: the
+    /// test runs to a fixed point. 600 s of dwell at 300 W is 50 Wh alone,
+    /// 25 Wh shared; the reserve floor is 20 Wh.
+    #[test]
+    fn contingency_v1_drops_a_holder_that_relied_on_a_leaving_teammate() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 510.0)]);
+        let mut stage = driver(vec![InspectionPoi {
+            required_dwell_s: 600.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        stage.set_policy(PlanningPolicy::ContingencyV1).unwrap();
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
+        assert_eq!(stage.pois.assignment_for("drone-b"), Some("poi-00"));
+        // a: 30 Wh, short even sharing (25 + 20). b: 46 Wh, enough sharing
+        // (25 + 20) but not alone (50 + 20).
+        assert!(battery.set_remaining_wh("drone-a", 30.0));
+        assert!(battery.set_remaining_wh("drone-b", 46.0));
+        let cannot = stage.holders_that_cannot_finish(&mobile, &battery);
+        assert_eq!(
+            cannot.into_iter().collect::<Vec<_>>(),
+            ["drone-a", "drone-b"]
+        );
+        // With a teammate that can finish, b keeps it.
+        assert!(battery.set_remaining_wh("drone-a", 60.0));
+        assert!(stage.holders_that_cannot_finish(&mobile, &battery).is_empty());
     }
 
     /// A wall across the x axis at x = 300, 400 m long and 10 m thick, in a
