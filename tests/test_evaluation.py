@@ -95,7 +95,14 @@ def _build_good_replay() -> dict:
                 ],
                 truths=[{"target_id": "tgt1", "position": [10.0 + i * 0.1, 20.0, 0.0]}],
                 observations=[{"target_id": "tgt1"}],
-                nodes=[{"node_id": "d0", "is_mobile": True, "position": [0.0, float(i), 0.0]}],
+                nodes=[
+                    {
+                        "node_id": "d0",
+                        "is_mobile": True,
+                        "position": [0.0, float(i), 0.0],
+                        "battery_fraction": 0.8,
+                    }
+                ],
             )
         )
 
@@ -629,19 +636,23 @@ class TestEvaluateReplay:
         assert report.mission_completion_rate == pytest.approx(1.0)
         assert report.required_objectives_total == 2
 
-    def test_a_run_with_no_objectives_counts_as_complete(self):
+    def test_a_run_with_no_objectives_has_no_completion_and_is_not_failed_for_it(self):
+        """No required objectives: completion is unavailable (never 100%),
+        and the gate treats it as not applicable rather than failing it."""
         replay = _build_good_replay()
         del replay["mission"]
         report = evaluate_replay(replay, "s", "m", 0.1, 1)
-        assert report.mission_completion_rate == pytest.approx(1.0)
+        assert report.mission_completion_rate is None
         assert report.required_objectives_total == 0
+        checked = check_pass_fail(report)
+        assert not any("mission_completion_rate" in r for r in checked.failure_reasons)
 
     def test_empty_replay(self):
         replay = {"meta": {"duration_s": 60.0}, "frames": []}
         report = evaluate_replay(replay, "empty", "surv", 0.0, 0)
         assert report.duration_s == pytest.approx(60.0)
         assert report.time_to_reacquire_mean_s is None
-        assert report.track_continuity_mean == 0.0
+        assert report.track_continuity_mean is None
         assert report.localisation_rmse_m is None
         assert report.covariance_reduction_mean is None
         assert report.covariance_reduction_tracks == 0
@@ -766,6 +777,7 @@ class TestCheckPassFail:
             seed=0,
             duration_s=60.0,
             track_continuity_mean=0.7,
+            localisation_rmse_m=0.0,
             mission_completion_rate=1.0,
             energy_reserve_min=1.0,
         )
@@ -908,8 +920,8 @@ class TestEvaluationReportDataclass:
         )
         assert report.passed is False
         assert report.failure_reasons == []
-        assert report.track_continuity_mean == 0.0
-        assert report.energy_reserve_min == 1.0
+        assert report.track_continuity_mean is None
+        assert report.energy_reserve_min is None
 
 
 # ===================================================================

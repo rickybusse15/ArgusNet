@@ -494,8 +494,10 @@ def aggregate_reports(
         return statistics.mean(vals), (statistics.stdev(vals) if len(vals) > 1 else 0.0)
 
     rmse_vals = [r.localisation_rmse_m for r in reports if r.localisation_rmse_m is not None]
-    cont_vals = [r.track_continuity_mean for r in reports]
-    comp_vals = [r.mission_completion_rate for r in reports]
+    cont_vals = [r.track_continuity_mean for r in reports if r.track_continuity_mean is not None]
+    comp_vals = [
+        r.mission_completion_rate for r in reports if r.mission_completion_rate is not None
+    ]
 
     rmse_mean, rmse_std = _mean_std(rmse_vals)
     cont_mean, cont_std = _mean_std(cont_vals)

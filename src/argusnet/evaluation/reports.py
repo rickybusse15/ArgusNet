@@ -50,6 +50,9 @@ def report_to_markdown(report: EvaluationReport) -> str:
     def _fmt(v: float | None, unit: str = "") -> str:
         return f"{v:.3f}{unit}" if v is not None else "N/A"
 
+    def _percent(v: float | None) -> str:
+        return f"{v:.2%}" if v is not None else "N/A"
+
     lines += [
         "| Metric | Value |",
         "|--------|-------|",
@@ -70,8 +73,8 @@ def report_to_markdown(report: EvaluationReport) -> str:
         "",
         "| Metric | Value |",
         "|--------|-------|",
-        f"| Completion rate | {report.mission_completion_rate:.2%} |",
-        f"| Energy reserve (min) | {report.energy_reserve_min:.2%} |",
+        f"| Completion rate | {_percent(report.mission_completion_rate)} |",
+        f"| Energy reserve (min) | {_percent(report.energy_reserve_min)} |",
         "",
     ]
 
@@ -132,8 +135,18 @@ def print_report(report: EvaluationReport) -> None:
     print(f"[{status}] {report.scenario_name} (seed={report.seed})")
     if report.localisation_rmse_m is not None:
         print(f"  RMSE: {report.localisation_rmse_m:.2f} m")
-    print(f"  Track continuity: {report.track_continuity_mean:.3f}")
-    print(f"  Mission completion: {report.mission_completion_rate:.1%}")
+    continuity = report.track_continuity_mean
+    print(
+        f"  Track continuity: {continuity:.3f}"
+        if continuity is not None
+        else "  Track continuity: N/A"
+    )
+    completion = report.mission_completion_rate
+    print(
+        f"  Mission completion: {completion:.1%}"
+        if completion is not None
+        else "  Mission completion: N/A"
+    )
     if report.failure_reasons:
         for reason in report.failure_reasons:
             print(f"  ! {reason}")

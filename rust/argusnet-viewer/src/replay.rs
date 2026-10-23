@@ -157,6 +157,7 @@ impl ReplayState {
                 meta: None,
                 summary: None,
                 frames: Vec::new(),
+                mission_assurance: None,
             })
             .frames
             .push(frame);

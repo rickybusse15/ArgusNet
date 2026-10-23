@@ -2,6 +2,21 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Client assurance package (S1.0, ported from the maintainer's 2026-10-12
+  work). `argusnet client-package --replay R --output DIR` writes:
+  - an unsigned, hash-listed manifest;
+  - `assurance.json` and `assurance.md` (`argusnet.mission-assurance/v1`),
+    carrying the F1 outcome record with its reasons;
+  - the replay annotated with `summary.mission_assurance`, which
+    `argusnet-replay` reads.
+
+  Evaluation no longer reads battery from motion; it uses the recorded
+  `battery_fraction`. Missing metrics stay `null` (shown as N/A).
+  Impossible objective counts are refused. A run with no required
+  objectives has no completion rate: never 100%, and not applicable to the
+  pass/fail check. The stored P4.9c reference was migrated for that one
+  field (225 runs).
+
 - Real land cover from OSM (R5). `scripts/import_features.py` turns water,
   land use, natural cover and roads into an `argusnet.features` document;
   the scenario option `features_path` paints the run's land cover from it.

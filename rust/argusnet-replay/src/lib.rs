@@ -19,6 +19,9 @@
 //! the conversions from `argusnet-proto`'s wire messages into these DTOs so the
 //! viewer can accept live frames without a JSON round trip.
 
+pub mod assurance;
+pub use assurance::{assurance_frame_index, MissionAssurance};
+
 use std::collections::HashMap;
 
 use serde::de::{self, SeqAccess, Visitor};
@@ -179,10 +182,42 @@ pub struct TreesRead {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(from = "ReplayDocumentRaw")]
 pub struct ReplayDocument {
     pub meta: Option<Value>,
     pub summary: Option<Value>,
+    /// Decode evaluator-owned results once at load time, outside the render loop.
+    /// An invalid extension must not prevent playback of a compatible replay.
+    pub mission_assurance: Option<Result<MissionAssurance, String>>,
     pub frames: Vec<ReplayFrame>,
+}
+
+#[derive(Deserialize)]
+struct ReplayDocumentRaw {
+    meta: Option<Value>,
+    summary: Option<Value>,
+    frames: Vec<ReplayFrame>,
+}
+
+impl From<ReplayDocumentRaw> for ReplayDocument {
+    fn from(raw: ReplayDocumentRaw) -> Self {
+        let mission_assurance = raw
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.get("mission_assurance"))
+            .map(|value| {
+                let report: MissionAssurance =
+                    serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+                report.validate().map_err(str::to_owned)?;
+                Ok(report)
+            });
+        Self {
+            meta: raw.meta,
+            summary: raw.summary,
+            frames: raw.frames,
+            mission_assurance,
+        }
+    }
 }
 
 impl ReplayDocument {

@@ -67,7 +67,7 @@ class EvaluationReport:
     # Track performance
     time_to_reacquire_mean_s: float | None = None
     time_to_reacquire_p95_s: float | None = None
-    track_continuity_mean: float = 0.0
+    track_continuity_mean: float | None = None
     track_continuity_per_target: dict[str, float] = field(default_factory=dict)
     localisation_rmse_m: float | None = None
     localisation_rmse_per_track: dict[str, float] = field(default_factory=dict)
@@ -95,10 +95,10 @@ class EvaluationReport:
     comms_dropout_duration_s: float = 0.0
 
     # Mission outcome
-    mission_completion_rate: float = 0.0
+    mission_completion_rate: float | None = None
     required_objectives_met: int = 0
     required_objectives_total: int = 0
-    energy_reserve_min: float = 1.0
+    energy_reserve_min: float | None = None
     energy_reserve_per_drone: dict[str, float] = field(default_factory=dict)
     # The battery ledger's own reading: the lowest `battery_fraction` any
     # drone reached in the replay. None when the replay carries no battery
@@ -582,22 +582,23 @@ def evaluate_replay(
     # -----------------------------------------------------------------------
     # Mission outcome metrics
     # -----------------------------------------------------------------------
-    # Energy reserves — computed from mobile node trajectories when available
+    # Energy reserves — recorded battery state; kinematics cannot establish charge
     energy_per_drone: dict[str, float] = _compute_energy_reserves(frames)
-    energy_min = float(min(energy_per_drone.values())) if energy_per_drone else 1.0
+    mobile_nodes = [
+        node
+        for frame in frames
+        for node in frame.get("nodes") or []
+        if node.get("is_mobile", False)
+    ]
+    energy_complete = bool(mobile_nodes) and all(
+        (value := _optional_float(node.get("battery_fraction"))) is not None
+        and 0.0 <= value <= 1.0
+        and node.get("node_id")
+        for node in mobile_nodes
+    )
+    energy_min = float(min(energy_per_drone.values())) if energy_complete else None
 
-    # Mission completion: the top-level `mission` summary if a producer writes
-    # one; otherwise the POIs of the last frame's `scan_mission_state` (both
-    # the Python and the Rust writers record them there). Only a run with
-    # neither -- one with no objectives -- counts as all met.
-    mission_meta = replay_doc.get("mission") or _poi_objectives(frames)
-    required_total = int(mission_meta.get("required_objectives_total", 0))
-    required_met = int(mission_meta.get("required_objectives_met", required_total))
-    mission_completion_rate: float
-    if required_total > 0:
-        mission_completion_rate = float(required_met) / float(required_total)
-    else:
-        mission_completion_rate = 1.0
+    required_total, required_met, mission_completion_rate = _mission_outcome(replay_doc)
 
     # -----------------------------------------------------------------------
     # Assemble report (pass/fail is determined separately)
@@ -618,7 +619,7 @@ def evaluate_replay(
         # Track performance
         time_to_reacquire_mean_s=ttr_mean,
         time_to_reacquire_p95_s=ttr_p95,
-        track_continuity_mean=cont_mean,
+        track_continuity_mean=cont_mean if target_ids and frames else None,
         track_continuity_per_target=cont_per_target,
         localisation_rmse_m=loc_rmse,
         localisation_rmse_per_track=loc_per_track,
@@ -838,69 +839,55 @@ def _battery_remaining_min(frames: list[dict]) -> float | None:
     return lowest
 
 
-def _poi_objectives(frames: list[dict]) -> dict[str, int]:
-    """The inspection POIs as objectives, from the last frame that reports
-    them: every POI is required, and a completed one is met. Empty when no
-    frame carries a `scan_mission_state`."""
-    for frame in reversed(frames):
-        state = frame.get("scan_mission_state")
-        if isinstance(state, dict) and "total_poi_count" in state:
-            return {
-                "required_objectives_total": int(state["total_poi_count"]),
-                "required_objectives_met": int(state.get("completed_poi_count", 0)),
-            }
-    return {}
-
-
 def _compute_energy_reserves(frames: list[dict]) -> dict[str, float]:
-    """Estimate energy reserves for each mobile drone from position time series.
+    """Read the minimum recorded battery fraction for each mobile platform.
 
-    Uses the linear depletion model from SCENARIOS.md:
-        energy_reserve = 1.0 - (total_distance_m / (speed_mps * max_endurance_s))
-
-    Default ``max_endurance_s = 600 s``.  Speed is estimated from average
-    velocity magnitude across frames.
-
-    Returns an empty dict when no mobile nodes are found.
+    Position and speed do not establish battery state. Missing readings and the
+    ground-station sentinel (-1) remain unavailable rather than becoming 100%.
     """
-    MAX_ENDURANCE_S = 600.0  # seconds (baseline platform parameter)
-
-    # Collect position time series per mobile node
-    node_positions: dict[str, list[tuple[float, np.ndarray]]] = {}
+    reserves: dict[str, float] = {}
     for frame in frames:
-        ts = float(frame.get("timestamp_s", 0.0))
         for node in frame.get("nodes") or []:
-            if not node.get("is_mobile", False):
+            if not node.get("is_mobile", False) or not node.get("node_id"):
                 continue
-            nid = node.get("node_id", "")
-            pos = np.asarray(node.get("position", [0.0, 0.0, 0.0]), dtype=float)
-            node_positions.setdefault(nid, []).append((ts, pos))
+            value = _optional_float(node.get("battery_fraction"))
+            if value is not None and 0.0 <= value <= 1.0:
+                nid = node["node_id"]
+                reserves[nid] = min(reserves.get(nid, value), value)
+    return reserves
 
-    if not node_positions:
-        return {}
 
-    energy_per_drone: dict[str, float] = {}
-    for nid, series in node_positions.items():
-        if len(series) < 2:
-            energy_per_drone[nid] = 1.0
-            continue
-        total_dist = 0.0
-        speeds: list[float] = []
-        for i in range(1, len(series)):
-            dt = series[i][0] - series[i - 1][0]
-            dp = np.linalg.norm(series[i][1] - series[i - 1][1])
-            total_dist += float(dp)
-            if dt > 0.0:
-                speeds.append(float(dp) / float(dt))
+def _mission_outcome(replay_doc: dict) -> tuple[int, int, float | None]:
+    """Use explicit objective counts or the recorded scan mission's POI counts.
 
-        avg_speed = float(np.mean(speeds)) if speeds else 1.0
-        if avg_speed <= 0.0:
-            avg_speed = 1.0
-        max_range_m = avg_speed * MAX_ENDURANCE_S
-        reserve = 1.0 - (total_dist / max_range_m)
-        energy_per_drone[nid] = max(0.0, min(1.0, reserve))
-
-    return energy_per_drone
+    A run with no required objectives, or none recorded, has no completion
+    rate (None): it is never reported as 100%. The acceptance gate treats
+    that as not applicable rather than as a failure (`check_pass_fail`).
+    Impossible counts are refused."""
+    mission = replay_doc.get("mission") or {}
+    total = mission.get("required_objectives_total")
+    met = mission.get("required_objectives_met")
+    if total is None and met is None:
+        states = [
+            frame["scan_mission_state"]
+            for frame in replay_doc.get("frames") or []
+            if frame.get("scan_mission_state")
+        ]
+        if states:
+            total = states[-1].get("total_poi_count")
+            met = states[-1].get("completed_poi_count")
+    if total is None or met is None:
+        return 0, 0, None
+    if (
+        not isinstance(total, int)
+        or isinstance(total, bool)
+        or not isinstance(met, int)
+        or isinstance(met, bool)
+        or total < 0
+        or not 0 <= met <= total
+    ):
+        raise ValueError("Mission objective counts must be integers with 0 <= met <= total")
+    return total, met, met / total if total else None
 
 
 def _optional_int(value: object) -> int | None:
@@ -955,14 +942,18 @@ def check_pass_fail(
 
     # --- track continuity ---
     cont_min = float(t["track_continuity_mean_min"])  # type: ignore[arg-type]
-    if report.track_continuity_mean < cont_min:
+    if report.track_continuity_mean is None or not np.isfinite(report.track_continuity_mean):
+        failures.append("track_continuity_mean unavailable")
+    elif report.track_continuity_mean < cont_min:
         failures.append(
             f"track_continuity_mean={report.track_continuity_mean:.3f} < {cont_min:.2f}"
         )
 
     # --- localisation RMSE ---
     rmse_fail = float(t["localisation_rmse_m_fail"])  # type: ignore[arg-type]
-    if report.localisation_rmse_m is not None and report.localisation_rmse_m > rmse_fail:
+    if report.localisation_rmse_m is None or not np.isfinite(report.localisation_rmse_m):
+        failures.append("localisation_rmse_m unavailable")
+    elif report.localisation_rmse_m > rmse_fail:
         failures.append(
             f"localisation_rmse_m={report.localisation_rmse_m:.1f} > {rmse_fail:.1f} (hard fail)"
         )
@@ -985,15 +976,23 @@ def check_pass_fail(
         )
 
     # --- mission completion ---
+    # No completion rate means the run has no required objectives (or none
+    # recorded): not applicable to this check, not a failure and never 100%.
     mcr_min = float(t["mission_completion_rate_min"])  # type: ignore[arg-type]
-    if report.mission_completion_rate < mcr_min:
+    if report.mission_completion_rate is None:
+        pass
+    elif not np.isfinite(report.mission_completion_rate):
+        failures.append("mission_completion_rate unavailable")
+    elif report.mission_completion_rate < mcr_min:
         failures.append(
             f"mission_completion_rate={report.mission_completion_rate:.3f} < {mcr_min:.1f}"
         )
 
     # --- energy reserve ---
     er_min = float(t["energy_reserve_min_min"])  # type: ignore[arg-type]
-    if report.energy_reserve_min < er_min:
+    if report.energy_reserve_min is None or not np.isfinite(report.energy_reserve_min):
+        failures.append("energy_reserve_min unavailable")
+    elif report.energy_reserve_min < er_min:
         failures.append(f"energy_reserve_min={report.energy_reserve_min:.3f} < {er_min:.2f}")
 
     passed = len(failures) == 0
@@ -1037,7 +1036,7 @@ def report_to_dict(report: EvaluationReport) -> dict:
             if report.time_to_reacquire_p95_s is not None
             else None
         ),
-        "track_continuity_mean": float(report.track_continuity_mean),
+        "track_continuity_mean": _float_or_none(report.track_continuity_mean),
         "track_continuity_per_target": {
             k: float(v) for k, v in report.track_continuity_per_target.items()
         },
@@ -1061,10 +1060,10 @@ def report_to_dict(report: EvaluationReport) -> dict:
         "safety_override_count": int(report.safety_override_count),
         "comms_dropout_count": int(report.comms_dropout_count),
         "comms_dropout_duration_s": float(report.comms_dropout_duration_s),
-        "mission_completion_rate": float(report.mission_completion_rate),
+        "mission_completion_rate": _float_or_none(report.mission_completion_rate),
         "required_objectives_met": int(report.required_objectives_met),
         "required_objectives_total": int(report.required_objectives_total),
-        "energy_reserve_min": float(report.energy_reserve_min),
+        "energy_reserve_min": _float_or_none(report.energy_reserve_min),
         "energy_reserve_per_drone": {
             k: float(v) for k, v in report.energy_reserve_per_drone.items()
         },
@@ -1120,7 +1119,7 @@ def report_from_dict(d: dict) -> EvaluationReport:
             if d.get("time_to_reacquire_p95_s") is not None
             else None
         ),
-        track_continuity_mean=float(d.get("track_continuity_mean", 0.0)),
+        track_continuity_mean=_optional_float(d.get("track_continuity_mean")),
         track_continuity_per_target=dict(d.get("track_continuity_per_target") or {}),
         localisation_rmse_m=(
             float(d["localisation_rmse_m"]) if d.get("localisation_rmse_m") is not None else None
@@ -1140,10 +1139,10 @@ def report_from_dict(d: dict) -> EvaluationReport:
         safety_override_count=int(d.get("safety_override_count", 0)),
         comms_dropout_count=int(d.get("comms_dropout_count", 0)),
         comms_dropout_duration_s=float(d.get("comms_dropout_duration_s", 0.0)),
-        mission_completion_rate=float(d.get("mission_completion_rate", 0.0)),
+        mission_completion_rate=_optional_float(d.get("mission_completion_rate")),
         required_objectives_met=int(d.get("required_objectives_met", 0)),
         required_objectives_total=int(d.get("required_objectives_total", 0)),
-        energy_reserve_min=float(d.get("energy_reserve_min", 1.0)),
+        energy_reserve_min=_optional_float(d.get("energy_reserve_min")),
         energy_reserve_per_drone=dict(d.get("energy_reserve_per_drone") or {}),
         battery_remaining_min=(
             None if d.get("battery_remaining_min") is None else float(d["battery_remaining_min"])

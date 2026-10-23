@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from argusnet.evaluation.metrics import EvaluationReport, evaluate_replay
+from argusnet.evaluation.metrics import EvaluationReport, check_pass_fail, evaluate_replay
 from argusnet.evaluation.outcome import mission_outcome
 
 
@@ -106,6 +106,6 @@ def scorecard_from_replay(
         seed=int(seed if seed is not None else meta.get("seed", 0)),
     )
     return dataclasses.replace(
-        scorecard_from_report(report),
+        scorecard_from_report(check_pass_fail(report)),
         outcome=mission_outcome(replay_doc, mission_type=mission_type),
     )
