@@ -203,17 +203,26 @@ impl BeliefMapView {
     }
 }
 
-/// Apply the frames up to the cursor, and hide the scene's true layers the
-/// first time a self-built map appears.
+/// Apply the frames up to the cursor, and hide the true world the first
+/// time a self-built map appears: the scene's layers, and the run's true
+/// power lines (with their clearance corridors) and trees, which the replay
+/// carries for the simulation, not as anything the drones measured. Each
+/// can be turned back on to compare.
 pub fn sync_belief_map_system(
     mut commands: Commands,
     replay: Res<ReplayState>,
     mut view: ResMut<BeliefMapView>,
     mut layers: ResMut<LayerVisibilityState>,
+    mut overlays: ResMut<crate::state::RuntimeOverlayVisibility>,
     scene: Option<Res<ScenePackage>>,
 ) {
     let layout = replay.document.as_ref().and_then(|doc| doc.belief_grid());
     if layout != view.layout || replay.epoch() != view.epoch {
+        // Another run: its truth is hidden afresh. A seek within the run
+        // keeps the epoch, and with it whatever the viewer turned back on.
+        if replay.epoch() != view.epoch {
+            view.truth_hidden = false;
+        }
         view.forget(&mut commands);
         view.layout = layout;
         view.epoch = replay.epoch();
@@ -228,6 +237,9 @@ pub fn sync_belief_map_system(
             }
         }
         layers.base_layers.insert(LAYER_ID.to_string(), true);
+        overlays.power_lines = false;
+        overlays.power_line_clearance = false;
+        overlays.trees = false;
         view.truth_hidden = true;
     }
     let Some(current) = replay.current_frame() else {
@@ -914,6 +926,70 @@ const SAVED_MAPS_DIR: &str = "argusnet-maps";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The run's true lines and trees are hidden with the scene's layers
+    /// when a self-built map appears, once (so a viewer can turn them back
+    /// on to compare), and left alone in a run with a prior world.
+    #[test]
+    fn a_self_built_map_hides_the_true_lines_and_trees() {
+        let run = |knowledge: &str| {
+            let document: crate::replay::ReplayDocument = serde_json::from_value(serde_json::json!({
+                "meta": {
+                    "world_knowledge": {
+                        "knowledge": knowledge,
+                        "belief_grid": {"origin_m": [0.0, 0.0], "resolution_m": 5.0, "dimensions": [4, 4]},
+                    },
+                },
+                "frames": [{"timestamp_s": 0.0}, {"timestamp_s": 1.0}],
+            }))
+            .unwrap();
+            let mut app = App::new();
+            app.insert_resource(ReplayState::new(Some(document)))
+                .init_resource::<BeliefMapView>()
+                .init_resource::<LayerVisibilityState>()
+                // Everything on, the corridors included, as a viewer may
+                // have left them before loading this run.
+                .insert_resource(crate::state::RuntimeOverlayVisibility {
+                    power_lines: true,
+                    power_line_clearance: true,
+                    trees: true,
+                    ..Default::default()
+                })
+                .add_systems(Update, sync_belief_map_system);
+            app.update();
+            app
+        };
+        let overlays = |app: &App| {
+            let o = app
+                .world()
+                .resource::<crate::state::RuntimeOverlayVisibility>();
+            (o.power_lines, o.power_line_clearance, o.trees)
+        };
+        assert_eq!(overlays(&run("prior")), (true, true, true));
+        let mut app = run("none");
+        assert_eq!(overlays(&app), (false, false, false));
+        // Turned back on to compare, they stay on.
+        {
+            let mut o = app
+                .world_mut()
+                .resource_mut::<crate::state::RuntimeOverlayVisibility>();
+            o.power_lines = true;
+            o.trees = true;
+        }
+        app.update();
+        assert_eq!(overlays(&app), (true, false, true));
+        // A seek within the run keeps them.
+        app.world_mut().resource_mut::<ReplayState>().step_to(1);
+        app.update();
+        assert_eq!(overlays(&app), (true, false, true));
+        // Another self-built run hides its truth afresh.
+        let next = app.world().resource::<ReplayState>().document.clone();
+        app.world_mut()
+            .resource_mut::<ReplayState>()
+            .begin_epoch(next);
+        app.update();
+        assert_eq!(overlays(&app), (false, false, false));
+    }
 
     fn row(i: u32, j: u32, ground_cm: Option<i32>) -> BeliefCellRow {
         BeliefCellRow(i, j, ground_cm, None, 0, 1)
