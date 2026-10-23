@@ -62,8 +62,12 @@ impl AchievedRate {
     }
 }
 
+/// Measured on the real clock, not Bevy's virtual one, which caps each
+/// step at 250 ms and would hide a slow frame; and on the cursor itself,
+/// which playback advances continuously between recorded frames, not the
+/// frame it sits in, which would read normal slow playback as stalls.
 pub fn measure_achieved_rate_system(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     replay: Res<ReplayState>,
     mut rate: ResMut<AchievedRate>,
 ) {
@@ -71,7 +75,7 @@ pub fn measure_achieved_rate_system(
         *rate = AchievedRate::default();
         return;
     }
-    rate.observe(replay.current_timestamp_s(), time.delta_secs());
+    rate.observe(replay.time_s(), time.delta_secs());
 }
 
 /// One timing readout: a value, or why there is none.
@@ -290,6 +294,13 @@ mod tests {
         assert!((rate.rate.unwrap() - 1.0).abs() < 0.05, "{:?}", rate.rate);
         rate.observe(2.0, 0.1);
         assert_eq!(rate.rate, None, "a seek back restarts");
+        // Slow playback, the cursor moving a little every frame: 0.25x,
+        // never "stopped".
+        let mut slow = AchievedRate::default();
+        for k in 0..300 {
+            slow.observe(0.0025 * k as f32, 0.01);
+        }
+        assert!((slow.rate.unwrap() - 0.25).abs() < 1e-3, "{:?}", slow.rate);
         for _ in 0..11 {
             rate.observe(2.0, 0.1);
         }
