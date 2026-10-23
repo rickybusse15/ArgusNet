@@ -89,7 +89,7 @@ pub struct PlacedBuildings {
 
 /// Read and check the document at `path`.
 pub fn load(path: &str) -> Result<(BuildingsDocument, u64), BuildError> {
-    let bytes = std::fs::read(path)
+    let bytes = super::read_import_limited(path)
         .map_err(|error| BuildError::Invalid(format!("buildings_path {path}: {error}")))?;
     let document: BuildingsDocument = serde_json::from_slice(&bytes)
         .map_err(|error| BuildError::Invalid(format!("buildings_path {path}: {error}")))?;

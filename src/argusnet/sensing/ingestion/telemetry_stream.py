@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
+from argusnet.core.io_limits import check_file_size
 from argusnet.core.types import NodeState, vec3
 
 logger = logging.getLogger(__name__)
@@ -334,6 +335,7 @@ class JSONTelemetryReplay:
 
     def replay(self) -> list[NodeState]:
         """Read all lines and return final node states."""
+        check_file_size(self._path)
         with open(self._path) as fh:
             for line in fh:
                 line = line.strip()

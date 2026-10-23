@@ -25,6 +25,12 @@ from dataclasses import asdict, dataclass, field, fields
 from types import MappingProxyType
 from typing import Any
 
+from argusnet.core.io_limits import read_text_capped
+
+# A constants file is a small mapping. 8 MiB is far above any real one and
+# still bounds a file that is not a replay.
+_MAX_CONFIG_BYTES = 8 * 1024 * 1024
+
 # ---------------------------------------------------------------------------
 # Sensor configuration
 # ---------------------------------------------------------------------------
@@ -618,14 +624,7 @@ class SimulationConstants:
     @classmethod
     def from_yaml(cls, path: str) -> SimulationConstants:
         """Load from a YAML file.  Falls back to JSON if PyYAML is unavailable."""
-        try:
-            import yaml  # type: ignore[import-untyped]
-
-            with open(path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
-        except ImportError:
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
+        data = _load_config_data(path, yaml_allowed=True)
         if not isinstance(data, dict):
             raise ValueError(f"Expected a mapping at the top level of {path}.")
         return cls.from_dict(data)
@@ -633,8 +632,7 @@ class SimulationConstants:
     @classmethod
     def from_json(cls, path: str) -> SimulationConstants:
         """Load from a JSON file."""
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
+        data = json.loads(read_text_capped(path, max_bytes=_MAX_CONFIG_BYTES))
         if not isinstance(data, dict):
             raise ValueError(f"Expected a mapping at the top level of {path}.")
         return cls.from_dict(data)
@@ -673,25 +671,44 @@ class SimulationConstants:
 # ---------------------------------------------------------------------------
 
 
+def _load_yaml_text(text: str) -> Any:
+    """Parse YAML with aliases disabled.
+
+    ``yaml.safe_load`` still expands anchors. A kilobyte of aliases grows
+    without a bound, so a shared constants file must not be allowed to name
+    the same node twice.
+    """
+    import yaml  # type: ignore[import-untyped]
+
+    class _NoAliasLoader(yaml.SafeLoader):
+        def compose_node(self, parent, index):  # noqa: ANN001, ANN202
+            if self.check_event(yaml.events.AliasEvent):
+                raise yaml.YAMLError(
+                    "YAML aliases are disabled; an anchor can expand without bound"
+                )
+            return super().compose_node(parent, index)
+
+    # SafeLoader subclass; compose_node rejects aliases before they expand.
+    return yaml.load(text, Loader=_NoAliasLoader)  # nosec B506
+
+
+def _load_config_data(path: str, *, yaml_allowed: bool) -> Any:
+    text = read_text_capped(path, max_bytes=_MAX_CONFIG_BYTES)
+    if yaml_allowed:
+        try:
+            return _load_yaml_text(text)
+        except ImportError:
+            return json.loads(text)
+    return json.loads(text)
+
+
 def load_config_mapping(path: str) -> dict[str, Any]:
     """Load a JSON or YAML constants-override file as a plain mapping.
 
     YAML support falls back to JSON parsing when PyYAML is unavailable,
-    matching ``SimulationConstants.from_yaml``.
+    matching ``SimulationConstants.from_yaml``. Aliases are rejected.
     """
-    lowered = path.lower()
-    if lowered.endswith(".json"):
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    else:
-        try:
-            import yaml  # type: ignore[import-untyped]
-
-            with open(path, encoding="utf-8") as fh:
-                data = yaml.safe_load(fh)
-        except ImportError:
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
+    data = _load_config_data(path, yaml_allowed=not path.lower().endswith(".json"))
     if not isinstance(data, dict):
         raise ValueError(f"Expected a mapping at the top level of {path}.")
     return data

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use argusnet_core::{PlatformFrame, TrackerConfig, TrackingEngine};
 use argusnet_proto::pb::world_model_service_server::{WorldModelService, WorldModelServiceServer};
 use argusnet_proto::pb::{
@@ -206,11 +206,96 @@ impl PartialTrackerConfig {
     }
 }
 
+/// Tracker configs are a handful of keys. A megabyte is already far larger
+/// than one, and it bounds the file before YAML parsing.
+const MAX_TRACKER_CONFIG_BYTES: u64 = 1024 * 1024;
+
+/// True when `text` uses a YAML anchor or alias outside quotes and comments.
+///
+/// `serde_yaml` expands aliases with no depth limit. A kilobyte of `*alias`
+/// nodes grows without bound, so a shared daemon config must not name one.
+fn yaml_document_uses_aliases(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut token_start = true;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_single {
+            if byte == b'\'' {
+                if index + 1 < bytes.len() && bytes[index + 1] == b'\'' {
+                    index += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            index += 1;
+            continue;
+        }
+        if in_double {
+            if byte == b'\\' && index + 1 < bytes.len() {
+                index += 2;
+                continue;
+            }
+            if byte == b'"' {
+                in_double = false;
+                token_start = false;
+            }
+            index += 1;
+            continue;
+        }
+        match byte {
+            b'\'' => {
+                in_single = true;
+                token_start = false;
+            }
+            b'"' => {
+                in_double = true;
+                token_start = false;
+            }
+            b'#' if token_start => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+                continue;
+            }
+            b'\n' | b' ' | b'\t' | b'\r' | b':' | b',' | b'[' | b'{' | b']' | b'}' => {
+                token_start = true;
+            }
+            b'-' if token_start => {
+                token_start = true;
+            }
+            b'*' | b'&' if token_start => return true,
+            _ => token_start = false,
+        }
+        index += 1;
+    }
+    false
+}
+
 pub fn load_tracker_config(args: &ServeArgs) -> Result<TrackerConfig> {
     let mut config = TrackerConfig::default();
 
     if let Some(path) = &args.config {
-        let parsed: PartialTrackerConfig = serde_yaml::from_str(&std::fs::read_to_string(path)?)?;
+        let len = std::fs::metadata(path)
+            .with_context(|| format!("failed to read {}", path.display()))?
+            .len();
+        if len > MAX_TRACKER_CONFIG_BYTES {
+            return Err(anyhow!(
+                "{} is {len} bytes, over the {MAX_TRACKER_CONFIG_BYTES} byte tracker-config limit",
+                path.display()
+            ));
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if yaml_document_uses_aliases(&text) {
+            return Err(anyhow!(
+                "{}: YAML aliases are disabled; an anchor can expand without bound",
+                path.display()
+            ));
+        }
+        let parsed: PartialTrackerConfig = serde_yaml::from_str(&text)?;
         config = parsed.apply(config).map_err(|error| anyhow!(error))?;
     }
 
@@ -827,6 +912,57 @@ pub async fn run(cli: Cli) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn yaml_aliases_are_refused_before_they_expand() {
+        let path =
+            std::env::temp_dir().join(format!("argusnetd-alias-{}.yaml", std::process::id()));
+        fs::write(
+            &path,
+            "a: &a [\"x\", \"x\"]\nb: &b [*a, *a, *a, *a]\nmin_observations: *b\n",
+        )
+        .unwrap();
+        let args = ServeArgs {
+            listen: "127.0.0.1:50051".into(),
+            config: Some(path.clone()),
+            min_observations: None,
+            max_stale_steps: None,
+            min_confidence: None,
+            max_bearing_std_rad: None,
+            max_timestamp_skew_s: None,
+            min_intersection_angle_deg: None,
+            data_association_mode: None,
+            cv_process_accel_std: None,
+            ct_process_accel_std: None,
+            ct_turn_rate_std: None,
+            innovation_window: None,
+            innovation_scale_factor: None,
+            innovation_max_scale: None,
+            adaptive_measurement_noise: None,
+            chi_squared_gate_threshold: None,
+            cluster_distance_threshold_m: None,
+            near_parallel_rejection_angle_deg: None,
+            confirmation_m: None,
+            confirmation_n: None,
+            max_coast_frames: None,
+            max_coast_seconds: None,
+            min_quality_score: None,
+            tls_cert: None,
+            tls_key: None,
+            tls_client_ca: None,
+        };
+        let error = load_tracker_config(&args).unwrap_err().to_string();
+        assert!(error.contains("aliases"), "{error}");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_quoted_star_in_yaml_is_not_an_alias() {
+        assert!(!yaml_document_uses_aliases(
+            "note: \"*not an alias\"\nmin_observations: 2\n# *comment\n"
+        ));
+        assert!(yaml_document_uses_aliases("min_observations: *count\n"));
+    }
 
     #[test]
     fn yaml_config_is_loaded_and_cli_overrides_it() {

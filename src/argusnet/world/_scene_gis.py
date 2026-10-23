@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
+from argusnet.core.io_limits import check_file_size, read_text_capped
 
 from .environment import Bounds2D, EnvironmentCRS
 
@@ -17,6 +18,10 @@ from .environment import Bounds2D, EnvironmentCRS
 # an untrusted GeoTIFF with a huge declared raster size otherwise decodes
 # unbounded, a decompression-bomb-style memory exhaustion risk.
 _MAX_DEM_PIXELS = 256_000_000
+# Uncompressed float64 at the pixel cap, plus slack for GeoTIFF headers.
+# Checked with stat() before the file is read, so a multi-gigabyte input is
+# refused before tifffile or a provenance hash materializes it.
+MAX_DEM_FILE_BYTES = _MAX_DEM_PIXELS * 8 + 16 * 1024 * 1024
 
 
 def lazy_import_tifffile():
@@ -177,7 +182,7 @@ def project_dem_to_runtime(
     dem_path: str | Path, *, source_crs: str | None = None
 ) -> RasterReference:
     tifffile = lazy_import_tifffile()
-    CRS, Transformer = lazy_import_pyproj()
+    check_file_size(dem_path, max_bytes=MAX_DEM_FILE_BYTES)
 
     with tifffile.TiffFile(str(dem_path)) as handle:
         page = handle.pages[0]
@@ -212,6 +217,7 @@ def project_dem_to_runtime(
                 "for example EPSG:32611."
             )
 
+    CRS, Transformer = lazy_import_pyproj()
     source = CRS.from_user_input(source_crs_id)
     to_wgs84 = Transformer.from_crs(source, CRS.from_epsg(4326), always_xy=True)
 
@@ -290,7 +296,7 @@ def _extract_geojson_crs(document: Mapping[str, object]) -> str | None:
 def load_geojson_layer(
     path: str | Path, *, default_source_crs_id: str | None = None
 ) -> GeoJSONLayer:
-    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    document = json.loads(read_text_capped(path))
     if document.get("type") == "FeatureCollection":
         features = document.get("features", [])
     elif document.get("type") == "Feature":
@@ -361,6 +367,7 @@ __all__ = [
     "GeoJSONLayer",
     "RasterReference",
     "geojson_geometry_to_runtime",
+    "MAX_DEM_FILE_BYTES",
     "load_geojson_layer",
     "load_geojson_features",
     "project_dem_to_runtime",
