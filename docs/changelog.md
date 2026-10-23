@@ -2,6 +2,11 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Viewer: branch a running simulation from the past (P5.2). The in-process
+  run keeps a bounded checkpoint history. *Branch here* seeks back to the
+  frame under the cursor, keeps the frames before it, and holds the run
+  there, on a new epoch. Running on reproduces the original history exactly.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

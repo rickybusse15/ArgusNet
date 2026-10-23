@@ -27,6 +27,16 @@
 //! all of it. After a reset the run is held again, so a reset never sets a run
 //! going on its own.
 //!
+//! Seek (P5.2) is the other. The worker keeps a bounded history of
+//! checkpoints, one every [`CHECKPOINT_EVERY_TICKS`] ticks, at most
+//! [`RETAINED_CHECKPOINTS`] of them. A seek to an earlier tick restores the
+//! nearest checkpoint at or before it, which branches the epoch, and runs
+//! forward to the tick without publishing those frames: a restore equals the
+//! uninterrupted run (A2), so they are the frames the front end already has.
+//! The run is then held at the tick, and the status says where the new epoch
+//! branched ([`WorkerStatus::branched_at`]). A seek forward, or to a tick
+//! older than the history keeps, is refused with its reason.
+//!
 //! A run with lanes at their own rates (B2.4, B2.5, `scheduled_v1`) is
 //! stepped through a [`PhasedLaneExecutor`] at those rates
 //! ([`SimWorker::spawn_with_rates`]); every other run is stepped as the CLI's
@@ -51,6 +61,12 @@ use crate::snapshot::RuntimeSnapshot;
 
 /// Commands the worker holds before answering Busy.
 pub const DEFAULT_COMMAND_CAPACITY: usize = 64;
+
+/// A checkpoint is kept every this many ticks, for seeking back (P5.2).
+pub const CHECKPOINT_EVERY_TICKS: u64 = 25;
+/// At most this many are kept; the oldest goes first. With a 1 s tick the
+/// history reaches back 1000 s.
+pub const RETAINED_CHECKPOINTS: usize = 40;
 
 /// How the worker paces ticks against the wall clock.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -90,6 +106,11 @@ pub struct WorkerStatus {
     pub tick: u64,
     pub speed: f64,
     pub dt_s: f64,
+    /// The oldest tick a seek can reach, when the history holds any.
+    pub retained_from: Option<u64>,
+    /// When this epoch began with a seek: the tick it branched at. Every
+    /// frame before it is the previous epoch's, unchanged.
+    pub branched_at: Option<u64>,
 }
 
 /// One committed tick, in order.
@@ -179,6 +200,8 @@ impl SimWorker {
                 tick: 0,
                 speed: 1.0,
                 dt_s: 0.0,
+                retained_from: None,
+                branched_at: None,
             }),
             latest: Mutex::new(None),
         });
@@ -209,6 +232,10 @@ impl SimWorker {
                 Loop {
                     run,
                     executor,
+                    rates,
+                    history: std::collections::VecDeque::new(),
+                    branched_at: None,
+                    seek_acks: BTreeMap::new(),
                     pacing,
                     controls: control_rx,
                     acks: ack_tx,
@@ -309,6 +336,16 @@ struct Loop {
     /// The lanes executor of a run with a lane at its own rate; `None` steps
     /// the run one legacy tick at a time.
     executor: Option<PhasedLaneExecutor>,
+    /// The lane rates the executor was built with, to rebuild it after a
+    /// seek restores an earlier tick.
+    rates: LaneRates,
+    /// Checkpoints for seeking back, oldest first, each with the next tick
+    /// it would run (P5.2).
+    history: std::collections::VecDeque<(u64, crate::snapshot::SimulationCheckpoint)>,
+    /// Where the current epoch branched, if a seek began it.
+    branched_at: Option<u64>,
+    /// Seeks the worker applied, for answering a retry with the original.
+    seek_acks: BTreeMap<u64, CommandAck>,
     pacing: Pacing,
     controls: Receiver<Control>,
     acks: Sender<CommandAck>,
@@ -327,6 +364,9 @@ struct Loop {
 impl Loop {
     fn run(mut self) {
         self.hold();
+        // The run as it starts: a seek can always go back to tick 0 while
+        // the history reaches it.
+        self.retain_checkpoint();
         loop {
             if self.shared.status.lock().expect("status").phase == WorkerPhase::Stopped {
                 return;
@@ -401,6 +441,160 @@ impl Loop {
         status.tick = self.run.sim.tick();
         status.speed = self.run.sim.speed();
         status.dt_s = self.run.dt_s();
+        status.retained_from = self.history.front().map(|(tick, _)| *tick);
+        status.branched_at = self.branched_at;
+    }
+
+    /// Keep a checkpoint of the run as it stands, when its next tick is on
+    /// the history's interval, dropping the oldest beyond the bound.
+    fn retain_checkpoint(&mut self) {
+        let tick = self.run.sim.tick();
+        if !tick.is_multiple_of(CHECKPOINT_EVERY_TICKS)
+            || self.history.back().is_some_and(|(last, _)| *last == tick)
+        {
+            return;
+        }
+        if let Ok(checkpoint) = self.run.sim.checkpoint() {
+            self.history.push_back((tick, checkpoint));
+            while self.history.len() > RETAINED_CHECKPOINTS {
+                self.history.pop_front();
+            }
+        }
+    }
+
+    /// Whether `envelope` is addressed to this run and its current epoch.
+    fn stale(&self, envelope: &CommandEnvelope) -> Option<RejectReason> {
+        let epoch = self.run.sim.epoch();
+        if envelope.run_id != self.run.run_id() {
+            Some(RejectReason::StaleRun {
+                found: envelope.run_id.clone(),
+                expected: self.run.run_id().to_string(),
+            })
+        } else if envelope.expected_epoch != epoch {
+            Some(RejectReason::StaleEpoch {
+                found: envelope.expected_epoch,
+                expected: epoch,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Seek back to `target`, the next tick to run (P5.2). See the module
+    /// docs.
+    fn seek(&mut self, envelope: CommandEnvelope, target: u64) -> CommandAck {
+        if let Some(previous) = self.seek_acks.get(&envelope.command_id) {
+            let mut repeated = previous.clone();
+            repeated.duplicate = true;
+            return repeated;
+        }
+        let refuse = |this: &Self, reason| CommandAck {
+            command_id: envelope.command_id,
+            status: AckStatus::Rejected(reason),
+            effective_tick: None,
+            epoch: this.run.sim.epoch(),
+            revision: this.run.sim.revision(),
+            duplicate: false,
+        };
+        let from = self
+            .history
+            .iter()
+            .rev()
+            .find(|(tick, _)| *tick <= target)
+            .map(|(tick, checkpoint)| (*tick, checkpoint.clone()));
+        let ack = if let Some(reason) = self.stale(&envelope) {
+            refuse(self, reason)
+        } else if target > self.run.sim.tick() {
+            refuse(
+                self,
+                RejectReason::Unsupported {
+                    name: "seek forward: run or step the run instead".to_string(),
+                },
+            )
+        } else if let Some((from_tick, checkpoint)) = from {
+            match self.branch(from_tick, &checkpoint, target) {
+                Ok(()) => CommandAck {
+                    command_id: envelope.command_id,
+                    status: AckStatus::Applied,
+                    effective_tick: Some(target),
+                    epoch: self.run.sim.epoch(),
+                    revision: self.run.sim.revision(),
+                    duplicate: false,
+                },
+                Err(error) => {
+                    self.set_phase(WorkerPhase::Faulted(error));
+                    refuse(self, RejectReason::Faulted)
+                }
+            }
+        } else {
+            refuse(self, RejectReason::RewindUnavailable { tick: target })
+        };
+        self.seek_acks.insert(envelope.command_id, ack.clone());
+        ack
+    }
+
+    /// Restore the checkpoint taken at `from_tick`, run forward to `target`
+    /// unpublished, and hold there.
+    fn branch(
+        &mut self,
+        from_tick: u64,
+        checkpoint: &crate::snapshot::SimulationCheckpoint,
+        target: u64,
+    ) -> Result<(), String> {
+        let (left_epoch, left_revision) = (self.run.sim.epoch(), self.run.sim.revision());
+        self.run
+            .restore(checkpoint)
+            .map_err(|error| error.to_string())?;
+        // A branch of the history it left, not a resume of it.
+        self.run.sim.branch_from(left_epoch, left_revision);
+        if !self.rates.is_empty() {
+            self.executor = Some(scheduled_executor(&self.run, &self.rates)?);
+        }
+        // Commands still pending on the epoch left are cancelled with it:
+        // the restore replaced the history their answers would come from,
+        // so they are answered here, not left pending forever.
+        let epoch = self.run.sim.epoch();
+        for command_id in std::mem::take(&mut self.pending) {
+            let _ = self.acks.send(CommandAck {
+                command_id,
+                status: AckStatus::Cancelled(RejectReason::StaleEpoch {
+                    found: left_epoch,
+                    expected: epoch,
+                }),
+                effective_tick: None,
+                epoch,
+                revision: self.run.sim.revision(),
+                duplicate: false,
+            });
+        }
+        // The checkpoint may have been taken paused (the first one is):
+        // run forward regardless.
+        if self.run.sim.is_paused() {
+            let id = self.internal_id;
+            self.internal_id -= 1;
+            let resume = CommandEnvelope::new(
+                id,
+                self.run.run_id(),
+                self.run.sim.epoch(),
+                CommandKind::Resume,
+            );
+            let _ = self.run.sim.apply_command(resume);
+        }
+        let mut tick = from_tick;
+        while tick < target {
+            match self.step() {
+                Ok(_) => tick = self.run.sim.tick(),
+                // The resume applies at the first boundary.
+                Err(RunError::Tick(TickError::Paused)) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        // Later history belonged to the abandoned branch.
+        self.history.retain(|(kept, _)| *kept <= target);
+        self.branched_at = Some(target);
+        *self.shared.latest.lock().expect("latest") = None;
+        self.hold();
+        Ok(())
     }
 
     /// Pause the run through its own command path, before any tick runs.
@@ -431,6 +625,11 @@ impl Loop {
             let _ = self.acks.send(ack);
             return;
         }
+        if let CommandKind::Seek { tick } = envelope.payload {
+            let ack = self.seek(envelope, tick);
+            let _ = self.acks.send(ack);
+            return;
+        }
         let ack = self.run.sim.apply_command(envelope);
         if ack.is_accepted() && !ack.duplicate {
             self.pending.push(ack.command_id);
@@ -445,20 +644,7 @@ impl Loop {
             return repeated;
         }
         let epoch = self.run.sim.epoch();
-        let reason = if envelope.run_id != self.run.run_id() {
-            Some(RejectReason::StaleRun {
-                found: envelope.run_id.clone(),
-                expected: self.run.run_id().to_string(),
-            })
-        } else if envelope.expected_epoch != epoch {
-            Some(RejectReason::StaleEpoch {
-                found: envelope.expected_epoch,
-                expected: epoch,
-            })
-        } else {
-            None
-        };
-        let ack = match reason {
+        let ack = match self.stale(&envelope) {
             Some(reason) => CommandAck {
                 command_id: envelope.command_id,
                 status: AckStatus::Rejected(reason),
@@ -473,9 +659,12 @@ impl Loop {
                 if let Some(executor) = self.executor.as_mut() {
                     executor.reset();
                 }
+                self.history.clear();
+                self.branched_at = None;
                 self.flush_pending();
                 *self.shared.latest.lock().expect("latest") = None;
                 self.hold();
+                self.retain_checkpoint();
                 CommandAck {
                     command_id: envelope.command_id,
                     status: AckStatus::Applied,
@@ -506,6 +695,7 @@ impl Loop {
                     }
                 }
                 *self.shared.latest.lock().expect("latest") = Some(snapshot);
+                self.retain_checkpoint();
                 let step = Duration::from_secs_f64(self.run.dt_s() / self.run.sim.speed());
                 self.next_due += step;
                 // Far behind (a slow tick, a long pause): pace from now
@@ -677,6 +867,209 @@ mod tests {
         assert!(acks
             .iter()
             .any(|a| a.command_id == 1 && a.status == AckStatus::Applied));
+    }
+
+    /// P5.2: after the run finishes, a seek back restores the nearest
+    /// checkpoint, branches the epoch and holds at the tick without
+    /// publishing the ticks it re-ran; running on gives exactly the straight
+    /// run's frames from there.
+    #[test]
+    fn a_seek_back_branches_and_runs_on_as_the_straight_run() {
+        let (worker, _) = worker(Pacing::Unpaced);
+        command(&worker, 1, CommandKind::Resume);
+        let first = run_to_completion(&worker);
+        assert_eq!(first.len(), 80);
+        let before = worker.status();
+        assert_eq!(before.retained_from, Some(0));
+        assert_eq!(before.branched_at, None);
+
+        command(&worker, 2, CommandKind::Seek { tick: 30 });
+        let acks = acks_until(&worker, 2, true);
+        let ack = acks.iter().find(|a| a.command_id == 2).unwrap();
+        assert_eq!(ack.status, AckStatus::Applied, "{ack:?}");
+        assert_eq!(ack.effective_tick, Some(30));
+        let status = wait_for(&worker, |s| {
+            s.phase == WorkerPhase::Paused && s.epoch != before.epoch
+        });
+        assert_eq!(status.tick, 30);
+        assert_eq!(status.branched_at, Some(30));
+        assert!(
+            worker.frames().is_empty(),
+            "the re-run ticks are not resent"
+        );
+
+        command(&worker, 3, CommandKind::Resume);
+        let rest = run_to_completion(&worker);
+        assert_eq!(rest.len(), 50);
+        assert!(
+            rest == first[30..],
+            "the branch reproduces the straight run"
+        );
+    }
+
+    /// A seek in a run with lanes at their own rates rebuilds the lanes
+    /// executor at the restored tick, and the branch still runs on as the
+    /// straight run did, buffered lane state included.
+    #[test]
+    fn a_seek_with_lanes_at_their_own_rates_runs_on_as_the_straight_run() {
+        use crate::run_options::RunOptions;
+        use crate::scheduler::parse_rate;
+        let path = format!(
+            "{}/../../tests/fixtures/scenario_bundle_scan.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let bundle =
+            ScenarioBundle::from_json(&std::fs::read_to_string(&path).expect("fixture")).unwrap();
+        let rates = LaneRates {
+            fusion: Some(parse_rate("1/2").expect("rate")),
+            mapping: Some(parse_rate("1/3").expect("rate")),
+            mission: Some(parse_rate("1/7").expect("rate")),
+        };
+        let options = RunOptions {
+            lane_rates: rates,
+            ..RunOptions::default()
+        };
+        let worker = SimWorker::spawn_with_rates(
+            move || {
+                let mut run = assemble(&bundle).map_err(|e| e.to_string())?;
+                options.apply(&mut run, &bundle)?;
+                Ok(run)
+            },
+            Pacing::Unpaced,
+            rates,
+        );
+        command(&worker, 1, CommandKind::Resume);
+        let first = run_to_completion(&worker);
+        // Mid-interval: the nearest checkpoint is at 50, so 13 ticks re-run.
+        command(&worker, 2, CommandKind::Seek { tick: 63 });
+        let acks = acks_until(&worker, 2, true);
+        let ack = acks.iter().find(|a| a.command_id == 2).unwrap();
+        assert_eq!(ack.status, AckStatus::Applied, "{ack:?}");
+        wait_for(&worker, |s| s.phase == WorkerPhase::Paused && s.tick == 63);
+        command(&worker, 3, CommandKind::Resume);
+        let rest = run_to_completion(&worker);
+        assert!(
+            rest == first[63..],
+            "the branch reproduces the straight run"
+        );
+    }
+
+    /// A branch from after a scheduled source restart back to before it
+    /// applies the restart again when it gets there: the restart guard is
+    /// the restored timeline's, not the one left (review finding).
+    #[test]
+    fn a_branch_back_past_a_source_restart_applies_it_again() {
+        use crate::delivery::{DeliveryProfile, DEFAULT_QUEUE_CAPACITY};
+        use crate::faults::{Fault, FaultManifest, MANIFEST_FORMAT, MANIFEST_VERSION};
+        let build_bundle = bundle();
+        let worker = SimWorker::spawn(
+            move || {
+                let mut run = assemble(&build_bundle).map_err(|e| e.to_string())?;
+                run.set_delivery(DeliveryProfile::from_seconds(
+                    build_bundle.dt_s,
+                    1.5,
+                    1.0,
+                    &BTreeMap::new(),
+                    0.0,
+                    DEFAULT_QUEUE_CAPACITY,
+                    11,
+                )?)?;
+                run.set_faults(FaultManifest {
+                    format: MANIFEST_FORMAT.into(),
+                    version: MANIFEST_VERSION,
+                    faults: vec![Fault::SourceRestart {
+                        node_id: "drone-east".into(),
+                        at_s: 15.0,
+                    }],
+                })?;
+                Ok(run)
+            },
+            Pacing::Unpaced,
+        );
+        command(&worker, 1, CommandKind::Resume);
+        let first = run_to_completion(&worker);
+        // The restart is at tick 30 and catches evidence in flight; branch
+        // back to 28, from the tick-25 checkpoint.
+        let stale = |frames: &[String]| {
+            frames
+                .iter()
+                .filter(|f| f.contains("delivery_stale_epoch"))
+                .count()
+        };
+        assert!(
+            stale(&first) > 0,
+            "the case needs evidence caught in flight"
+        );
+        command(&worker, 2, CommandKind::Seek { tick: 28 });
+        let acks = acks_until(&worker, 2, true);
+        assert_eq!(
+            acks.iter().find(|a| a.command_id == 2).unwrap().status,
+            AckStatus::Applied
+        );
+        wait_for(&worker, |s| s.phase == WorkerPhase::Paused && s.tick == 28);
+        command(&worker, 3, CommandKind::Resume);
+        let rest = run_to_completion(&worker);
+        assert_eq!(stale(&rest), stale(&first[28..]));
+        assert!(
+            rest == first[28..],
+            "the restart is applied again on the branch"
+        );
+    }
+
+    /// A command still pending when a seek branches the run is answered as
+    /// cancelled, not left pending forever (review finding).
+    #[test]
+    fn a_seek_cancels_commands_pending_on_the_epoch_it_leaves() {
+        let (worker, _) = worker(Pacing::Unpaced);
+        let status = wait_for(&worker, |s| s.phase == WorkerPhase::Paused);
+        let mut deferred = CommandEnvelope::new(
+            1,
+            status.run_id.clone().unwrap(),
+            status.epoch,
+            CommandKind::SetSpeed { multiplier: 2.0 },
+        );
+        deferred.requested_effective_tick = Some(1000);
+        worker.submit(deferred).unwrap();
+        let acks = acks_until(&worker, 1, false);
+        assert!(acks
+            .iter()
+            .any(|a| a.command_id == 1 && a.status == AckStatus::Accepted));
+        command(&worker, 2, CommandKind::Seek { tick: 0 });
+        let acks = acks_until(&worker, 1, true);
+        assert!(matches!(
+            &acks.iter().rfind(|a| a.command_id == 1).unwrap().status,
+            AckStatus::Cancelled(RejectReason::StaleEpoch { .. })
+        ));
+    }
+
+    /// A seek forward, or one composed against an old epoch, is refused
+    /// with its reason and changes nothing.
+    #[test]
+    fn a_seek_forward_or_stale_is_refused() {
+        let (worker, _) = worker(Pacing::Unpaced);
+        let status = wait_for(&worker, |s| s.phase == WorkerPhase::Paused);
+        command(&worker, 1, CommandKind::Seek { tick: 5 });
+        let acks = acks_until(&worker, 1, true);
+        assert!(matches!(
+            &acks.iter().find(|a| a.command_id == 1).unwrap().status,
+            AckStatus::Rejected(RejectReason::Unsupported { .. })
+        ));
+        worker
+            .submit(CommandEnvelope::new(
+                2,
+                status.run_id.clone().unwrap(),
+                status.epoch + 7,
+                CommandKind::Seek { tick: 0 },
+            ))
+            .unwrap();
+        let acks = acks_until(&worker, 2, true);
+        assert!(matches!(
+            &acks.iter().find(|a| a.command_id == 2).unwrap().status,
+            AckStatus::Rejected(RejectReason::StaleEpoch { .. })
+        ));
+        let after = worker.status();
+        assert_eq!((after.epoch, after.tick), (status.epoch, status.tick));
+        assert_eq!(after.branched_at, None);
     }
 
     /// Every frame of a finished worker run, collected after it completes.
