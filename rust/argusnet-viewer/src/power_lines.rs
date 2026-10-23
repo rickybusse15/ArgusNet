@@ -74,6 +74,9 @@ pub const WIRE_MIN_WIDTH_PX: f32 = 1.6;
 pub const WIRE_COLOR: [f32; 4] = [0.78, 0.80, 0.80, 1.0];
 /// Towers: galvanised steel.
 pub const TOWER_COLOR: [f32; 3] = [0.56, 0.58, 0.58];
+/// Mapped wires: the spans the drones' own map holds, a belief cyan, so
+/// they read as known rather than true.
+pub const MAPPED_WIRE_COLOR: [f32; 4] = [0.25, 0.85, 0.95, 1.0];
 /// Clearance corridors: a translucent amber, the caution colour.
 pub const CLEARANCE_COLOR: [f32; 4] = [1.0, 0.55, 0.05, 0.35];
 /// Segments round each conductor's clearance tube.
@@ -141,7 +144,8 @@ impl Plugin for PowerLinePlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "shaders/power_line.wesl");
         app.add_plugins(MaterialPlugin::<WireMaterial>::default())
-            .init_resource::<PowerLines>();
+            .init_resource::<PowerLines>()
+            .init_resource::<MappedWires>();
     }
 }
 
@@ -608,6 +612,112 @@ pub fn sync_power_lines(
     }
 }
 
+/// Marks the mapped-wire mesh.
+#[derive(Component)]
+pub struct MappedWiresPart;
+
+/// The spans the platforms' own map holds, drawn as wires (R3).
+#[derive(Resource, Default)]
+pub struct MappedWires {
+    /// The run and how many span rows its frames recorded up to the cursor.
+    built_for: Option<(u64, usize)>,
+    entity: Option<Entity>,
+    mesh: Option<Handle<Mesh>>,
+    material: Option<Handle<WireMaterial>>,
+    spans: usize,
+    builds: u64,
+}
+
+impl MappedWires {
+    /// Spans drawn.
+    pub fn span_count(&self) -> usize {
+        self.spans
+    }
+    /// How many times the geometry was built.
+    pub fn builds(&self) -> u64 {
+        self.builds
+    }
+}
+
+/// Draw the spans the platforms' own map holds at the cursor: the frames'
+/// `mapped_wires` up to it, wires only (the map holds conductors), in
+/// [`MAPPED_WIRE_COLOR`]. Rebuilt only when the run or the number of span
+/// rows up to the cursor changes, so scrubbing back removes what was mapped
+/// later. Shown with the Mapped Wires toggle.
+#[allow(clippy::too_many_arguments)]
+pub fn sync_mapped_wires(
+    mut commands: Commands,
+    replay: Res<ReplayState>,
+    visibility: Res<RuntimeOverlayVisibility>,
+    mut drawn: ResMut<MappedWires>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut wire_materials: ResMut<Assets<WireMaterial>>,
+    mut shown: Query<&mut Visibility, With<MappedWiresPart>>,
+) {
+    let visible = if visibility.mapped_wires {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut v in &mut shown {
+        v.set_if_neq(visible);
+    }
+    let index = replay.frame_index;
+    let rows = replay
+        .document
+        .as_ref()
+        .map_or(0, |document| document.mapped_wire_rows_through(index));
+    let key = (replay.epoch(), rows);
+    if drawn.built_for == Some(key) {
+        return;
+    }
+    let drawn = drawn.as_mut();
+    drawn.built_for = Some(key);
+    drawn.builds += 1;
+    if let Some(entity) = drawn.entity.take() {
+        commands.entity(entity).despawn();
+    }
+    if let Some(handle) = drawn.mesh.take() {
+        meshes.remove(&handle);
+    }
+    drawn.spans = 0;
+    let Some(document) = replay.document.as_ref() else {
+        return;
+    };
+    let read = document.mapped_wires_through(index);
+    for reason in &read.refused {
+        warn!("mapped wire not drawn: {reason}");
+    }
+    let Some(mesh) = wire_mesh(&read.lines) else {
+        return;
+    };
+    let material = drawn
+        .material
+        .get_or_insert_with(|| {
+            wire_materials.add(WireMaterial {
+                color: Vec4::from_array(MAPPED_WIRE_COLOR),
+                ..WireMaterial::default()
+            })
+        })
+        .clone();
+    let handle = meshes.add(mesh);
+    drawn.mesh = Some(handle.clone());
+    drawn.spans = read.lines.len();
+    drawn.entity = Some(
+        commands
+            .spawn((
+                MappedWiresPart,
+                PresentationOnly,
+                NoFrustumCulling,
+                Mesh3d(handle),
+                MeshMaterial3d(material),
+                Transform::IDENTITY,
+                visible,
+            ))
+            .id(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,6 +861,7 @@ mod tests {
             .init_resource::<Assets<WireMaterial>>()
             .init_resource::<Assets<StandardMaterial>>()
             .init_resource::<PowerLines>()
+            .init_resource::<MappedWires>()
             .insert_resource(RuntimeOverlayVisibility::default())
             .insert_resource(ReplayState::new(Some(
                 serde_json::from_value(document).unwrap(),
@@ -835,6 +946,92 @@ mod tests {
         assert!(parts(&mut app).is_empty());
         assert_eq!(app.world().resource::<PowerLines>().builds(), 2);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 0);
+    }
+
+    /// A frame at `t` carrying `spans` as its newly mapped wires.
+    fn mapped_frame(t: f64, spans: Vec<serde_json::Value>) -> serde_json::Value {
+        serde_json::json!({
+            "timestamp_s": t,
+            "nodes": [],
+            "tracks": [],
+            "truths": [],
+            "observations": [],
+            "rejected_observations": [],
+            "mapped_wires": spans,
+        })
+    }
+
+    fn mapped_parts(app: &mut App) -> Vec<Visibility> {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<MappedWiresPart>>();
+        query.iter(app.world()).copied().collect()
+    }
+
+    /// The spans mapped up to the cursor are drawn, in their own colour:
+    /// none before the first is mapped, more as the cursor passes each, and
+    /// fewer again when it is scrubbed back. A span the model refuses is
+    /// reported and hides nothing else; the toggle hides them.
+    #[test]
+    fn mapped_wires_follow_the_cursor() {
+        let first = serde_json::to_value(line()).unwrap();
+        let mut second = first.clone();
+        second["id"] = serde_json::json!("line-b");
+        let mut bad = first.clone();
+        bad["id"] = serde_json::json!("line-bad");
+        bad["conductor_offsets_m"] = serde_json::json!([]);
+        let document = serde_json::json!({
+            "meta": {},
+            "frames": [
+                mapped_frame(0.0, vec![]),
+                mapped_frame(1.0, vec![first.clone()]),
+                mapped_frame(2.0, vec![]),
+                mapped_frame(3.0, vec![second, bad, first]),
+            ],
+        });
+        let mut app = app(document);
+        app.add_systems(Update, sync_mapped_wires);
+        let at = |app: &mut App, index: usize| {
+            app.world_mut().resource_mut::<ReplayState>().frame_index = index;
+            app.update();
+            app.world().resource::<MappedWires>().span_count()
+        };
+        assert_eq!(at(&mut app, 0), 0);
+        assert!(mapped_parts(&mut app).is_empty());
+        assert_eq!(at(&mut app, 1), 1);
+        assert_eq!(at(&mut app, 2), 1);
+        let builds = app.world().resource::<MappedWires>().builds();
+        assert_eq!(at(&mut app, 2), 1);
+        assert_eq!(
+            app.world().resource::<MappedWires>().builds(),
+            builds,
+            "nothing new mapped, nothing rebuilt"
+        );
+        // The repeat of the first span is read once; the refused one is
+        // skipped and the good one beside it is drawn.
+        assert_eq!(at(&mut app, 3), 2);
+        assert_eq!(mapped_parts(&mut app), [Visibility::Inherited]);
+        let document = app.world().resource::<ReplayState>();
+        let read = document.document.as_ref().unwrap().mapped_wires_through(3);
+        assert_eq!(read.refused.len(), 1, "{:?}", read.refused);
+        assert!(read.refused[0].starts_with("frames[3].mapped_wires[1]"));
+        let material = app
+            .world()
+            .resource::<Assets<WireMaterial>>()
+            .iter()
+            .next()
+            .unwrap()
+            .1
+            .color;
+        assert_eq!(material, Vec4::from_array(MAPPED_WIRE_COLOR));
+        assert_eq!(at(&mut app, 1), 1, "scrubbed back");
+
+        app.world_mut()
+            .resource_mut::<RuntimeOverlayVisibility>()
+            .mapped_wires = false;
+        app.update();
+        assert_eq!(mapped_parts(&mut app), [Visibility::Hidden]);
+        assert!(parts(&mut app).is_empty(), "no true lines in this run");
     }
 
     /// A line the model refuses is not drawn and its reason is kept; the

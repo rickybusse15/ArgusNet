@@ -2,6 +2,11 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Mapped wires in the replay and the viewer (R3). A run that maps the world
+  for itself records each power-line span its map gains (`mapped_wires`, a
+  frame field). The viewer draws the spans known at the cursor in cyan, with
+  a Mapped Wires toggle. The true lines stay hidden in a self-built view.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

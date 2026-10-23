@@ -1347,6 +1347,8 @@ pub(super) fn section_runtime_overlays(
             &mut runtime_visibility.power_line_clearance,
             "Clearance Corridors",
         );
+        ui.checkbox(&mut runtime_visibility.mapped_wires, "Mapped Wires")
+            .on_hover_text("The spans the drones' own map holds, as they found them");
         ui.checkbox(
             &mut runtime_visibility.show_covariance_ellipsoids,
             "Covariance Ellipsoids",

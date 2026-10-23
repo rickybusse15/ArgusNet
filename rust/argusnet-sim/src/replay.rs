@@ -545,6 +545,12 @@ pub struct ReplayFrame {
     /// soft, and a trunk the physics has already pushed clear of.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tree_contacts: Vec<ReplayTreeContact>,
+    /// The power-line spans the platforms' own map gained this tick, in a
+    /// run that maps the world for itself (R3): whole spans, each once, the
+    /// wire-hazard prior's on the first tick. Applying the frames in order
+    /// gives the wires the map holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mapped_wires: Vec<argusnet_world::powerline::PowerLine>,
 }
 
 /// One platform touching one tree in one tick (R2).
@@ -790,6 +796,7 @@ impl ReplayWriter {
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
             tree_contacts: Vec::new(),
+            mapped_wires: Vec::new(),
         }
     }
 

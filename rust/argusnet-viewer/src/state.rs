@@ -46,6 +46,10 @@ pub struct RuntimeOverlayVisibility {
     /// Each power-line span's clearance volume (R3): an overlay, off by
     /// default.
     pub power_line_clearance: bool,
+    /// The power-line spans the platforms' own map holds, in a run that maps
+    /// the world for itself (R3): what the drones know, not the true lines.
+    /// On by default; nothing to draw in a run with a prior map.
+    pub mapped_wires: bool,
     /// Buildings drawn at the scene's styled translucency, so drones and
     /// tracks behind them show through. Off by default: buildings are
     /// solid. No layer preset owns it.
@@ -75,6 +79,7 @@ impl Default for RuntimeOverlayVisibility {
             power_lines: true,
             trees: true,
             power_line_clearance: false,
+            mapped_wires: true,
             see_through_buildings: false,
         }
     }

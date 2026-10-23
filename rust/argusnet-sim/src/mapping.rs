@@ -557,6 +557,13 @@ impl MappingStage {
         })
     }
 
+    /// The power-line spans mapped since the last call, as replay rows (R3).
+    pub fn take_wire_updates(&mut self) -> Vec<argusnet_world::powerline::PowerLine> {
+        self.belief
+            .as_mut()
+            .map_or_else(Vec::new, |belief| belief.grid.take_new_wires())
+    }
+
     /// The canopy cells changed since the last call, as replay rows (R2).
     pub fn take_canopy_updates(&mut self) -> Vec<crate::belief_world::CanopyCellUpdate> {
         self.belief
