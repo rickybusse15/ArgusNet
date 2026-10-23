@@ -2270,13 +2270,9 @@ impl AssembledRun {
                 .into_iter()
                 .cloned()
                 .collect();
-            let observe = self.observe();
-            replay_frame.sensor_bias_offsets_rad = observe
-                .sensors()
-                .keys()
-                .map(|node| (node.clone(), observe.bias_offset_rad(node)))
-                .filter(|(_, offset)| *offset != 0.0)
-                .collect();
+            // From the offset table, not the installed sensors: a drift goes
+            // on accumulating through an outage that removes its sensor.
+            replay_frame.sensor_bias_offsets_rad = self.observe().bias_offsets().clone();
         }
         self.replay.push_frame(replay_frame);
         let mobile: std::collections::BTreeSet<&str> = snapshot

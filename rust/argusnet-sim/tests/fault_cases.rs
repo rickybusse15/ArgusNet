@@ -472,3 +472,35 @@ fn a_drifting_run_resumes_mid_drift_and_after() {
         assert_eq!(rest, straight[at..], "resumed at tick {at}");
     }
 }
+
+/// A drift overlapping an outage of the same sensor goes on accumulating,
+/// and the frames carry its offset throughout the outage, as before and
+/// after it.
+#[test]
+fn a_drift_is_recorded_through_an_outage_of_its_sensor() {
+    let bundle = bundle();
+    let node = "drone-east";
+    let mut run = assemble(&bundle).unwrap();
+    run.set_faults(manifest(vec![
+        drift(node, 10.0, 20.0, 0.01),
+        outage(node, 12.0, 25.0),
+    ]))
+    .unwrap();
+    let frames = run_frames(run, bundle.steps);
+    let during = frames_in(&frames, 12.0, 25.0);
+    assert!(!during.is_empty());
+    for frame in during {
+        assert!(
+            frame.observations.iter().all(|o| o.node_id != node),
+            "out at {}",
+            frame.timestamp_s
+        );
+        let expected = 0.01 * (frame.timestamp_s.min(20.0) - 10.0);
+        let recorded = frame.sensor_bias_offsets_rad.get(node).copied();
+        assert!(
+            recorded.is_some_and(|r| (r - expected).abs() < 1e-12),
+            "{recorded:?} at {}",
+            frame.timestamp_s
+        );
+    }
+}

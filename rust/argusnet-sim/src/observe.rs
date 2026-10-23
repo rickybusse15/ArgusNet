@@ -779,6 +779,12 @@ impl ObserveStage {
         }
     }
 
+    /// Every non-zero calibration drift offset, radians, by node: installed
+    /// or not, since a drift outlasts an outage.
+    pub fn bias_offsets(&self) -> &BTreeMap<String, f64> {
+        &self.bias_offsets
+    }
+
     /// The calibration drift offset on `node_id`'s bearing bias, radians.
     pub fn bias_offset_rad(&self, node_id: &str) -> f64 {
         self.bias_offsets.get(node_id).copied().unwrap_or(0.0)
@@ -1515,7 +1521,10 @@ impl StageHandler for ObserveStage {
                         node_id: node_id.clone(),
                         target_id: target_id.clone(),
                         origin,
-                        direction: thermal.direction,
+                        // The walk is the primary's alone, as in the
+                        // reference; a calibration drift turns every bearing
+                        // the sensor reports (zero leaves it untouched).
+                        direction: apply_bias_to_direction(thermal.direction, offset_rad),
                         bearing_std_rad: thermal.bearing_std_rad,
                         timestamp_s,
                         confidence: thermal.confidence,
@@ -1528,6 +1537,7 @@ impl StageHandler for ObserveStage {
             // Its own stream, keyed `(node_id, "clutter", tick)`, so the number
             // of real targets in view cannot shift the false-alarm draws.
             if spec.false_alarm_rate_per_scan > 0.0 {
+                let offset_rad = self.bias_offsets.get(node_id).copied().unwrap_or(0.0);
                 let mut clutter_rng = DeterministicRng::keyed(
                     seed,
                     &[
@@ -1566,7 +1576,9 @@ impl StageHandler for ObserveStage {
                         node_id: node_id.clone(),
                         target_id: CLUTTER_TARGET_ID.to_string(),
                         origin,
-                        direction: noisy / noisy_norm,
+                        // A calibration drift turns these too: the sensor
+                        // reports them through the same calibration.
+                        direction: apply_bias_to_direction(noisy / noisy_norm, offset_rad),
                         bearing_std_rad: spec.clutter_bearing_std_rad,
                         timestamp_s,
                         confidence,
@@ -2997,6 +3009,46 @@ mod tests {
         assert_ne!(thermal.direction, primary.direction);
         // One accepted *pair*, two observations -- the tally counts pairs.
         assert_eq!(obs(&mut sim).tally().attempted, 1);
+    }
+
+    /// F2: a calibration drift turns every bearing the sensor reports by
+    /// the offset -- the primary, the thermal duplicate and its clutter --
+    /// and nothing else about them.
+    #[test]
+    fn a_calibration_drift_turns_every_bearing_the_sensor_reports() {
+        let run = |offset_rad: f64| {
+            let mut sim = rig(
+                vec![sensor_node("s0", 0.0, 0.0, false)],
+                vec![target("t0", 500.0, 0.0, 0.0)],
+            );
+            obs(&mut sim).install_sensor(
+                "s0",
+                SensorSpec {
+                    band: SensorBand::Thermal,
+                    false_alarm_rate_per_scan: 4.0,
+                    ..permissive()
+                },
+            );
+            obs(&mut sim).set_bias_offset("s0", offset_rad);
+            sim.step().expect("tick runs");
+            obs(&mut sim).observations().to_vec()
+        };
+        let (plain, drifted) = (run(0.0), run(0.2));
+        assert_eq!(plain.len(), drifted.len());
+        assert!(
+            plain
+                .iter()
+                .filter(|o| o.target_id == CLUTTER_TARGET_ID)
+                .count()
+                > 0,
+            "the case needs clutter"
+        );
+        assert!(plain.len() >= 3, "primary, thermal and clutter");
+        for (a, b) in plain.iter().zip(&drifted) {
+            assert_eq!((&a.target_id, a.confidence), (&b.target_id, b.confidence));
+            let angle = a.direction.dot(&b.direction).clamp(-1.0, 1.0).acos();
+            assert!((angle - 0.2).abs() < 1e-9, "{} turned {angle}", a.target_id);
+        }
     }
 
     /// The four names the reference treats as thermal, and the fact that
