@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use argusnet_replay::read_text_limited;
 use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
 use argusnet_sim::scenario::{assemble_with, BundleError, RunError, ScenarioBundle};
 use argusnet_sim::scheduler::{
@@ -35,6 +34,24 @@ use argusnet_sim::simulation::TickError;
 use argusnet_sim::snapshot::SimulationCheckpoint;
 use clap::{Parser, Subcommand};
 use rundir::{Recorder, RunDir};
+
+/// Largest replay, scenario, or checkpoint this binary will read.
+/// Matches `argusnet_replay::MAX_DOCUMENT_BYTES`.
+const MAX_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_text_limited(path: &std::path::Path) -> std::io::Result<String> {
+    let len = std::fs::metadata(path)?.len();
+    if len > MAX_DOCUMENT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is {len} bytes, over the {MAX_DOCUMENT_BYTES} byte limit",
+                path.display()
+            ),
+        ));
+    }
+    std::fs::read_to_string(path)
+}
 
 #[derive(Parser)]
 #[command(

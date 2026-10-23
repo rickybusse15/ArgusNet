@@ -46,8 +46,8 @@ from argusnet.core.frames import ENUOrigin, enu_to_wgs84, wgs84_to_enu
 from argusnet.core.io_limits import sha256_file
 
 from ._scene_gis import (
-    MAX_DEM_FILE_BYTES,
     _MAX_DEM_PIXELS,
+    MAX_DEM_FILE_BYTES,
     _extract_nodata_value,
     _fill_nodata,
     lazy_import_pyproj,

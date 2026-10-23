@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
@@ -55,7 +55,7 @@ def _load_npy(path: Path) -> np.ndarray:
         if next_size > _MAX_NPY_BYTES:
             raise ValueError(f"{path}: declared array exceeds {_MAX_NPY_BYTES} bytes")
         declared = next_size
-    return np.load(path, allow_pickle=False)
+    return cast("np.ndarray", np.load(path, allow_pickle=False))
 
 
 @dataclass(frozen=True)

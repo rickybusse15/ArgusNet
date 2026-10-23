@@ -688,7 +688,7 @@ def _load_yaml_text(text: str) -> Any:
                 )
             return super().compose_node(parent, index)
 
-    # nosec B506: SafeLoader subclass; compose_node rejects aliases before expansion.
+    # SafeLoader subclass; compose_node rejects aliases before they expand.
     return yaml.load(text, Loader=_NoAliasLoader)  # nosec B506
 
 

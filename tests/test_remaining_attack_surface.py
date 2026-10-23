@@ -18,6 +18,7 @@ import numpy as np
 import yaml
 
 from argusnet.core.config import load_config_mapping
+from argusnet.core.io_limits import FileSizeLimitError
 from argusnet.mapping.world_model import _load_npy
 from argusnet.world._scene_gis import load_geojson_layer
 from argusnet.world.environment import (
@@ -99,7 +100,9 @@ class TestEnvironmentBundleContainment(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundle = _bundle(root)
-            manifest = json.loads((bundle / "environment_manifest.json").read_text(encoding="utf-8"))
+            manifest = json.loads(
+                (bundle / "environment_manifest.json").read_text(encoding="utf-8")
+            )
             relative = manifest["terrain"]["tiles"][0]["path"]
             tile = bundle / relative
             outside = root / "outside.json"
@@ -167,7 +170,7 @@ class TestGeoJsonSizeCap(unittest.TestCase):
 
             with (
                 patch("argusnet.world._scene_gis.read_text_capped", tiny),
-                self.assertRaises(Exception),
+                self.assertRaises(FileSizeLimitError),
             ):
                 load_geojson_layer(path)
 

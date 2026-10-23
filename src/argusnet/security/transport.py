@@ -63,9 +63,12 @@ def _localhost_resolves_only_to_loopback(host: str) -> bool:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
         return False
-    if not infos:
-        return False
-    return all(_ip_is_loopback(info[4][0]) for info in infos)
+    for info in infos:
+        address = info[4][0]
+        # getaddrinfo's sockaddr is a union; only the host string is an address.
+        if not isinstance(address, str) or not _ip_is_loopback(address):
+            return False
+    return bool(infos)
 
 
 def is_loopback_host(host: str) -> bool:

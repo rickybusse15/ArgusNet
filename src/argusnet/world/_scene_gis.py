@@ -182,7 +182,6 @@ def project_dem_to_runtime(
     dem_path: str | Path, *, source_crs: str | None = None
 ) -> RasterReference:
     tifffile = lazy_import_tifffile()
-    CRS, Transformer = lazy_import_pyproj()
     check_file_size(dem_path, max_bytes=MAX_DEM_FILE_BYTES)
 
     with tifffile.TiffFile(str(dem_path)) as handle:
@@ -218,6 +217,7 @@ def project_dem_to_runtime(
                 "for example EPSG:32611."
             )
 
+    CRS, Transformer = lazy_import_pyproj()
     source = CRS.from_user_input(source_crs_id)
     to_wgs84 = Transformer.from_crs(source, CRS.from_epsg(4326), always_xy=True)
 

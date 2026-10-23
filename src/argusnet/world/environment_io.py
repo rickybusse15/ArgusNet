@@ -103,12 +103,17 @@ def _array_from_blob(blob: Mapping[str, object]) -> np.ndarray:
         compressed = bytes.fromhex(payload_hex)
     except ValueError as exc:
         raise ValueError("environment bundle array payload_hex is not hex") from exc
+    # zlib.decompress has no output cap. decompressobj(max_length) stops early;
+    # a limit of 0 means unlimited, so an empty shape still gets a positive cap.
+    decompressor = zlib.decompressobj()
     try:
-        raw = zlib.decompress(compressed, max_length=_MAX_DECOMPRESSED_BLOB_BYTES)
+        raw = decompressor.decompress(compressed, max_length=expected if expected else 1)
     except zlib.error as exc:
         raise ValueError(
             "environment bundle array failed to decompress within the size cap"
         ) from exc
+    if decompressor.unconsumed_tail or not decompressor.eof:
+        raise ValueError("environment bundle array failed to decompress within the size cap")
     if len(raw) != expected:
         raise ValueError("environment bundle array shape does not match its payload")
     return np.frombuffer(raw, dtype=dtype).reshape(tuple(shape))
@@ -129,8 +134,7 @@ def _tile_list(section: object, name: str) -> list[object]:
         raise ValueError(f"environment bundle {name}.tiles must be a list")
     if len(tiles) > _MAX_BUNDLE_TILES:
         raise ValueError(
-            f"environment bundle {name} has {len(tiles)} tiles, "
-            f"over the {_MAX_BUNDLE_TILES} cap"
+            f"environment bundle {name} has {len(tiles)} tiles, over the {_MAX_BUNDLE_TILES} cap"
         )
     return tiles
 
@@ -242,9 +246,7 @@ def load_environment_bundle(path: str) -> EnvironmentModel:
     for tile_meta in _tile_list(terrain_manifest, "terrain"):
         if not isinstance(tile_meta, Mapping):
             raise ValueError("environment bundle terrain tile must be a mapping")
-        payload = _bundle_json(
-            bundle_root, tile_meta.get("path"), field_name="terrain tile path"
-        )
+        payload = _bundle_json(bundle_root, tile_meta.get("path"), field_name="terrain tile path")
         terrain_tiles[(int(tile_meta["lod"]), int(tile_meta["tx"]), int(tile_meta["ty"]))] = (
             TerrainTile(
                 tx=int(tile_meta["tx"]),
@@ -301,9 +303,7 @@ def load_environment_bundle(path: str) -> EnvironmentModel:
     for tile_meta in _tile_list(obstacle_manifest, "obstacles"):
         if not isinstance(tile_meta, Mapping):
             raise ValueError("environment bundle obstacle tile must be a mapping")
-        payload = _bundle_json(
-            bundle_root, tile_meta.get("path"), field_name="obstacle tile path"
-        )
+        payload = _bundle_json(bundle_root, tile_meta.get("path"), field_name="obstacle tile path")
         for primitive_meta in payload:
             kind = primitive_meta["kind"]
             if kind == "cylinder-v1":
