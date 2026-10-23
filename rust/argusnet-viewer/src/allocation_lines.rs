@@ -6,7 +6,8 @@
 
 use bevy::prelude::*;
 
-use crate::replay::{ReplayFrame, ReplayState};
+use crate::presentation::CurrentRuntimeMarkers;
+use crate::replay::{MarkerKind, ReplayFrame, ReplayState};
 use crate::state::MissionOverlaySettings;
 
 /// One drone-to-POI line.
@@ -16,13 +17,24 @@ pub struct AllocationLine {
     pub poi_id: String,
     pub from: Vec3,
     pub to: Vec3,
-    /// The drone is dwelling on it (`active`), not yet there (`pending`).
-    pub active: bool,
+    /// The drone is inspecting it: the POI is active and the drone within
+    /// dwell range of it, not merely assigned and still flying there.
+    pub dwelling: bool,
 }
 
+/// How close, horizontally, a drone must be for its POI's dwell to count:
+/// the runtime's `POI_DWELL_RANGE_M` (`argusnet-sim` mission driver), which
+/// credits dwell only within it.
+pub const DWELL_RANGE_M: f32 = 30.0;
+
 /// The lines for `frame`: every POI not yet complete with an assigned drone
-/// in the frame and a recorded position, in the frame's POI order.
-pub fn allocation_lines(frame: &ReplayFrame) -> Vec<AllocationLine> {
+/// in the frame and a recorded position, in the frame's POI order. Each
+/// starts where the drone is presented (`presented`, the interpolated pose
+/// the drone's marker is drawn at), falling back to its recorded position.
+pub fn allocation_lines(
+    frame: &ReplayFrame,
+    presented: impl Fn(&str) -> Option<Vec3>,
+) -> Vec<AllocationLine> {
     let Some(mission) = frame.scan_mission_state.as_ref() else {
         return Vec::new();
     };
@@ -34,20 +46,23 @@ pub fn allocation_lines(frame: &ReplayFrame) -> Vec<AllocationLine> {
             let drone_id = poi.assigned_drone_id.as_ref()?;
             let position = poi.position?;
             let node = frame.nodes.iter().find(|node| &node.node_id == drone_id)?;
+            let from = presented(drone_id).unwrap_or(Vec3::from_array(node.position));
+            let to = Vec3::from_array(position);
+            let in_range = from.truncate().distance(to.truncate()) <= DWELL_RANGE_M;
             Some(AllocationLine {
                 drone_id: drone_id.clone(),
                 poi_id: poi.poi_id.clone(),
-                from: Vec3::from_array(node.position),
-                to: Vec3::from_array(position),
-                active: poi.status == "active",
+                from,
+                to,
+                dwelling: poi.status == "active" && in_range,
             })
         })
         .collect()
 }
 
 /// Allocation lines: violet, a hue no other overlay uses (range rays are
-/// amber, trails green, mapped wires cyan), brighter for a POI being
-/// inspected than for one the drone is still flying to.
+/// amber, trails green, mapped wires cyan), brighter while the drone is
+/// inspecting than while it is still flying to the POI.
 pub const ALLOCATION_COLOR: [f32; 3] = [0.78, 0.45, 1.0];
 
 pub fn allocation_lines_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
@@ -55,13 +70,24 @@ pub fn allocation_lines_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
 }
 
 /// Draw the cursor frame's allocation lines, with a ring at each POI.
-pub fn draw_allocation_lines_system(mut gizmos: Gizmos, replay_state: Res<ReplayState>) {
+pub fn draw_allocation_lines_system(
+    mut gizmos: Gizmos,
+    replay_state: Res<ReplayState>,
+    markers: Res<CurrentRuntimeMarkers>,
+) {
     let Some(frame) = replay_state.current_frame() else {
         return;
     };
+    let presented = |drone: &str| {
+        markers
+            .markers
+            .iter()
+            .find(|m| m.kind == MarkerKind::Node && &*m.label == drone)
+            .map(|m| m.position)
+    };
     let [r, g, b] = ALLOCATION_COLOR;
-    for line in allocation_lines(frame) {
-        let alpha = if line.active { 0.95 } else { 0.5 };
+    for line in allocation_lines(frame, presented) {
+        let alpha = if line.dwelling { 0.95 } else { 0.5 };
         let color = Color::srgba(r, g, b, alpha);
         gizmos.line(line.from, line.to, color);
         let ring = bevy::math::Isometry3d::new(line.to + Vec3::Z, Quat::IDENTITY);
@@ -105,22 +131,32 @@ mod tests {
                 ]
             }
         }));
-        let lines = allocation_lines(&frame);
+        let lines = allocation_lines(&frame, |_| None);
         assert_eq!(
             lines
                 .iter()
-                .map(|l| (l.drone_id.as_str(), l.poi_id.as_str(), l.active))
+                .map(|l| (l.drone_id.as_str(), l.poi_id.as_str()))
                 .collect::<Vec<_>>(),
-            [("d1", "p1", true), ("d2", "p2", false)]
+            [("d1", "p1"), ("d2", "p2")]
         );
         assert_eq!(lines[0].from, Vec3::new(0.0, 0.0, 50.0));
         assert_eq!(lines[0].to, Vec3::new(100.0, 0.0, 0.0));
+        // Active but 100 m away: assigned and flying there, not inspecting.
+        assert!(!lines[0].dwelling);
+        assert!(!lines[1].dwelling, "pending");
+
+        // Presented (interpolated) within 30 m: inspecting, and the line
+        // starts where the drone is drawn.
+        let near = Vec3::new(80.0, 5.0, 50.0);
+        let lines = allocation_lines(&frame, |id| (id == "d1").then_some(near));
+        assert_eq!(lines[0].from, near);
+        assert!(lines[0].dwelling);
     }
 
     /// No mission state, no lines.
     #[test]
     fn a_frame_without_mission_state_draws_none() {
         let frame = frame(serde_json::json!({"timestamp_s": 0.0}));
-        assert!(allocation_lines(&frame).is_empty());
+        assert!(allocation_lines(&frame, |_| None).is_empty());
     }
 }
