@@ -149,7 +149,7 @@ jobs:
       # ~/.cargo/bin" recorded in ci-rust-path.sh since 2026-09-11, and why
       # cargo-audit was "rebuilt on every run". The bin directory holds tools,
       # not build state; there is nothing in it worth caching.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: fast
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -184,7 +184,7 @@ jobs:
           # Sourced, not run: a child process cannot change this step's PATH.
           # See the script for why a self-hosted runner needs it at all.
           source scripts/ci-rust-path.sh
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: viewer
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -287,7 +287,7 @@ jobs:
       # seconds instead of behind a full clippy pass.
       - name: Format check
         run: cargo fmt --all -- --check
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: lint
           save-if: ${{ github.ref == 'refs/heads/main' }}
