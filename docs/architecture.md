@@ -21,12 +21,19 @@ map below describes existing components; target ownership does not imply deliver
 
 ## Current migration boundary and next architecture
 
-At reviewed checkout `ec9c2f7`, Rust includes landscape construction, belief
-publication, localization/sensing/planning libraries, mission state, TickWorld
-and stage bodies with populated snapshots, replay writing and control-state
-checkpoint recovery. Full scenario/CLI/checkpoint
-qualification remains open; Python still composes the existing production mission. See
-[STATE_OWNERSHIP.md](STATE_OWNERSHIP.md) for library versus active-consumer status.
+Reviewed at `79ca540` on 2026-10-23: `argusnet-sim` composes the eleven-stage
+production mission, calls fusion directly, writes replays and supports reset,
+causal checkpoints and journal recovery. `argusnet-rs` builds and runs scenarios
+without Python. The viewer uses the same Rust run on a worker thread and builds
+scenes in Rust; Python remains the reference simulation and offline tooling.
+
+Opt-in phased lanes support separate mission, mapping and fusion rates;
+per-sensor capture and delayed delivery are supported on tick boundaries.
+Unknown-world runs build and export a measured map. Real building, terrain and
+feature imports feed the Rust world used by physics, sensing and rendering.
+Complete independent scheduling, pending-job restore and hardware qualification
+remain open. See [STATE_OWNERSHIP.md](STATE_OWNERSHIP.md) for current owners and
+[KNOWN_GAPS.md](KNOWN_GAPS.md) for the remaining boundary.
 
 The next architecture completes one Rust simulation owner, one revisioned belief
 owner, typed task → route → trajectory → safety → execution decisions, capability-
@@ -111,12 +118,12 @@ be labeled as planned until the referenced code exists.
 |-----------|----------------|-------------|------|
 | World Model | `src/argusnet/world/*` | `argusnet-world`, `argusnet-native` | `TERRAIN.md` |
 | Sensing/Fusion | `src/argusnet/sensing/*`, `src/argusnet/adapters/argusnet_grpc.py` | `argusnet-core`, `argusnet-server`, `argusnet-proto` | `FUSION.md` |
-| Localization | `src/argusnet/localization/*`, replay state in `argusnet.core.types` | `argusnet-localization` (library; mission composition pending) | `LOCALIZATION.md` |
-| Mapping | `src/argusnet/mapping/*`, replay state in `argusnet.core.types` | `argusnet-mapping` (kernels, queries and revisioned belief publication; full runtime composition pending) | `MAPPING.md` |
-| Indexing | `src/argusnet/indexing/*` | planned `indexing-engine` | `INDEXING.md` |
-| Inspection | `src/argusnet/planning/poi.py`, `src/argusnet/planning/inspection.py`, inspection state in `argusnet.core.types` | planned `inspection-engine` | `INSPECTION.md` |
+| Localization | `src/argusnet/localization/*`, replay state in `argusnet.core.types` | `argusnet-localization`, localization stages in `argusnet-sim` | `LOCALIZATION.md` |
+| Mapping | `src/argusnet/mapping/*`, replay state in `argusnet.core.types` | `argusnet-mapping`, mapping/belief stages in `argusnet-sim` | `MAPPING.md` |
+| Indexing | `src/argusnet/indexing/*` | No dedicated Rust indexing crate; persistent cross-mission memory remains planned | `INDEXING.md` |
+| Inspection | `src/argusnet/planning/poi.py`, `src/argusnet/planning/inspection.py`, inspection state in `argusnet.core.types` | `argusnet-planning`, POI/mission state in `argusnet-sim` (evidence/reconstruction target remains open) | `INSPECTION.md` |
 | Planning / Trajectory / Safety | `src/argusnet/planning/*`, `src/argusnet/simulation/behaviors.py`, `src/argusnet/safety/*` | `safety-engine`, `argusnet-planning`; full trajectory execution integration pending | `PLANNING.md`, `SAFETY.md` |
-| Mission Execution / Evaluation | `src/argusnet/simulation/sim.py`, `src/argusnet/mission/*`, `src/argusnet/evaluation/*` | `argusnet-sim` (stage runtime under integration), `argusnet-replay`, `argusnet-viewer`; complete Rust mission pending | `MISSION_EXECUTION.md`, `SCENARIOS.md`, `PERFORMANCE_AND_BENCHMARKING.md` |
+| Mission Execution / Evaluation | `src/argusnet/simulation/sim.py`, `src/argusnet/mission/*`, `src/argusnet/evaluation/*` | `argusnet-sim` (assembled runtime), `argusnet-cli`, `argusnet-replay`, `argusnet-viewer` | `MISSION_EXECUTION.md`, `SCENARIOS.md`, `PERFORMANCE_AND_BENCHMARKING.md` |
 
 ## Core Architectural Rule
 
@@ -136,6 +143,9 @@ pipeline or clearly document why it is bridging legacy behavior.
 
 ## Entry Points
 
+- `rust/argusnet-cli/src/main.rs` - Rust scenario build/run and scene packaging CLI.
+- `rust/argusnet-sim/src/scenario.rs` - assembled Rust mission runtime.
+
 - `src/argusnet/cli/main.py` - top-level CLI dispatcher.
 - `src/argusnet/cli/sim.py` and `src/argusnet/simulation/sim.py` - simulation CLI and runtime.
 - `src/argusnet/cli/scene.py` and `src/argusnet/world/scene_loader.py` - scene package build/load.
@@ -148,7 +158,17 @@ pipeline or clearly document why it is bridging legacy behavior.
 
 ## Current Data Flow
 
-The current implementation path is primarily simulation/replay oriented:
+The Rust path runs both headless and inside the viewer:
+
+```text
+argusnet-rs --config / --bundle -> argusnet-sim assembled run
+-> world / sensing / direct TrackingEngine fusion / mapping / mission stages
+-> snapshots and replay JSON -> Rust scene builder -> viewer playback
+
+argusnet-viewer --run -> Rust simulation worker -> immutable snapshots -> viewer
+```
+
+The retained Python reference path is:
 
 ```text
 CLI args -> ScenarioOptions / SimulationConfig
@@ -278,10 +298,10 @@ and revisioned belief publication already exist. The existing Python mission bri
 |---------|-----------|---------|
 | Ground truth terrain/objects | Simulation only | Used for synthetic observations and scoring, not planner input in physical-mode tests |
 | Prior terrain/geofence | World / Mission | Initial constraints and optional starting map |
-| Runtime terrain queries | `argusnet.world.environment.TerrainLayer` | Python authority for sim LOS, altitude clamping, and terrain-derived replay data |
+| Runtime terrain queries | `argusnet-world` | Rust run queries directly; Python `TerrainLayer` delegates through `argusnet-native` |
 | Belief/coverage map | Mapping | Current implementation uses `CoverageMap`, `WorldMap`, and `MappingState` |
 | Localization state | Localization | Current implementation uses `GridLocalizer`, `LocalizationEstimate`, and `LocalizationState` |
-| Bearing observations | Python generated -> Rust filtered | Python creates observations; Rust performs runtime fusion acceptance/update |
+| Bearing observations | Session sensing -> Rust filtered | Rust runs synthesize in `argusnet-sim`; Python reference uses its observation source. `argusnet-core` owns fusion acceptance/update |
 | Fused object states | Rust `argusnet-core` | Single runtime source of truth for dynamic object estimates |
 | Platform metrics | Rust `argusnet-core` | Computed per frame in current fusion path |
 | Node health | Rust `argusnet-core` | Accumulated and polled on demand |

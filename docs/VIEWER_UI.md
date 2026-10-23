@@ -4,7 +4,10 @@
 [independently scheduled Rust runtime](RUST_RUNTIME_ARCHITECTURE.md) and
 [hardware qualification](HARDWARE_INTEGRATION.md) govern source timing,
 freshness and control authority. These remain target requirements, not a claim
-that the current viewer implements the new UI or scheduler.
+that every viewer or scheduler requirement is implemented. The shell, inspectors,
+projections, layer presets and Rust-worker controls now exist; Plan/Review still
+show unavailable reasons pending their backend contracts. See [usage](usage.md)
+and [state ownership](STATE_OWNERSHIP.md) for current behavior.
 
 ## Document status
 
