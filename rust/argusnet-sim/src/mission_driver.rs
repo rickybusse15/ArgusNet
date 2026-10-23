@@ -4632,7 +4632,9 @@ mod tests {
         );
         // With a teammate that can finish, b keeps it.
         assert!(battery.set_remaining_wh("drone-a", 60.0));
-        assert!(stage.holders_that_cannot_finish(&mobile, &battery).is_empty());
+        assert!(stage
+            .holders_that_cannot_finish(&mobile, &battery)
+            .is_empty());
     }
 
     /// A wall across the x axis at x = 300, 400 m long and 10 m thick, in a
