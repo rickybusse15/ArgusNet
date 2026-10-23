@@ -531,14 +531,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         _run_info(args)
         return
     if command == COMMAND_CLIENT_PACKAGE:
+        from argusnet.core.errors import ArgusNetError
+        from argusnet.core.io_limits import read_text_capped
         from argusnet.evaluation.assurance import build_client_package
         from argusnet.evaluation.replay import validate_replay_document
 
         try:
-            replay_doc = json.loads(Path(args.replay).read_text(encoding="utf-8"))
+            # The replay-input size cap applies before anything is parsed.
+            replay_doc = json.loads(read_text_capped(args.replay))
             validate_replay_document(replay_doc)
             build_client_package(replay_doc).write(Path(args.output))
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, ArgusNetError) as error:
             raise SystemExit(f"Client package failed: {error}") from error
         print(f"Client package written to {args.output}")
         return

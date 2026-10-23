@@ -236,3 +236,46 @@ def test_the_report_carries_an_f1_outcome_that_agrees_with_its_status(
     assert report["outcome"]["format"] == "argusnet.mission-outcome/1"
     assert report["outcome"]["outcome"] in outcomes
     assert all(reason["code"] and reason["detail"] for reason in report["outcome"]["reasons"])
+
+
+def test_the_source_hash_is_the_input_as_given():
+    """The hash is over the replay as given (canonical JSON), with no
+    summary added first; a package of a package's replay names the same
+    source."""
+    doc = replay()
+    assert "summary" not in doc
+    canonical = (json.dumps(doc, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
+    first = json.loads(build_client_package(doc).assurance)
+    assert first["source_replay_sha256"] == hashlib.sha256(canonical).hexdigest()
+    annotated = json.loads(build_client_package(doc).replay)
+    again = json.loads(build_client_package(annotated).assurance)
+    assert again["source_replay_sha256"] == first["source_replay_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("change", "outcome"),
+    [("unmet", "objectives_unmet"), ("recovered", "incomplete")],
+)
+def test_a_complete_phase_is_not_completed_when_f1_says_otherwise(change, outcome):
+    """The status never contradicts the embedded F1 outcome."""
+    doc = replay("complete", completed=0 if change == "unmet" else 1)
+    if change == "recovered":
+        doc["meta"]["recovery"] = {"recovered_from_tick": 40}
+    report = json.loads(build_client_package(doc).assurance)
+    assert report["outcome"]["outcome"] == outcome
+    assert report["status"] == "incomplete"
+
+
+def test_the_cli_reads_the_replay_through_the_size_cap(tmp_path, monkeypatch):
+    """The replay-input cap applies before parsing: the same valid replay
+    packages under the normal cap and is refused under a tiny one."""
+    import argusnet.core.io_limits as io_limits
+
+    source = Path(__file__).parent / "fixtures" / "replay_contract_fixture.json"
+    main(["client-package", "--replay", str(source), "--output", str(tmp_path / "ok")])
+    assert (tmp_path / "ok" / "manifest.json").exists()
+    capped = io_limits.read_text_capped
+    monkeypatch.setattr(io_limits, "read_text_capped", lambda path, **_: capped(path, max_bytes=16))
+    with pytest.raises(SystemExit, match="byte limit"):
+        main(["client-package", "--replay", str(source), "--output", str(tmp_path / "out")])
+    assert not (tmp_path / "out").exists()

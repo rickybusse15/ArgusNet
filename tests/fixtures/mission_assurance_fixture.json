@@ -139,7 +139,7 @@
   "required_objectives_met": 1,
   "required_objectives_total": 1,
   "schema_version": "argusnet.mission-assurance/v1",
-  "source_replay_sha256": "51f3abc777e6c4caed85cd96049cf345b978d9d4f4694a3baad8a5f8f3fc2bc3",
+  "source_replay_sha256": "7655786bb96ac89095285ac859dbcde5f40ca00dfb2f9afa19c50725493ccc06",
   "status": "completed",
   "terminal_phase": "complete",
   "terminal_source_pointer": "/frames/0/scan_mission_state/phase",

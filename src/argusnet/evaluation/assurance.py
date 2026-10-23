@@ -65,9 +65,16 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
     Missing contracts are explicit nulls; legacy timeout/POI dwell never certify
     localization integrity, evidence sufficiency, safe landing or qualification.
     """
+    # The source hash is over the input as given, less any earlier report:
+    # a `summary` that held only that report is dropped with it, so a package
+    # of a package's replay names the same source as the first. The output's
+    # summary is made only after hashing.
     source = copy.deepcopy(replay_doc)
-    summary = source.setdefault("summary", {})
-    summary.pop("mission_assurance", None)
+    summary = source.get("summary")
+    if isinstance(summary, dict) and "mission_assurance" in summary:
+        summary.pop("mission_assurance")
+        if not summary:
+            del source["summary"]
     source_hash = _sha256(_json_bytes(source))
     meta = source.get("meta") or {}
     frames = source.get("frames") or []
@@ -143,9 +150,10 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
                 }
             )
     # A completed POI or all-met count does not prove terminal mission/landing.
-    # An abort is the safety monitor's, as the F1 outcome finds it (the
-    # mission phases never record one); otherwise the recorded phase says
-    # whether the mission reached its terminal phase.
+    # The status never contradicts the embedded F1 outcome: an abort is the
+    # safety monitor's (the mission phases never record one), and a run is
+    # completed only when it reached its terminal phase AND F1 finds it
+    # completed; a truncated or recovered run, or unmet objectives, is not.
     outcome = mission_outcome(source, mission_type=str(meta.get("mission_mode", "unknown")))
     status = (
         "unavailable"
@@ -153,7 +161,7 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
         else "aborted"
         if outcome["outcome"] == "aborted"
         else "completed"
-        if phase == "complete"
+        if phase == "complete" and outcome["outcome"] == "completed"
         else "incomplete"
     )
     unavailable = [f"provenance.{key}" for key, value in provenance.items() if value is None]
@@ -221,7 +229,7 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
     }
     assurance_bytes = _json_bytes(assurance)
     markdown = _assurance_markdown(assurance).encode()
-    source["summary"]["mission_assurance"] = assurance
+    source.setdefault("summary", {})["mission_assurance"] = assurance
     replay = _json_bytes(source)
     artifacts = [
         ("assurance.json", assurance_bytes),
