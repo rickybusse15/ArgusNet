@@ -1,6 +1,7 @@
-# F5, first slice: energy contingencies (`contingency_v1`)
+# F5: energy contingencies (`contingency_v1`, `flown_v1`)
 
-**Status:** first slice, 2026-10-23. Opt-in: `argusnet-rs sim --planning-policy
+**Status:** two slices, 2026-10-23: the planning policy, then the energy
+profile (below). Policy: Opt-in: `argusnet-rs sim --planning-policy
 contingency_v1` (also on the viewer's `--run`). Every other policy's replays are
 unchanged. The one exception is a fix to `efficient_v1` (below).
 
@@ -85,23 +86,49 @@ outside the scenarios' acceptance envelopes on every seed, because those
 envelopes are calibrated for the reference policy under legacy energy; this
 is the same for both variants and is not a difference between them.
 
-## Findings, not fixed here
+## Second slice: `flown_v1`, energy charged on the flown position
 
-- **Energy is charged on the nominal controller position, not the flown one.**
+`--energy-profile flown_v1` (CLI and viewer `--run`) charges the same per-tick
+cost as `physical_v1` (motion, plus hover for the rest of the tick), but on
+where each platform actually flew. At each commit, stage 10 records where every
+mobile platform ended the tick, after overrides, deconfliction and safety
+(`BatteryStage::record_flown`). The next tick's stage 1 charges the motion from
+the tick before to there. The charge is one tick late. The first tick draws hover
+alone, and the second is measured from where the first tick's controllers put
+each platform. The recorded positions are
+checkpointed, because a resumed world does not hold them: stage 1 rebuilds
+platforms each tick.
+
+Evidence:
+- `rust/argusnet-sim/tests/flown_energy.rs`: on the scan fixture, every tick's
+  draw equals the cost of the motion the replay shows, to 1e-9 Wh, including
+  ticks where a drone sits still (hover alone). Under `physical_v1` the ledger
+  and the flown path disagree. A `flown_v1` run resumes frame for frame from a
+  checkpoint, and a `physical_v1` run refuses it.
+- `contingency.rs`: the drone cut to 100.5 Wh that goes home on its reserve
+  ends the run with 0 Wh under `physical_v1` and 69.3 Wh under `flown_v1`.
+
+The other profiles are unchanged: 14/14 replays identical, lifecycle equal.
+
+## Findings
+
+- **Energy was charged on the nominal controller position, not the flown one**
+  (now selectable away with `flown_v1`; the earlier profiles keep it).
   Stage 1 accounts battery before stage 2's overrides (the preserved causal
   order, [ARCHITECTURE_AND_PROTOCOLS.md](ARCHITECTURE_AND_PROTOCOLS.md) stage
   1). A drone held at home by an egress is still charged for the lanes its
   controller would fly: on the scan fixture that is 0.25–0.65 Wh/s while it
   sits still, against 0.083 Wh/s of hover. The planner's predictions price
   the flown route, so they and the ledger disagree for an overridden drone.
-  Charging the flown position is a declared behaviour change. It belongs in its
-  own energy profile, and is F5's next slice.
+  Charging the flown position is a declared behaviour change, so it is its own
+  energy profile, `flown_v1` (the second slice, above).
 - **No landed state.** A drone that is home keeps drawing hover power under
   `physical_v1`. A long run drains it whatever the planner does.
 
 ## Open
 
-- Charging the flown position (above), then re-measuring the margin.
+- Re-measure the 5 % take margin under `flown_v1`, and decide whether
+  `flown_v1` should become the default physical profile (D-3's promotion).
 - The Operate reserve/contingency inspector and Plan feasibility view: the
   decisions and `unassigned_reason` are their inputs.
 - Qualification over seeds (F4's `compare_scenarios.py`): `contingency_v1`

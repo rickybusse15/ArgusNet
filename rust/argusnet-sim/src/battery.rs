@@ -97,6 +97,10 @@ struct State {
     wind_mps: Option<[f64; 3]>,
     warned: BTreeSet<String>,
     events: Vec<BatteryEvent>,
+    /// Under `flown_v1`, where each mobile platform ended the last committed
+    /// tick, recorded at commit ([`BatteryStage::record_flown`]) and charged
+    /// by the next run. Checkpointed: a resumed world does not hold it.
+    flown: Option<Vec<(String, [f64; 3])>>,
 }
 
 impl BatteryStage {
@@ -184,6 +188,33 @@ impl BatteryStage {
     }
 
     /// Take the events the last run produced, leaving none behind.
+    /// Under `flown_v1`, record where each mobile platform ended the tick
+    /// just committed -- after overrides, deconfliction and safety -- for the
+    /// next tick to charge. Called by the simulation at commit. Does nothing
+    /// under another profile.
+    pub fn record_flown(&mut self, world: &crate::world::TickWorld) {
+        if self.state.profile != EnergyProfile::FlownV1 {
+            return;
+        }
+        self.state.flown = Some(
+            world
+                .platforms()
+                .iter()
+                .filter(|platform| platform.is_mobile)
+                .map(|platform| {
+                    (
+                        platform.node_id.clone(),
+                        [
+                            platform.position.x,
+                            platform.position.y,
+                            platform.position.z,
+                        ],
+                    )
+                })
+                .collect(),
+        );
+    }
+
     pub fn take_events(&mut self) -> Vec<BatteryEvent> {
         std::mem::take(&mut self.state.events)
     }
@@ -262,6 +293,10 @@ struct BatteryCheckpoint {
     /// Absent for legacy, so a legacy checkpoint is unchanged (D-3).
     #[serde(default, skip_serializing_if = "EnergyProfile::is_legacy")]
     energy_profile: EnergyProfile,
+    /// Under `flown_v1`, where each platform ended the checkpointed tick.
+    /// Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    flown: Option<Vec<(String, [f64; 3])>>,
 }
 
 impl StageHandler for BatteryStage {
@@ -279,22 +314,28 @@ impl StageHandler for BatteryStage {
 
         // Declaration order, which §4 asks for: several reference stages break
         // ties by position in this list.
-        let sampled: Vec<(String, [f64; 3])> = context
-            .world
-            .platforms()
-            .iter()
-            .filter(|platform| platform.is_mobile)
-            .map(|platform| {
-                (
-                    platform.node_id.clone(),
-                    [
-                        platform.position.x,
-                        platform.position.y,
-                        platform.position.z,
-                    ],
-                )
-            })
-            .collect();
+        // Under `flown_v1`, where the platforms ended the last tick. Before
+        // any tick has been committed, where they are now: the first tick
+        // draws hover alone, and the second is measured from here.
+        let flown = shared.flown.take();
+        let sampled: Vec<(String, [f64; 3])> = flown.unwrap_or_else(|| {
+            context
+                .world
+                .platforms()
+                .iter()
+                .filter(|platform| platform.is_mobile)
+                .map(|platform| {
+                    (
+                        platform.node_id.clone(),
+                        [
+                            platform.position.x,
+                            platform.position.y,
+                            platform.position.z,
+                        ],
+                    )
+                })
+                .collect()
+        });
 
         for (node_id, position) in sampled {
             // `if not ns.is_mobile or ns.node_id not in _battery_states`.
@@ -315,7 +356,7 @@ impl StageHandler for BatteryStage {
                 (EnergyProfile::Legacy, Some(previous)) => {
                     Some(model.segment_cost_wh(previous, position))
                 }
-                (EnergyProfile::PhysicalV1, previous) => {
+                (EnergyProfile::PhysicalV1 | EnergyProfile::FlownV1, previous) => {
                     Some(model.tick_cost_wh(previous, position, context.dt_s))
                 }
             };
@@ -421,6 +462,7 @@ impl StageHandler for BatteryStage {
         for previous in shared.previous_positions.values_mut() {
             *previous = None;
         }
+        shared.flown = None;
         shared.warned.clear();
         shared.events.clear();
     }
@@ -436,6 +478,7 @@ impl StageHandler for BatteryStage {
             previous_positions: shared.previous_positions.clone(),
             warned: shared.warned.clone(),
             energy_profile: shared.profile,
+            flown: shared.flown.clone(),
         };
         Some(serde_json::to_value(state).expect("battery checkpoint serialises"))
     }
@@ -489,6 +532,7 @@ impl StageHandler for BatteryStage {
             .collect();
         shared.previous_positions = decoded.previous_positions;
         shared.warned = decoded.warned;
+        shared.flown = decoded.flown;
         shared.events.clear();
         Ok(())
     }

@@ -1488,6 +1488,20 @@ impl Simulation {
             outcome: StageOutcome::Ran,
             notes: Vec::new(),
         });
+        // `flown_v1` charges next tick for where the platforms ended this one.
+        if let Some(handler) = self.handlers.get_mut(&Stage::SampleControllersAndBattery) {
+            let handler: &mut dyn std::any::Any = handler.as_mut();
+            let battery = if handler.is::<crate::controller::ControllerStage>() {
+                handler
+                    .downcast_mut::<crate::controller::ControllerStage>()
+                    .and_then(crate::controller::ControllerStage::battery_mut)
+            } else {
+                handler.downcast_mut::<crate::battery::BatteryStage>()
+            };
+            if let Some(battery) = battery {
+                battery.record_flown(&self.world);
+            }
+        }
         // Commit. Only now does the tick advance and a revision become visible.
         self.clock.advance();
         Ok(self.commit_timed())

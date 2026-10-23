@@ -21,13 +21,17 @@
 /// stationary platform draws nothing. It is kept unchanged so every existing
 /// run, golden file and acceptance result stays valid. `PhysicalV1` also
 /// charges hover power for the part of each tick not spent moving; see
-/// [`BatteryModel::tick_cost_wh`].
+/// [`BatteryModel::tick_cost_wh`]. `FlownV1` charges the same per-tick cost
+/// on where the platform actually flew (after overrides, deconfliction and
+/// safety), one tick late, rather than on its controller's nominal position
+/// (F5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EnergyProfile {
     #[default]
     Legacy,
     PhysicalV1,
+    FlownV1,
 }
 
 impl EnergyProfile {
@@ -39,6 +43,7 @@ impl EnergyProfile {
         match self {
             EnergyProfile::Legacy => "legacy",
             EnergyProfile::PhysicalV1 => "physical_v1",
+            EnergyProfile::FlownV1 => "flown_v1",
         }
     }
 }
