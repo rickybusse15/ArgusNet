@@ -11,6 +11,17 @@ Work package IDs are stable references for PRs and handoffs; they are not dates.
 An implementation PR should normally close one package or a clearly identified
 sub-slice, with its prerequisites and remaining work stated.
 
+## Current implementation reading guide (2026-10-23)
+
+The baseline tables and September amendment below retain their historical state;
+package descriptions are target acceptance contracts. Use the current
+[status index](STATUS.md), [state ownership](../STATE_OWNERSHIP.md) and
+[recent PR snapshot](STATUS.md#recent-pr-snapshot-2026-10-23) for delivery status.
+Rust mission composition, lifecycle/checkpoint/recovery, the viewer worker and
+basic controls are implemented. Partial P4.10 lane/sensor rates and timed delivery
+ship; full independent scheduling remains open. P6's analysis-only packaging,
+production command handoff and duplicate Python runtime removal remain work.
+
 ## September 23 execution-model amendment
 
 Target architecture: [independently scheduled Rust runtime](../RUST_RUNTIME_ARCHITECTURE.md),

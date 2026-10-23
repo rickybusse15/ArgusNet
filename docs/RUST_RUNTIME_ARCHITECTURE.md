@@ -1,6 +1,9 @@
 # Rust runtime target: independently scheduled subsystems
 
-**Design updated:** 2026-09-23. **Status:** agreed target, not implemented runtime.
+**Design updated:** 2026-09-23. **Implementation reviewed:** 2026-10-23.
+**Status:** agreed target, partially implemented. Rust composition and the viewer
+worker ship; opt-in lane rates, tick-aligned sensor rates and delayed delivery
+are implemented. Full independent scheduling and pending-job history remain open.
 Implementation evidence is tracked in [state ownership](STATE_OWNERSHIP.md) and
 [known gaps](KNOWN_GAPS.md). This design extends ADR-005/007 through
 [ADR-009](adr/009-independently-scheduled-runtime.md). Package IDs and acceptance

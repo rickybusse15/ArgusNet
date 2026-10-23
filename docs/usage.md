@@ -2,11 +2,16 @@
 
 ## Start here: current checkout
 
-The installed `argusnet` CLI is currently Python orchestration with Rust
-world/safety/fusion components. The following commands are existing entrypoints;
-the [Rust-only scheduled runtime](RUST_RUNTIME_ARCHITECTURE.md) is a target,
-not an additional available CLI flag. Use Python 3.10+ and the repository-pinned
-Rust toolchain; source installation builds the native library.
+Two simulation entrypoints ship: `argusnet-rs` builds and runs scenarios in Rust,
+and the Python `argusnet` CLI remains the reference and offline tooling entrypoint.
+The viewer runs the Rust simulation in process with `--run`, without requiring
+Python or a prebuilt scene. Independent scheduling is partially implemented:
+`--executor lanes` with `--mission-rate`, `--mapping-rate` and `--fusion-rate`,
+plus per-sensor rates and delayed delivery (see below). The complete
+[scheduled runtime](RUST_RUNTIME_ARCHITECTURE.md) remains a target.
+
+The following Python workflow uses Python 3.10+ and the repository-pinned Rust
+toolchain; source installation builds the native library.
 
 ```bash
 python3 -m venv .venv
@@ -30,25 +35,25 @@ accurate model. Current `target_count` configures scenario objects; a fused trac
 is the estimator's output, while an inspection POI identifies required work.
 See [track semantics](FUSION.md#track-identity-lifecycle-and-time-contract-target).
 
-## What is changing in the viewer (planned)
+## Viewer shell and remaining work
 
-Current `real-world` / `scan-map` / `split` controls below remain current behavior.
-The new [viewer specification](VIEWER_UI.md) introduces Operate/Plan/Review,
-Perspective/Top-down/Section and independent layer presets with flat, restrained
-instrument styling. Those names describe planned UI, not existing CLI values.
+Operate/Plan/Review workspace controls, Perspective/Top-down/Section projections
+and Operational/Reconstruction/Safety layer presets are implemented in the shell.
+Plan and Review display unavailable reasons until their canonical mission,
+journal and evidence contracts exist. These are UI controls; `--view-mode`
+continues to accept `real-world`, `scan-map` and `split`.
 
-Basic Rust-worker Run/Pause/Step/Speed/Reset controls ship before the independent
-scheduler is fully qualified. The target then shows source identity, pose/map/plan
-freshness, pending commands, achieved speed, recording health and history bounds.
-Diagnostics contains rates, deadline misses and queue details. Simulation Step
-processes one control interval; playback on a live source changes only the viewed
-history. Unsupported controls display a reason.
+Rust-worker Run/Pause/Step/Speed/Reset controls are implemented (see below).
+The [viewer specification](VIEWER_UI.md) describes the full target, including
+complete source freshness, achieved speed, recording health and history bounds.
+Full scheduler qualification and pending-job history remain open.
 
 ## Interpreting results and common problems
 
 - Default mapping missions have no targets: an empty fused-track list is expected.
   Use coverage and inspection results, or the target-tracking example below.
-- A scene is the current viewer input; build it from the replay before opening it.
+- Replay playback requires a scene package; an in-process `--run` builds its
+  own scene, or starts empty under `--world-knowledge none`.
 - Rust/native loading errors require a working pinned toolchain and a successful
   source install; there is no silent Python world/safety fallback.
 - Current split-view and team-localization graphics describe existing legacy
@@ -110,6 +115,12 @@ observations are rejected `out_of_range` and no tracks confirm; the CLI prints a
 diagnostic hint when that happens.
 
 ### Run a simulation inside the viewer
+
+A checked-in bundle can run directly, with no Python or prebuilt scene:
+
+```bash
+cargo run --release -p argusnet-viewer -- --run tests/fixtures/scenario_bundle_scan.json
+```
 
 The viewer can run a scenario itself instead of playing a recorded replay (P5.0,
 D1). Export the scenario's configuration and build a scene for its world once:
@@ -181,7 +192,8 @@ walls and vegetation as GLB models, the styles, the environment metadata and
 the replay. A replay that breaks the replay contract (no frames, an
 unsupported `schema_version`, a `frame_count` that does not match) is refused,
 as Python refuses it. `argusnet-viewer --run <scenario>` builds one itself
-when no `--scene` is given.
+when no `--scene` is given, except under `--world-knowledge none`, which starts
+with only the map bounds. Pass `--scene` to include the true world for comparison.
 
 ### Real buildings in a run (R1)
 
@@ -332,7 +344,7 @@ argusnet sim --mission-mode scan_map_inspect --map-preset medium --drone-count 6
 ```
 
 Resolution and size:
-- `--map-preset` sets map size: `small`, `medium`, `large`, `xlarge`, `theater`,
+- `--map-preset` sets map size: `small`, `medium`, `large`, `xlarge`, `regional`, `theater`,
   `operational` (increasing extent) — larger maps exercise the 2-D path planner
   harder.
 - `--terrain-resolution-m` sets terrain grid fidelity (smaller = higher-res).
@@ -381,6 +393,21 @@ argusnet ingest --replay-file replay.json --enu-origin "47.0,11.0,600"
 # MQTT live
 argusnet ingest --mqtt-broker localhost --enu-origin "47.0,11.0,600"
 ```
+
+### Client assurance package (S1.0)
+
+```bash
+argusnet client-package --replay runs/demo.json --output runs/demo-client-package
+```
+
+This offline Python command writes an unsigned, hash-listed `manifest.json`,
+`assurance.json`, `assurance.md` and an annotated replay carrying
+`summary.mission_assurance`. An existing package is never overwritten. The report
+embeds the F1 outcome and states unavailable evidence instead of inventing a
+successful result. Energy comes from recorded battery fractions; missing values
+stay unavailable, and a mission with no required objectives has no completion
+rate. Rust reads the report; Review workspace presentation is proposed in #283
+and is not in the reviewed `79ca540` baseline.
 
 ### Export
 

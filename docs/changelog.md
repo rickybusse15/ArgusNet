@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — The mission lane at its own rate (`scheduled_v1`)
+## Unreleased — Rust runtime, scheduled lanes and world realism
 
 - Decisions in the platform inspector (F3). In a viewer `--run`, selecting a
   drone shows the mission's decisions about it up to the cursor (assignments,

@@ -1,6 +1,34 @@
 # Rust Runtime Migration and Game-Engine Viewer
 
-## Reviewed state and target (2026-09-23)
+## Current implementation (reviewed 2026-10-23 at `79ca540`)
+
+- `argusnet-sim` owns the assembled eleven-stage run, subsystem state, reset,
+  causal checkpoints and journal recovery. `argusnet-rs` builds/runs scenarios
+  without Python; statistical qualification uses a stored Python reference
+  (A3.2, D-10, D-12; see [migration status](migration/STATUS.md)).
+- The viewer runs that Rust simulation on a worker thread (`--run`), with
+  acknowledged Run/Pause/Step/Speed/Reset controls. Scene building is Rust too.
+  The shell, inspectors, projections, layer presets and quality tiers exist;
+  Plan/Review remain explicitly unavailable pending their backend contracts.
+- Opt-in phased lanes support mission, mapping and fusion rates. Bearing sensors
+  can capture at separate rates on tick boundaries; timed delivery supports
+  delay/jitter and fixed-lag fusion. This is partial P4.10, not the full target.
+- Unknown-world runs use range scans and a checkpointed belief map for runtime
+  planning and export. Initial lane/POI construction still reads truth.
+- The Rust world accepts real buildings, DEM terrain and OSM features (land cover,
+  trees and power lines). R5.3's unified import pipeline/canonical town remains open.
+- Merged #280 hides true tree/wire overlays for unknown-world maps. Merged #281
+  adds Python client assurance packaging and a Rust report reader. Contracts and
+  Review integration (#282–#284) are open, not delivered in this baseline.
+- Remaining gates include complete independent scheduling and pending-job restore,
+  cross-platform determinism, and separate hardware qualification. Python still
+  ships as the reference simulation and offline tooling.
+
+The dated snapshots below are historical evidence. Use this section and
+[known gaps](KNOWN_GAPS.md) for current status; accepted designs do not establish
+that every target interface is implemented.
+
+## Historical review (2026-09-23)
 
 The reviewed code baseline is `ec9c2f7` (including main through `45390b8`), not a
 claim about the latest remote or release. Rust stage bodies, direct fusion,
@@ -68,8 +96,9 @@ They do not change the separate product roadmap's phase numbering.
 
 The historical milestone narrative below records earlier implementation states;
 use [STATE_OWNERSHIP.md](STATE_OWNERSHIP.md) for the reviewed checkout inventory.
-Localization, sensing, mapping and planning libraries now exist, but P4.8 complete
-mission composition, world assembly and revisioned belief ownership remain open.
+Localization, sensing, mapping and planning libraries are composed in the Rust
+mission runtime. Remaining scheduler and operator gates are tracked in the current
+implementation section above and the migration status index.
 Proto regeneration and field-parity checks are present in CI. Do not restart
 completed library ports or infer full runtime readiness from their existence.
 

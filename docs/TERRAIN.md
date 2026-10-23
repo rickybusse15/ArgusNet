@@ -18,6 +18,17 @@ The execution contract is [Rust runtime architecture](RUST_RUNTIME_ARCHITECTURE.
 [delivery](migration/DELIVERY_PLAN.md), [verification](migration/VERIFICATION_AND_ROLLOUT.md)
 and [hardware integration](HARDWARE_INTEGRATION.md) define promotion gates.
 
+## Current real-data inputs (reviewed 2026-10-23)
+
+The Rust scenario builder accepts `options.terrain_path` for an imported DEM
+height grid, `options.buildings_path` for buildings and `options.features_path`
+for OSM land cover, trees and power lines. Offline Python import scripts write
+these documents; building and running the resulting world is Rust. All real
+layers must share an origin, and the terrain grid must match the map preset.
+See [usage](usage.md#real-terrain-in-a-run-r5) and the
+[realism plan](WORLD_REALISM_PLAN.md#r5-real-world-scene-ingestion) for commands,
+semantics and remaining R5.3 work.
+
 ## World generation and publication contract (target)
 
 A resolved world-build manifest records generator/version, root seed and derived
@@ -82,7 +93,9 @@ decisions. Physics and path planning are not the viewer's responsibility.
 
 ### 1.2 Analytic Terrain (simulation / planning / sensing path)
 
-**Owner:** `src/argusnet/world/environment.py` (`TerrainLayer`) at runtime.
+**Owner:** `argusnet-world` for analytic evaluation. The Rust run builds its
+world in `argusnet-sim`; Python `TerrainLayer` delegates queries through
+`argusnet-native` and retains authoring/export metadata.
 
 **Construction:** `src/argusnet/world/procedural.py` exposes `TerrainBuildConfig` and
 `build_terrain_layer(config, bounds)`. Supported sources are:
@@ -228,14 +241,15 @@ pub struct TerrainBounds {
 
 ## 4. Curvature
 
-**Definition:** Laplacian approximation using the four-point stencil:
+**Definition:** Rust `GridTerrain::curvature_at` returns half the Laplacian
+using a central-difference stencil:
 
 ```
-kappa(x, y) = (h(x+d,y) + h(x-d,y) + h(x,y+d) + h(x,y-d) - 4*h(x,y)) / d^2
+kappa(x, y) = (h(x+d,y) + h(x-d,y) + h(x,y+d) + h(x,y-d) - 4*h(x,y)) / (2 * d^2)
 ```
 
-where `d = delta_m`. Positive values indicate convex surfaces (hilltops);
-negative values indicate concave surfaces (valleys).
+where `d = delta_m`. Positive values indicate bowl-shaped surfaces (valleys);
+negative values indicate dome-shaped surfaces (hilltops).
 
 This exists on both `TerrainModel` and `TerrainLayer`.
 
@@ -318,8 +332,8 @@ kernel with runtime tiles; `TerrainViewerMesh::sample_height` is removed.
 Python terrain/obstacle classes retain their constructors, metadata and public
 imports for scenario authoring and export. Their query methods call
 `argusnet-native`; there is no fallback Python evaluator. Terrain preset values
-remain declarative Python configuration. GIS import, procedural scenario shaping
-and the simulation tick loop are later-phase work.
+remain declarative Python configuration. GIS import and Python scenario shaping
+remain available offline; an assembled Rust simulation tick also ships.
 
 `pip install -e .` compiles and installs the native library using the pinned Rust
 toolchain. A wheel includes it. For checkout development, use
