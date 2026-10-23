@@ -183,6 +183,65 @@ pub fn matching_ortho_height(fov: f32, distance: f32) -> f32 {
     2.0 * distance.max(1.0) * (fov * 0.5).tan()
 }
 
+/// Metres per screen pixel at the camera's focus (V3's scale bar): the
+/// height the view spans there over the canvas's height in pixels. Both
+/// projections share it, since top-down and Section match the perspective
+/// scale at the focus ([`matching_ortho_height`]). `None` before a camera
+/// and its canvas exist.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
+pub struct CanvasScale {
+    pub metres_per_px: Option<f32>,
+}
+
+/// Keep [`CanvasScale`] current, after the projection is applied.
+pub fn update_canvas_scale_system(
+    mut scale: ResMut<CanvasScale>,
+    saved: Res<SavedPerspective>,
+    camera: Query<(&Camera, &OrbitCamera, &Projection), With<MainCamera>>,
+) {
+    let measured = camera
+        .single()
+        .ok()
+        .and_then(|(camera, orbit, projection)| {
+            let fov = match projection {
+                Projection::Perspective(perspective) => Some(perspective.fov),
+                _ => saved.0.as_ref().map(|perspective| perspective.fov),
+            }?;
+            let height_px = camera.logical_viewport_size()?.y;
+            (height_px > 0.0).then(|| matching_ortho_height(fov, orbit.radius) / height_px)
+        });
+    scale.set_if_neq(CanvasScale {
+        metres_per_px: measured,
+    });
+}
+
+/// The scale bar for `metres_per_px`: the longest 1, 2 or 5 × 10ⁿ metres
+/// that fits in `max_px`, and its length in pixels. `None` for a scale with
+/// nothing sensible to show.
+pub fn scale_bar(metres_per_px: f32, max_px: f32) -> Option<(f32, f32)> {
+    if !(metres_per_px.is_finite() && metres_per_px > 0.0 && max_px > 0.0) {
+        return None;
+    }
+    let span = metres_per_px * max_px;
+    let decade = 10_f32.powf(span.log10().floor());
+    let metres = [5.0, 2.0, 1.0]
+        .into_iter()
+        .map(|step| step * decade)
+        .find(|metres| *metres <= span)?;
+    Some((metres, metres / metres_per_px))
+}
+
+/// A scale bar's length as an operator reads it.
+pub fn scale_label(metres: f32) -> String {
+    if metres >= 1000.0 {
+        format!("{} km", metres / 1000.0)
+    } else if metres >= 1.0 {
+        format!("{} m", metres)
+    } else {
+        format!("{} cm", (metres * 100.0).round())
+    }
+}
+
 /// Apply the selected projection to the main camera.
 pub fn apply_projection_system(
     ui_state: Res<ViewerUiState>,
@@ -240,6 +299,26 @@ pub fn apply_projection_system(
 
 #[cfg(test)]
 mod tests {
+    use super::{scale_bar, scale_label};
+
+    /// The bar is the longest 1, 2 or 5 x 10^n metres that fits, at its
+    /// length in pixels; nothing for a scale with nothing to show.
+    #[test]
+    fn the_scale_bar_is_a_round_length_that_fits() {
+        let (metres, px) = scale_bar(1.0, 120.0).unwrap();
+        assert_eq!((metres, px), (100.0, 100.0));
+        let (metres, px) = scale_bar(3.0, 120.0).unwrap();
+        assert_eq!(metres, 200.0);
+        assert!((px - 200.0 / 3.0).abs() < 1e-4);
+        assert_eq!(scale_bar(0.02, 120.0).unwrap().0, 2.0);
+        assert_eq!(scale_bar(40.0, 120.0).unwrap().0, 2000.0);
+        assert!(scale_bar(0.0, 120.0).is_none());
+        assert!(scale_bar(f32::NAN, 120.0).is_none());
+        assert_eq!(scale_label(2000.0), "2 km");
+        assert_eq!(scale_label(200.0), "200 m");
+        assert_eq!(scale_label(0.5), "50 cm");
+    }
+
     use super::*;
 
     fn app(projection: ViewProjection) -> App {

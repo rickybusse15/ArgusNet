@@ -32,6 +32,7 @@ pub mod theme;
 pub mod trail_ribbons;
 pub mod trees;
 pub mod ui;
+pub mod world_view;
 pub mod zone_walls;
 
 pub use app::run;
