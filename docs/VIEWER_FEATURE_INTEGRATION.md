@@ -278,6 +278,17 @@ live).
 | V3 Layers and timeline | Belief/truth primary toggle, layer chips, projection toggle with reset and scale, error and map-known curves on the timeline, live history window | Truth hidden outside Evaluation; scrubbing never implies a live flight is paused |
 | V4 Planned-feature surfaces | P0b assignment history and efficiency metrics, P1 allocation lines, R0–R4 world layers, scheduler lane rates in Diagnostics | Each ships with the backend slice that produces its data; no panel without a source |
 
+**V4 timing (2026-10-23):** Diagnostics has a *Timing* section
+(`ui/timing.rs`). It shows:
+- the execution model and lane rates;
+- sensor capture rates;
+- the delivery profile and its totals;
+- the speed asked for against the speed achieved: source seconds per wall
+  second, smoothed over bursty ticks, reading "stopped" after a second still.
+
+Anything the replay did not record is unavailable, with the reason. Track
+evidence age was already in the strip and the track table.
+
 V0 is the prerequisite for everything that makes live look like the console;
 V1–V3 can proceed on replay in parallel and are verified there first, then
 re-verified on live once V0 lands. V4 items are scheduled by their owning

@@ -26,6 +26,7 @@ mod source;
 pub mod strip;
 mod time;
 mod timeline;
+pub mod timing;
 mod widgets;
 mod workspace;
 
@@ -102,6 +103,8 @@ pub struct UiReads<'w> {
     prefs: Res<'w, crate::prefs::ViewerPrefs>,
     /// The in-process run's state, when `--run` started one (D1).
     sim: Option<Res<'w, crate::sim_session::SimSourceState>>,
+    /// The speed the view is actually advancing at (V4 timing).
+    achieved: Option<Res<'w, timing::AchievedRate>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -131,7 +134,9 @@ pub fn viewer_ui_system(
         camera,
         prefs,
         sim,
+        achieved,
     } = reads;
+    let achieved = achieved.map(|rate| *rate).unwrap_or_default();
     // `ctx_mut` is fallible in bevy_egui 0.42: no primary context means there is
     // no frame to draw into yet.
     let Ok(context) = contexts.ctx_mut() else {
@@ -230,6 +235,7 @@ pub fn viewer_ui_system(
             ViewerMode::Replay => drawer_replay_content(ui, &replay_state),
             ViewerMode::Diagnostics => drawer_diagnostics_content(
                 ui,
+                &achieved,
                 &replay_state,
                 &frame_metrics,
                 &mission_zones,

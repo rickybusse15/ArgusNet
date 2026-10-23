@@ -2,6 +2,11 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Viewer: timing in Diagnostics (console parity V4). The execution model,
+  lane and sensor rates, the delivery profile and totals, and the speed asked
+  for against the speed achieved. What a replay did not record reads as
+  unavailable.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;
