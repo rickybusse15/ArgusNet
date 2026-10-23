@@ -65,7 +65,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # headless renderer; already in the tree as a Bevy dependency.
 crossbeam-channel = "0.5"
 egui_extras = "0.36"
-egui_plot = "0.37"
+egui_plot = "0.38"
 hdrhistogram = "7"
 # `serde-serialize`: checkpoints carry the fusion engine's filter state
 # (P4.8e.4), which is nalgebra vectors and matrices.
