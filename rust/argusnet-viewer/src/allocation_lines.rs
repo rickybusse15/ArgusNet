@@ -45,9 +45,10 @@ pub fn allocation_lines(frame: &ReplayFrame) -> Vec<AllocationLine> {
         .collect()
 }
 
-/// Allocation lines: the overlay's colour, brighter for a POI being
+/// Allocation lines: violet, a hue no other overlay uses (range rays are
+/// amber, trails green, mapped wires cyan), brighter for a POI being
 /// inspected than for one the drone is still flying to.
-pub const ALLOCATION_COLOR: [f32; 3] = [0.98, 0.78, 0.30];
+pub const ALLOCATION_COLOR: [f32; 3] = [0.78, 0.45, 1.0];
 
 pub fn allocation_lines_enabled(overlay: Res<MissionOverlaySettings>) -> bool {
     overlay.show_allocation_lines
