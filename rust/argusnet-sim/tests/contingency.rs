@@ -19,11 +19,15 @@ fn bundle(case: &str) -> ScenarioBundle {
 }
 
 fn run(policy: PlanningPolicy) -> AssembledRun {
+    run_charging(policy, EnergyProfile::PhysicalV1)
+}
+
+fn run_charging(policy: PlanningPolicy, profile: EnergyProfile) -> AssembledRun {
     let bundle = bundle("scan");
     let mut run = assemble(&bundle).expect("assembles");
     let options = RunOptions {
         planning_policy: policy,
-        energy_profile: EnergyProfile::PhysicalV1,
+        energy_profile: profile,
         ..RunOptions::default()
     };
     options.apply(&mut run, &bundle).expect("applies");
@@ -278,6 +282,34 @@ fn a_holder_that_can_no_longer_finish_hands_its_poi_on() {
         .statuses()
         .iter()
         .all(|(_, status, _)| status == "complete"));
+}
+
+/// The same cut under `flown_v1`: once home on its reserve the drone is
+/// charged for hovering there, not for the lanes its controller would fly,
+/// so it still holds most of its reserve when the run ends. Under
+/// `physical_v1` it runs flat (the case above).
+#[test]
+fn charged_for_what_it_flies_a_drone_home_on_its_reserve_keeps_it() {
+    let cut = |profile| {
+        let mut east = Vec::new();
+        finish(
+            run_charging(PlanningPolicy::ContingencyV1, profile),
+            |count, run| {
+                if count == 0 {
+                    set_all(run, 160.0);
+                }
+                if count == 24 {
+                    assert!(run.battery_mut().set_remaining_wh("drone-east", 100.5));
+                }
+                east.push(run.battery().remaining_wh("drone-east").unwrap());
+            },
+        );
+        *east.last().unwrap()
+    };
+    let physical = cut(EnergyProfile::PhysicalV1);
+    let flown = cut(EnergyProfile::FlownV1);
+    assert_eq!(physical, 0.0, "nominal lanes run it flat");
+    assert!(flown > 60.0, "it kept {flown} Wh");
 }
 
 /// The unassigned POIs are checkpointed: a run resumed mid-mission finishes

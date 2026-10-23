@@ -10,6 +10,11 @@
   by the F1 outcome) instead of holding the mission open. Under both
   efficient policies, the mission's egress clear no longer cancels a drone's
   own reserve return. See `docs/migration/ENERGY_CONTINGENCIES.md`.
+- Energy charged on the flown position (F5). `--energy-profile flown_v1`
+  charges motion and hover on where each platform actually flew (after
+  overrides, deconfliction and safety), at the commit of each tick. Under the other
+  profiles, a drone held at home by an override is still billed for the
+  lanes its controller would fly.
 
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
