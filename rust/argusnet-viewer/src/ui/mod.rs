@@ -21,6 +21,7 @@ mod inspectors;
 mod layout;
 mod platform;
 pub mod preferences;
+mod review;
 mod shell;
 mod source;
 pub mod strip;
@@ -199,6 +200,9 @@ pub fn viewer_ui_system(
         ),
         Region::Timeline => {
             section_operator_timeline(ui, &mut replay_state, &mut ui_state, sim.is_some())
+        }
+        Region::Rail if ui_state.workspace == crate::state::Workspace::Review => {
+            review::review_rail(ui, &mut replay_state)
         }
         Region::Rail => {
             let workspace = ui_state.workspace;

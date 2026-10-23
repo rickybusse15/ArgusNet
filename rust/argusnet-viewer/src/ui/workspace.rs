@@ -449,15 +449,15 @@ mod tests {
     }
 
     #[test]
-    fn plan_and_review_say_what_they_wait_for() {
+    fn plan_says_what_it_waits_for() {
         assert!(Workspace::Operate.unavailable_until().is_none());
-        for workspace in [Workspace::Plan, Workspace::Review] {
-            let why = workspace.unavailable_until().expect("not built yet");
-            assert!(
-                why.contains("unavailable until") && why.contains("S1"),
-                "{why}"
-            );
-        }
+        // Review reads the client package's report (S1.2).
+        assert!(Workspace::Review.unavailable_until().is_none());
+        let why = Workspace::Plan.unavailable_until().expect("not built yet");
+        assert!(
+            why.contains("unavailable until") && why.contains("S1"),
+            "{why}"
+        );
     }
 
     /// One Escape, one transient mode: the event inspector closes and the

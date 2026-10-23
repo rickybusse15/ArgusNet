@@ -217,10 +217,8 @@ impl Workspace {
                 "Plan is unavailable until the canonical site, mission and trajectory \
                  contracts exist (S1).",
             ),
-            Workspace::Review => Some(
-                "Review is unavailable until the canonical journal, evidence and finding \
-                 contracts exist (S1).",
-            ),
+            // Review reads the assurance report a client package carries (S1).
+            Workspace::Review => None,
         }
     }
 }

@@ -39,6 +39,22 @@ pub struct OutcomeReason {
     pub detail: String,
     #[serde(default)]
     pub evidence_count: usize,
+    /// What the reason rests on: frames (`{"kind": "frame", "tick"}`),
+    /// safety events (with their `tick`) and other references.
+    #[serde(default)]
+    pub evidence: Vec<serde_json::Value>,
+}
+
+impl OutcomeReason {
+    /// The first frame the reason's evidence points at, when one is within
+    /// a replay of `frame_count` frames.
+    pub fn first_frame(&self, frame_count: usize) -> Option<usize> {
+        self.evidence
+            .iter()
+            .filter_map(|item| item.get("tick").and_then(serde_json::Value::as_u64))
+            .map(|tick| tick as usize)
+            .find(|tick| *tick < frame_count)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +152,14 @@ mod tests {
         assert_eq!(outcome.outcome, report.status);
         assert!(outcome.reasons.iter().any(|r| r.code == "objectives_met"));
         assert!(outcome.reasons.iter().all(|r| !r.detail.is_empty()));
+        // Each reason points at a frame of the replay it describes.
+        let met = outcome
+            .reasons
+            .iter()
+            .find(|r| r.code == "objectives_met")
+            .unwrap();
+        assert_eq!(met.first_frame(1), Some(0));
+        assert_eq!(met.first_frame(0), None);
     }
 
     #[test]
