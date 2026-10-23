@@ -237,6 +237,7 @@ impl SimSession {
                 meta: Some(meta),
                 summary: None,
                 frames: Vec::new(),
+                mission_assurance: None,
             });
             replay.begin_epoch(self.meta.clone());
             replay.live = true;

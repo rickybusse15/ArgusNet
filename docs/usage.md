@@ -391,6 +391,44 @@ argusnet export --replay replay.json --format geojson \
 
 Formats: `geojson`, `czml`, `foxglove`
 
+### Replay-derived client assurance package (S1)
+
+```bash
+argusnet client-package --replay mapping.json --output reports/mapping-assurance
+```
+
+The new output directory contains `manifest.json`, `assurance.json`,
+`assurance.md` and an annotated `replay.json`. An existing package directory is
+refused, so a reviewed package is never overwritten. The manifest lists the
+SHA-256 of the exact delivered bytes, and the source replay's canonical JSON
+hash: the input as given, as canonical JSON (sorted keys, indent 2, trailing
+newline), less any previous assurance extension, and less its `summary` when that
+held nothing else. It is unsigned. The package's status never contradicts the
+F1 outcome it carries: a run is completed only when it reached its terminal
+phase and F1 finds it completed. The replay is read under the replay-input size
+cap.
+
+`assurance.json` (`argusnet.mission-assurance/v1`) records:
+- the outcome: its own status, plus the F1 record (`argusnet.mission-outcome/1`)
+  with every reason and the frames and events each rests on;
+- recorded POI results, each pointing at its frame;
+- the minimum measured battery fraction;
+- localization timeouts;
+- events, each with a frame reference.
+
+Missing provenance, evidence acceptance, landing, recording completeness and
+physical localization integrity stay unavailable. Legacy POI dwell completion
+and timeout confidence do not establish them. The package does not include
+reconstruction, raw capture, change detection or qualification products.
+
+Evaluation metrics write missing values as JSON `null`, and text reports show
+`N/A`. Energy comes from the recorded `battery_fraction`, not from trajectory
+estimates, and zero remains a flat battery. A run with no required objectives
+has no completion rate. It is never 100%, and the pass/fail check treats it as
+not applicable rather than failing it. Unmatched position-error data fails
+qualification with an unavailable reason. Benchmark means exclude unavailable
+values.
+
 ## Python API
 
 ### Run a simulation

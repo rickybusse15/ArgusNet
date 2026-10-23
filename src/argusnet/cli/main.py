@@ -26,6 +26,7 @@ COMMAND_DUMP_CONFIG = "dump-config"
 COMMAND_LIVE = "live"
 COMMAND_DIAGNOSE = "diagnose"
 COMMAND_SCORECARD = "scorecard"
+COMMAND_CLIENT_PACKAGE = "client-package"
 
 if TYPE_CHECKING:
     from argusnet.core.frames import ENUOrigin
@@ -45,6 +46,7 @@ ALL_COMMANDS = frozenset(
         COMMAND_LIVE,
         COMMAND_DIAGNOSE,
         COMMAND_SCORECARD,
+        COMMAND_CLIENT_PACKAGE,
     }
 )
 
@@ -374,6 +376,14 @@ def build_parser(command: str | None = None) -> argparse.ArgumentParser:
     _add_logging_args(info_parser)
     info_parser.add_argument("path", help="Path to the replay JSON file.")
 
+    package_parser = subparsers.add_parser(
+        COMMAND_CLIENT_PACKAGE,
+        help="Build a replay-derived mission assurance package.",
+    )
+    _add_logging_args(package_parser)
+    package_parser.add_argument("--replay", required=True, help="Source replay JSON.")
+    package_parser.add_argument("--output", required=True, help="New package directory.")
+
     # --- scorecard ---
     scorecard_parser = subparsers.add_parser(
         COMMAND_SCORECARD,
@@ -519,6 +529,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     if command == COMMAND_INFO:
         _run_info(args)
+        return
+    if command == COMMAND_CLIENT_PACKAGE:
+        from argusnet.core.errors import ArgusNetError
+        from argusnet.core.io_limits import read_text_capped
+        from argusnet.evaluation.assurance import build_client_package
+        from argusnet.evaluation.replay import validate_replay_document
+
+        try:
+            # The replay-input size cap applies before anything is parsed.
+            replay_doc = json.loads(read_text_capped(args.replay))
+            validate_replay_document(replay_doc)
+            build_client_package(replay_doc).write(Path(args.output))
+        except (OSError, ValueError, ArgusNetError) as error:
+            raise SystemExit(f"Client package failed: {error}") from error
+        print(f"Client package written to {args.output}")
         return
     if command == COMMAND_SCORECARD:
         _run_scorecard(args)

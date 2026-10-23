@@ -1,0 +1,170 @@
+{
+  "completion_rate": 1.0,
+  "energy_reserve_min": 0.4,
+  "energy_reserve_per_platform": {
+    "drone": 0.4
+  },
+  "events": [
+    {
+      "event_id": "/frames/0/safety_events/0",
+      "event_type": null,
+      "kind": "safety_events",
+      "reason": "clearance",
+      "record": {
+        "event_id": "safe-1",
+        "reason": "clearance",
+        "subject_id": "drone",
+        "timestamp_s": 0.0
+      },
+      "recorded_event_id": "safe-1",
+      "source_pointer": "/frames/0/safety_events/0",
+      "subject_id": "drone",
+      "timestamp_s": 0.0
+    }
+  ],
+  "landing_outcome": null,
+  "localisation_rmse_m": null,
+  "localization_integrity": null,
+  "localization_timeout_sources": [
+    "/frames/0/scan_mission_state/localization_timed_out"
+  ],
+  "metric_definitions": {
+    "completion_rate": "Recorded required-objective or POI completion fraction; not evidence acceptance",
+    "energy_reserve_min": "Minimum recorded mobile-platform battery fraction; not return feasibility",
+    "localisation_rmse_m": "Legacy fixed nearest-truth track pairing RMSE in meters; not pose integrity",
+    "track_continuity_mean": "Mean fraction of frames with target observations; not track survival"
+  },
+  "objectives": [
+    {
+      "evidence_sufficiency": null,
+      "objective_id": "asset",
+      "source_pointer": "/frames/0/scan_mission_state/poi_statuses/0",
+      "status": "complete"
+    }
+  ],
+  "outcome": {
+    "degradation": {
+      "localization_timed_out_at_tick": 0
+    },
+    "energy": {
+      "min_fraction": 0.4,
+      "min_platform": "drone",
+      "min_tick": 0,
+      "per_platform": {
+        "drone": {
+          "min_fraction": 0.4,
+          "tick": 0
+        }
+      }
+    },
+    "evidence_sufficiency": {
+      "covariance_reduction_mean": {
+        "reason": "no track qualified",
+        "status": "unavailable"
+      },
+      "covariance_reduction_tracks": 0,
+      "localisation_rmse_m": {
+        "reason": "no fused track was matched to a truth",
+        "status": "unavailable"
+      },
+      "track_continuity_per_target": {
+        "reason": "no targets",
+        "status": "unavailable"
+      }
+    },
+    "format": "argusnet.mission-outcome/1",
+    "objectives": {
+      "coverage_fraction": null,
+      "coverage_threshold": null,
+      "final_phase": "complete",
+      "kind": "scan_map_inspect",
+      "pois_completed": 1,
+      "pois_total": 1,
+      "unmet_pois": []
+    },
+    "outcome": "completed",
+    "reasons": [
+      {
+        "code": "localization_timed_out",
+        "detail": "localization timed out at tick 0",
+        "evidence": [
+          {
+            "kind": "frame",
+            "tick": 0,
+            "timestamp_s": 0.0
+          }
+        ],
+        "evidence_count": 1
+      },
+      {
+        "code": "objectives_met",
+        "detail": "every objective met, without abort",
+        "evidence": [
+          {
+            "kind": "frame",
+            "tick": 0,
+            "timestamp_s": 0.0
+          }
+        ],
+        "evidence_count": 1
+      }
+    ],
+    "scenario_name": "assurance",
+    "seed": 7,
+    "violations": {
+      "aborted_platforms": [],
+      "by_violation": {},
+      "rejected_validations": 0
+    }
+  },
+  "provenance": {
+    "altitude_datum": null,
+    "belief_revision": null,
+    "calibration_version": null,
+    "config_hash": null,
+    "coordinate_frame": null,
+    "firmware_version": null,
+    "mission_id": null,
+    "model_version": null,
+    "run_id": null,
+    "runtime_algorithm_version": null,
+    "scenario_name": "assurance",
+    "seed": 7,
+    "site_id": null,
+    "time_basis": null,
+    "world_content_hash": null,
+    "world_revision": null
+  },
+  "recording_completeness": null,
+  "required_objectives_met": 1,
+  "required_objectives_total": 1,
+  "schema_version": "argusnet.mission-assurance/v1",
+  "source_replay_sha256": "7655786bb96ac89095285ac859dbcde5f40ca00dfb2f9afa19c50725493ccc06",
+  "status": "completed",
+  "terminal_phase": "complete",
+  "terminal_source_pointer": "/frames/0/scan_mission_state/phase",
+  "track_continuity_mean": null,
+  "unavailable_fields": [
+    "provenance.site_id",
+    "provenance.mission_id",
+    "provenance.run_id",
+    "provenance.coordinate_frame",
+    "provenance.altitude_datum",
+    "provenance.time_basis",
+    "provenance.world_revision",
+    "provenance.belief_revision",
+    "provenance.world_content_hash",
+    "provenance.config_hash",
+    "provenance.runtime_algorithm_version",
+    "provenance.calibration_version",
+    "provenance.firmware_version",
+    "provenance.model_version",
+    "landing_outcome",
+    "localization_integrity",
+    "evidence_sufficiency",
+    "qualification",
+    "recording_completeness",
+    "localisation_rmse_m",
+    "track_continuity_mean"
+  ]
+}
