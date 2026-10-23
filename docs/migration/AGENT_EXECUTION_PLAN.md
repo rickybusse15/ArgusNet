@@ -210,7 +210,7 @@ Read from the repository on 2026-10-03 unless marked *unverified*.
 | Guardrails G0, G2, G3 | open |
 | Viewer P2.5 shell, P2.6 acceptance | not started (no PR seen) |
 | Viewer P5 | D1, D2 and D5's viewer part done: `--run` and Tools → Scenario run the Rust simulation in process and scenes are built in Rust; the viewer starts no process (`app::scenario_run_tests::the_viewer_starts_no_processes`) |
-| F1–F7, S1/S2 contracts | F1 done (`evaluation/outcome.py`, `argusnet.mission-outcome/1`). S1 done for replays (2026-10-23): the client package (`argusnet client-package`), versioned contracts for the twelve record kinds (`docs/contracts/`), and the Review workspace reading the report. S2 and F2–F7 not started |
+| F1–F7, S1/S2 contracts | F1 done (`evaluation/outcome.py`, `argusnet.mission-outcome/1`). S1 done for replays (2026-10-23): the client package (`argusnet client-package`), versioned contracts for the twelve record kinds (`docs/contracts/`), and the Review workspace reading the report. F2 first slice (the fault manifest), F3 mission slice (typed decisions) and F4 (paired scenario comparisons) done, as `STATUS.md` records. S2, F5, F6 and F7 not started |
 | Hardware S3–S8 | planning docs only; no hardware profile frozen |
 | Open question from `STATUS.md` | confirm P4.8d.4 ("world-backed stage 1 + Python-vs-Rust stage-1 parity") was closed by P4.8e.x |
 
