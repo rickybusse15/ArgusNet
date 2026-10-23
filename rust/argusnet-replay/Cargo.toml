@@ -17,6 +17,8 @@ live-stream = ["dep:argusnet-proto"]
 argusnet-world = { path = "../argusnet-world" }
 serde.workspace = true
 serde_json.workspace = true
+# SHA-256 for the client package's source binding (already in the lockfile via rustls).
+ring = "0.17"
 argusnet-proto = { path = "../argusnet-proto", optional = true }
 
 [dev-dependencies]

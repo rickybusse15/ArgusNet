@@ -279,3 +279,30 @@ def test_the_cli_reads_the_replay_through_the_size_cap(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="byte limit"):
         main(["client-package", "--replay", str(source), "--output", str(tmp_path / "out")])
     assert not (tmp_path / "out").exists()
+
+
+def test_the_canonical_encoding_cannot_drift_from_the_rust_reader():
+    """The committed hash is what argusnet-replay computes for the same
+    fixture (its `the_canonical_encoding_matches_the_python_producer`)."""
+    from argusnet.evaluation.assurance import canonical_json
+
+    fixtures = Path(__file__).parent / "fixtures"
+    doc = json.loads((fixtures / "canonical_json_fixture.json").read_text(encoding="utf-8"))
+    source = {key: value for key, value in doc.items() if key != "summary"}
+    expected = (fixtures / "canonical_json_fixture.sha256").read_text().strip()
+    assert hashlib.sha256(canonical_json(source)).hexdigest() == expected
+
+
+def test_the_report_binds_its_source_in_the_canonical_encoding():
+    from argusnet.evaluation.assurance import CANONICAL_ENCODING, canonical_json
+
+    doc = replay()
+    report = json.loads(build_client_package(doc).assurance)
+    assert report["source_binding"] == {
+        "encoding": CANONICAL_ENCODING,
+        "sha256": hashlib.sha256(canonical_json(doc)).hexdigest(),
+    }
+    # A package of the package's replay binds the same source.
+    annotated = json.loads(build_client_package(doc).replay)
+    again = json.loads(build_client_package(annotated).assurance)
+    assert again["source_binding"] == report["source_binding"]
