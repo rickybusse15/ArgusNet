@@ -57,3 +57,11 @@ scripts/ci-local.sh                 # every CI job locally (ruff, mypy, pytest, 
 | gRPC service | `proto/argusnet/v1/world_model.proto`, `src/argusnet/adapters/argusnet_grpc.py`, `rust/argusnet-server/` |
 | Scene packaging | `rust/argusnet-sim/src/scene_build.rs` (Rust, used by the viewer and `argusnet-rs build-scene`), `src/argusnet/world/scene_loader.py`, `_glb.py` (Python reference) |
 | Viewer | `rust/argusnet-viewer/src/` |
+
+## Cursor Cloud specific instructions
+
+The image already has the Rust toolchain pinned in `rust-toolchain.toml` (1.98.0, with rustfmt and clippy). Project Python is an editable `.[dev]` install at `/opt/argusnet-venv`. Login shells prepend that `bin` directory from `/etc/profile.d/argusnet-venv.sh`, and `argusnet`, `argusnet-sim`, `argusnet-build-scene`, `pytest`, `ruff`, and `mypy` are symlinked into `/usr/local/bin`. Run project Python as `/opt/argusnet-venv/bin/python`.
+
+Viewer linking and software rendering need `pkg-config`, `libasound2-dev`, `libudev-dev`, `mesa-vulkan-drivers` (lavapipe), `xvfb`, `libxkbcommon-x11-0`, and `imagemagick`. The install also leaves `target/debug/argusnetd`, `target/debug/argusnet-rs`, and `target/debug/argusnet-viewer`. There is no process to keep running between commands. Headless frames go through lavapipe; the render smoke in `docs/LOCAL_CI.md` is the check.
+
+`tests/test_buildings_import.py::test_the_committed_document_is_what_the_importer_writes` requires the importer's coordinates to match the committed fixture exactly. pyproj 3.8.0 (PROJ 9.8.1) moves a few footprint vertices by less than a nanometre, so that assertion fails. The rest of `pytest tests/` passes.
