@@ -1,6 +1,6 @@
 # Known Gaps — ArgusNet
 
-## Scheduled-runtime status (reviewed 2026-10-23 at `cc59c16`)
+## Scheduled-runtime status (reviewed 2026-10-23 at `79ca540`)
 
 | Capability | Status | Remaining evidence |
 | --- | --- | --- |
@@ -127,6 +127,17 @@ Status labels:
 | Viewer live streaming | **Implemented** | Legacy `WatchFrames` plus operator-focused `WatchFramesV2`, reconnect, bounded queues/history, truth filtering, sequence/drop telemetry |
 | Scene GLB triangle winding | **Fixed (2026-10-12)** | Every terrain triangle used to be wound facing down while its normals faced up, so the double-sided material lit it as a back face: the sun contributed nothing, and the camera's exposure had been opened three stops to make up for it, which washed sunlit surfaces (buildings, the drones' self-built map) out to white. Both scene writers now wind the terrain counter-clockwise from above, the committed `scene.smartscene` terrain was rewritten the same way, and both cameras use EV100 12 (`Exposure::OVERCAST`, matching the 12 000 lux sun). `tests/test_rust_scene_build.py` fails if any layer of a built package has a triangle facing away from its normals. Before/after renders: [`performance/terrain-winding-2026-10-12/`](performance/terrain-winding-2026-10-12/). The lit ground exposed two compositing faults, both fixed in the same change: sensor volumes and zone walls were not additive (they covered 85% of what was behind them), and the belief overlay took the ground's hue. The picker still casts occluders from both faces, for packages built before the fix. |
 | Viewer headless CI/render path | **Implemented smoke coverage; measured hardware budget** | CI renders through Bevy and checks a non-empty image. R4 realism fixtures meet the D-5 machine budget ([record](performance/r4-frame-budget-2026-10-21.md)); this does not establish every C8 image-diff or workload gate |
+
+## Client reporting and pending operator slices
+
+Merged #281 provides offline Python client assurance packaging and a Rust reader.
+Reports preserve missing data as unavailable and carry the F1 outcome. The
+record-kind contracts (#282), Review workspace (#283) and associated status docs
+(#284) remain open at this review. Energy contingencies and flown-energy fixes
+(#285/#286), drift faults (#287), mapped-wire display (#288), decision explanations
+(#289) and reserve display (#290) are also open. See the dated
+[PR snapshot](migration/STATUS.md#recent-pr-snapshot-2026-10-23) for dependencies
+and CI status; these proposals do not close scheduler or P6 packaging gates.
 
 ## Interface Boundaries That Need Formalization
 

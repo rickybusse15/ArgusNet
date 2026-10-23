@@ -394,6 +394,21 @@ argusnet ingest --replay-file replay.json --enu-origin "47.0,11.0,600"
 argusnet ingest --mqtt-broker localhost --enu-origin "47.0,11.0,600"
 ```
 
+### Client assurance package (S1.0)
+
+```bash
+argusnet client-package --replay runs/demo.json --output runs/demo-client-package
+```
+
+This offline Python command writes an unsigned, hash-listed `manifest.json`,
+`assurance.json`, `assurance.md` and an annotated replay carrying
+`summary.mission_assurance`. An existing package is never overwritten. The report
+embeds the F1 outcome and states unavailable evidence instead of inventing a
+successful result. Energy comes from recorded battery fractions; missing values
+stay unavailable, and a mission with no required objectives has no completion
+rate. Rust reads the report; Review workspace presentation is proposed in #283
+and is not in the reviewed `79ca540` baseline.
+
 ### Export
 
 ```bash

@@ -10,7 +10,7 @@ States: **done** (merged), **local** (committed and locally verified but not pus
 **open**, **blocked** (with the reason). **done** rows cite the merging PR and
 its merge commit on `main`.
 
-## Current checkout summary (2026-10-23, `cc59c16`)
+## Current checkout summary (2026-10-23, `79ca540`)
 
 P5.0's Rust worker and viewer controls are implemented; the dated milestones
 below retain the evidence and unresolved acceptance gates. Phased lanes now
@@ -25,6 +25,31 @@ this measurement does not close every graphics or workload acceptance gate.
 R5.1/R5.2 add DEM terrain and OSM land cover, mapped trees and power lines
 (#277, #278). R5.3's unified pipeline and canonical real-world scenario remain
 open ([realism plan](../WORLD_REALISM_PLAN.md)).
+
+## Recent PR snapshot (2026-10-23)
+
+Checked against GitHub with `main` at `79ca540`. This is a dated status snapshot,
+not a promise that open PR branches have shipped. PR descriptions report local
+verification; merge status and remote CI are separate evidence.
+
+| PR | State at review | Scope and dependency |
+| --- | --- | --- |
+| [#277](https://github.com/rickybusse15/ArgusNet/pull/277), [#278](https://github.com/rickybusse15/ArgusNet/pull/278) | Merged | DEM terrain, OSM land cover, mapped trees and power lines in the Rust world |
+| [#279](https://github.com/rickybusse15/ArgusNet/pull/279) | Open; CI passed | R5.3 unified offline import pipeline and canonical real-world scenario |
+| [#280](https://github.com/rickybusse15/ArgusNet/pull/280) | Merged | Unknown-world views hide true tree and power-line overlays |
+| [#281](https://github.com/rickybusse15/ArgusNet/pull/281) | Merged | Offline client assurance package, honest missing-data evaluation and Rust report reader |
+| [#282](https://github.com/rickybusse15/ArgusNet/pull/282) | Open; CI queued | S1 record-kind contracts and offline record producer; based on main after #281 |
+| [#283](https://github.com/rickybusse15/ArgusNet/pull/283), [#284](https://github.com/rickybusse15/ArgusNet/pull/284) | Open; CI queued | Review workspace/report integration, then S1 status docs; stacked on #282 and #283 respectively |
+| [#285](https://github.com/rickybusse15/ArgusNet/pull/285), [#286](https://github.com/rickybusse15/ArgusNet/pull/286) | Open; CI queued | Energy contingencies, then flown-position energy accounting; #286 is stacked on #285 |
+| [#287](https://github.com/rickybusse15/ArgusNet/pull/287) | Open; CI queued | Calibration drift faults and fault metadata in replay frames |
+| [#288](https://github.com/rickybusse15/ArgusNet/pull/288) | Open; CI queued | Record and display learned wire spans |
+| [#289](https://github.com/rickybusse15/ArgusNet/pull/289), [#290](https://github.com/rickybusse15/ArgusNet/pull/290) | Open; CI queued | Viewer mission-decision explanations and per-platform energy reserve readout |
+
+These extend world ingestion, mission behavior and operator visibility. They do
+not complete P4.10's independent scheduler or P6's Python runtime retirement.
+Rust scenario construction, simulation, scene packaging and the viewer worker
+already run without Python. Optional Python offline import, reporting and
+analysis remain within the target architecture.
 
 ## P5.0: dated prerequisite and implementation history
 

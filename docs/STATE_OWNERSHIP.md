@@ -1,6 +1,6 @@
 # State Ownership Map
 
-## Current implementation (reviewed 2026-10-23 at `cc59c16`)
+## Current implementation (reviewed 2026-10-23 at `79ca540`)
 
 - `argusnet-sim` owns the assembled eleven-stage run, subsystem state, reset,
   causal checkpoints and journal recovery. `argusnet-rs` builds/runs scenarios
@@ -17,6 +17,9 @@
   planning and export. Initial lane/POI construction still reads truth.
 - The Rust world accepts real buildings, DEM terrain and OSM features (land cover,
   trees and power lines). R5.3's unified import pipeline/canonical town remains open.
+- Merged #280 hides true tree/wire overlays for unknown-world maps. Merged #281
+  adds Python client assurance packaging and a Rust report reader. Contracts and
+  Review integration (#282–#284) are open, not delivered in this baseline.
 - Remaining gates include complete independent scheduling and pending-job restore,
   cross-platform determinism, and separate hardware qualification. Python still
   ships as the reference simulation and offline tooling.
@@ -24,6 +27,22 @@
 The dated snapshots below are historical evidence. Use this section and
 [known gaps](KNOWN_GAPS.md) for current status; accepted designs do not establish
 that every target interface is implemented.
+
+## Remaining Python code
+
+| Area | Current Python responsibility | Migration boundary |
+| --- | --- | --- |
+| `simulation/`, `planning/`, `mapping/`, `localization/`, `sensing/`, `mission/` | Reference simulation and domain implementations; additional utility/experimental modules | Rust runs use their assembled Rust stages. Inventory callers before deleting migrated Python implementations; directory presence does not establish product completeness |
+| `world/` | GIS import, scenario authoring, scene/export helpers and native query wrappers | Terrain, collision, visibility and safety authority is Rust; useful offline import/export can remain Python |
+| `evaluation/` | Metrics, benchmarks, comparisons, replay validation, exports and client assurance packaging (#281) | Optional offline tooling; Rust reads the assurance report |
+| `adapters/`, `v1/`, `security/`, telemetry ingestion | Python gRPC client/bindings, security helpers and ingestion | External clients can remain; the Python adapter's daemon auto-build/start is a remaining packaging/runtime coupling |
+| `indexing/`, `ui/`, core types and helpers | Utility, reference and partial capability code | Audit actual callers and implemented behavior before retaining, porting or removing |
+| CLI, packaging and scripts | Installed `argusnet` command, native-library source build, test/experiment orchestration | Rust currently uses `argusnet-rs`; analysis-only packaging and final executable ownership remain P6 work |
+
+The Rust simulation/viewer do not require this Python execution path. The target
+keeps optional analysis, GIS and reporting while removing duplicate runtime code
+when its last supported caller has migrated. See the
+[P6 contracts](migration/DELIVERY_PLAN.md#8-phase-6--reduce-python-without-breaking-analysis).
 
 ## Historical review (2026-09-23)
 

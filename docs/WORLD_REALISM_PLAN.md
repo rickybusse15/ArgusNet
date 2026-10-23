@@ -1,6 +1,6 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12; updated 2026-10-23 (`cc59c16`). R0 is done: the
+**Status:** proposed 2026-10-12; updated 2026-10-23 (`79ca540`). R0 is done: the
 opacity fix (#222) and typed structure matching. R1 is done: building-v2
 roofs, the georeferenced import and material facades. R3 is done: the
 model, the safety clearance, lines in a run, drawing in the viewer, the

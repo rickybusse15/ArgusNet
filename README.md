@@ -15,12 +15,17 @@ with acknowledged Run/Pause/Step/Speed/Reset controls, and builds scene packages
 in Rust. The Python `argusnet` CLI remains available as the simulation reference
 and for offline GIS, analysis and export workflows.
 
-Reviewed against checkout `cc59c16` on **2026-10-23**. Opt-in scheduling supports
+Reviewed against checkout `79ca540` on **2026-10-23**. Opt-in scheduling supports
 separate mission, mapping and fusion rates, per-sensor capture rates on tick
 boundaries, and delayed measurement delivery. Full independent scheduling and
 pending-job history remain incomplete. Real buildings, DEM terrain, OSM land
 cover, mapped trees and power lines can feed the Rust run; the unified import
 pipeline and canonical real-world scenario remain planned.
+Merged #280 hides true trees and power lines in unknown-world views. Merged
+#281 adds an offline client assurance package with a Rust report reader; the
+Review workspace integration remains an open PR. See the dated
+[recent PR snapshot](docs/migration/STATUS.md#recent-pr-snapshot-2026-10-23)
+for merged versus proposed work.
 [State ownership](docs/STATE_OWNERSHIP.md) and [known gaps](docs/KNOWN_GAPS.md)
 distinguish implemented behavior from remaining qualification.
 
@@ -121,6 +126,21 @@ P IDs are migration packages; S IDs are autonomous-system gates; F1–F7 are
 capability features. They are not interchangeable phase numbers. The
 [delivery plan](docs/migration/DELIVERY_PLAN.md), [product roadmap](docs/ROADMAP.md)
 and [autonomous system plan](docs/AUTONOMOUS_SYSTEM_PLAN.md) define their dependencies.
+
+## Python boundary and remaining migration
+
+The Rust CLI and viewer simulation require no Python runtime. Python still ships
+the reference simulation, GIS import, evaluation/reporting, exports and test
+orchestration. The installed `argusnet` command remains Python; `argusnet-rs` is
+the Rust executable. Python source installation still builds `argusnet-native`,
+and the Python tracking adapter can build/start `argusnetd`.
+
+P6 will separate lightweight analysis packaging from native dependencies,
+transfer production command ownership to Rust and retire migrated Python runtime
+code after caller/compatibility checks. Optional offline Python tooling remains
+part of the target; finishing the migration does not require rewriting it all.
+See [Python ownership](docs/STATE_OWNERSHIP.md#remaining-python-code) and the
+[P6 delivery contracts](docs/migration/DELIVERY_PLAN.md#8-phase-6--reduce-python-without-breaking-analysis).
 
 ## Performance and testing
 

@@ -21,7 +21,7 @@ map below describes existing components; target ownership does not imply deliver
 
 ## Current migration boundary and next architecture
 
-Reviewed at `cc59c16` on 2026-10-23: `argusnet-sim` composes the eleven-stage
+Reviewed at `79ca540` on 2026-10-23: `argusnet-sim` composes the eleven-stage
 production mission, calls fusion directly, writes replays and supports reset,
 causal checkpoints and journal recovery. `argusnet-rs` builds and runs scenarios
 without Python. The viewer uses the same Rust run on a worker thread and builds

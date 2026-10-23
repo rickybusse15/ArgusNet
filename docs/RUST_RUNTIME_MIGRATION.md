@@ -1,6 +1,6 @@
 # Rust Runtime Migration and Game-Engine Viewer
 
-## Current implementation (reviewed 2026-10-23 at `cc59c16`)
+## Current implementation (reviewed 2026-10-23 at `79ca540`)
 
 - `argusnet-sim` owns the assembled eleven-stage run, subsystem state, reset,
   causal checkpoints and journal recovery. `argusnet-rs` builds/runs scenarios
@@ -17,6 +17,9 @@
   planning and export. Initial lane/POI construction still reads truth.
 - The Rust world accepts real buildings, DEM terrain and OSM features (land cover,
   trees and power lines). R5.3's unified import pipeline/canonical town remains open.
+- Merged #280 hides true tree/wire overlays for unknown-world maps. Merged #281
+  adds Python client assurance packaging and a Rust report reader. Contracts and
+  Review integration (#282–#284) are open, not delivered in this baseline.
 - Remaining gates include complete independent scheduling and pending-job restore,
   cross-platform determinism, and separate hardware qualification. Python still
   ships as the reference simulation and offline tooling.
