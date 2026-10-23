@@ -41,6 +41,12 @@ def validator(name: str) -> Draft7Validator:
 
 
 def package_records(doc: dict) -> tuple[dict, dict[str, list[dict]]]:
+    index, by_kind, _ = package_contents(doc)
+    return index, by_kind
+
+
+def package_contents(doc: dict) -> tuple[dict, dict[str, list[dict]], dict]:
+    """The record index, the records by kind, and the package's replay."""
     package = build_client_package(doc)
     files = dict(package.records)
     index = json.loads(files["records/index.json"])
@@ -49,12 +55,22 @@ def package_records(doc: dict) -> tuple[dict, dict[str, list[dict]]]:
         for kind, entry in index["kinds"].items()
         if entry["status"] == "recorded"
     }
-    return index, by_kind
+    return index, by_kind, json.loads(package.replay)
+
+
+def resolve(document: object, pointer: str) -> object:
+    """An RFC 6901 JSON pointer into `document`; KeyError or IndexError when
+    it names nothing there."""
+    target = document
+    for token in pointer.split("/")[1:]:
+        token = token.replace("~1", "/").replace("~0", "~")
+        target = target[int(token)] if isinstance(target, list) else target[token]  # type: ignore[index]
+    return target
 
 
 def check(doc: dict) -> tuple[dict, dict[str, list[dict]]]:
     """Validate everything a package of `doc` carries; return it."""
-    index, by_kind = package_records(doc)
+    index, by_kind, packaged = package_contents(doc)
     errors = sorted(validator("record-index").iter_errors(index), key=str)
     assert not errors, errors[0].message
     sequences = []
@@ -65,11 +81,12 @@ def check(doc: dict) -> tuple[dict, dict[str, list[dict]]]:
             assert not errors, f"{kind} {record['record_id']}: {errors[0].message}"
             assert set(record["ids"]) == set(IDS)
             sequences.append(record["ids"]["sequence"])
+            # Every stated source is a JSON pointer into the package's own
+            # replay, and resolves there.
             source = record["source"]
-            if isinstance(source, str) and source.startswith("/frames/") and "*" not in source:
-                target: object = doc
-                for part in source.strip("/").split("/"):
-                    target = target[int(part)] if isinstance(target, list) else target[part]  # type: ignore[index]
+            if isinstance(source, str):
+                assert source.startswith("/"), source
+                resolve(packaged, source)
     assert sorted(sequences) == list(range(len(sequences))), "sequences unique, from 0"
     return index, by_kind
 

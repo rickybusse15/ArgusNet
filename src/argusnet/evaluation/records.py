@@ -97,13 +97,15 @@ def _record(
     }
 
 
-def _nodes(frames: list[dict[str, Any]]) -> dict[str, list[tuple[int, dict[str, Any]]]]:
-    by_id: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+def _nodes(frames: list[dict[str, Any]]) -> dict[str, list[tuple[int, int, dict[str, Any]]]]:
+    """Each node's entries by id: (frame index, index in the frame's nodes,
+    the node), in frame order."""
+    by_id: dict[str, list[tuple[int, int, dict[str, Any]]]] = {}
     for index, frame in enumerate(frames):
-        for node in frame.get("nodes") or []:
+        for j, node in enumerate(frame.get("nodes") or []):
             node_id = node.get("node_id")
             if node_id:
-                by_id.setdefault(str(node_id), []).append((index, node))
+                by_id.setdefault(str(node_id), []).append((index, j, node))
     return by_id
 
 
@@ -204,13 +206,16 @@ def records_from_replay(
             if drone:
                 estimates[str(drone)] = (index, j, estimate)
     for node_id in sorted(nodes):
-        first_index, first = nodes[node_id][0]
+        first_index, first_slot, first = nodes[node_id][0]
+        # The platform's first recorded entry: where its record, and its
+        # path's first sample, come from (a JSON pointer to one value).
+        first_pointer = f"/frames/{first_index}/nodes/{first_slot}"
         records["platform"].append(
             _record(
                 "platform",
                 f"platform/{node_id}",
                 ids(first_index),
-                f"/frames/{first_index}/nodes",
+                first_pointer,
                 platform_id=node_id,
                 mobile=bool(first.get("is_mobile", False)),
                 sensor_type=_value(first.get("sensor_type"), "no sensor type"),
@@ -223,17 +228,17 @@ def records_from_replay(
         if not first.get("is_mobile", False):
             continue
         samples: list[list[float]] = [
-            list(node["position"]) for _, node in nodes[node_id] if node.get("position")
+            list(node["position"]) for _, _, node in nodes[node_id] if node.get("position")
         ]
         times = [
-            node.get("timestamp_s", frames[i].get("timestamp_s")) for i, node in nodes[node_id]
+            node.get("timestamp_s", frames[i].get("timestamp_s")) for i, _, node in nodes[node_id]
         ]
         records["trajectory"].append(
             _record(
                 "trajectory",
                 f"trajectory/{node_id}",
                 ids(None),
-                f"/frames/*/nodes[node_id={node_id}]",
+                first_pointer,
                 platform_id=node_id,
                 samples=len(samples),
                 start_s=_value(times[0] if times else None, "no samples"),

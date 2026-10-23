@@ -25,7 +25,9 @@ Every record carries:
 
 - `contract`: its kind and version;
 - `record_id`;
-- `source`: a JSON pointer into the source replay;
+- `source`: an RFC 6901 JSON pointer into the package's `replay.json`. It
+  resolves there, and the tests check every one. A record about a whole path,
+  such as a trajectory, points at its first recorded sample;
 - `ids`: the identity and revision keys of VIEWER_UI 10.2:
   `session_id / run_id / epoch / tick / world_revision / belief_revision /
   sequence`.
