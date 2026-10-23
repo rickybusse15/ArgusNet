@@ -100,7 +100,8 @@ def import_world(
 
     terrain = import_terrain(dem_path, map_preset=map_preset, origin=origin, source_crs=dem_crs)
     georeference = terrain["georeference"]
-    assert isinstance(georeference, Mapping)
+    if not isinstance(georeference, Mapping):
+        raise ValueError("the terrain import carries no georeference")
     shared = (float(georeference["origin_lat_deg"]), float(georeference["origin_lon_deg"]))
     files: dict[str, Path] = {"terrain": out / "terrain.json"}
     write_terrain(terrain, files["terrain"])

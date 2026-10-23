@@ -89,7 +89,8 @@ def to_geojson(answer: Mapping[str, object]) -> dict[str, object]:
     features: list[dict[str, object]] = []
     skipped = 0
     elements = answer.get("elements", [])
-    assert isinstance(elements, list)
+    if not isinstance(elements, list):
+        raise ValueError("an Overpass answer's `elements` must be a list")
     for element in elements:
         kind = element.get("type")
         tags = dict(element.get("tags") or {})
