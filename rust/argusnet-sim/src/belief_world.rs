@@ -205,6 +205,11 @@ pub struct BeliefGrid {
     /// [`Self::wires`] as snapshots share them. Derived.
     #[serde(skip)]
     wires_view: Option<Arc<Vec<PowerLine>>>,
+    /// Spans mapped since the replay last took them, in the order mapped:
+    /// the prior's after a reset, then each the first time a scan puts
+    /// points on it.
+    #[serde(skip)]
+    new_wires: Vec<String>,
     /// Cells touched since the replay last took them.
     #[serde(skip)]
     changed: BTreeSet<usize>,
@@ -277,6 +282,7 @@ impl BeliefGrid {
             wires: BTreeMap::new(),
             prior_wires: Vec::new(),
             wires_view: None,
+            new_wires: Vec::new(),
             changed: BTreeSet::new(),
             canopy_top_m: Vec::new(),
             canopy_count: Vec::new(),
@@ -301,6 +307,20 @@ impl BeliefGrid {
             .map(|span| (span.id.clone(), span.clone()))
             .collect();
         self.wires_view = None;
+        self.new_wires = self
+            .prior_wires
+            .iter()
+            .map(|span| span.id.clone())
+            .collect();
+    }
+
+    /// The spans mapped since the last call, as replay rows: whole spans,
+    /// each once.
+    pub fn take_new_wires(&mut self) -> Vec<PowerLine> {
+        std::mem::take(&mut self.new_wires)
+            .into_iter()
+            .filter_map(|id| self.wires.get(&id).cloned())
+            .collect()
     }
 
     /// The spans mapped so far.
@@ -440,6 +460,7 @@ impl BeliefGrid {
         for wire in &scan.wires {
             if !self.wires.contains_key(&wire.span.id) {
                 self.wires.insert(wire.span.id.clone(), wire.span.clone());
+                self.new_wires.push(wire.span.id.clone());
                 self.wires_view = None;
             }
         }

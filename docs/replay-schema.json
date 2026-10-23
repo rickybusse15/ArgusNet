@@ -928,6 +928,15 @@
             "$ref": "#/definitions/inspection_evidence_record"
           }
         },
+        "mapped_wires": {
+          "type": "array",
+          "description": "World-knowledge `none` runs (R3): the power-line spans the platforms' map gained this tick, whole spans in the meta.power_lines line format, each recorded once; the wire-hazard prior's spans on the first frame. Applying the frames in order gives the wires the map holds. Absent when none.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "supports", "conductor_offsets_m"]
+          }
+        },
         "belief_updates": {
           "type": "array",
           "description": "World-knowledge `none` runs: the belief cells this tick changed, as rows [i, j, ground_cm, structure_top_cm, occupancy_pct, confidence]. ground_cm is null until a ground return lands; structure_top_cm is null unless the cell is believed occupied; occupancy_pct is 0 for a cell with no structure return; confidence is 1 + floor(log2(returns)) capped at 4. Each row replaces the cell's previous one, so applying the frames in order rebuilds the map. Cell (i, j) spans meta.world_knowledge.belief_grid origin + (i, j) * resolution.",
