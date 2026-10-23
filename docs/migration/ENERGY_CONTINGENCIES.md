@@ -64,6 +64,27 @@ it is (`return_home` / `reserve_return_kept`). Reference runs are untouched.
 
 `tests/test_mission_outcome.py` covers F1's reading of the reason.
 
+### On the canonical scenarios: no change where energy is ample
+
+`scripts/compare_scenarios.py` ran `planner_adversarial` (6 POIs, 120 s) and
+`persistent_long` (5 POIs, 300 s) on the 10 held-out seeds, `efficient_v1`
+against `contingency_v1`, both under `physical_v1`. The release binary was
+built from this branch at `a7057a4`. Every paired difference is exactly zero,
+with 10 of 10 tied, on all of these:
+- mission completion;
+- `energy_reserve_min` and `battery_remaining_min`;
+- scan coverage time;
+- POI service time;
+- fleet distance and idle time;
+- task changes, handoffs and assignment thrash.
+
+The canonical 500 Wh battery never comes near the reserve in these runs, so
+the contingency rules never fire. That is the intended non-regression. The
+rules' effect is shown on the stressed fixture above. Both variants fall
+outside the scenarios' acceptance envelopes on every seed, because those
+envelopes are calibrated for the reference policy under legacy energy; this
+is the same for both variants and is not a difference between them.
+
 ## Findings, not fixed here
 
 - **Energy is charged on the nominal controller position, not the flown one.**
