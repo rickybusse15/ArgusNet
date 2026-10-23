@@ -14,6 +14,7 @@ from typing import Any
 
 from argusnet.evaluation.metrics import evaluate_replay
 from argusnet.evaluation.outcome import mission_outcome
+from argusnet.evaluation.records import records_from_replay
 
 ASSURANCE_VERSION = "argusnet.mission-assurance/v1"
 PACKAGE_VERSION = "argusnet.client-package/v1"
@@ -35,6 +36,9 @@ class ClientPackage:
     assurance: bytes
     markdown: bytes
     replay: bytes
+    # The S1 records (`records/index.json` and one `records/<kind>.json` per
+    # recorded kind), as (path, bytes).
+    records: tuple[tuple[str, bytes], ...] = ()
 
     def write(self, directory: Path) -> None:
         """Publish a new package atomically; never overwrite a reviewed package."""
@@ -49,7 +53,9 @@ class ClientPackage:
                 ("assurance.json", self.assurance),
                 ("assurance.md", self.markdown),
                 ("replay.json", self.replay),
+                *self.records,
             ):
+                (staging / name).parent.mkdir(parents=True, exist_ok=True)
                 (staging / name).write_bytes(content)
             os.rename(staging, directory)
         finally:
@@ -231,10 +237,19 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
     markdown = _assurance_markdown(assurance).encode()
     source.setdefault("summary", {})["mission_assurance"] = assurance
     replay = _json_bytes(source)
+    # The S1 records (docs/contracts), each pointing into the replay.
+    record_index, by_kind = records_from_replay(source, assurance)
+    records = [("records/index.json", _json_bytes(record_index))]
+    records += [
+        (f"records/{kind}.json", _json_bytes(by_kind[kind]))
+        for kind, entry in record_index["kinds"].items()
+        if entry["status"] == "recorded"
+    ]
     artifacts = [
         ("assurance.json", assurance_bytes),
         ("assurance.md", markdown),
         ("replay.json", replay),
+        *records,
     ]
     manifest = _json_bytes(
         {
@@ -251,7 +266,7 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
             ],
         }
     )
-    return ClientPackage(manifest, assurance_bytes, markdown, replay)
+    return ClientPackage(manifest, assurance_bytes, markdown, replay, tuple(records))
 
 
 def _assurance_markdown(report: dict[str, Any]) -> str:
