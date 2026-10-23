@@ -2,6 +2,12 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Reserve in the replay and the platform inspector (F5). Under a physical
+  energy profile, each frame records every platform's remaining energy and
+  the reserve it needs to get home (`energy_reserves`). The inspector's
+  Reserve row shows the margin above it, or the shortfall below it.
+  Legacy replays are unchanged.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

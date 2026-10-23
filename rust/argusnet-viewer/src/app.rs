@@ -2837,6 +2837,7 @@ mod tests {
             belief_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
+            energy_reserves: Default::default(),
         };
 
         let rejection = RejectedObservation {
