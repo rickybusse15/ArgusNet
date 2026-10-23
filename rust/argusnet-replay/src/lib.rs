@@ -355,6 +355,17 @@ pub struct ReplayFrame {
     /// Platforms physics put back out of the true ground or a structure.
     #[serde(default)]
     pub world_contacts: Vec<WorldContact>,
+    /// Under a physical energy profile: each platform's remaining energy and
+    /// its reserve home this tick (F5). Empty otherwise.
+    #[serde(default)]
+    pub energy_reserves: std::collections::BTreeMap<String, EnergyReserve>,
+}
+
+/// A platform's energy against its reserve home (F5).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct EnergyReserve {
+    pub remaining_wh: f64,
+    pub reserve_wh: f64,
 }
 
 /// `[i, j, ground_cm, structure_top_cm, occupancy_pct, confidence]`, as the
@@ -894,6 +905,7 @@ mod live_stream {
             belief_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
+            energy_reserves: Default::default(),
         }
     }
 
