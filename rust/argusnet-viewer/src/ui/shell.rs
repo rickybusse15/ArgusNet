@@ -158,10 +158,14 @@ pub(super) fn status_line(
         // follow is reported here, not silently dropped.
         ui.separator();
         ui.label(format!("Camera: {}", camera.mode_label()));
-        // The scale at the camera's focus (V3): a 1-2-5 bar, at most 120 px.
+        // The scale at the camera's focus (V3): a 1-2-5 bar, at most 120
+        // points. The scale is per logical pixel and egui draws in points,
+        // which the UI-scale preference zooms: convert, so the bar's length
+        // on the ground holds at any UI scale.
+        let zoom = ui.ctx().zoom_factor();
         if let Some((metres, px)) = scale
             .metres_per_px
-            .and_then(|m| crate::projection::scale_bar(m, 120.0))
+            .and_then(|m| crate::projection::scale_bar_in_points(m, zoom, 120.0))
         {
             ui.separator();
             scale_bar_widget(ui, px);
