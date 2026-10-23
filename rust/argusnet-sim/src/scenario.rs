@@ -2041,10 +2041,18 @@ impl AssembledRun {
             .into_iter()
             .map(|(node, spec, out)| (node.to_string(), spec, out))
             .collect();
+        let offsets: Vec<(String, f64)> = schedule
+            .bias_offsets(tick)
+            .into_iter()
+            .map(|(node, offset)| (node.to_string(), offset))
+            .collect();
         let observe = self
             .sim
             .stage_mut::<ObserveStage>(Stage::GenerateObservations)
             .expect("assembly installs an ObserveStage");
+        for (node, offset) in offsets {
+            observe.set_bias_offset(&node, offset);
+        }
         for (node, spec, out) in sensors {
             match (out, observe.sensor(&node).is_some()) {
                 (true, true) => observe.remove_sensor(&node),
@@ -2255,6 +2263,21 @@ impl AssembledRun {
             .map(crate::replay::ReplaySafetyEvent::from)
             .collect();
         self.enrich(&mut replay_frame, timestamp_s, &snapshot.platforms, &truths);
+        if let Some(schedule) = &self.faults {
+            let tick = (timestamp_s / self.dt_s).round() as u64;
+            replay_frame.active_faults = schedule
+                .active_at(tick, self.dt_s)
+                .into_iter()
+                .cloned()
+                .collect();
+            let observe = self.observe();
+            replay_frame.sensor_bias_offsets_rad = observe
+                .sensors()
+                .keys()
+                .map(|node| (node.clone(), observe.bias_offset_rad(node)))
+                .filter(|(_, offset)| *offset != 0.0)
+                .collect();
+        }
         self.replay.push_frame(replay_frame);
         let mobile: std::collections::BTreeSet<&str> = snapshot
             .platforms

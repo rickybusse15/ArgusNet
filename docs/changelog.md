@@ -2,6 +2,11 @@
 
 ## Unreleased — The mission lane at its own rate (`scheduled_v1`)
 
+- Calibration drift faults (F2). A fault manifest can drift a sensor's bearing
+  calibration (`calibration_drift`, `rate_rad_per_s` over an interval, held
+  afterwards). Every replay frame of a faulted run names the faults in force
+  (`active_faults`) and each sensor's drift offset (`sensor_bias_offsets_rad`).
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;
