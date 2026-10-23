@@ -405,16 +405,8 @@ pub(super) fn selection_inspector(
     }
     let platform = selection.selected.as_ref().and_then(|selected| {
         matches!(selected.key, crate::presentation::EntityKey::Platform(_))
-            .then(|| replay_state.current_frame())
+            .then(|| crate::ui::platform::inspect_selected_platform(replay_state, &selected.label))
             .flatten()
-            .and_then(|frame| {
-                let history = replay_state
-                    .document
-                    .as_ref()
-                    .and_then(|document| document.meta.as_ref())
-                    .and_then(|meta| meta.get("assignment_history"));
-                inspect_platform(frame, &selected.label, history)
-            })
             .map(|sections| (selected.label.clone(), sections))
     });
     match (
