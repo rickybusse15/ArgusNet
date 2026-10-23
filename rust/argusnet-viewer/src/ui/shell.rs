@@ -570,6 +570,7 @@ pub(super) fn drawer_replay_content(ui: &mut egui::Ui, replay_state: &ReplayStat
 
 pub(super) fn drawer_diagnostics_content(
     ui: &mut egui::Ui,
+    achieved: &super::timing::AchievedRate,
     replay_state: &ReplayState,
     frame_metrics: &CurrentFrameMetrics,
     mission_zones: &LoadedMissionZones,
@@ -579,6 +580,8 @@ pub(super) fn drawer_diagnostics_content(
     ui.label("Current-frame health, tracking, and event tables");
     ui.separator();
     section_performance(ui, replay_state, diagnostics);
+    ui.separator();
+    super::timing::section_timing(ui, replay_state, achieved);
     ui.separator();
     section_tracking_metrics(ui, frame_metrics);
     section_mapping_status(ui, replay_state);
