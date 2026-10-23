@@ -550,8 +550,23 @@ impl Loop {
         if !self.rates.is_empty() {
             self.executor = Some(scheduled_executor(&self.run, &self.rates)?);
         }
-        // Commands waiting on the old epoch went with it.
-        self.flush_pending();
+        // Commands still pending on the epoch left are cancelled with it:
+        // the restore replaced the history their answers would come from,
+        // so they are answered here, not left pending forever.
+        let epoch = self.run.sim.epoch();
+        for command_id in std::mem::take(&mut self.pending) {
+            let _ = self.acks.send(CommandAck {
+                command_id,
+                status: AckStatus::Cancelled(RejectReason::StaleEpoch {
+                    found: left_epoch,
+                    expected: epoch,
+                }),
+                effective_tick: None,
+                epoch,
+                revision: self.run.sim.revision(),
+                duplicate: false,
+            });
+        }
         // The checkpoint may have been taken paused (the first one is):
         // run forward regardless.
         if self.run.sim.is_paused() {
@@ -937,6 +952,94 @@ mod tests {
             rest == first[63..],
             "the branch reproduces the straight run"
         );
+    }
+
+    /// A branch from after a scheduled source restart back to before it
+    /// applies the restart again when it gets there: the restart guard is
+    /// the restored timeline's, not the one left (review finding).
+    #[test]
+    fn a_branch_back_past_a_source_restart_applies_it_again() {
+        use crate::delivery::{DeliveryProfile, DEFAULT_QUEUE_CAPACITY};
+        use crate::faults::{Fault, FaultManifest, MANIFEST_FORMAT, MANIFEST_VERSION};
+        let build_bundle = bundle();
+        let worker = SimWorker::spawn(
+            move || {
+                let mut run = assemble(&build_bundle).map_err(|e| e.to_string())?;
+                run.set_delivery(DeliveryProfile::from_seconds(
+                    build_bundle.dt_s,
+                    1.5,
+                    1.0,
+                    &BTreeMap::new(),
+                    0.0,
+                    DEFAULT_QUEUE_CAPACITY,
+                    11,
+                )?)?;
+                run.set_faults(FaultManifest {
+                    format: MANIFEST_FORMAT.into(),
+                    version: MANIFEST_VERSION,
+                    faults: vec![Fault::SourceRestart {
+                        node_id: "drone-east".into(),
+                        at_s: 15.0,
+                    }],
+                })?;
+                Ok(run)
+            },
+            Pacing::Unpaced,
+        );
+        command(&worker, 1, CommandKind::Resume);
+        let first = run_to_completion(&worker);
+        // The restart is at tick 30 and catches evidence in flight; branch
+        // back to 28, from the tick-25 checkpoint.
+        let stale = |frames: &[String]| {
+            frames
+                .iter()
+                .filter(|f| f.contains("delivery_stale_epoch"))
+                .count()
+        };
+        assert!(
+            stale(&first) > 0,
+            "the case needs evidence caught in flight"
+        );
+        command(&worker, 2, CommandKind::Seek { tick: 28 });
+        let acks = acks_until(&worker, 2, true);
+        assert_eq!(
+            acks.iter().find(|a| a.command_id == 2).unwrap().status,
+            AckStatus::Applied
+        );
+        wait_for(&worker, |s| s.phase == WorkerPhase::Paused && s.tick == 28);
+        command(&worker, 3, CommandKind::Resume);
+        let rest = run_to_completion(&worker);
+        assert_eq!(stale(&rest), stale(&first[28..]));
+        assert!(
+            rest == first[28..],
+            "the restart is applied again on the branch"
+        );
+    }
+
+    /// A command still pending when a seek branches the run is answered as
+    /// cancelled, not left pending forever (review finding).
+    #[test]
+    fn a_seek_cancels_commands_pending_on_the_epoch_it_leaves() {
+        let (worker, _) = worker(Pacing::Unpaced);
+        let status = wait_for(&worker, |s| s.phase == WorkerPhase::Paused);
+        let mut deferred = CommandEnvelope::new(
+            1,
+            status.run_id.clone().unwrap(),
+            status.epoch,
+            CommandKind::SetSpeed { multiplier: 2.0 },
+        );
+        deferred.requested_effective_tick = Some(1000);
+        worker.submit(deferred).unwrap();
+        let acks = acks_until(&worker, 1, false);
+        assert!(acks
+            .iter()
+            .any(|a| a.command_id == 1 && a.status == AckStatus::Accepted));
+        command(&worker, 2, CommandKind::Seek { tick: 0 });
+        let acks = acks_until(&worker, 1, true);
+        assert!(matches!(
+            &acks.iter().rfind(|a| a.command_id == 1).unwrap().status,
+            AckStatus::Cancelled(RejectReason::StaleEpoch { .. })
+        ));
     }
 
     /// A seek forward, or one composed against an old epoch, is refused

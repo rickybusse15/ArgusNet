@@ -2069,6 +2069,12 @@ impl AssembledRun {
         self.sim.preflight(checkpoint)?;
         self.apply_sensor_faults(checkpoint.tick);
         self.sim.restore(checkpoint)?;
+        // The once-per-tick restart guard belongs to the timeline restored,
+        // not the one left: a run restored to before a restart must apply it
+        // when it gets there again. A checkpoint taken paused at its tick had
+        // that tick's faults applied before the pause (they apply before
+        // each step), so they are not applied twice.
+        self.restarts_applied_at = checkpoint.paused.then_some(checkpoint.tick);
         // Contacts the guard logged in a tick the restore abandoned belong to
         // a timeline that no longer exists.
         if let Some(guard) = &self.guard {
