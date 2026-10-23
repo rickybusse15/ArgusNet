@@ -1607,6 +1607,18 @@ impl Simulation {
         Ok(StageOutcome::Ran)
     }
 
+    /// Make a run just restored to an earlier tick a branch of the history it
+    /// left (a seek, P5.2): a new epoch, newer than `left_epoch`, the one the
+    /// run was on, so a command composed before the seek is stale, and a
+    /// revision that does not go back past `left_revision`, since snapshots
+    /// are ordered by it across epochs. Everything the restore put back is
+    /// otherwise kept, so the branch runs on exactly as the checkpointed run
+    /// did.
+    pub fn branch_from(&mut self, left_epoch: u64, left_revision: u64) {
+        self.epoch = self.epoch.max(left_epoch) + 1;
+        self.revision = self.revision.max(left_revision);
+    }
+
     /// Return to tick zero on a new epoch, clearing any fault.
     ///
     /// A new epoch because §6 treats a branch in history as a new epoch, and a
