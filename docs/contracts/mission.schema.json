@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/mission.schema.json",
+  "title": "S1 mission record (argusnet.mission/v1)",
+  "description": "What the run was asked to do, its objectives and how it ended (the F1 outcome).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "scenario_name",
+        "mission_type",
+        "duration_s",
+        "outcome",
+        "objectives"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.mission/v1"
+        },
+        "scenario_name": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "mission_type": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "duration_s": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "outcome": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "objectives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "objective_id",
+              "status",
+              "platform_id",
+              "completed_at_s",
+              "source"
+            ],
+            "properties": {
+              "objective_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "platform_id": {
+                "$ref": "common.schema.json#/definitions/maybe_string"
+              },
+              "completed_at_s": {
+                "$ref": "common.schema.json#/definitions/maybe_number"
+              },
+              "source": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

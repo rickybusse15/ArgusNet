@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/site.schema.json",
+  "title": "S1 site record (argusnet.site/v1)",
+  "description": "The place a run stands in: its frame, bounds, terrain source and imported real-world layers.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "origin",
+        "crs_id",
+        "bounds_m",
+        "terrain_source",
+        "imports"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.site/v1"
+        },
+        "origin": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "latitude_deg",
+                "longitude_deg",
+                "altitude_m"
+              ],
+              "properties": {
+                "latitude_deg": {
+                  "type": "number"
+                },
+                "longitude_deg": {
+                  "type": "number"
+                },
+                "altitude_m": {
+                  "type": "number"
+                }
+              }
+            },
+            {
+              "$ref": "common.schema.json#/definitions/unavailable"
+            }
+          ]
+        },
+        "crs_id": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "bounds_m": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "x_min_m",
+                "x_max_m",
+                "y_min_m",
+                "y_max_m"
+              ]
+            },
+            {
+              "$ref": "common.schema.json#/definitions/unavailable"
+            }
+          ]
+        },
+        "terrain_source": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "imports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "layer",
+              "format",
+              "content_hash",
+              "source_sha256"
+            ],
+            "properties": {
+              "layer": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string"
+              },
+              "content_hash": {
+                "$ref": "common.schema.json#/definitions/maybe_string"
+              },
+              "source_sha256": {
+                "$ref": "common.schema.json#/definitions/maybe_string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

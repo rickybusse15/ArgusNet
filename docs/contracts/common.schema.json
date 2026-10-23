@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/common.schema.json",
+  "title": "S1 common definitions",
+  "description": "Shared by every S1 record: the explicit unavailable value, the identity and revision keys (VIEWER_UI 10.2) and the record envelope.",
+  "definitions": {
+    "unavailable": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "unavailable"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "description": "A value the source cannot support. Never success, never zero."
+    },
+    "maybe_string": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "common.schema.json#/definitions/unavailable"
+        }
+      ]
+    },
+    "maybe_integer": {
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "$ref": "common.schema.json#/definitions/unavailable"
+        }
+      ]
+    },
+    "maybe_number": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "common.schema.json#/definitions/unavailable"
+        }
+      ]
+    },
+    "maybe_boolean": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "common.schema.json#/definitions/unavailable"
+        }
+      ]
+    },
+    "ids": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "run_id",
+        "epoch",
+        "tick",
+        "world_revision",
+        "belief_revision",
+        "sequence"
+      ],
+      "description": "session_id / run_id / epoch / tick / world_revision / belief_revision / sequence (VIEWER_UI 10.2).",
+      "properties": {
+        "session_id": {
+          "$ref": "#/definitions/maybe_string"
+        },
+        "run_id": {
+          "$ref": "#/definitions/maybe_string"
+        },
+        "epoch": {
+          "$ref": "#/definitions/maybe_integer"
+        },
+        "tick": {
+          "$ref": "#/definitions/maybe_integer"
+        },
+        "world_revision": {
+          "$ref": "#/definitions/maybe_string"
+        },
+        "belief_revision": {
+          "$ref": "#/definitions/maybe_integer"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "required": [
+        "contract",
+        "record_id",
+        "ids",
+        "source"
+      ],
+      "properties": {
+        "contract": {
+          "type": "string",
+          "pattern": "^argusnet\\.[a-z_]+/v[0-9]+$"
+        },
+        "record_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ids": {
+          "$ref": "#/definitions/ids"
+        },
+        "source": {
+          "$ref": "#/definitions/maybe_string",
+          "description": "A JSON pointer into the source replay."
+        }
+      }
+    },
+    "position_m": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  }
+}

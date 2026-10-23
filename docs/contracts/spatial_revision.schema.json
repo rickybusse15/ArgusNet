@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/spatial_revision.schema.json",
+  "title": "S1 spatial_revision record (argusnet.spatial_revision/v1)",
+  "description": "How the run's world was known: a prior world, or the map the platforms built (its revisions and its error against truth).",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "world_knowledge",
+        "belief_revisions",
+        "known_fraction",
+        "ground_rmse_m",
+        "structure_precision",
+        "structure_recall"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.spatial_revision/v1"
+        },
+        "world_knowledge": {
+          "enum": [
+            "prior",
+            "none"
+          ]
+        },
+        "belief_revisions": {
+          "$ref": "common.schema.json#/definitions/maybe_integer"
+        },
+        "known_fraction": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "ground_rmse_m": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "structure_precision": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "structure_recall": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/localization.schema.json",
+  "title": "S1 localization record (argusnet.localization/v1)",
+  "description": "A platform's last localization estimate. Physical integrity is not modelled and stays unavailable.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "platform_id",
+        "estimated_at_s",
+        "position_m",
+        "position_std_m",
+        "confidence",
+        "integrity"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.localization/v1"
+        },
+        "platform_id": {
+          "type": "string"
+        },
+        "estimated_at_s": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "position_m": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/definitions/position_m"
+            },
+            {
+              "$ref": "common.schema.json#/definitions/unavailable"
+            }
+          ]
+        },
+        "position_std_m": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "confidence": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "integrity": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        }
+      }
+    }
+  ]
+}
