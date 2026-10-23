@@ -87,6 +87,35 @@ pub struct ReplayState {
     trimmed_before_s: Option<f32>,
     /// Which run the frames belong to. See [`Self::epoch`].
     epoch: u64,
+    /// The mission's decisions (F3), when the source reports them: an
+    /// in-process run does, in tick order. `None` for a replay, which never
+    /// records them (they are journaled), so the inspector says so.
+    pub decisions: Option<Vec<RecordedDecision>>,
+}
+
+/// One mission decision (F3) as an in-process run reported it, stamped with
+/// its tick's time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedDecision {
+    pub timestamp_s: f32,
+    pub kind: String,
+    /// `applied`, `queued_for_next_tick` or `rejected`.
+    pub status: String,
+    pub reason: String,
+    /// The platform it is about.
+    pub subject: Option<String>,
+    /// What it chose: a POI, a receiving drone, a phase.
+    pub selected: Option<String>,
+    pub detail: String,
+}
+
+impl ReplayState {
+    /// Record a tick's decisions, if this state takes them.
+    pub fn push_decisions(&mut self, decisions: impl IntoIterator<Item = RecordedDecision>) {
+        if let Some(log) = self.decisions.as_mut() {
+            log.extend(decisions);
+        }
+    }
 }
 
 impl Default for ReplayState {
@@ -101,6 +130,7 @@ impl Default for ReplayState {
             time_s: 0.0,
             trimmed_before_s: None,
             epoch: 0,
+            decisions: None,
         }
     }
 }
@@ -139,6 +169,11 @@ impl ReplayState {
     pub fn begin_epoch(&mut self, document: Option<ReplayDocument>) {
         self.document = document;
         self.trimmed_before_s = None;
+        // Another run's decisions are not this one's; a source that reports
+        // them keeps reporting them.
+        if let Some(log) = self.decisions.as_mut() {
+            log.clear();
+        }
         self.epoch += 1;
         self.step_to(0);
     }

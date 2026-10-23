@@ -242,6 +242,8 @@ impl SimSession {
             replay.begin_epoch(self.meta.clone());
             replay.live = true;
             replay.playing = false;
+            // The run reports its decisions (F3): the inspector shows them.
+            replay.decisions = Some(Vec::new());
         }
         let mut appended = 0_u64;
         let frames = self.worker.frames();
@@ -255,7 +257,14 @@ impl SimSession {
             }
             match to_viewer_frame(&worker_frame.frame) {
                 Ok(frame) => {
+                    let at_s = frame.timestamp_s;
                     replay.push_frame(frame);
+                    replay.push_decisions(
+                        worker_frame
+                            .decisions
+                            .iter()
+                            .map(|decision| recorded_decision(decision, at_s)),
+                    );
                     appended += 1;
                 }
                 Err(_) => self.conversion_errors += 1,
@@ -288,6 +297,25 @@ impl SimSession {
             WorkerPhase::Faulted(_) | WorkerPhase::Failed(_) => SimRunState::Faulted,
             _ => SimRunState::Paused,
         }
+    }
+}
+
+/// A worker's decision as the viewer keeps it, at its tick's time.
+fn recorded_decision(
+    decision: &argusnet_sim::mission_driver::Decision,
+    at_s: f32,
+) -> crate::replay::RecordedDecision {
+    crate::replay::RecordedDecision {
+        timestamp_s: at_s,
+        kind: decision.kind.to_string(),
+        status: serde_json::to_value(decision.status)
+            .ok()
+            .and_then(|status| status.as_str().map(str::to_string))
+            .unwrap_or_default(),
+        reason: decision.reason.to_string(),
+        subject: decision.subject.clone(),
+        selected: decision.selected.clone(),
+        detail: decision.detail.clone(),
     }
 }
 
@@ -525,6 +553,68 @@ mod tests {
             panic!("a missing file is an error");
         };
         assert!(error.contains("scenario_bundle_tt.missing"));
+    }
+
+    /// F3: an in-process run hands the viewer its mission decisions with
+    /// each frame, every one the journal records, in tick order, stamped
+    /// with the frame's time; a replay state that is not a run's has none.
+    #[test]
+    fn a_run_hands_the_viewer_its_decisions() {
+        let path = fixture("scenario_bundle_scan.json");
+        let mut session = SimSession::start(path.clone(), RunOptions::default(), Pacing::Unpaced);
+        let mut replay = ReplayState::new(None);
+        assert!(replay.decisions.is_none(), "a replay records none");
+        wait(&mut session, &mut replay, |s, _| {
+            s.status().phase == WorkerPhase::Paused
+        });
+        session.send("Run", CommandKind::Resume).expect("sent");
+        wait(&mut session, &mut replay, |s, _| {
+            s.status().phase == WorkerPhase::Completed
+        });
+        session.take_frames(&mut replay);
+        let decisions = replay.decisions.as_ref().expect("a run reports them");
+
+        // The same run, straight: every decision its journal records.
+        let mut direct = load_run(&path, &RunOptions::default()).expect("loads");
+        let mut journaled = Vec::new();
+        loop {
+            match direct.step() {
+                Ok(_) => {}
+                Err(argusnet_sim::scenario::RunError::Tick(
+                    argusnet_sim::simulation::TickError::Completed { .. },
+                )) => break,
+                Err(error) => panic!("{error:?}"),
+            }
+            let at = direct.last_frame().unwrap().timestamp_s as f32;
+            for decision in direct.journal_body()["decisions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                journaled.push((
+                    at,
+                    decision["kind"].as_str().unwrap().to_string(),
+                    decision["reason"].as_str().unwrap().to_string(),
+                    decision["status"].as_str().unwrap().to_string(),
+                ));
+            }
+        }
+        let shown: Vec<_> = decisions
+            .iter()
+            .map(|d| {
+                (
+                    d.timestamp_s,
+                    d.kind.clone(),
+                    d.reason.clone(),
+                    d.status.clone(),
+                )
+            })
+            .collect();
+        assert!(
+            shown.iter().any(|(_, kind, _, _)| kind == "poi_assignment"),
+            "the scan run assigns its POIs"
+        );
+        assert_eq!(shown, journaled);
     }
 
     /// The session's frames are the run's, in order, and a control stays

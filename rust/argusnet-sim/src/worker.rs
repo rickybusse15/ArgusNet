@@ -98,6 +98,10 @@ pub struct WorkerFrame {
     pub epoch: u64,
     pub tick: u64,
     pub frame: ReplayFrame,
+    /// The mission's decisions this tick (F3), as the journal records them:
+    /// sent with the frame on the lossless channel, so a front end that
+    /// skips drawing a frame still has them.
+    pub decisions: Vec<crate::mission_driver::Decision>,
 }
 
 enum Control {
@@ -502,6 +506,11 @@ impl Loop {
                             epoch,
                             tick: self.run.sim.tick().saturating_sub(1),
                             frame: frame.clone(),
+                            decisions: self
+                                .run
+                                .driver()
+                                .map(|driver| driver.decisions().to_vec())
+                                .unwrap_or_default(),
                         });
                     }
                 }
