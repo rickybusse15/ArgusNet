@@ -548,6 +548,8 @@ fn run_inner(
                 draw_team_localization_system.run_if(loc_ellipses_enabled),
                 draw_coord_frame_system.run_if(coord_frame_enabled),
                 draw_egress_paths_system.run_if(egress_paths_enabled),
+                crate::allocation_lines::draw_allocation_lines_system
+                    .run_if(crate::allocation_lines::allocation_lines_enabled),
                 crate::belief_map::belief_overlays_system,
             )
                 .chain()
@@ -3249,12 +3251,17 @@ mod overlay_gating_tests {
             show_reconstruction: false,
             show_coord_frame: false,
             show_egress_paths: false,
+            show_allocation_lines: false,
         });
         assert!(!run_condition(scan_grid_enabled, &mut world));
         assert!(!run_condition(poi_markers_enabled, &mut world));
         assert!(!run_condition(loc_ellipses_enabled, &mut world));
         assert!(!run_condition(coord_frame_enabled, &mut world));
         assert!(!run_condition(egress_paths_enabled, &mut world));
+        assert!(!run_condition(
+            crate::allocation_lines::allocation_lines_enabled,
+            &mut world
+        ));
     }
 
     #[test]

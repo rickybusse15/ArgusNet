@@ -2,6 +2,10 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Viewer: allocation lines (console parity V4, P1). A line from each drone
+  to the POI it holds, brighter while it dwells there, with a Mission-overlays
+  toggle.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

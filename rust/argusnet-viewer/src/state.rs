@@ -88,6 +88,9 @@ pub struct MissionOverlaySettings {
     pub show_reconstruction: bool,
     pub show_coord_frame: bool,
     pub show_egress_paths: bool,
+    /// A line from each drone to the POI it holds (V4, P1). No preset owns
+    /// it.
+    pub show_allocation_lines: bool,
 }
 
 /// The startup layers are the Operational preset's (`crate::layers`).
@@ -100,6 +103,7 @@ impl Default for MissionOverlaySettings {
             show_reconstruction: true,
             show_coord_frame: false,
             show_egress_paths: true,
+            show_allocation_lines: true,
         }
     }
 }
