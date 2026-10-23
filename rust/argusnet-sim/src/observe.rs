@@ -498,6 +498,10 @@ pub struct ObserveStage {
     /// Sensors that capture at their own rate (P4.10b); `None` is every
     /// sensor every tick.
     capture: Option<CaptureRates>,
+    /// A scheduled calibration drift's bearing offset per sensor, radians,
+    /// added to its bias walk (F2). Set before every tick from the fault
+    /// schedule, a pure function of the tick, so it is not checkpointed.
+    bias_offsets: BTreeMap<String, f64>,
 }
 
 /// Sensors capturing at their own rates rather than every tick.
@@ -616,6 +620,7 @@ impl ObserveStage {
             range: None,
             scans: Vec::new(),
             capture: None,
+            bias_offsets: BTreeMap::new(),
         }
     }
 
@@ -762,6 +767,27 @@ impl ObserveStage {
     /// measured from the datum.
     pub fn set_terrain(&mut self, terrain: Box<dyn TerrainHeight>) {
         self.state.terrain = terrain;
+    }
+
+    /// Add `offset_rad` to `node_id`'s bearing bias from now on, on top of
+    /// its walk: a calibration drift (F2). Zero removes it.
+    pub fn set_bias_offset(&mut self, node_id: &str, offset_rad: f64) {
+        if offset_rad == 0.0 {
+            self.bias_offsets.remove(node_id);
+        } else {
+            self.bias_offsets.insert(node_id.to_string(), offset_rad);
+        }
+    }
+
+    /// Every non-zero calibration drift offset, radians, by node: installed
+    /// or not, since a drift outlasts an outage.
+    pub fn bias_offsets(&self) -> &BTreeMap<String, f64> {
+        &self.bias_offsets
+    }
+
+    /// The calibration drift offset on `node_id`'s bearing bias, radians.
+    pub fn bias_offset_rad(&self, node_id: &str) -> f64 {
+        self.bias_offsets.get(node_id).copied().unwrap_or(0.0)
     }
 
     /// The accumulated bearing bias for `node_id`, radians.
@@ -1463,7 +1489,9 @@ impl StageHandler for ObserveStage {
 
                 // The bias walk steps once per observation, from the sensor's
                 // own stream -- see `SensorState`. It is applied after the
-                // noise, so the two compose as rotate-then-tilt.
+                // noise, so the two compose as rotate-then-tilt. A scheduled
+                // calibration drift adds to it (F2); absent, nothing changes.
+                let offset_rad = self.bias_offsets.get(node_id).copied().unwrap_or(0.0);
                 let direction = match shared.drifts.get_mut(node_id) {
                     Some(state) => {
                         let bias_rad = match state.drift.increment_std(timestamp_s) {
@@ -1473,9 +1501,9 @@ impl StageHandler for ObserveStage {
                             }
                             None => state.drift.step(timestamp_s, 0.0),
                         };
-                        apply_bias_to_direction(accepted.direction, bias_rad)
+                        apply_bias_to_direction(accepted.direction, bias_rad + offset_rad)
                     }
-                    None => accepted.direction,
+                    None => apply_bias_to_direction(accepted.direction, offset_rad),
                 };
 
                 shared.observations.push(BearingObservation {
@@ -1493,7 +1521,10 @@ impl StageHandler for ObserveStage {
                         node_id: node_id.clone(),
                         target_id: target_id.clone(),
                         origin,
-                        direction: thermal.direction,
+                        // The walk is the primary's alone, as in the
+                        // reference; a calibration drift turns every bearing
+                        // the sensor reports (zero leaves it untouched).
+                        direction: apply_bias_to_direction(thermal.direction, offset_rad),
                         bearing_std_rad: thermal.bearing_std_rad,
                         timestamp_s,
                         confidence: thermal.confidence,
@@ -1506,6 +1537,7 @@ impl StageHandler for ObserveStage {
             // Its own stream, keyed `(node_id, "clutter", tick)`, so the number
             // of real targets in view cannot shift the false-alarm draws.
             if spec.false_alarm_rate_per_scan > 0.0 {
+                let offset_rad = self.bias_offsets.get(node_id).copied().unwrap_or(0.0);
                 let mut clutter_rng = DeterministicRng::keyed(
                     seed,
                     &[
@@ -1544,7 +1576,9 @@ impl StageHandler for ObserveStage {
                         node_id: node_id.clone(),
                         target_id: CLUTTER_TARGET_ID.to_string(),
                         origin,
-                        direction: noisy / noisy_norm,
+                        // A calibration drift turns these too: the sensor
+                        // reports them through the same calibration.
+                        direction: apply_bias_to_direction(noisy / noisy_norm, offset_rad),
                         bearing_std_rad: spec.clutter_bearing_std_rad,
                         timestamp_s,
                         confidence,
@@ -2975,6 +3009,46 @@ mod tests {
         assert_ne!(thermal.direction, primary.direction);
         // One accepted *pair*, two observations -- the tally counts pairs.
         assert_eq!(obs(&mut sim).tally().attempted, 1);
+    }
+
+    /// F2: a calibration drift turns every bearing the sensor reports by
+    /// the offset -- the primary, the thermal duplicate and its clutter --
+    /// and nothing else about them.
+    #[test]
+    fn a_calibration_drift_turns_every_bearing_the_sensor_reports() {
+        let run = |offset_rad: f64| {
+            let mut sim = rig(
+                vec![sensor_node("s0", 0.0, 0.0, false)],
+                vec![target("t0", 500.0, 0.0, 0.0)],
+            );
+            obs(&mut sim).install_sensor(
+                "s0",
+                SensorSpec {
+                    band: SensorBand::Thermal,
+                    false_alarm_rate_per_scan: 4.0,
+                    ..permissive()
+                },
+            );
+            obs(&mut sim).set_bias_offset("s0", offset_rad);
+            sim.step().expect("tick runs");
+            obs(&mut sim).observations().to_vec()
+        };
+        let (plain, drifted) = (run(0.0), run(0.2));
+        assert_eq!(plain.len(), drifted.len());
+        assert!(
+            plain
+                .iter()
+                .filter(|o| o.target_id == CLUTTER_TARGET_ID)
+                .count()
+                > 0,
+            "the case needs clutter"
+        );
+        assert!(plain.len() >= 3, "primary, thermal and clutter");
+        for (a, b) in plain.iter().zip(&drifted) {
+            assert_eq!((&a.target_id, a.confidence), (&b.target_id, b.confidence));
+            let angle = a.direction.dot(&b.direction).clamp(-1.0, 1.0).acos();
+            assert!((angle - 0.2).abs() < 1e-9, "{} turned {angle}", a.target_id);
+        }
     }
 
     /// The four names the reference treats as thermal, and the fact that

@@ -24,6 +24,7 @@ An `argusnet.fault-manifest` (version 1) lists faults by simulated time:
 | `sensor_outage` | The node's sensor produces nothing over `[start_s, end_s)`, then returns with a fresh bias state (it restarted). | — |
 | `link_delay` | The node's evidence takes `delay_s` to arrive over the interval instead of its profile delay. | B4 delivery (`--fusion-lag-s`); delay plus jitter within the lag |
 | `source_restart` | The node's transport restarts: a new source epoch, so its in-flight evidence is dropped as `delivery_stale_epoch`. | B4 delivery |
+| `calibration_drift` | The node's bearing calibration drifts at `rate_rad_per_s` over `[start_s, end_s)` and stays where it got to, since nothing recalibrates it. The offset adds to the sensor's bias walk and survives an outage's restart. (Second slice, 2026-10-23.) | — |
 
 The manifest is validated against the run before any tick. It is refused
 (`argusnet-rs` exit 3, with the reason) when:
@@ -31,6 +32,7 @@ The manifest is validated against the run before any tick. It is refused
 - a fault names a node with no sensor;
 - an interval is empty or reversed;
 - a link fault is given without a fusion lag;
+- a drift rate is zero or not finite;
 - a delay doesn't fit within the lag.
 
 Accepted manifests are recorded in the replay as `meta.fault_manifest`, so a
@@ -96,11 +98,30 @@ unchanged: 14/14 replay hashes identical, `--lifecycle` equal.
 
 These are the rest of F2 in the plan:
 
-- calibration drift faults;
-- degraded positioning (VIO and localization);
+- degraded positioning (VIO and localization). Stage 5's VIO integrates the
+  nominal path and is told every frame that it did not move, so a positioning
+  fault needs its own design;
 - hold, return or abort mission responses to a fault, which need F5's
   reserve logic and mission policy;
 - a no-terrain-penetration check under faults: these faults don't move
   platforms, so it becomes relevant with mission responses;
-- fault events as replay frames: today the manifest is recorded, and each
-  drop with its reason.
+- fault events in the viewer's timeline. Since the second slice, every frame
+  names the faults in force (`active_faults`) and each sensor's drift offset
+  (`sensor_bias_offsets_rad`).
+
+## Second slice: calibration drift and faults in frames (2026-10-23)
+
+Case E (`a_calibration_drift_turns_one_sensors_bearings_and_stays`) drifts
+drone-east at 0.01 rad/s over [10 s, 20 s). Declared before the run, and held:
+- every bearing drone-east reports from 10 s on is turned from the unfaulted
+  run's by exactly the drift so far, to 1e-6 rad: 0.1 rad from 20 s, held to
+  the end;
+- every other sensor's observations are bit-identical to the unfaulted run;
+- frames name the fault over [10 s, 20 s) only, and carry the offset from its
+  first tick on.
+
+The turn is exact because the drift and the walk rotate the same direction
+about the same axis. Offsets are a pure function of the tick, re-applied before
+every tick and on restore. A run resumed mid-drift or after it matches the
+straight run frame for frame. A zero or non-finite rate is refused before the
+run. Runs without faults are unchanged (14/14 canonical replays).

@@ -11,8 +11,11 @@
 //!   delivery (B4), and must fit within the fusion lag, like any profile.
 //! - **`source_restart`**: at `at_s` the node's transport restarts: a new
 //!   source epoch, so evidence it sent before is dropped as stale.
+//! - **`calibration_drift`**: a node's bearing calibration drifts at
+//!   `rate_rad_per_s` over `[start_s, end_s)` and stays where it got to:
+//!   nothing recalibrates it. Added to the sensor's bias walk.
 //!
-//! Outages and delays are a pure function of the tick and are re-applied
+//! Outages, delays and drift offsets are a pure function of the tick and are re-applied
 //! idempotently before every tick, so a checkpoint needs no extra state to
 //! resume them. A restart happens once, at its tick; its effect (the epoch)
 //! lives in the delivery network's own checkpoint.
@@ -43,6 +46,12 @@ pub enum Fault {
     SourceRestart {
         node_id: String,
         at_s: f64,
+    },
+    CalibrationDrift {
+        node_id: String,
+        start_s: f64,
+        end_s: f64,
+        rate_rad_per_s: f64,
     },
 }
 
@@ -80,6 +89,8 @@ pub struct FaultSchedule {
     /// `(node, start tick, end tick, delay ticks)`.
     delays: Vec<(String, u64, u64, u64)>,
     restarts: Vec<(String, u64)>,
+    /// `(node, start tick, end tick, radians per tick)`.
+    drifts: Vec<(String, u64, u64, f64)>,
     /// Each outage node's sensor as installed, to put back.
     specs: BTreeMap<String, SensorSpec>,
 }
@@ -122,6 +133,7 @@ impl FaultSchedule {
             outages: Vec::new(),
             delays: Vec::new(),
             restarts: Vec::new(),
+            drifts: Vec::new(),
             specs: BTreeMap::new(),
         };
         for fault in &manifest.faults {
@@ -167,6 +179,24 @@ impl FaultSchedule {
                         .restarts
                         .push((node_id.clone(), tick_of(*at_s, dt_s)));
                 }
+                Fault::CalibrationDrift {
+                    node_id,
+                    start_s,
+                    end_s,
+                    rate_rad_per_s,
+                } => {
+                    known(node_id)?;
+                    let (start, end) = interval(node_id, *start_s, *end_s)?;
+                    if !(rate_rad_per_s.is_finite() && *rate_rad_per_s != 0.0) {
+                        return Err(format!(
+                            "calibration_drift on {node_id}: the rate {rate_rad_per_s} rad/s \
+                             is not a finite non-zero number"
+                        ));
+                    }
+                    schedule
+                        .drifts
+                        .push((node_id.clone(), start, end, rate_rad_per_s * dt_s));
+                }
             }
         }
         Ok(schedule)
@@ -174,6 +204,37 @@ impl FaultSchedule {
 
     pub fn manifest(&self) -> &FaultManifest {
         &self.manifest
+    }
+
+    /// Every drifted node's calibration offset at `tick`, radians: the drift
+    /// accumulated over the ticks of its intervals before `tick`, held after
+    /// an interval ends. Zero before the first. Several faults on one node
+    /// add.
+    pub fn bias_offsets(&self, tick: u64) -> BTreeMap<&str, f64> {
+        let mut out: BTreeMap<&str, f64> = BTreeMap::new();
+        for (node, start, end, per_tick) in &self.drifts {
+            let elapsed = tick.clamp(*start, *end) - start;
+            *out.entry(node.as_str()).or_insert(0.0) += per_tick * elapsed as f64;
+        }
+        out
+    }
+
+    /// The faults in force at `tick`, in manifest order: an interval fault
+    /// over its interval, a restart at its tick. A drift is listed while it
+    /// drifts; what it left behind is in [`Self::bias_offsets`].
+    pub fn active_at(&self, tick: u64, dt_s: f64) -> Vec<&Fault> {
+        let within =
+            |start: f64, end: f64| (tick_of(start, dt_s)..tick_of(end, dt_s)).contains(&tick);
+        self.manifest
+            .faults
+            .iter()
+            .filter(|fault| match fault {
+                Fault::SensorOutage { start_s, end_s, .. }
+                | Fault::LinkDelay { start_s, end_s, .. }
+                | Fault::CalibrationDrift { start_s, end_s, .. } => within(*start_s, *end_s),
+                Fault::SourceRestart { at_s, .. } => tick_of(*at_s, dt_s) == tick,
+            })
+            .collect()
     }
 
     /// Whether `node`'s sensor is out at `tick`.

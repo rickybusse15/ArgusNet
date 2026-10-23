@@ -893,6 +893,27 @@
             "$ref": "#/definitions/mission_event"
           }
         },
+        "active_faults": {
+          "type": "array",
+          "description": "The scheduled faults (F2) in force this tick, as the fault manifest gives them: an interval fault over its interval, a source restart at its tick. Absent when none.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["kind", "node_id"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["sensor_outage", "link_delay", "source_restart", "calibration_drift"]
+              },
+              "node_id": {"type": "string"}
+            }
+          }
+        },
+        "sensor_bias_offsets_rad": {
+          "type": "object",
+          "description": "Each sensor's calibration drift offset this tick, radians, where non-zero (F2). Persists after its drift ends. Absent when none.",
+          "additionalProperties": {"type": "number"}
+        },
         "safety_events": {
           "type": "array",
           "description": "Safety validation results emitted during this frame.",
