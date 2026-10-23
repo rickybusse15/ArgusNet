@@ -1,19 +1,23 @@
 # World and viewer realism plan: buildings, vegetation, power lines
 
-**Status:** proposed 2026-10-12; updated 2026-10-20. R0 is done: the
+**Status:** proposed 2026-10-12; updated 2026-10-23 (`cc59c16`). R0 is done: the
 opacity fix (#222) and typed structure matching. R1 is done: building-v2
 roofs, the georeferenced import and material facades. R3 is done: the
 model, the safety clearance, lines in a run, drawing in the viewer, the
 planner's corridor, the guard against wires, sensing wires and the
 clearance-corridor overlay. R2 is done: the tree model, trees in a run,
 sensing through trees, flight round trees and drawing trees. R4 is done
-but for lighting tuned against a real scene, which waits for R5. R5 is
-not started.
+but for lighting tuned against a real scene. R5.1 (DEM terrain) and R5.2
+(OSM land cover, mapped trees and power lines) are done (#277, #278); R5.3
+(the unified import pipeline and canonical town) is next.
 **Workstream:** WS-R (new). Ties into ROADMAP Tier C (scene ingestion and
 semantic materials), VIEWER_UI §6.3a, §15 and §18, and AGENT_EXECUTION_PLAN C6,
 C8 (P2.6) and D2 (P5.1).
 
-## Where the world stands
+## Original baseline before R0–R5 (historical)
+
+The table records the starting point of this plan. Current completion is in the
+status above and the Done records under each R package below.
 
 | Feature | Today | Gap |
 | --- | --- | --- |

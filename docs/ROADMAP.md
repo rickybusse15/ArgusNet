@@ -37,8 +37,9 @@ renumber the migration or feature packages in this document.
 ## Scheduled Rust runtime and operator delivery
 
 The target is [independently scheduled Rust execution](RUST_RUNTIME_ARCHITECTURE.md),
-not merely the existing Python loop translated to Rust. Complete and baseline
-P4.8/P4.9; deliver basic P5.0 viewer controls early; add P4.10a–f independent rates,
+not merely the existing Python loop translated to Rust. Preserve the recorded
+P4.8/P4.9 acceptance evidence; extend the implemented P5.0 viewer controls and
+partial P4.10 lane rates toward complete independent rates,
 measurement timing, incremental work, bounded jobs and causal history. Promote
 scheduled execution only after named-workload accuracy and performance gates.
 P6 retires superseded execution paths after installed-package/consumer acceptance.

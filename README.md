@@ -9,16 +9,20 @@ infrastructure inspection, survey, environmental observation and search coverage
 
 ## Current status
 
-The current supported entry path uses Python mission orchestration with Rust
-world queries, safety and sensor fusion, plus a native Bevy viewer. Rust also has
-ported sensing/localization/planning components, belief revisions, simulation
-stages and replay writing. Complete Rust production composition and viewer-worker
-integration remain migration work.
+The Rust CLI `argusnet-rs sim` builds and runs scenarios with no Python runtime.
+The Bevy viewer runs the same simulation on an in-process worker (`--run`),
+with acknowledged Run/Pause/Step/Speed/Reset controls, and builds scene packages
+in Rust. The Python `argusnet` CLI remains available as the simulation reference
+and for offline GIS, analysis and export workflows.
 
-The documentation was aligned on **2026-09-23**, using checkout `ec9c2f7` as the
-implementation baseline. This is not a claim about the latest remote release.
+Reviewed against checkout `cc59c16` on **2026-10-23**. Opt-in scheduling supports
+separate mission, mapping and fusion rates, per-sensor capture rates on tick
+boundaries, and delayed measurement delivery. Full independent scheduling and
+pending-job history remain incomplete. Real buildings, DEM terrain, OSM land
+cover, mapped trees and power lines can feed the Rust run; the unified import
+pipeline and canonical real-world scenario remain planned.
 [State ownership](docs/STATE_OWNERSHIP.md) and [known gaps](docs/KNOWN_GAPS.md)
-distinguish implemented libraries, integrated behavior and planned capabilities.
+distinguish implemented behavior from remaining qualification.
 
 ## Run the current system
 
@@ -38,8 +42,9 @@ cargo run -p argusnet-viewer --release -- --scene runs/demo.smartscene --autopla
 ```
 
 The default simulation is a mapping/inspection mission with no targets; empty
-fused-track output is expected. Evaluate coverage and inspection results. The
-current viewer opens a scene package built from a replay, not a bare replay file.
+fused-track output is expected. Evaluate coverage and inspection results. For
+replay playback, the viewer opens a scene package built from a replay.
+For an in-process run, pass `--run` a scenario config or bundle; no scene is required.
 First compilation is separate from runtime startup performance.
 
 See [usage](docs/usage.md) for existing modes, split-view controls, target-tracking
@@ -47,10 +52,22 @@ examples, ingestion and exports. Use `argusnet --help` or `argusnet sim --help`
 for current options. [Live operations](docs/LIVE_OPERATIONS.md) describes the
 existing live-enabled build and TLS connection workflow.
 
-## The Rust-only target
+A Rust-only run from a checked-in scenario bundle needs no Python setup:
 
-Starting, running, controlling, viewing and recording simulations will use Rust
-components only. Python remains optional for offline analysis, experiment
+```bash
+cargo run --release -p argusnet-cli -- sim --bundle tests/fixtures/scenario_bundle_scan.json --replay runs/rust-demo.json
+cargo run --release -p argusnet-cli -- build-scene --replay runs/rust-demo.json --output runs/rust-demo.smartscene
+cargo run --release -p argusnet-viewer -- --run tests/fixtures/scenario_bundle_scan.json
+```
+
+The viewer opens paused at tick 0. See [usage](docs/usage.md) for run options,
+unknown-world mapping and real-data imports.
+
+## The remaining Rust runtime target
+
+Starting, running, controlling, viewing and recording simulations already have Rust
+entrypoints; the remaining target is complete independent subsystem scheduling.
+Python remains optional for offline analysis, experiment
 orchestration, GIS and export workflows. Existing Rust domain crates are reused;
 this is an incremental migration within this repository.
 
@@ -75,31 +92,26 @@ execution speed and visual quality separate. Paced simulation can report slower
 achieved speed under load; hardware-coupled operation instead needs explicit
 synchronization limits and qualified deadline responses.
 
-## Viewer changes coming
+## Viewer status and remaining work
 
-The [viewer specification](docs/VIEWER_UI.md) describes a flat, restrained,
-typography-led instrument interface with **Operate / Plan / Review** workspaces.
-**Perspective / Top-down / Section** are separate projections, with independent
-Operational / Reconstruction / Safety layer presets and one source-time timeline.
+The viewer has an Operate/Plan/Review shell, Perspective/Top-down/Section
+projections, Operational/Reconstruction/Safety layer presets, inspectors and a
+source-time timeline. Plan and Review show explicit unavailable reasons pending
+their canonical mission, journal and evidence contracts. The existing
+`real-world`, `scan-map` and `split` CLI view modes still work independently of
+these shell controls.
 
-The viewer will expose 3D belief, unknown space, uncertainty, trajectories,
-sensor volumes and evidence. It will show pose/map/plan freshness, command status,
-achieved simulation speed, recording health and available history. Detailed task
-rates and deadline/queue metrics belong in Diagnostics. Low visual quality must
-preserve safety and uncertainty semantics.
-
-These are planned interfaces, not replacements already available for the current
-`real-world`, `scan-map` and `split` CLI values. Basic Rust-worker controls ship
-before the scheduler redesign is complete. The
-[feature integration guide](docs/VIEWER_FEATURE_INTEGRATION.md) maps workflows to
-backend contracts and explicit unavailable states.
+The [viewer specification](docs/VIEWER_UI.md) remains the full target, including
+complete freshness, recording health, durable history and qualified live-world
+presentation. The [feature integration guide](docs/VIEWER_FEATURE_INTEGRATION.md)
+maps workflows to backend contracts and explicit unavailable states.
 
 ## Delivery sequence
 
-| Track | Next outcome |
+| Track | Current state / next outcome |
 | --- | --- |
-| P4.8–P4.9 | Complete Rust production composition, reset/restore and correctness/performance baseline |
-| P5.0, early | Responsive viewer worker with acknowledged basic controls |
+| P4.8–P4.9 | Rust production composition, reset/restore and statistical acceptance implemented; remaining qualification is tracked in migration status |
+| P5.0 | In-process viewer worker and acknowledged basic controls implemented; complete remaining operator acceptance |
 | P4.10a–f | Independent schedules, sensor timing, incremental work, bounded jobs and complete history; opt-in until qualified |
 | Remaining P2/P5 | Visual system, history/seek, recording and coherent live-world presentation |
 | P6 | Retire superseded execution paths after consumer and packaging acceptance |
@@ -149,8 +161,8 @@ require actual timing and fault evidence before promotion.
 
 | Location | Role |
 | --- | --- |
-| `rust/` | Domain libraries, simulation runtime under integration, server, replay and viewer |
-| `src/argusnet/` | Current Python orchestration, adapters and retained offline tooling |
+| `rust/` | Domain libraries, assembled simulation runtime and CLI, server, replay and viewer |
+| `src/argusnet/` | Python reference simulation, adapters and offline tooling |
 | `proto/` | External service contracts; binding changes update both languages |
 | `tests/` | Python/contract fixtures and evaluation checks; Rust crates also contain tests |
 | `docs/` | Current behavior, accepted designs, delivery and evidence |

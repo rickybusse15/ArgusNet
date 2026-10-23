@@ -1,17 +1,17 @@
 # Known Gaps — ArgusNet
 
-## Scheduled-runtime status (reviewed 2026-10-12)
+## Scheduled-runtime status (reviewed 2026-10-23 at `cc59c16`)
 
 | Capability | Status | Remaining evidence |
 | --- | --- | --- |
-| Rust stage composition, direct fusion and replay writer | Partial | 2026-10-03: `argusnet-rs` builds and runs all seven canonical scenarios with no Python, six within every envelope (#122). Owned subsystem state (A1.2) and a production constructor that rejects missing stages (A1.3, `tests/production.rs`) are done. Acceptance scores against a stored reference (D-10). Multi-seed and held-out qualification done (A3.2, `docs/performance/a32-qualification-2026-10-03.md`): everything passes except `covariance_reduction_mean`, whose sampling noise is of the order of its envelope. D-12 judges it by its median (envelope unchanged); the confirmation run on 30 fresh seeds passes 7/7 (`docs/performance/d12-confirmation-2026-10-04.md`) |
+| Rust stage composition, direct fusion and replay writer | **Implemented; statistically qualified** | 2026-10-03: `argusnet-rs` builds and runs all seven canonical scenarios with no Python, six within every envelope (#122). Owned subsystem state (A1.2) and a production constructor that rejects missing stages (A1.3, `rust/argusnet-sim/tests/production.rs`) are done. Acceptance scores against a stored reference (D-10). Multi-seed and held-out qualification done (A3.2, `docs/performance/a32-qualification-2026-10-03.md`): everything passes except `covariance_reduction_mean`, whose sampling noise is of the order of its envelope. D-12 judges it by its median (envelope unchanged); the confirmation run on 30 fresh seeds passes 7/7 (`docs/performance/d12-confirmation-2026-10-04.md`) |
 | Command recovery and format-2 control checkpoints | Implemented in reviewed `ec9c2f7` | Not full causal checkpointing or proof of remote release |
-| Subsystem-wide reset/restore | **Implemented** (A2, 2026-10-03) | `AssembledRun::reset` reloads the run as assembled; checkpoint format 4 binds to the scenario's content hash and refuses another scenario before mutating. Evidence: `scripts/replay_hashes.py --lifecycle` (all 7 canonical scenarios × seeds 7, 42: reset at a seeded tick replays byte-identical to fresh; resume from an on-disk checkpoint equals the uninterrupted frames), `tests/assembled_resume.rs` (`a_reset_assembled_run_is_a_fresh_run`, `a_checkpoint_from_a_different_scenario_is_refused_before_anything_changes`, `truncated_or_corrupt_checkpoint_text_fails_cleanly`, per-phase resume). Not covered: pending scheduler jobs (P4.10) |
+| Subsystem-wide reset/restore | **Implemented** (A2, 2026-10-03) | `AssembledRun::reset` reloads the run as assembled; checkpoint format 4 binds to the scenario's content hash and refuses another scenario before mutating. Evidence: `scripts/replay_hashes.py --lifecycle` (all 7 canonical scenarios × seeds 7, 42: reset at a seeded tick replays byte-identical to fresh; resume from an on-disk checkpoint equals the uninterrupted frames), `rust/argusnet-sim/tests/assembled_resume.rs` (`a_reset_assembled_run_is_a_fresh_run`, `a_checkpoint_from_a_different_scenario_is_refused_before_anything_changes`, `truncated_or_corrupt_checkpoint_text_fails_cleanly`, per-phase resume). Not covered: pending scheduler jobs (P4.10) |
 | Independent/rational task and sensor rates | **Partial** (P4.10a) | Scheduler types (integer `SimTime`, rational schedules, phase order, `EventQueue`) and the legacy-order compound-lane and phased-lane executors are merged and replay byte-identical (B2.1–B2.3). The mission lane can run at its own rate under `scheduled_v1` (B2.4, `--executor lanes --mission-rate`), recorded in the replay; a stage not due is traced as skipped and its next run is given the elapsed time. The viewer's in-process run takes the same rate (`--run ... --mission-rate`). The mapping lane can run at its own rate too (B2.5, `--mapping-rate`), its skipped ticks buffered and integrated when it runs, and so can the fusion lane (B2.6, `--fusion-rate`), its skipped ticks buffered and fused when it runs. Not yet: the publication lane off the legacy rate, stages 1–6 off the compound lane, sensor rates off the tick grid (per-sensor rates on it are in, `--sensor-rate`), work pending across a boundary |
 | Timestamped measurement delivery | **Partial** (P4.10b, #196, #199) | Delivery envelopes with acquisition/availability/receipt ticks, seeded per-source delay and jitter, fusion at a fixed lag, explicit drops; track error scored at evidence time with present error and evidence age reported (`docs/migration/DELIVERY_TIMING.md`). Per-sensor capture rates on tick boundaries (`--sensor-rate`). Not yet: buffered mapping inputs, capture times between ticks, clock quality, evidence time on the gRPC wire, delayed-measurement smoothing. Tracks record their evidence time in timed replays (`evidence_time_s`) |
 | Bounded causal jobs and complete scheduler history | Planned P4.10d–f | Deterministic application, stale result checks and restore during pending work |
 | Starting with no world knowledge | **First slice** (#201–#208) | `--world-knowledge none`: range scanners, a checkpointed belief grid, stages 1, 3 and 4 planning on it, a physics guard; the map exports as a scene package. Pursuit now uses fused tracks (a tasking cue before the first). Search drones explore the frontier and scan progress reads the map. Still reading truth: the bundle builder's lane and POI planning (`docs/migration/UNKNOWN_WORLD.md`) |
-| Operate/Plan/Review visual redesign and freshness | Planned/partial foundations | P2/P5 acceptance; current replay controls remain distinct |
+| Viewer shell, projections and freshness | **Partial** | Shell, inspectors, Perspective/Top-down/Section, layer presets and Rust-worker controls are implemented. Plan/Review show unavailable reasons; complete freshness/history and operator acceptance remain open |
 | Qualified hardware adapters and deadlines | Planned S3–S7 | Actual SIL/HIL and device/clock/fault evidence; telemetry viewing grants no control |
 
 See [target architecture](RUST_RUNTIME_ARCHITECTURE.md),
@@ -37,11 +37,12 @@ Status labels:
 | Procedural / DEM / hybrid terrain construction | **Implemented** | `src/argusnet/world/procedural.py`, `TerrainBuildConfig`, `build_terrain_layer()` |
 | Terrain batch/cached query path | **Implemented** | `TerrainLayer.height_at_many()` and viewer mesh caching |
 | Obstacle primitives and collision checks | **Implemented** | `src/argusnet/world/obstacles.py`, `EnvironmentModel` |
-| Land-cover and seasonal masks | **Partial** | Current procedural masks exist; production sensor-specific seasonal tuning remains future work. |
+| Real-data world imports | **Implemented (R1, R5.1–R5.2)** | Rust builder options `buildings_path`, `terrain_path`, `features_path` accept georeferenced buildings, DEM terrain, land cover, trees and power lines. Unified pipeline and canonical town scenario (R5.3) remain open; see [usage](usage.md) |
+| Land-cover and seasonal masks | **Partial** | Procedural masks and imported OSM land cover exist; production sensor-specific seasonal tuning remains future work. |
 | Weather affecting sensing | **Implemented** | `src/argusnet/world/visibility.py`, `src/argusnet/world/weather.py` |
 | Weather affecting vehicle dynamics | **Planned** | Wind/weather are not fully coupled to drone dynamics. |
 | CRS/geodetic transforms | **Partial** | `src/argusnet/core/frames.py` and `EnvironmentCRS`; most sim scenarios remain local-frame. |
-| Rust world/terrain runtime integration | **Implemented (Phase 3)** | `argusnet-world` owns analytic/tiled sampling, obstacle geometry/indexing, land-cover queries and LOS. Python calls the native library; the viewer uses its replay-raster adapter. Python scenario authoring/export and the tick loop remain until later phases. |
+| Rust world/terrain runtime integration | **Implemented (Phase 3)** | `argusnet-world` owns analytic/tiled sampling, obstacle geometry/indexing, land-cover queries and LOS. Python calls the native library; the viewer uses its replay-raster adapter. Python reference authoring/export and tick loop remain supported alongside the assembled Rust run. |
 
 ## Sensing And Fusion
 
@@ -125,7 +126,7 @@ Status labels:
 | Viewer replay playback | **Implemented** | `rust/argusnet-viewer` |
 | Viewer live streaming | **Implemented** | Legacy `WatchFrames` plus operator-focused `WatchFramesV2`, reconnect, bounded queues/history, truth filtering, sequence/drop telemetry |
 | Scene GLB triangle winding | **Fixed (2026-10-12)** | Every terrain triangle used to be wound facing down while its normals faced up, so the double-sided material lit it as a back face: the sun contributed nothing, and the camera's exposure had been opened three stops to make up for it, which washed sunlit surfaces (buildings, the drones' self-built map) out to white. Both scene writers now wind the terrain counter-clockwise from above, the committed `scene.smartscene` terrain was rewritten the same way, and both cameras use EV100 12 (`Exposure::OVERCAST`, matching the 12 000 lux sun). `tests/test_rust_scene_build.py` fails if any layer of a built package has a triangle facing away from its normals. Before/after renders: [`performance/terrain-winding-2026-10-12/`](performance/terrain-winding-2026-10-12/). The lit ground exposed two compositing faults, both fixed in the same change: sensor volumes and zone walls were not additive (they covered 85% of what was behind them), and the belief overlay took the ground's hue. The picker still casts occluders from both faces, for packages built before the fix. |
-| Viewer headless CI/render path | **Implemented smoke coverage** | CI renders through Bevy and checks a non-empty image. Fixed-image regression and steady-state frame-budget gates remain open. |
+| Viewer headless CI/render path | **Implemented smoke coverage; measured hardware budget** | CI renders through Bevy and checks a non-empty image. R4 realism fixtures meet the D-5 machine budget ([record](performance/r4-frame-budget-2026-10-21.md)); this does not establish every C8 image-diff or workload gate |
 
 ## Interface Boundaries That Need Formalization
 
@@ -140,7 +141,7 @@ Status labels:
    and safety gates.
 6. Rust world queries and native safety are now load-bearing (migration Phase 3).
    Remaining runtime consumers should use `argusnet-world` directly as they migrate;
-   Python still owns the simulation loop. See [migration plan](RUST_RUNTIME_MIGRATION.md).
+   Rust owns its assembled simulation loop; Python retains the reference loop. See [migration plan](RUST_RUNTIME_MIGRATION.md).
 
 ## Proto And Schema State
 
@@ -159,29 +160,22 @@ The [latest feature UI plan](VIEWER_FEATURE_INTEGRATION.md) adds Perspective,
 Top-down and Section over coherent 3D spatial revisions, localization integrity,
 onboard contingencies, SIL/HIL qualification and client-product review/export.
 The [autonomous system plan](AUTONOMOUS_SYSTEM_PLAN.md) defines their S0–S8 gates.
-These are requirements, not claims that volumetric mapping, aircraft autonomy,
-section rendering or all export formats are implemented.
+These are requirements, not claims that volumetric mapping, aircraft autonomy
+or all export formats are implemented. Section projection
+is implemented; full coherent 3D spatial revisions remain target work.
 
-## Latest merged phase status
+## Current delivery boundary
 
-At `ba163ac`, P4.3g landscapes, P4.6d belief publication and P4.8a–c mission/world/
-stage integration are present. Rust snapshots can contain platforms and tracks.
-References below to missing builders/publication or an empty shell describe the
-older review baseline. Complete scenario/controller, checkpoint/replay/CLI and
-viewer integration remain open; see [the phase plan](migration/DELIVERY_PLAN.md).
+The [ownership inventory](STATE_OWNERSHIP.md) records the assembled Rust runtime,
+reset/checkpoint/recovery and in-process viewer controls. The remaining runtime
+boundary is full independent scheduling and pending-job history, rather than
+initial domain-stage composition. See the [phase plan](migration/DELIVERY_PLAN.md)
+and [migration status](migration/STATUS.md) for acceptance evidence.
 
-## Next delivery boundary
-
-The [ownership inventory](STATE_OWNERSHIP.md) distinguishes Rust libraries from
-active runtime consumers. Localization/VIO, sensing, coverage/belief queries and
-planning ports exist, but the Rust simulation still needs complete domain-stage
-composition, runtime world assembly and revisioned belief ownership. Its command
-and checkpoint foundations require the corrections in the
-[source review](NEXT_REFACTOR_REVIEW.md) before viewer control integration.
-
-[VIEWER_UI.md](VIEWER_UI.md) is the new target specification, not the current UI.
-Operate/Plan/Review, acknowledged runtime controls and complete world-aware live
-state remain staged work. Existing V2 live rendering is not evidence of P5.3.
+[VIEWER_UI.md](VIEWER_UI.md) remains the full target. Its shell, projections and
+basic controls are implemented; Plan/Review backend contracts and complete
+world-aware live state remain staged work. Existing V2 live rendering is not
+evidence of P5.3.
 
 F1 scorecards, F3 explanations and F4 comparisons have shipped as replay and
 mission slices, and F2 failure schedules has its first slice (sensor outages, link

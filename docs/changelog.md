@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — The mission lane at its own rate (`scheduled_v1`)
+## Unreleased — Rust runtime, scheduled lanes and world realism
 
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
