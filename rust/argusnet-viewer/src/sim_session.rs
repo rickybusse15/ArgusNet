@@ -44,8 +44,8 @@ const NOTICE_FOR: Duration = Duration::from_secs(6);
 /// Assemble the run at `path` and install `options` on it -- through the same
 /// [`RunOptions::apply`] as `argusnet-rs sim`, so the viewer's run is the CLI's.
 pub fn load_run(path: &Path, options: &RunOptions) -> Result<AssembledRun, String> {
-    let text =
-        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let text = argusnet_replay::read_text_limited(path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
     let bundle_text = match value.get("format").and_then(|f| f.as_str()) {

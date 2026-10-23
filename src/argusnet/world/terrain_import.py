@@ -34,7 +34,6 @@ limit. Nodata pixels are filled from their neighbours and counted.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from collections.abc import Mapping
@@ -44,8 +43,10 @@ from typing import Any
 import numpy as np
 
 from argusnet.core.frames import ENUOrigin, enu_to_wgs84, wgs84_to_enu
+from argusnet.core.io_limits import sha256_file
 
 from ._scene_gis import (
+    MAX_DEM_FILE_BYTES,
     _MAX_DEM_PIXELS,
     _extract_nodata_value,
     _fill_nodata,
@@ -164,7 +165,7 @@ def import_terrain(
 
     tifffile = lazy_import_tifffile()
     CRS, Transformer = lazy_import_pyproj()
-    source_bytes = Path(dem_path).read_bytes()
+    source_sha256 = sha256_file(dem_path, max_bytes=MAX_DEM_FILE_BYTES)
     with tifffile.TiffFile(str(dem_path)) as handle:
         page = handle.pages[0]
         if math.prod(page.shape) > _MAX_DEM_PIXELS:
@@ -261,7 +262,7 @@ def import_terrain(
         "rows": len(y_values),
         "cols": len(x_values),
         "heights_m": [float(v) for v in local.tolist()],
-        "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "source_sha256": source_sha256,
         "summary": {
             "dem_shape": [rows, cols],
             "nodata_pixels_filled": nodata_pixels,

@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
+use argusnet_replay::read_text_limited;
 use argusnet_sim::builder::{self, BuildError, ScenarioConfig};
 use argusnet_sim::scenario::{assemble_with, BundleError, RunError, ScenarioBundle};
 use argusnet_sim::scheduler::{
@@ -435,7 +436,7 @@ fn tick_summary(sorted_ms: &[f64]) -> serde_json::Value {
 
 /// Read and build a config, mapping the builder's errors to exit codes.
 fn built_bundle(path: &std::path::Path) -> Result<serde_json::Value, ExitCode> {
-    let text = std::fs::read_to_string(path)
+    let text = read_text_limited(path)
         .map_err(|error| fail(EXIT_INVALID, format!("{}: {error}", path.display())))?;
     let config = ScenarioConfig::from_json(&text).map_err(|error| fail(EXIT_INVALID, error))?;
     builder::build_bundle(&config).map_err(|error| match error {
@@ -466,7 +467,7 @@ fn fuse(args: FuseArgs) -> ExitCode {
     use prost::Message;
 
     let run = || -> Result<Vec<String>, String> {
-        let text = std::fs::read_to_string(&args.capture).map_err(|e| e.to_string())?;
+        let text = read_text_limited(&args.capture).map_err(|e| e.to_string())?;
         let capture: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let tracker = pb::TrackerConfig::decode(
             hex_decode(capture["tracker"].as_str().ok_or("no tracker")?)?.as_slice(),
@@ -609,14 +610,14 @@ fn sim(args: SimArgs) -> ExitCode {
     }
     let mut resolved_config = None;
     let text = match (&args.bundle, &args.config) {
-        (Some(path), _) => match std::fs::read_to_string(path) {
+        (Some(path), _) => match read_text_limited(path) {
             Ok(text) => text,
             Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
         },
         (None, Some(path)) => match built_bundle(path) {
             Ok(bundle) => {
                 // Every option, defaults filled in: what was actually built.
-                resolved_config = std::fs::read_to_string(path)
+                resolved_config = read_text_limited(path)
                     .ok()
                     .and_then(|text| ScenarioConfig::from_json(&text).ok())
                     .and_then(|config| serde_json::to_value(config).ok());
@@ -751,7 +752,7 @@ fn sim(args: SimArgs) -> ExitCode {
         }),
     )]);
     if let Some(path) = &args.resume {
-        let checkpoint: SimulationCheckpoint = match std::fs::read_to_string(path)
+        let checkpoint: SimulationCheckpoint = match read_text_limited(path)
             .map_err(|error| error.to_string())
             .and_then(|text| serde_json::from_str(&text).map_err(|error| error.to_string()))
         {
@@ -1053,7 +1054,7 @@ fn stage_table(
 }
 
 fn build_scene(args: BuildSceneArgs) -> ExitCode {
-    let text = match std::fs::read_to_string(&args.replay) {
+    let text = match read_text_limited(&args.replay) {
         Ok(text) => text,
         Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", args.replay.display())),
     };

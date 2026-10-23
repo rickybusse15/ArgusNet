@@ -924,6 +924,18 @@ fn create_working_asset_root() -> Result<PathBuf> {
 }
 
 fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<()> {
+    let source_root = source
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", source.display()))?;
+    copy_tree_contained(&source_root, &source_root, destination)
+}
+
+/// Copy `source` into `destination`, refusing a symlink that leaves `root`.
+///
+/// `fs::copy` follows a symlink and would read whatever it names. A scene
+/// package is untrusted, and the synthetic working copy is made before Bevy
+/// loads any layer, so the escape has to be rejected here too.
+fn copy_tree_contained(root: &Path, source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)
         .with_context(|| format!("failed to create {}", destination.display()))?;
     for entry in
@@ -932,8 +944,28 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<()> {
         let entry = entry?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_directory_recursive(&source_path, &destination_path)?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            let target = fs::canonicalize(&source_path)
+                .with_context(|| format!("failed to resolve symlink {}", source_path.display()))?;
+            if !target.starts_with(root) || target.is_dir() {
+                anyhow::bail!(
+                    "refusing to copy {} because it is a symlink to {} outside the scene package",
+                    source_path.display(),
+                    target.display()
+                );
+            }
+            fs::copy(&target, &destination_path).with_context(|| {
+                format!(
+                    "failed to copy {} -> {}",
+                    source_path.display(),
+                    destination_path.display()
+                )
+            })?;
+            continue;
+        }
+        if file_type.is_dir() {
+            copy_tree_contained(root, &source_path, &destination_path)?;
         } else {
             fs::copy(&source_path, &destination_path).with_context(|| {
                 format!(
@@ -966,6 +998,12 @@ fn spawn_base_layers(
             );
             continue;
         };
+        if let Err(error) =
+            crate::schema::validate_scene_asset(&working_scene_root.asset_root, &asset_path)
+        {
+            warn!("Refusing to load layer {:?}: {error:#}", layer.id);
+            continue;
+        }
         let handle: Handle<WorldAsset> = asset_server.load(format!("{asset_path}#Scene0"));
         let visibility = if *layer_visibility.base_layers.get(&layer.id).unwrap_or(&true) {
             Visibility::Visible
@@ -2441,7 +2479,7 @@ fn simulate_to_replay(
 /// Build the scene package for `replay_path` into `output_root`, replacing
 /// whatever is there: what `python -m argusnet build-scene` did, in Rust.
 fn build_scene_from_replay_file(replay_path: &Path, output_root: &Path) -> Result<()> {
-    let text = fs::read_to_string(replay_path)
+    let text = argusnet_replay::read_text_limited(replay_path)
         .with_context(|| format!("reading {}", replay_path.display()))?;
     let replay: serde_json::Value = serde_json::from_str(&text)
         .with_context(|| format!("parsing {}", replay_path.display()))?;
@@ -3406,6 +3444,41 @@ mod scenario_run_tests {
             }
         }
         assert!(offenders.is_empty(), "{offenders:?} start processes");
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::copy_directory_recursive;
+
+    #[test]
+    fn a_symlink_that_leaves_the_package_is_not_copied() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("argusnet-copy-src-{suffix}"));
+        let dest = std::env::temp_dir().join(format!("argusnet-copy-dst-{suffix}"));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&dest);
+        fs::create_dir_all(root.join("terrain")).unwrap();
+        fs::write(root.join("terrain/mesh.glb"), b"glb").unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", root.join("terrain/secret.glb")).unwrap();
+
+        let error = copy_directory_recursive(&root, &dest)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("symlink") || error.contains("outside"),
+            "{error}"
+        );
+        assert!(!dest.join("terrain/secret.glb").exists());
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&dest);
     }
 }
 

@@ -52,6 +52,22 @@ use environment::{build_environment, MapBounds};
 pub const CONFIG_FORMAT: &str = "argusnet.scenario-config";
 pub const CONFIG_VERSION: u32 = 1;
 
+/// Largest terrain, buildings, or features document a scenario may name.
+/// A shared scenario is untrusted input; this matches the replay cap.
+const MAX_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
+
+pub(super) fn read_import_limited(path: &str) -> Result<Vec<u8>, String> {
+    let len = std::fs::metadata(path)
+        .map_err(|error| error.to_string())?
+        .len();
+    if len > MAX_IMPORT_BYTES {
+        return Err(format!(
+            "{len} bytes, over the {MAX_IMPORT_BYTES} byte limit"
+        ));
+    }
+    std::fs::read(path).map_err(|error| error.to_string())
+}
+
 /// `SimulationConstants.dynamics`' map extent.
 pub const MAP_BOUNDS_X_EXTENT_M: f64 = 360.0;
 pub const MAP_BOUNDS_Y_MIN_M: f64 = -330.0;

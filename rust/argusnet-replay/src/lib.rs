@@ -23,10 +23,34 @@ pub mod assurance;
 pub use assurance::{assurance_frame_index, MissionAssurance};
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+
+/// Largest replay, scenario, or checkpoint document a reader will load.
+/// Matches `DEFAULT_MAX_FILE_BYTES` in `argusnet.core.io_limits`.
+pub const MAX_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Read a text document, refusing anything over [`MAX_DOCUMENT_BYTES`].
+pub fn read_text_limited(path: &Path) -> std::io::Result<String> {
+    read_text_at_most(path, MAX_DOCUMENT_BYTES)
+}
+
+fn read_text_at_most(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let len = std::fs::metadata(path)?.len();
+    if len > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is {len} bytes, over the {max_bytes} byte limit",
+                path.display()
+            ),
+        ));
+    }
+    std::fs::read_to_string(path)
+}
 
 /// Custom deserializer that accepts either a flat `[f64, ...]` array
 /// or a nested `[[f64, ...], ...]` matrix (flattening the latter).
@@ -1370,5 +1394,19 @@ mod contract_fixture_tests {
             assert_eq!(covariance.len(), 36, "expected a flattened 6x6 covariance");
             assert!(covariance.iter().all(|value| value.is_finite()));
         }
+    }
+}
+
+#[cfg(test)]
+mod read_limit_tests {
+    use super::read_text_limited;
+
+    #[test]
+    fn an_oversized_document_is_refused_before_it_is_parsed() {
+        let path = std::env::temp_dir().join(format!("argusnet-replay-cap-{}", std::process::id()));
+        std::fs::write(&path, "x".repeat(64)).unwrap();
+        assert!(super::read_text_at_most(&path, 8).is_err());
+        assert_eq!(read_text_limited(&path).unwrap().len(), 64);
+        let _ = std::fs::remove_file(&path);
     }
 }

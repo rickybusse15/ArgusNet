@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from argusnet.core.io_limits import read_text_capped, resolve_contained_path
+
 from .environment import (
     Bounds2D,
     EnvironmentCRS,
@@ -31,6 +33,27 @@ from .obstacles import (
 # The environment bundle format this module writes and reads.
 ENVIRONMENT_BUNDLE_FORMAT = "smartmap-v1"
 
+# A shared bundle is untrusted. Cap how many tile files one manifest can name,
+# and how far one zlib blob may expand, before either becomes a file-read or
+# memory bomb. A legitimate tile is a few hundred kilobytes.
+_MAX_BUNDLE_TILES = 16_384
+_MAX_DECOMPRESSED_BLOB_BYTES = 64 * 1024 * 1024
+_ALLOWED_BLOB_DTYPES = frozenset(
+    {
+        "float32",
+        "float64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "bool",
+    }
+)
+
 
 def _array_to_blob(array: np.ndarray) -> dict[str, object]:
     raw = np.ascontiguousarray(array).tobytes(order="C")
@@ -43,10 +66,73 @@ def _array_to_blob(array: np.ndarray) -> dict[str, object]:
 
 
 def _array_from_blob(blob: Mapping[str, object]) -> np.ndarray:
-    raw = zlib.decompress(bytes.fromhex(str(blob["payload_hex"])))
-    return np.frombuffer(raw, dtype=np.dtype(str(blob["dtype"]))).reshape(
-        tuple(int(value) for value in blob["shape"])
-    )
+    """Decode one bundle array, refusing bombs and non-numeric dtypes.
+
+    The blob is attacker-controlled when the bundle comes from a shared scene.
+    ``zlib.decompress`` without a length cap expands a few kilobytes into
+    gigabytes, and ``np.dtype`` accepts object and sub-array dtypes that are
+    not height or class grids.
+    """
+    if blob.get("compression", "zlib") != "zlib":
+        raise ValueError("environment bundle array compression must be zlib")
+    payload_hex = blob.get("payload_hex")
+    if not isinstance(payload_hex, str) or not payload_hex:
+        raise ValueError("environment bundle array payload_hex must be a non-empty string")
+    if len(payload_hex) > _MAX_DECOMPRESSED_BLOB_BYTES * 2:
+        raise ValueError("environment bundle array payload exceeds the size cap")
+    dtype_name = blob.get("dtype")
+    if not isinstance(dtype_name, str) or dtype_name not in _ALLOWED_BLOB_DTYPES:
+        raise ValueError(f"environment bundle array dtype is not allowed: {dtype_name!r}")
+    shape_raw = blob.get("shape")
+    if not isinstance(shape_raw, (list, tuple)) or not shape_raw:
+        raise ValueError("environment bundle array shape must be a non-empty list")
+    shape: list[int] = []
+    for dim in shape_raw:
+        if isinstance(dim, bool) or not isinstance(dim, int) or dim < 0:
+            raise ValueError("environment bundle array shape must be non-negative integers")
+        shape.append(dim)
+    dtype = np.dtype(dtype_name)
+    expected = int(dtype.itemsize)
+    for dim in shape:
+        if expected > _MAX_DECOMPRESSED_BLOB_BYTES or dim > _MAX_DECOMPRESSED_BLOB_BYTES:
+            raise ValueError("environment bundle array shape exceeds the size cap")
+        expected *= dim
+        if expected > _MAX_DECOMPRESSED_BLOB_BYTES:
+            raise ValueError("environment bundle array shape exceeds the size cap")
+    try:
+        compressed = bytes.fromhex(payload_hex)
+    except ValueError as exc:
+        raise ValueError("environment bundle array payload_hex is not hex") from exc
+    try:
+        raw = zlib.decompress(compressed, max_length=_MAX_DECOMPRESSED_BLOB_BYTES)
+    except zlib.error as exc:
+        raise ValueError(
+            "environment bundle array failed to decompress within the size cap"
+        ) from exc
+    if len(raw) != expected:
+        raise ValueError("environment bundle array shape does not match its payload")
+    return np.frombuffer(raw, dtype=dtype).reshape(tuple(shape))
+
+
+def _bundle_json(bundle_root: Path, relative: object, *, field_name: str) -> object:
+    if not isinstance(relative, str):
+        raise ValueError(f"{field_name} must be a string path")
+    path = resolve_contained_path(bundle_root, relative, field_name=field_name)
+    return json.loads(read_text_capped(path))
+
+
+def _tile_list(section: object, name: str) -> list[object]:
+    if not isinstance(section, Mapping):
+        raise ValueError(f"environment bundle {name} must be a mapping")
+    tiles = section.get("tiles")
+    if not isinstance(tiles, list):
+        raise ValueError(f"environment bundle {name}.tiles must be a list")
+    if len(tiles) > _MAX_BUNDLE_TILES:
+        raise ValueError(
+            f"environment bundle {name} has {len(tiles)} tiles, "
+            f"over the {_MAX_BUNDLE_TILES} cap"
+        )
+    return tiles
 
 
 def write_environment_bundle(path: str, environment: EnvironmentModel) -> None:
@@ -137,7 +223,12 @@ def write_environment_bundle(path: str, environment: EnvironmentModel) -> None:
 
 def load_environment_bundle(path: str) -> EnvironmentModel:
     bundle_root = Path(path)
-    manifest = json.loads((bundle_root / "environment_manifest.json").read_text(encoding="utf-8"))
+    manifest_path = resolve_contained_path(
+        bundle_root,
+        "environment_manifest.json",
+        field_name="environment_manifest.json",
+    )
+    manifest = json.loads(read_text_capped(manifest_path))
     declared = manifest.get("format_version")
     if declared != ENVIRONMENT_BUNDLE_FORMAT:
         raise ValueError(
@@ -148,8 +239,12 @@ def load_environment_bundle(path: str) -> EnvironmentModel:
 
     terrain_manifest = manifest["terrain"]
     terrain_tiles: dict[tuple[int, int, int], TerrainTile] = {}
-    for tile_meta in terrain_manifest["tiles"]:
-        payload = json.loads((bundle_root / tile_meta["path"]).read_text(encoding="utf-8"))
+    for tile_meta in _tile_list(terrain_manifest, "terrain"):
+        if not isinstance(tile_meta, Mapping):
+            raise ValueError("environment bundle terrain tile must be a mapping")
+        payload = _bundle_json(
+            bundle_root, tile_meta.get("path"), field_name="terrain tile path"
+        )
         terrain_tiles[(int(tile_meta["lod"]), int(tile_meta["tx"]), int(tile_meta["ty"]))] = (
             TerrainTile(
                 tx=int(tile_meta["tx"]),
@@ -177,8 +272,12 @@ def load_environment_bundle(path: str) -> EnvironmentModel:
 
     land_cover_manifest = manifest["land_cover"]
     land_cover_tiles: dict[tuple[int, int], LandCoverTile] = {}
-    for tile_meta in land_cover_manifest["tiles"]:
-        payload = json.loads((bundle_root / tile_meta["path"]).read_text(encoding="utf-8"))
+    for tile_meta in _tile_list(land_cover_manifest, "land_cover"):
+        if not isinstance(tile_meta, Mapping):
+            raise ValueError("environment bundle land-cover tile must be a mapping")
+        payload = _bundle_json(
+            bundle_root, tile_meta.get("path"), field_name="land_cover tile path"
+        )
         land_cover_tiles[(int(tile_meta["tx"]), int(tile_meta["ty"]))] = LandCoverTile(
             tx=int(tile_meta["tx"]),
             ty=int(tile_meta["ty"]),
@@ -199,8 +298,12 @@ def load_environment_bundle(path: str) -> EnvironmentModel:
 
     obstacle_manifest = manifest["obstacles"]
     primitives = []
-    for tile_meta in obstacle_manifest["tiles"]:
-        payload = json.loads((bundle_root / tile_meta["path"]).read_text(encoding="utf-8"))
+    for tile_meta in _tile_list(obstacle_manifest, "obstacles"):
+        if not isinstance(tile_meta, Mapping):
+            raise ValueError("environment bundle obstacle tile must be a mapping")
+        payload = _bundle_json(
+            bundle_root, tile_meta.get("path"), field_name="obstacle tile path"
+        )
         for primitive_meta in payload:
             kind = primitive_meta["kind"]
             if kind == "cylinder-v1":

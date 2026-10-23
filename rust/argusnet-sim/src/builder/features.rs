@@ -172,7 +172,7 @@ pub fn cover_density(class: LandCoverClass, season: SeasonalVariation) -> u8 {
 /// feature's class and polygon.
 pub fn load(path: &str) -> Result<(FeaturesDocument, u64), BuildError> {
     let invalid = |message: String| BuildError::Invalid(format!("features_path {path}: {message}"));
-    let bytes = std::fs::read(path).map_err(|error| invalid(error.to_string()))?;
+    let bytes = super::read_import_limited(path).map_err(invalid)?;
     let document: FeaturesDocument =
         serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
     if document.format != FEATURES_FORMAT || document.version != FEATURES_VERSION {

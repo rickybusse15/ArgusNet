@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from argusnet.core.errors import ValidationError
+from argusnet.core.io_limits import read_text_capped
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
 from argusnet.core.types import BearingObservation, NodeState, TruthState, Vector3, vec3
 from argusnet.core.validation import assert_finite, assert_unit_interval
@@ -423,10 +424,7 @@ class FileReplayIngestionAdapter:
         return nodes, observations
 
     def _run(self) -> None:
-        import json as _json
-
-        with open(self.replay_path) as fh:
-            data = _json.load(fh)
+        data = json.loads(read_text_capped(self.replay_path))
 
         frames = data.get("frames", [])
         if not frames:

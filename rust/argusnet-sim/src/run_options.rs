@@ -192,6 +192,16 @@ impl RunOptions {
 
     /// A fault manifest from a file, checked for format and version.
     pub fn read_faults(path: &std::path::Path) -> Result<FaultManifest, String> {
+        const MAX_FAULT_BYTES: u64 = 256 * 1024 * 1024;
+        let len = std::fs::metadata(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?
+            .len();
+        if len > MAX_FAULT_BYTES {
+            return Err(format!(
+                "{} is {len} bytes, over the {MAX_FAULT_BYTES} byte limit",
+                path.display()
+            ));
+        }
         std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {error}", path.display()))
             .and_then(|text| FaultManifest::from_json(&text))

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,23 +32,75 @@ class TransportSecurityError(ArgusNetError):
     """Raised when a non-loopback endpoint lacks the TLS material it requires."""
 
 
-def is_loopback_host(host: str) -> bool:
-    host = host.strip("[]")
-    if host in ("localhost",):
-        return True
+def _ip_is_loopback(address: str) -> bool:
+    """True for a loopback address, including an IPv4-mapped IPv6 loopback.
+
+    ``ipaddress`` reports ``::ffff:127.0.0.1`` as not loopback. That address
+    still dials 127.0.0.1, including when a resolver returns it for
+    ``localhost``, so it is treated as loopback.
+    """
     try:
-        return ipaddress.ip_address(host).is_loopback
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
     except ValueError:
         return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        return bool(mapped.is_loopback)
+    return bool(ip.is_loopback)
+
+
+def _localhost_resolves_only_to_loopback(host: str) -> bool:
+    """``localhost`` is loopback only when every resolved address is.
+
+    Trusting the name without resolving it lets a poisoned hosts file or DNS
+    answer send plaintext to a non-local address. Any other name is not
+    treated as loopback even if it currently resolves to 127.0.0.1: that
+    would widen the plaintext exemption to attacker-controlled DNS.
+    """
+    if host.lower() != "localhost":
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    return all(_ip_is_loopback(info[4][0]) for info in infos)
+
+
+def is_loopback_host(host: str) -> bool:
+    host = host.strip().strip("[]")
+    if _localhost_resolves_only_to_loopback(host):
+        return True
+    return _ip_is_loopback(host)
+
+
+def endpoint_host(endpoint: str) -> str:
+    """Host a URL parser would dial, not the substring before the first colon.
+
+    ``127.0.0.1:80@evil.example:443`` is userinfo ``127.0.0.1:80`` and host
+    ``evil.example``. Splitting on the first colon reports the loopback
+    address and would exempt a remote plaintext connection.
+    """
+    if "://" in endpoint:
+        endpoint = endpoint.split("://", 1)[1]
+    for separator in "/?#":
+        endpoint = endpoint.split(separator, 1)[0]
+    if "@" in endpoint:
+        endpoint = endpoint.rsplit("@", 1)[1]
+    if endpoint.startswith("["):
+        end = endpoint.find("]")
+        if end == -1:
+            return endpoint
+        return endpoint[1:end]
+    if ":" in endpoint:
+        return endpoint.rsplit(":", 1)[0]
+    return endpoint
 
 
 def is_loopback_endpoint(endpoint: str) -> bool:
     """``endpoint`` is ``host:port``, with IPv6 hosts written as ``[::1]:50051``."""
-    if endpoint.startswith("["):
-        host = endpoint[1 : endpoint.index("]")]
-    else:
-        host = endpoint.rsplit(":", 1)[0] if ":" in endpoint else endpoint
-    return is_loopback_host(host)
+    return is_loopback_host(endpoint_host(endpoint))
 
 
 @dataclass(frozen=True)
