@@ -1360,6 +1360,11 @@ pub(super) fn section_runtime_overlays(
             "Localization ellipses",
         );
         ui.checkbox(&mut mission_overlay.show_egress_paths, "Egress paths");
+        ui.checkbox(
+            &mut mission_overlay.show_allocation_lines,
+            "Allocation lines",
+        )
+        .on_hover_text("A line from each drone to the POI it holds");
     });
 }
 

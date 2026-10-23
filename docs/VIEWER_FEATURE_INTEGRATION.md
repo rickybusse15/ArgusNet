@@ -278,6 +278,13 @@ live).
 | V3 Layers and timeline | Belief/truth primary toggle, layer chips, projection toggle with reset and scale, error and map-known curves on the timeline, live history window | Truth hidden outside Evaluation; scrubbing never implies a live flight is paused |
 | V4 Planned-feature surfaces | P0b assignment history and efficiency metrics, P1 allocation lines, R0–R4 world layers, scheduler lane rates in Diagnostics | Each ships with the backend slice that produces its data; no panel without a source |
 
+**V4 status (2026-10-23):** allocation lines are built
+(`allocation_lines.rs`). Each drone holding a POI that is not yet complete gets
+a line to it, with a ring at the POI. The line is brighter while the drone
+dwells there. It is drawn from the frame's own mission state, and a POI without
+a recorded position or a drone draws nothing. The line has a Mission-overlays
+toggle, "Allocation lines", which no preset owns.
+
 V0 is the prerequisite for everything that makes live look like the console;
 V1–V3 can proceed on replay in parallel and are verified there first, then
 re-verified on live once V0 lands. V4 items are scheduled by their owning
