@@ -251,10 +251,25 @@ struct DriverCheckpoint {
     /// (R3). Absent when none.
     #[serde(default, skip_serializing_if = "is_zero")]
     mapped_wires: usize,
+    /// Pending POIs no drone can afford under contingency_v1 (F5). Absent
+    /// when none.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    unassigned: BTreeSet<String>,
 }
 
 fn is_zero(count: &usize) -> bool {
     *count == 0
+}
+
+/// Why a drone gives up the POI it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GiveUp {
+    /// At its reserve home, and heading there.
+    Reserve,
+    /// Below the fixed handoff fraction (efficient_v1).
+    Low,
+    /// It can no longer afford the dwell left and the trip home (F5).
+    CannotFinish,
 }
 
 /// A drone sweeping one hole in the coverage map (P4).
@@ -277,6 +292,9 @@ pub struct DriverReport {
     pub total_count: usize,
     /// `_shared_state.coordinator_id`.
     pub coordinator_drone_id: Option<String>,
+    /// Pending POIs no drone can afford to finish and fly home from, under
+    /// contingency_v1 (F5): reported unassigned, not merely pending.
+    pub unassigned: BTreeSet<String>,
 }
 
 /// `CoordinationManager.elect_coordinator`: the highest battery fraction,
@@ -363,6 +381,9 @@ pub struct MissionDriverStage {
     mapped_bounds: Option<Bounds2d>,
     /// Whether this run mapped more wires than the last. Transient.
     replan_for_wires: bool,
+    /// Pending POIs no drone can afford under contingency_v1 (F5).
+    /// Checkpointed.
+    unassigned: BTreeSet<String>,
 }
 
 /// The obstacle layer the driver plans routes over (P3), with its planner.
@@ -985,6 +1006,14 @@ impl Flight {
 /// unless it is that much further. Tuned on the qualification seeds only.
 pub const PRIORITY_WORTH_WH: f64 = 5.0;
 
+/// Under [`PlanningPolicy::ContingencyV1`] (F5), the margin above its reserve
+/// home, as a fraction of capacity, that a drone must keep after new work to
+/// take it. It gives work up only when finishing would leave less than the
+/// reserve itself, so the band between is hysteresis: a drone that spends
+/// energy as its plan said never drops a POI it has just taken; only a
+/// change the plan did not price (a headwind, a longer way home) moves it.
+pub const CONTINGENCY_TAKE_MARGIN_FRACTION: f64 = 0.05;
+
 /// The longest route home, as a multiple of the straight line, that a
 /// drone's reserve check prices exactly under efficient_v1 (P3). A drone with
 /// the energy to fly this far home, against the worst the wind can do, is
@@ -1073,6 +1102,7 @@ impl MissionDriverStage {
             mapped_wires: 0,
             mapped_bounds: None,
             replan_for_wires: false,
+            unassigned: BTreeSet::new(),
         }
     }
 
@@ -1196,7 +1226,7 @@ impl MissionDriverStage {
     /// routes, a layer is known and the planner finds one. A route that does
     /// not turn is returned too, as two points.
     fn route(&self, from: [f64; 3], to: [f64; 3]) -> Option<PlannerRoute> {
-        if self.policy != PlanningPolicy::EfficientV1 {
+        if !self.policy.is_efficient() {
             return None;
         }
         self.obstacles.as_ref()?.route(from, to)
@@ -1212,9 +1242,7 @@ impl MissionDriverStage {
     /// outcome is kept for later runs.
     fn corners_between(&self, from: [f64; 3], to: [f64; 3], fixed_ends: bool) -> Option<Corners> {
         let kept = match (fixed_ends, &self.obstacles) {
-            (true, Some(obstacles)) if self.policy == PlanningPolicy::EfficientV1 => {
-                Some(&obstacles.kept)
-            }
+            (true, Some(obstacles)) if self.policy.is_efficient() => Some(&obstacles.kept),
             _ => None,
         };
         let key = route_key(from, to);
@@ -1246,7 +1274,7 @@ impl MissionDriverStage {
         to: [f64; 3],
         corners: Option<Corners>,
     ) -> Option<Corners> {
-        if self.policy != PlanningPolicy::EfficientV1 {
+        if !self.policy.is_efficient() {
             return corners;
         }
         let Some(obstacles) = self.obstacles.as_ref().filter(|o| o.guards_anything()) else {
@@ -2218,6 +2246,38 @@ impl MissionDriverStage {
         }
     }
 
+    /// Fly every drone sent home on its own reserve home again, from where
+    /// it is, after the mission's egress drops every recall at once.
+    fn keep_reserve_returns(&mut self, mobile: &[(String, [f64; 3])], at_s: f64) {
+        for (id, position) in mobile {
+            if !self.homeward.contains(id) {
+                continue;
+            }
+            let Some(home) = self.homes.get(id).copied() else {
+                continue;
+            };
+            let flight = self.flight(*position, home, at_s);
+            let mut inputs = serde_json::json!({ "position_m": position });
+            flight.record(&mut inputs);
+            self.override_commands
+                .push(OverrideCommand::SetEgress(id.clone(), flight.trajectory));
+            self.decisions.push(Decision {
+                kind: "return_home",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason: "reserve_return_kept",
+                detail: format!(
+                    "the mission's recall ended, but {id} went home on its own reserve: it \
+                     stays on its way home"
+                ),
+                inputs,
+                command: Some("set_egress"),
+            });
+        }
+    }
+
     /// Safe handoff under efficient_v1 (P1). Every drone below the handoff
     /// threshold gives up the POI it holds. A lead's POI goes to a receiver
     /// that can afford the dwell still to do and the trip home above its
@@ -2235,17 +2295,43 @@ impl MissionDriverStage {
                 .map_or(1.0, |remaining| remaining / capacity_wh)
         };
         let threshold = self.config.handoff_low_fraction;
+        // Under contingency_v1 (F5) a holder gives its POI up when it can no
+        // longer afford what is left of it and the trip home, whatever its
+        // fraction; otherwise below the fixed threshold.
+        let contingency = self.policy.plans_contingencies();
+        let cannot_finish = if contingency {
+            self.holders_that_cannot_finish(mobile, battery)
+        } else {
+            BTreeSet::new()
+        };
         // A drone at its reserve is already homeward; say so, rather than
         // that its battery is low, whatever its fraction.
         let homeward = self.homeward.clone();
-        let giving_up = |id: &str| fraction_of(id) < threshold || homeward.contains(id);
-        let why = |id: &str| -> (bool, String) {
+        let giving_up = |id: &str| {
+            homeward.contains(id)
+                || if contingency {
+                    cannot_finish.contains(id)
+                } else {
+                    fraction_of(id) < threshold
+                }
+        };
+        let why = |id: &str| -> (GiveUp, String) {
             if homeward.contains(id) {
-                (true, format!("{id} at its reserve and heading home"))
+                (
+                    GiveUp::Reserve,
+                    format!("{id} at its reserve and heading home"),
+                )
+            } else if contingency {
+                (
+                    GiveUp::CannotFinish,
+                    format!("{id} can no longer afford the dwell left and the trip home"),
+                )
             } else {
-                (false, format!("{id} below {threshold} of capacity"))
+                (GiveUp::Low, format!("{id} below {threshold} of capacity"))
             }
         };
+        // New work needs this much above the reserve (F5's hysteresis).
+        let take_margin_wh = self.take_margin_wh(&battery.model());
         let mut low: Vec<&(String, [f64; 3])> = mobile
             .iter()
             .filter(|(id, _)| giving_up(id) && self.pois.assignment_for(id).is_some())
@@ -2260,7 +2346,8 @@ impl MissionDriverStage {
             low.into_iter().partition(|(id, _)| self.pois.leads(id));
         for (teammate, _) in teammates {
             let poi = self.pois.assignment_for(teammate).map(str::to_string);
-            let (at_reserve, cause) = why(teammate);
+            let (given_up, cause) = why(teammate);
+            let at_reserve = given_up == GiveUp::Reserve;
             self.pois.release(teammate);
             self.decisions.push(Decision {
                 kind: "poi_release",
@@ -2268,10 +2355,10 @@ impl MissionDriverStage {
                 subject: Some(teammate.clone()),
                 selected: poi.clone(),
                 candidates: Vec::new(),
-                reason: if at_reserve {
-                    "reserve_teammate"
-                } else {
-                    "low_battery_teammate"
+                reason: match given_up {
+                    GiveUp::Reserve => "reserve_teammate",
+                    GiveUp::Low => "low_battery_teammate",
+                    GiveUp::CannotFinish => "cannot_finish_teammate",
                 },
                 detail: format!(
                     "{cause} leaves {}'s team",
@@ -2344,7 +2431,7 @@ impl MissionDriverStage {
                             None => model.capacity_wh * model.reserve_fraction,
                         };
                         let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
-                        (remaining_wh - spent_wh >= reserve_wh).then_some(spent_wh)
+                        (remaining_wh - spent_wh >= reserve_wh + take_margin_wh).then_some(spent_wh)
                     })
                     .collect()
             })
@@ -2358,7 +2445,8 @@ impl MissionDriverStage {
         for ((lead, _), receiver) in leads.iter().zip(chosen) {
             let poi = self.pois.assignment_for(lead).map(str::to_string);
             let fraction = fraction_of(lead);
-            let (at_reserve, cause) = why(lead);
+            let (given_up, cause) = why(lead);
+            let at_reserve = given_up == GiveUp::Reserve;
             match receiver {
                 Some(column) => {
                     let to = &receivers[column].0;
@@ -2370,10 +2458,10 @@ impl MissionDriverStage {
                         subject: Some(lead.clone()),
                         selected: Some(to.clone()),
                         candidates: candidates.clone(),
-                        reason: if at_reserve {
-                            "reserve_handoff"
-                        } else {
-                            "safe_handoff"
+                        reason: match given_up {
+                            GiveUp::Reserve => "reserve_handoff",
+                            GiveUp::Low => "safe_handoff",
+                            GiveUp::CannotFinish => "cannot_finish_handoff",
                         },
                         detail: format!(
                             "{cause} hands {} to {to}, the cheapest drone that can afford \
@@ -2422,6 +2510,153 @@ impl MissionDriverStage {
         }
     }
 
+    /// The margin above its reserve a drone keeps to take new work: none but
+    /// under contingency_v1 (F5, [`CONTINGENCY_TAKE_MARGIN_FRACTION`]).
+    fn take_margin_wh(&self, model: &BatteryModel) -> f64 {
+        if self.policy.plans_contingencies() {
+            model.capacity_wh * CONTINGENCY_TAKE_MARGIN_FRACTION
+        } else {
+            0.0
+        }
+    }
+
+    /// The drones holding a POI that can no longer afford to finish it and
+    /// fly home (F5): the trip there from where they are (none once in
+    /// range), their share of the dwell left with the holders already in
+    /// range, and the reserve home from the POI. Checked every run, so a
+    /// headwind or a longer way home moves the work as soon as it costs too
+    /// much, not when the battery falls past a fixed fraction.
+    fn holders_that_cannot_finish(
+        &self,
+        mobile: &[(String, [f64; 3])],
+        battery: &BatteryStage,
+    ) -> BTreeSet<String> {
+        let model = battery.model();
+        let wind = battery.wind_mps();
+        let active = self.pois.active_pois();
+        let in_range = |position: &[f64; 3], poi: [f64; 3]| {
+            let (dx, dy) = (poi[0] - position[0], poi[1] - position[1]);
+            (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
+        };
+        // To a fixed point: a teammate that gives the POI up (homeward, or
+        // unable to finish itself) shares none of the dwell, which can leave
+        // a drone that relied on it unable to finish too. The set only
+        // grows, so this ends.
+        let mut cannot = BTreeSet::new();
+        loop {
+            let leaving = |other: &String| cannot.contains(other) || self.homeward.contains(other);
+            let mut newly = Vec::new();
+            for (id, position) in mobile {
+                if cannot.contains(id) {
+                    continue;
+                }
+                let Some(held) = self.pois.assignment_for(id) else {
+                    continue;
+                };
+                let Some(poi) = active.iter().find(|poi| poi.poi_id == held) else {
+                    continue;
+                };
+                let sharing = mobile
+                    .iter()
+                    .filter(|(other, other_position)| {
+                        other != id
+                            && !leaving(other)
+                            && self.pois.assignment_for(other) == Some(held)
+                            && in_range(other_position, poi.position)
+                    })
+                    .count();
+                let hover_s = poi.remaining_dwell_s.max(0.0) / (sharing + 1) as f64;
+                let trip_wh = if in_range(position, poi.position) {
+                    0.0
+                } else {
+                    self.trip_cost_wh(&model, *position, poi.position)
+                };
+                let spent_wh = trip_wh + model.hover_power_w * hover_s / 3600.0;
+                let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
+                if remaining_wh - spent_wh < self.reserve_for(&model, id, poi.position, wind) {
+                    newly.push(id.clone());
+                }
+            }
+            // Added after the pass, so one pass judges a whole team on the
+            // same teammates.
+            if newly.is_empty() {
+                return cannot;
+            }
+            cannot.extend(newly);
+        }
+    }
+
+    /// Under contingency_v1 (F5), mark the pending POIs that no drone still
+    /// working (not homeward) could afford, from where it is now, with the
+    /// margin new work needs; and clear the mark from one that some drone
+    /// could afford again. Each change is a decision. A marked POI is
+    /// reported unassigned and no longer holds the mission open.
+    fn mark_unaffordable(
+        &mut self,
+        mobile: &[(String, [f64; 3])],
+        battery: &BatteryStage,
+        timestamp_s: f64,
+    ) {
+        let model = battery.model();
+        let wind = battery.wind_mps();
+        let margin_wh = self.take_margin_wh(&model);
+        let mut pending = self.pois.pending_pois();
+        pending.sort_by(|a, b| a.poi_id.cmp(&b.poi_id).then(a.index.cmp(&b.index)));
+        let workers: Vec<&(String, [f64; 3])> = mobile
+            .iter()
+            .filter(|(id, _)| !self.homeward.contains(id.as_str()))
+            .collect();
+        let mut now = BTreeSet::new();
+        for poi in &pending {
+            let affordable = workers.iter().any(|(id, position)| {
+                let spent_wh = self.trip_cost_wh(&model, *position, poi.position)
+                    + model.hover_power_w * poi.required_dwell_s.max(0.0) / 3600.0;
+                let remaining_wh = battery.remaining_wh(id).unwrap_or(model.capacity_wh);
+                remaining_wh - spent_wh
+                    >= self.reserve_for(&model, id, poi.position, wind) + margin_wh
+            });
+            if !affordable {
+                now.insert(poi.poi_id.clone());
+            }
+        }
+        let candidates: Vec<String> = workers.iter().map(|(id, _)| id.clone()).collect();
+        for poi in now.difference(&self.unassigned) {
+            self.decisions.push(Decision {
+                kind: "poi_unassigned",
+                status: DecisionStatus::Applied,
+                subject: None,
+                selected: Some(poi.clone()),
+                candidates: candidates.clone(),
+                reason: "no_affordable_drone",
+                detail: format!(
+                    "no drone still working can afford {poi}'s trip and dwell and the trip \
+                     home with the margin new work needs: it is reported unassigned and \
+                     no longer holds the mission open"
+                ),
+                inputs: serde_json::json!({
+                    "timestamp_s": timestamp_s,
+                    "take_margin_wh": margin_wh,
+                    "homeward": self.homeward,
+                }),
+                command: None,
+            });
+        }
+        for poi in self.unassigned.difference(&now) {
+            self.decisions.push(Decision {
+                kind: "poi_unassigned",
+                status: DecisionStatus::Applied,
+                subject: None,
+                selected: Some(poi.clone()),
+                candidates: candidates.clone(),
+                reason: "affordable_again",
+                detail: format!("a drone can afford {poi} again: it is pending once more"),
+                inputs: serde_json::json!({ "timestamp_s": timestamp_s }),
+                command: None,
+            });
+        }
+        self.unassigned = now;
+    }
+
     /// Release `drone_id`'s POI redirect, so it stops flying to a POI it no
     /// longer holds.
     fn stop_flying_to_poi(&mut self, drone_id: &str) {
@@ -2454,7 +2689,10 @@ impl MissionDriverStage {
         };
         self.hand_off_safely(mobile, battery);
         let threshold = self.config.handoff_low_fraction;
-        let low = |id: &str| fraction_of(id) < threshold;
+        // Under contingency_v1 affordability alone decides (F5).
+        let contingency = self.policy.plans_contingencies();
+        let low = |id: &str| !contingency && fraction_of(id) < threshold;
+        let take_margin_wh = self.take_margin_wh(&battery.model());
         // A drone below the handoff threshold takes nothing new: it has just
         // given its POI up, or would be giving it up.
         let mut free: Vec<&(String, [f64; 3])> = mobile
@@ -2482,7 +2720,7 @@ impl MissionDriverStage {
                         let spent_wh = self.trip_cost_wh(&model, *position, *poi_position)
                             + model.hover_power_w * poi.required_dwell_s.max(0.0) / 3600.0;
                         let reserve_wh = self.reserve_for(&model, id, *poi_position, wind);
-                        (remaining_wh - spent_wh >= reserve_wh)
+                        (remaining_wh - spent_wh >= reserve_wh + take_margin_wh)
                             .then_some(spent_wh - PRIORITY_WORTH_WH * poi.priority as f64)
                     })
                     .collect()
@@ -2521,7 +2759,7 @@ impl MissionDriverStage {
                     // A holder about to hand the POI on leaves it this run,
                     // and the newcomer would hover alone until its receiver
                     // arrived.
-                    fraction_of(id) >= self.config.handoff_low_fraction && {
+                    (contingency || fraction_of(id) >= self.config.handoff_low_fraction) && {
                         let (dx, dy) =
                             (poi.position[0] - position[0], poi.position[1] - position[1]);
                         (dx * dx + dy * dy).sqrt() <= POI_DWELL_RANGE_M
@@ -2558,8 +2796,8 @@ impl MissionDriverStage {
                         let spent_wh = self.trip_cost_wh(&model, *position, poi.position)
                             + model.hover_power_w * together_s / 3600.0;
                         (remaining_wh - spent_wh
-                            >= self.reserve_for(&model, id, poi.position, wind))
-                        .then_some(spent_wh)
+                            >= self.reserve_for(&model, id, poi.position, wind) + take_margin_wh)
+                            .then_some(spent_wh)
                     })
                     .collect()
             })
@@ -2624,6 +2862,7 @@ impl MissionDriverStage {
             completed_count: self.pois.completed_count(),
             total_count: self.pois.total_count(),
             coordinator_drone_id: self.coordinator.clone(),
+            unassigned: self.unassigned.clone(),
         };
     }
 
@@ -2698,13 +2937,16 @@ impl MissionDriverStage {
                 .map_or(1.0, |remaining| remaining / capacity_wh)
         };
         let mut unassigned: Vec<String> = Vec::new();
-        let efficient = self.policy == PlanningPolicy::EfficientV1;
+        let efficient = self.policy.is_efficient();
         let mut pending_before = self.pending_poi_ids();
         let mut joins = Vec::new();
         if efficient {
             // In the order the allocator considers them, by id.
             pending_before.sort();
             joins = self.allocate_fleet_wide(mobile, battery);
+            if self.policy.plans_contingencies() {
+                self.mark_unaffordable(mobile, battery, timestamp_s);
+            }
         }
         for join in &joins {
             self.decisions.push(Decision {
@@ -3009,12 +3251,11 @@ impl StageHandler for MissionDriverStage {
 
         // The wires the self-built map holds now (R3), before any flight is
         // planned this run.
-        self.replan_for_wires =
-            self.policy == PlanningPolicy::EfficientV1 && self.follow_mapped_wires();
+        self.replan_for_wires = self.policy.is_efficient() && self.follow_mapped_wires();
         if self.replan_for_wires {
             self.replan_egress_for_wires(&mobile, phase, timestamp_s);
         }
-        if self.policy == PlanningPolicy::EfficientV1 {
+        if self.policy.is_efficient() {
             self.send_low_drones_home(&mobile, battery, timestamp_s);
         }
         if phase == MissionPhase::Inspecting {
@@ -3066,7 +3307,7 @@ impl StageHandler for MissionDriverStage {
             && coverage_fraction >= self.machine.config().scan_coverage_threshold;
         // The holes themselves, for the gap filler (P4), in a run with a
         // prior map; their share is the gate's input.
-        let holes = (gate_open && belief.is_none() && self.policy == PlanningPolicy::EfficientV1)
+        let holes = (gate_open && belief.is_none() && self.policy.is_efficient())
             .then(|| gap_cells(mapping));
         let gap_cell_fraction = gate_open.then(|| match (&belief, &holes) {
             (Some(belief), _) => {
@@ -3075,7 +3316,16 @@ impl StageHandler for MissionDriverStage {
             (None, Some((cells, total))) => cells.len() as f64 / (*total).max(1) as f64,
             (None, None) => gap_cell_fraction(mapping),
         });
-        let all_pois_complete = self.pois.all_complete();
+        // Under contingency_v1 a POI no drone can afford is closed for the
+        // mission (F5): reported unassigned, it does not hold it open.
+        let all_pois_complete = if self.policy.plans_contingencies() {
+            self.pois
+                .statuses()
+                .iter()
+                .all(|s| s.state == PoiState::Complete || self.unassigned.contains(&s.poi_id))
+        } else {
+            self.pois.all_complete()
+        };
         let gate_inputs = serde_json::json!({
             "coverage_fraction": coverage_fraction,
             "gap_cell_fraction": gap_cell_fraction,
@@ -3146,7 +3396,7 @@ impl StageHandler for MissionDriverStage {
                         command: Some("set_egress"),
                     });
                 }
-                MissionEvent::EgressRoutesCleared { .. } => {
+                MissionEvent::EgressRoutesCleared { at_s } => {
                     self.override_commands.push(OverrideCommand::ClearAllEgress);
                     self.decisions.push(Decision {
                         kind: "egress_cleared",
@@ -3159,6 +3409,14 @@ impl StageHandler for MissionDriverStage {
                         inputs: gate_inputs.clone(),
                         command: Some("clear_all_egress"),
                     });
+                    // The mission's recall is over, but a drone sent home on
+                    // its own reserve still has to stay there: dropped with
+                    // the rest, it would fly its lanes again until its
+                    // battery ran out, since a homeward drone is never sent
+                    // home twice.
+                    if self.policy.is_efficient() {
+                        self.keep_reserve_returns(&mobile, at_s);
+                    }
                 }
                 MissionEvent::PhaseChanged { from, to, .. } => {
                     self.decisions.push(Decision {
@@ -3190,7 +3448,7 @@ impl StageHandler for MissionDriverStage {
                 MissionEvent::RescorePois { .. } => {}
             }
         }
-        if self.policy == PlanningPolicy::EfficientV1 {
+        if self.policy.is_efficient() {
             self.fill_gaps(
                 holes,
                 gap_cell_fraction,
@@ -3218,6 +3476,7 @@ impl StageHandler for MissionDriverStage {
             homeward: self.homeward.clone(),
             gap_fill: self.gap_fill.clone(),
             mapped_wires: self.mapped_wires,
+            unassigned: self.unassigned.clone(),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -3260,6 +3519,7 @@ impl StageHandler for MissionDriverStage {
         self.homeward = decoded.homeward;
         self.gap_fill = decoded.gap_fill;
         self.mapped_wires = decoded.mapped_wires;
+        self.unassigned = decoded.unassigned;
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -3289,7 +3549,7 @@ impl StageHandler for MissionDriverStage {
         // home at once, not at the next run: what it would fly meanwhile is
         // the energy that gets it home. Its POI goes at the next run, which
         // treats a homeward drone as giving it up.
-        if self.policy == PlanningPolicy::EfficientV1 {
+        if self.policy.is_efficient() {
             let empty = BatteryStage::new();
             let battery = stage_one_battery(context.stages).unwrap_or(&empty);
             self.send_low_drones_home(&mobile, battery, context.timestamp_s);
@@ -3311,6 +3571,7 @@ impl StageHandler for MissionDriverStage {
         }
         self.mapped_installed = 0;
         self.mapped_wires = 0;
+        self.unassigned.clear();
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -4343,6 +4604,37 @@ mod tests {
         assert_eq!(left.reason, "low_battery_teammate");
         assert!(stage.pois.leads("drone-a"), "the lead keeps it");
         assert_eq!(stage.pois.assignment_for("drone-b"), None);
+    }
+
+    /// F5: a teammate that cannot finish shares none of the dwell, so a
+    /// drone that could afford the POI only with it cannot either: the
+    /// test runs to a fixed point. 600 s of dwell at 300 W is 50 Wh alone,
+    /// 25 Wh shared; the reserve floor is 20 Wh.
+    #[test]
+    fn contingency_v1_drops_a_holder_that_relied_on_a_leaving_teammate() {
+        let (mut battery, mobile) = fleet(&[("drone-a", 500.0), ("drone-b", 510.0)]);
+        let mut stage = driver(vec![InspectionPoi {
+            required_dwell_s: 600.0,
+            ..poi("poi-00", 500.0, 1)
+        }]);
+        stage.set_policy(PlanningPolicy::ContingencyV1).unwrap();
+        stage.inspect(0.0, 1.0, &mobile, &battery, &empty_map());
+        assert_eq!(stage.pois.assignment_for("drone-a"), Some("poi-00"));
+        assert_eq!(stage.pois.assignment_for("drone-b"), Some("poi-00"));
+        // a: 30 Wh, short even sharing (25 + 20). b: 46 Wh, enough sharing
+        // (25 + 20) but not alone (50 + 20).
+        assert!(battery.set_remaining_wh("drone-a", 30.0));
+        assert!(battery.set_remaining_wh("drone-b", 46.0));
+        let cannot = stage.holders_that_cannot_finish(&mobile, &battery);
+        assert_eq!(
+            cannot.into_iter().collect::<Vec<_>>(),
+            ["drone-a", "drone-b"]
+        );
+        // With a teammate that can finish, b keeps it.
+        assert!(battery.set_remaining_wh("drone-a", 60.0));
+        assert!(stage
+            .holders_that_cannot_finish(&mobile, &battery)
+            .is_empty());
     }
 
     /// A wall across the x axis at x = 300, 400 m long and 10 m thick, in a

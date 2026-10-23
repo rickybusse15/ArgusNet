@@ -18,6 +18,13 @@ pub enum PlanningPolicy {
     /// includes the hover for the dwell and refuses a POI a drone could not
     /// afford to finish and fly home from.
     EfficientV1,
+    /// `efficient_v1` with continuous energy contingencies (F5): a drone
+    /// gives a POI up when it can no longer afford the dwell left and the
+    /// trip home, not at a fixed battery fraction; it takes new work only
+    /// with a margin above that (hysteresis, so a POI is not taken and then
+    /// dropped); and a POI no drone can afford is reported unassigned rather
+    /// than left pending.
+    ContingencyV1,
 }
 
 impl PlanningPolicy {
@@ -25,10 +32,22 @@ impl PlanningPolicy {
         *self == PlanningPolicy::Reference
     }
 
+    /// Whether the fleet-wide planner (P1-P4, R2, R3) decides: every policy
+    /// but the reference.
+    pub fn is_efficient(&self) -> bool {
+        !self.is_reference()
+    }
+
+    /// Whether energy contingencies are planned continuously (F5).
+    pub fn plans_contingencies(&self) -> bool {
+        *self == PlanningPolicy::ContingencyV1
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             PlanningPolicy::Reference => "reference",
             PlanningPolicy::EfficientV1 => "efficient_v1",
+            PlanningPolicy::ContingencyV1 => "contingency_v1",
         }
     }
 }

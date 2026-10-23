@@ -437,6 +437,11 @@ pub struct ReplayPoiStatus {
     pub completion_time_s: Option<f64>,
     pub dwell_accumulated_s: f64,
     pub position: Option<[f64; 3]>,
+    /// Why a pending POI has no drone, when the planner says so
+    /// (contingency_v1, F5: `no_affordable_drone`). Absent otherwise, so
+    /// every other replay is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unassigned_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

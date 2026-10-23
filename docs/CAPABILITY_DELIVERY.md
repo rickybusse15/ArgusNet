@@ -1,7 +1,7 @@
 # Capability delivery and viewer integration
 
-Status (2026-10-12): F1, F3 and F4 have shipped as replay and mission slices, and
-F2 has its first slice; F5–F7 are planned (see [migration status](migration/STATUS.md)
+Status (2026-10-23): F1, F3 and F4 have shipped as replay and mission slices, and
+F2 and F5 have their first slices; F6 and F7 are planned (see [migration status](migration/STATUS.md)
 for each slice's evidence). For the planned ones, existing modules are starting
 points, not evidence that these end-to-end features ship.
 This document translates the [roadmap](ROADMAP.md) and

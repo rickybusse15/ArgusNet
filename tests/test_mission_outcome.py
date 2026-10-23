@@ -126,6 +126,23 @@ class MissionOutcomeTest(unittest.TestCase):
         self.assertEqual(_codes(outcome), ["pois_not_inspected", "mission_not_complete"])
         self.assertEqual(outcome["reasons"][0]["evidence"][0]["id"], "poi-1")
 
+    def test_a_poi_no_drone_could_afford_says_so(self) -> None:
+        replay = _completed()
+        pois = [
+            {"poi_id": "poi-0", "status": "complete"},
+            {"poi_id": "poi-1", "status": "pending", "unassigned_reason": "no_affordable_drone"},
+        ]
+        replay["frames"][-1] = _frame(9, phase="complete", pois=pois)
+        outcome = mission_outcome(replay)
+        self.assertEqual(outcome["outcome"], "objectives_unmet")
+        self.assertEqual(_codes(outcome), ["pois_not_inspected"])
+        evidence = outcome["reasons"][0]["evidence"][0]
+        self.assertEqual(evidence["unassigned_reason"], "no_affordable_drone")
+        self.assertEqual(
+            outcome["objectives"]["unassigned_pois"],
+            [{"poi_id": "poi-1", "reason": "no_affordable_drone"}],
+        )
+
     def test_missing_measurements_are_unavailable_not_zero(self) -> None:
         replay = copy.deepcopy(_completed())
         for frame in replay["frames"]:
