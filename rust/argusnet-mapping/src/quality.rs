@@ -93,10 +93,12 @@ impl QualityRequirement {
     }
 
     /// Whether the declared bias alone exceeds the vertical requirement:
-    /// then no cell can ever meet it.
+    /// then no cell can ever meet it. A bias equal to the requirement is
+    /// not: a noiseless cell's sigma reaches it exactly, and the sigma
+    /// check accepts equality.
     pub fn bias_exceeds_sigma(&self) -> bool {
         self.max_vertical_sigma_m
-            .is_some_and(|sigma| self.bias_floor_m >= sigma)
+            .is_some_and(|sigma| self.bias_floor_m > sigma)
     }
 }
 
@@ -321,6 +323,15 @@ mod tests {
             DeficitReason::BiasLimited,
             "no count beats a bias above the requirement"
         );
+        // A bias equal to the requirement is reachable: with no noise and
+        // identical heights the sigma is exactly the bias.
+        let equal = QualityRequirement {
+            bias_floor_m: 0.5,
+            ..r.clone()
+        };
+        let quality = assess(&evidence(8, 10.0, 0.0), area, 0.0, &equal);
+        assert_eq!(quality.vertical_sigma_m, Some(0.5));
+        assert_eq!(quality.reason, DeficitReason::Met);
     }
 
     #[test]

@@ -273,3 +273,30 @@ fn an_invalid_requirement_is_refused_before_the_run() {
         .unwrap_err();
     assert!(error.contains("must name"), "{error}");
 }
+
+#[test]
+fn a_checkpoint_from_other_quality_tracking_is_refused() {
+    let bundle = bundle("scenario_bundle_scan.json");
+    let checkpoint_of = |config: ExplorationConfig| {
+        let mut run = run_with(&bundle, config);
+        for _ in 0..10 {
+            run.step().unwrap();
+        }
+        run.sim.checkpoint().unwrap()
+    };
+    let without = checkpoint_of(ExplorationConfig::default());
+    let at_40 = checkpoint_of(with_quality(requirement()));
+    let at_20 = checkpoint_of(with_quality(QualityRequirement {
+        max_incidence_deg: 20.0,
+        ..requirement()
+    }));
+    let mut tracked = run_with(&bundle, with_quality(requirement()));
+    assert!(tracked.restore(&without).is_err(), "no evidence to resume");
+    assert!(tracked.restore(&at_20).is_err(), "another incidence limit");
+    assert!(tracked.restore(&at_40).is_ok());
+    let mut plain = run_with(&bundle, ExplorationConfig::default());
+    assert!(
+        plain.restore(&at_40).is_err(),
+        "evidence the run cannot use"
+    );
+}

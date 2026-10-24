@@ -859,8 +859,15 @@ impl StageHandler for MappingStage {
         }
         match (&self.belief, &decoded.belief) {
             (None, None) => {}
-            (Some(belief), Some(saved)) if belief.grid.same_layout(saved) => {}
-            (Some(_), Some(_)) => return Err(malformed("the belief grid's layout differs")),
+            (Some(belief), Some(saved)) if !belief.grid.same_layout(saved) => {
+                return Err(malformed("the belief grid's layout differs"))
+            }
+            (Some(belief), Some(saved)) if !belief.grid.same_quality_tracking(saved) => {
+                return Err(malformed(
+                    "the belief grid's quality tracking differs (requirement or incidence limit)",
+                ))
+            }
+            (Some(_), Some(_)) => {}
             (Some(_), None) | (None, Some(_)) => {
                 return Err(malformed(
                     "one run builds its own map and the other has a prior one",

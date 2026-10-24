@@ -385,6 +385,13 @@ impl BeliefGrid {
         self.reset_wires();
     }
 
+    /// Whether `other` keeps accepted evidence under the same incidence
+    /// limit (SR5a), or neither keeps any: a checkpoint's evidence is only
+    /// meaningful under the admission policy that gathered it.
+    pub fn same_quality_tracking(&self, other: &Self) -> bool {
+        self.accept_incidence_deg == other.accept_incidence_deg
+    }
+
     /// Whether `other` covers the same cells (for a checkpoint's check).
     pub fn same_layout(&self, other: &Self) -> bool {
         self.nx == other.nx
