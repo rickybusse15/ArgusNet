@@ -177,6 +177,25 @@ impl LoopedWaypointPath {
         lane
     }
 
+    /// This lane flown no higher than `agl_m` above the ground it believes:
+    /// its base height, with its vertical swing, and its floor, held under
+    /// the cap. Unchanged when it already flies lower.
+    pub fn with_agl_cap(self, agl_m: f64) -> Self {
+        let base = (agl_m - self.config.vertical_amplitude_m.abs()).max(0.0);
+        if self.config.base_agl_m <= base && self.config.min_agl_m <= base {
+            return self;
+        }
+        let speed_mps = self.speed_mps;
+        let config = WaypointPathConfig {
+            base_agl_m: self.config.base_agl_m.min(base),
+            min_agl_m: self.config.min_agl_m.min(base),
+            ..self.config.clone()
+        };
+        let mut lane = Self::new(config).expect("a valid lane stays valid at another height");
+        lane.speed_mps = speed_mps;
+        lane
+    }
+
     /// The speed the lane is flown at: the configured speed, at least
     /// [`Self::MIN_SPEED_MPS`] unless a cap holds it lower.
     pub fn speed_mps(&self) -> f64 {

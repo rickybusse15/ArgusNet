@@ -2,6 +2,21 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Sensor rig and moving pod (SR1, SR2). `--rig-profile provisional|FILE` in
+  a `--world-knowledge none` run flies a declared rig.
+  - The rig is validated before the run, against both mass limits, and
+    recorded with its identity.
+  - The pod's fixed rectangular LiDAR maps from a 3-axis gimbal with no joint
+    limits: slew, settle, airframe occlusion, and truth vs estimated pose, so
+    boresight bias shows in the map.
+  - `--pointing nadir|sweep:A:P|body:Y,P,R`. The pod stows below cruise, and
+    stowed or unsettled captures are refused by the map.
+  - Every controller flies low enough for the LiDAR's furthest ray to reach
+    the ground.
+
+  Also fixed: stage 2's POI and egress overrides could leave a platform below
+  the true ground in a no-prior run. Runs without a rig are unchanged. See
+  `docs/migration/RIG_AND_POD.md`.
 - Forward navigation camera as the primary obstacle-avoidance sensor (SR5c,
   first slice). `--nav-camera` in a `--world-knowledge none` run (or
   `--nav-camera-profile FILE`) adds a body-fixed camera:

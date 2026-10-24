@@ -429,6 +429,7 @@ impl NavCamera {
             misses,
             wires,
             sensor: ScanSensor::NavCamera,
+            pod: None,
         }
     }
 }

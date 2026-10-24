@@ -269,6 +269,10 @@ pub struct RangeScan {
     /// frame never counts as mapping evidence.
     #[serde(default, skip_serializing_if = "ScanSensor::is_range_scanner")]
     pub sensor: ScanSensor,
+    /// The pod's state at capture, for a scan from the rig's pod LiDAR
+    /// ([`crate::pod`]); absent for the legacy scanner and the camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pod: Option<crate::pod::PodCapture>,
 }
 
 /// The scanner: a fan of rays over the true world.
@@ -392,6 +396,7 @@ impl RangeScanner {
             misses,
             wires: self.wires_near(origin_m),
             sensor: ScanSensor::RangeScanner,
+            pod: None,
         }
     }
 }

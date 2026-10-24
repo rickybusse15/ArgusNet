@@ -235,6 +235,20 @@ impl Operational {
         }
     }
 
+    /// Fly no higher than `agl_m` above the believed ground.
+    fn cap_agl(&mut self, agl_m: f64) {
+        match self {
+            Operational::Search(lane) => *lane = lane.clone().with_agl_cap(agl_m),
+            Operational::Explore(explorer) => explorer.cap_agl(agl_m),
+            Operational::Follow { controller, .. } => controller.cap_agl(agl_m),
+            Operational::SearchThenFollow(wrapper) => {
+                let lane = wrapper.search_mut();
+                *lane = lane.clone().with_agl_cap(agl_m);
+                wrapper.follow_mut().cap_agl(agl_m);
+            }
+        }
+    }
+
     fn reset_to_constructed(&mut self) {
         match self {
             Operational::Search(_) => {}
@@ -494,6 +508,30 @@ impl ControllerStage {
                 PlatformController::Free(operational) => operational.cap_speed(speed_mps),
                 PlatformController::Launched { controller, .. } => {
                     controller.operational_mut().cap_speed(speed_mps)
+                }
+            }
+            capped += 1;
+        }
+        capped
+    }
+
+    /// Cap every mobile controller's height above the believed ground to
+    /// `agl_m` (the pod LiDAR's reach), launch climbs included. Before the
+    /// first tick. Returns how many were capped.
+    pub fn cap_agl(&mut self, agl_m: f64) -> usize {
+        let mut capped = 0;
+        for (_, controller) in self.state.controllers.iter_mut() {
+            match controller {
+                PlatformController::Static { .. } => continue,
+                PlatformController::Free(operational) => operational.cap_agl(agl_m),
+                PlatformController::Launched {
+                    controller,
+                    profile,
+                    ..
+                } => {
+                    controller.cap_operational_altitude(agl_m);
+                    profile.min_operational_agl_m = profile.min_operational_agl_m.min(agl_m);
+                    controller.operational_mut().cap_agl(agl_m);
                 }
             }
             capped += 1;

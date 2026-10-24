@@ -27,6 +27,20 @@ through mapping and quality reporting. Follow [simulation fidelity](SIMULATION_F
 - Fully solid-state versus internal moving scan optics remains a component
   decision. A rectangular aperture does not establish the scanner mechanism.
 
+**Decided 2026-10-23 (maintainer):**
+
+- **Gimbal:** 3-axis (yaw, pitch, roll). No joint limits are set: rotation is
+  continuous on every axis. Slew rate, settling and housing occlusion are still
+  modelled; their values are assumed until a mechanism is chosen.
+- **Pod sensors:** all of them — LiDAR, two visible cameras, thermal and the
+  mapping IMU on one carrier. The two cameras' roles (stereo pair or
+  wide/detail) are not yet decided.
+- **LiDAR:** fixed rectangular field of view. Its size is not yet known; the
+  profile carries an assumed value.
+- **Flight:** cruise is the operating mode. Hover is for take-off and landing
+  only, so the planner never plans a hover station for sensing. Cruise dynamics
+  (minimum speed, turn radius) are not yet known.
+
 Altitude, speed, accuracy, optics/baseline, device models, power and endurance are
 unresolved. Treat **60–120 m AGL and 250–300 m LiDAR range on 10%-reflective targets
 in bright daylight as provisional sizing assumptions**, not selected operating
@@ -400,7 +414,9 @@ datasheet and firmware revision in its eventual profile.
 
 Before selecting hardware or qualifying a model, resolve altitude/speed, maximum
 ray angle, survey accuracy/statistic, usable ground density, camera arrangement,
-thermal versus NIR, scanner mechanism, power, interfaces and required endurance.
+thermal versus NIR, LiDAR field of view, cruise dynamics, power, interfaces and
+required endurance. The gimbal axes, joint limits, pod sensor set, LiDAR scan
+type and flight-mode use are decided (section 1).
 Use [hardware integration](HARDWARE_INTEGRATION.md) for adapter/flight qualification
 and [verification](migration/VERIFICATION_AND_ROLLOUT.md) for lifecycle/scheduler
 acceptance. None of the proposed types, slices or experiments is claimed shipped.

@@ -109,6 +109,28 @@ pub struct ExplorationConfig {
     /// (the default) is every run before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nav_camera: Option<NavCameraConfig>,
+    /// The declared rig (SR1): with it, the pod's LiDAR on a 3-axis gimbal
+    /// maps in place of the legacy scanner, and the rig's navigation camera
+    /// is the avoidance sensor. Absent is every run before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rig: Option<crate::rig::RigProfile>,
+    /// What the planner asks the pod to hold while mapping (SR2). Only with
+    /// a rig; nadir when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointing: Option<crate::pod::PointingPolicy>,
+}
+
+impl ExplorationConfig {
+    /// The navigation camera the run flies: the rig's, or the stand-alone
+    /// one.
+    pub fn effective_nav_camera(&self) -> Option<NavCameraConfig> {
+        match &self.rig {
+            Some(rig) => rig
+                .mount(crate::rig::SensorRole::NavCamera)
+                .and_then(|mount| mount.nav_camera.clone()),
+            None => self.nav_camera.clone(),
+        }
+    }
 }
 
 fn default_explore() -> bool {
@@ -140,6 +162,8 @@ impl Default for ExplorationConfig {
             pursuit: PursuitSource::default(),
             wire_prior: false,
             nav_camera: None,
+            rig: None,
+            pointing: None,
         }
     }
 }
@@ -169,6 +193,19 @@ impl ExplorationConfig {
         }
         if let Some(camera) = &self.nav_camera {
             camera.validate()?;
+        }
+        if let Some(rig) = &self.rig {
+            if self.nav_camera.is_some() {
+                return Err(
+                    "the rig carries the navigation camera; do not declare a second one".into(),
+                );
+            }
+            rig.validate()?;
+        }
+        match (&self.pointing, &self.rig) {
+            (Some(_), None) => return Err("pointing needs a rig with a pod".into()),
+            (Some(policy), Some(_)) => policy.validate()?,
+            _ => {}
         }
         self.scan.validate()
     }
@@ -247,6 +284,13 @@ pub struct BeliefGrid {
     safety_top_m: Vec<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     safety_log_odds: Vec<f64>,
+    /// Pod captures refused because the gimbal had not settled (SR2).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    unsettled_scans: u64,
+    /// Pod captures refused because the pod was stowed: take-off, landing
+    /// or a hold below cruise, when it is not surveying (SR2).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    stowed_scans: u64,
     /// What snapshots share, kept current as returns land. Derived: rebuilt
     /// from the grid after a restore or a reset.
     #[serde(skip)]
@@ -309,6 +353,8 @@ impl BeliefGrid {
             canopy_changed: BTreeSet::new(),
             safety_top_m: Vec::new(),
             safety_log_odds: Vec::new(),
+            unsettled_scans: 0,
+            stowed_scans: 0,
             views: None,
         })
     }
@@ -363,6 +409,8 @@ impl BeliefGrid {
         self.canopy_changed.clear();
         self.safety_top_m = Vec::new();
         self.safety_log_odds = Vec::new();
+        self.unsettled_scans = 0;
+        self.stowed_scans = 0;
         self.views = None;
         self.reset_wires();
     }
@@ -516,6 +564,16 @@ impl BeliefGrid {
         }
     }
 
+    /// Pod captures refused unsettled.
+    pub fn unsettled_scans(&self) -> u64 {
+        self.unsettled_scans
+    }
+
+    /// Pod captures refused stowed.
+    pub fn stowed_scans(&self) -> u64 {
+        self.stowed_scans
+    }
+
     /// Cells the navigation camera believes occupied.
     pub fn safety_cells_at(&self, threshold: f64) -> usize {
         self.safety_log_odds
@@ -538,6 +596,20 @@ impl BeliefGrid {
         if scan.sensor == ScanSensor::NavCamera {
             self.integrate_camera(scan);
             return;
+        }
+        // A pod capture is survey evidence only while the pod is surveying:
+        // stowed (take-off, landing, a hold below cruise) its rays graze the
+        // ground far ahead, and still moving its pose is not the one the
+        // returns were georeferenced with to within the settle tolerance.
+        if let Some(pod) = &scan.pod {
+            if pod.source == crate::pod::PointingSource::Stow {
+                self.stowed_scans += 1;
+                return;
+            }
+            if !pod.settled {
+                self.unsettled_scans += 1;
+                return;
+            }
         }
         for hit in &scan.returns {
             let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
@@ -751,6 +823,10 @@ impl BeliefGrid {
         self.views = Some(views);
         snapshot
     }
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 fn probability(log_odds: f64) -> f64 {
@@ -1429,6 +1505,15 @@ impl PhysicalGuard {
 
     /// The lowest a platform may be at `p`'s place: the guard's clearance
     /// over the ground.
+    /// Whether `p` is somewhere a platform cannot be: below the true ground,
+    /// inside a structure or inside a wire. Within the clearance above the
+    /// ground is not: a platform lands there.
+    pub fn violates(&self, p: [f64; 3]) -> bool {
+        p[2] < TerrainSampler::height_at(&self.terrain, p[0], p[1])
+            || self.obstacles.collides(p)
+            || self.wires.iter().any(|wire| wire.contains(p))
+    }
+
     fn floor_at(&self, p: [f64; 3]) -> f64 {
         TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m
     }
@@ -1533,6 +1618,7 @@ mod tests {
             misses: 0,
             wires: Vec::new(),
             sensor: Default::default(),
+            pod: None,
         }
     }
 
@@ -1914,6 +2000,21 @@ mod tests {
             1.0,
         )
         .with_power_lines(lines)
+    }
+
+    /// Somewhere a platform cannot be: below the true ground, inside a
+    /// structure or a wire. Within the clearance above the ground is not: a
+    /// platform lands there.
+    #[test]
+    fn the_guard_says_where_a_platform_cannot_be() {
+        let guard = guard_over(None, &[wire(20.0)]);
+        assert!(guard.violates([10.0, 10.0, -0.1]), "below the ground");
+        assert!(
+            !guard.violates([10.0, 10.0, 0.5]),
+            "landed, within the clearance"
+        );
+        assert!(guard.violates([50.0, 0.0, 20.0]), "on the wire");
+        assert!(!guard.violates([50.0, 0.0, 30.0]));
     }
 
     /// A platform within the guard's clearance of a wire is pushed straight

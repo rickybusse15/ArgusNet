@@ -213,6 +213,19 @@ struct SimArgs {
     /// of the assumed default. Implies `--nav-camera`.
     #[arg(long)]
     nav_camera_profile: Option<PathBuf>,
+    /// In a `--world-knowledge none` run, fly a declared sensor rig (SR1):
+    /// `provisional` for the built-in assumed rig, or a `RigProfile` JSON
+    /// file. The pod's LiDAR maps from a 3-axis gimbal in place of the
+    /// legacy scanner, and the rig's navigation camera is the avoidance
+    /// sensor (so `--nav-camera` is refused with it). Recorded in the
+    /// replay's `meta.world_knowledge` with the rig's identity and mass.
+    #[arg(long)]
+    rig_profile: Option<String>,
+    /// What the pod holds while mapping, with `--rig-profile`: `nadir` (the
+    /// default), `sweep:AMPLITUDE_DEG:PERIOD_S` (rolled side to side about
+    /// the track) or `body:YAW,PITCH,ROLL` (fixed in the body, degrees).
+    #[arg(long)]
+    pointing: Option<String>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -334,6 +347,40 @@ enum PlanningPolicyArg {
     EfficientV1,
 }
 
+/// `--pointing`'s value.
+fn parse_pointing(text: &str) -> Result<argusnet_sim::pod::PointingPolicy, String> {
+    use argusnet_sim::pod::PointingPolicy;
+    let number = |part: &str| {
+        part.trim()
+            .parse::<f64>()
+            .map_err(|_| format!("--pointing: {part:?} is not a number"))
+    };
+    match text.split_once(':') {
+        None if text == "nadir" => Ok(PointingPolicy::Nadir),
+        Some(("sweep", rest)) => {
+            let (amplitude, period) = rest
+                .split_once(':')
+                .ok_or("--pointing sweep needs sweep:AMPLITUDE_DEG:PERIOD_S")?;
+            Ok(PointingPolicy::CrossTrackSweep {
+                amplitude_deg: number(amplitude)?,
+                period_s: number(period)?,
+            })
+        }
+        Some(("body", rest)) => {
+            let parts: Vec<&str> = rest.split(',').collect();
+            if parts.len() != 3 {
+                return Err("--pointing body needs body:YAW,PITCH,ROLL".into());
+            }
+            Ok(PointingPolicy::BodyFixed {
+                ypr_deg: [number(parts[0])?, number(parts[1])?, number(parts[2])?],
+            })
+        }
+        _ => Err(format!(
+            "--pointing {text:?}: expected nadir, sweep:AMPLITUDE_DEG:PERIOD_S or body:YAW,PITCH,ROLL"
+        )),
+    }
+}
+
 /// The energy profile, delivery and faults the flags ask for, applied by
 /// the same code as the viewer's in-process run.
 fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, String> {
@@ -350,6 +397,19 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             .nav_camera
             .then(argusnet_sim::nav_camera::NavCameraConfig::default),
     };
+    let rig = args
+        .rig_profile
+        .as_deref()
+        .map(|source| -> Result<argusnet_sim::rig::RigProfile, String> {
+            if source == "provisional" {
+                return Ok(argusnet_sim::rig::RigProfile::provisional());
+            }
+            let text =
+                std::fs::read_to_string(source).map_err(|error| format!("{source}: {error}"))?;
+            serde_json::from_str(&text).map_err(|error| format!("{source}: {error}"))
+        })
+        .transpose()?;
+    let pointing = args.pointing.as_deref().map(parse_pointing).transpose()?;
     Ok(RunOptions {
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
@@ -382,7 +442,8 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         exploration: (args.pursuit.is_some()
             || args.explore.is_some()
             || args.wire_prior
-            || nav_camera.is_some())
+            || nav_camera.is_some()
+            || rig.is_some())
         .then(|| {
             let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
             let scan = if nav_camera.is_some() {
@@ -397,6 +458,8 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             argusnet_sim::belief_world::ExplorationConfig {
                 scan,
                 nav_camera: nav_camera.clone(),
+                rig: rig.clone(),
+                pointing: pointing.clone(),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -623,6 +686,26 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--wire-prior gives a --world-knowledge none run the power lines' spans; \
              a prior run knows them already",
+        );
+    }
+    if (args.rig_profile.is_some() || args.pointing.is_some())
+        && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
+    {
+        return fail(
+            EXIT_INVALID,
+            "--rig-profile and --pointing fly a sensor rig in a --world-knowledge none run",
+        );
+    }
+    if args.pointing.is_some() && args.rig_profile.is_none() {
+        return fail(
+            EXIT_INVALID,
+            "--pointing needs --rig-profile: it points the rig's pod",
+        );
+    }
+    if args.rig_profile.is_some() && (args.nav_camera || args.nav_camera_profile.is_some()) {
+        return fail(
+            EXIT_INVALID,
+            "--rig-profile carries the navigation camera; drop --nav-camera",
         );
     }
     if (args.nav_camera || args.nav_camera_profile.is_some())
