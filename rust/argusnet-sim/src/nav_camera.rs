@@ -309,6 +309,10 @@ pub struct NavCamera {
     envelope: NavCameraEnvelope,
     world: SharedVisibility,
     spans: Arc<Vec<SpanPieces>>,
+    /// Where the camera sits on the body and how it is turned (a rig's
+    /// mount): lever arm in the body frame, and the mount's rotation. `None`
+    /// is a camera at the platform's origin looking along its heading.
+    mount: Option<([f64; 3], crate::pod::Quat)>,
 }
 
 impl NavCamera {
@@ -324,7 +328,37 @@ impl NavCamera {
             envelope,
             world,
             spans: Arc::new(Vec::new()),
+            mount: None,
         })
+    }
+
+    /// The camera on a rig's body mount: `lever_arm_m` from the platform's
+    /// origin in the body frame (FLU), turned by `rotation_ypr_deg` (yaw,
+    /// then pitch nose down, then roll). Its field of view and boresight
+    /// depression are the profile's, about the mounted axis.
+    pub fn with_mount(mut self, lever_arm_m: [f64; 3], rotation_ypr_deg: [f64; 3]) -> Self {
+        self.mount = Some((
+            lever_arm_m,
+            crate::pod::Quat::from_ypr_deg(rotation_ypr_deg),
+        ));
+        self
+    }
+
+    /// The camera's position and rotation in the world for a platform at
+    /// `position_m` heading `heading_rad`; `None` for the rotation when the
+    /// camera is unmounted (it looks along the heading).
+    fn pose(&self, position_m: [f64; 3], heading_rad: f64) -> ([f64; 3], Option<crate::pod::Quat>) {
+        match &self.mount {
+            None => (position_m, None),
+            Some((lever, rotation)) => {
+                let body = crate::pod::Quat::from_axis_angle([0.0, 0.0, 1.0], heading_rad);
+                let offset = body.rotate(*lever);
+                (
+                    std::array::from_fn(|k| position_m[k] + offset[k]),
+                    Some(body.then(*rotation)),
+                )
+            }
+        }
     }
 
     /// The camera, also detecting `lines`' wires.
@@ -379,7 +413,17 @@ impl NavCamera {
         let cast_m = envelope.structure_range_m.max(envelope.canopy_range_m);
         let mut returns = Vec::new();
         let mut misses = 0u32;
-        for direction in self.config.directions(heading) {
+        let (origin_m, rotation) = self.pose(origin_m, heading);
+        let directions = match rotation {
+            None => self.config.directions(heading),
+            Some(rotation) => self
+                .config
+                .directions(0.0)
+                .into_iter()
+                .map(|d| rotation.rotate(d))
+                .collect(),
+        };
+        for direction in directions {
             // Drawn for every sight line, so one line's outcome never shifts
             // another's.
             let detect = rng.uniform();
@@ -418,8 +462,11 @@ impl NavCamera {
             });
         }
         let wires = wires_seen(&self.spans, origin_m, |point| {
-            self.config
-                .in_view(heading, std::array::from_fn(|k| point[k] - origin_m[k]))
+            let d = std::array::from_fn(|k| point[k] - origin_m[k]);
+            match rotation {
+                None => self.config.in_view(heading, d),
+                Some(rotation) => self.config.in_view(0.0, rotation.conj().rotate(d)),
+            }
         });
         RangeScan {
             node_id: node_id.to_string(),
@@ -596,6 +643,39 @@ mod tests {
         assert_eq!(
             near,
             camera.frame("d", 3, 1.0, [400.0, 500.0, 60.0], [10.0, 0.0, 0.0])
+        );
+    }
+
+    /// A rig's mount moves the camera and turns it: mounted backwards, it
+    /// sees the wall behind the platform and not the one ahead; a zero
+    /// mount is the unmounted camera.
+    #[test]
+    fn the_mount_places_and_turns_the_camera() {
+        let flying_east = |camera: &NavCamera, x: f64| {
+            camera.frame("d", 3, 1.0, [x, 500.0, 60.0], [10.0, 0.0, 0.0])
+        };
+        let plain =
+            NavCamera::new(NavCameraConfig::default(), world_with_wall(500.0), None).unwrap();
+        let zero = plain.clone().with_mount([0.0; 3], [0.0; 3]);
+        let a = flying_east(&plain, 400.0);
+        let b = flying_east(&zero, 400.0);
+        assert_eq!(a.returns.len(), b.returns.len());
+        for (p, q) in a.returns.iter().zip(&b.returns) {
+            assert!((0..3).all(|k| (p.point_m[k] - q.point_m[k]).abs() < 1e-9));
+        }
+        let backwards = plain
+            .clone()
+            .with_mount([0.45, 0.0, 0.05], [180.0, 0.0, 0.0]);
+        assert!(
+            flying_east(&backwards, 400.0).returns.is_empty(),
+            "the wall is ahead"
+        );
+        let past = flying_east(&backwards, 610.0);
+        assert!(!past.returns.is_empty(), "the wall is behind");
+        // The lever arm moves the origin: 0.45 m forward of the platform,
+        // which faces east.
+        assert!(
+            (past.origin_m[0] - 610.45).abs() < 1e-9 && (past.origin_m[2] - 60.05).abs() < 1e-9
         );
     }
 

@@ -1902,6 +1902,12 @@ impl AssembledRun {
             self.world.visibility.clone(),
         )?
         .with_power_lines(&self.world.power_lines);
+        // A rig's camera flies on its declared body mount.
+        let camera_mount = config
+            .rig
+            .as_ref()
+            .and_then(|rig| rig.mount(crate::rig::SensorRole::NavCamera))
+            .map(|mount| (mount.lever_arm_m, mount.rotation_ypr_deg));
         let camera = config
             .effective_nav_camera()
             .map(|camera| {
@@ -1910,7 +1916,13 @@ impl AssembledRun {
                     self.world.visibility.clone(),
                     self.weather.as_ref(),
                 )
-                .map(|camera| camera.with_power_lines(&self.world.power_lines))
+                .map(|camera| {
+                    let camera = camera.with_power_lines(&self.world.power_lines);
+                    match camera_mount {
+                        Some((lever, rotation)) => camera.with_mount(lever, rotation),
+                        None => camera,
+                    }
+                })
             })
             .transpose()?;
         let pod = config

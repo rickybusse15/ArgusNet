@@ -587,20 +587,11 @@ impl BeliefGrid {
     /// navigation camera frame is safety evidence only
     /// ([`Self::integrate_camera`]).
     pub fn integrate(&mut self, scan: &RangeScan, tick: u64) {
-        for wire in &scan.wires {
-            if !self.wires.contains_key(&wire.span.id) {
-                self.wires.insert(wire.span.id.clone(), wire.span.clone());
-                self.wires_view = None;
-            }
-        }
-        if scan.sensor == ScanSensor::NavCamera {
-            self.integrate_camera(scan);
-            return;
-        }
         // A pod capture is survey evidence only while the pod is surveying:
         // stowed (take-off, landing, a hold below cruise) its rays graze the
         // ground far ahead, and still moving its pose is not the one the
         // returns were georeferenced with to within the settle tolerance.
+        // Refused whole, wires included.
         if let Some(pod) = &scan.pod {
             if pod.source == crate::pod::PointingSource::Stow {
                 self.stowed_scans += 1;
@@ -610,6 +601,16 @@ impl BeliefGrid {
                 self.unsettled_scans += 1;
                 return;
             }
+        }
+        for wire in &scan.wires {
+            if !self.wires.contains_key(&wire.span.id) {
+                self.wires.insert(wire.span.id.clone(), wire.span.clone());
+                self.wires_view = None;
+            }
+        }
+        if scan.sensor == ScanSensor::NavCamera {
+            self.integrate_camera(scan);
+            return;
         }
         for hit in &scan.returns {
             let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
@@ -2000,6 +2001,35 @@ mod tests {
             1.0,
         )
         .with_power_lines(lines)
+    }
+
+    /// A refused pod capture is refused whole: its wires do not reach the
+    /// map either, while a settled mission capture's do.
+    #[test]
+    fn a_refused_pod_capture_maps_no_wires() {
+        use crate::pod::{PodCapture, PointingSource};
+        let capture = |source, settled| {
+            let mut s = scan(Vec::new());
+            s.wires = vec![crate::range_scan::WireReturn {
+                span: wire(20.0).span_line(0),
+                point_m: [50.0, 0.0, 20.0],
+            }];
+            s.pod = Some(PodCapture {
+                source,
+                settled,
+                command_error_rad: 0.0,
+                boresight_world: [0.0, 0.0, -1.0],
+                occluded: 0,
+            });
+            s
+        };
+        let mut belief = grid();
+        belief.integrate(&capture(PointingSource::Stow, true), 1);
+        belief.integrate(&capture(PointingSource::Mission, false), 2);
+        assert_eq!(belief.wires().count(), 0);
+        assert_eq!((belief.stowed_scans(), belief.unsettled_scans()), (1, 1));
+        belief.integrate(&capture(PointingSource::Mission, true), 3);
+        assert_eq!(belief.wires().count(), 1);
     }
 
     /// Somewhere a platform cannot be: below the true ground, inside a
