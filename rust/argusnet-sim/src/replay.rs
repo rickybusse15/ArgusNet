@@ -324,6 +324,13 @@ pub struct ReplayBeliefStats {
     /// Cells with a canopy return (R2). Written only when there are some.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub canopy_cells: u64,
+    /// Pod captures the map refused because the gimbal had not settled
+    /// (SR2), so far. Written only when there are some.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unsettled_scans: u64,
+    /// Pod captures the map refused because the pod was stowed (SR2).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stowed_scans: u64,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -354,6 +361,11 @@ pub struct ReplayRangeScan {
         skip_serializing_if = "crate::range_scan::ScanSensor::is_range_scanner"
     )]
     pub sensor: crate::range_scan::ScanSensor,
+    /// The pod at capture (SR2): who pointed it, whether it had settled, the
+    /// boresight the estimator believes, and the rays the airframe blocked.
+    /// Absent for the legacy scanner and the camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pod: Option<crate::pod::PodCapture>,
 }
 
 /// Most returns per scan a replay frame carries. The frame's returns are a
@@ -383,6 +395,11 @@ impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
             misses: scan.misses,
             wire: scan.wires.iter().map(|wire| dm(wire.point_m)).collect(),
             sensor: scan.sensor,
+            pod: scan.pod.clone().map(|mut pod| {
+                pod.boresight_world = pod.boresight_world.map(|v| (v * 1e4).round() / 1e4);
+                pod.command_error_rad = (pod.command_error_rad * 1e5).round() / 1e5;
+                pod
+            }),
         }
     }
 }

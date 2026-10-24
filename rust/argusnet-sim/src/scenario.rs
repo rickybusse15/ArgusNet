@@ -1035,6 +1035,8 @@ fn belief_stats(
         structure_precision: (believed_n > 0).then(|| believed_right as f64 / believed_n as f64),
         structure_recall: (true_n > 0).then(|| true_found as f64 / true_n as f64),
         canopy_cells: grid.canopy_cells() as u64,
+        unsettled_scans: grid.unsettled_scans(),
+        stowed_scans: grid.stowed_scans(),
     }
 }
 
@@ -1900,16 +1902,39 @@ impl AssembledRun {
             self.world.visibility.clone(),
         )?
         .with_power_lines(&self.world.power_lines);
+        // A rig's camera flies on its declared body mount.
+        let camera_mount = config
+            .rig
+            .as_ref()
+            .and_then(|rig| rig.mount(crate::rig::SensorRole::NavCamera))
+            .map(|mount| (mount.lever_arm_m, mount.rotation_ypr_deg));
         let camera = config
-            .nav_camera
-            .clone()
+            .effective_nav_camera()
             .map(|camera| {
                 crate::nav_camera::NavCamera::new(
                     camera,
                     self.world.visibility.clone(),
                     self.weather.as_ref(),
                 )
-                .map(|camera| camera.with_power_lines(&self.world.power_lines))
+                .map(|camera| {
+                    let camera = camera.with_power_lines(&self.world.power_lines);
+                    match camera_mount {
+                        Some((lever, rotation)) => camera.with_mount(lever, rotation),
+                        None => camera,
+                    }
+                })
+            })
+            .transpose()?;
+        let pod = config
+            .rig
+            .clone()
+            .map(|rig| {
+                crate::pod::PodSensing::new(
+                    rig,
+                    config.pointing.clone().unwrap_or_default(),
+                    self.world.visibility.clone(),
+                )
+                .map(|pod| pod.with_power_lines(&self.world.power_lines))
             })
             .transpose()?;
         let mut summary = serde_json::json!({
@@ -1971,6 +1996,15 @@ impl AssembledRun {
         if let Some(cap) = speed_cap_mps {
             controllers.cap_speeds(cap);
         }
+        // The pod's LiDAR maps only what it reaches: every controller flies
+        // low enough for its furthest ray, over the believed ground, which
+        // may stand in high by the unknown margin.
+        let agl_cap_m = pod
+            .as_ref()
+            .and_then(|pod| pod.max_mapping_agl_m(config.unknown_margin_m));
+        if let Some(cap) = agl_cap_m {
+            controllers.cap_agl(cap);
+        }
         controllers.set_physical_guard(guard.clone());
 
         // The platforms do not know the true obstacles, so the mission
@@ -2009,6 +2043,15 @@ impl AssembledRun {
             summary["nav_camera_envelope"] =
                 serde_json::to_value(camera.envelope()).expect("envelope serialises");
             self.observe_mut().set_nav_camera(camera);
+        }
+        if let Some(pod) = pod {
+            summary["rig_identity"] = serde_json::json!(pod.rig().identity());
+            summary["rig_sensors"] = pod.rig().sensor_summary();
+            summary["rig_mass_kg"] =
+                serde_json::to_value(pod.rig().mass_totals()).expect("totals serialise");
+            summary["pointing"] = serde_json::to_value(pod.policy()).expect("policy serialises");
+            summary["mapping_agl_cap_m"] = serde_json::json!(agl_cap_m);
+            self.observe_mut().set_pod(pod);
         }
         self.sim
             .connect(crate::simulation::Handoff::RangeScansToMapping)

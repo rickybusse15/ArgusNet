@@ -615,6 +615,16 @@
               "minimum": 0,
               "maximum": 1,
               "description": "Of the cells a true building or wall covers at its centre, the fraction with a believed structure within one cell."
+            },
+            "unsettled_scans": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "SR2: pod captures refused because the gimbal had not settled, so far. Absent when none."
+            },
+            "stowed_scans": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "SR2: pod captures refused because the pod was stowed, so far. Absent when none."
             }
           }
         }
@@ -1037,6 +1047,46 @@
                   "nav_camera"
                 ],
                 "description": "`nav_camera` for the forward navigation camera's obstacle detections (SR5c): safety evidence, not the map. Absent for the range scanner."
+              },
+              "pod": {
+                "type": "object",
+                "description": "SR2: the rig pod at capture. `source` is `mission` (the planner's pointing) or `stow` (below cruise: take-off, landing, a hold). Stowed or unsettled captures are refused by the map. `boresight_world` is the LiDAR boresight as the estimator has it; `occluded` counts rays the airframe blocked. Absent for the legacy scanner and the navigation camera.",
+                "required": [
+                  "source",
+                  "settled",
+                  "command_error_rad",
+                  "boresight_world",
+                  "occluded"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "mission",
+                      "stow"
+                    ]
+                  },
+                  "settled": {
+                    "type": "boolean"
+                  },
+                  "command_error_rad": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "boresight_world": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  },
+                  "occluded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
               }
             }
           }
