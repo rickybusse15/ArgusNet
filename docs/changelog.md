@@ -2,6 +2,18 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Physical guard sweeps structures (`--world-knowledge none` runs only).
+  `PhysicalGuard::enforce_from` now sweeps each step against the true
+  buildings and walls as well as the wires. A step longer than a wall is
+  thick used to pass through it with no contact recorded; it now stops 1 cm
+  short of the near face and records a `structure` contact. A platform flying
+  at a wall therefore never ends a tick beyond it, where `enforce` alone
+  could push it out of the far face. No-prior runs that met a structure
+  record more contacts and end some ticks at different positions. So can a
+  prior-map run with a non-reference deconfliction policy, whose guard
+  sweeps each lateral push the same way. Other prior-map runs have no guard
+  and are unchanged (14/14 replay hashes).
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

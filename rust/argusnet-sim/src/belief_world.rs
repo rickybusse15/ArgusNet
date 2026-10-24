@@ -1152,9 +1152,10 @@ impl VisibilitySampler for BeliefVisibility {
     }
 }
 
-/// How far short of a wire's envelope [`PhysicalGuard::enforce_from`] stops
-/// a flight that would enter it, metres.
-const WIRE_STOP_SHORT_M: f64 = 0.01;
+/// How far short of a structure, or a wire's envelope,
+/// [`PhysicalGuard::enforce_from`] stops a flight that would enter it,
+/// metres.
+const SWEEP_STOP_SHORT_M: f64 = 0.01;
 
 /// Every `WorldContact::kind` the guard writes: out of the ground, out of a
 /// structure, and still inside one after the push limit. The replay schema
@@ -1270,13 +1271,16 @@ impl PhysicalGuard {
     }
 
     /// [`Self::enforce`] for a platform that flew from `from`: the flight is
-    /// swept against the wires first, since a wire is thin enough to pass
-    /// between two positions each clear of it. A flight that comes within
-    /// the guard's clearance of one is stopped just short of where it first
-    /// does (solved per piece, [`ConductorEnvelope::first_entry`]), and the
-    /// stop recorded; then the stop is enforced. One that starts inside an
-    /// envelope is left to `enforce` to push out. With no wires this is
-    /// `enforce`.
+    /// swept against the hard structures and the wires first
+    /// ([`Self::first_structure_hit`]), since a wire, or a wall thinner than
+    /// the step is long, can lie between two positions each clear of it. A
+    /// flight that meets a building or wall, or comes within the guard's
+    /// clearance of a wire, is stopped just short of where it first does,
+    /// and the stop recorded as a `structure` contact; then the stop is
+    /// enforced. Stopped on the near side, `enforce` never pushes it out
+    /// through the far side of a wall it was flying at. One that starts
+    /// inside a structure or an envelope is left to `enforce` to push out.
+    /// A flight that meets nothing is `enforce`.
     pub fn enforce_from(
         &self,
         node_id: &str,
@@ -1288,14 +1292,9 @@ impl PhysicalGuard {
             + (position[1] - from[1]).powi(2)
             + (position[2] - from[2]).powi(2))
         .sqrt();
-        let entry = self
-            .wires
-            .iter()
-            .filter_map(|wire| wire.first_entry(from, position))
-            .min_by(f64::total_cmp);
-        let stop = match entry {
+        let stop = match self.first_structure_hit(from, position) {
             Some(t) if t > 0.0 && length > 0.0 => {
-                let f = ((t * length - WIRE_STOP_SHORT_M) / length).max(0.0);
+                let f = ((t * length - SWEEP_STOP_SHORT_M) / length).max(0.0);
                 let stop = [
                     from[0] + (position[0] - from[0]) * f,
                     from[1] + (position[1] - from[1]) * f,
@@ -1886,6 +1885,90 @@ mod tests {
         // A guard without lines meets no wire.
         assert_eq!(guard_over(None, &[]).first_structure_hit(from, to), None);
     }
+    /// A wall 10 m thick across the map at x = 0, from 0 to 100 m up.
+    fn thin_wall() -> argusnet_world::obstacles::Obstacle {
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        Obstacle::polygon_prism(
+            "wall",
+            BlockerType::Wall,
+            vec![[-5.0, -190.0], [5.0, -190.0], [5.0, 190.0], [-5.0, 190.0]],
+            0.0,
+            100.0,
+        )
+        .unwrap()
+    }
+
+    /// A step longer than a wall is thick, between two positions each clear
+    /// of it, is stopped just short of the wall's near face and recorded as
+    /// a structure contact: it no longer tunnels through uncounted (the
+    /// fixture's drone-north stepped from x 11.9 to -5.96 in one tick). One
+    /// that starts inside it is `enforce` exactly.
+    #[test]
+    fn a_fast_step_through_a_thin_wall_is_stopped_short_of_it() {
+        let guard = guard_over(Some(thin_wall()), &[]);
+        let (from, to) = ([11.9, 3.0, 20.0], [-5.96, 3.0, 20.0]);
+        // Each end alone is clear: `enforce` sees nothing.
+        assert_eq!(guard.enforce("d", 0.0, to), to);
+        assert!(guard.take_contacts().is_empty());
+        let stopped = guard.enforce_from("d", 0.0, from, to);
+        assert!(
+            (stopped[0] - (5.0 + SWEEP_STOP_SHORT_M)).abs() < 1e-9,
+            "{stopped:?}"
+        );
+        assert_eq!([stopped[1], stopped[2]], [3.0, 20.0]);
+        let contacts = guard.take_contacts();
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
+        assert_eq!(contacts[0].kind, "structure");
+        assert!((contacts[0].correction_m - (stopped[0] - to[0])).abs() < 1e-9);
+        // Over the wall's top: not met, and nothing recorded.
+        let over = [-5.96, 3.0, 101.5];
+        assert_eq!(guard.enforce_from("d", 0.0, [11.9, 3.0, 101.5], over), over);
+        assert!(guard.take_contacts().is_empty());
+        // From inside: left to `enforce` to push out.
+        let inside = [1.0, 3.0, 20.0];
+        assert_eq!(
+            guard.enforce_from("d", 0.0, inside, [0.5, 3.0, 20.0]),
+            guard.enforce("e", 0.0, [0.5, 3.0, 20.0])
+        );
+    }
+
+    /// `enforce` alone pushes a platform inside a wall to its nearest face,
+    /// which can be the far one; swept from where it was, a platform flying
+    /// at the wall stops on the near side, at any speed, every tick.
+    #[test]
+    fn a_platform_approaching_a_wall_never_ends_a_tick_beyond_it() {
+        let guard = guard_over(Some(thin_wall()), &[]);
+        // 1 m into the far half: the nearest face is the far one.
+        let deep = guard.enforce("d", 0.0, [-4.0, 0.0, 20.0]);
+        assert!(deep[0] < -5.0, "{deep:?}");
+        for step_m in [0.5, 1.0, 3.0, 7.0, 9.0, 10.0, 12.0, 17.86, 25.0, 60.0] {
+            for start_x in [12.0, 11.9, 8.3, 5.5] {
+                let mut p = [start_x, 0.0, 20.0];
+                for tick in 0..40 {
+                    let to = [p[0] - step_m, p[1], p[2]];
+                    p = guard.enforce_from("d", tick as f64, p, to);
+                    assert!(
+                        p[0] > 5.0,
+                        "step {step_m} from {start_x}, tick {tick}: {p:?}"
+                    );
+                }
+                // It reached the wall and is held at its near face: stopped
+                // just short of it, or, for a step ending exactly on the
+                // face, pushed back out by the guard's 1 m clearance.
+                assert!(
+                    p[0] <= 5.0 + 1.0 + step_m,
+                    "step {step_m} from {start_x}: {p:?}"
+                );
+            }
+        }
+        let contacts = guard.take_contacts();
+        assert!(!contacts.is_empty());
+        assert!(
+            contacts.iter().all(|c| c.kind == "structure"),
+            "{contacts:?}"
+        );
+    }
+
     /// A push out of one structure can land in the next; the guard pushes
     /// again until the point is clear (the reference's fixture).
     #[test]
