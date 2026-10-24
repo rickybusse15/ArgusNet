@@ -324,6 +324,44 @@ pub struct ReplayBeliefStats {
     /// Cells with a canopy return (R2). Written only when there are some.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub canopy_cells: u64,
+    /// The map against the run's quality requirement (SR5a). Absent
+    /// without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<ReplayQualityStats>,
+}
+
+/// How many cells give each deficit reason, and the scan's progress on
+/// them. `unreachable_cells` are bias-limited: no flying brings them to the
+/// requirement, so they are reported and never counted as met.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayQualityStats {
+    pub met_cells: u64,
+    pub unseen_cells: u64,
+    pub too_oblique_cells: u64,
+    pub sparse_cells: u64,
+    pub stale_cells: u64,
+    pub unreachable_cells: u64,
+    /// Met over all cells.
+    pub met_fraction: f64,
+    /// Met or unreachable over all cells: nothing left for flying to do.
+    /// What the scan gate reads; never a claim that the map is met.
+    pub resolved_fraction: f64,
+}
+
+impl From<&crate::belief_world::QualityLayer> for ReplayQualityStats {
+    fn from(layer: &crate::belief_world::QualityLayer) -> Self {
+        let counts = &layer.counts;
+        Self {
+            met_cells: counts.met,
+            unseen_cells: counts.unseen,
+            too_oblique_cells: counts.too_oblique,
+            sparse_cells: counts.sparse,
+            stale_cells: counts.stale,
+            unreachable_cells: counts.unreachable(),
+            met_fraction: counts.met_fraction(),
+            resolved_fraction: layer.resolved_fraction(),
+        }
+    }
 }
 
 fn is_zero(value: &u64) -> bool {

@@ -12,6 +12,7 @@ name = "argusnet-rs"
 path = "src/main.rs"
 
 [dependencies]
+argusnet-mapping = { path = "../argusnet-mapping" }
 argusnet-core = { path = "../argusnet-core" }
 argusnet-proto = { path = "../argusnet-proto" }
 argusnet-sim = { path = "../argusnet-sim" }
