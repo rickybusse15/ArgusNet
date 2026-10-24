@@ -160,6 +160,19 @@ impl LoopedWaypointPath {
         &self.config
     }
 
+    /// This lane flown no faster than `speed_mps`: the same lane, rebuilt
+    /// at the lower speed, or itself unchanged when it is already slower.
+    pub fn with_speed_cap(self, speed_mps: f64) -> Self {
+        if self.config.speed_mps <= speed_mps {
+            return self;
+        }
+        let config = WaypointPathConfig {
+            speed_mps,
+            ..self.config.clone()
+        };
+        Self::new(config).expect("a valid lane stays valid at another speed")
+    }
+
     pub fn path_length_m(&self) -> f64 {
         self.path_length_m
     }

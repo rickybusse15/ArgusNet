@@ -493,6 +493,9 @@ pub struct ObserveStage {
     /// itself (`world_knowledge: none`). `None` otherwise: no scans, and the
     /// stage is the one it always was.
     range: Option<crate::range_scan::RangeScanner>,
+    /// The mobile platforms' forward navigation camera, beside the scanner
+    /// (SR5c). Its frames follow the scans, tagged as camera frames.
+    nav_camera: Option<crate::nav_camera::NavCamera>,
     /// This tick's scans, handed to stage 8.
     scans: Vec<crate::range_scan::RangeScan>,
     /// Sensors that capture at their own rate (P4.10b); `None` is every
@@ -614,6 +617,7 @@ impl ObserveStage {
             },
             compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
             range: None,
+            nav_camera: None,
             scans: Vec::new(),
             capture: None,
         }
@@ -689,12 +693,23 @@ impl ObserveStage {
         self.range = Some(scanner);
     }
 
+    /// Also look ahead with `camera` from every mobile platform, every tick.
+    pub fn set_nav_camera(&mut self, camera: crate::nav_camera::NavCamera) {
+        self.nav_camera = Some(camera);
+    }
+
+    /// The navigation camera, when one is installed.
+    pub fn nav_camera(&self) -> Option<&crate::nav_camera::NavCamera> {
+        self.nav_camera.as_ref()
+    }
+
     /// The range scanner, in a run without a prior map.
     pub fn range_scanner(&self) -> Option<&crate::range_scan::RangeScanner> {
         self.range.as_ref()
     }
 
-    /// This tick's range scans, in platform order. Empty without a scanner.
+    /// This tick's range scans, in platform order, then the navigation
+    /// camera's frames in platform order. Empty without a scanner.
     pub fn range_scans(&self) -> &[crate::range_scan::RangeScan] {
         &self.scans
     }
@@ -715,11 +730,8 @@ impl ObserveStage {
             .filter(|p| p.is_mobile)
             .collect();
         let (tick, timestamp_s) = (context.tick, context.timestamp_s);
-        self.scans = self.compute.map_ordered(&poses, |platform| {
-            scanner.scan(
-                &platform.node_id,
-                tick,
-                timestamp_s,
+        let pose = |platform: &argusnet_types::NodeState| {
+            (
                 [
                     platform.position.x,
                     platform.position.y,
@@ -731,7 +743,18 @@ impl ObserveStage {
                     platform.velocity.z,
                 ],
             )
+        };
+        self.scans = self.compute.map_ordered(&poses, |platform| {
+            let (position, velocity) = pose(platform);
+            scanner.scan(&platform.node_id, tick, timestamp_s, position, velocity)
         });
+        if let Some(camera) = &self.nav_camera {
+            let frames = self.compute.map_ordered(&poses, |platform| {
+                let (position, velocity) = pose(platform);
+                camera.frame(&platform.node_id, tick, timestamp_s, position, velocity)
+            });
+            self.scans.extend(frames);
+        }
     }
 
     /// Give `node_id` a sensor. A platform with no spec generates nothing.

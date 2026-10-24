@@ -2,6 +2,20 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Forward navigation camera as the primary obstacle-avoidance sensor (SR5c,
+  first slice). `--nav-camera` in a `--world-knowledge none` run (or
+  `--nav-camera-profile FILE`) adds a body-fixed camera:
+  - its structure detections become safety obstacles the planners avoid, and
+    never count as mapped ground or structure;
+  - every controller is capped to the speed that stops short within its
+    detection range, which fog shortens;
+  - the range scanner drops its forward fan.
+
+  The replay records the profile and the envelope in `meta.world_knowledge`,
+  and the camera's frames in `range_scans` with `sensor: "nav_camera"` (drawn
+  green in the viewer). Runs without the flag are unchanged. See
+  `docs/migration/NAV_CAMERA_SAFETY.md`; the planner integration it starts is
+  §8 of `docs/SENSING_REALISM_IMPLEMENTATION_GUIDE.md`.
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

@@ -45,8 +45,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::follow_path::VisibilitySampler;
 use crate::motion::{ObstacleSampler, TerrainSampler};
+use crate::nav_camera::NavCameraConfig;
 use crate::observe::TerrainHeight;
-use crate::range_scan::{RangeScan, RangeScanConfig, ReturnClass};
+use crate::range_scan::{RangeScan, RangeScanConfig, ReturnClass, ScanSensor};
 use crate::runtime_world::{SharedObstacles, SharedTerrain};
 
 /// What a run's platforms know of the world before they sense it.
@@ -102,6 +103,12 @@ pub struct ExplorationConfig {
     /// default) learns each span only from the scanners.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub wire_prior: bool,
+    /// The forward navigation camera, the primary obstacle-avoidance sensor
+    /// ([`crate::nav_camera`]). Its detections are safety evidence only, and
+    /// every controller is capped to the speed its envelope allows. Absent
+    /// (the default) is every run before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav_camera: Option<NavCameraConfig>,
 }
 
 fn default_explore() -> bool {
@@ -132,6 +139,7 @@ impl Default for ExplorationConfig {
             explore: true,
             pursuit: PursuitSource::default(),
             wire_prior: false,
+            nav_camera: None,
         }
     }
 }
@@ -158,6 +166,9 @@ impl ExplorationConfig {
                 "occupied_probability must be in [0.5, 1), got {}",
                 self.occupied_probability
             ));
+        }
+        if let Some(camera) = &self.nav_camera {
+            camera.validate()?;
         }
         self.scan.validate()
     }
@@ -225,6 +236,17 @@ pub struct BeliefGrid {
     /// Cells with canopy returns since the replay last took them.
     #[serde(skip)]
     canopy_changed: BTreeSet<usize>,
+    /// The navigation camera's obstacle evidence (§8.4 of the sensing
+    /// guide): per cell, the highest detection (meaningful where any landed)
+    /// and its log-odds. Safety evidence only: it never makes a cell
+    /// measured, so it neither moves the frontier nor counts as mapped
+    /// structure, and only ever adds obstacles (a camera that saw nothing
+    /// clears nothing). Empty until the first detection lands, so a run
+    /// without the camera checkpoints exactly as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    safety_top_m: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    safety_log_odds: Vec<f64>,
     /// What snapshots share, kept current as returns land. Derived: rebuilt
     /// from the grid after a restore or a reset.
     #[serde(skip)]
@@ -242,6 +264,9 @@ struct Views {
     ground: Arc<Vec<f64>>,
     /// Structure top per cell, NaN unless believed occupied.
     structure: Arc<Vec<f64>>,
+    /// The camera's obstacle top per cell, NaN unless believed occupied;
+    /// empty without camera evidence.
+    safety: Arc<Vec<f64>>,
     /// Highest seen ground per block, NaN where none.
     block_max: Vec<f64>,
     dirty_blocks: BTreeSet<usize>,
@@ -282,6 +307,8 @@ impl BeliefGrid {
             canopy_count: Vec::new(),
             canopy_shown_cm: Vec::new(),
             canopy_changed: BTreeSet::new(),
+            safety_top_m: Vec::new(),
+            safety_log_odds: Vec::new(),
             views: None,
         })
     }
@@ -334,6 +361,8 @@ impl BeliefGrid {
         self.canopy_count = Vec::new();
         self.canopy_shown_cm = Vec::new();
         self.canopy_changed.clear();
+        self.safety_top_m = Vec::new();
+        self.safety_log_odds = Vec::new();
         self.views = None;
         self.reset_wires();
     }
@@ -421,6 +450,9 @@ impl BeliefGrid {
                 }
             })
             .collect();
+        let safety: Vec<f64> = (0..self.safety_log_odds.len())
+            .map(|k| self.safety_value(k, occupied_probability))
+            .collect();
         let (bnx, bny) = self.blocks();
         let block_max = (0..bnx * bny)
             .map(|b| self.block_max_of(&ground, b))
@@ -429,19 +461,81 @@ impl BeliefGrid {
             occupied_probability,
             ground: Arc::new(ground),
             structure: Arc::new(structure),
+            safety: Arc::new(safety),
             block_max,
             dirty_blocks: BTreeSet::new(),
         }
     }
 
+    /// The camera's obstacle top in cell `index`, NaN unless occupied.
+    fn safety_value(&self, index: usize, occupied_probability: f64) -> f64 {
+        match self.safety_log_odds.get(index) {
+            Some(&log_odds) if probability(log_odds) >= occupied_probability => {
+                self.safety_top_m[index]
+            }
+            _ => f64::NAN,
+        }
+    }
+
+    /// Fuse one navigation camera frame: structure detections raise the
+    /// cell's safety evidence. Crowns stay soft, as the scanner's do: never
+    /// occupied. Nothing here touches the mapped cells.
+    fn integrate_camera(&mut self, scan: &RangeScan) {
+        for hit in &scan.returns {
+            if hit.class != ReturnClass::Structure {
+                continue;
+            }
+            let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
+                continue;
+            };
+            if self.safety_log_odds.is_empty() {
+                let cells = self.cell_count();
+                self.safety_top_m = vec![0.0; cells];
+                self.safety_log_odds = vec![0.0; cells];
+            }
+            let top = &mut self.safety_top_m[index];
+            *top = if self.safety_log_odds[index] == 0.0 {
+                hit.point_m[2]
+            } else {
+                top.max(hit.point_m[2])
+            };
+            self.safety_log_odds[index] =
+                (self.safety_log_odds[index] + LOG_ODDS_STRUCTURE).min(LOG_ODDS_LIMIT);
+            let cells = self.cell_count();
+            if let Some(occupied) = self.views.as_ref().map(|v| v.occupied_probability) {
+                let value = self.safety_value(index, occupied);
+                let views = self.views.as_mut().expect("checked above");
+                let safety = Arc::make_mut(&mut views.safety);
+                if safety.is_empty() {
+                    *safety = vec![f64::NAN; cells];
+                }
+                safety[index] = value;
+            }
+        }
+    }
+
+    /// Cells the navigation camera believes occupied.
+    pub fn safety_cells_at(&self, threshold: f64) -> usize {
+        self.safety_log_odds
+            .iter()
+            .filter(|&&log_odds| log_odds > 0.0 && probability(log_odds) >= threshold)
+            .count()
+    }
+
     /// Fuse one platform's scan, in return order. A wire span is mapped the
-    /// first time a scan puts points on it.
+    /// first time a scan puts points on it, whichever sensor saw it. A
+    /// navigation camera frame is safety evidence only
+    /// ([`Self::integrate_camera`]).
     pub fn integrate(&mut self, scan: &RangeScan, tick: u64) {
         for wire in &scan.wires {
             if !self.wires.contains_key(&wire.span.id) {
                 self.wires.insert(wire.span.id.clone(), wire.span.clone());
                 self.wires_view = None;
             }
+        }
+        if scan.sensor == ScanSensor::NavCamera {
+            self.integrate_camera(scan);
+            return;
         }
         for hit in &scan.returns {
             let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
@@ -646,6 +740,7 @@ impl BeliefGrid {
             ground: Arc::clone(&views.ground),
             stand_in,
             structure_top: Arc::clone(&views.structure),
+            safety_top: Arc::clone(&views.safety),
             wires: Arc::clone(
                 self.wires_view
                     .get_or_insert_with(|| Arc::new(self.wires.values().cloned().collect())),
@@ -786,6 +881,9 @@ pub struct BeliefSnapshot {
     stand_in: Vec<f64>,
     /// NaN where the cell is not believed occupied.
     structure_top: Arc<Vec<f64>>,
+    /// The navigation camera's obstacles: NaN where the camera does not
+    /// believe the cell occupied; empty without camera evidence.
+    safety_top: Arc<Vec<f64>>,
     /// The power-line spans mapped so far (R3), in id order.
     wires: Arc<Vec<PowerLine>>,
 }
@@ -973,9 +1071,23 @@ impl BeliefSnapshot {
         top.is_finite().then_some(top)
     }
 
+    /// The camera's obstacle top in the cell at `(x, y)`, if the
+    /// navigation camera believes it occupied.
+    pub fn safety_top_at(&self, x_m: f64, y_m: f64) -> Option<f64> {
+        let (i, j) = self.ij(x_m, y_m);
+        let top = *self.safety_top.get(j * self.nx + i)?;
+        top.is_finite().then_some(top)
+    }
+
+    /// Whether `point_m` is inside a believed obstacle: a mapped structure,
+    /// or one the navigation camera detected.
     fn collides(&self, point_m: [f64; 3]) -> bool {
+        let below = |top: f64| point_m[2] <= top + STRUCTURE_MARGIN_M;
         self.structure_top_at(point_m[0], point_m[1])
-            .is_some_and(|top| point_m[2] <= top + STRUCTURE_MARGIN_M)
+            .is_some_and(below)
+            || self
+                .safety_top_at(point_m[0], point_m[1])
+                .is_some_and(below)
     }
 }
 
@@ -1418,6 +1530,7 @@ mod tests {
             returns,
             misses: 0,
             wires: Vec::new(),
+            sensor: Default::default(),
         }
     }
 
@@ -1568,6 +1681,46 @@ mod tests {
     /// highest crown, shown to the replay when first seen or moved 10 cm,
     /// but it is never occupied, so nothing collides with it. A grid that
     /// never saw a crown checkpoints without a canopy key.
+    /// A navigation camera frame is safety evidence: two detections make
+    /// the cell an obstacle the planners avoid, but the cell is not
+    /// measured, so the frontier, the known fraction and the mapped
+    /// structures are untouched; the evidence survives a checkpoint.
+    #[test]
+    fn camera_detections_are_obstacles_but_not_map() {
+        let config = ExplorationConfig::default();
+        let mut belief = grid();
+        let snapshot = belief.snapshot(&config);
+        let handle = BeliefHandle::new(snapshot);
+        let mut frame = scan(vec![RangeReturn {
+            point_m: [45.0, 45.0, 80.0],
+            class: ReturnClass::Structure,
+        }]);
+        frame.sensor = ScanSensor::NavCamera;
+        belief.integrate(&frame, 1);
+        handle.publish(belief.snapshot(&config));
+        let obstacles = BeliefObstacles::new(handle.clone());
+        assert!(
+            !obstacles.collides([45.0, 45.0, 79.0]),
+            "one detection is not yet an obstacle"
+        );
+        belief.integrate(&frame, 2);
+        handle.publish(belief.snapshot(&config));
+        assert!(obstacles.collides([45.0, 45.0, 79.0]));
+        assert!(!obstacles.collides([45.0, 45.0, 90.0]), "above its top");
+        assert_eq!(belief.safety_cells_at(config.occupied_probability), 1);
+        assert_eq!(belief.known_cells(), 0, "never measured");
+        assert_eq!(belief.structure_cells_at(config.occupied_probability), 0);
+        assert!(belief
+            .take_changed_cells(config.occupied_probability)
+            .is_empty());
+        assert_eq!(handle.current().known_fraction(), 0.0);
+        let text = serde_json::to_string(&belief).unwrap();
+        let restored: BeliefGrid = serde_json::from_str(&text).unwrap();
+        assert_eq!(restored.safety_cells_at(config.occupied_probability), 1);
+        // A grid without camera evidence serialises as it always did.
+        assert!(!serde_json::to_string(&grid()).unwrap().contains("safety"));
+    }
+
     #[test]
     fn canopy_returns_are_seen_but_never_occupied() {
         let config = ExplorationConfig::default();
