@@ -2100,6 +2100,7 @@ mod tests {
             }],
             misses: 0,
             wires: Vec::new(),
+            sensor: Default::default(),
         };
         map(sim).submit_range_scans(vec![scan]);
     }

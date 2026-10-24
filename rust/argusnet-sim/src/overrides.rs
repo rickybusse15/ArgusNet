@@ -506,6 +506,12 @@ impl MissionOverrideStage {
         self.state.rejoin_speed_mps = Some(speed_mps.max(f64::EPSILON));
     }
 
+    /// Rejoin no faster than `speed_mps`.
+    pub fn cap_rejoin_speed(&mut self, speed_mps: f64) {
+        let current = self.state.rejoin_speed_mps.unwrap_or(REDIRECT_SPEED_MPS);
+        self.set_rejoin_speed(current.min(speed_mps));
+    }
+
     pub fn rejoining_at(&self, node_id: &str) -> Option<[f64; 3]> {
         self.state.rejoining.get(node_id).copied()
     }

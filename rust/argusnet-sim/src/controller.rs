@@ -221,6 +221,20 @@ impl PlatformController {
 }
 
 impl Operational {
+    /// Fly no faster than `speed_mps`, whatever this controller flies.
+    fn cap_speed(&mut self, speed_mps: f64) {
+        match self {
+            Operational::Search(lane) => *lane = lane.clone().with_speed_cap(speed_mps),
+            Operational::Explore(explorer) => explorer.cap_speed(speed_mps),
+            Operational::Follow { controller, .. } => controller.cap_speed(speed_mps),
+            Operational::SearchThenFollow(wrapper) => {
+                let lane = wrapper.search_mut();
+                *lane = lane.clone().with_speed_cap(speed_mps);
+                wrapper.follow_mut().cap_speed(speed_mps);
+            }
+        }
+    }
+
     fn reset_to_constructed(&mut self) {
         match self {
             Operational::Search(_) => {}
@@ -468,6 +482,23 @@ impl ControllerStage {
             }
         }
         turned
+    }
+
+    /// Cap every mobile controller to `speed_mps` (the navigation camera's
+    /// envelope). Before the first tick. Returns how many were capped.
+    pub fn cap_speeds(&mut self, speed_mps: f64) -> usize {
+        let mut capped = 0;
+        for (_, controller) in self.state.controllers.iter_mut() {
+            match controller {
+                PlatformController::Static { .. } => continue,
+                PlatformController::Free(operational) => operational.cap_speed(speed_mps),
+                PlatformController::Launched { controller, .. } => {
+                    controller.operational_mut().cap_speed(speed_mps)
+                }
+            }
+            capped += 1;
+        }
+        capped
     }
 
     /// How many controllers are frontier explorers.
