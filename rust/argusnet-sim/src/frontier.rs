@@ -217,10 +217,7 @@ impl FrontierExplorer {
     }
 
     fn lane_speed_mps(&self) -> f64 {
-        self.lane
-            .config()
-            .speed_mps
-            .max(LoopedWaypointPath::MIN_SPEED_MPS)
+        self.lane.speed_mps()
     }
 }
 

@@ -467,10 +467,12 @@ impl BeliefGrid {
         }
     }
 
-    /// The camera's obstacle top in cell `index`, NaN unless occupied.
+    /// The camera's obstacle top in cell `index`, NaN unless occupied. A
+    /// cell needs positive camera evidence: an untouched cell's zero
+    /// log-odds passes a threshold of 0.5 but has no obstacle in it.
     fn safety_value(&self, index: usize, occupied_probability: f64) -> f64 {
         match self.safety_log_odds.get(index) {
-            Some(&log_odds) if probability(log_odds) >= occupied_probability => {
+            Some(&log_odds) if log_odds > 0.0 && probability(log_odds) >= occupied_probability => {
                 self.safety_top_m[index]
             }
             _ => f64::NAN,
@@ -1719,6 +1721,25 @@ mod tests {
         assert_eq!(restored.safety_cells_at(config.occupied_probability), 1);
         // A grid without camera evidence serialises as it always did.
         assert!(!serde_json::to_string(&grid()).unwrap().contains("safety"));
+
+        // At a 0.5 threshold an untouched cell's zero log-odds passes the
+        // probability test, but it has no evidence: it never becomes an
+        // obstacle, before a checkpoint or after.
+        let even = ExplorationConfig {
+            occupied_probability: 0.5,
+            ..ExplorationConfig::default()
+        };
+        let mut belief = grid();
+        belief.integrate(&frame, 1);
+        let before = belief.snapshot(&even);
+        assert!(before.safety_top_at(45.0, 45.0).is_some());
+        assert_eq!(before.safety_top_at(155.0, 155.0), None);
+        let mut restored: BeliefGrid =
+            serde_json::from_str(&serde_json::to_string(&belief).unwrap()).unwrap();
+        let after = restored.snapshot(&even);
+        assert_eq!(after.safety_top_at(155.0, 155.0), None);
+        assert!(!after.collides([155.0, 155.0, 0.5]));
+        assert_eq!(restored.safety_cells_at(0.5), 1);
     }
 
     #[test]
