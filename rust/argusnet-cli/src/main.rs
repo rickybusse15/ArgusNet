@@ -201,6 +201,14 @@ struct SimArgs {
     /// Recorded in the replay's `meta.world_knowledge.exploration`.
     #[arg(long)]
     wire_prior: bool,
+    /// In a `--world-knowledge none` run, what each cell of the map must
+    /// reach (SR5a), as JSON (`QualityRequirement`: density, vertical sigma,
+    /// age, incidence limit, declared bias). The map then reports why each
+    /// cell falls short, explorers go where flying can still fix it, and the
+    /// scan phase ends on the share of reachable cells that meet it.
+    /// Recorded in the replay's `meta.world_knowledge.exploration.quality`.
+    #[arg(long)]
+    quality_requirements: Option<PathBuf>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -326,6 +334,16 @@ enum PlanningPolicyArg {
 /// the same code as the viewer's in-process run.
 fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, String> {
     use argusnet_sim::run_options::{DeliverySeconds, RunOptions};
+    let quality = args
+        .quality_requirements
+        .as_ref()
+        .map(|path| {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            serde_json::from_str::<argusnet_mapping::quality::QualityRequirement>(&text)
+                .map_err(|error| format!("{}: {error}", path.display()))
+        })
+        .transpose()?;
     Ok(RunOptions {
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
@@ -355,27 +373,28 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             WorldKnowledgeArg::Prior => argusnet_sim::belief_world::WorldKnowledge::Prior,
             WorldKnowledgeArg::None => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
         },
-        exploration: (args.pursuit.is_some() || args.explore.is_some() || args.wire_prior).then(
-            || {
-                let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
-                argusnet_sim::belief_world::ExplorationConfig {
-                    pursuit: match args.pursuit {
-                        Some(PursuitArg::Tracks) => {
-                            argusnet_sim::belief_world::PursuitSource::Tracks
-                        }
-                        Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
-                        None => defaults.pursuit,
-                    },
-                    explore: match args.explore {
-                        Some(ExploreArg::Frontier) => true,
-                        Some(ExploreArg::Lanes) => false,
-                        None => defaults.explore,
-                    },
-                    wire_prior: args.wire_prior,
-                    ..defaults
-                }
-            },
-        ),
+        exploration: (args.pursuit.is_some()
+            || args.explore.is_some()
+            || args.wire_prior
+            || quality.is_some())
+        .then(|| {
+            let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
+            argusnet_sim::belief_world::ExplorationConfig {
+                pursuit: match args.pursuit {
+                    Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
+                    Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
+                    None => defaults.pursuit,
+                },
+                explore: match args.explore {
+                    Some(ExploreArg::Frontier) => true,
+                    Some(ExploreArg::Lanes) => false,
+                    None => defaults.explore,
+                },
+                wire_prior: args.wire_prior,
+                quality: quality.clone(),
+                ..defaults
+            }
+        }),
         // Resolved by `sim`: a recovered run takes it from its run directory.
         lane_rates: argusnet_sim::scheduler::LaneRates::default(),
         sensor_rates: RunOptions::sensor_rate_table(&args.sensor_rate)?,
@@ -588,6 +607,15 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--wire-prior gives a --world-knowledge none run the power lines' spans; \
              a prior run knows them already",
+        );
+    }
+    if args.quality_requirements.is_some()
+        && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
+    {
+        return fail(
+            EXIT_INVALID,
+            "--quality-requirements measures the map the platforms build; \
+             it needs --world-knowledge none",
         );
     }
     if let Some(dir) = &args.export_scene {
