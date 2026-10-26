@@ -1,0 +1,269 @@
+{
+  "format": "argusnet.real-site-inspection/v1",
+  "site": "west_pleasant_view",
+  "world_id": "0fd4c2b70d34ba37645cb74a85714e8be3d216c09999e71e3d02a740a01e7714",
+  "commit": "4a0b6951184c777bb459a0774f0087ae62e181d3",
+  "binary_sha256": "72c3f8bf1234d70fe21578c5896b927dc2e609d98c2ea82c8bc660d2676a96f0",
+  "workflow_sha256": "b1f3197b6320876247ae749ff1426958c58256d794ed8ac8c854c148ce12ca6b",
+  "duration_s": 120.0,
+  "checks": [
+    "replay schema",
+    "same-seed replay equality",
+    "package artifact hashes"
+  ],
+  "runs": [
+    {
+      "seed": 7,
+      "replay_sha256": "75a42eea2589700086fdb432e2e7f64b1856fa47ebb7e92caebffb2853987086",
+      "package_manifest_sha256": "b0b7c5019ab012279f1f48467380da4cdd371cb6a6c1b3f1213d98bfeed74e62",
+      "repeat_identical": true,
+      "frames": 481,
+      "mission_status": "incomplete",
+      "outcome": {
+        "degradation": {
+          "localization_timed_out_at_tick": 199
+        },
+        "energy": {
+          "min_fraction": 0.905679839346519,
+          "min_platform": "drone-north",
+          "min_tick": 480,
+          "per_platform": {
+            "drone-east": {
+              "min_fraction": 0.9241826982911012,
+              "tick": 480
+            },
+            "drone-north": {
+              "min_fraction": 0.905679839346519,
+              "tick": 480
+            }
+          }
+        },
+        "evidence_sufficiency": {
+          "covariance_reduction_mean": {
+            "reason": "no track qualified",
+            "status": "unavailable"
+          },
+          "covariance_reduction_tracks": 0,
+          "localisation_rmse_m": {
+            "reason": "no fused track was matched to a truth",
+            "status": "unavailable"
+          },
+          "track_continuity_per_target": {
+            "reason": "no targets",
+            "status": "unavailable"
+          }
+        },
+        "format": "argusnet.mission-outcome/1",
+        "objectives": {
+          "coverage_fraction": 0.8181818181818182,
+          "coverage_threshold": 0.7,
+          "final_phase": "egress",
+          "kind": "scan_map_inspect",
+          "pois_completed": 3,
+          "pois_total": 3,
+          "unmet_pois": []
+        },
+        "outcome": "objectives_unmet",
+        "reasons": [
+          {
+            "code": "mission_not_complete",
+            "detail": "the mission ended in phase 'egress', not 'complete'",
+            "evidence": [
+              {
+                "kind": "frame",
+                "tick": 480,
+                "timestamp_s": 120.0
+              }
+            ],
+            "evidence_count": 1
+          },
+          {
+            "code": "localization_timed_out",
+            "detail": "localization timed out at tick 199",
+            "evidence": [
+              {
+                "kind": "frame",
+                "tick": 199,
+                "timestamp_s": 49.75
+              }
+            ],
+            "evidence_count": 1
+          }
+        ],
+        "scenario_name": "civilian-observation-medium-mixed-mixed",
+        "seed": 7,
+        "violations": {
+          "aborted_platforms": [],
+          "by_violation": {},
+          "rejected_validations": 0
+        }
+      },
+      "completion_rate": 1.0,
+      "energy_reserve_min": 0.905679839346519,
+      "belief": {
+        "known_cells": 12661,
+        "total_cells": 15246,
+        "known_fraction": 0.8304473304473304,
+        "ground_rmse_m": 0.1687490016934769,
+        "ground_max_abs_error_m": 1.5350382626083583,
+        "structure_cells": 1833,
+        "structure_precision": 0.9694489907255864,
+        "structure_recall": 0.9241902136457616,
+        "canopy_cells": 336
+      },
+      "unavailable_fields": [
+        "provenance.site_id",
+        "provenance.mission_id",
+        "provenance.run_id",
+        "provenance.coordinate_frame",
+        "provenance.altitude_datum",
+        "provenance.time_basis",
+        "provenance.world_revision",
+        "provenance.belief_revision",
+        "provenance.world_content_hash",
+        "provenance.config_hash",
+        "provenance.runtime_algorithm_version",
+        "provenance.calibration_version",
+        "provenance.firmware_version",
+        "provenance.model_version",
+        "landing_outcome",
+        "localization_integrity",
+        "evidence_sufficiency",
+        "qualification",
+        "recording_completeness",
+        "localisation_rmse_m",
+        "track_continuity_mean"
+      ],
+      "review_scene": "seed-7/review.smartscene"
+    },
+    {
+      "seed": 42,
+      "replay_sha256": "615eea7c3d1e2f8ae2639587fe429a51ed15a4f9b1fd5fb37f30c3b50f2b9c64",
+      "package_manifest_sha256": "c91505fc14e0ad7005f0a44e43652f18943f1603a1728bcc49d52f40a9425028",
+      "repeat_identical": true,
+      "frames": 481,
+      "mission_status": "incomplete",
+      "outcome": {
+        "degradation": {
+          "localization_timed_out_at_tick": 199
+        },
+        "energy": {
+          "min_fraction": 0.9128374038591743,
+          "min_platform": "drone-north",
+          "min_tick": 480,
+          "per_platform": {
+            "drone-east": {
+              "min_fraction": 0.9145221507810475,
+              "tick": 480
+            },
+            "drone-north": {
+              "min_fraction": 0.9128374038591743,
+              "tick": 480
+            }
+          }
+        },
+        "evidence_sufficiency": {
+          "covariance_reduction_mean": {
+            "reason": "no track qualified",
+            "status": "unavailable"
+          },
+          "covariance_reduction_tracks": 0,
+          "localisation_rmse_m": {
+            "reason": "no fused track was matched to a truth",
+            "status": "unavailable"
+          },
+          "track_continuity_per_target": {
+            "reason": "no targets",
+            "status": "unavailable"
+          }
+        },
+        "format": "argusnet.mission-outcome/1",
+        "objectives": {
+          "coverage_fraction": 0.7588875770693952,
+          "coverage_threshold": 0.7,
+          "final_phase": "egress",
+          "kind": "scan_map_inspect",
+          "pois_completed": 3,
+          "pois_total": 3,
+          "unmet_pois": []
+        },
+        "outcome": "objectives_unmet",
+        "reasons": [
+          {
+            "code": "mission_not_complete",
+            "detail": "the mission ended in phase 'egress', not 'complete'",
+            "evidence": [
+              {
+                "kind": "frame",
+                "tick": 480,
+                "timestamp_s": 120.0
+              }
+            ],
+            "evidence_count": 1
+          },
+          {
+            "code": "localization_timed_out",
+            "detail": "localization timed out at tick 199",
+            "evidence": [
+              {
+                "kind": "frame",
+                "tick": 199,
+                "timestamp_s": 49.75
+              }
+            ],
+            "evidence_count": 1
+          }
+        ],
+        "scenario_name": "civilian-observation-medium-mixed-mixed",
+        "seed": 42,
+        "violations": {
+          "aborted_platforms": [],
+          "by_violation": {},
+          "rejected_validations": 0
+        }
+      },
+      "completion_rate": 1.0,
+      "energy_reserve_min": 0.9128374038591743,
+      "belief": {
+        "known_cells": 11747,
+        "total_cells": 15246,
+        "known_fraction": 0.7704971795880887,
+        "ground_rmse_m": 0.1668654461128471,
+        "ground_max_abs_error_m": 1.633916261605755,
+        "structure_cells": 1775,
+        "structure_precision": 0.9684507042253521,
+        "structure_recall": 0.8931771192281185,
+        "canopy_cells": 347
+      },
+      "unavailable_fields": [
+        "provenance.site_id",
+        "provenance.mission_id",
+        "provenance.run_id",
+        "provenance.coordinate_frame",
+        "provenance.altitude_datum",
+        "provenance.time_basis",
+        "provenance.world_revision",
+        "provenance.belief_revision",
+        "provenance.world_content_hash",
+        "provenance.config_hash",
+        "provenance.runtime_algorithm_version",
+        "provenance.calibration_version",
+        "provenance.firmware_version",
+        "provenance.model_version",
+        "landing_outcome",
+        "localization_integrity",
+        "evidence_sufficiency",
+        "qualification",
+        "recording_completeness",
+        "localisation_rmse_m",
+        "track_continuity_mean"
+      ],
+      "review_scene": "seed-42/review.smartscene"
+    }
+  ],
+  "limits": [
+    "Reproducibility checks do not certify mission completion or map quality.",
+    "Scenario setup still uses truth for some routes and inspection points.",
+    "Landing, localization integrity and evidence sufficiency remain unavailable."
+  ]
+}
