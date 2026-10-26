@@ -356,3 +356,151 @@ fn a_faulted_run_is_deterministic_and_resumes_mid_outage() {
     let rest = json(&run_frames(resumed, bundle.steps - at as u64));
     assert_eq!(rest, straight[at..]);
 }
+
+fn drift(node: &str, start_s: f64, end_s: f64, rate_rad_per_s: f64) -> Fault {
+    Fault::CalibrationDrift {
+        node_id: node.into(),
+        start_s,
+        end_s,
+        rate_rad_per_s,
+    }
+}
+
+/// Case E, a calibration drift on one sensor: 0.01 rad/s over [10 s, 20 s).
+/// Declared: that sensor's bearings turn by exactly the drift so far
+/// (0.1 rad by 20 s) and stay turned, since nothing recalibrates it; every
+/// other sensor's observations are unchanged; the frames name the fault
+/// while it drifts and carry the offset from its start on.
+#[test]
+fn a_calibration_drift_turns_one_sensors_bearings_and_stays() {
+    let bundle = bundle();
+    let node = "drone-east";
+    let (start, end, rate) = (10.0, 20.0, 0.01);
+    let baseline = run_frames(assemble(&bundle).unwrap(), bundle.steps);
+    let mut run = assemble(&bundle).unwrap();
+    run.set_faults(manifest(vec![drift(node, start, end, rate)]))
+        .unwrap();
+    let drifted = run_frames(run, bundle.steps);
+
+    let offset_at = |t: f64| rate * (t.clamp(start, end) - start);
+    let mut turned = 0;
+    for (plain, frame) in baseline.iter().zip(&drifted) {
+        let t = frame.timestamp_s;
+        assert_eq!(plain.observations.len(), frame.observations.len(), "t={t}");
+        for (a, b) in plain.observations.iter().zip(&frame.observations) {
+            assert_eq!(a.node_id, b.node_id);
+            if a.node_id != node || t < start - 1e-9 {
+                assert_eq!(a.direction, b.direction, "{} at {t}", a.node_id);
+                continue;
+            }
+            let cos = a.direction[0] * b.direction[0]
+                + a.direction[1] * b.direction[1]
+                + a.direction[2] * b.direction[2];
+            let angle = cos.clamp(-1.0, 1.0).acos();
+            assert!(
+                (angle - offset_at(t)).abs() < 1e-6,
+                "{node} turned {angle} at {t}, expected {}",
+                offset_at(t)
+            );
+            turned += 1;
+        }
+        let active: Vec<_> = frame.active_faults.iter().collect();
+        if (start..end).contains(&t) {
+            assert_eq!(active, [&drift(node, start, end, rate)], "t={t}");
+        } else {
+            assert!(active.is_empty(), "t={t}");
+        }
+        let recorded = frame.sensor_bias_offsets_rad.get(node).copied();
+        if t <= start + 1e-9 {
+            assert_eq!(recorded, None, "t={t}");
+        } else {
+            assert!((recorded.unwrap() - offset_at(t)).abs() < 1e-12, "t={t}");
+        }
+    }
+    assert!(
+        turned > 10,
+        "the case needs the drone to observe after the drift starts"
+    );
+    assert!(baseline
+        .iter()
+        .all(|f| f.active_faults.is_empty() && f.sensor_bias_offsets_rad.is_empty()));
+}
+
+/// A drift rate that is zero or not finite is refused before the run.
+#[test]
+fn a_drift_with_no_rate_is_refused() {
+    let bundle = bundle();
+    for rate in [0.0, f64::NAN] {
+        let mut run = assemble(&bundle).unwrap();
+        let error = run
+            .set_faults(manifest(vec![drift("drone-east", 1.0, 2.0, rate)]))
+            .unwrap_err();
+        assert!(error.contains("calibration_drift"), "{error}");
+    }
+}
+
+/// The drift is a pure function of the tick: a run resumed during the drift,
+/// or after it, carries on exactly as the straight run.
+#[test]
+fn a_drifting_run_resumes_mid_drift_and_after() {
+    let bundle = bundle();
+    let make = || {
+        let mut run = assemble(&bundle).unwrap();
+        run.set_faults(manifest(vec![
+            drift("drone-east", 10.0, 20.0, 0.01),
+            drift("drone-north", 5.0, 30.0, -0.004),
+        ]))
+        .unwrap();
+        run
+    };
+    let json = |frames: &[ReplayFrame]| -> Vec<String> {
+        frames
+            .iter()
+            .map(|f| serde_json::to_string(f).unwrap())
+            .collect()
+    };
+    let straight = json(&run_frames(make(), bundle.steps));
+    for at in [30usize, 50] {
+        let mut original = make();
+        for _ in 0..at {
+            original.step().unwrap();
+        }
+        let checkpoint = original.sim.checkpoint().unwrap();
+        let mut resumed = make();
+        resumed.restore(&checkpoint).expect("restore accepted");
+        let rest = json(&run_frames(resumed, bundle.steps - at as u64));
+        assert_eq!(rest, straight[at..], "resumed at tick {at}");
+    }
+}
+
+/// A drift overlapping an outage of the same sensor goes on accumulating,
+/// and the frames carry its offset throughout the outage, as before and
+/// after it.
+#[test]
+fn a_drift_is_recorded_through_an_outage_of_its_sensor() {
+    let bundle = bundle();
+    let node = "drone-east";
+    let mut run = assemble(&bundle).unwrap();
+    run.set_faults(manifest(vec![
+        drift(node, 10.0, 20.0, 0.01),
+        outage(node, 12.0, 25.0),
+    ]))
+    .unwrap();
+    let frames = run_frames(run, bundle.steps);
+    let during = frames_in(&frames, 12.0, 25.0);
+    assert!(!during.is_empty());
+    for frame in during {
+        assert!(
+            frame.observations.iter().all(|o| o.node_id != node),
+            "out at {}",
+            frame.timestamp_s
+        );
+        let expected = 0.01 * (frame.timestamp_s.min(20.0) - 10.0);
+        let recorded = frame.sensor_bias_offsets_rad.get(node).copied();
+        assert!(
+            recorded.is_some_and(|r| (r - expected).abs() < 1e-12),
+            "{recorded:?} at {}",
+            frame.timestamp_s
+        );
+    }
+}

@@ -550,6 +550,14 @@ pub struct ReplayFrame {
     /// soft, and a trunk the physics has already pushed clear of.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tree_contacts: Vec<ReplayTreeContact>,
+    /// The scheduled faults in force this tick (F2), as the manifest gives
+    /// them. Absent in a run without faults, or a tick with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_faults: Vec<crate::faults::Fault>,
+    /// Each sensor's calibration drift offset this tick, radians, where one
+    /// is non-zero (F2). It persists after its drift ends.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sensor_bias_offsets_rad: BTreeMap<String, f64>,
 }
 
 /// One platform touching one tree in one tick (R2).
@@ -795,6 +803,8 @@ impl ReplayWriter {
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
             tree_contacts: Vec::new(),
+            active_faults: Vec::new(),
+            sensor_bias_offsets_rad: BTreeMap::new(),
         }
     }
 
