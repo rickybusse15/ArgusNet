@@ -178,6 +178,20 @@ impl ReplayState {
         self.step_to(0);
     }
 
+    /// A seek branched the run (P5.2): keep the first `keep` frames, which
+    /// the branch shares with the history it left, drop the rest, and begin a
+    /// new epoch, so what was presented from the abandoned branch is not
+    /// carried into this one. The cursor stays where it was, within the kept
+    /// frames.
+    pub fn branch(&mut self, keep: usize) {
+        if let Some(document) = self.document.as_mut() {
+            document.frames.truncate(keep);
+        }
+        self.trimmed_before_s = None;
+        self.epoch += 1;
+        self.step_to(self.frame_index);
+    }
+
     /// Carry `previous`'s epoch forward, to one after it. For a state built
     /// fresh to replace `previous` with another run.
     pub fn succeed(&mut self, previous: &ReplayState) {
