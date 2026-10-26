@@ -44,6 +44,7 @@ verification; merge status and remote CI are separate evidence.
 | [#287](https://github.com/rickybusse15/ArgusNet/pull/287) | Open; CI queued | Calibration drift faults and fault metadata in replay frames |
 | [#288](https://github.com/rickybusse15/ArgusNet/pull/288) | Open; CI queued | Record and display learned wire spans |
 | [#289](https://github.com/rickybusse15/ArgusNet/pull/289), [#290](https://github.com/rickybusse15/ArgusNet/pull/290) | Open; CI queued | Viewer mission-decision explanations and per-platform energy reserve readout |
+| [#303](https://github.com/rickybusse15/ArgusNet/pull/303) | Open | Physical guard sweeps each step against buildings and walls, not only wires: no tunnelling through thin walls uncounted (no-prior runs; prior runs 14/14 hashes) |
 
 These extend world ingestion, mission behavior and operator visibility. They do
 not complete P4.10's independent scheduler or P6's Python runtime retirement.

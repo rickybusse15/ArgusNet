@@ -70,7 +70,14 @@ byte-identical, and the lifecycle checks are equal.
    stage 1 samples and after stage 3 resolves. If a belief led a platform
    below the true ground or into a building, the guard puts it back and the
    frame records a `world_contacts` entry. The contact count measures how
-   safe flying on the belief was.
+   safe flying on the belief was. Each move is swept from where the platform
+   was against the true buildings, walls and power-line wires
+   (`PhysicalGuard::enforce_from`): a step that meets one stops 1 cm short of
+   it on the near side, with a `structure` contact. Before 2026-10-23 only
+   wires were swept, so a step longer than a wall is thick crossed it
+   uncounted, and a platform that ended a tick inside a wall could be pushed
+   out through its far face. Tree trunks are still checked only where the
+   platform ends a tick.
 
 The grid, together with what the replay last showed of it, is stage 8
 checkpoint state (an optional key, absent in prior runs). A resumed run
