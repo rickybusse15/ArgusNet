@@ -37,6 +37,15 @@
     one `records/<kind>.json` per recorded kind. Reconstruction and change
     are listed as unavailable, with reasons.
 
+- Energy contingencies (F5, first slice). `--planning-policy contingency_v1`
+  hands a POI on when its drone can no longer afford the dwell left and the
+  trip home, rather than at a fixed 30 %. It takes new work only with a 5 %
+  margin above the reserve, so work just taken is not dropped. A POI no drone
+  can afford is reported unassigned (`unassigned_reason` in the replay, cited
+  by the F1 outcome) instead of holding the mission open. Under both
+  efficient policies, the mission's egress clear no longer cancels a drone's
+  own reserve return. See `docs/migration/ENERGY_CONTINGENCIES.md`.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

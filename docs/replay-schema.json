@@ -1549,6 +1549,13 @@
                   "complete"
                 ]
               },
+              "unassigned_reason": {
+                "type": "string",
+                "description": "Why a pending POI has no drone, when the planner says so (contingency_v1, F5): no_affordable_drone. Absent otherwise.",
+                "enum": [
+                  "no_affordable_drone"
+                ]
+              },
               "position": {
                 "type": "array",
                 "description": "World-space [x_m, y_m, z_m] position of this POI.",

@@ -134,6 +134,13 @@ def _objectives(
             "coverage_fraction": scan.get("scan_coverage_fraction"),
             "coverage_threshold": scan.get("scan_coverage_threshold"),
         }
+        # contingency_v1 (F5) says why a POI has no drone; absent otherwise.
+        unassigned = [s for s in unmet if s.get("unassigned_reason")]
+        if unassigned:
+            section["unassigned_pois"] = [
+                {"poi_id": s.get("poi_id"), "reason": s.get("unassigned_reason")}
+                for s in unassigned
+            ]
         reasons = []
         last = len(frames) - 1
         if unmet:
@@ -147,6 +154,11 @@ def _objectives(
                             "id": s.get("poi_id"),
                             "status": s.get("status"),
                             "tick": last,
+                            **(
+                                {"unassigned_reason": s["unassigned_reason"]}
+                                if s.get("unassigned_reason")
+                                else {}
+                            ),
                         }
                         for s in unmet
                     ],

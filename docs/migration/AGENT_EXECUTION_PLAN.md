@@ -883,6 +883,13 @@ scenario/config/world/algorithm recorded.
 thrashing, handoff, unassigned-task reporting; no team assignment weakens a
 per-platform reserve; **no UI-computed reserve authority**.
 
+**Status (2026-10-23):** first slice done, as the opt-in
+`--planning-policy contingency_v1`
+([ENERGY_CONTINGENCIES.md](ENERGY_CONTINGENCIES.md)). It adds feasibility-based
+give-up, a take margin (hysteresis) and unassigned-POI reporting. Next: charge
+energy on the flown position rather than the nominal one (a finding of this
+slice), the viewer's reserve inspector, and seed qualification.
+
 ### F6 — Persistent spatial memory (design first)
 **Depends:** one mutable belief owner (A), durable immutable tile/evidence store.
 **Do:** ADR for site/map store, stable CRS, content identity, alignment
