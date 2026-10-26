@@ -227,7 +227,9 @@ struct SimArgs {
     export_scene: Option<PathBuf>,
     /// How battery energy is charged (D-3): `legacy` charges motion only, as
     /// the reference does; `physical_v1` also charges hover power for the part
-    /// of each tick not spent moving.
+    /// of each tick not spent moving; `flown_v1` charges the same on where
+    /// each platform actually flew (after overrides, deconfliction and
+    /// safety), charged as each tick commits, not on its controller's nominal position (F5).
     #[arg(long, value_enum, default_value = "legacy")]
     energy_profile: EnergyProfileArg,
     /// Who allocates the mission's POIs (P1): `reference` is the reference's
@@ -333,6 +335,8 @@ enum EnergyProfileArg {
     Legacy,
     #[value(name = "physical_v1")]
     PhysicalV1,
+    #[value(name = "flown_v1")]
+    FlownV1,
 }
 
 /// `--planning-policy`'s values (P1).
@@ -353,6 +357,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
             EnergyProfileArg::PhysicalV1 => argusnet_planning::battery::EnergyProfile::PhysicalV1,
+            EnergyProfileArg::FlownV1 => argusnet_planning::battery::EnergyProfile::FlownV1,
         },
         planning_policy: match args.planning_policy {
             PlanningPolicyArg::Reference => {
