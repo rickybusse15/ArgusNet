@@ -585,12 +585,21 @@ def main(argv: Sequence[str] | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _read_capped_text(path: Path) -> str:
+    """Read an operator-supplied JSON document, refusing an unbounded file."""
+    from argusnet.core.io_limits import FileSizeLimitError, read_text_capped
+
+    try:
+        return read_text_capped(path)
+    except FileSizeLimitError as exc:
+        raise SystemExit(f"Error: {exc}") from exc
+
+
 def _run_scorecard(args: argparse.Namespace) -> None:
     replay_path = Path(args.replay)
     if not replay_path.exists():
         raise SystemExit(f"Error: {replay_path} does not exist.")
-    with replay_path.open(encoding="utf-8") as fh:
-        replay_doc = json.load(fh)
+    replay_doc = json.loads(_read_capped_text(replay_path))
 
     from argusnet.evaluation.scorecard import scorecard_from_replay
 
@@ -809,8 +818,7 @@ def _run_validate_replay(args: argparse.Namespace) -> None:
         raise SystemExit(f"Error: {replay_path} does not exist.")
 
     try:
-        with open(replay_path, encoding="utf-8") as fh:
-            document = json.load(fh)
+        document = json.loads(_read_capped_text(replay_path))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Error: {replay_path} is not valid JSON: {exc}") from exc
 
@@ -832,8 +840,7 @@ def _run_info(args: argparse.Namespace) -> None:
         raise SystemExit(f"Error: {replay_path} does not exist.")
 
     try:
-        with open(replay_path, encoding="utf-8") as fh:
-            document = json.load(fh)
+        document = json.loads(_read_capped_text(replay_path))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Error: {replay_path} is not valid JSON: {exc}") from exc
 

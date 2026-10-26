@@ -210,7 +210,7 @@ Read from the repository on 2026-10-03 unless marked *unverified*.
 | Guardrails G0, G2, G3 | open |
 | Viewer P2.5 shell, P2.6 acceptance | not started (no PR seen) |
 | Viewer P5 | D1, D2 and D5's viewer part done: `--run` and Tools → Scenario run the Rust simulation in process and scenes are built in Rust; the viewer starts no process (`app::scenario_run_tests::the_viewer_starts_no_processes`) |
-| F1–F7, S1/S2 contracts | not started except what pre-exists: `src/argusnet/evaluation/{scorecard,reports,benchmarks}.py` are the F1/F4 starting points |
+| F1–F7, S1/S2 contracts | F1 done (`evaluation/outcome.py`, `argusnet.mission-outcome/1`). S1 done for replays (2026-10-23): the client package (`argusnet client-package`), versioned contracts for the twelve record kinds (`docs/contracts/`), and the Review workspace reading the report. F2 first slice (the fault manifest), F3 mission slice (typed decisions) and F4 (paired scenario comparisons) done, as `STATUS.md` records. S2, F5, F6 and F7 not started |
 | Hardware S3–S8 | planning docs only; no hardware profile frozen |
 | Open question from `STATUS.md` | confirm P4.8d.4 ("world-backed stage 1 + Python-vs-Rust stage-1 parity") was closed by P4.8e.x |
 
@@ -826,6 +826,25 @@ building Plan/Review UI.** Ids and revision keys follow VIEWER_UI §10.2
 (`session_id / run_id / epoch / tick / world_revision / belief_revision /
 sequence`).
 
+
+**Status (2026-10-23):** done for replay-derived output.
+- **S1.0, the client package:** `argusnet client-package --replay R --output DIR`
+  writes a hash-listed, unsigned manifest; `assurance.json` and `assurance.md`
+  (`argusnet.mission-assurance/v1`, carrying the F1 outcome); and the
+  annotated replay. Evaluation no longer reports missing data as success.
+- **S1.1, the contracts:** draft-07 schemas in `docs/contracts/` for the twelve
+  kinds, with a shared envelope (the 10.2 identity keys and a source pointer)
+  and explicit unavailable values. The package carries `records/`, and every
+  record validates, from synthetic replays and from real runs.
+- **S1.2, Review:** the workspace reads the report: outcome, findings and
+  objectives (each with a frame link), energy, events and unavailable fields.
+
+Not yet:
+- **records only a runtime can produce:** reconstruction and change (F6); planned
+  trajectories; evidence sufficiency (F7); session, run, epoch and world-revision
+  identity, which replays do not record;
+- **signing:** packages are unsigned;
+- **Plan:** the workspace still waits for its own contracts.
 ### F1 — Mission outcome scorecards
 **Start:** `src/argusnet/evaluation/scorecard.py`, `reports.py`.
 **Do:** objective outcomes, evidence sufficiency, energy, violations,
@@ -863,6 +882,13 @@ scenario/config/world/algorithm recorded.
 **Do:** continuous route-to-home reserve feasibility, hysteresis against task
 thrashing, handoff, unassigned-task reporting; no team assignment weakens a
 per-platform reserve; **no UI-computed reserve authority**.
+
+**Status (2026-10-23):** first slice done, as the opt-in
+`--planning-policy contingency_v1`
+([ENERGY_CONTINGENCIES.md](ENERGY_CONTINGENCIES.md)). It adds feasibility-based
+give-up, a take margin (hysteresis) and unassigned-POI reporting. Second
+slice: `--energy-profile flown_v1` charges energy on the flown position, not
+the nominal one. Next: the viewer's reserve inspector and seed qualification.
 
 ### F6 — Persistent spatial memory (design first)
 **Depends:** one mutable belief owner (A), durable immutable tile/evidence store.

@@ -21,11 +21,13 @@ mod inspectors;
 mod layout;
 mod platform;
 pub mod preferences;
+mod review;
 mod shell;
 mod source;
 pub mod strip;
 mod time;
 mod timeline;
+pub mod timing;
 mod widgets;
 mod workspace;
 
@@ -102,6 +104,10 @@ pub struct UiReads<'w> {
     prefs: Res<'w, crate::prefs::ViewerPrefs>,
     /// The in-process run's state, when `--run` started one (D1).
     sim: Option<Res<'w, crate::sim_session::SimSourceState>>,
+    /// Metres per pixel at the camera's focus, for the scale bar (V3).
+    scale: Option<Res<'w, crate::projection::CanvasScale>>,
+    /// The speed the view is actually advancing at (V4 timing).
+    achieved: Option<Res<'w, timing::AchievedRate>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -131,7 +137,11 @@ pub fn viewer_ui_system(
         camera,
         prefs,
         sim,
+        scale,
+        achieved,
     } = reads;
+    let scale = scale.map(|scale| *scale).unwrap_or_default();
+    let achieved = achieved.map(|rate| *rate).unwrap_or_default();
     // `ctx_mut` is fallible in bevy_egui 0.42: no primary context means there is
     // no frame to draw into yet.
     let Ok(context) = contexts.ctx_mut() else {
@@ -160,8 +170,13 @@ pub fn viewer_ui_system(
     let root = &mut root;
 
     let viewport = context.viewport_rect();
-    let layout =
-        ShellLayout::for_viewport(viewport.width(), viewport.height(), ui_state.drawer_open);
+    // Review's report is the rail, so the rail does not collapse there.
+    let layout = ShellLayout::for_workspace(
+        viewport.width(),
+        viewport.height(),
+        ui_state.drawer_open,
+        ui_state.workspace == crate::state::Workspace::Review,
+    );
     let alerts = collect_alerts(&replay_state, &mission_zones);
     let frame_count = replay_state.frame_count();
     let sim = sim.and_then(|sim| sim.0);
@@ -196,9 +211,13 @@ pub fn viewer_ui_system(
             &camera,
             &prefs,
             &layout,
+            scale,
         ),
         Region::Timeline => {
             section_operator_timeline(ui, &mut replay_state, &mut ui_state, sim.is_some())
+        }
+        Region::Rail if ui_state.workspace == crate::state::Workspace::Review => {
+            review::review_rail(ui, &mut replay_state)
         }
         Region::Rail => {
             let workspace = ui_state.workspace;
@@ -226,10 +245,15 @@ pub fn viewer_ui_system(
                 &raster_status,
                 &mut layer_visibility,
                 &mut zone_overlap_model,
+                crate::world_view::truth_unavailable(matches!(
+                    source,
+                    SourceContext::Live | SourceContext::LiveHistory
+                )),
             ),
             ViewerMode::Replay => drawer_replay_content(ui, &replay_state),
             ViewerMode::Diagnostics => drawer_diagnostics_content(
                 ui,
+                &achieved,
                 &replay_state,
                 &frame_metrics,
                 &mission_zones,
@@ -376,6 +400,45 @@ mod tests {
                 .clear();
         }
         (layout, regions, canvas)
+    }
+
+    /// V3: the world switch draws in a frame, and where there is no truth
+    /// (live operation) a true-world view falls back to the drones' map,
+    /// every truth layer with it.
+    #[test]
+    fn the_world_switch_withdraws_truth_where_there_is_none() {
+        use super::*;
+        let context = egui::Context::default();
+        let mut overlays = RuntimeOverlayVisibility::default();
+        let mut layers = LayerVisibilityState::default();
+        layers
+            .base_layers
+            .insert(crate::belief_map::LAYER_ID.to_string(), false);
+        let scene = vec!["terrain".to_string()];
+        crate::world_view::apply(
+            crate::world_view::WorldView::TrueWorld,
+            true,
+            &scene,
+            crate::belief_map::LAYER_ID,
+            &mut overlays,
+            &mut layers.base_layers,
+        );
+        let draw = |unavailable: Option<&'static str>,
+                    overlays: &mut RuntimeOverlayVisibility,
+                    layers: &mut LayerVisibilityState| {
+            context
+                .run_ui(egui::RawInput::default(), |ui| {
+                    inspectors::section_world_view(ui, &scene, overlays, layers, unavailable);
+                })
+                .textures_delta
+                .clear();
+        };
+        draw(None, &mut overlays, &mut layers);
+        assert!(overlays.truths, "a replay may show truth");
+        draw(Some("live"), &mut overlays, &mut layers);
+        assert!(!overlays.truths && !overlays.power_lines && !overlays.trees);
+        assert!(!layers.base_layers["terrain"]);
+        assert!(layers.base_layers[crate::belief_map::LAYER_ID]);
     }
 
     fn outer(regions: &[(super::Region, egui::Rect)], region: super::Region) -> Option<egui::Rect> {

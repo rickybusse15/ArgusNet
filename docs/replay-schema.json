@@ -615,6 +615,68 @@
               "minimum": 0,
               "maximum": 1,
               "description": "Of the cells a true building or wall covers at its centre, the fraction with a believed structure within one cell."
+            },
+            "quality": {
+              "type": "object",
+              "description": "SR5a: the map against the run's quality requirement (`meta.world_knowledge.exploration.quality`). Every cell counts under exactly one reason. Unreachable cells are bias-limited: no flying meets them, so they are never counted as met. Absent without a requirement.",
+              "required": [
+                "met_cells",
+                "unseen_cells",
+                "too_oblique_cells",
+                "sparse_cells",
+                "stale_cells",
+                "unreachable_cells",
+                "met_fraction",
+                "resolved_fraction"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "met_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unseen_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "too_oblique_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sparse_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "stale_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unreachable_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "met_fraction": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "resolved_fraction": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Met or unreachable over all cells: what the scan gate reads. Never a claim that the map is met."
+                }
+              }
+            },
+            "unsettled_scans": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "SR2: pod captures refused because the gimbal had not settled, so far. Absent when none."
+            },
+            "stowed_scans": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "SR2: pod captures refused because the pod was stowed, so far. Absent when none."
             }
           }
         }
@@ -893,6 +955,39 @@
             "$ref": "#/definitions/mission_event"
           }
         },
+        "active_faults": {
+          "type": "array",
+          "description": "The scheduled faults (F2) in force this tick, as the fault manifest gives them: an interval fault over its interval, a source restart at its tick. Absent when none.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["kind", "node_id"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["sensor_outage", "link_delay", "source_restart", "calibration_drift"]
+              },
+              "node_id": {"type": "string"}
+            }
+          }
+        },
+        "sensor_bias_offsets_rad": {
+          "type": "object",
+          "description": "Each sensor's calibration drift offset this tick, radians, where non-zero (F2). Persists after its drift ends. Absent when none.",
+          "additionalProperties": {"type": "number"}
+        },
+        "energy_reserves": {
+          "type": "object",
+          "description": "Under a physical energy profile (D-3): per platform, its remaining energy and the reserve it needs to get home from where it is, as the battery's reserve check computed them this tick (F5). Absent under legacy energy.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["remaining_wh", "reserve_wh"],
+            "properties": {
+              "remaining_wh": {"type": "number"},
+              "reserve_wh": {"type": "number"}
+            }
+          }
+        },
         "safety_events": {
           "type": "array",
           "description": "Safety validation results emitted during this frame.",
@@ -926,6 +1021,15 @@
           "description": "Optional inspection evidence records captured or indexed this frame.",
           "items": {
             "$ref": "#/definitions/inspection_evidence_record"
+          }
+        },
+        "mapped_wires": {
+          "type": "array",
+          "description": "World-knowledge `none` runs (R3): the power-line spans the platforms' map gained this tick, whole spans in the meta.power_lines line format, each recorded once; the wire-hazard prior's spans on the first frame. Applying the frames in order gives the wires the map holds. Absent when none.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "supports", "conductor_offsets_m"]
           }
         },
         "belief_updates": {
@@ -1029,6 +1133,53 @@
                   },
                   "minItems": 3,
                   "maxItems": 3
+                }
+              },
+              "sensor": {
+                "type": "string",
+                "enum": [
+                  "nav_camera"
+                ],
+                "description": "`nav_camera` for the forward navigation camera's obstacle detections (SR5c): safety evidence, not the map. Absent for the range scanner."
+              },
+              "pod": {
+                "type": "object",
+                "description": "SR2: the rig pod at capture. `source` is `mission` (the planner's pointing) or `stow` (below cruise: take-off, landing, a hold). Stowed or unsettled captures are refused by the map. `boresight_world` is the LiDAR boresight as the estimator has it; `occluded` counts rays the airframe blocked. Absent for the legacy scanner and the navigation camera.",
+                "required": [
+                  "source",
+                  "settled",
+                  "command_error_rad",
+                  "boresight_world",
+                  "occluded"
+                ],
+                "additionalProperties": true,
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "mission",
+                      "stow"
+                    ]
+                  },
+                  "settled": {
+                    "type": "boolean"
+                  },
+                  "command_error_rad": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "boresight_world": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  },
+                  "occluded": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
                 }
               }
             }
@@ -1439,7 +1590,7 @@
         },
         "scan_coverage_fraction": {
           "type": "number",
-          "description": "Fraction of the map grid that has been scanned (0.0\u20131.0).",
+          "description": "What the scanning gate reads (0.0\u20131.0): the footprint grid's scanned fraction with a prior map; the self-built map's known fraction without one; with a quality requirement (SR5b), `mapping_state.belief.quality.resolved_fraction`.",
           "minimum": 0,
           "maximum": 1
         },
@@ -1547,6 +1698,13 @@
                   "pending",
                   "active",
                   "complete"
+                ]
+              },
+              "unassigned_reason": {
+                "type": "string",
+                "description": "Why a pending POI has no drone, when the planner says so (contingency_v1, F5): no_affordable_drone. Absent otherwise.",
+                "enum": [
+                  "no_affordable_drone"
                 ]
               },
               "position": {

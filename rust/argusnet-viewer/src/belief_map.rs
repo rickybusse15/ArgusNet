@@ -231,15 +231,19 @@ pub fn sync_belief_map_system(
         return;
     };
     if !view.truth_hidden {
-        if let Some(scene) = scene {
-            for layer in &scene.manifest.layers {
-                layers.base_layers.insert(layer.id.clone(), false);
-            }
-        }
-        layers.base_layers.insert(LAYER_ID.to_string(), true);
-        overlays.power_lines = false;
-        overlays.power_line_clearance = false;
-        overlays.trees = false;
+        // The primary switch's own rule (V3): the drones' map on, every
+        // truth-bearing layer off together.
+        let scene_layers: Vec<String> = scene
+            .map(|scene| scene.manifest.layers.iter().map(|l| l.id.clone()).collect())
+            .unwrap_or_default();
+        crate::world_view::apply(
+            crate::world_view::WorldView::DronesMap,
+            true,
+            &scene_layers,
+            LAYER_ID,
+            &mut overlays,
+            &mut layers.base_layers,
+        );
         view.truth_hidden = true;
     }
     let Some(current) = replay.current_frame() else {
@@ -801,8 +805,18 @@ pub fn belief_overlays_system(
     let ground_ray = Color::srgba(1.0, 0.78, 0.35, 0.30);
     let ground_hit = Color::srgba(1.0, 0.82, 0.40, 0.95);
     let structure = Color::srgba(1.0, 0.45, 0.85, 0.95);
+    // The navigation camera's detections: safety evidence, not the map.
+    let camera = Color::srgba(0.35, 0.95, 0.55, 0.95);
     for scan in &frame.range_scans {
         let origin = Vec3::from_array(scan.origin_m);
+        if scan.is_nav_camera() {
+            for point in &scan.structure {
+                let p = Vec3::from_array(*point);
+                gizmos.line(origin, p, camera.with_alpha(0.35));
+                gizmos.sphere(Isometry3d::from_translation(p), 1.4, camera);
+            }
+            continue;
+        }
         for point in &scan.ground {
             let p = Vec3::from_array(*point);
             gizmos.line(origin, p, ground_ray);

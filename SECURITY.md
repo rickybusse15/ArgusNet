@@ -81,7 +81,10 @@ cryptographic identity layer on top:
   `ARGUSNET_TLS_CLIENT_CA`/`ARGUSNET_TLS_CERT`/`ARGUSNET_TLS_KEY`. Use
   `--live-tls-domain` when the certificate name differs from the endpoint host.
   The check runs before the window opens, so a misconfigured endpoint fails
-  loudly instead of streaming the world model in the clear.
+  loudly instead of streaming the world model in the clear. The host is the
+  host a URL parser dials (text after `@`, port after the last colon), so
+  `127.0.0.1:80@remote:443` is a remote endpoint and is refused in the clear.
+  `localhost` is plaintext only when every address it resolves to is loopback.
 - **MQTT**: `MQTTIngestionAdapter` refuses to connect to a non-loopback broker
   without TLS (`ARGUSNET_MQTT_TLS_CA`/`_CERT`/`_KEY`) and without a
   `device_registry` configured; broker credentials are read from
@@ -108,18 +111,35 @@ listen address is loopback-only but still reachable from other local users.
 
 ### Untrusted file handling
 
-- **Scene manifests** (`src/argusnet/world/scene_loader.py`): every path field
-  (`layers[].asset_path`, `metadata.environment`/`style`, `replay.path`) is
-  checked for absolute paths and `..` traversal, then re-verified with a
-  filesystem containment check (`resolve()` + `relative_to()`) against the
-  scene package's own directory before it is ever read. A malicious scene
-  package cannot reference files outside itself.
+- **Scene manifests** (`src/argusnet/world/scene_loader.py` and the viewer's
+  `safe_manifest_path`): every path field (`layers[].asset_path`,
+  `metadata.environment`/`style`/`land_cover`, `replay.path`) is checked for
+  absolute paths and `..` traversal, then re-verified on the filesystem
+  (`resolve()` / canonicalize, including symlinks) against the scene package's
+  own directory before it is ever read. The viewer applies the same check to
+  glTF buffer and image URIs before handing a layer to Bevy, which would
+  otherwise follow `../` and symlinks out of the asset root. The synthetic
+  working copy refuses the same symlink escape before it copies a layer.
+  A malicious scene package cannot reference files outside itself.
+- **Environment bundles** (`src/argusnet/world/environment_io.py`): tile paths
+  in `environment_manifest.json` are contained the same way. Each array blob
+  is zlib with a decompressed-size cap and an allowlist of numeric dtypes, so
+  a shared bundle cannot expand a few kilobytes into gigabytes or request an
+  object array.
 - **Replay JSON / recording index files** (`src/argusnet/evaluation/replay.py`,
-  `recording.py`): capped via `src/argusnet/core/io_limits.py` before
-  `json.loads` (default 256 MB) to bound memory use on an oversized or
-  maliciously large file.
-- **GeoTIFF DEMs** (`src/argusnet/world/_scene_gis.py`): pixel count is checked
-  against a cap before the raster is decoded into memory.
+  `recording.py`, the file-replay adapter, the Python `scorecard` /
+  `validate-replay` / `info` commands, telemetry JSON-lines replay, and the
+  Rust readers including `fuse` captures and fault manifests): capped via
+  `src/argusnet/core/io_limits.py` / `argusnet_replay::read_text_limited`
+  before parse (default 256 MB). Scenario terrain, buildings, and features
+  documents use the same cap.
+- **GeoTIFF DEMs and GeoJSON overlays**: file size is checked before the bytes
+  are read; DEM pixel count is still checked before the raster is decoded.
+- **Saved world-model `.npy` grids**: object arrays are refused, and a header
+  that declares an array over 1 GiB is refused before `np.load` allocates it.
+- **YAML configs** (simulation constants and `argusnetd --config`): aliases
+  are rejected. `yaml.safe_load` and `serde_yaml` would otherwise expand a
+  small anchor into an unbounded document.
 - **MQTT payloads**: capped in size before `json.loads`; numeric fields
   (angles, standard deviations, confidence, position/velocity, timestamps) are
   validated finite/in-range via `src/argusnet/core/validation.py` before being

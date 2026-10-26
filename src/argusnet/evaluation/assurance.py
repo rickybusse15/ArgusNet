@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -14,9 +15,68 @@ from typing import Any
 
 from argusnet.evaluation.metrics import evaluate_replay
 from argusnet.evaluation.outcome import mission_outcome
+from argusnet.evaluation.records import records_from_replay
 
 ASSURANCE_VERSION = "argusnet.mission-assurance/v1"
 PACKAGE_VERSION = "argusnet.client-package/v1"
+
+
+CANONICAL_ENCODING = "argusnet.canonical-json/1"
+
+
+def _canonical_float(value: float) -> str:
+    """`value` as serde_json writes it: Python's shortest round-trip digits,
+    as plain decimals from 1e-5 up and with an unpadded exponent below, and
+    `e+NN` above 1e16 (as both already agree)."""
+    if not math.isfinite(value):
+        raise ValueError("canonical JSON has no NaN or infinity")
+    text = repr(value)
+    if "e" not in text:
+        return text
+    mantissa, exponent_text = text.split("e")
+    exponent = int(exponent_text)
+    if exponent > 0:
+        return f"{mantissa}e+{exponent}"
+    if exponent == -5:
+        sign = "-" if mantissa.startswith("-") else ""
+        digits = mantissa.lstrip("-").replace(".", "")
+        return f"{sign}0.0000{digits}"
+    return f"{mantissa}e{exponent}"
+
+
+def canonical_json(value: Any) -> bytes:
+    """`argusnet.canonical-json/1`: compact JSON, keys sorted by code point,
+    strings as JSON escapes them (non-ASCII kept), integers as written, and
+    floats as serde_json writes them, so the bytes a Python producer hashes
+    are the bytes a Rust reader rebuilds."""
+
+    def encode(item: Any) -> str:
+        if item is None:
+            return "null"
+        if item is True:
+            return "true"
+        if item is False:
+            return "false"
+        if isinstance(item, int):
+            return str(item)
+        if isinstance(item, float):
+            return _canonical_float(item)
+        if isinstance(item, str):
+            return json.dumps(item, ensure_ascii=False)
+        if isinstance(item, (list, tuple)):
+            return "[" + ",".join(encode(element) for element in item) + "]"
+        if isinstance(item, dict):
+            return (
+                "{"
+                + ",".join(
+                    json.dumps(str(key), ensure_ascii=False) + ":" + encode(item[key])
+                    for key in sorted(item, key=str)
+                )
+                + "}"
+            )
+        raise TypeError(f"canonical JSON cannot encode {type(item).__name__}")
+
+    return encode(value).encode()
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -35,6 +95,9 @@ class ClientPackage:
     assurance: bytes
     markdown: bytes
     replay: bytes
+    # The S1 records (`records/index.json` and one `records/<kind>.json` per
+    # recorded kind), as (path, bytes).
+    records: tuple[tuple[str, bytes], ...] = ()
 
     def write(self, directory: Path) -> None:
         """Publish a new package atomically; never overwrite a reviewed package."""
@@ -49,7 +112,9 @@ class ClientPackage:
                 ("assurance.json", self.assurance),
                 ("assurance.md", self.markdown),
                 ("replay.json", self.replay),
+                *self.records,
             ):
+                (staging / name).parent.mkdir(parents=True, exist_ok=True)
                 (staging / name).write_bytes(content)
             os.rename(staging, directory)
         finally:
@@ -65,14 +130,13 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
     Missing contracts are explicit nulls; legacy timeout/POI dwell never certify
     localization integrity, evidence sufficiency, safe landing or qualification.
     """
-    # The source hash is over the input as given, less any earlier report:
-    # a `summary` that held only that report is dropped with it, so a package
-    # of a package's replay names the same source as the first. The output's
-    # summary is made only after hashing.
+    # The source hash is over the input as given, less any earlier report and
+    # less a `summary` left empty, so a package of a package's replay names the
+    # same source as the first. The output's summary is made only after hashing.
     source = copy.deepcopy(replay_doc)
     summary = source.get("summary")
-    if isinstance(summary, dict) and "mission_assurance" in summary:
-        summary.pop("mission_assurance")
+    if isinstance(summary, dict):
+        summary.pop("mission_assurance", None)
         if not summary:
             del source["summary"]
     source_hash = _sha256(_json_bytes(source))
@@ -188,6 +252,13 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
     assurance = {
         "schema_version": ASSURANCE_VERSION,
         "source_replay_sha256": source_hash,
+        # The same source in an encoding a reader can reproduce from the
+        # replay it loads (argusnet-replay verifies it before trusting the
+        # report): compact canonical JSON, Rust's float style.
+        "source_binding": {
+            "encoding": CANONICAL_ENCODING,
+            "sha256": _sha256(canonical_json(source)),
+        },
         "provenance": provenance,
         "status": status,
         # The F1 record (`argusnet.mission-outcome/1`): how the run ended and
@@ -231,10 +302,19 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
     markdown = _assurance_markdown(assurance).encode()
     source.setdefault("summary", {})["mission_assurance"] = assurance
     replay = _json_bytes(source)
+    # The S1 records (docs/contracts), each pointing into the replay.
+    record_index, by_kind = records_from_replay(source, assurance)
+    records = [("records/index.json", _json_bytes(record_index))]
+    records += [
+        (f"records/{kind}.json", _json_bytes(by_kind[kind]))
+        for kind, entry in record_index["kinds"].items()
+        if entry["status"] == "recorded"
+    ]
     artifacts = [
         ("assurance.json", assurance_bytes),
         ("assurance.md", markdown),
         ("replay.json", replay),
+        *records,
     ]
     manifest = _json_bytes(
         {
@@ -251,7 +331,7 @@ def build_client_package(replay_doc: dict[str, Any]) -> ClientPackage:
             ],
         }
     )
-    return ClientPackage(manifest, assurance_bytes, markdown, replay)
+    return ClientPackage(manifest, assurance_bytes, markdown, replay, tuple(records))
 
 
 def _assurance_markdown(report: dict[str, Any]) -> str:

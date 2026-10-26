@@ -66,12 +66,86 @@ pub struct WireReturn {
 
 /// One span's conductor pieces, and the box holding them.
 #[derive(Debug, Clone)]
-struct SpanPieces {
+pub(crate) struct SpanPieces {
     span: PowerLine,
     pieces: Vec<ConductorPiece>,
     range_m: f64,
     low_m: [f64; 3],
     high_m: [f64; 3],
+}
+
+/// `lines`' spans, each detectable within `range_m(line)` of a sensor.
+pub(crate) fn span_pieces(
+    lines: &[PowerLine],
+    range_m: impl Fn(&PowerLine) -> f64,
+) -> Vec<SpanPieces> {
+    let mut spans = Vec::new();
+    for line in lines {
+        let range_m = range_m(line);
+        let per_span = line.pieces_by_span();
+        for (span, pieces) in per_span.into_iter().enumerate() {
+            let mut low_m = [f64::INFINITY; 3];
+            let mut high_m = [f64::NEG_INFINITY; 3];
+            for piece in &pieces {
+                for axis in 0..3 {
+                    low_m[axis] = low_m[axis]
+                        .min(piece.start_m[axis].min(piece.end_m[axis]) - piece.sag_error_m);
+                    high_m[axis] = high_m[axis]
+                        .max(piece.start_m[axis].max(piece.end_m[axis]) + piece.sag_error_m);
+                }
+            }
+            spans.push(SpanPieces {
+                span: line.span_line(span),
+                pieces,
+                range_m,
+                low_m,
+                high_m,
+            });
+        }
+    }
+    spans
+}
+
+/// The spans of `spans` with a conductor within detection range of
+/// `origin_m` whose nearest point `sees` admits, each with that point (in
+/// line, then span order). The nearest point is on the pieces, which the
+/// wire hangs within millimetres of.
+pub(crate) fn wires_seen(
+    spans: &[SpanPieces],
+    origin_m: [f64; 3],
+    sees: impl Fn([f64; 3]) -> bool,
+) -> Vec<WireReturn> {
+    let mut wires = Vec::new();
+    for span in spans {
+        let outside = (0..3).any(|axis| {
+            origin_m[axis] < span.low_m[axis] - span.range_m
+                || origin_m[axis] > span.high_m[axis] + span.range_m
+        });
+        if outside {
+            continue;
+        }
+        let nearest = span
+            .pieces
+            .iter()
+            .map(|piece| {
+                let point = argusnet_world::powerline::closest_on_segment(
+                    origin_m,
+                    piece.start_m,
+                    piece.end_m,
+                );
+                (segment_distance(origin_m, origin_m, point, point), point)
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((distance, point)) = nearest {
+            if distance <= span.range_m && sees(point) {
+                wires.push(WireReturn {
+                    span: span.span.clone(),
+                    point_m: point,
+                });
+            }
+        }
+    }
+    wires
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -160,6 +234,24 @@ pub struct RangeReturn {
     pub class: ReturnClass,
 }
 
+/// Which sensor made a [`RangeScan`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanSensor {
+    /// The mapping payload's range scanner: evidence for the map.
+    #[default]
+    RangeScanner,
+    /// The body-fixed forward navigation camera
+    /// ([`crate::nav_camera`]): evidence for obstacle avoidance only.
+    NavCamera,
+}
+
+impl ScanSensor {
+    pub fn is_range_scanner(&self) -> bool {
+        *self == Self::RangeScanner
+    }
+}
+
 /// One platform's scan at one tick.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RangeScan {
@@ -173,6 +265,14 @@ pub struct RangeScan {
     /// there are none, so a scan in a world without lines is unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wires: Vec<WireReturn>,
+    /// The sensor: the range scanner unless written. A navigation camera's
+    /// frame never counts as mapping evidence.
+    #[serde(default, skip_serializing_if = "ScanSensor::is_range_scanner")]
+    pub sensor: ScanSensor,
+    /// The pod's state at capture, for a scan from the rig's pod LiDAR
+    /// ([`crate::pod`]); absent for the legacy scanner and the camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pod: Option<crate::pod::PodCapture>,
 }
 
 /// The scanner: a fan of rays over the true world.
@@ -196,33 +296,11 @@ impl RangeScanner {
 
     /// The scanner, also detecting `lines`' wires (R3).
     pub fn with_power_lines(mut self, lines: &[PowerLine]) -> Self {
-        let mut spans = Vec::new();
-        for line in lines {
-            // No further than the scanner reaches at all.
-            let range_m =
-                wire_detection_range_m(line.conductor_radius_m).min(self.config.max_range_m);
-            let per_span = line.pieces_by_span();
-            for (span, pieces) in per_span.into_iter().enumerate() {
-                let mut low_m = [f64::INFINITY; 3];
-                let mut high_m = [f64::NEG_INFINITY; 3];
-                for piece in &pieces {
-                    for axis in 0..3 {
-                        low_m[axis] = low_m[axis]
-                            .min(piece.start_m[axis].min(piece.end_m[axis]) - piece.sag_error_m);
-                        high_m[axis] = high_m[axis]
-                            .max(piece.start_m[axis].max(piece.end_m[axis]) + piece.sag_error_m);
-                    }
-                }
-                spans.push(SpanPieces {
-                    span: line.span_line(span),
-                    pieces,
-                    range_m,
-                    low_m,
-                    high_m,
-                });
-            }
-        }
-        self.spans = Arc::new(spans);
+        // No further than the scanner reaches at all.
+        let max_range_m = self.config.max_range_m;
+        self.spans = Arc::new(span_pieces(lines, |line| {
+            wire_detection_range_m(line.conductor_radius_m).min(max_range_m)
+        }));
         self
     }
 
@@ -232,41 +310,9 @@ impl RangeScanner {
     }
 
     /// The spans with a conductor within detection range of `origin_m` and
-    /// below its horizon, each with its nearest point (in line, then span
-    /// order). The nearest point is on the pieces, which the wire hangs
-    /// within millimetres of.
+    /// below its horizon (the fan looks down).
     fn wires_near(&self, origin_m: [f64; 3]) -> Vec<WireReturn> {
-        let mut wires = Vec::new();
-        for span in self.spans.iter() {
-            let outside = (0..3).any(|axis| {
-                origin_m[axis] < span.low_m[axis] - span.range_m
-                    || origin_m[axis] > span.high_m[axis] + span.range_m
-            });
-            if outside {
-                continue;
-            }
-            let nearest = span
-                .pieces
-                .iter()
-                .map(|piece| {
-                    let point = argusnet_world::powerline::closest_on_segment(
-                        origin_m,
-                        piece.start_m,
-                        piece.end_m,
-                    );
-                    (segment_distance(origin_m, origin_m, point, point), point)
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0));
-            if let Some((distance, point)) = nearest {
-                if distance <= span.range_m && point[2] <= origin_m[2] {
-                    wires.push(WireReturn {
-                        span: span.span.clone(),
-                        point_m: point,
-                    });
-                }
-            }
-        }
-        wires
+        wires_seen(&self.spans, origin_m, |point| point[2] <= origin_m[2])
     }
 
     pub fn config(&self) -> &RangeScanConfig {
@@ -349,6 +395,8 @@ impl RangeScanner {
             returns,
             misses,
             wires: self.wires_near(origin_m),
+            sensor: ScanSensor::RangeScanner,
+            pod: None,
         }
     }
 }

@@ -52,6 +52,85 @@ pub struct Section {
 
 const NOT_IN_REPLAY: &str = "not in this replay";
 
+/// The platform inspector for `node_id` at the cursor: [`inspect_platform`]
+/// on the current frame with the replay's assignment history, and the F3
+/// decision rows ([`decision_rows`]) at the end of its Task and route
+/// section. `None` when there is no frame or no such platform.
+pub fn inspect_selected_platform(
+    replay: &crate::replay::ReplayState,
+    node_id: &str,
+) -> Option<Vec<Section>> {
+    let frame = replay.current_frame()?;
+    let history = replay
+        .document
+        .as_ref()
+        .and_then(|document| document.meta.as_ref())
+        .and_then(|meta| meta.get("assignment_history"));
+    let mut sections = inspect_platform(frame, node_id, history)?;
+    if let Some(tasking) = sections
+        .iter_mut()
+        .find(|section| section.title.starts_with("4 "))
+    {
+        tasking.rows.extend(decision_rows(
+            replay.decisions.as_deref(),
+            node_id,
+            frame.timestamp_s,
+        ));
+    }
+    Some(sections)
+}
+
+/// The F3 rows for `node_id` at `at_s`: the decisions about it (as subject,
+/// or as what was chosen, such as a handoff's receiver) up to the cursor,
+/// the last of them and why. `None` is a source that records no decisions
+/// (a replay: they are journaled), shown as unavailable, never as "none".
+pub fn decision_rows(
+    decisions: Option<&[crate::replay::RecordedDecision]>,
+    node_id: &str,
+    at_s: f32,
+) -> Vec<Row> {
+    let Some(decisions) = decisions else {
+        return vec![Row::unavailable(
+            "Last decision",
+            "decisions are journaled, not recorded in replays",
+        )];
+    };
+    let about: Vec<_> = decisions
+        .iter()
+        .filter(|decision| decision.timestamp_s <= at_s)
+        .filter(|decision| {
+            decision.subject.as_deref() == Some(node_id)
+                || decision.selected.as_deref() == Some(node_id)
+        })
+        .collect();
+    let Some(last) = about.last() else {
+        return vec![
+            Row::new("Decisions", Field::Value("0".into())),
+            Row::new(
+                "Last decision",
+                Field::Value("none about this platform yet".into()),
+            ),
+        ];
+    };
+    let chose = last
+        .selected
+        .as_deref()
+        .filter(|selected| *selected != node_id)
+        .map(|selected| format!(" -> {selected}"))
+        .unwrap_or_default();
+    vec![
+        Row::new("Decisions", Field::Value(about.len().to_string())),
+        Row::new(
+            "Last decision",
+            Field::Value(format!(
+                "t = {:.1} s  {}{chose}: {} ({})",
+                last.timestamp_s, last.kind, last.reason, last.status
+            )),
+        ),
+        Row::new("Why", Field::Value(last.detail.clone())),
+    ]
+}
+
 /// §7.2's sections for `node_id` in `frame`; `None` if the frame has no such
 /// platform (the selection no longer resolves). With the replay's
 /// `meta.assignment_history` (P0b), the task and its last change come from
@@ -238,7 +317,26 @@ pub fn inspect_platform(
                         Field::Value(format!("{:.0}%", fraction * 100.0))
                     }),
             ),
-            Row::unavailable("Reserve", NOT_IN_REPLAY),
+            Row::new(
+                "Reserve",
+                frame.energy_reserves.get(node_id).map_or(
+                    Field::Unavailable("recorded only under a physical energy profile"),
+                    |reserve| {
+                        let margin = reserve.remaining_wh - reserve.reserve_wh;
+                        Field::Value(if margin > 0.0 {
+                            format!(
+                                "{:.0} Wh to get home; {:.0} Wh above it",
+                                reserve.reserve_wh, margin
+                            )
+                        } else {
+                            format!(
+                                "{:.0} Wh to get home; at or below it by {:.0} Wh",
+                                reserve.reserve_wh, -margin
+                            )
+                        })
+                    },
+                ),
+            ),
             Row::new(
                 "Return home",
                 egress.map_or(Field::Unavailable("not returning"), |progress| {
@@ -567,6 +665,137 @@ mod tests {
                 "10  Safety"
             ]
         );
+    }
+
+    fn decision(
+        t: f32,
+        kind: &str,
+        subject: &str,
+        selected: Option<&str>,
+    ) -> crate::replay::RecordedDecision {
+        crate::replay::RecordedDecision {
+            timestamp_s: t,
+            kind: kind.into(),
+            status: "applied".into(),
+            reason: format!("{kind}_reason"),
+            subject: Some(subject.into()),
+            selected: selected.map(str::to_string),
+            detail: format!("{subject} {kind}"),
+        }
+    }
+
+    /// F3 rows: a replay's absence of decisions is unavailable, never
+    /// "none"; a run's are the platform's own (as subject, or as what was
+    /// chosen, such as a handoff's receiver) up to the cursor, the last with
+    /// what it chose and why.
+    #[test]
+    fn decisions_are_the_platforms_own_up_to_the_cursor() {
+        let rows = decision_rows(None, "drone-1", 10.0);
+        assert!(matches!(rows[0].value, Field::Unavailable(_)), "{rows:?}");
+
+        let log = vec![
+            decision(1.0, "poi_assignment", "drone-1", Some("poi-01")),
+            decision(2.0, "poi_assignment", "drone-2", Some("poi-02")),
+            decision(5.0, "poi_handoff", "drone-2", Some("drone-1")),
+            decision(9.0, "return_home", "drone-1", None),
+        ];
+        let at = |t: f32| decision_rows(Some(&log), "drone-1", t);
+        let value = |rows: &[Row], label: &str| match &rows
+            .iter()
+            .find(|r| r.label == label)
+            .unwrap()
+            .value
+        {
+            Field::Value(v) => v.clone(),
+            other => panic!("{label}: {other:?}"),
+        };
+        assert_eq!(
+            value(&at(0.5), "Last decision"),
+            "none about this platform yet"
+        );
+        assert_eq!(value(&at(0.5), "Decisions"), "0");
+        assert_eq!(
+            value(&at(1.0), "Last decision"),
+            "t = 1.0 s  poi_assignment -> poi-01: poi_assignment_reason (applied)"
+        );
+        // drone-2 handing its POI to drone-1 is about drone-1 too.
+        assert_eq!(value(&at(6.0), "Decisions"), "2");
+        assert_eq!(value(&at(6.0), "Why"), "drone-2 poi_handoff");
+        assert!(value(&at(6.0), "Last decision").contains("poi_handoff:"));
+        assert_eq!(value(&at(9.0), "Decisions"), "3");
+        assert_eq!(value(&at(9.0), "Why"), "drone-1 return_home");
+    }
+
+    /// The inspector the shell shows carries the decision rows in its Task
+    /// and route section: unavailable for a replay, the platform's own for
+    /// a run that reports them.
+    #[test]
+    fn the_shown_inspector_explains_the_task() {
+        let document: crate::replay::ReplayDocument = serde_json::from_value(serde_json::json!({
+            "frames": [{
+                "timestamp_s": 4.0,
+                "nodes": [{"node_id": "drone-1", "position": [1.0, 2.0, 30.0],
+                           "velocity": [0.0, 0.0, 0.0], "is_mobile": true}]
+            }]
+        }))
+        .unwrap();
+        let mut replay = crate::replay::ReplayState::new(Some(document));
+        let tasking = |replay: &crate::replay::ReplayState| {
+            inspect_selected_platform(replay, "drone-1")
+                .unwrap()
+                .into_iter()
+                .find(|section| section.title.starts_with("4 "))
+                .unwrap()
+                .rows
+        };
+        let last = |rows: Vec<Row>| {
+            rows.into_iter()
+                .find(|r| r.label == "Last decision")
+                .unwrap()
+                .value
+        };
+        assert!(matches!(last(tasking(&replay)), Field::Unavailable(_)));
+        replay.decisions = Some(vec![decision(
+            0.0,
+            "poi_assignment",
+            "drone-1",
+            Some("poi-01"),
+        )]);
+        assert!(matches!(last(tasking(&replay)), Field::Value(v) if v.contains("poi-01")));
+        assert!(inspect_selected_platform(&replay, "drone-9").is_none());
+    }
+
+    /// F5: the reserve reads from the frame's energy record, with the margin
+    /// above it or the shortfall below it; without one it is unavailable.
+    #[test]
+    fn the_reserve_reads_the_recorded_energy() {
+        let reserve = |remaining: f64| {
+            let frame = frame(serde_json::json!({
+                "timestamp_s": 4.0,
+                "nodes": [{"node_id": "drone-1", "position": [1.0, 2.0, 30.0],
+                           "velocity": [0.0, 0.0, 0.0], "is_mobile": true}],
+                "energy_reserves": {"drone-1": {"remaining_wh": remaining, "reserve_wh": 104.4}}
+            }));
+            row(
+                &inspect_platform(&frame, "drone-1", None).unwrap(),
+                "Reserve",
+            )
+            .value
+            .clone()
+        };
+        assert_eq!(
+            reserve(150.0),
+            Field::Value("104 Wh to get home; 46 Wh above it".into())
+        );
+        assert_eq!(
+            reserve(100.0),
+            Field::Value("104 Wh to get home; at or below it by 4 Wh".into())
+        );
+        let sections = inspect_platform(&minimal(), "drone-1", None).unwrap();
+        assert!(matches!(
+            row(&sections, "Reserve").value,
+            Field::Unavailable(_)
+        ));
     }
 
     #[test]

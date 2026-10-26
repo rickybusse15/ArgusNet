@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/change.schema.json",
+  "title": "S1 change record (argusnet.change/v1)",
+  "description": "A change between this run's world and an earlier one's.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "change_type",
+        "location_m",
+        "compared_with"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.change/v1"
+        },
+        "change_type": {
+          "type": "string"
+        },
+        "location_m": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/definitions/position_m"
+            },
+            {
+              "$ref": "common.schema.json#/definitions/unavailable"
+            }
+          ]
+        },
+        "compared_with": {
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

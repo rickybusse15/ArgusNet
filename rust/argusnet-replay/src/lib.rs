@@ -20,13 +20,39 @@
 //! viewer can accept live frames without a JSON round trip.
 
 pub mod assurance;
-pub use assurance::{assurance_frame_index, MissionAssurance};
+pub use assurance::{
+    assurance_frame_index, canonical_json, source_sha256, verify_source_binding, MissionAssurance,
+};
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+
+/// Largest replay, scenario, or checkpoint document a reader will load.
+/// Matches `DEFAULT_MAX_FILE_BYTES` in `argusnet.core.io_limits`.
+pub const MAX_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Read a text document, refusing anything over [`MAX_DOCUMENT_BYTES`].
+pub fn read_text_limited(path: &Path) -> std::io::Result<String> {
+    read_text_at_most(path, MAX_DOCUMENT_BYTES)
+}
+
+fn read_text_at_most(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let len = std::fs::metadata(path)?.len();
+    if len > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is {len} bytes, over the {max_bytes} byte limit",
+                path.display()
+            ),
+        ));
+    }
+    std::fs::read_to_string(path)
+}
 
 /// Custom deserializer that accepts either a flat `[f64, ...]` array
 /// or a nested `[[f64, ...], ...]` matrix (flattening the latter).
@@ -255,6 +281,41 @@ impl ReplayDocument {
         read
     }
 
+    /// The power-line spans the platforms' own map holds at frame `index`
+    /// (the frames' `mapped_wires` up to and including it), each read through
+    /// the model on its own, like [`Self::power_lines`]. A span recorded
+    /// twice is read once.
+    pub fn mapped_wires_through(&self, index: usize) -> PowerLinesRead {
+        let mut read = PowerLinesRead::default();
+        let mut seen = std::collections::BTreeSet::new();
+        for (f, frame) in self.frames.iter().enumerate().take(index.saturating_add(1)) {
+            for (s, span) in frame.mapped_wires.iter().enumerate() {
+                match serde_json::from_value::<argusnet_world::powerline::PowerLine>(span.clone()) {
+                    Ok(span) => {
+                        if seen.insert(span.id.clone()) {
+                            read.lines.push(span);
+                        }
+                    }
+                    Err(error) => read
+                        .refused
+                        .push(format!("frames[{f}].mapped_wires[{s}]: {error}")),
+                }
+            }
+        }
+        read
+    }
+
+    /// How many spans the frames up to and including `index` record, without
+    /// reading them: what [`Self::mapped_wires_through`] would read changes
+    /// only when this does.
+    pub fn mapped_wire_rows_through(&self, index: usize) -> usize {
+        self.frames
+            .iter()
+            .take(index.saturating_add(1))
+            .map(|frame| frame.mapped_wires.len())
+            .sum()
+    }
+
     /// The run's trees (`meta.trees`, R2), each read through the model's
     /// own check on its own: one the model refuses is reported with its
     /// index and reason, and every other tree is still read.
@@ -355,6 +416,22 @@ pub struct ReplayFrame {
     /// Platforms physics put back out of the true ground or a structure.
     #[serde(default)]
     pub world_contacts: Vec<WorldContact>,
+    /// A run that maps the world for itself: the power-line spans its map
+    /// gained this frame (R3), whole spans, each once. Kept as written and
+    /// read through the model by [`ReplayDocument::mapped_wires_through`].
+    #[serde(default)]
+    pub mapped_wires: Vec<Value>,
+    /// Under a physical energy profile: each platform's remaining energy and
+    /// its reserve home this tick (F5). Empty otherwise.
+    #[serde(default)]
+    pub energy_reserves: std::collections::BTreeMap<String, EnergyReserve>,
+}
+
+/// A platform's energy against its reserve home (F5).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct EnergyReserve {
+    pub remaining_wh: f64,
+    pub reserve_wh: f64,
 }
 
 /// `[i, j, ground_cm, structure_top_cm, occupancy_pct, confidence]`, as the
@@ -400,6 +477,18 @@ pub struct RangeScanSample {
     pub structure: Vec<[f32; 3]>,
     #[serde(default)]
     pub misses: u32,
+    /// `nav_camera` for the forward navigation camera's detections; empty
+    /// (absent) for the range scanner.
+    #[serde(default)]
+    pub sensor: String,
+}
+
+impl RangeScanSample {
+    /// Whether these are the navigation camera's obstacle detections rather
+    /// than the mapping scanner's returns.
+    pub fn is_nav_camera(&self) -> bool {
+        self.sensor == "nav_camera"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -751,8 +840,17 @@ pub struct DeconflictionEvent {
 impl TryFrom<Value> for ReplayDocument {
     type Error = serde_json::Error;
 
+    /// The document, with its assurance report checked against it: a report
+    /// whose source binding does not match these frames and metadata is
+    /// kept as an error, never shown as this replay's.
     fn try_from(value: Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value)
+        let mut document: ReplayDocument = serde_json::from_value(value.clone())?;
+        if let Some(Ok(report)) = &document.mission_assurance {
+            if let Err(why) = assurance::verify_source_binding(report, &value) {
+                document.mission_assurance = Some(Err(why));
+            }
+        }
+        Ok(document)
     }
 }
 
@@ -894,6 +992,8 @@ mod live_stream {
             belief_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
+            mapped_wires: Vec::new(),
+            energy_reserves: Default::default(),
         }
     }
 
@@ -1370,5 +1470,19 @@ mod contract_fixture_tests {
             assert_eq!(covariance.len(), 36, "expected a flattened 6x6 covariance");
             assert!(covariance.iter().all(|value| value.is_finite()));
         }
+    }
+}
+
+#[cfg(test)]
+mod read_limit_tests {
+    use super::read_text_limited;
+
+    #[test]
+    fn an_oversized_document_is_refused_before_it_is_parsed() {
+        let path = std::env::temp_dir().join(format!("argusnet-replay-cap-{}", std::process::id()));
+        std::fs::write(&path, "x".repeat(64)).unwrap();
+        assert!(super::read_text_at_most(&path, 8).is_err());
+        assert_eq!(read_text_limited(&path).unwrap().len(), 64);
+        let _ = std::fs::remove_file(&path);
     }
 }

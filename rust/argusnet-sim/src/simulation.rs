@@ -1488,6 +1488,22 @@ impl Simulation {
             outcome: StageOutcome::Ran,
             notes: Vec::new(),
         });
+        // `flown_v1` charges this tick for what it flew, before the snapshot
+        // publishes the fleet.
+        let dt_s = self.config.timestep().seconds();
+        if let Some(handler) = self.handlers.get_mut(&Stage::SampleControllersAndBattery) {
+            let handler: &mut dyn std::any::Any = handler.as_mut();
+            let battery = if handler.is::<crate::controller::ControllerStage>() {
+                handler
+                    .downcast_mut::<crate::controller::ControllerStage>()
+                    .and_then(crate::controller::ControllerStage::battery_mut)
+            } else {
+                handler.downcast_mut::<crate::battery::BatteryStage>()
+            };
+            if let Some(battery) = battery {
+                battery.charge_flown(&mut self.world, dt_s);
+            }
+        }
         // Commit. Only now does the tick advance and a revision become visible.
         self.clock.advance();
         Ok(self.commit_timed())
@@ -1607,6 +1623,18 @@ impl Simulation {
         Ok(StageOutcome::Ran)
     }
 
+    /// Make a run just restored to an earlier tick a branch of the history it
+    /// left (a seek, P5.2): a new epoch, newer than `left_epoch`, the one the
+    /// run was on, so a command composed before the seek is stale, and a
+    /// revision that does not go back past `left_revision`, since snapshots
+    /// are ordered by it across epochs. Everything the restore put back is
+    /// otherwise kept, so the branch runs on exactly as the checkpointed run
+    /// did.
+    pub fn branch_from(&mut self, left_epoch: u64, left_revision: u64) {
+        self.epoch = self.epoch.max(left_epoch) + 1;
+        self.revision = self.revision.max(left_revision);
+    }
+
     /// Return to tick zero on a new epoch, clearing any fault.
     ///
     /// A new epoch because §6 treats a branch in history as a new epoch, and a
@@ -1663,9 +1691,15 @@ impl Simulation {
                 stage: *stage,
             });
         }
+        let committed_platforms = self
+            .stage::<crate::controller::ControllerStage>(Stage::SampleControllersAndBattery)
+            .filter(|controller| controller.has_physical_guard())
+            .map(|_| self.world.platforms().to_vec());
         Ok(SimulationCheckpoint {
             header: CheckpointHeader {
-                format_version: if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
+                format_version: if committed_platforms.is_some() {
+                    CheckpointHeader::FORMAT_VERSION_COMMITTED_PLATFORMS
+                } else if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
                     CheckpointHeader::FORMAT_VERSION
                 } else {
                     CheckpointHeader::FORMAT_VERSION_STAGE_LAG
@@ -1707,6 +1741,7 @@ impl Simulation {
                 .iter()
                 .map(|(stage, rate)| (stage.to_string(), rate.clone()))
                 .collect(),
+            committed_platforms,
         })
     }
 
@@ -1721,6 +1756,35 @@ impl Simulation {
             self.config.content_hash(),
             self.scenario_hash,
         )?;
+
+        let guarded = self
+            .stage::<crate::controller::ControllerStage>(Stage::SampleControllersAndBattery)
+            .is_some_and(|controller| controller.has_physical_guard());
+        if guarded != checkpoint.committed_platforms.is_some() {
+            return Err(RestoreError::InvalidState {
+                detail: "guarded checkpoints require committed platform poses (format 6)".into(),
+            });
+        }
+        if let Some(platforms) = &checkpoint.committed_platforms {
+            if platforms.len() != self.world.platforms().len()
+                || platforms
+                    .iter()
+                    .zip(self.world.platforms())
+                    .any(|(saved, current)| {
+                        saved.node_id != current.node_id
+                            || saved
+                                .position
+                                .iter()
+                                .chain(saved.velocity.iter())
+                                .any(|v| !v.is_finite())
+                            || !saved.timestamp_s.is_finite()
+                    })
+            {
+                return Err(RestoreError::InvalidState {
+                    detail: "committed platform poses are malformed or name another fleet".into(),
+                });
+            }
+        }
 
         if checkpoint.seed != self.config.seed() {
             return Err(RestoreError::InvalidState {
@@ -1830,6 +1894,11 @@ impl Simulation {
             &checkpoint.pending_commands,
             &checkpoint.command_history,
         );
+        if let Some(platforms) = &checkpoint.committed_platforms {
+            for (current, saved) in self.world.platforms_mut().iter_mut().zip(platforms) {
+                *current = saved.clone();
+            }
+        }
         self.clock.restore_tick(checkpoint.tick);
         self.epoch = checkpoint.header.epoch;
         self.belief_revision = checkpoint.header.belief_revision;

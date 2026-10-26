@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/report.schema.json",
+  "title": "S1 report record (argusnet.report/v1)",
+  "description": "The run's assurance report: status, outcome and what it cannot claim.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "status",
+        "outcome",
+        "completion_rate",
+        "energy_reserve_min",
+        "unavailable_fields",
+        "source_replay_sha256"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.report/v1"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "aborted",
+            "incomplete",
+            "unavailable"
+          ]
+        },
+        "outcome": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "completion_rate": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "energy_reserve_min": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "unavailable_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_replay_sha256": {
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

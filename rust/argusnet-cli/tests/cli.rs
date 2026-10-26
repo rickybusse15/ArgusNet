@@ -605,7 +605,7 @@ fn a_crashed_efficient_run_recovers_with_its_planning_policy() {
         .expect("runs");
     // The reference is the flag's default, so naming it changes nothing:
     // the run directory's policy wins. (Only a different non-reference
-    // policy is refused, and there is no second one yet.)
+    // policy is refused: see the contingency_v1 test below.)
     assert!(
         named_default.status.success(),
         "{}",
@@ -1077,4 +1077,69 @@ fn a_crashed_run_with_sensor_rates_recovers_with_them() {
     );
     assert_ne!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stderr).contains("faster than the tick"));
+}
+
+/// F5: a `contingency_v1` run recovers as that run, and recovering it under
+/// the other non-reference policy is refused before anything is written.
+#[test]
+fn a_crashed_contingency_run_recovers_only_as_contingency() {
+    let policy = ["--planning-policy", "contingency_v1"];
+    let whole = run_dir("journal-contingency-whole");
+    let output = record("scenario_bundle_scan.json", &whole, &policy);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let crashed = run_dir("journal-contingency-crashed");
+    let with_crash: Vec<&str> = policy
+        .iter()
+        .copied()
+        .chain(["--crash-after", "60"])
+        .collect();
+    let output = record("scenario_bundle_scan.json", &crashed, &with_crash);
+    assert_eq!(output.status.code(), Some(4), "the crash aid exits 4");
+    let run: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(crashed.join("run.json")).unwrap()).unwrap();
+    assert_eq!(run["planning_policy"], "contingency_v1");
+
+    let journal = std::fs::read(crashed.join("journal.jsonl")).unwrap();
+    let refused = binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(&crashed)
+        .args([
+            "--checkpoint-every",
+            "25",
+            "--planning-policy",
+            "efficient_v1",
+        ])
+        .output()
+        .expect("runs");
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--planning-policy differs"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        journal
+    );
+
+    let recovered = binary()
+        .args(["sim", "--quiet", "--recover"])
+        .arg(&crashed)
+        .args(["--checkpoint-every", "25"])
+        .output()
+        .expect("runs");
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    assert_eq!(
+        std::fs::read(crashed.join("journal.jsonl")).unwrap(),
+        std::fs::read(whole.join("journal.jsonl")).unwrap(),
+        "the recovered journal is not the uninterrupted contingency_v1 one"
+    );
 }

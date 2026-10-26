@@ -46,6 +46,10 @@ pub struct RuntimeOverlayVisibility {
     /// Each power-line span's clearance volume (R3): an overlay, off by
     /// default.
     pub power_line_clearance: bool,
+    /// The power-line spans the platforms' own map holds, in a run that maps
+    /// the world for itself (R3): what the drones know, not the true lines.
+    /// On by default; nothing to draw in a run with a prior map.
+    pub mapped_wires: bool,
     /// Buildings drawn at the scene's styled translucency, so drones and
     /// tracks behind them show through. Off by default: buildings are
     /// solid. No layer preset owns it.
@@ -75,6 +79,7 @@ impl Default for RuntimeOverlayVisibility {
             power_lines: true,
             trees: true,
             power_line_clearance: false,
+            mapped_wires: true,
             see_through_buildings: false,
         }
     }
@@ -88,6 +93,9 @@ pub struct MissionOverlaySettings {
     pub show_reconstruction: bool,
     pub show_coord_frame: bool,
     pub show_egress_paths: bool,
+    /// A line from each drone to the POI it holds (V4, P1). No preset owns
+    /// it.
+    pub show_allocation_lines: bool,
 }
 
 /// The startup layers are the Operational preset's (`crate::layers`).
@@ -100,6 +108,7 @@ impl Default for MissionOverlaySettings {
             show_reconstruction: true,
             show_coord_frame: false,
             show_egress_paths: true,
+            show_allocation_lines: true,
         }
     }
 }
@@ -217,10 +226,8 @@ impl Workspace {
                 "Plan is unavailable until the canonical site, mission and trajectory \
                  contracts exist (S1).",
             ),
-            Workspace::Review => Some(
-                "Review is unavailable until the canonical journal, evidence and finding \
-                 contracts exist (S1).",
-            ),
+            // Review reads the assurance report a client package carries (S1).
+            Workspace::Review => None,
         }
     }
 }

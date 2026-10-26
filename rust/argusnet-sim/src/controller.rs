@@ -221,6 +221,34 @@ impl PlatformController {
 }
 
 impl Operational {
+    /// Fly no faster than `speed_mps`, whatever this controller flies.
+    fn cap_speed(&mut self, speed_mps: f64) {
+        match self {
+            Operational::Search(lane) => *lane = lane.clone().with_speed_cap(speed_mps),
+            Operational::Explore(explorer) => explorer.cap_speed(speed_mps),
+            Operational::Follow { controller, .. } => controller.cap_speed(speed_mps),
+            Operational::SearchThenFollow(wrapper) => {
+                let lane = wrapper.search_mut();
+                *lane = lane.clone().with_speed_cap(speed_mps);
+                wrapper.follow_mut().cap_speed(speed_mps);
+            }
+        }
+    }
+
+    /// Fly no higher than `agl_m` above the believed ground.
+    fn cap_agl(&mut self, agl_m: f64) {
+        match self {
+            Operational::Search(lane) => *lane = lane.clone().with_agl_cap(agl_m),
+            Operational::Explore(explorer) => explorer.cap_agl(agl_m),
+            Operational::Follow { controller, .. } => controller.cap_agl(agl_m),
+            Operational::SearchThenFollow(wrapper) => {
+                let lane = wrapper.search_mut();
+                *lane = lane.clone().with_agl_cap(agl_m);
+                wrapper.follow_mut().cap_agl(agl_m);
+            }
+        }
+    }
+
     fn reset_to_constructed(&mut self) {
         match self {
             Operational::Search(_) => {}
@@ -418,6 +446,10 @@ impl ControllerStage {
         self.guard = Some(guard);
     }
 
+    pub fn has_physical_guard(&self) -> bool {
+        self.guard.is_some()
+    }
+
     /// Launch a parked platform. Ignored for one already launched, as in the
     /// reference.
     pub fn trigger_launch(&mut self, node_id: &str, timestamp_s: f64, target_id: &str) -> bool {
@@ -468,6 +500,47 @@ impl ControllerStage {
             }
         }
         turned
+    }
+
+    /// Cap every mobile controller to `speed_mps` (the navigation camera's
+    /// envelope). Before the first tick. Returns how many were capped.
+    pub fn cap_speeds(&mut self, speed_mps: f64) -> usize {
+        let mut capped = 0;
+        for (_, controller) in self.state.controllers.iter_mut() {
+            match controller {
+                PlatformController::Static { .. } => continue,
+                PlatformController::Free(operational) => operational.cap_speed(speed_mps),
+                PlatformController::Launched { controller, .. } => {
+                    controller.operational_mut().cap_speed(speed_mps)
+                }
+            }
+            capped += 1;
+        }
+        capped
+    }
+
+    /// Cap every mobile controller's height above the believed ground to
+    /// `agl_m` (the pod LiDAR's reach), launch climbs included. Before the
+    /// first tick. Returns how many were capped.
+    pub fn cap_agl(&mut self, agl_m: f64) -> usize {
+        let mut capped = 0;
+        for (_, controller) in self.state.controllers.iter_mut() {
+            match controller {
+                PlatformController::Static { .. } => continue,
+                PlatformController::Free(operational) => operational.cap_agl(agl_m),
+                PlatformController::Launched {
+                    controller,
+                    profile,
+                    ..
+                } => {
+                    controller.cap_operational_altitude(agl_m);
+                    profile.min_operational_agl_m = profile.min_operational_agl_m.min(agl_m);
+                    controller.operational_mut().cap_agl(agl_m);
+                }
+            }
+            capped += 1;
+        }
+        capped
     }
 
     /// How many controllers are frontier explorers.

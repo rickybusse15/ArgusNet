@@ -1214,6 +1214,59 @@ pub(super) fn section_frame_events(ui: &mut egui::Ui, replay_state: &ReplayState
 }
 
 // ---------------------------------------------------------------------------
+// Section: World view (V3)
+// ---------------------------------------------------------------------------
+
+/// The primary belief/truth switch, ahead of the layer chips: one choice
+/// sets every truth-bearing layer together (`crate::world_view`). The true
+/// world is refused, with its reason, where there is no truth to show.
+pub(super) fn section_world_view(
+    ui: &mut egui::Ui,
+    scene_layers: &[String],
+    runtime_visibility: &mut RuntimeOverlayVisibility,
+    layer_visibility: &mut LayerVisibilityState,
+    truth_unavailable: Option<&'static str>,
+) {
+    use crate::world_view::{apply, WorldView};
+    let mut current = WorldView::of(runtime_visibility);
+    // Live operation has no truth: whatever was on, the drones' map shows.
+    let forced = truth_unavailable.is_some() && current == WorldView::TrueWorld;
+    let mut chosen = forced.then_some(WorldView::DronesMap);
+    if forced {
+        current = WorldView::DronesMap;
+    }
+    ui.horizontal(|ui| {
+        ui.label("World:");
+        for view in WorldView::ALL {
+            let refused = view == WorldView::TrueWorld && truth_unavailable.is_some();
+            let response = ui
+                .add_enabled(
+                    !refused,
+                    egui::Button::selectable(current == view, view.label()),
+                )
+                .on_hover_text(view.explanation())
+                .on_disabled_hover_text(truth_unavailable.unwrap_or_default());
+            if response.clicked() && current != view {
+                chosen = Some(view);
+            }
+        }
+    });
+    if let Some(view) = chosen {
+        let self_built = layer_visibility
+            .base_layers
+            .contains_key(crate::belief_map::LAYER_ID);
+        apply(
+            view,
+            self_built,
+            scene_layers,
+            crate::belief_map::LAYER_ID,
+            runtime_visibility,
+            &mut layer_visibility.base_layers,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Section: Layers
 // ---------------------------------------------------------------------------
 
@@ -1347,6 +1400,8 @@ pub(super) fn section_runtime_overlays(
             &mut runtime_visibility.power_line_clearance,
             "Clearance Corridors",
         );
+        ui.checkbox(&mut runtime_visibility.mapped_wires, "Mapped Wires")
+            .on_hover_text("The spans the drones' own map holds, as they found them");
         ui.checkbox(
             &mut runtime_visibility.show_covariance_ellipsoids,
             "Covariance Ellipsoids",
@@ -1360,6 +1415,11 @@ pub(super) fn section_runtime_overlays(
             "Localization ellipses",
         );
         ui.checkbox(&mut mission_overlay.show_egress_paths, "Egress paths");
+        ui.checkbox(
+            &mut mission_overlay.show_allocation_lines,
+            "Allocation lines",
+        )
+        .on_hover_text("A line from each drone to the POI it holds");
     });
 }
 

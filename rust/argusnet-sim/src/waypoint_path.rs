@@ -160,6 +160,48 @@ impl LoopedWaypointPath {
         &self.config
     }
 
+    /// This lane flown no faster than `speed_mps`: the same lane, rebuilt
+    /// at the lower speed, or itself unchanged when it is already slower. An
+    /// explicit cap is a safety bound, so it overrides the half-metre floor
+    /// an uncapped lane is flown at.
+    pub fn with_speed_cap(self, speed_mps: f64) -> Self {
+        if self.speed_mps <= speed_mps {
+            return self;
+        }
+        let config = WaypointPathConfig {
+            speed_mps,
+            ..self.config.clone()
+        };
+        let mut lane = Self::new(config).expect("a valid lane stays valid at another speed");
+        lane.speed_mps = speed_mps.max(0.0);
+        lane
+    }
+
+    /// This lane flown no higher than `agl_m` above the ground it believes:
+    /// its base height, with its vertical swing, and its floor, held under
+    /// the cap. Unchanged when it already flies lower.
+    pub fn with_agl_cap(self, agl_m: f64) -> Self {
+        let base = (agl_m - self.config.vertical_amplitude_m.abs()).max(0.0);
+        if self.config.base_agl_m <= base && self.config.min_agl_m <= base {
+            return self;
+        }
+        let speed_mps = self.speed_mps;
+        let config = WaypointPathConfig {
+            base_agl_m: self.config.base_agl_m.min(base),
+            min_agl_m: self.config.min_agl_m.min(base),
+            ..self.config.clone()
+        };
+        let mut lane = Self::new(config).expect("a valid lane stays valid at another height");
+        lane.speed_mps = speed_mps;
+        lane
+    }
+
+    /// The speed the lane is flown at: the configured speed, at least
+    /// [`Self::MIN_SPEED_MPS`] unless a cap holds it lower.
+    pub fn speed_mps(&self) -> f64 {
+        self.speed_mps
+    }
+
     pub fn path_length_m(&self) -> f64 {
         self.path_length_m
     }
@@ -242,6 +284,23 @@ mod tests {
         assert_eq!(py_mod(1.0, -3.0), -2.0);
         assert!(py_mod(3.0, 3.0) == 0.0 && py_mod(3.0, 3.0).is_sign_positive());
         assert!(py_mod(3.0, -3.0).is_sign_negative());
+    }
+
+    /// A safety cap holds a lane below the half-metre floor an uncapped
+    /// lane keeps; a cap above the lane's speed changes nothing.
+    #[test]
+    fn a_speed_cap_overrides_the_minimum_speed() {
+        let lane = LoopedWaypointPath::new(config(vec![[0.0, 0.0], [100.0, 0.0]])).unwrap();
+        assert_eq!(lane.clone().with_speed_cap(20.0), lane);
+        let capped = lane.clone().with_speed_cap(0.062);
+        assert_eq!(capped.speed_mps(), 0.062);
+        let slow = LoopedWaypointPath::new(WaypointPathConfig {
+            speed_mps: 0.1,
+            ..config(vec![[0.0, 0.0], [100.0, 0.0]])
+        })
+        .unwrap();
+        assert_eq!(slow.speed_mps(), LoopedWaypointPath::MIN_SPEED_MPS);
+        assert_eq!(slow.with_speed_cap(0.2).speed_mps(), 0.2);
     }
 
     fn config(points: Vec<[f64; 2]>) -> WaypointPathConfig {

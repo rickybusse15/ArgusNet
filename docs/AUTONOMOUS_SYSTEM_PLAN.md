@@ -306,6 +306,15 @@ Land site, mission, platform/sensor, localization, spatial revision, trajectory,
 safety, evidence, reconstruction, finding, change and report contracts. Produce
 one replay-derived client package with explicit unavailable fields.
 
+*Done for replays (2026-10-23):*
+- the contracts (`docs/contracts/`);
+- the client package (`argusnet client-package`, carrying `records/`);
+- the Review workspace reading it.
+
+Reconstruction and change records, planned trajectories, evidence
+sufficiency, runtime identity and signing remain open (see
+AGENT_EXECUTION_PLAN S1).
+
 ### S2 — Three-dimensional belief world and client review
 
 Publish surface plus volumetric spatial chunks, progressive reconstruction,

@@ -183,6 +183,86 @@ pub fn matching_ortho_height(fov: f32, distance: f32) -> f32 {
     2.0 * distance.max(1.0) * (fov * 0.5).tan()
 }
 
+/// Metres per screen pixel at the camera's focus (V3's scale bar): the
+/// height the view spans there over the canvas's height in pixels. Both
+/// projections share it, since top-down and Section match the perspective
+/// scale at the focus ([`matching_ortho_height`]). `None` before a camera
+/// and its canvas exist, and in free-fly, which has no focus to measure at:
+/// the orbit's radius there is stale, and a bar from it would lie.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
+pub struct CanvasScale {
+    pub metres_per_px: Option<f32>,
+}
+
+/// Keep [`CanvasScale`] current, after the projection is applied.
+pub fn update_canvas_scale_system(
+    mut scale: ResMut<CanvasScale>,
+    saved: Res<SavedPerspective>,
+    control: Option<Res<crate::camera_control::CameraControl>>,
+    camera: Query<(&Camera, &OrbitCamera, &Projection), With<MainCamera>>,
+) {
+    let free_fly =
+        control.is_some_and(|control| control.mode == crate::camera_control::CameraMode::FreeFly);
+    let measured = camera
+        .single()
+        .ok()
+        .and_then(|(camera, orbit, projection)| {
+            let fov = match projection {
+                Projection::Perspective(perspective) => Some(perspective.fov),
+                _ => saved.0.as_ref().map(|perspective| perspective.fov),
+            }?;
+            canvas_metres_per_px(
+                free_fly,
+                fov,
+                orbit.radius,
+                camera.logical_viewport_size()?.y,
+            )
+        });
+    scale.set_if_neq(CanvasScale {
+        metres_per_px: measured,
+    });
+}
+
+/// Metres per logical pixel at the focus of an orbit at `radius` with
+/// vertical field of view `fov`, on a canvas `height_px` tall; `None` in
+/// free-fly, where the orbit's radius is stale and there is no focus.
+pub fn canvas_metres_per_px(free_fly: bool, fov: f32, radius: f32, height_px: f32) -> Option<f32> {
+    (!free_fly && height_px > 0.0).then(|| matching_ortho_height(fov, radius) / height_px)
+}
+
+/// The scale bar in egui points, which the UI-scale preference zooms: a
+/// point is `zoom` logical pixels, so it spans `zoom` times the ground.
+pub fn scale_bar_in_points(metres_per_px: f32, zoom: f32, max_points: f32) -> Option<(f32, f32)> {
+    scale_bar(metres_per_px * zoom, max_points)
+}
+
+/// The scale bar for `metres_per_px`: the longest 1, 2 or 5 × 10ⁿ metres
+/// that fits in `max_px`, and its length in pixels. `None` for a scale with
+/// nothing sensible to show.
+pub fn scale_bar(metres_per_px: f32, max_px: f32) -> Option<(f32, f32)> {
+    if !(metres_per_px.is_finite() && metres_per_px > 0.0 && max_px > 0.0) {
+        return None;
+    }
+    let span = metres_per_px * max_px;
+    let decade = 10_f32.powf(span.log10().floor());
+    let metres = [5.0, 2.0, 1.0]
+        .into_iter()
+        .map(|step| step * decade)
+        .find(|metres| *metres <= span)?;
+    Some((metres, metres / metres_per_px))
+}
+
+/// A scale bar's length as an operator reads it.
+pub fn scale_label(metres: f32) -> String {
+    if metres >= 1000.0 {
+        format!("{} km", metres / 1000.0)
+    } else if metres >= 1.0 {
+        format!("{} m", metres)
+    } else {
+        format!("{} cm", (metres * 100.0).round())
+    }
+}
+
 /// Apply the selected projection to the main camera.
 pub fn apply_projection_system(
     ui_state: Res<ViewerUiState>,
@@ -240,6 +320,48 @@ pub fn apply_projection_system(
 
 #[cfg(test)]
 mod tests {
+    use super::{canvas_metres_per_px, scale_bar, scale_bar_in_points, scale_label};
+
+    /// At 200 % UI scale a point is two pixels, so it covers twice the
+    /// ground: the bar's metres per drawn point is the canvas scale times
+    /// the zoom, whatever the zoom.
+    #[test]
+    fn the_scale_bar_holds_its_ground_length_at_any_ui_scale() {
+        assert_eq!(scale_bar_in_points(1.0, 1.0, 120.0), Some((100.0, 100.0)));
+        assert_eq!(scale_bar_in_points(1.0, 2.0, 120.0), Some((200.0, 100.0)));
+        for zoom in [0.75_f32, 1.25, 2.0, 3.0] {
+            let (metres, points) = scale_bar_in_points(1.0, zoom, 120.0).unwrap();
+            assert!((metres / points - zoom).abs() < 1e-5, "zoom {zoom}");
+        }
+    }
+
+    /// Free-fly has no focus: no scale, rather than the stale orbit's.
+    #[test]
+    fn free_fly_has_no_scale() {
+        assert!(canvas_metres_per_px(true, 0.8, 500.0, 700.0).is_none());
+        assert!(canvas_metres_per_px(false, 0.8, 500.0, 0.0).is_none());
+        let m = canvas_metres_per_px(false, 0.8, 500.0, 700.0).unwrap();
+        assert!((m - super::matching_ortho_height(0.8, 500.0) / 700.0).abs() < 1e-6);
+    }
+
+    /// The bar is the longest 1, 2 or 5 x 10^n metres that fits, at its
+    /// length in pixels; nothing for a scale with nothing to show.
+    #[test]
+    fn the_scale_bar_is_a_round_length_that_fits() {
+        let (metres, px) = scale_bar(1.0, 120.0).unwrap();
+        assert_eq!((metres, px), (100.0, 100.0));
+        let (metres, px) = scale_bar(3.0, 120.0).unwrap();
+        assert_eq!(metres, 200.0);
+        assert!((px - 200.0 / 3.0).abs() < 1e-4);
+        assert_eq!(scale_bar(0.02, 120.0).unwrap().0, 2.0);
+        assert_eq!(scale_bar(40.0, 120.0).unwrap().0, 2000.0);
+        assert!(scale_bar(0.0, 120.0).is_none());
+        assert!(scale_bar(f32::NAN, 120.0).is_none());
+        assert_eq!(scale_label(2000.0), "2 km");
+        assert_eq!(scale_label(200.0), "200 m");
+        assert_eq!(scale_label(0.5), "50 cm");
+    }
+
     use super::*;
 
     fn app(projection: ViewProjection) -> App {

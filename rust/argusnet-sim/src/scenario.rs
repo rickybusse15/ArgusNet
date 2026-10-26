@@ -839,6 +839,8 @@ pub struct AssembledRun {
     /// written as `meta.assignment_history`. Not checkpointed: like the
     /// frames, a resumed run's history starts at its checkpoint.
     assignments: crate::assignments::AssignmentHistory,
+    /// The bundle's weather, for the navigation camera's envelope.
+    weather: Option<MotionWeather>,
 }
 
 /// What the replay frames need beyond the stages' own handles.
@@ -1033,6 +1035,9 @@ fn belief_stats(
         structure_precision: (believed_n > 0).then(|| believed_right as f64 / believed_n as f64),
         structure_recall: (true_n > 0).then(|| true_found as f64 / true_n as f64),
         canopy_cells: grid.canopy_cells() as u64,
+        quality: None,
+        unsettled_scans: grid.unsettled_scans(),
+        stowed_scans: grid.stowed_scans(),
     }
 }
 
@@ -1413,6 +1418,7 @@ pub fn assemble_with(
             .fold(f64::NEG_INFINITY, f64::max)
             .max(f64::MIN),
         map_bounds_m: bundle.map_bounds_m,
+        weather: bundle.weather.clone(),
         world,
         guard: None,
         policy_guard: false,
@@ -1897,7 +1903,42 @@ impl AssembledRun {
             self.world.visibility.clone(),
         )?
         .with_power_lines(&self.world.power_lines);
-        let summary = serde_json::json!({
+        // A rig's camera flies on its declared body mount.
+        let camera_mount = config
+            .rig
+            .as_ref()
+            .and_then(|rig| rig.mount(crate::rig::SensorRole::NavCamera))
+            .map(|mount| (mount.lever_arm_m, mount.rotation_ypr_deg));
+        let camera = config
+            .effective_nav_camera()
+            .map(|camera| {
+                crate::nav_camera::NavCamera::new(
+                    camera,
+                    self.world.visibility.clone(),
+                    self.weather.as_ref(),
+                )
+                .map(|camera| {
+                    let camera = camera.with_power_lines(&self.world.power_lines);
+                    match camera_mount {
+                        Some((lever, rotation)) => camera.with_mount(lever, rotation),
+                        None => camera,
+                    }
+                })
+            })
+            .transpose()?;
+        let pod = config
+            .rig
+            .clone()
+            .map(|rig| {
+                crate::pod::PodSensing::new(
+                    rig,
+                    config.pointing.clone().unwrap_or_default(),
+                    self.world.visibility.clone(),
+                )
+                .map(|pod| pod.with_power_lines(&self.world.power_lines))
+            })
+            .transpose()?;
+        let mut summary = serde_json::json!({
             "knowledge": knowledge.as_str(),
             "exploration": &config,
             "belief_grid": {
@@ -1916,6 +1957,11 @@ impl AssembledRun {
                     .to_string()
             })?
             .set_belief(grid, config.clone());
+        let dt_s = self.dt_s;
+        self.sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .expect("installed above")
+            .set_belief_dt(dt_s);
         let terrain = BeliefTerrain::new(handle.clone(), resolution_m);
         let guard = PhysicalGuard::new(
             self.world.terrain.clone(),
@@ -1948,6 +1994,23 @@ impl AssembledRun {
         if config.explore {
             controllers.explore_search_lanes();
         }
+        // The navigation camera bounds every controller's speed: each must
+        // be able to stop short of what the camera can see.
+        let speed_cap_mps = camera
+            .as_ref()
+            .map(|camera| camera.envelope().max_speed_mps);
+        if let Some(cap) = speed_cap_mps {
+            controllers.cap_speeds(cap);
+        }
+        // The pod's LiDAR maps only what it reaches: every controller flies
+        // low enough for its furthest ray, over the believed ground, which
+        // may stand in high by the unknown margin.
+        let agl_cap_m = pod
+            .as_ref()
+            .and_then(|pod| pod.max_mapping_agl_m(config.unknown_margin_m));
+        if let Some(cap) = agl_cap_m {
+            controllers.cap_agl(cap);
+        }
         controllers.set_physical_guard(guard.clone());
 
         // The platforms do not know the true obstacles, so the mission
@@ -1960,6 +2023,9 @@ impl AssembledRun {
             .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
         {
             driver.set_known_obstacles(None, self.map_bounds_m);
+            if let Some(cap) = speed_cap_mps {
+                driver.cap_redirect_speed(cap);
+            }
         }
 
         let deconflict = self
@@ -1979,6 +2045,20 @@ impl AssembledRun {
             safety.set_terrain(Box::new(terrain));
         }
         self.observe_mut().set_range_scanner(scanner);
+        if let Some(camera) = camera {
+            summary["nav_camera_envelope"] =
+                serde_json::to_value(camera.envelope()).expect("envelope serialises");
+            self.observe_mut().set_nav_camera(camera);
+        }
+        if let Some(pod) = pod {
+            summary["rig_identity"] = serde_json::json!(pod.rig().identity());
+            summary["rig_sensors"] = pod.rig().sensor_summary();
+            summary["rig_mass_kg"] =
+                serde_json::to_value(pod.rig().mass_totals()).expect("totals serialise");
+            summary["pointing"] = serde_json::to_value(pod.policy()).expect("policy serialises");
+            summary["mapping_agl_cap_m"] = serde_json::json!(agl_cap_m);
+            self.observe_mut().set_pod(pod);
+        }
         self.sim
             .connect(crate::simulation::Handoff::RangeScansToMapping)
             .map_err(|error| format!("{error:?}"))?;
@@ -1988,6 +2068,9 @@ impl AssembledRun {
         {
             overrides.set_physical_guard(Some(guard.clone()));
             overrides.set_power_lines(Vec::new());
+            if let Some(cap) = speed_cap_mps {
+                overrides.cap_rejoin_speed(cap);
+            }
         }
         self.guard = Some(guard);
         self.policy_guard = false;
@@ -2041,10 +2124,18 @@ impl AssembledRun {
             .into_iter()
             .map(|(node, spec, out)| (node.to_string(), spec, out))
             .collect();
+        let offsets: Vec<(String, f64)> = schedule
+            .bias_offsets(tick)
+            .into_iter()
+            .map(|(node, offset)| (node.to_string(), offset))
+            .collect();
         let observe = self
             .sim
             .stage_mut::<ObserveStage>(Stage::GenerateObservations)
             .expect("assembly installs an ObserveStage");
+        for (node, offset) in offsets {
+            observe.set_bias_offset(&node, offset);
+        }
         for (node, spec, out) in sensors {
             match (out, observe.sensor(&node).is_some()) {
                 (true, true) => observe.remove_sensor(&node),
@@ -2069,6 +2160,12 @@ impl AssembledRun {
         self.sim.preflight(checkpoint)?;
         self.apply_sensor_faults(checkpoint.tick);
         self.sim.restore(checkpoint)?;
+        // The once-per-tick restart guard belongs to the timeline restored,
+        // not the one left: a run restored to before a restart must apply it
+        // when it gets there again. A checkpoint taken paused at its tick had
+        // that tick's faults applied before the pause (they apply before
+        // each step), so they are not applied twice.
+        self.restarts_applied_at = checkpoint.paused.then_some(checkpoint.tick);
         // Contacts the guard logged in a tick the restore abandoned belong to
         // a timeline that no longer exists.
         if let Some(guard) = &self.guard {
@@ -2255,6 +2352,17 @@ impl AssembledRun {
             .map(crate::replay::ReplaySafetyEvent::from)
             .collect();
         self.enrich(&mut replay_frame, timestamp_s, &snapshot.platforms, &truths);
+        if let Some(schedule) = &self.faults {
+            let tick = (timestamp_s / self.dt_s).round() as u64;
+            replay_frame.active_faults = schedule
+                .active_at(tick, self.dt_s)
+                .into_iter()
+                .cloned()
+                .collect();
+            // From the offset table, not the installed sensors: a drift goes
+            // on accumulating through an outage that removes its sensor.
+            replay_frame.sensor_bias_offsets_rad = self.observe().bias_offsets().clone();
+        }
         self.replay.push_frame(replay_frame);
         let mobile: std::collections::BTreeSet<&str> = snapshot
             .platforms
@@ -2352,6 +2460,23 @@ impl AssembledRun {
     ) {
         let tally = self.observe().tally();
         self.report.totals.add(&tally);
+        frame.energy_reserves = crate::battery::BatteryStage::of(&self.sim)
+            .map(|battery| {
+                battery
+                    .reserves()
+                    .iter()
+                    .map(|(node, (remaining_wh, reserve_wh))| {
+                        (
+                            node.clone(),
+                            crate::replay::ReplayEnergyReserve {
+                                remaining_wh: *remaining_wh,
+                                reserve_wh: *reserve_wh,
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         frame.deconfliction_events = self
             .sim
@@ -2429,6 +2554,11 @@ impl AssembledRun {
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
             .map(MappingStage::take_canopy_updates)
             .unwrap_or_default();
+        let wire_updates = self
+            .sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .map(MappingStage::take_wire_updates)
+            .unwrap_or_default();
         let Some(mapping) = self.mapping() else {
             return;
         };
@@ -2440,13 +2570,19 @@ impl AssembledRun {
             mean_revisits: stats.mean_revisits,
             belief: mapping.belief_grid().zip(mapping.exploration_config()).map(
                 |(grid, config)| {
-                    belief_stats(
+                    let mut stats = belief_stats(
                         grid,
                         config.occupied_probability,
                         self.report.terrain.as_ref(),
                         &self.true_structures,
                         &self.true_trunks,
-                    )
+                    );
+                    stats.quality = mapping.belief_snapshot().and_then(|snapshot| {
+                        snapshot
+                            .quality()
+                            .map(crate::replay::ReplayQualityStats::from)
+                    });
+                    stats
                 },
             ),
         });
@@ -2457,6 +2593,7 @@ impl AssembledRun {
             .collect();
         frame.belief_updates = belief_updates;
         frame.canopy_updates = canopy_updates;
+        frame.mapped_wires = wire_updates;
         frame.inspection_events = mapping
             .inspection_events()
             .into_iter()
@@ -2509,7 +2646,7 @@ impl AssembledRun {
             // without a prior one, the footprint bookkeeping otherwise.
             scan_coverage_fraction: mapping
                 .belief_snapshot()
-                .map_or(stats.coverage_fraction, |belief| belief.known_fraction()),
+                .map_or(stats.coverage_fraction, |belief| belief.scan_progress()),
             scan_coverage_threshold: self.report.scan_coverage_threshold.unwrap_or(0.0),
             localization_estimates: mapping
                 .last_estimates()
@@ -2534,6 +2671,10 @@ impl AssembledRun {
                     completion_time_s: status.completion_time_s,
                     dwell_accumulated_s: status.dwell_accumulated_s,
                     position: Some(*position),
+                    unassigned_reason: report
+                        .unassigned
+                        .contains(&status.poi_id)
+                        .then(|| "no_affordable_drone".to_string()),
                 })
                 .collect(),
             completed_poi_count: report.completed_count,

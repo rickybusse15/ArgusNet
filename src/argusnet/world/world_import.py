@@ -1,0 +1,172 @@
+"""One real-world import (R5): a DEM and an OSM extract to a runnable world.
+
+Offline tooling that runs the three importers with one origin and writes
+what a run needs into one folder:
+
+* `terrain.json` (`argusnet.terrain`): the DEM on the map preset's grid;
+* `buildings.json` (`argusnet.buildings`): the extract's buildings, when it
+  has any;
+* `features.json` (`argusnet.features`): its land cover, trees and power
+  lines, empty when it maps none (so nothing procedural stands in);
+* `scenario.json`: a scenario config naming all three, with trees on;
+* `world.json` (`argusnet.world-import`): the manifest. It holds the origin,
+  each file's SHA-256 and the sources', each importer's summary, and a
+  `world_id` hashed from the files' hashes and the options that shape the
+  built world (map and terrain presets, origin), so the same data imported
+  the same way is the same world, and anything else is not.
+
+The extract may be GeoJSON or an Overpass API answer (`out geom`), which is
+converted first and kept as `osm.geojson` (`argusnet.world.overpass`).
+
+The origin is the one given, or the DEM's centre. Every file is imported
+around it, so the builder's one-origin check holds by construction. The
+extract is split by the `building` tag: features with one (other than
+`no`) go to the buildings importer, which reads every polygon it is given
+as a building; everything goes to the features importer, which skips
+buildings.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Mapping
+from pathlib import Path
+
+from argusnet.core.io_limits import read_text_capped, sha256_file
+
+from .buildings_import import import_buildings, write_buildings
+from .features_import import import_features, write_features
+from .overpass import convert as convert_overpass
+from .terrain_import import import_terrain, write_terrain
+
+FORMAT = "argusnet.world-import"
+VERSION = 1
+
+
+def _sha256(path: Path) -> str:
+    return sha256_file(path)
+
+
+def is_building(properties: Mapping[str, object]) -> bool:
+    value = str(properties.get("building", "")).strip().lower()
+    return value not in ("", "no")
+
+
+def is_overpass_answer(path: Path) -> bool:
+    """Whether `path` is an Overpass API answer rather than GeoJSON."""
+    document = json.loads(read_text_capped(path))
+    return isinstance(document, Mapping) and "elements" in document and "type" not in document
+
+
+def split_buildings(osm_path: str | Path, out_path: Path) -> int:
+    """Write the extract's building features to `out_path`, keeping its CRS
+    member; return how many there are."""
+    document = json.loads(read_text_capped(osm_path))
+    features = document.get("features", []) if document.get("type") == "FeatureCollection" else []
+    buildings = [
+        feature
+        for feature in features
+        if isinstance(feature, Mapping)
+        and isinstance(feature.get("properties"), Mapping)
+        and is_building(feature["properties"])
+    ]
+    split: dict[str, object] = {"type": "FeatureCollection", "features": buildings}
+    if "crs" in document:
+        split["crs"] = document["crs"]
+    out_path.write_text(json.dumps(split), encoding="utf-8")
+    return len(buildings)
+
+
+def import_world(
+    dem_path: str | Path,
+    osm_path: str | Path,
+    out_dir: str | Path,
+    *,
+    map_preset: str,
+    origin: tuple[float, float] | None = None,
+    dem_crs: str | None = None,
+    osm_crs: str | None = None,
+    terrain_preset: str = "urban_flat",
+    seed: int = 7,
+    duration_s: float = 120.0,
+) -> dict[str, object]:
+    """Import `dem_path` and `osm_path` into `out_dir` around one origin and
+    return the manifest (also written as `world.json`)."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    source_osm = Path(osm_path)
+    if is_overpass_answer(source_osm):
+        osm_path = out / "osm.geojson"
+        convert_overpass(source_osm, osm_path)
+
+    terrain = import_terrain(dem_path, map_preset=map_preset, origin=origin, source_crs=dem_crs)
+    georeference = terrain["georeference"]
+    if not isinstance(georeference, Mapping):
+        raise ValueError("the terrain import carries no georeference")
+    shared = (float(georeference["origin_lat_deg"]), float(georeference["origin_lon_deg"]))
+    files: dict[str, Path] = {"terrain": out / "terrain.json"}
+    write_terrain(terrain, files["terrain"])
+    summaries: dict[str, object] = {"terrain": terrain["summary"]}
+
+    building_source = out / "osm-buildings.geojson"
+    if split_buildings(osm_path, building_source):
+        buildings = import_buildings(building_source, origin=shared, source_crs=osm_crs)
+        files["buildings"] = out / "buildings.json"
+        write_buildings(buildings, files["buildings"])
+        summaries["buildings"] = buildings["summary"]
+    building_source.unlink()
+
+    # Always written, empty when the extract maps nothing but buildings: a
+    # features file makes the land cover the data's, so the builder never
+    # falls back to procedural cover, walls, forest or scattered trees for a
+    # real place.
+    features = import_features(osm_path, origin=shared, source_crs=osm_crs, allow_empty=True)
+    files["features"] = out / "features.json"
+    write_features(features, files["features"])
+    summaries["features"] = features["summary"]
+
+    options: dict[str, object] = {
+        "map_preset": map_preset,
+        "terrain_preset": terrain_preset,
+        "terrain_path": str(files["terrain"].resolve()),
+        "trees": True,
+    }
+    for name in ("buildings", "features"):
+        if name in files:
+            options[f"{name}_path"] = str(files[name].resolve())
+    scenario = {
+        "format": "argusnet.scenario-config",
+        "version": 1,
+        "seed": seed,
+        "duration_s": duration_s,
+        "options": options,
+    }
+    (out / "scenario.json").write_text(json.dumps(scenario, indent=1) + "\n", encoding="utf-8")
+
+    hashes = {name: _sha256(path) for name, path in files.items()}
+    # Everything that decides the built world: the files, and the options
+    # the builder reads beside them (the run's seed is not one: the world's
+    # trees and cover are seeded from the terrain, not the run).
+    identity = {
+        "files": {name: hashes[name] for name in sorted(hashes)},
+        "map_preset": map_preset,
+        "terrain_preset": terrain_preset,
+        "origin": list(shared),
+    }
+    world_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    manifest: dict[str, object] = {
+        "format": FORMAT,
+        "version": VERSION,
+        "world_id": world_id,
+        "origin": {"latitude_deg": shared[0], "longitude_deg": shared[1]},
+        "map_preset": map_preset,
+        "files": {
+            name: {"path": path.name, "sha256": hashes[name]} for name, path in files.items()
+        },
+        "sources": {"dem_sha256": _sha256(Path(dem_path)), "osm_sha256": _sha256(source_osm)},
+        "scenario": "scenario.json",
+        "summaries": summaries,
+    }
+    (out / "world.json").write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+    return manifest

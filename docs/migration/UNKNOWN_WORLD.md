@@ -70,7 +70,14 @@ byte-identical, and the lifecycle checks are equal.
    stage 1 samples and after stage 3 resolves. If a belief led a platform
    below the true ground or into a building, the guard puts it back and the
    frame records a `world_contacts` entry. The contact count measures how
-   safe flying on the belief was.
+   safe flying on the belief was. Each move is swept from where the platform
+   was against the true buildings, walls and power-line wires
+   (`PhysicalGuard::enforce_from`): a step that meets one stops 1 cm short of
+   it on the near side, with a `structure` contact. Before 2026-10-23 only
+   wires were swept, so a step longer than a wall is thick crossed it
+   uncounted, and a platform that ended a tick inside a wall could be pushed
+   out through its far face. Tree trunks are still checked only where the
+   platform ends a tick.
 
 The grid, together with what the replay last showed of it, is stage 8
 checkpoint state (an optional key, absent in prior runs). A resumed run
@@ -90,6 +97,11 @@ All additions are optional:
 - **Frame `range_scans`**: at most 32 returns per platform scan, for showing
   the sensing.
 - **Frame `world_contacts`**: as above.
+- **Frame `mapped_wires`** (R3): the power-line spans the drones' map gained
+  that tick, as whole spans in the `meta.power_lines` line format, each
+  recorded once. With the wire-hazard prior (`--wire-prior`), the prior's
+  spans arrive on the first frame. Applying the frames in order gives the
+  wires the map holds.
 - **`mapping_state.belief`**: known cells and fraction; ground RMSE and
   maximum error against the true terrain at known cell centres; structure
   cells, with structure precision (believed cells with a true building or
@@ -122,6 +134,12 @@ run opens, and stay in the Layers panel as truth for comparison.
 - **Unknown**: black, inside a faint outline of the map bounds.
 - **Range returns**: each drone's returns this frame, drawn as rays.
 - **Contacts**: red rings.
+- **Mapped wires**: each span the drones' map holds at the cursor, drawn as
+  a conductor in cyan, so it reads as known rather than true. Drawn from the
+  frames' `mapped_wires`; the true lines stay hidden, as before. The Mapped
+  Wires toggle in Runtime Overlays (on by default) hides them. Scrubbing back
+  removes a span mapped later. Wires only: the map holds conductors, not
+  towers.
 - **Readout**: known %, ground RMSE, structure found and right %, and
   contacts.
 

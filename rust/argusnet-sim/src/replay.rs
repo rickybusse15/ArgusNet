@@ -324,6 +324,51 @@ pub struct ReplayBeliefStats {
     /// Cells with a canopy return (R2). Written only when there are some.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub canopy_cells: u64,
+    /// Pod captures the map refused because the gimbal had not settled
+    /// (SR2), so far. Written only when there are some.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unsettled_scans: u64,
+    /// Pod captures the map refused because the pod was stowed (SR2).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stowed_scans: u64,
+    /// The map against the run's quality requirement (SR5a). Absent
+    /// without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<ReplayQualityStats>,
+}
+
+/// How many cells give each deficit reason, and the scan's progress on
+/// them. `unreachable_cells` are bias-limited: no flying brings them to the
+/// requirement, so they are reported and never counted as met.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayQualityStats {
+    pub met_cells: u64,
+    pub unseen_cells: u64,
+    pub too_oblique_cells: u64,
+    pub sparse_cells: u64,
+    pub stale_cells: u64,
+    pub unreachable_cells: u64,
+    /// Met over all cells.
+    pub met_fraction: f64,
+    /// Met or unreachable over all cells: nothing left for flying to do.
+    /// What the scan gate reads; never a claim that the map is met.
+    pub resolved_fraction: f64,
+}
+
+impl From<&crate::belief_world::QualityLayer> for ReplayQualityStats {
+    fn from(layer: &crate::belief_world::QualityLayer) -> Self {
+        let counts = &layer.counts;
+        Self {
+            met_cells: counts.met,
+            unseen_cells: counts.unseen,
+            too_oblique_cells: counts.too_oblique,
+            sparse_cells: counts.sparse,
+            stale_cells: counts.stale,
+            unreachable_cells: counts.unreachable(),
+            met_fraction: counts.met_fraction(),
+            resolved_fraction: layer.resolved_fraction(),
+        }
+    }
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -347,6 +392,18 @@ pub struct ReplayRangeScan {
     /// (R3). Absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wire: Vec<[f64; 3]>,
+    /// `nav_camera` for the forward navigation camera's detections (safety
+    /// evidence, not the map); absent for the range scanner.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::range_scan::ScanSensor::is_range_scanner"
+    )]
+    pub sensor: crate::range_scan::ScanSensor,
+    /// The pod at capture (SR2): who pointed it, whether it had settled, the
+    /// boresight the estimator believes, and the rays the airframe blocked.
+    /// Absent for the legacy scanner and the camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pod: Option<crate::pod::PodCapture>,
 }
 
 /// Most returns per scan a replay frame carries. The frame's returns are a
@@ -375,6 +432,12 @@ impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
             canopy: of(crate::range_scan::ReturnClass::Canopy),
             misses: scan.misses,
             wire: scan.wires.iter().map(|wire| dm(wire.point_m)).collect(),
+            sensor: scan.sensor,
+            pod: scan.pod.clone().map(|mut pod| {
+                pod.boresight_world = pod.boresight_world.map(|v| (v * 1e4).round() / 1e4);
+                pod.command_error_rad = (pod.command_error_rad * 1e5).round() / 1e5;
+                pod
+            }),
         }
     }
 }
@@ -437,6 +500,11 @@ pub struct ReplayPoiStatus {
     pub completion_time_s: Option<f64>,
     pub dwell_accumulated_s: f64,
     pub position: Option<[f64; 3]>,
+    /// Why a pending POI has no drone, when the planner says so
+    /// (contingency_v1, F5: `no_affordable_drone`). Absent otherwise, so
+    /// every other replay is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unassigned_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -487,6 +555,13 @@ pub struct ReplayTargetMetadata {
     pub last_seen_s: f64,
     pub confidence: f64,
     pub notes: String,
+}
+
+/// A platform's energy against its reserve home (F5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayEnergyReserve {
+    pub remaining_wh: f64,
+    pub reserve_wh: f64,
 }
 
 /// One frame: the seven keys the schema marks required, and the optional
@@ -545,6 +620,26 @@ pub struct ReplayFrame {
     /// soft, and a trunk the physics has already pushed clear of.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tree_contacts: Vec<ReplayTreeContact>,
+    /// The scheduled faults in force this tick (F2), as the manifest gives
+    /// them. Absent in a run without faults, or a tick with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_faults: Vec<crate::faults::Fault>,
+    /// Each sensor's calibration drift offset this tick, radians, where one
+    /// is non-zero (F2). It persists after its drift ends.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sensor_bias_offsets_rad: BTreeMap<String, f64>,
+    /// The power-line spans the platforms' own map gained this tick, in a
+    /// run that maps the world for itself (R3): whole spans, each once, the
+    /// wire-hazard prior's on the first tick. Applying the frames in order
+    /// gives the wires the map holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mapped_wires: Vec<argusnet_world::powerline::PowerLine>,
+    /// Under a physical energy profile (D-3), each platform's remaining
+    /// energy and the reserve it needs to get home from where it is, as the
+    /// battery's reserve check computed them this tick (F5). Absent under
+    /// legacy energy.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub energy_reserves: BTreeMap<String, ReplayEnergyReserve>,
 }
 
 /// One platform touching one tree in one tick (R2).
@@ -790,6 +885,10 @@ impl ReplayWriter {
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
             tree_contacts: Vec::new(),
+            active_faults: Vec::new(),
+            sensor_bias_offsets_rad: BTreeMap::new(),
+            mapped_wires: Vec::new(),
+            energy_reserves: BTreeMap::new(),
         }
     }
 

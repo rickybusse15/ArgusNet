@@ -1,3 +1,4 @@
+pub mod allocation_lines;
 pub mod app;
 pub mod belief_map;
 pub mod belief_render;
@@ -32,6 +33,7 @@ pub mod theme;
 pub mod trail_ribbons;
 pub mod trees;
 pub mod ui;
+pub mod world_view;
 pub mod zone_walls;
 
 pub use app::run;

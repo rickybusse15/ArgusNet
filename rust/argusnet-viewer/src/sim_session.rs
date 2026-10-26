@@ -13,9 +13,12 @@
 //!   shown as **pending** until the run answers that it took effect (Applied)
 //!   or did not (Rejected or Cancelled, with the reason). The viewer never
 //!   infers success from motion.
-//! - **Controls offered are controls that work.** Rewind needs checkpoints the
-//!   worker does not retain, so it is shown disabled with that reason rather
-//!   than hidden or faked.
+//! - **Controls offered are controls that work.** *Branch here* seeks the run
+//!   back to the frame under the cursor (P5.2), through the worker's retained
+//!   checkpoints. It is offered only while the operator reviews history the
+//!   checkpoints reach, and otherwise shown disabled with the reason. A
+//!   branch keeps the frames before the cursor and begins a new presentation
+//!   epoch.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -44,8 +47,8 @@ const NOTICE_FOR: Duration = Duration::from_secs(6);
 /// Assemble the run at `path` and install `options` on it -- through the same
 /// [`RunOptions::apply`] as `argusnet-rs sim`, so the viewer's run is the CLI's.
 pub fn load_run(path: &Path, options: &RunOptions) -> Result<AssembledRun, String> {
-    let text =
-        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let text = argusnet_replay::read_text_limited(path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
     let bundle_text = match value.get("format").and_then(|f| f.as_str()) {
@@ -242,31 +245,38 @@ impl SimSession {
             replay.begin_epoch(self.meta.clone());
             replay.live = true;
             replay.playing = false;
+            // The run reports its decisions (F3): the inspector shows them.
+            replay.decisions = Some(Vec::new());
         }
         let mut appended = 0_u64;
         let frames = self.worker.frames();
+        let status = self.worker.status();
         for worker_frame in frames {
             if self.epoch != Some(worker_frame.epoch) {
                 if self.epoch.is_some() {
-                    replay.begin_epoch(self.meta.clone());
-                    replay.live = true;
+                    self.enter_epoch(replay, worker_frame.epoch, &status);
                 }
                 self.epoch = Some(worker_frame.epoch);
             }
             match to_viewer_frame(&worker_frame.frame) {
                 Ok(frame) => {
+                    let at_s = frame.timestamp_s;
                     replay.push_frame(frame);
+                    replay.push_decisions(
+                        worker_frame
+                            .decisions
+                            .iter()
+                            .map(|decision| recorded_decision(decision, at_s)),
+                    );
                     appended += 1;
                 }
                 Err(_) => self.conversion_errors += 1,
             }
         }
-        // A reset with no frame yet: show the empty new run now, not after
-        // its first tick.
-        let status = self.worker.status();
+        // A reset or a branch with no frame yet: show it now, not after its
+        // first tick.
         if self.epoch.is_some_and(|epoch| epoch != status.epoch) && status.run_id.is_some() {
-            replay.begin_epoch(self.meta.clone());
-            replay.live = true;
+            self.enter_epoch(replay, status.epoch, &status);
             self.epoch = Some(status.epoch);
         }
         if appended > 0 {
@@ -281,6 +291,16 @@ impl SimSession {
         appended
     }
 
+    /// Present the worker's `epoch`: a seek's branch keeps the frames before
+    /// the tick it branched at; any other new epoch (a reset) starts empty.
+    fn enter_epoch(&self, replay: &mut ReplayState, epoch: u64, status: &WorkerStatus) {
+        match status.branched_at.filter(|_| status.epoch == epoch) {
+            Some(tick) => replay.branch(tick as usize),
+            None => replay.begin_epoch(self.meta.clone()),
+        }
+        replay.live = true;
+    }
+
     /// The source indicator's state.
     pub fn run_state(&self) -> SimRunState {
         match self.worker.status().phase {
@@ -288,6 +308,25 @@ impl SimSession {
             WorkerPhase::Faulted(_) | WorkerPhase::Failed(_) => SimRunState::Faulted,
             _ => SimRunState::Paused,
         }
+    }
+}
+
+/// A worker's decision as the viewer keeps it, at its tick's time.
+fn recorded_decision(
+    decision: &argusnet_sim::mission_driver::Decision,
+    at_s: f32,
+) -> crate::replay::RecordedDecision {
+    crate::replay::RecordedDecision {
+        timestamp_s: at_s,
+        kind: decision.kind.to_string(),
+        status: serde_json::to_value(decision.status)
+            .ok()
+            .and_then(|status| status.as_str().map(str::to_string))
+            .unwrap_or_default(),
+        reason: decision.reason.to_string(),
+        subject: decision.subject.clone(),
+        selected: decision.selected.clone(),
+        detail: decision.detail.clone(),
     }
 }
 
@@ -302,9 +341,30 @@ pub fn describe(reason: &RejectReason) -> String {
         RejectReason::Completed => "the run has finished; reset to run it again".into(),
         RejectReason::Faulted => "the run faulted; reset it".into(),
         RejectReason::InvalidSpeed => "not a valid speed".into(),
-        RejectReason::RewindUnavailable { .. } => "rewind needs retained checkpoints".into(),
+        RejectReason::RewindUnavailable { tick } => {
+            format!("no retained checkpoint reaches tick {tick}")
+        }
         RejectReason::Unsupported { name } => format!("not supported ({name})"),
         other => format!("{other:?}"),
+    }
+}
+
+/// The tick *Branch here* would seek to with the cursor on frame `cursor`
+/// of `frames` (the next tick after it), or why it cannot.
+pub fn branch_target(status: &WorkerStatus, cursor: usize, frames: usize) -> Result<u64, String> {
+    if status.run_id.is_none() || frames == 0 {
+        return Err("The run has no history yet".into());
+    }
+    if cursor + 1 >= frames {
+        return Err("Drag the timeline back to the moment to branch from".into());
+    }
+    let target = cursor as u64 + 1;
+    match status.retained_from {
+        Some(oldest) if oldest <= target => Ok(target),
+        Some(oldest) => Err(format!(
+            "The run keeps checkpoints back to tick {oldest} only"
+        )),
+        None => Err("The run has kept no checkpoint yet".into()),
     }
 }
 
@@ -336,6 +396,7 @@ pub fn sim_controls_ui_system(
     mut contexts: EguiContexts,
     mut session: ResMut<SimSession>,
     ui_state: Res<crate::state::ViewerUiState>,
+    replay: Res<ReplayState>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -431,11 +492,23 @@ pub fn sim_controls_ui_system(
                     {
                         session.send("Reset", CommandKind::Reset);
                     }
-                    ui.add_enabled(false, egui::Button::new("Rewind"))
-                        .on_disabled_hover_text(
-                            "Rewinding the run needs retained checkpoints, which this build does \
-                             not keep. Drag the timeline to review history instead.",
-                        );
+                    let branch = branch_target(&status, replay.frame_index, replay.frame_count());
+                    let pending = session.is_pending("Branch here");
+                    let response = ui
+                        .add_enabled(branch.is_ok() && !pending, egui::Button::new("Branch here"))
+                        .on_hover_text(
+                            "Seek the run back to the frame under the cursor, paused: later \
+                             frames are dropped and the run continues from here",
+                        )
+                        .on_disabled_hover_text(match &branch {
+                            Err(why) => why.clone(),
+                            Ok(_) => "Waiting for the run to acknowledge".to_string(),
+                        });
+                    if response.clicked() {
+                        if let Ok(tick) = branch {
+                            session.send("Branch here", CommandKind::Seek { tick });
+                        }
+                    }
                 });
                 let pending: Vec<_> = session.pending().map(|p| p.label).collect();
                 if !pending.is_empty() {
@@ -525,6 +598,147 @@ mod tests {
             panic!("a missing file is an error");
         };
         assert!(error.contains("scenario_bundle_tt.missing"));
+    }
+
+    /// F3: an in-process run hands the viewer its mission decisions with
+    /// each frame, every one the journal records, in tick order, stamped
+    /// with the frame's time; a replay state that is not a run's has none.
+    #[test]
+    fn a_run_hands_the_viewer_its_decisions() {
+        let path = fixture("scenario_bundle_scan.json");
+        let mut session = SimSession::start(path.clone(), RunOptions::default(), Pacing::Unpaced);
+        let mut replay = ReplayState::new(None);
+        assert!(replay.decisions.is_none(), "a replay records none");
+        wait(&mut session, &mut replay, |s, _| {
+            s.status().phase == WorkerPhase::Paused
+        });
+        session.send("Run", CommandKind::Resume).expect("sent");
+        wait(&mut session, &mut replay, |s, _| {
+            s.status().phase == WorkerPhase::Completed
+        });
+        session.take_frames(&mut replay);
+        let decisions = replay.decisions.as_ref().expect("a run reports them");
+
+        // The same run, straight: every decision its journal records.
+        let mut direct = load_run(&path, &RunOptions::default()).expect("loads");
+        let mut journaled = Vec::new();
+        loop {
+            match direct.step() {
+                Ok(_) => {}
+                Err(argusnet_sim::scenario::RunError::Tick(
+                    argusnet_sim::simulation::TickError::Completed { .. },
+                )) => break,
+                Err(error) => panic!("{error:?}"),
+            }
+            let at = direct.last_frame().unwrap().timestamp_s as f32;
+            for decision in direct.journal_body()["decisions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                journaled.push((
+                    at,
+                    decision["kind"].as_str().unwrap().to_string(),
+                    decision["reason"].as_str().unwrap().to_string(),
+                    decision["status"].as_str().unwrap().to_string(),
+                ));
+            }
+        }
+        let shown: Vec<_> = decisions
+            .iter()
+            .map(|d| {
+                (
+                    d.timestamp_s,
+                    d.kind.clone(),
+                    d.reason.clone(),
+                    d.status.clone(),
+                )
+            })
+            .collect();
+        assert!(
+            shown.iter().any(|(_, kind, _, _)| kind == "poi_assignment"),
+            "the scan run assigns its POIs"
+        );
+        assert_eq!(shown, journaled);
+    }
+
+    /// P5.2: *Branch here* from a reviewed frame seeks the run back. The
+    /// viewer keeps the frames before it and begins a new epoch, and running
+    /// on gives exactly the straight run's frames from there.
+    #[test]
+    fn branching_from_a_reviewed_frame_keeps_the_frames_before_it() {
+        let mut session = SimSession::start(
+            fixture("scenario_bundle_tt.json"),
+            RunOptions::default(),
+            Pacing::Unpaced,
+        );
+        let mut replay = ReplayState::new(None);
+        wait(&mut session, &mut replay, |s, _| {
+            s.status().phase == WorkerPhase::Paused
+        });
+        session.send("Run", CommandKind::Resume).expect("sent");
+        wait(&mut session, &mut replay, |s, _| {
+            s.status().phase == WorkerPhase::Completed
+        });
+        session.take_frames(&mut replay);
+        let shown = |replay: &ReplayState| -> Vec<String> {
+            replay
+                .document
+                .as_ref()
+                .unwrap()
+                .frames
+                .iter()
+                .map(|frame| {
+                    // The metrics' maps are hashed: compare them sorted.
+                    let mut frame = frame.clone();
+                    let rejections: std::collections::BTreeMap<_, _> =
+                        frame.metrics.rejection_counts.drain().collect();
+                    let errors: Vec<_> = {
+                        let mut errors: Vec<_> = frame.metrics.track_errors_m.drain().collect();
+                        errors.sort_by(|a, b| a.0.cmp(&b.0));
+                        errors
+                    };
+                    format!("{frame:?} {rejections:?} {errors:?}")
+                })
+                .collect()
+        };
+        let straight = shown(&replay);
+        assert_eq!(straight.len(), 80);
+        let epoch = replay.epoch();
+
+        let status = session.status();
+        assert!(
+            branch_target(&status, 79, 80).is_err(),
+            "at the newest frame"
+        );
+        replay.step_to(29);
+        let tick = branch_target(&status, replay.frame_index, replay.frame_count()).unwrap();
+        assert_eq!(tick, 30);
+        session
+            .send("Branch here", CommandKind::Seek { tick })
+            .expect("sent");
+        wait(&mut session, &mut replay, |s, _| {
+            !s.is_pending("Branch here")
+        });
+        session.take_frames(&mut replay);
+        assert!(session.notice().is_none(), "{:?}", session.notice());
+        assert_eq!(replay.frame_count(), 30);
+        assert!(replay.epoch() > epoch, "a branch is a new epoch");
+        assert_eq!(session.status().phase, WorkerPhase::Paused);
+
+        session.send("Run", CommandKind::Resume).expect("sent");
+        wait(&mut session, &mut replay, |s, _| {
+            s.status().phase == WorkerPhase::Completed
+        });
+        session.take_frames(&mut replay);
+        let rerun = shown(&replay);
+        let first_diff = rerun.iter().zip(&straight).position(|(a, b)| a != b);
+        assert!(
+            rerun == straight,
+            "the branch reruns the same history: {} vs {} frames, first difference at {first_diff:?}",
+            rerun.len(),
+            straight.len()
+        );
     }
 
     /// The session's frames are the run's, in order, and a control stays

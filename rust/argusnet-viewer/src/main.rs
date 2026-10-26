@@ -121,11 +121,13 @@ struct Args {
 /// timestamped delivery (B4) and scheduled faults (F2).
 #[derive(clap::Args, Debug)]
 struct RunOptionArgs {
-    /// `legacy` charges motion only; `physical_v1` also charges hover power.
-    #[arg(long, value_parser = ["legacy", "physical_v1"], default_value = "legacy", requires = "run")]
+    /// `legacy` charges motion only; `physical_v1` also charges hover power;
+    /// `flown_v1` charges that on the flown position (F5).
+    #[arg(long, value_parser = ["legacy", "physical_v1", "flown_v1"], default_value = "legacy", requires = "run")]
     energy_profile: String,
-    /// Who allocates the mission's POIs (P1): `reference` or `efficient_v1`.
-    #[arg(long, value_parser = ["reference", "efficient_v1"], default_value = "reference", requires = "run")]
+    /// Who allocates the mission's POIs (P1): `reference`, `efficient_v1`,
+    /// or `contingency_v1` (F5).
+    #[arg(long, value_parser = ["reference", "efficient_v1", "contingency_v1"], default_value = "reference", requires = "run")]
     planning_policy: String,
     /// Fuse the evidence acquired this many seconds ago (B4). Omit for the
     /// legacy same-tick path.
@@ -175,10 +177,12 @@ impl RunOptionArgs {
         Ok(RunOptions {
             energy_profile: match self.energy_profile.as_str() {
                 "physical_v1" => argusnet_sim::run_options::EnergyProfile::PhysicalV1,
+                "flown_v1" => argusnet_sim::run_options::EnergyProfile::FlownV1,
                 _ => argusnet_sim::run_options::EnergyProfile::Legacy,
             },
             planning_policy: match self.planning_policy.as_str() {
                 "efficient_v1" => argusnet_sim::run_options::PlanningPolicy::EfficientV1,
+                "contingency_v1" => argusnet_sim::run_options::PlanningPolicy::ContingencyV1,
                 _ => argusnet_sim::run_options::PlanningPolicy::Reference,
             },
             delivery: self.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {

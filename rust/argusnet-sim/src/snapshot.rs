@@ -128,6 +128,9 @@ impl CheckpointHeader {
     /// refuses it instead of resuming without them. Every other checkpoint
     /// stays format 4.
     pub const FORMAT_VERSION_STAGE_LAG: u32 = 5;
+    /// Guarded controller sampling sweeps from the last committed pose.
+    /// Preserve that causal input, including when lanes have their own rates.
+    pub const FORMAT_VERSION_COMMITTED_PLATFORMS: u32 = 6;
     /// Version 2 changes command-boundary recovery and single-step semantics.
     /// Old checkpoints must not silently resume under a different control contract.
     pub const RUNTIME_ALGORITHM_VERSION: u32 = 2;
@@ -279,6 +282,10 @@ pub struct SimulationCheckpoint {
     /// lane runs every boundary.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub lane_rates: std::collections::BTreeMap<String, String>,
+    /// Causal input to swept collision checks, not a presentation snapshot.
+    /// Only guarded runs write this, under format 6 so older readers refuse it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed_platforms: Option<Vec<NodeState>>,
 }
 
 impl SimulationCheckpoint {
@@ -289,13 +296,16 @@ impl SimulationCheckpoint {
         config_hash: u64,
         scenario_hash: u64,
     ) -> Result<(), RestoreError> {
-        let expected = if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
+        let expected = if self.committed_platforms.is_some() {
+            CheckpointHeader::FORMAT_VERSION_COMMITTED_PLATFORMS
+        } else if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
             CheckpointHeader::FORMAT_VERSION
         } else {
             CheckpointHeader::FORMAT_VERSION_STAGE_LAG
         };
         let readable = self.header.format_version == expected
             || (self.header.format_version == CheckpointHeader::FORMAT_VERSION_STAGE_LAG
+                && self.committed_platforms.is_none()
                 && self.stage_lag.is_empty()
                 && self.lane_rates.is_empty());
         if !readable {
@@ -481,6 +491,7 @@ mod tests {
             stage_states: Default::default(),
             stage_lag: Default::default(),
             lane_rates: Default::default(),
+            committed_platforms: None,
         }
     }
 

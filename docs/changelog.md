@@ -2,6 +2,132 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Physical guard sweeps structures (`--world-knowledge none` runs only).
+  `PhysicalGuard::enforce_from` now sweeps each step against the true
+  buildings and walls as well as the wires. A step longer than a wall is
+  thick used to pass through it with no contact recorded; it now stops 1 cm
+  short of the near face and records a `structure` contact. A platform flying
+  at a wall therefore never ends a tick beyond it, where `enforce` alone
+  could push it out of the far face. No-prior runs that met a structure
+  record more contacts and end some ticks at different positions. So can a
+  prior-map run with a non-reference deconfliction policy, whose guard
+  sweeps each lateral push the same way. Other prior-map runs have no guard
+  and are unchanged (14/14 replay hashes).
+
+- Viewer: the Review workspace is available (S1.2). It reads the assurance
+  report a client package annotates into its replay:
+  - the status and the F1 outcome;
+  - the outcome's reasons as findings, each jumping to the first frame it
+    rests on;
+  - objectives, each jumping to its frame;
+  - completion and the lowest recorded energy;
+  - recorded events;
+  - every field the report states it cannot support.
+
+  A replay without a report, or with one that fails its checks, says so
+  and how to make one. Plan keeps its placeholder until its own contracts.
+
+- S1 contracts (S1.1): versioned JSON Schemas in `docs/contracts/` for
+  site, mission, platform, localization, spatial revision, trajectory,
+  safety, evidence, reconstruction, finding, change and report records.
+  - **Envelope:** every record shares the VIEWER_UI 10.2 identity keys and
+    a JSON pointer to its source.
+  - **Unavailable:** what the replay cannot support is explicit.
+  - **Packages:** the client package now carries `records/index.json` and
+    one `records/<kind>.json` per recorded kind. Reconstruction and change
+    are listed as unavailable, with reasons.
+
+- Energy contingencies (F5, first slice). `--planning-policy contingency_v1`
+  hands a POI on when its drone can no longer afford the dwell left and the
+  trip home, rather than at a fixed 30 %. It takes new work only with a 5 %
+  margin above the reserve, so work just taken is not dropped. A POI no drone
+  can afford is reported unassigned (`unassigned_reason` in the replay, cited
+  by the F1 outcome) instead of holding the mission open. Under both
+  efficient policies, the mission's egress clear no longer cancels a drone's
+  own reserve return. See `docs/migration/ENERGY_CONTINGENCIES.md`.
+- Energy charged on the flown position (F5). `--energy-profile flown_v1`
+  charges motion and hover on where each platform actually flew (after
+  overrides, deconfliction and safety), at the commit of each tick. Under the other
+  profiles, a drone held at home by an override is still billed for the
+  lanes its controller would fly.
+
+- Calibration drift faults (F2). A fault manifest can drift a sensor's bearing
+  calibration (`calibration_drift`, `rate_rad_per_s` over an interval, held
+  afterwards). Every replay frame of a faulted run names the faults in force
+  (`active_faults`) and each sensor's drift offset (`sensor_bias_offsets_rad`).
+
+- Mapped wires in the replay and the viewer (R3). A run that maps the world
+  for itself records each power-line span its map gains (`mapped_wires`, a
+  frame field). The viewer draws the spans known at the cursor in cyan, with
+  a Mapped Wires toggle. The true lines stay hidden in a self-built view.
+- Decisions in the platform inspector (F3). In a viewer `--run`, selecting a
+  drone shows the mission's decisions about it up to the cursor (assignments,
+  handoffs, returns home): how many, the last, and why. A replay shows them
+  as unavailable: decisions are journaled, not recorded in replays.
+
+- Reserve in the replay and the platform inspector (F5). Under a physical
+  energy profile, each frame records every platform's remaining energy and
+  the reserve it needs to get home (`energy_reserves`). The inspector's
+  Reserve row shows the margin above it, or the shortfall below it.
+  Legacy replays are unchanged.
+- Viewer: one belief/truth switch and a scale bar (console parity V3). The
+  Mission drawer opens with *World: Drones' map | True world*, which sets
+  every truth-bearing layer at once. Truth is refused in live operation.
+  The status line shows a scale bar at the camera's focus.
+- Viewer: timing in Diagnostics (console parity V4). The execution model,
+  lane and sensor rates, the delivery profile and totals, and the speed asked
+  for against the speed achieved. What a replay did not record reads as
+  unavailable.
+- Viewer: allocation lines (console parity V4, P1). A line from each drone
+  to the POI it holds, brighter while it dwells there, with a Mission-overlays
+  toggle.
+- Viewer: branch a running simulation from the past (P5.2). The in-process
+  run keeps a bounded checkpoint history. *Branch here* seeks back to the
+  frame under the cursor, keeps the frames before it, and holds the run
+  there, on a new epoch. Running on reproduces the original history exactly.
+
+- Quality requirements and deficit-driven mapping (SR5a, SR5b first
+  slice). `--quality-requirements FILE` in a `--world-knowledge none` run
+  declares what each map cell must reach: density, vertical sigma, age and
+  incidence limit, with a declared bias.
+  - The map keeps each cell's accepted evidence and reports why it falls
+    short: unseen, too oblique, sparse, stale, or bias-limited (unreachable).
+  - Explorers go where flying can still fix a deficit.
+  - The scan gate reads the resolved share. Unreachable cells never hold the
+    scan open and are never counted as met.
+
+  The replay records `mapping_state.belief.quality`, and the scan decision
+  names the unreachable cells. Runs without the flag are unchanged. See
+  `docs/migration/QUALITY_DEFICITS.md`.
+- Sensor rig and moving pod (SR1, SR2). `--rig-profile provisional|FILE` in
+  a `--world-knowledge none` run flies a declared rig.
+  - The rig is validated before the run, against both mass limits, and
+    recorded with its identity.
+  - The pod's fixed rectangular LiDAR maps from a 3-axis gimbal with no joint
+    limits: slew, settle, airframe occlusion, and truth vs estimated pose, so
+    boresight bias shows in the map.
+  - `--pointing nadir|sweep:A:P|body:Y,P,R`. The pod stows below cruise, and
+    stowed or unsettled captures are refused by the map.
+  - Every controller flies low enough for the LiDAR's furthest ray to reach
+    the ground.
+
+  Also fixed: stage 2's POI and egress overrides could leave a platform below
+  the true ground in a no-prior run. Runs without a rig are unchanged. See
+  `docs/migration/RIG_AND_POD.md`.
+- Forward navigation camera as the primary obstacle-avoidance sensor (SR5c,
+  first slice). `--nav-camera` in a `--world-knowledge none` run (or
+  `--nav-camera-profile FILE`) adds a body-fixed camera:
+  - its structure detections become safety obstacles the planners avoid, and
+    never count as mapped ground or structure;
+  - every controller is capped to the speed that stops short within its
+    detection range, which fog shortens;
+  - the range scanner drops its forward fan.
+
+  The replay records the profile and the envelope in `meta.world_knowledge`,
+  and the camera's frames in `range_scans` with `sensor: "nav_camera"` (drawn
+  green in the viewer). Runs without the flag are unchanged. See
+  `docs/migration/NAV_CAMERA_SAFETY.md`; the planner integration it starts is
+  §8 of `docs/SENSING_REALISM_IMPLEMENTATION_GUIDE.md`.
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;
@@ -24,6 +150,18 @@
   nothing is invented. Roads run through forests, buildings stay urban,
   trees grow only in mapped forests, and the procedural walls and forest
   stands are dropped. Every real layer must share one origin.
+- The canonical real-world scenario (R5): West Pleasant View, Colorado,
+  from a committed USGS 3DEP DEM and OSM extract with attribution
+  (tests/fixtures/real/west_pleasant_view). Its import and run are pinned
+  by recorded counts, and the realism render fixtures include it.
+  `import_world` reads Overpass answers directly.
+- Viewer: building facades share one material per baked material instead
+  of one per part. A real town's ~600 buildings fell from p95 21 ms to
+  4 ms, pixel-identical.
+- A real place in one step (R5). `scripts/import_world.py` turns a DEM and
+  one OSM extract into a runnable world folder: every layer around one
+  origin, a scenario config, and a manifest with a content-hashed
+  `world_id`. Optionally it also runs the scenario and packages the scene.
 - Mapped trees and power lines (R5). The features document carries OSM
   trees (points and tree rows) and power lines, with their tagged sizes,
   tower heights, cables and voltage. The run stands them on its ground in

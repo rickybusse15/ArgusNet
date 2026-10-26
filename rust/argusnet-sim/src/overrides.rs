@@ -506,6 +506,12 @@ impl MissionOverrideStage {
         self.state.rejoin_speed_mps = Some(speed_mps.max(f64::EPSILON));
     }
 
+    /// Rejoin no faster than `speed_mps`.
+    pub fn cap_rejoin_speed(&mut self, speed_mps: f64) {
+        let current = self.state.rejoin_speed_mps.unwrap_or(REDIRECT_SPEED_MPS);
+        self.set_rejoin_speed(current.min(speed_mps));
+    }
+
     pub fn rejoining_at(&self, node_id: &str) -> Option<[f64; 3]> {
         self.state.rejoining.get(node_id).copied()
     }
@@ -999,13 +1005,17 @@ impl StageHandler for MissionOverrideStage {
             };
             // Cloned out of the table so the borrow ends before `applied` is
             // written; the tables are one entry per platform, so this is small.
-            let sampled: Vec<(String, [f64; 3], [f64; 3])> = table
+            let mut sampled: Vec<(String, [f64; 3], [f64; 3])> = table
                 .iter()
                 .map(|(node_id, trajectory)| {
                     let (position, velocity) = trajectory.sample(timestamp_s);
                     (node_id.clone(), position, velocity)
                 })
                 .collect();
+            // In node order: each platform's position is its own, but the
+            // guard records contacts as it goes, and their order is in the
+            // replay.
+            sampled.sort_by(|a, b| a.0.cmp(&b.0));
             for (node_id, position, velocity) in sampled {
                 let Some(platform) = context.world.platform_mut(&node_id) else {
                     // The reference iterates `node_states` and looks the
@@ -1013,6 +1023,19 @@ impl StageHandler for MissionOverrideStage {
                     // the world is simply never read. Dropping it here is the
                     // same behaviour, not a swallowed error.
                     continue;
+                };
+                // Physics holds an overridden platform where it can be: a
+                // mission flight planned over the believed ground can run into
+                // the true ground, a structure or a wire, and the guard puts
+                // it back and records the contact. Only a position that is
+                // somewhere a platform cannot be is corrected, so a landing
+                // within the clearance stays a landing. Only a run without a
+                // prior map has a guard.
+                let position = match shared.guard.as_ref() {
+                    Some(guard) if guard.violates(position) => {
+                        guard.enforce(&node_id, timestamp_s, position)
+                    }
+                    _ => position,
                 };
                 platform.position = Vector3::new(position[0], position[1], position[2]);
                 platform.velocity = Vector3::new(velocity[0], velocity[1], velocity[2]);

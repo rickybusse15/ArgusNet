@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/finding.schema.json",
+  "title": "S1 finding record (argusnet.finding/v1)",
+  "description": "One attributable finding about the run: a reason for its outcome, with the frames and events it rests on.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "code",
+        "detail",
+        "severity",
+        "evidence_count",
+        "evidence"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.finding/v1"
+        },
+        "code": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "evidence_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

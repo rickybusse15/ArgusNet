@@ -35,6 +35,24 @@ use argusnet_sim::snapshot::SimulationCheckpoint;
 use clap::{Parser, Subcommand};
 use rundir::{Recorder, RunDir};
 
+/// Largest replay, scenario, or checkpoint this binary will read.
+/// Matches `argusnet_replay::MAX_DOCUMENT_BYTES`.
+const MAX_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_text_limited(path: &std::path::Path) -> std::io::Result<String> {
+    let len = std::fs::metadata(path)?.len();
+    if len > MAX_DOCUMENT_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is {len} bytes, over the {MAX_DOCUMENT_BYTES} byte limit",
+                path.display()
+            ),
+        ));
+    }
+    std::fs::read_to_string(path)
+}
+
 #[derive(Parser)]
 #[command(
     name = "argusnet-rs",
@@ -201,6 +219,39 @@ struct SimArgs {
     /// Recorded in the replay's `meta.world_knowledge.exploration`.
     #[arg(long)]
     wire_prior: bool,
+    /// In a `--world-knowledge none` run, what each cell of the map must
+    /// reach (SR5a), as JSON (`QualityRequirement`: density, vertical sigma,
+    /// age, incidence limit, declared bias). The map then reports why each
+    /// cell falls short, explorers go where flying can still fix it, and the
+    /// scan phase ends on the share of reachable cells that meet it.
+    /// Recorded in the replay's `meta.world_knowledge.exploration.quality`.
+    #[arg(long)]
+    quality_requirements: Option<PathBuf>,
+    /// In a `--world-knowledge none` run, fly with a forward navigation
+    /// camera as the primary obstacle-avoidance sensor (SR5c): its
+    /// detections become safety obstacles, every controller is capped to the
+    /// speed its detection envelope allows, and the range scanner drops its
+    /// forward fan (it maps; it no longer looks ahead). Recorded in the
+    /// replay's `meta.world_knowledge` with the envelope.
+    #[arg(long)]
+    nav_camera: bool,
+    /// The navigation camera's profile as JSON (`NavCameraConfig`), instead
+    /// of the assumed default. Implies `--nav-camera`.
+    #[arg(long)]
+    nav_camera_profile: Option<PathBuf>,
+    /// In a `--world-knowledge none` run, fly a declared sensor rig (SR1):
+    /// `provisional` for the built-in assumed rig, or a `RigProfile` JSON
+    /// file. The pod's LiDAR maps from a 3-axis gimbal in place of the
+    /// legacy scanner, and the rig's navigation camera is the avoidance
+    /// sensor (so `--nav-camera` is refused with it). Recorded in the
+    /// replay's `meta.world_knowledge` with the rig's identity and mass.
+    #[arg(long)]
+    rig_profile: Option<String>,
+    /// What the pod holds while mapping, with `--rig-profile`: `nadir` (the
+    /// default), `sweep:AMPLITUDE_DEG:PERIOD_S` (rolled side to side about
+    /// the track) or `body:YAW,PITCH,ROLL` (fixed in the body, degrees).
+    #[arg(long)]
+    pointing: Option<String>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -209,13 +260,18 @@ struct SimArgs {
     export_scene: Option<PathBuf>,
     /// How battery energy is charged (D-3): `legacy` charges motion only, as
     /// the reference does; `physical_v1` also charges hover power for the part
-    /// of each tick not spent moving.
+    /// of each tick not spent moving; `flown_v1` charges the same on where
+    /// each platform actually flew (after overrides, deconfliction and
+    /// safety), charged as each tick commits, not on its controller's nominal position (F5).
     #[arg(long, value_enum, default_value = "legacy")]
     energy_profile: EnergyProfileArg,
     /// Who allocates the mission's POIs (P1): `reference` is the reference's
     /// greedy, fleet-order assignment; `efficient_v1` assigns every free drone
     /// against every pending POI at once, on trip and dwell energy within the
-    /// reserve home. Recorded in the replay's `meta.planning_policy`.
+    /// reserve home; `contingency_v1` is `efficient_v1` that hands work on
+    /// when a drone can no longer afford to finish it and fly home, takes
+    /// new work only with a margin, and reports a POI no drone can afford as
+    /// unassigned (F5). Recorded in the replay's `meta.planning_policy`.
     #[arg(long, value_enum, default_value = "reference")]
     planning_policy: PlanningPolicyArg,
     /// Model timestamped delivery (B4): fusion ingests the evidence acquired
@@ -312,6 +368,8 @@ enum EnergyProfileArg {
     Legacy,
     #[value(name = "physical_v1")]
     PhysicalV1,
+    #[value(name = "flown_v1")]
+    FlownV1,
 }
 
 /// `--planning-policy`'s values (P1).
@@ -320,16 +378,88 @@ enum PlanningPolicyArg {
     Reference,
     #[value(name = "efficient_v1")]
     EfficientV1,
+    #[value(name = "contingency_v1")]
+    ContingencyV1,
+}
+
+/// `--pointing`'s value.
+fn parse_pointing(text: &str) -> Result<argusnet_sim::pod::PointingPolicy, String> {
+    use argusnet_sim::pod::PointingPolicy;
+    let number = |part: &str| {
+        part.trim()
+            .parse::<f64>()
+            .map_err(|_| format!("--pointing: {part:?} is not a number"))
+    };
+    match text.split_once(':') {
+        None if text == "nadir" => Ok(PointingPolicy::Nadir),
+        Some(("sweep", rest)) => {
+            let (amplitude, period) = rest
+                .split_once(':')
+                .ok_or("--pointing sweep needs sweep:AMPLITUDE_DEG:PERIOD_S")?;
+            Ok(PointingPolicy::CrossTrackSweep {
+                amplitude_deg: number(amplitude)?,
+                period_s: number(period)?,
+            })
+        }
+        Some(("body", rest)) => {
+            let parts: Vec<&str> = rest.split(',').collect();
+            if parts.len() != 3 {
+                return Err("--pointing body needs body:YAW,PITCH,ROLL".into());
+            }
+            Ok(PointingPolicy::BodyFixed {
+                ypr_deg: [number(parts[0])?, number(parts[1])?, number(parts[2])?],
+            })
+        }
+        _ => Err(format!(
+            "--pointing {text:?}: expected nadir, sweep:AMPLITUDE_DEG:PERIOD_S or body:YAW,PITCH,ROLL"
+        )),
+    }
 }
 
 /// The energy profile, delivery and faults the flags ask for, applied by
 /// the same code as the viewer's in-process run.
 fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, String> {
     use argusnet_sim::run_options::{DeliverySeconds, RunOptions};
+    let quality = args
+        .quality_requirements
+        .as_ref()
+        .map(|path| {
+            let text =
+                read_text_limited(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            serde_json::from_str::<argusnet_mapping::quality::QualityRequirement>(&text)
+                .map_err(|error| format!("{}: {error}", path.display()))
+        })
+        .transpose()?;
+    let nav_camera = match &args.nav_camera_profile {
+        Some(path) => {
+            let text =
+                read_text_limited(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let config: argusnet_sim::nav_camera::NavCameraConfig = serde_json::from_str(&text)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            Some(config)
+        }
+        None => args
+            .nav_camera
+            .then(argusnet_sim::nav_camera::NavCameraConfig::default),
+    };
+    let rig = args
+        .rig_profile
+        .as_deref()
+        .map(|source| -> Result<argusnet_sim::rig::RigProfile, String> {
+            if source == "provisional" {
+                return Ok(argusnet_sim::rig::RigProfile::provisional());
+            }
+            let text = read_text_limited(std::path::Path::new(source))
+                .map_err(|error| format!("{source}: {error}"))?;
+            serde_json::from_str(&text).map_err(|error| format!("{source}: {error}"))
+        })
+        .transpose()?;
+    let pointing = args.pointing.as_deref().map(parse_pointing).transpose()?;
     Ok(RunOptions {
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
             EnergyProfileArg::PhysicalV1 => argusnet_planning::battery::EnergyProfile::PhysicalV1,
+            EnergyProfileArg::FlownV1 => argusnet_planning::battery::EnergyProfile::FlownV1,
         },
         planning_policy: match args.planning_policy {
             PlanningPolicyArg::Reference => {
@@ -337,6 +467,9 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             }
             PlanningPolicyArg::EfficientV1 => {
                 argusnet_planning::allocation::PlanningPolicy::EfficientV1
+            }
+            PlanningPolicyArg::ContingencyV1 => {
+                argusnet_planning::allocation::PlanningPolicy::ContingencyV1
             }
         },
         delivery: args.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {
@@ -355,27 +488,43 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             WorldKnowledgeArg::Prior => argusnet_sim::belief_world::WorldKnowledge::Prior,
             WorldKnowledgeArg::None => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
         },
-        exploration: (args.pursuit.is_some() || args.explore.is_some() || args.wire_prior).then(
-            || {
-                let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
-                argusnet_sim::belief_world::ExplorationConfig {
-                    pursuit: match args.pursuit {
-                        Some(PursuitArg::Tracks) => {
-                            argusnet_sim::belief_world::PursuitSource::Tracks
-                        }
-                        Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
-                        None => defaults.pursuit,
-                    },
-                    explore: match args.explore {
-                        Some(ExploreArg::Frontier) => true,
-                        Some(ExploreArg::Lanes) => false,
-                        None => defaults.explore,
-                    },
-                    wire_prior: args.wire_prior,
-                    ..defaults
+        exploration: (args.pursuit.is_some()
+            || args.explore.is_some()
+            || args.wire_prior
+            || nav_camera.is_some()
+            || rig.is_some()
+            || quality.is_some())
+        .then(|| {
+            let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
+            let scan = if nav_camera.is_some() {
+                // The camera looks ahead; the scanner only maps.
+                argusnet_sim::range_scan::RangeScanConfig {
+                    forward_count: 0,
+                    ..defaults.scan.clone()
                 }
-            },
-        ),
+            } else {
+                defaults.scan.clone()
+            };
+            argusnet_sim::belief_world::ExplorationConfig {
+                scan,
+                nav_camera: nav_camera.clone(),
+                rig: rig.clone(),
+                pointing: pointing.clone(),
+                pursuit: match args.pursuit {
+                    Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
+                    Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
+                    None => defaults.pursuit,
+                },
+                explore: match args.explore {
+                    Some(ExploreArg::Frontier) => true,
+                    Some(ExploreArg::Lanes) => false,
+                    None => defaults.explore,
+                },
+                wire_prior: args.wire_prior,
+                quality: quality.clone(),
+                ..defaults
+            }
+        }),
         // Resolved by `sim`: a recovered run takes it from its run directory.
         lane_rates: argusnet_sim::scheduler::LaneRates::default(),
         sensor_rates: RunOptions::sensor_rate_table(&args.sensor_rate)?,
@@ -435,7 +584,7 @@ fn tick_summary(sorted_ms: &[f64]) -> serde_json::Value {
 
 /// Read and build a config, mapping the builder's errors to exit codes.
 fn built_bundle(path: &std::path::Path) -> Result<serde_json::Value, ExitCode> {
-    let text = std::fs::read_to_string(path)
+    let text = read_text_limited(path)
         .map_err(|error| fail(EXIT_INVALID, format!("{}: {error}", path.display())))?;
     let config = ScenarioConfig::from_json(&text).map_err(|error| fail(EXIT_INVALID, error))?;
     builder::build_bundle(&config).map_err(|error| match error {
@@ -466,7 +615,7 @@ fn fuse(args: FuseArgs) -> ExitCode {
     use prost::Message;
 
     let run = || -> Result<Vec<String>, String> {
-        let text = std::fs::read_to_string(&args.capture).map_err(|e| e.to_string())?;
+        let text = read_text_limited(&args.capture).map_err(|e| e.to_string())?;
         let capture: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let tracker = pb::TrackerConfig::decode(
             hex_decode(capture["tracker"].as_str().ok_or("no tracker")?)?.as_slice(),
@@ -590,6 +739,34 @@ fn sim(args: SimArgs) -> ExitCode {
              a prior run knows them already",
         );
     }
+    if (args.rig_profile.is_some() || args.pointing.is_some())
+        && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
+    {
+        return fail(
+            EXIT_INVALID,
+            "--rig-profile and --pointing fly a sensor rig in a --world-knowledge none run",
+        );
+    }
+    if args.pointing.is_some() && args.rig_profile.is_none() {
+        return fail(
+            EXIT_INVALID,
+            "--pointing needs --rig-profile: it points the rig's pod",
+        );
+    }
+    if args.rig_profile.is_some() && (args.nav_camera || args.nav_camera_profile.is_some()) {
+        return fail(
+            EXIT_INVALID,
+            "--rig-profile carries the navigation camera; drop --nav-camera",
+        );
+    }
+    if (args.quality_requirements.is_some() || args.nav_camera || args.nav_camera_profile.is_some())
+        && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
+    {
+        return fail(
+            EXIT_INVALID,
+            "--quality-requirements and --nav-camera need --world-knowledge none",
+        );
+    }
     if let Some(dir) = &args.export_scene {
         if matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
             return fail(
@@ -609,14 +786,14 @@ fn sim(args: SimArgs) -> ExitCode {
     }
     let mut resolved_config = None;
     let text = match (&args.bundle, &args.config) {
-        (Some(path), _) => match std::fs::read_to_string(path) {
+        (Some(path), _) => match read_text_limited(path) {
             Ok(text) => text,
             Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
         },
         (None, Some(path)) => match built_bundle(path) {
             Ok(bundle) => {
                 // Every option, defaults filled in: what was actually built.
-                resolved_config = std::fs::read_to_string(path)
+                resolved_config = read_text_limited(path)
                     .ok()
                     .and_then(|text| ScenarioConfig::from_json(&text).ok())
                     .and_then(|config| serde_json::to_value(config).ok());
@@ -751,7 +928,7 @@ fn sim(args: SimArgs) -> ExitCode {
         }),
     )]);
     if let Some(path) = &args.resume {
-        let checkpoint: SimulationCheckpoint = match std::fs::read_to_string(path)
+        let checkpoint: SimulationCheckpoint = match read_text_limited(path)
             .map_err(|error| error.to_string())
             .and_then(|text| serde_json::from_str(&text).map_err(|error| error.to_string()))
         {
@@ -1053,7 +1230,7 @@ fn stage_table(
 }
 
 fn build_scene(args: BuildSceneArgs) -> ExitCode {
-    let text = match std::fs::read_to_string(&args.replay) {
+    let text = match read_text_limited(&args.replay) {
         Ok(text) => text,
         Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", args.replay.display())),
     };

@@ -37,6 +37,13 @@ class TestLoopbackDetection(unittest.TestCase):
         for endpoint in ("10.0.0.5:50051", "example.com:50051", "0.0.0.0:50051"):
             self.assertFalse(is_loopback_endpoint(endpoint), endpoint)
 
+    def test_userinfo_cannot_disguise_a_remote_host_as_loopback(self):
+        # URL parsers treat this as userinfo "127.0.0.1:80" and host evil.example.
+        self.assertFalse(is_loopback_endpoint("127.0.0.1:80@evil.example:443"))
+        self.assertFalse(is_loopback_endpoint("http://127.0.0.1:80@evil.example:443/WorldModel"))
+        self.assertTrue(is_loopback_endpoint("operator@127.0.0.1:50051"))
+        self.assertTrue(is_loopback_endpoint("http://127.0.0.1:50051"))
+
 
 class TestGrpcClientRefusesPlaintextOffLoopback(unittest.TestCase):
     def test_non_loopback_without_tls_raises(self):

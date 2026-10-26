@@ -79,6 +79,16 @@ impl FrontierExplorer {
         &self.lane
     }
 
+    /// Explore, and fall back to the lane, no higher than `agl_m`.
+    pub fn cap_agl(&mut self, agl_m: f64) {
+        self.lane = self.lane.clone().with_agl_cap(agl_m);
+    }
+
+    /// Explore, and fall back to the lane, no faster than `speed_mps`.
+    pub fn cap_speed(&mut self, speed_mps: f64) {
+        self.lane = self.lane.clone().with_speed_cap(speed_mps);
+    }
+
     pub fn state(&self) -> &ExplorerState {
         &self.state
     }
@@ -157,11 +167,11 @@ impl FrontierExplorer {
             Some(_) if state.on_lane => true,
             Some(goal) => {
                 (goal[0] - xy[0]).hypot(goal[1] - xy[1]) < arrival_m
-                    || !belief.is_unexplored(goal[0], goal[1], UNEXPLORED_SHARE)
+                    || !belief.needs_work(goal[0], goal[1], UNEXPLORED_SHARE)
             }
         };
         if needs_goal {
-            let frontier = frontier.get_or_init(|| belief.unexplored_centres(UNEXPLORED_SHARE));
+            let frontier = frontier.get_or_init(|| belief.work_centres(UNEXPLORED_SHARE));
             match Self::choose_goal(frontier, xy, claims) {
                 Some(goal) => {
                     state.goal_m = Some(goal);
@@ -212,10 +222,7 @@ impl FrontierExplorer {
     }
 
     fn lane_speed_mps(&self) -> f64 {
-        self.lane
-            .config()
-            .speed_mps
-            .max(LoopedWaypointPath::MIN_SPEED_MPS)
+        self.lane.speed_mps()
     }
 }
 
@@ -275,6 +282,8 @@ mod tests {
                 returns,
                 misses: 0,
                 wires: Vec::new(),
+                sensor: Default::default(),
+                pod: None,
             },
             1,
         );

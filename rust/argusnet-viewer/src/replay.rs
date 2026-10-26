@@ -87,6 +87,35 @@ pub struct ReplayState {
     trimmed_before_s: Option<f32>,
     /// Which run the frames belong to. See [`Self::epoch`].
     epoch: u64,
+    /// The mission's decisions (F3), when the source reports them: an
+    /// in-process run does, in tick order. `None` for a replay, which never
+    /// records them (they are journaled), so the inspector says so.
+    pub decisions: Option<Vec<RecordedDecision>>,
+}
+
+/// One mission decision (F3) as an in-process run reported it, stamped with
+/// its tick's time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedDecision {
+    pub timestamp_s: f32,
+    pub kind: String,
+    /// `applied`, `queued_for_next_tick` or `rejected`.
+    pub status: String,
+    pub reason: String,
+    /// The platform it is about.
+    pub subject: Option<String>,
+    /// What it chose: a POI, a receiving drone, a phase.
+    pub selected: Option<String>,
+    pub detail: String,
+}
+
+impl ReplayState {
+    /// Record a tick's decisions, if this state takes them.
+    pub fn push_decisions(&mut self, decisions: impl IntoIterator<Item = RecordedDecision>) {
+        if let Some(log) = self.decisions.as_mut() {
+            log.extend(decisions);
+        }
+    }
 }
 
 impl Default for ReplayState {
@@ -101,6 +130,7 @@ impl Default for ReplayState {
             time_s: 0.0,
             trimmed_before_s: None,
             epoch: 0,
+            decisions: None,
         }
     }
 }
@@ -139,8 +169,35 @@ impl ReplayState {
     pub fn begin_epoch(&mut self, document: Option<ReplayDocument>) {
         self.document = document;
         self.trimmed_before_s = None;
+        // Another run's decisions are not this one's; a source that reports
+        // them keeps reporting them.
+        if let Some(log) = self.decisions.as_mut() {
+            log.clear();
+        }
         self.epoch += 1;
         self.step_to(0);
+    }
+
+    /// A seek branched the run (P5.2): keep the first `keep` frames, which
+    /// the branch shares with the history it left, drop the rest, and begin a
+    /// new epoch, so what was presented from the abandoned branch is not
+    /// carried into this one. The cursor stays where it was, within the kept
+    /// frames.
+    pub fn branch(&mut self, keep: usize) {
+        if let Some(document) = self.document.as_mut() {
+            document.frames.truncate(keep);
+        }
+        let last_time = self
+            .document
+            .as_ref()
+            .and_then(|document| document.frames.last())
+            .map(|frame| frame.timestamp_s);
+        if let Some(log) = self.decisions.as_mut() {
+            log.retain(|decision| last_time.is_some_and(|time| decision.timestamp_s <= time));
+        }
+        self.trimmed_before_s = None;
+        self.epoch += 1;
+        self.step_to(self.frame_index);
     }
 
     /// Carry `previous`'s epoch forward, to one after it. For a state built
@@ -425,6 +482,38 @@ mod replay_state_tests {
     use serde_json::json;
 
     use super::{MarkerKind, ReplayDocument, ReplayState, DEFAULT_MAX_STALE_STEPS};
+
+    #[test]
+    fn a_branch_discards_decisions_from_the_abandoned_future() {
+        let mut replay = timed(&[0.0, 1.0, 2.0], &[]);
+        replay.decisions = Some(
+            [0.0, 1.0, 2.0]
+                .into_iter()
+                .map(|timestamp_s| super::RecordedDecision {
+                    timestamp_s,
+                    kind: "poi_assignment".into(),
+                    status: "applied".into(),
+                    reason: "assigned".into(),
+                    subject: Some("drone".into()),
+                    selected: None,
+                    detail: "assigned".into(),
+                })
+                .collect(),
+        );
+        replay.branch(2);
+        assert_eq!(
+            replay
+                .decisions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|d| d.timestamp_s)
+                .collect::<Vec<_>>(),
+            [0.0, 1.0]
+        );
+        replay.branch(0);
+        assert!(replay.decisions.as_ref().unwrap().is_empty());
+    }
 
     #[test]
     fn replay_state_advances_and_stops_at_last_frame() {

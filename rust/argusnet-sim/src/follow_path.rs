@@ -242,6 +242,19 @@ impl FollowPathController {
         &self.config
     }
 
+    /// Orbit no higher than `agl_m`, swing included.
+    pub fn cap_agl(&mut self, agl_m: f64) {
+        let base = (agl_m - self.config.vertical_amplitude_m.abs()).max(0.0);
+        self.config.base_agl_m = self.config.base_agl_m.min(base);
+        self.config.min_agl_m = self.config.min_agl_m.min(base);
+        self.config.terrain_following_agl_m = self.config.terrain_following_agl_m.min(base);
+    }
+
+    /// Orbit no faster than `speed_mps`.
+    pub fn cap_speed(&mut self, speed_mps: f64) {
+        self.config.max_speed_mps = self.config.max_speed_mps.min(speed_mps);
+    }
+
     pub fn state(&self) -> &FollowPathState {
         &self.state
     }

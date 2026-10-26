@@ -1,0 +1,552 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/record-index.schema.json",
+  "title": "S1 record index (argusnet.record-index/v1)",
+  "description": "Which record kinds a package carries, how many, and why a kind is unavailable rather than empty.",
+  "type": "object",
+  "required": [
+    "contract",
+    "kinds"
+  ],
+  "properties": {
+    "contract": {
+      "const": "argusnet.record-index/v1"
+    },
+    "kinds": {
+      "type": "object",
+      "required": [
+        "site",
+        "mission",
+        "platform",
+        "localization",
+        "spatial_revision",
+        "trajectory",
+        "safety",
+        "evidence",
+        "reconstruction",
+        "finding",
+        "change",
+        "report"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "site": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "mission": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "platform": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "localization": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "spatial_revision": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "trajectory": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "safety": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "reconstruction": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "finding": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "change": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        "report": {
+          "type": "object",
+          "required": [
+            "status",
+            "count"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "recorded",
+                "unavailable"
+              ]
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "count": {
+                "const": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

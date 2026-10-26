@@ -236,6 +236,11 @@ impl<T> LaunchController<T> {
         }
     }
 
+    /// Climb to no more than `agl_m` above the station.
+    pub fn cap_operational_altitude(&mut self, agl_m: f64) {
+        self.operational_altitude_agl_m = self.operational_altitude_agl_m.min(agl_m);
+    }
+
     /// Launch, once.
     ///
     /// A second call is ignored — including its target id. The reference

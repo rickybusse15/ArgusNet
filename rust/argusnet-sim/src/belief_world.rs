@@ -39,14 +39,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
+use argusnet_mapping::quality::{
+    assess, CellEvidence, DeficitCounts, DeficitReason, QualityRequirement,
+};
 use argusnet_types::Bounds2d;
 use argusnet_world::powerline::{ConductorEnvelope, PowerLine};
 use serde::{Deserialize, Serialize};
 
 use crate::follow_path::VisibilitySampler;
 use crate::motion::{ObstacleSampler, TerrainSampler};
+use crate::nav_camera::NavCameraConfig;
 use crate::observe::TerrainHeight;
-use crate::range_scan::{RangeScan, RangeScanConfig, ReturnClass};
+use crate::range_scan::{RangeScan, RangeScanConfig, ReturnClass, ScanSensor};
 use crate::runtime_world::{SharedObstacles, SharedTerrain};
 
 /// What a run's platforms know of the world before they sense it.
@@ -102,6 +106,41 @@ pub struct ExplorationConfig {
     /// default) learns each span only from the scanners.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub wire_prior: bool,
+    /// What each cell of the map must reach (SR5a). With it, the map keeps
+    /// each cell's accepted evidence and publishes why each falls short;
+    /// explorers go where flying can still fix a deficit (SR5b) and the scan
+    /// phase measures progress as the share of reachable cells that meet
+    /// it. Absent (the default) is every run before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualityRequirement>,
+    /// The forward navigation camera, the primary obstacle-avoidance sensor
+    /// ([`crate::nav_camera`]). Its detections are safety evidence only, and
+    /// every controller is capped to the speed its envelope allows. Absent
+    /// (the default) is every run before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav_camera: Option<NavCameraConfig>,
+    /// The declared rig (SR1): with it, the pod's LiDAR on a 3-axis gimbal
+    /// maps in place of the legacy scanner, and the rig's navigation camera
+    /// is the avoidance sensor. Absent is every run before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rig: Option<crate::rig::RigProfile>,
+    /// What the planner asks the pod to hold while mapping (SR2). Only with
+    /// a rig; nadir when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointing: Option<crate::pod::PointingPolicy>,
+}
+
+impl ExplorationConfig {
+    /// The navigation camera the run flies: the rig's, or the stand-alone
+    /// one.
+    pub fn effective_nav_camera(&self) -> Option<NavCameraConfig> {
+        match &self.rig {
+            Some(rig) => rig
+                .mount(crate::rig::SensorRole::NavCamera)
+                .and_then(|mount| mount.nav_camera.clone()),
+            None => self.nav_camera.clone(),
+        }
+    }
 }
 
 fn default_explore() -> bool {
@@ -132,6 +171,10 @@ impl Default for ExplorationConfig {
             explore: true,
             pursuit: PursuitSource::default(),
             wire_prior: false,
+            quality: None,
+            nav_camera: None,
+            rig: None,
+            pointing: None,
         }
     }
 }
@@ -158,6 +201,25 @@ impl ExplorationConfig {
                 "occupied_probability must be in [0.5, 1), got {}",
                 self.occupied_probability
             ));
+        }
+        if let Some(quality) = &self.quality {
+            quality.validate()?;
+        }
+        if let Some(camera) = &self.nav_camera {
+            camera.validate()?;
+        }
+        if let Some(rig) = &self.rig {
+            if self.nav_camera.is_some() {
+                return Err(
+                    "the rig carries the navigation camera; do not declare a second one".into(),
+                );
+            }
+            rig.validate()?;
+        }
+        match (&self.pointing, &self.rig) {
+            (Some(_), None) => return Err("pointing needs a rig with a pod".into()),
+            (Some(policy), Some(_)) => policy.validate()?,
+            _ => {}
         }
         self.scan.validate()
     }
@@ -205,6 +267,11 @@ pub struct BeliefGrid {
     /// [`Self::wires`] as snapshots share them. Derived.
     #[serde(skip)]
     wires_view: Option<Arc<Vec<PowerLine>>>,
+    /// Spans mapped since the replay last took them, in the order mapped:
+    /// the prior's after a reset, then each the first time a scan puts
+    /// points on it.
+    #[serde(skip)]
+    new_wires: Vec<String>,
     /// Cells touched since the replay last took them.
     #[serde(skip)]
     changed: BTreeSet<usize>,
@@ -225,6 +292,44 @@ pub struct BeliefGrid {
     /// Cells with canopy returns since the replay last took them.
     #[serde(skip)]
     canopy_changed: BTreeSet<usize>,
+    /// Accepted-evidence tracking (SR5a): the steepest-from-nadir ray, in
+    /// degrees, whose ground return a cell accepts. `None` keeps no such
+    /// evidence, and the grid checkpoints as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accept_incidence_deg: Option<f64>,
+    /// Per cell, the accepted ground returns: count, sum and sum of squares
+    /// of their heights, and the tick of the newest (`-1` for none). Empty
+    /// without tracking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_count: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_sum_m: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_sq_m2: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_tick: Vec<i64>,
+    /// The tick the quality was last published at, so a restored grid
+    /// publishes the same ages. `None` without tracking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quality_tick: Option<u64>,
+    /// The navigation camera's obstacle evidence (§8.4 of the sensing
+    /// guide): per cell, the highest detection (meaningful where any landed)
+    /// and its log-odds. Safety evidence only: it never makes a cell
+    /// measured, so it neither moves the frontier nor counts as mapped
+    /// structure, and only ever adds obstacles (a camera that saw nothing
+    /// clears nothing). Empty until the first detection lands, so a run
+    /// without the camera checkpoints exactly as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    safety_top_m: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    safety_log_odds: Vec<f64>,
+    /// Pod captures refused because the gimbal had not settled (SR2).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    unsettled_scans: u64,
+    /// Pod captures refused because the pod was stowed: take-off, landing
+    /// or a hold below cruise, when it is not surveying (SR2).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    stowed_scans: u64,
     /// What snapshots share, kept current as returns land. Derived: rebuilt
     /// from the grid after a restore or a reset.
     #[serde(skip)]
@@ -242,6 +347,9 @@ struct Views {
     ground: Arc<Vec<f64>>,
     /// Structure top per cell, NaN unless believed occupied.
     structure: Arc<Vec<f64>>,
+    /// The camera's obstacle top per cell, NaN unless believed occupied;
+    /// empty without camera evidence.
+    safety: Arc<Vec<f64>>,
     /// Highest seen ground per block, NaN where none.
     block_max: Vec<f64>,
     dirty_blocks: BTreeSet<usize>,
@@ -277,11 +385,22 @@ impl BeliefGrid {
             wires: BTreeMap::new(),
             prior_wires: Vec::new(),
             wires_view: None,
+            new_wires: Vec::new(),
             changed: BTreeSet::new(),
             canopy_top_m: Vec::new(),
             canopy_count: Vec::new(),
             canopy_shown_cm: Vec::new(),
             canopy_changed: BTreeSet::new(),
+            accept_incidence_deg: None,
+            accepted_count: Vec::new(),
+            accepted_sum_m: Vec::new(),
+            accepted_sq_m2: Vec::new(),
+            accepted_tick: Vec::new(),
+            quality_tick: None,
+            safety_top_m: Vec::new(),
+            safety_log_odds: Vec::new(),
+            unsettled_scans: 0,
+            stowed_scans: 0,
             views: None,
         })
     }
@@ -301,6 +420,20 @@ impl BeliefGrid {
             .map(|span| (span.id.clone(), span.clone()))
             .collect();
         self.wires_view = None;
+        self.new_wires = self
+            .prior_wires
+            .iter()
+            .map(|span| span.id.clone())
+            .collect();
+    }
+
+    /// The spans mapped since the last call, as replay rows: whole spans,
+    /// each once.
+    pub fn take_new_wires(&mut self) -> Vec<PowerLine> {
+        std::mem::take(&mut self.new_wires)
+            .into_iter()
+            .filter_map(|id| self.wires.get(&id).cloned())
+            .collect()
     }
 
     /// The spans mapped so far.
@@ -334,8 +467,26 @@ impl BeliefGrid {
         self.canopy_count = Vec::new();
         self.canopy_shown_cm = Vec::new();
         self.canopy_changed.clear();
+        if self.accept_incidence_deg.is_some() {
+            self.accepted_count.fill(0);
+            self.accepted_sum_m.fill(0.0);
+            self.accepted_sq_m2.fill(0.0);
+            self.accepted_tick.fill(-1);
+            self.quality_tick = Some(0);
+        }
+        self.safety_top_m = Vec::new();
+        self.safety_log_odds = Vec::new();
+        self.unsettled_scans = 0;
+        self.stowed_scans = 0;
         self.views = None;
         self.reset_wires();
+    }
+
+    /// Whether `other` keeps accepted evidence under the same incidence
+    /// limit (SR5a), or neither keeps any: a checkpoint's evidence is only
+    /// meaningful under the admission policy that gathered it.
+    pub fn same_quality_tracking(&self, other: &Self) -> bool {
+        self.accept_incidence_deg == other.accept_incidence_deg
     }
 
     /// Whether `other` covers the same cells (for a checkpoint's check).
@@ -421,6 +572,9 @@ impl BeliefGrid {
                 }
             })
             .collect();
+        let safety: Vec<f64> = (0..self.safety_log_odds.len())
+            .map(|k| self.safety_value(k, occupied_probability))
+            .collect();
         let (bnx, bny) = self.blocks();
         let block_max = (0..bnx * bny)
             .map(|b| self.block_max_of(&ground, b))
@@ -429,19 +583,179 @@ impl BeliefGrid {
             occupied_probability,
             ground: Arc::new(ground),
             structure: Arc::new(structure),
+            safety: Arc::new(safety),
             block_max,
             dirty_blocks: BTreeSet::new(),
         }
     }
 
+    /// Keep each cell's accepted evidence: ground returns from rays within
+    /// `max_incidence_deg` of nadir (SR5a). Before any scan.
+    pub fn track_quality(&mut self, max_incidence_deg: f64) {
+        let cells = self.cell_count();
+        self.accept_incidence_deg = Some(max_incidence_deg);
+        self.accepted_count = vec![0; cells];
+        self.accepted_sum_m = vec![0.0; cells];
+        self.accepted_sq_m2 = vec![0.0; cells];
+        self.accepted_tick = vec![-1; cells];
+        self.quality_tick = Some(0);
+    }
+
+    /// Record that the quality is published as of `tick`; a grid without
+    /// tracking keeps none.
+    pub fn mark_quality_tick(&mut self, tick: u64) {
+        if self.quality_tick.is_some() {
+            self.quality_tick = Some(tick);
+        }
+    }
+
+    /// The tick the quality was last published at (SR5a).
+    pub fn quality_tick(&self) -> Option<u64> {
+        self.quality_tick
+    }
+
+    /// Cell `index`'s accepted evidence at tick `now`, ages in seconds at
+    /// `dt_s` a tick.
+    fn evidence(&self, index: usize, now: u64, dt_s: f64) -> CellEvidence {
+        let accepted_returns = self.accepted_count.get(index).copied().unwrap_or(0);
+        CellEvidence {
+            ground_returns: self.ground_count[index],
+            accepted_returns,
+            accepted_height_sum_m: self.accepted_sum_m.get(index).copied().unwrap_or(0.0),
+            accepted_height_sq_sum_m2: self.accepted_sq_m2.get(index).copied().unwrap_or(0.0),
+            accepted_age_s: self
+                .accepted_tick
+                .get(index)
+                .filter(|&&t| t >= 0 && accepted_returns > 0)
+                .map(|&t| (now as i64 - t).max(0) as f64 * dt_s),
+        }
+    }
+
+    /// Every cell's quality against `requirement` at tick `now` (SR5a).
+    /// `per_return_sigma_m` is the scanner's declared range noise.
+    pub fn quality(
+        &self,
+        requirement: &QualityRequirement,
+        per_return_sigma_m: f64,
+        now: u64,
+        dt_s: f64,
+    ) -> QualityLayer {
+        let area = self.resolution_m * self.resolution_m;
+        let reasons: Vec<DeficitReason> = (0..self.cell_count())
+            .map(|k| {
+                assess(
+                    &self.evidence(k, now, dt_s),
+                    area,
+                    per_return_sigma_m,
+                    requirement,
+                )
+                .reason
+            })
+            .collect();
+        let mut counts = DeficitCounts::default();
+        for reason in &reasons {
+            counts.add(*reason);
+        }
+        QualityLayer { reasons, counts }
+    }
+
+    /// The camera's obstacle top in cell `index`, NaN unless occupied. A
+    /// cell needs positive camera evidence: an untouched cell's zero
+    /// log-odds passes a threshold of 0.5 but has no obstacle in it.
+    fn safety_value(&self, index: usize, occupied_probability: f64) -> f64 {
+        match self.safety_log_odds.get(index) {
+            Some(&log_odds) if log_odds > 0.0 && probability(log_odds) >= occupied_probability => {
+                self.safety_top_m[index]
+            }
+            _ => f64::NAN,
+        }
+    }
+
+    /// Fuse one navigation camera frame: structure detections raise the
+    /// cell's safety evidence. Crowns stay soft, as the scanner's do: never
+    /// occupied. Nothing here touches the mapped cells.
+    fn integrate_camera(&mut self, scan: &RangeScan) {
+        for hit in &scan.returns {
+            if hit.class != ReturnClass::Structure {
+                continue;
+            }
+            let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
+                continue;
+            };
+            if self.safety_log_odds.is_empty() {
+                let cells = self.cell_count();
+                self.safety_top_m = vec![0.0; cells];
+                self.safety_log_odds = vec![0.0; cells];
+            }
+            let top = &mut self.safety_top_m[index];
+            *top = if self.safety_log_odds[index] == 0.0 {
+                hit.point_m[2]
+            } else {
+                top.max(hit.point_m[2])
+            };
+            self.safety_log_odds[index] =
+                (self.safety_log_odds[index] + LOG_ODDS_STRUCTURE).min(LOG_ODDS_LIMIT);
+            let cells = self.cell_count();
+            if let Some(occupied) = self.views.as_ref().map(|v| v.occupied_probability) {
+                let value = self.safety_value(index, occupied);
+                let views = self.views.as_mut().expect("checked above");
+                let safety = Arc::make_mut(&mut views.safety);
+                if safety.is_empty() {
+                    *safety = vec![f64::NAN; cells];
+                }
+                safety[index] = value;
+            }
+        }
+    }
+
+    /// Pod captures refused unsettled.
+    pub fn unsettled_scans(&self) -> u64 {
+        self.unsettled_scans
+    }
+
+    /// Pod captures refused stowed.
+    pub fn stowed_scans(&self) -> u64 {
+        self.stowed_scans
+    }
+
+    /// Cells the navigation camera believes occupied.
+    pub fn safety_cells_at(&self, threshold: f64) -> usize {
+        self.safety_log_odds
+            .iter()
+            .filter(|&&log_odds| log_odds > 0.0 && probability(log_odds) >= threshold)
+            .count()
+    }
+
     /// Fuse one platform's scan, in return order. A wire span is mapped the
-    /// first time a scan puts points on it.
+    /// first time a scan puts points on it, whichever sensor saw it. A
+    /// navigation camera frame is safety evidence only
+    /// ([`Self::integrate_camera`]).
     pub fn integrate(&mut self, scan: &RangeScan, tick: u64) {
+        // A pod capture is survey evidence only while the pod is surveying:
+        // stowed (take-off, landing, a hold below cruise) its rays graze the
+        // ground far ahead, and still moving its pose is not the one the
+        // returns were georeferenced with to within the settle tolerance.
+        // Refused whole, wires included.
+        if let Some(pod) = &scan.pod {
+            if pod.source == crate::pod::PointingSource::Stow {
+                self.stowed_scans += 1;
+                return;
+            }
+            if !pod.settled {
+                self.unsettled_scans += 1;
+                return;
+            }
+        }
         for wire in &scan.wires {
             if !self.wires.contains_key(&wire.span.id) {
                 self.wires.insert(wire.span.id.clone(), wire.span.clone());
+                self.new_wires.push(wire.span.id.clone());
                 self.wires_view = None;
             }
+        }
+        if scan.sensor == ScanSensor::NavCamera {
+            self.integrate_camera(scan);
+            return;
         }
         for hit in &scan.returns {
             let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
@@ -451,6 +765,20 @@ impl BeliefGrid {
                 ReturnClass::Ground => {
                     self.ground_sum[index] += hit.point_m[2];
                     self.ground_count[index] += 1;
+                    if let Some(limit_deg) = self.accept_incidence_deg {
+                        let horizontal = (hit.point_m[0] - scan.origin_m[0])
+                            .hypot(hit.point_m[1] - scan.origin_m[1]);
+                        let drop = scan.origin_m[2] - hit.point_m[2];
+                        // From nadir: 0 straight down, 90 level.
+                        let incidence_deg = horizontal.atan2(drop).to_degrees();
+                        if incidence_deg <= limit_deg {
+                            let z = hit.point_m[2];
+                            self.accepted_count[index] += 1;
+                            self.accepted_sum_m[index] += z;
+                            self.accepted_sq_m2[index] += z * z;
+                            self.accepted_tick[index] = tick as i64;
+                        }
+                    }
                     self.log_odds[index] =
                         (self.log_odds[index] + LOG_ODDS_GROUND).max(-LOG_ODDS_LIMIT);
                 }
@@ -646,14 +974,20 @@ impl BeliefGrid {
             ground: Arc::clone(&views.ground),
             stand_in,
             structure_top: Arc::clone(&views.structure),
+            safety_top: Arc::clone(&views.safety),
             wires: Arc::clone(
                 self.wires_view
                     .get_or_insert_with(|| Arc::new(self.wires.values().cloned().collect())),
             ),
+            quality: None,
         };
         self.views = Some(views);
         snapshot
     }
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 fn probability(log_odds: f64) -> f64 {
@@ -786,11 +1120,98 @@ pub struct BeliefSnapshot {
     stand_in: Vec<f64>,
     /// NaN where the cell is not believed occupied.
     structure_top: Arc<Vec<f64>>,
+    /// The navigation camera's obstacles: NaN where the camera does not
+    /// believe the cell occupied; empty without camera evidence.
+    safety_top: Arc<Vec<f64>>,
     /// The power-line spans mapped so far (R3), in id order.
     wires: Arc<Vec<PowerLine>>,
+    /// Each cell's deficit against the run's quality requirement (SR5a);
+    /// `None` without one.
+    quality: Option<Arc<QualityLayer>>,
+}
+
+/// Every cell's deficit reason, and how many give each.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QualityLayer {
+    pub reasons: Vec<DeficitReason>,
+    pub counts: DeficitCounts,
+}
+
+impl QualityLayer {
+    /// The scan's progress: the share of cells with nothing left for flying
+    /// to do, because they meet the requirement or no flying can make them
+    /// (bias-limited, unreachable). An unreachable cell never holds the scan
+    /// open, and is never counted as met: [`DeficitCounts::met_fraction`]
+    /// and the unreachable count are reported beside this.
+    pub fn resolved_fraction(&self) -> f64 {
+        (self.counts.met + self.counts.unreachable()) as f64 / self.counts.total().max(1) as f64
+    }
 }
 
 impl BeliefSnapshot {
+    /// This snapshot with `layer` as its quality.
+    pub fn with_quality(mut self, layer: QualityLayer) -> Self {
+        self.quality = Some(Arc::new(layer));
+        self
+    }
+
+    pub fn quality(&self) -> Option<&QualityLayer> {
+        self.quality.as_deref()
+    }
+
+    /// The deficit reason of the cell at `(x, y)`, with a requirement.
+    pub fn deficit_at(&self, x_m: f64, y_m: f64) -> Option<DeficitReason> {
+        let (i, j) = self.ij(x_m, y_m);
+        self.quality
+            .as_ref()
+            .map(|layer| layer.reasons[j * self.nx + i])
+    }
+
+    /// The scan's progress: the resolved share with a quality requirement
+    /// ([`QualityLayer::resolved_fraction`]), the known fraction without
+    /// one.
+    pub fn scan_progress(&self) -> f64 {
+        match &self.quality {
+            Some(layer) => layer.resolved_fraction(),
+            None => self.known_fraction(),
+        }
+    }
+
+    /// Whether the block holding `(x, y)` still needs flying, at least
+    /// `share` of it: unmeasured without a requirement; improvable (unseen,
+    /// too oblique, sparse or stale) with one. An explorer keeps its goal
+    /// while it does.
+    pub fn needs_work(&self, x_m: f64, y_m: f64, share: f64) -> bool {
+        let (i, j) = self.ij(x_m, y_m);
+        self.block_work_share(i / BLOCK_CELLS, j / BLOCK_CELLS) >= share
+    }
+
+    /// The centre of every block that needs flying ([`Self::needs_work`]),
+    /// in block order: where an explorer can go to improve the map.
+    pub fn work_centres(&self, share: f64) -> Vec<[f64; 2]> {
+        if self.quality.is_none() {
+            return self.unexplored_centres(share);
+        }
+        self.centres_where(|bi, bj| self.block_work_share(bi, bj) >= share)
+    }
+
+    fn block_work_share(&self, bi: usize, bj: usize) -> f64 {
+        let Some(layer) = &self.quality else {
+            return self.block_unknown_share(bi, bj);
+        };
+        let (i0, j0) = (bi * BLOCK_CELLS, bj * BLOCK_CELLS);
+        let (i1, j1) = (
+            (i0 + BLOCK_CELLS).min(self.nx),
+            (j0 + BLOCK_CELLS).min(self.ny),
+        );
+        let total = (i1 - i0) * (j1 - j0);
+        let improvable = (j0..j1)
+            .flat_map(|j| (i0..i1).map(move |i| (i, j)))
+            .filter(|&(i, j)| layer.reasons[j * self.nx + i].is_improvable())
+            .count();
+        improvable as f64 / total.max(1) as f64
+    }
+
     /// The power-line spans mapped when this snapshot was taken (R3): the
     /// wires a run without a prior map plans round.
     pub fn wires(&self) -> &Arc<Vec<PowerLine>> {
@@ -883,12 +1304,17 @@ impl BeliefSnapshot {
     /// The centre of every block at least `share` unmeasured, in block order:
     /// where an explorer can go to map something new.
     pub fn unexplored_centres(&self, share: f64) -> Vec<[f64; 2]> {
+        self.centres_where(|bi, bj| self.block_unknown_share(bi, bj) >= share)
+    }
+
+    /// The centre of every block `pick` accepts, in block order.
+    fn centres_where(&self, pick: impl Fn(usize, usize) -> bool) -> Vec<[f64; 2]> {
         let bny = self.ny.div_ceil(BLOCK_CELLS);
         let block_m = BLOCK_CELLS as f64 * self.resolution_m;
         let mut out = Vec::new();
         for bj in 0..bny {
             for bi in 0..self.bnx {
-                if self.block_unknown_share(bi, bj) >= share {
+                if pick(bi, bj) {
                     let cx = self.x_min_m + (bi as f64 + 0.5) * block_m;
                     let cy = self.y_min_m + (bj as f64 + 0.5) * block_m;
                     let x_max = self.x_min_m + self.nx as f64 * self.resolution_m;
@@ -973,9 +1399,23 @@ impl BeliefSnapshot {
         top.is_finite().then_some(top)
     }
 
+    /// The camera's obstacle top in the cell at `(x, y)`, if the
+    /// navigation camera believes it occupied.
+    pub fn safety_top_at(&self, x_m: f64, y_m: f64) -> Option<f64> {
+        let (i, j) = self.ij(x_m, y_m);
+        let top = *self.safety_top.get(j * self.nx + i)?;
+        top.is_finite().then_some(top)
+    }
+
+    /// Whether `point_m` is inside a believed obstacle: a mapped structure,
+    /// or one the navigation camera detected.
     fn collides(&self, point_m: [f64; 3]) -> bool {
+        let below = |top: f64| point_m[2] <= top + STRUCTURE_MARGIN_M;
         self.structure_top_at(point_m[0], point_m[1])
-            .is_some_and(|top| point_m[2] <= top + STRUCTURE_MARGIN_M)
+            .is_some_and(below)
+            || self
+                .safety_top_at(point_m[0], point_m[1])
+                .is_some_and(below)
     }
 }
 
@@ -1152,9 +1592,10 @@ impl VisibilitySampler for BeliefVisibility {
     }
 }
 
-/// How far short of a wire's envelope [`PhysicalGuard::enforce_from`] stops
-/// a flight that would enter it, metres.
-const WIRE_STOP_SHORT_M: f64 = 0.01;
+/// How far short of a structure, or a wire's envelope,
+/// [`PhysicalGuard::enforce_from`] stops a flight that would enter it,
+/// metres.
+const SWEEP_STOP_SHORT_M: f64 = 0.01;
 
 /// Every `WorldContact::kind` the guard writes: out of the ground, out of a
 /// structure, and still inside one after the push limit. The replay schema
@@ -1270,13 +1711,16 @@ impl PhysicalGuard {
     }
 
     /// [`Self::enforce`] for a platform that flew from `from`: the flight is
-    /// swept against the wires first, since a wire is thin enough to pass
-    /// between two positions each clear of it. A flight that comes within
-    /// the guard's clearance of one is stopped just short of where it first
-    /// does (solved per piece, [`ConductorEnvelope::first_entry`]), and the
-    /// stop recorded; then the stop is enforced. One that starts inside an
-    /// envelope is left to `enforce` to push out. With no wires this is
-    /// `enforce`.
+    /// swept against the hard structures and the wires first
+    /// ([`Self::first_structure_hit`]), since a wire, or a wall thinner than
+    /// the step is long, can lie between two positions each clear of it. A
+    /// flight that meets a building or wall, or comes within the guard's
+    /// clearance of a wire, is stopped just short of where it first does,
+    /// and the stop recorded as a `structure` contact; then the stop is
+    /// enforced. Stopped on the near side, `enforce` never pushes it out
+    /// through the far side of a wall it was flying at. One that starts
+    /// inside a structure or an envelope is left to `enforce` to push out.
+    /// A flight that meets nothing is `enforce`.
     pub fn enforce_from(
         &self,
         node_id: &str,
@@ -1288,14 +1732,9 @@ impl PhysicalGuard {
             + (position[1] - from[1]).powi(2)
             + (position[2] - from[2]).powi(2))
         .sqrt();
-        let entry = self
-            .wires
-            .iter()
-            .filter_map(|wire| wire.first_entry(from, position))
-            .min_by(f64::total_cmp);
-        let stop = match entry {
+        let stop = match self.first_structure_hit(from, position) {
             Some(t) if t > 0.0 && length > 0.0 => {
-                let f = ((t * length - WIRE_STOP_SHORT_M) / length).max(0.0);
+                let f = ((t * length - SWEEP_STOP_SHORT_M) / length).max(0.0);
                 let stop = [
                     from[0] + (position[0] - from[0]) * f,
                     from[1] + (position[1] - from[1]) * f,
@@ -1315,6 +1754,15 @@ impl PhysicalGuard {
 
     /// The lowest a platform may be at `p`'s place: the guard's clearance
     /// over the ground.
+    /// Whether `p` is somewhere a platform cannot be: below the true ground,
+    /// inside a structure or inside a wire. Within the clearance above the
+    /// ground is not: a platform lands there.
+    pub fn violates(&self, p: [f64; 3]) -> bool {
+        p[2] < TerrainSampler::height_at(&self.terrain, p[0], p[1])
+            || self.obstacles.collides(p)
+            || self.wires.iter().any(|wire| wire.contains(p))
+    }
+
     fn floor_at(&self, p: [f64; 3]) -> f64 {
         TerrainSampler::height_at(&self.terrain, p[0], p[1]) + self.clearance_m
     }
@@ -1418,6 +1866,8 @@ mod tests {
             returns,
             misses: 0,
             wires: Vec::new(),
+            sensor: Default::default(),
+            pod: None,
         }
     }
 
@@ -1568,6 +2018,119 @@ mod tests {
     /// highest crown, shown to the replay when first seen or moved 10 cm,
     /// but it is never occupied, so nothing collides with it. A grid that
     /// never saw a crown checkpoints without a canopy key.
+    /// SR5b: a block measured only by shallow rays is known, so it is no
+    /// longer unexplored, but every cell is too oblique, so it still needs
+    /// work and stays a goal. Once steep returns meet it, it drops out.
+    #[test]
+    fn a_known_block_that_falls_short_is_still_a_goal() {
+        use argusnet_mapping::quality::{DeficitReason, QualityRequirement};
+        let requirement = QualityRequirement {
+            min_ground_density_per_m2: Some(0.02),
+            max_vertical_sigma_m: None,
+            max_age_s: None,
+            max_incidence_deg: 30.0,
+            bias_floor_m: 0.0,
+        };
+        let config = ExplorationConfig::default();
+        let mut belief = grid();
+        belief.track_quality(requirement.max_incidence_deg);
+        // Every cell of the first block, from a platform far off to the
+        // side: 60+ degrees from nadir.
+        let shallow: Vec<RangeReturn> = (0..5)
+            .flat_map(|i| (0..5).map(move |j| (i, j)))
+            .map(|(i, j)| ground(5.0 + 10.0 * i as f64, 5.0 + 10.0 * j as f64, 0.0))
+            .collect();
+        let mut far = scan(shallow.clone());
+        far.origin_m = [400.0, 25.0, 100.0];
+        belief.integrate(&far, 1);
+        let snapshot =
+            belief
+                .snapshot(&config)
+                .with_quality(belief.quality(&requirement, 0.3, 1, 1.0));
+        assert!(!snapshot.is_unexplored(25.0, 25.0, 0.5), "measured");
+        assert!(snapshot.needs_work(25.0, 25.0, 0.5), "but not good enough");
+        assert_eq!(
+            snapshot.deficit_at(25.0, 25.0),
+            Some(DeficitReason::TooOblique)
+        );
+        assert!(snapshot.work_centres(0.5).contains(&[25.0, 25.0]));
+        assert!(!snapshot.unexplored_centres(0.5).contains(&[25.0, 25.0]));
+        // Straight down, twice: two accepted returns per 100 m² cell.
+        let mut over = scan(shallow);
+        over.origin_m = [25.0, 25.0, 100.0];
+        belief.integrate(&over, 2);
+        belief.integrate(&over, 3);
+        let snapshot =
+            belief
+                .snapshot(&config)
+                .with_quality(belief.quality(&requirement, 0.3, 3, 1.0));
+        assert_eq!(snapshot.deficit_at(25.0, 25.0), Some(DeficitReason::Met));
+        assert!(!snapshot.needs_work(25.0, 25.0, 0.5));
+        assert!(!snapshot.work_centres(0.5).contains(&[25.0, 25.0]));
+        // Without a requirement, work is the unexplored share.
+        let plain = belief.snapshot(&config);
+        assert_eq!(plain.work_centres(0.5), plain.unexplored_centres(0.5));
+    }
+
+    /// A navigation camera frame is safety evidence: two detections make
+    /// the cell an obstacle the planners avoid, but the cell is not
+    /// measured, so the frontier, the known fraction and the mapped
+    /// structures are untouched; the evidence survives a checkpoint.
+    #[test]
+    fn camera_detections_are_obstacles_but_not_map() {
+        let config = ExplorationConfig::default();
+        let mut belief = grid();
+        let snapshot = belief.snapshot(&config);
+        let handle = BeliefHandle::new(snapshot);
+        let mut frame = scan(vec![RangeReturn {
+            point_m: [45.0, 45.0, 80.0],
+            class: ReturnClass::Structure,
+        }]);
+        frame.sensor = ScanSensor::NavCamera;
+        belief.integrate(&frame, 1);
+        handle.publish(belief.snapshot(&config));
+        let obstacles = BeliefObstacles::new(handle.clone());
+        assert!(
+            !obstacles.collides([45.0, 45.0, 79.0]),
+            "one detection is not yet an obstacle"
+        );
+        belief.integrate(&frame, 2);
+        handle.publish(belief.snapshot(&config));
+        assert!(obstacles.collides([45.0, 45.0, 79.0]));
+        assert!(!obstacles.collides([45.0, 45.0, 90.0]), "above its top");
+        assert_eq!(belief.safety_cells_at(config.occupied_probability), 1);
+        assert_eq!(belief.known_cells(), 0, "never measured");
+        assert_eq!(belief.structure_cells_at(config.occupied_probability), 0);
+        assert!(belief
+            .take_changed_cells(config.occupied_probability)
+            .is_empty());
+        assert_eq!(handle.current().known_fraction(), 0.0);
+        let text = serde_json::to_string(&belief).unwrap();
+        let restored: BeliefGrid = serde_json::from_str(&text).unwrap();
+        assert_eq!(restored.safety_cells_at(config.occupied_probability), 1);
+        // A grid without camera evidence serialises as it always did.
+        assert!(!serde_json::to_string(&grid()).unwrap().contains("safety"));
+
+        // At a 0.5 threshold an untouched cell's zero log-odds passes the
+        // probability test, but it has no evidence: it never becomes an
+        // obstacle, before a checkpoint or after.
+        let even = ExplorationConfig {
+            occupied_probability: 0.5,
+            ..ExplorationConfig::default()
+        };
+        let mut belief = grid();
+        belief.integrate(&frame, 1);
+        let before = belief.snapshot(&even);
+        assert!(before.safety_top_at(45.0, 45.0).is_some());
+        assert_eq!(before.safety_top_at(155.0, 155.0), None);
+        let mut restored: BeliefGrid =
+            serde_json::from_str(&serde_json::to_string(&belief).unwrap()).unwrap();
+        let after = restored.snapshot(&even);
+        assert_eq!(after.safety_top_at(155.0, 155.0), None);
+        assert!(!after.collides([155.0, 155.0, 0.5]));
+        assert_eq!(restored.safety_cells_at(0.5), 1);
+    }
+
     #[test]
     fn canopy_returns_are_seen_but_never_occupied() {
         let config = ExplorationConfig::default();
@@ -1742,6 +2305,50 @@ mod tests {
         .with_power_lines(lines)
     }
 
+    /// A refused pod capture is refused whole: its wires do not reach the
+    /// map either, while a settled mission capture's do.
+    #[test]
+    fn a_refused_pod_capture_maps_no_wires() {
+        use crate::pod::{PodCapture, PointingSource};
+        let capture = |source, settled| {
+            let mut s = scan(Vec::new());
+            s.wires = vec![crate::range_scan::WireReturn {
+                span: wire(20.0).span_line(0),
+                point_m: [50.0, 0.0, 20.0],
+            }];
+            s.pod = Some(PodCapture {
+                source,
+                settled,
+                command_error_rad: 0.0,
+                boresight_world: [0.0, 0.0, -1.0],
+                occluded: 0,
+            });
+            s
+        };
+        let mut belief = grid();
+        belief.integrate(&capture(PointingSource::Stow, true), 1);
+        belief.integrate(&capture(PointingSource::Mission, false), 2);
+        assert_eq!(belief.wires().count(), 0);
+        assert_eq!((belief.stowed_scans(), belief.unsettled_scans()), (1, 1));
+        belief.integrate(&capture(PointingSource::Mission, true), 3);
+        assert_eq!(belief.wires().count(), 1);
+    }
+
+    /// Somewhere a platform cannot be: below the true ground, inside a
+    /// structure or a wire. Within the clearance above the ground is not: a
+    /// platform lands there.
+    #[test]
+    fn the_guard_says_where_a_platform_cannot_be() {
+        let guard = guard_over(None, &[wire(20.0)]);
+        assert!(guard.violates([10.0, 10.0, -0.1]), "below the ground");
+        assert!(
+            !guard.violates([10.0, 10.0, 0.5]),
+            "landed, within the clearance"
+        );
+        assert!(guard.violates([50.0, 0.0, 20.0]), "on the wire");
+        assert!(!guard.violates([50.0, 0.0, 30.0]));
+    }
+
     /// A platform within the guard's clearance of a wire is pushed straight
     /// away from it, to the wire's radius plus the clearance, and the push
     /// is a recorded contact. Clear of it, nothing moves.
@@ -1886,6 +2493,90 @@ mod tests {
         // A guard without lines meets no wire.
         assert_eq!(guard_over(None, &[]).first_structure_hit(from, to), None);
     }
+    /// A wall 10 m thick across the map at x = 0, from 0 to 100 m up.
+    fn thin_wall() -> argusnet_world::obstacles::Obstacle {
+        use argusnet_world::obstacles::{BlockerType, Obstacle};
+        Obstacle::polygon_prism(
+            "wall",
+            BlockerType::Wall,
+            vec![[-5.0, -190.0], [5.0, -190.0], [5.0, 190.0], [-5.0, 190.0]],
+            0.0,
+            100.0,
+        )
+        .unwrap()
+    }
+
+    /// A step longer than a wall is thick, between two positions each clear
+    /// of it, is stopped just short of the wall's near face and recorded as
+    /// a structure contact: it no longer tunnels through uncounted (the
+    /// fixture's drone-north stepped from x 11.9 to -5.96 in one tick). One
+    /// that starts inside it is `enforce` exactly.
+    #[test]
+    fn a_fast_step_through_a_thin_wall_is_stopped_short_of_it() {
+        let guard = guard_over(Some(thin_wall()), &[]);
+        let (from, to) = ([11.9, 3.0, 20.0], [-5.96, 3.0, 20.0]);
+        // Each end alone is clear: `enforce` sees nothing.
+        assert_eq!(guard.enforce("d", 0.0, to), to);
+        assert!(guard.take_contacts().is_empty());
+        let stopped = guard.enforce_from("d", 0.0, from, to);
+        assert!(
+            (stopped[0] - (5.0 + SWEEP_STOP_SHORT_M)).abs() < 1e-9,
+            "{stopped:?}"
+        );
+        assert_eq!([stopped[1], stopped[2]], [3.0, 20.0]);
+        let contacts = guard.take_contacts();
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
+        assert_eq!(contacts[0].kind, "structure");
+        assert!((contacts[0].correction_m - (stopped[0] - to[0])).abs() < 1e-9);
+        // Over the wall's top: not met, and nothing recorded.
+        let over = [-5.96, 3.0, 101.5];
+        assert_eq!(guard.enforce_from("d", 0.0, [11.9, 3.0, 101.5], over), over);
+        assert!(guard.take_contacts().is_empty());
+        // From inside: left to `enforce` to push out.
+        let inside = [1.0, 3.0, 20.0];
+        assert_eq!(
+            guard.enforce_from("d", 0.0, inside, [0.5, 3.0, 20.0]),
+            guard.enforce("e", 0.0, [0.5, 3.0, 20.0])
+        );
+    }
+
+    /// `enforce` alone pushes a platform inside a wall to its nearest face,
+    /// which can be the far one; swept from where it was, a platform flying
+    /// at the wall stops on the near side, at any speed, every tick.
+    #[test]
+    fn a_platform_approaching_a_wall_never_ends_a_tick_beyond_it() {
+        let guard = guard_over(Some(thin_wall()), &[]);
+        // 1 m into the far half: the nearest face is the far one.
+        let deep = guard.enforce("d", 0.0, [-4.0, 0.0, 20.0]);
+        assert!(deep[0] < -5.0, "{deep:?}");
+        for step_m in [0.5, 1.0, 3.0, 7.0, 9.0, 10.0, 12.0, 17.86, 25.0, 60.0] {
+            for start_x in [12.0, 11.9, 8.3, 5.5] {
+                let mut p = [start_x, 0.0, 20.0];
+                for tick in 0..40 {
+                    let to = [p[0] - step_m, p[1], p[2]];
+                    p = guard.enforce_from("d", tick as f64, p, to);
+                    assert!(
+                        p[0] > 5.0,
+                        "step {step_m} from {start_x}, tick {tick}: {p:?}"
+                    );
+                }
+                // It reached the wall and is held at its near face: stopped
+                // just short of it, or, for a step ending exactly on the
+                // face, pushed back out by the guard's 1 m clearance.
+                assert!(
+                    p[0] <= 5.0 + 1.0 + step_m,
+                    "step {step_m} from {start_x}: {p:?}"
+                );
+            }
+        }
+        let contacts = guard.take_contacts();
+        assert!(!contacts.is_empty());
+        assert!(
+            contacts.iter().all(|c| c.kind == "structure"),
+            "{contacts:?}"
+        );
+    }
+
     /// A push out of one structure can land in the next; the guard pushes
     /// again until the point is clear (the reference's fixture).
     #[test]

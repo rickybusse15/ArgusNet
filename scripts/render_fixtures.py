@@ -49,6 +49,11 @@ FIXTURES = {
     "realism_dense_low_pitch": ("dense", "low-pitch", "real-world"),
     "realism_large": ("large", "isometric", "real-world"),
     "realism_large_close": ("large", "close", "real-world"),
+    # R5: the canonical real place, West Pleasant View, Colorado (a USGS
+    # DEM and an OSM extract, tests/fixtures/real/west_pleasant_view).
+    "realism_real": ("real", "isometric", "real-world"),
+    "realism_real_close": ("real", "close", "real-world"),
+    "realism_real_low_pitch": ("real", "low-pitch", "real-world"),
 }
 DEFAULT_FIXTURES = ("overview", "close", "low_pitch", "split", "high_entity")
 # The worlds the realism fixtures render: scenario-config options.
@@ -70,6 +75,9 @@ REALISM_WORLDS = {
         "poi_count": 8,
     },
 }
+# The real places the realism fixtures render: a fixture folder under
+# tests/fixtures/real with a canonical.json.
+REAL_WORLDS = {"real": "west_pleasant_view"}
 TIERS = ("low", "standard", "high")
 HIGH_ENTITY_COUNT = 400
 
@@ -102,6 +110,41 @@ def build_realism_scene(argusnet_rs: Path, world: str, out: Path) -> None:
     )
     for command in (
         [str(argusnet_rs), "sim", "--quiet", "--config", str(config), "--replay", str(replay)],
+        [str(argusnet_rs), "build-scene", "--replay", str(replay), "--output", str(out)],
+    ):
+        subprocess.run(command, check=True, capture_output=True)
+
+
+def build_real_scene(argusnet_rs: Path, world: str, out: Path) -> None:
+    """Import the canonical real place for `world`, run it for 30 s and
+    package its scene in `out`."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from argusnet.world.world_import import import_world
+
+    fixture = ROOT / "tests" / "fixtures" / "real" / REAL_WORLDS[world]
+    canonical = json.loads((fixture / "canonical.json").read_text(encoding="utf-8"))
+    folder = out.with_name(f"{out.name}-world")
+    import_world(
+        fixture / canonical["dem"],
+        fixture / canonical["osm"],
+        folder,
+        map_preset=canonical["map_preset"],
+        origin=tuple(canonical["origin"]),
+        terrain_preset=canonical["terrain_preset"],
+        seed=canonical["seed"],
+        duration_s=30.0,
+    )
+    replay = folder / "replay.json"
+    for command in (
+        [
+            str(argusnet_rs),
+            "sim",
+            "--quiet",
+            "--config",
+            str(folder / "scenario.json"),
+            "--replay",
+            str(replay),
+        ],
         [str(argusnet_rs), "build-scene", "--replay", str(replay), "--output", str(out)],
     ):
         subprocess.run(command, check=True, capture_output=True)
@@ -143,6 +186,12 @@ def main() -> int:
                 parser.error(f"the {world} realism fixtures need --argusnet-rs")
             scenes[world] = args.out / f"scene-{world}"
             build_realism_scene(args.argusnet_rs, world, scenes[world])
+    for world in REAL_WORLDS:
+        if world in needed:
+            if args.argusnet_rs is None:
+                parser.error(f"the {world} realism fixtures need --argusnet-rs")
+            scenes[world] = args.out / f"scene-{world}"
+            build_real_scene(args.argusnet_rs, world, scenes[world])
 
     runs = []
     for fixture in args.fixtures:

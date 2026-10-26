@@ -7,7 +7,7 @@
 //! never blocks on the network. Connection loss triggers reconnect with
 //! backoff.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
@@ -59,24 +59,63 @@ impl LiveTlsConfig {
     }
 }
 
-/// Host portion of an endpoint, with any scheme and port stripped.
+/// Host a URL parser would dial.
+///
+/// `127.0.0.1:80@evil.example:443` is userinfo `127.0.0.1:80` and host
+/// `evil.example`. Taking the text before the first colon reports a loopback
+/// address and would open a plaintext stream to the remote host.
 fn endpoint_host(endpoint: &str) -> &str {
     let without_scheme = endpoint
         .split_once("://")
         .map(|(_, rest)| rest)
         .unwrap_or(endpoint);
     let authority = without_scheme
-        .split_once('/')
-        .map(|(auth, _)| auth)
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|part| !part.is_empty())
         .unwrap_or(without_scheme);
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority);
     // IPv6 literals are bracketed: [::1]:50051
     if let Some(rest) = authority.strip_prefix('[') {
         return rest.split_once(']').map(|(host, _)| host).unwrap_or(rest);
     }
+    // The port is the last colon. Unbracketed IPv6 then fails the loopback
+    // check and plaintext is refused, which is the safe direction.
     authority
-        .split_once(':')
+        .rsplit_once(':')
         .map(|(host, _)| host)
         .unwrap_or(authority)
+}
+
+fn ip_is_loopback(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_loopback(),
+        IpAddr::V6(ip) => {
+            ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+    }
+}
+
+/// `localhost` is loopback only when every address it resolves to is.
+/// Any other name stays non-loopback even if DNS currently says 127.0.0.1.
+fn localhost_resolves_only_to_loopback(host: &str) -> bool {
+    if !host.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    let Ok(addrs) = (host, 0).to_socket_addrs() else {
+        return false;
+    };
+    let mut saw_one = false;
+    for addr in addrs {
+        saw_one = true;
+        if !ip_is_loopback(addr.ip()) {
+            return false;
+        }
+    }
+    saw_one
 }
 
 /// True for endpoints the daemon will serve without TLS.
@@ -85,14 +124,13 @@ fn endpoint_host(endpoint: &str) -> &str {
 /// `argusnet.security.transport`.
 pub fn is_loopback_endpoint(endpoint: &str) -> bool {
     let host = endpoint_host(endpoint);
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
+    if host.is_empty() {
+        return false;
     }
-    match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(ip)) => ip.is_loopback(),
-        Ok(IpAddr::V6(ip)) => ip.is_loopback(),
-        Err(_) => false,
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip_is_loopback(ip);
     }
+    localhost_resolves_only_to_loopback(host)
 }
 
 /// Decide the URL to dial, refusing plaintext to anything but loopback.
@@ -520,6 +558,8 @@ mod tests {
             "LocalHost:50051",
             "[::1]:50051",
             "127.5.6.7:50051",
+            // Userinfo before a loopback host still dials loopback.
+            "operator@127.0.0.1:50051",
         ] {
             assert!(
                 is_loopback_endpoint(endpoint),
@@ -537,6 +577,9 @@ mod tests {
             "[2001:db8::1]:50051",
             // A host that merely starts with the loopback digits is not loopback.
             "127.0.0.1.example.com:50051",
+            // Userinfo that begins with a loopback address is still a remote host.
+            "127.0.0.1:80@evil.example:443",
+            "http://127.0.0.1:80@evil.example:443/WorldModel",
         ] {
             assert!(
                 !is_loopback_endpoint(endpoint),

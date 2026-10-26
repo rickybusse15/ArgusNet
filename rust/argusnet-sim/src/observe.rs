@@ -493,11 +493,21 @@ pub struct ObserveStage {
     /// itself (`world_knowledge: none`). `None` otherwise: no scans, and the
     /// stage is the one it always was.
     range: Option<crate::range_scan::RangeScanner>,
+    /// The mobile platforms' forward navigation camera, beside the scanner
+    /// (SR5c). Its frames follow the scans, tagged as camera frames.
+    nav_camera: Option<crate::nav_camera::NavCamera>,
+    /// The rig's pod (SR2): its LiDAR scans in place of `range`'s, from a
+    /// 3-axis gimbal whose state is part of this stage's checkpoint.
+    pod: Option<crate::pod::PodSensing>,
     /// This tick's scans, handed to stage 8.
     scans: Vec<crate::range_scan::RangeScan>,
     /// Sensors that capture at their own rate (P4.10b); `None` is every
     /// sensor every tick.
     capture: Option<CaptureRates>,
+    /// A scheduled calibration drift's bearing offset per sensor, radians,
+    /// added to its bias walk (F2). Set before every tick from the fault
+    /// schedule, a pure function of the tick, so it is not checkpointed.
+    bias_offsets: BTreeMap<String, f64>,
 }
 
 /// Sensors capturing at their own rates rather than every tick.
@@ -614,8 +624,11 @@ impl ObserveStage {
             },
             compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
             range: None,
+            nav_camera: None,
+            pod: None,
             scans: Vec::new(),
             capture: None,
+            bias_offsets: BTreeMap::new(),
         }
     }
 
@@ -684,9 +697,59 @@ impl ObserveStage {
         }
     }
 
+    /// The stage state without its pod wrapper, and the pods' state: a run
+    /// with a pod accepts only a wrapped checkpoint, and one without only a
+    /// plain one.
+    fn split_pods(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<
+        (serde_json::Value, Option<crate::pod::PodsState>),
+        crate::simulation::StageStateError,
+    > {
+        let wrapped = state.get("pods").is_some() && state.get("base").is_some();
+        match (&self.pod, wrapped) {
+            (None, false) => Ok((state.clone(), None)),
+            (Some(_), true) => {
+                let pods = serde_json::from_value(state["pods"].clone()).map_err(|error| {
+                    crate::simulation::StageStateError::Malformed {
+                        detail: format!("the pods' gimbal state: {error}"),
+                    }
+                })?;
+                Ok((state["base"].clone(), Some(pods)))
+            }
+            (Some(_), false) => Err(crate::simulation::StageStateError::Malformed {
+                detail: "this run flies a rig's pod and the checkpoint has none".into(),
+            }),
+            (None, true) => Err(crate::simulation::StageStateError::Malformed {
+                detail: "the checkpoint has a rig's pod and this run has none".into(),
+            }),
+        }
+    }
+
     /// Scan with `scanner` from every mobile platform, every tick.
     pub fn set_range_scanner(&mut self, scanner: crate::range_scan::RangeScanner) {
         self.range = Some(scanner);
+    }
+
+    /// Also look ahead with `camera` from every mobile platform, every tick.
+    pub fn set_nav_camera(&mut self, camera: crate::nav_camera::NavCamera) {
+        self.nav_camera = Some(camera);
+    }
+
+    /// Map with the rig's pod in place of the range scanner (SR2).
+    pub fn set_pod(&mut self, pod: crate::pod::PodSensing) {
+        self.pod = Some(pod);
+    }
+
+    /// The pod, when the run declares a rig.
+    pub fn pod(&self) -> Option<&crate::pod::PodSensing> {
+        self.pod.as_ref()
+    }
+
+    /// The navigation camera, when one is installed.
+    pub fn nav_camera(&self) -> Option<&crate::nav_camera::NavCamera> {
+        self.nav_camera.as_ref()
     }
 
     /// The range scanner, in a run without a prior map.
@@ -694,7 +757,8 @@ impl ObserveStage {
         self.range.as_ref()
     }
 
-    /// This tick's range scans, in platform order. Empty without a scanner.
+    /// This tick's range scans, in platform order, then the navigation
+    /// camera's frames in platform order. Empty without a scanner.
     pub fn range_scans(&self) -> &[crate::range_scan::RangeScan] {
         &self.scans
     }
@@ -715,11 +779,8 @@ impl ObserveStage {
             .filter(|p| p.is_mobile)
             .collect();
         let (tick, timestamp_s) = (context.tick, context.timestamp_s);
-        self.scans = self.compute.map_ordered(&poses, |platform| {
-            scanner.scan(
-                &platform.node_id,
-                tick,
-                timestamp_s,
+        let pose = |platform: &argusnet_types::NodeState| {
+            (
                 [
                     platform.position.x,
                     platform.position.y,
@@ -731,7 +792,30 @@ impl ObserveStage {
                     platform.velocity.z,
                 ],
             )
-        });
+        };
+        self.scans = match self.pod.as_mut() {
+            Some(pod) => {
+                let posed: Vec<(&str, [f64; 3], [f64; 3])> = poses
+                    .iter()
+                    .map(|platform| {
+                        let (position, velocity) = pose(platform);
+                        (platform.node_id.as_str(), position, velocity)
+                    })
+                    .collect();
+                pod.capture_all(tick, timestamp_s, &posed, &self.compute)
+            }
+            None => self.compute.map_ordered(&poses, |platform| {
+                let (position, velocity) = pose(platform);
+                scanner.scan(&platform.node_id, tick, timestamp_s, position, velocity)
+            }),
+        };
+        if let Some(camera) = &self.nav_camera {
+            let frames = self.compute.map_ordered(&poses, |platform| {
+                let (position, velocity) = pose(platform);
+                camera.frame(&platform.node_id, tick, timestamp_s, position, velocity)
+            });
+            self.scans.extend(frames);
+        }
     }
 
     /// Give `node_id` a sensor. A platform with no spec generates nothing.
@@ -762,6 +846,27 @@ impl ObserveStage {
     /// measured from the datum.
     pub fn set_terrain(&mut self, terrain: Box<dyn TerrainHeight>) {
         self.state.terrain = terrain;
+    }
+
+    /// Add `offset_rad` to `node_id`'s bearing bias from now on, on top of
+    /// its walk: a calibration drift (F2). Zero removes it.
+    pub fn set_bias_offset(&mut self, node_id: &str, offset_rad: f64) {
+        if offset_rad == 0.0 {
+            self.bias_offsets.remove(node_id);
+        } else {
+            self.bias_offsets.insert(node_id.to_string(), offset_rad);
+        }
+    }
+
+    /// Every non-zero calibration drift offset, radians, by node: installed
+    /// or not, since a drift outlasts an outage.
+    pub fn bias_offsets(&self) -> &BTreeMap<String, f64> {
+        &self.bias_offsets
+    }
+
+    /// The calibration drift offset on `node_id`'s bearing bias, radians.
+    pub fn bias_offset_rad(&self, node_id: &str) -> f64 {
+        self.bias_offsets.get(node_id).copied().unwrap_or(0.0)
     }
 
     /// The accumulated bearing bias for `node_id`, radians.
@@ -1271,6 +1376,9 @@ impl StageHandler for ObserveStage {
             .collect();
         shared.drifts = fresh;
         self.scans.clear();
+        if let Some(pod) = self.pod.as_mut() {
+            pod.reset();
+        }
         shared.observations.clear();
         shared.records.clear();
         shared.rejections.clear();
@@ -1281,12 +1389,18 @@ impl StageHandler for ObserveStage {
     /// table, oracle and feeds are configuration, rebuilt by assembly.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
         let shared = &self.state;
-        Some(match &self.capture {
+        let base = match &self.capture {
             None => serde_json::to_value(&shared.drifts).expect("drift state serialises"),
             Some(capture) => serde_json::json!({
                 "drifts": shared.drifts,
                 "capture_rates": capture.recorded(),
             }),
+        };
+        // A run with a pod wraps the stage's state with its gimbals; every
+        // other run checkpoints exactly as before.
+        Some(match &self.pod {
+            None => base,
+            Some(pod) => serde_json::json!({ "base": base, "pods": pod.state() }),
         })
     }
 
@@ -1294,7 +1408,8 @@ impl StageHandler for ObserveStage {
         &self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let drifts = self.decode_drifts(state)?;
+        let (state, _) = self.split_pods(state)?;
+        let drifts = self.decode_drifts(&state)?;
         let shared = &self.state;
         if !drifts.keys().eq(shared.sensors.keys()) {
             return Err(crate::simulation::StageStateError::Malformed {
@@ -1308,7 +1423,11 @@ impl StageHandler for ObserveStage {
         &mut self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let drifts = self.decode_drifts(state)?;
+        let (state, pods) = self.split_pods(state)?;
+        let drifts = self.decode_drifts(&state)?;
+        if let (Some(pod), Some(saved)) = (self.pod.as_mut(), pods) {
+            pod.restore(saved);
+        }
         let shared = &mut self.state;
         shared.drifts = drifts;
         shared.observations.clear();
@@ -1463,7 +1582,9 @@ impl StageHandler for ObserveStage {
 
                 // The bias walk steps once per observation, from the sensor's
                 // own stream -- see `SensorState`. It is applied after the
-                // noise, so the two compose as rotate-then-tilt.
+                // noise, so the two compose as rotate-then-tilt. A scheduled
+                // calibration drift adds to it (F2); absent, nothing changes.
+                let offset_rad = self.bias_offsets.get(node_id).copied().unwrap_or(0.0);
                 let direction = match shared.drifts.get_mut(node_id) {
                     Some(state) => {
                         let bias_rad = match state.drift.increment_std(timestamp_s) {
@@ -1473,9 +1594,9 @@ impl StageHandler for ObserveStage {
                             }
                             None => state.drift.step(timestamp_s, 0.0),
                         };
-                        apply_bias_to_direction(accepted.direction, bias_rad)
+                        apply_bias_to_direction(accepted.direction, bias_rad + offset_rad)
                     }
-                    None => accepted.direction,
+                    None => apply_bias_to_direction(accepted.direction, offset_rad),
                 };
 
                 shared.observations.push(BearingObservation {
@@ -1493,7 +1614,10 @@ impl StageHandler for ObserveStage {
                         node_id: node_id.clone(),
                         target_id: target_id.clone(),
                         origin,
-                        direction: thermal.direction,
+                        // The walk is the primary's alone, as in the
+                        // reference; a calibration drift turns every bearing
+                        // the sensor reports (zero leaves it untouched).
+                        direction: apply_bias_to_direction(thermal.direction, offset_rad),
                         bearing_std_rad: thermal.bearing_std_rad,
                         timestamp_s,
                         confidence: thermal.confidence,
@@ -1506,6 +1630,7 @@ impl StageHandler for ObserveStage {
             // Its own stream, keyed `(node_id, "clutter", tick)`, so the number
             // of real targets in view cannot shift the false-alarm draws.
             if spec.false_alarm_rate_per_scan > 0.0 {
+                let offset_rad = self.bias_offsets.get(node_id).copied().unwrap_or(0.0);
                 let mut clutter_rng = DeterministicRng::keyed(
                     seed,
                     &[
@@ -1544,7 +1669,9 @@ impl StageHandler for ObserveStage {
                         node_id: node_id.clone(),
                         target_id: CLUTTER_TARGET_ID.to_string(),
                         origin,
-                        direction: noisy / noisy_norm,
+                        // A calibration drift turns these too: the sensor
+                        // reports them through the same calibration.
+                        direction: apply_bias_to_direction(noisy / noisy_norm, offset_rad),
                         bearing_std_rad: spec.clutter_bearing_std_rad,
                         timestamp_s,
                         confidence,
@@ -2975,6 +3102,46 @@ mod tests {
         assert_ne!(thermal.direction, primary.direction);
         // One accepted *pair*, two observations -- the tally counts pairs.
         assert_eq!(obs(&mut sim).tally().attempted, 1);
+    }
+
+    /// F2: a calibration drift turns every bearing the sensor reports by
+    /// the offset -- the primary, the thermal duplicate and its clutter --
+    /// and nothing else about them.
+    #[test]
+    fn a_calibration_drift_turns_every_bearing_the_sensor_reports() {
+        let run = |offset_rad: f64| {
+            let mut sim = rig(
+                vec![sensor_node("s0", 0.0, 0.0, false)],
+                vec![target("t0", 500.0, 0.0, 0.0)],
+            );
+            obs(&mut sim).install_sensor(
+                "s0",
+                SensorSpec {
+                    band: SensorBand::Thermal,
+                    false_alarm_rate_per_scan: 4.0,
+                    ..permissive()
+                },
+            );
+            obs(&mut sim).set_bias_offset("s0", offset_rad);
+            sim.step().expect("tick runs");
+            obs(&mut sim).observations().to_vec()
+        };
+        let (plain, drifted) = (run(0.0), run(0.2));
+        assert_eq!(plain.len(), drifted.len());
+        assert!(
+            plain
+                .iter()
+                .filter(|o| o.target_id == CLUTTER_TARGET_ID)
+                .count()
+                > 0,
+            "the case needs clutter"
+        );
+        assert!(plain.len() >= 3, "primary, thermal and clutter");
+        for (a, b) in plain.iter().zip(&drifted) {
+            assert_eq!((&a.target_id, a.confidence), (&b.target_id, b.confidence));
+            let angle = a.direction.dot(&b.direction).clamp(-1.0, 1.0).acos();
+            assert!((angle - 0.2).abs() < 1e-9, "{} turned {angle}", a.target_id);
+        }
     }
 
     /// The four names the reference treats as thermal, and the fact that

@@ -41,7 +41,6 @@ the summary.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import re
@@ -49,6 +48,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from argusnet.core.frames import ENUOrigin, wgs84_to_enu
+from argusnet.core.io_limits import sha256_file
 
 from ._scene_gis import lazy_import_pyproj, load_geojson_layer
 
@@ -296,7 +296,7 @@ def import_buildings(
     CRS, Transformer = lazy_import_pyproj()
     from pyproj import Geod
 
-    source_bytes = Path(geojson_path).read_bytes()
+    source_sha256 = sha256_file(geojson_path)
     layer = load_geojson_layer(geojson_path, default_source_crs_id=source_crs)
     source_crs_id = source_crs or layer.source_crs_id
     to_wgs84 = Transformer.from_crs(
@@ -384,7 +384,7 @@ def import_buildings(
             "origin_lon_deg": origin[1],
             "origin_h_m": 0.0,
         },
-        "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "source_sha256": source_sha256,
         "summary": {
             "buildings": len(buildings),
             "skipped_degenerate": skipped,
