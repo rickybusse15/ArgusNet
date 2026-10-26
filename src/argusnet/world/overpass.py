@@ -23,6 +23,8 @@ import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from argusnet.core.io_limits import read_text_capped
+
 # Natural features that are lines, not areas, even when closed.
 LINEAR_NATURAL = frozenset({"tree_row", "coastline", "cliff", "ridge", "arete"})
 AREA_KEYS = ("building", "landuse", "leisure", "amenity", "water")
@@ -141,6 +143,6 @@ def to_geojson(answer: Mapping[str, object]) -> dict[str, object]:
 
 
 def convert(answer_path: str | Path, out_path: str | Path) -> dict[str, object]:
-    collection = to_geojson(json.loads(Path(answer_path).read_text(encoding="utf-8")))
+    collection = to_geojson(json.loads(read_text_capped(answer_path)))
     Path(out_path).write_text(json.dumps(collection), encoding="utf-8")
     return collection

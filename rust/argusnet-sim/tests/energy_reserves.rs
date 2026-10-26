@@ -57,3 +57,26 @@ fn a_physical_replay_records_each_drones_reserve_and_legacy_none() {
         .iter()
         .all(|frame| frame.get("energy_reserves").is_none()));
 }
+
+#[test]
+fn flown_energy_reserves_match_the_committed_battery_on_every_frame() {
+    let capacity = reference_battery_model().capacity_wh;
+    let doc = replay(EnergyProfile::FlownV1);
+    for frame in doc["frames"].as_array().unwrap() {
+        for node in frame["nodes"].as_array().unwrap() {
+            if node["is_mobile"] != true {
+                continue;
+            }
+            let id = node["node_id"].as_str().unwrap();
+            let remaining = frame["energy_reserves"][id]["remaining_wh"]
+                .as_f64()
+                .unwrap();
+            let fraction = node["battery_fraction"].as_f64().unwrap();
+            assert!(
+                (remaining - fraction * capacity).abs() < 1e-9,
+                "{id} at {}: reserve ledger differs from committed battery",
+                frame["timestamp_s"]
+            );
+        }
+    }
+}

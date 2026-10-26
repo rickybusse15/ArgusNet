@@ -33,6 +33,8 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
+from argusnet.core.io_limits import read_text_capped, sha256_file
+
 from .buildings_import import import_buildings, write_buildings
 from .features_import import import_features, write_features
 from .overpass import convert as convert_overpass
@@ -43,7 +45,7 @@ VERSION = 1
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return sha256_file(path)
 
 
 def is_building(properties: Mapping[str, object]) -> bool:
@@ -53,14 +55,14 @@ def is_building(properties: Mapping[str, object]) -> bool:
 
 def is_overpass_answer(path: Path) -> bool:
     """Whether `path` is an Overpass API answer rather than GeoJSON."""
-    document = json.loads(path.read_text(encoding="utf-8"))
+    document = json.loads(read_text_capped(path))
     return isinstance(document, Mapping) and "elements" in document and "type" not in document
 
 
 def split_buildings(osm_path: str | Path, out_path: Path) -> int:
     """Write the extract's building features to `out_path`, keeping its CRS
     member; return how many there are."""
-    document = json.loads(Path(osm_path).read_text(encoding="utf-8"))
+    document = json.loads(read_text_capped(osm_path))
     features = document.get("features", []) if document.get("type") == "FeatureCollection" else []
     buildings = [
         feature

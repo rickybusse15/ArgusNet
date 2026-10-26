@@ -187,6 +187,14 @@ impl ReplayState {
         if let Some(document) = self.document.as_mut() {
             document.frames.truncate(keep);
         }
+        let last_time = self
+            .document
+            .as_ref()
+            .and_then(|document| document.frames.last())
+            .map(|frame| frame.timestamp_s);
+        if let Some(log) = self.decisions.as_mut() {
+            log.retain(|decision| last_time.is_some_and(|time| decision.timestamp_s <= time));
+        }
         self.trimmed_before_s = None;
         self.epoch += 1;
         self.step_to(self.frame_index);
@@ -474,6 +482,38 @@ mod replay_state_tests {
     use serde_json::json;
 
     use super::{MarkerKind, ReplayDocument, ReplayState, DEFAULT_MAX_STALE_STEPS};
+
+    #[test]
+    fn a_branch_discards_decisions_from_the_abandoned_future() {
+        let mut replay = timed(&[0.0, 1.0, 2.0], &[]);
+        replay.decisions = Some(
+            [0.0, 1.0, 2.0]
+                .into_iter()
+                .map(|timestamp_s| super::RecordedDecision {
+                    timestamp_s,
+                    kind: "poi_assignment".into(),
+                    status: "applied".into(),
+                    reason: "assigned".into(),
+                    subject: Some("drone".into()),
+                    selected: None,
+                    detail: "assigned".into(),
+                })
+                .collect(),
+        );
+        replay.branch(2);
+        assert_eq!(
+            replay
+                .decisions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|d| d.timestamp_s)
+                .collect::<Vec<_>>(),
+            [0.0, 1.0]
+        );
+        replay.branch(0);
+        assert!(replay.decisions.as_ref().unwrap().is_empty());
+    }
 
     #[test]
     fn replay_state_advances_and_stops_at_last_frame() {

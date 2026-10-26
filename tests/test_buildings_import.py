@@ -27,7 +27,22 @@ def test_the_committed_document_is_what_the_importer_writes(town: dict) -> None:
     # The native builder's tests read the committed file; it must not drift
     # from the importer (regenerate with scripts/import_buildings.py).
     committed = json.loads((FIXTURES / "buildings_town.buildings.json").read_text())
-    assert committed == json.loads(json.dumps(town))
+    actual = json.loads(json.dumps(town))
+    # PROJ 9.8.1 changes these projected coordinates by at most 0.68 nm
+    # against the fixture. Keep tags, heights, IDs and topology exact; only
+    # projection-derived floats get a one-nanometre absolute allowance.
+    for expected_building, building in zip(
+        committed["buildings"], actual["buildings"], strict=True
+    ):
+        expected_points = expected_building.pop("footprint_xy_m")
+        points = building.pop("footprint_xy_m")
+        assert len(points) == len(expected_points)
+        for point, expected_point in zip(points, expected_points, strict=True):
+            assert point == pytest.approx(expected_point, rel=0, abs=1e-9)
+    expected_error = committed["summary"].pop("worst_footprint_area_error")
+    error = actual["summary"].pop("worst_footprint_area_error")
+    assert error == pytest.approx(expected_error, rel=0, abs=1e-10)
+    assert committed == actual
 
 
 def test_the_document_is_georeferenced(town: dict) -> None:

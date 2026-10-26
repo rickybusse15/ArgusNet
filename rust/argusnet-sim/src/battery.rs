@@ -187,7 +187,6 @@ impl BatteryStage {
         self.state.warned.contains(node_id)
     }
 
-    /// Take the events the last run produced, leaving none behind.
     /// Under `flown_v1`, charge each platform for the tick just committed:
     /// motion from where the last tick left it to where this one did (after
     /// overrides, deconfliction and safety), plus hover for the rest of the
@@ -224,6 +223,18 @@ impl BatteryStage {
                 .previous_positions
                 .insert(platform.node_id.clone(), Some(position));
             platform.battery_fraction = Some(drawn.fraction_of(model.capacity_wh));
+            let reserve_wh = match shared.homes.get(&platform.node_id) {
+                Some(home) => model.dynamic_reserve_wh(
+                    position,
+                    *home,
+                    shared.wind_mps,
+                    BatteryModel::DEFAULT_SAFETY_MARGIN,
+                ),
+                None => model.capacity_wh * model.reserve_fraction,
+            };
+            shared
+                .reserves
+                .insert(platform.node_id.clone(), (drawn.remaining_wh, reserve_wh));
         }
     }
 
@@ -233,6 +244,7 @@ impl BatteryStage {
         &self.state.reserves
     }
 
+    /// Take the events the last run produced, leaving none behind.
     pub fn take_events(&mut self) -> Vec<BatteryEvent> {
         std::mem::take(&mut self.state.events)
     }

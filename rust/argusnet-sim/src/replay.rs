@@ -370,7 +370,6 @@ impl From<&crate::belief_world::QualityLayer> for ReplayQualityStats {
         }
     }
 }
-}
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
