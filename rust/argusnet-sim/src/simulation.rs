@@ -1691,9 +1691,15 @@ impl Simulation {
                 stage: *stage,
             });
         }
+        let committed_platforms = self
+            .stage::<crate::controller::ControllerStage>(Stage::SampleControllersAndBattery)
+            .filter(|controller| controller.has_physical_guard())
+            .map(|_| self.world.platforms().to_vec());
         Ok(SimulationCheckpoint {
             header: CheckpointHeader {
-                format_version: if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
+                format_version: if committed_platforms.is_some() {
+                    CheckpointHeader::FORMAT_VERSION_COMMITTED_PLATFORMS
+                } else if self.stage_lag.is_empty() && self.lane_rates.is_empty() {
                     CheckpointHeader::FORMAT_VERSION
                 } else {
                     CheckpointHeader::FORMAT_VERSION_STAGE_LAG
@@ -1735,6 +1741,7 @@ impl Simulation {
                 .iter()
                 .map(|(stage, rate)| (stage.to_string(), rate.clone()))
                 .collect(),
+            committed_platforms,
         })
     }
 
@@ -1749,6 +1756,35 @@ impl Simulation {
             self.config.content_hash(),
             self.scenario_hash,
         )?;
+
+        let guarded = self
+            .stage::<crate::controller::ControllerStage>(Stage::SampleControllersAndBattery)
+            .is_some_and(|controller| controller.has_physical_guard());
+        if guarded != checkpoint.committed_platforms.is_some() {
+            return Err(RestoreError::InvalidState {
+                detail: "guarded checkpoints require committed platform poses (format 6)".into(),
+            });
+        }
+        if let Some(platforms) = &checkpoint.committed_platforms {
+            if platforms.len() != self.world.platforms().len()
+                || platforms
+                    .iter()
+                    .zip(self.world.platforms())
+                    .any(|(saved, current)| {
+                        saved.node_id != current.node_id
+                            || saved
+                                .position
+                                .iter()
+                                .chain(saved.velocity.iter())
+                                .any(|v| !v.is_finite())
+                            || !saved.timestamp_s.is_finite()
+                    })
+            {
+                return Err(RestoreError::InvalidState {
+                    detail: "committed platform poses are malformed or name another fleet".into(),
+                });
+            }
+        }
 
         if checkpoint.seed != self.config.seed() {
             return Err(RestoreError::InvalidState {
@@ -1858,6 +1894,11 @@ impl Simulation {
             &checkpoint.pending_commands,
             &checkpoint.command_history,
         );
+        if let Some(platforms) = &checkpoint.committed_platforms {
+            for (current, saved) in self.world.platforms_mut().iter_mut().zip(platforms) {
+                *current = saved.clone();
+            }
+        }
         self.clock.restore_tick(checkpoint.tick);
         self.epoch = checkpoint.header.epoch;
         self.belief_revision = checkpoint.header.belief_revision;

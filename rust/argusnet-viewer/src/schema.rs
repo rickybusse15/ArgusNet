@@ -568,7 +568,16 @@ pub fn validate_scene_asset(asset_root: &Path, relative: &str) -> Result<()> {
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if extension == "glb" || extension == "gltf" {
+    let requested_extension = Path::new(relative)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if extension == "glb"
+        || extension == "gltf"
+        || requested_extension == "glb"
+        || requested_extension == "gltf"
+    {
         gltf_uris_stay_inside(asset_root, &resolved)?;
     }
     Ok(())
@@ -931,6 +940,16 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("escapes") || error.contains(".."), "{error}");
+
+        // Bevy selects its loader from the requested name, even when an
+        // internal symlink's target has a different extension.
+        fs::rename(
+            root.join("terrain/mesh.gltf"),
+            root.join("terrain/payload.bin"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("payload.bin", root.join("terrain/alias.gltf")).unwrap();
+        assert!(super::validate_scene_asset(&root, "terrain/alias.gltf").is_err());
 
         fs::write(
             root.join("terrain/embedded.gltf"),

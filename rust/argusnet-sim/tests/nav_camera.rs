@@ -25,8 +25,7 @@ fn bundle_of(document: &serde_json::Value) -> ScenarioBundle {
 
 /// The `tt` fixture with a wall 40 m thick across the whole map at `x = 0`,
 /// from below the lowest ground to well above any flight. Thicker than any
-/// one tick's flight: the physical guard sweeps a step against wires but not
-/// structures, so a thinner wall can be stepped through uncounted.
+/// one tick's flight, exercising both the perception model and guard.
 fn walled() -> serde_json::Value {
     let mut document = fixture("scenario_bundle_tt.json");
     let bounds = document["world"]["obstacles"]["bounds"].clone();
@@ -244,6 +243,25 @@ fn a_camera_run_is_deterministic_and_resumes_exactly() {
         "the camera's evidence is checkpointed"
     );
     let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        checkpoint.header.format_version,
+        argusnet_sim::snapshot::CheckpointHeader::FORMAT_VERSION_COMMITTED_PLATFORMS
+    );
+    let before = original.sim.tick();
+    for malformed in [0, 1] {
+        let mut damaged = checkpoint.clone();
+        if malformed == 0 {
+            damaged.committed_platforms = None;
+        } else {
+            damaged.committed_platforms.as_mut().unwrap()[0].node_id = "another-fleet".into();
+        }
+        assert!(original.restore(&damaged).is_err());
+        assert_eq!(
+            original.sim.tick(),
+            before,
+            "refusal must not mutate the run"
+        );
+    }
     let mut resumed = run_with(&bundle, config);
     resumed.restore(&checkpoint).expect("restore accepted");
     let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
@@ -252,7 +270,11 @@ fn a_camera_run_is_deterministic_and_resumes_exactly() {
             serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
         })
         .collect();
-    assert_eq!(rest, straight[at..]);
+    let first_difference = rest.iter().zip(&straight[at..]).position(|(a, b)| a != b);
+    assert!(
+        first_difference.is_none(),
+        "first resumed frame difference: {first_difference:?}"
+    );
 }
 
 #[test]

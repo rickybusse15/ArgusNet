@@ -59,6 +59,7 @@ scenes/
 data/
 outputs/
 replays/
+runs/
 
 # ----------------------
 # Large binary assets

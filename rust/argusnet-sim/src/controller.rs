@@ -446,6 +446,10 @@ impl ControllerStage {
         self.guard = Some(guard);
     }
 
+    pub fn has_physical_guard(&self) -> bool {
+        self.guard.is_some()
+    }
+
     /// Launch a parked platform. Ignored for one already launched, as in the
     /// reference.
     pub fn trigger_launch(&mut self, node_id: &str, timestamp_s: f64, target_id: &str) -> bool {

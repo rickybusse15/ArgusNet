@@ -42,6 +42,15 @@ are preserved by merge commits; the integration must also use a merge commit.
    committed footprint coordinates by at most 0.676 nanometres, and its area-error
    diagnostic by 5.94e-11. The fixture permits 1e-9 m only on projected coordinates
    and 1e-10 on that diagnostic; tags, heights, identity and topology stay exact.
+5. **Guarded checkpoint omitted the previous committed pose.** Sweeping a
+   controller step now depends on where the previous tick actually ended.
+   Guarded runs use checkpoint format 6 and preserve committed platform poses;
+   malformed/missing poses are refused before mutation. Legacy runs retain
+   formats 4/5. The navigation-camera resume test exposed this combination.
+6. **New sensor profiles could allocate unbounded ray grids.** Navigation-camera
+   and LiDAR dimensions now use checked multiplication and a one-million-ray
+   capture cap. Profile files use the CLI's bounded reader. Overflow and
+   oversized profiles have regression coverage.
 
 ## Deferred dependency updates
 
