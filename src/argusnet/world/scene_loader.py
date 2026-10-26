@@ -8,10 +8,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 
 import numpy as np
 
+from argusnet.core.io_limits import (
+    read_text_capped,
+    reject_unsafe_relative_path,
+    resolve_contained_path,
+)
 from argusnet.evaluation.replay import (
     ReplayDocument,
     load_replay_document,
@@ -88,18 +93,12 @@ def _safe_relative_asset_path(relative_path: str, *, field_name: str) -> None:
     """Reject absolute paths and ``..`` traversal in a scene manifest path field.
 
     Scene manifests may come from an untrusted, shared scene package. Every
-    path field (layer ``asset_path``, ``metadata.environment``/``style``,
-    ``replay.path``) is later joined onto the scene package's directory to
-    resolve a file to read; without this check an absolute path or a ``..``
-    component lets the manifest point outside the package (path traversal).
+    path field (layer ``asset_path``, ``metadata.environment``/``style``/
+    ``land_cover``, ``replay.path``) is later joined onto the scene package's
+    directory to resolve a file to read; without this check an absolute path
+    or a ``..`` component lets the manifest point outside the package.
     """
-    if not isinstance(relative_path, str) or not relative_path.strip():
-        raise ValueError(f"Scene manifest {field_name} must be a non-empty string.")
-    if PurePosixPath(relative_path).is_absolute() or PureWindowsPath(relative_path).is_absolute():
-        raise ValueError(f"Scene manifest {field_name} must be a relative path: {relative_path!r}")
-    normalized = PurePosixPath(relative_path.replace("\\", "/"))
-    if ".." in normalized.parts:
-        raise ValueError(f"Scene manifest {field_name} must not contain '..': {relative_path!r}")
+    reject_unsafe_relative_path(relative_path, field_name=f"Scene manifest {field_name}")
 
 
 def resolve_scene_asset_path(
@@ -112,16 +111,9 @@ def resolve_scene_asset_path(
     on the filesystem (catches escapes that survive the string check, e.g.
     via a symlinked intermediate directory).
     """
-    _safe_relative_asset_path(relative_path, field_name=field_name)
-    root = Path(scene_root).resolve()
-    resolved = (root / relative_path).resolve()
-    try:
-        resolved.relative_to(root)
-    except ValueError:
-        raise ValueError(
-            f"Scene manifest {field_name} escapes the scene root: {relative_path!r}"
-        ) from None
-    return resolved
+    return resolve_contained_path(
+        scene_root, relative_path, field_name=f"Scene manifest {field_name}"
+    )
 
 
 def validate_scene_manifest(document: Mapping[str, object]) -> None:
@@ -145,6 +137,11 @@ def validate_scene_manifest(document: Mapping[str, object]) -> None:
         raise ValueError("Scene manifest metadata must include environment and style paths.")
     _safe_relative_asset_path(str(metadata.get("environment")), field_name="metadata.environment")
     _safe_relative_asset_path(str(metadata.get("style")), field_name="metadata.style")
+    land_cover = metadata.get("land_cover")
+    if isinstance(land_cover, str) and land_cover.strip():
+        _safe_relative_asset_path(land_cover, field_name="metadata.land_cover")
+    elif land_cover not in (None, ""):
+        raise ValueError("Scene manifest metadata.land_cover must be a relative path when set.")
     for index, layer in enumerate(layers):
         if not isinstance(layer, Mapping):
             raise ValueError("Scene manifest layers must be mappings.")
@@ -162,12 +159,15 @@ def validate_scene_manifest(document: Mapping[str, object]) -> None:
 
 def load_scene_manifest(path: str | Path) -> dict[str, object]:
     manifest_path = Path(path)
-    document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    document = json.loads(read_text_capped(manifest_path))
     validate_scene_manifest(document)
     scene_root = manifest_path.parent
     metadata = document["metadata"]
     resolve_scene_asset_path(scene_root, metadata["environment"], field_name="metadata.environment")
     resolve_scene_asset_path(scene_root, metadata["style"], field_name="metadata.style")
+    land_cover = metadata.get("land_cover")
+    if isinstance(land_cover, str) and land_cover.strip():
+        resolve_scene_asset_path(scene_root, land_cover, field_name="metadata.land_cover")
     for index, layer in enumerate(document["layers"]):
         resolve_scene_asset_path(
             scene_root, layer["asset_path"], field_name=f"layers[{index}].asset_path"

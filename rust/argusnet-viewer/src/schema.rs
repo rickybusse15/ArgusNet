@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::fs::{self, File};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bevy::prelude::Resource;
@@ -328,30 +329,249 @@ pub fn normalize_scene_root(scene_path: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+/// Largest scene JSON, replay, or mesh this loader will read. Matches the
+/// Python cap in `argusnet.core.io_limits`.
+const MAX_SCENE_FILE_BYTES: u64 = 256 * 1024 * 1024;
+/// glTF JSON is the chunk that names external URIs. The binary payload can
+/// be large; the JSON that points at it does not need to be.
+const MAX_GLTF_JSON_BYTES: usize = 32 * 1024 * 1024;
+
 fn read_json<T: for<'de> Deserialize<'de>>(path: PathBuf) -> Result<T> {
+    let meta = fs::metadata(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    if !meta.is_file() {
+        anyhow::bail!("{} is not a file", path.display());
+    }
+    if meta.len() > MAX_SCENE_FILE_BYTES {
+        anyhow::bail!(
+            "{} is {} bytes, over the {MAX_SCENE_FILE_BYTES} byte limit",
+            path.display(),
+            meta.len()
+        );
+    }
     let raw =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
 
-/// Joins `relative` onto `root`, rejecting an absolute path or any `..`
-/// component. Manifest path fields (`metadata.style`, `metadata.environment`,
-/// `replay.path`) can come from an untrusted, shared scene package and are
-/// read directly via `fs::read_to_string` in [`read_json`] — an unescaped
-/// path here is an arbitrary file read, not just an asset-load path
-/// traversal, so this is checked before the path is ever joined and read.
-fn safe_manifest_path(root: &Path, relative: &str, field_name: &str) -> Result<PathBuf> {
+/// Lexical rejection shared by manifest fields and glTF URIs.
+fn reject_lexical_escape(relative: &str, field_name: &str) -> Result<()> {
+    if relative.is_empty() || relative.contains('\0') {
+        anyhow::bail!("scene manifest {field_name} must be a non-empty relative path");
+    }
+    let normalized = relative.replace('\\', "/");
+    if normalized.split('/').any(|part| part == "..") {
+        anyhow::bail!(
+            "scene manifest {field_name} must be a relative path with no '..' components, got {relative:?}"
+        );
+    }
     let candidate = Path::new(relative);
     if candidate.is_absolute()
-        || candidate
-            .components()
-            .any(|component| component == std::path::Component::ParentDir)
+        || candidate.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
     {
         anyhow::bail!(
             "scene manifest {field_name} must be a relative path with no '..' components, got {relative:?}"
         );
     }
-    Ok(root.join(candidate))
+    Ok(())
+}
+
+/// Join `relative` onto `root`, refusing `..`, absolute paths, and any
+/// symlink whose target leaves `root`.
+///
+/// A lexical join is not enough: `metadata/environment.json` can be a symlink
+/// to `/etc/passwd`, and `fs::read_to_string` would follow it. The root must
+/// already exist; the final component may not, so a missing replay still
+/// fails later with its own error.
+fn contained_join(root: &Path, relative: &str, field_name: &str) -> Result<PathBuf> {
+    reject_lexical_escape(relative, field_name)?;
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", root.display()))?;
+    let mut current = root.clone();
+    for component in Path::new(&relative.replace('\\', "/")).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => {
+                current = current.join(part);
+                if current.is_symlink() {
+                    let target = fs::canonicalize(&current).with_context(|| {
+                        format!("failed to resolve symlink {}", current.display())
+                    })?;
+                    if !target.starts_with(&root) {
+                        anyhow::bail!(
+                            "scene manifest {field_name} escapes the scene root via symlink: {relative:?}"
+                        );
+                    }
+                    current = target;
+                }
+            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                anyhow::bail!(
+                    "scene manifest {field_name} must be a relative path with no '..' components, got {relative:?}"
+                );
+            }
+        }
+    }
+    if !current.starts_with(&root) {
+        anyhow::bail!("scene manifest {field_name} escapes the scene root: {relative:?}");
+    }
+    Ok(current)
+}
+
+/// Joins `relative` onto `root`, rejecting an absolute path, any `..`
+/// component, or a symlink that leaves the package. Manifest path fields
+/// (`metadata.style`, `metadata.environment`, `metadata.land_cover`,
+/// `replay.path`) can come from an untrusted, shared scene package and are
+/// read directly in [`read_json`] — an unescaped path here is an arbitrary
+/// file read.
+fn safe_manifest_path(root: &Path, relative: &str, field_name: &str) -> Result<PathBuf> {
+    contained_join(root, relative, field_name)
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(
+                std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or(""),
+                16,
+            ) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn collect_uris(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "uri" {
+                    if let Some(uri) = child.as_str() {
+                        out.push(uri.to_string());
+                    }
+                } else {
+                    collect_uris(child, out);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_uris(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn gltf_document(path: &Path) -> Result<Value> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut header = [0u8; 20];
+    let read = file
+        .read(&mut header)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if read >= 4 && &header[..4] == b"glTF" {
+        if read < 20 {
+            anyhow::bail!("truncated glb {}", path.display());
+        }
+        if &header[16..20] != b"JSON" {
+            anyhow::bail!("glb {} is missing its JSON chunk", path.display());
+        }
+        let json_len = u32::from_le_bytes(header[12..16].try_into().expect("4 bytes")) as usize;
+        if json_len > MAX_GLTF_JSON_BYTES {
+            anyhow::bail!(
+                "glb {} JSON chunk is {json_len} bytes, over the {MAX_GLTF_JSON_BYTES} byte limit",
+                path.display()
+            );
+        }
+        let mut json = vec![0u8; json_len];
+        file.read_exact(&mut json)
+            .with_context(|| format!("failed to read glb JSON from {}", path.display()))?;
+        return serde_json::from_slice(&json)
+            .with_context(|| format!("failed to parse glb JSON from {}", path.display()));
+    }
+    drop(file);
+    let raw = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_slice(&raw).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn gltf_uris_stay_inside(asset_root: &Path, gltf_file: &Path) -> Result<()> {
+    let document = gltf_document(gltf_file)?;
+    let mut uris = Vec::new();
+    collect_uris(&document, &mut uris);
+    let boundary = asset_root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", asset_root.display()))?;
+    let parent = gltf_file
+        .parent()
+        .context("glTF asset is missing a parent directory")?;
+    for uri in uris {
+        let decoded = percent_decode(uri.trim());
+        if decoded.to_ascii_lowercase().starts_with("data:") {
+            continue;
+        }
+        if decoded.contains('\0')
+            || decoded.contains("://")
+            || decoded.starts_with("//")
+            || decoded.contains('?')
+            || decoded.contains('#')
+        {
+            anyhow::bail!("glTF URI {uri:?} is not a file inside the scene package");
+        }
+        let normalized = decoded.replace('\\', "/");
+        reject_lexical_escape(&normalized, "glTF URI")?;
+        let joined = parent.join(&normalized);
+        let relative = joined.strip_prefix(&boundary).with_context(|| {
+            format!(
+                "glTF URI {uri:?} escapes the scene package at {}",
+                boundary.display()
+            )
+        })?;
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        contained_join(&boundary, &relative, "glTF URI")?;
+    }
+    Ok(())
+}
+
+/// Refuse a scene-layer asset that leaves `asset_root` or names a glTF buffer
+/// outside it. Bevy follows glTF buffer and image URIs relative to the file,
+/// and it follows symlinks, so the check has to happen before `asset_server.load`.
+pub fn validate_scene_asset(asset_root: &Path, relative: &str) -> Result<()> {
+    let resolved = contained_join(asset_root, relative, "asset_path")?;
+    let meta = fs::metadata(&resolved)
+        .with_context(|| format!("failed to read scene asset {}", resolved.display()))?;
+    if !meta.is_file() {
+        anyhow::bail!("scene asset {} is not a file", resolved.display());
+    }
+    if meta.len() > MAX_SCENE_FILE_BYTES {
+        anyhow::bail!(
+            "scene asset {} is {} bytes, over the {MAX_SCENE_FILE_BYTES} byte limit",
+            resolved.display(),
+            meta.len()
+        );
+    }
+    let extension = resolved
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if extension == "glb" || extension == "gltf" {
+        gltf_uris_stay_inside(asset_root, &resolved)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -422,9 +642,15 @@ mod tests {
 
     #[test]
     fn safe_manifest_path_resolves_contained_relative_path() {
-        let root = Path::new("/scene-root");
-        let resolved = safe_manifest_path(root, "metadata/style.json", "metadata.style").unwrap();
-        assert_eq!(resolved, root.join("metadata/style.json"));
+        let root = std::env::temp_dir().join(format!("argusnet-contained-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("metadata")).unwrap();
+        let resolved = safe_manifest_path(&root, "metadata/style.json", "metadata.style").unwrap();
+        assert_eq!(
+            resolved,
+            root.canonicalize().unwrap().join("metadata/style.json")
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -628,6 +854,105 @@ mod tests {
         assert!(ScenePackage::load(&root).is_err());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn load_scene_package_rejects_environment_symlink_escape() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("argusnet-schema-symlink-{suffix}"));
+        let outside = std::env::temp_dir().join(format!("argusnet-schema-outside-{suffix}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("metadata")).unwrap();
+        fs::write(&outside, "{\"stolen\":true}").unwrap();
+        fs::write(
+            root.join("scene_manifest.json"),
+            serde_json::to_string_pretty(&json!({
+                "format_version": "smartscene-v1",
+                "scene_id": "evil",
+                "bounds_xy_m": {
+                    "x_min_m": -10.0, "x_max_m": 10.0, "y_min_m": -5.0, "y_max_m": 5.0
+                },
+                "runtime_crs": {"runtime_crs_id": "local-enu"},
+                "source_crs_id": "EPSG:32611",
+                "layers": [],
+                "replay": null,
+                "metadata": {
+                    "environment": "metadata/environment.json",
+                    "style": "metadata/style.json"
+                },
+                "build": {"source_kind": "synthetic"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("metadata/style.json"),
+            serde_json::to_string_pretty(&json!({
+                "style_version": "smartstyle-v1",
+                "layers": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("metadata/environment.json")).unwrap();
+
+        let error = ScenePackage::load(&root).unwrap_err().to_string();
+        assert!(
+            error.contains("symlink") || error.contains("escapes"),
+            "{error}"
+        );
+
+        let _ = fs::remove_file(&outside);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gltf_buffer_uri_that_leaves_the_package_is_rejected() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("argusnet-gltf-uri-{suffix}"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("terrain")).unwrap();
+        fs::write(
+            root.join("terrain/mesh.gltf"),
+            serde_json::json!({
+                "asset": {"version": "2.0"},
+                "buffers": [{"uri": "../../../../etc/passwd", "byteLength": 1}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let error = super::validate_scene_asset(&root, "terrain/mesh.gltf")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("escapes") || error.contains(".."), "{error}");
+
+        fs::write(
+            root.join("terrain/embedded.gltf"),
+            serde_json::json!({
+                "asset": {"version": "2.0"},
+                "buffers": [{"byteLength": 0}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        super::validate_scene_asset(&root, "terrain/embedded.gltf").unwrap();
+
+        std::os::unix::fs::symlink("/etc/passwd", root.join("terrain/evil.glb")).unwrap();
+        let error = super::validate_scene_asset(&root, "terrain/evil.glb")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("symlink") || error.contains("escapes"),
+            "{error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

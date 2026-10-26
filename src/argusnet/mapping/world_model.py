@@ -9,22 +9,53 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from argusnet.mapping.semantics import SemanticMap
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
+from argusnet.core.io_limits import check_file_size, read_text_capped
 from argusnet.mapping.coverage import CoverageMap
 from argusnet.mapping.elevation import ElevationMap, flat_elevation_map
 from argusnet.mapping.occupancy import GridBounds, OccupancyGrid
 from argusnet.mapping.uncertainty import UncertaintyField
 
+if TYPE_CHECKING:
+    from argusnet.mapping.semantics import SemanticMap
+
 __all__ = [
     "WorldModel",
     "WorldModelConfig",
 ]
+
+# Declared npy payload, not the file size: a short header can name a huge
+# shape and np.load will try to allocate it. One gibibyte is past any grid
+# this saver writes today and still finite.
+_MAX_NPY_BYTES = 1024 * 1024 * 1024
+
+
+def _load_npy(path: Path) -> np.ndarray:
+    """Load a numeric ``.npy`` file, rejecting object arrays and oversized shapes."""
+    check_file_size(path, max_bytes=_MAX_NPY_BYTES)
+    with path.open("rb") as handle:
+        major, _minor = np.lib.format.read_magic(handle)
+        if major == 1:
+            shape, _fortran, dtype = np.lib.format.read_array_header_1_0(handle)
+        elif major == 2:
+            shape, _fortran, dtype = np.lib.format.read_array_header_2_0(handle)
+        else:
+            raise ValueError(f"{path}: unsupported npy version {major}")
+    if dtype.hasobject:
+        raise ValueError(f"{path}: object arrays are not allowed")
+    declared = int(dtype.itemsize)
+    for dim in shape:
+        dim = int(dim)
+        if dim < 0 or declared > _MAX_NPY_BYTES:
+            raise ValueError(f"{path}: declared array exceeds {_MAX_NPY_BYTES} bytes")
+        next_size = declared * dim
+        if next_size > _MAX_NPY_BYTES:
+            raise ValueError(f"{path}: declared array exceeds {_MAX_NPY_BYTES} bytes")
+        declared = next_size
+    return cast("np.ndarray", np.load(path, allow_pickle=False))
 
 
 @dataclass(frozen=True)
@@ -150,13 +181,13 @@ class WorldModel:
     def load(cls, directory: str | Path) -> WorldModel:
         """Load a previously saved WorldModel."""
         p = Path(directory)
-        cfg = json.loads((p / "config.json").read_text())
+        cfg = json.loads(read_text_capped(p / "config.json"))
         config = WorldModelConfig(**cfg)
         model = cls(config)
-        model.occupancy._log_odds = np.load(p / "occupancy_log_odds.npy")
-        model.occupancy._max_height = np.load(p / "occupancy_max_height.npy")
-        model.coverage._count = np.load(p / "coverage_count.npy")
-        model.uncertainty._mean = np.load(p / "uncertainty_mean.npy")
-        model.uncertainty._M2 = np.load(p / "uncertainty_M2.npy")
-        model.uncertainty._count = np.load(p / "uncertainty_count.npy")
+        model.occupancy._log_odds = _load_npy(p / "occupancy_log_odds.npy")
+        model.occupancy._max_height = _load_npy(p / "occupancy_max_height.npy")
+        model.coverage._count = _load_npy(p / "coverage_count.npy")
+        model.uncertainty._mean = _load_npy(p / "uncertainty_mean.npy")
+        model.uncertainty._M2 = _load_npy(p / "uncertainty_M2.npy")
+        model.uncertainty._count = _load_npy(p / "uncertainty_count.npy")
         return model
