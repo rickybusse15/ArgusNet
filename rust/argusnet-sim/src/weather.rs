@@ -181,6 +181,12 @@ pub struct MotionWeather {
 }
 
 impl MotionWeather {
+    /// The meteorological visibility after precipitation, floored at 1 m:
+    /// the `V` of [`Self::visibility_at_range`]'s Koschmieder law.
+    pub fn effective_visibility_m(&self) -> f64 {
+        (self.atmosphere.visibility_m * self.precipitation.visibility_reduction_factor()).max(1.0)
+    }
+
     /// `visibility_at_range`: Koschmieder over the precipitation-reduced
     /// visibility, floored at 1 m.
     pub fn visibility_at_range(&self, range_m: f64) -> f64 {

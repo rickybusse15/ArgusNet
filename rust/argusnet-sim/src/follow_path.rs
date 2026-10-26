@@ -242,6 +242,11 @@ impl FollowPathController {
         &self.config
     }
 
+    /// Orbit no faster than `speed_mps`.
+    pub fn cap_speed(&mut self, speed_mps: f64) {
+        self.config.max_speed_mps = self.config.max_speed_mps.min(speed_mps);
+    }
+
     pub fn state(&self) -> &FollowPathState {
         &self.state
     }

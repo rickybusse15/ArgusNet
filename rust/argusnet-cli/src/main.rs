@@ -227,6 +227,18 @@ struct SimArgs {
     /// Recorded in the replay's `meta.world_knowledge.exploration.quality`.
     #[arg(long)]
     quality_requirements: Option<PathBuf>,
+    /// In a `--world-knowledge none` run, fly with a forward navigation
+    /// camera as the primary obstacle-avoidance sensor (SR5c): its
+    /// detections become safety obstacles, every controller is capped to the
+    /// speed its detection envelope allows, and the range scanner drops its
+    /// forward fan (it maps; it no longer looks ahead). Recorded in the
+    /// replay's `meta.world_knowledge` with the envelope.
+    #[arg(long)]
+    nav_camera: bool,
+    /// The navigation camera's profile as JSON (`NavCameraConfig`), instead
+    /// of the assumed default. Implies `--nav-camera`.
+    #[arg(long)]
+    nav_camera_profile: Option<PathBuf>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -371,6 +383,18 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 .map_err(|error| format!("{}: {error}", path.display()))
         })
         .transpose()?;
+    let nav_camera = match &args.nav_camera_profile {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            let config: argusnet_sim::nav_camera::NavCameraConfig = serde_json::from_str(&text)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            Some(config)
+        }
+        None => args
+            .nav_camera
+            .then(argusnet_sim::nav_camera::NavCameraConfig::default),
+    };
     Ok(RunOptions {
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
@@ -407,10 +431,21 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         exploration: (args.pursuit.is_some()
             || args.explore.is_some()
             || args.wire_prior
-            || quality.is_some())
+            || nav_camera.is_some() || quality.is_some())
         .then(|| {
             let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
+            let scan = if nav_camera.is_some() {
+                // The camera looks ahead; the scanner only maps.
+                argusnet_sim::range_scan::RangeScanConfig {
+                    forward_count: 0,
+                    ..defaults.scan.clone()
+                }
+            } else {
+                defaults.scan.clone()
+            };
             argusnet_sim::belief_world::ExplorationConfig {
+                scan,
+                nav_camera: nav_camera.clone(),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -640,13 +675,12 @@ fn sim(args: SimArgs) -> ExitCode {
              a prior run knows them already",
         );
     }
-    if args.quality_requirements.is_some()
+    if (args.quality_requirements.is_some() || args.nav_camera || args.nav_camera_profile.is_some())
         && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
     {
         return fail(
             EXIT_INVALID,
-            "--quality-requirements measures the map the platforms build; \
-             it needs --world-knowledge none",
+            "--quality-requirements and --nav-camera need --world-knowledge none",
         );
     }
     if let Some(dir) = &args.export_scene {

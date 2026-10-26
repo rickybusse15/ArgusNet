@@ -24,6 +24,7 @@ pub mod mission;
 pub mod mission_driver;
 pub mod motion;
 pub mod motion_world;
+pub mod nav_camera;
 pub mod observation_follow;
 pub mod observe;
 pub mod overrides;

@@ -2872,6 +2872,12 @@ impl MissionDriverStage {
         self.replay = LocalizationReplay { ticks };
     }
 
+    /// Redirect drones to POIs, home and back no faster than `speed_mps`.
+    /// Before the first tick.
+    pub fn cap_redirect_speed(&mut self, speed_mps: f64) {
+        self.config.redirect_speed_mps = self.config.redirect_speed_mps.min(speed_mps);
+    }
+
     pub fn config(&self) -> &MissionDriverConfig {
         &self.config
     }
@@ -5071,6 +5077,7 @@ mod tests {
                 span: line.span_line(1),
                 point_m: [300.0, 0.0, 39.0],
             }],
+            sensor: Default::default(),
         };
         grid.integrate(&scan, 4);
         map.publish(grid.snapshot(&config));

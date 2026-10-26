@@ -385,6 +385,13 @@ pub struct ReplayRangeScan {
     /// (R3). Absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wire: Vec<[f64; 3]>,
+    /// `nav_camera` for the forward navigation camera's detections (safety
+    /// evidence, not the map); absent for the range scanner.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::range_scan::ScanSensor::is_range_scanner"
+    )]
+    pub sensor: crate::range_scan::ScanSensor,
 }
 
 /// Most returns per scan a replay frame carries. The frame's returns are a
@@ -413,6 +420,7 @@ impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
             canopy: of(crate::range_scan::ReturnClass::Canopy),
             misses: scan.misses,
             wire: scan.wires.iter().map(|wire| dm(wire.point_m)).collect(),
+            sensor: scan.sensor,
         }
     }
 }

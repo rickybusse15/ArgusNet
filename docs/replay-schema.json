@@ -1124,6 +1124,13 @@
                   "minItems": 3,
                   "maxItems": 3
                 }
+              },
+              "sensor": {
+                "type": "string",
+                "enum": [
+                  "nav_camera"
+                ],
+                "description": "`nav_camera` for the forward navigation camera's obstacle detections (SR5c): safety evidence, not the map. Absent for the range scanner."
               }
             }
           }

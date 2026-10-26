@@ -79,6 +79,11 @@ impl FrontierExplorer {
         &self.lane
     }
 
+    /// Explore, and fall back to the lane, no faster than `speed_mps`.
+    pub fn cap_speed(&mut self, speed_mps: f64) {
+        self.lane = self.lane.clone().with_speed_cap(speed_mps);
+    }
+
     pub fn state(&self) -> &ExplorerState {
         &self.state
     }
@@ -212,10 +217,7 @@ impl FrontierExplorer {
     }
 
     fn lane_speed_mps(&self) -> f64 {
-        self.lane
-            .config()
-            .speed_mps
-            .max(LoopedWaypointPath::MIN_SPEED_MPS)
+        self.lane.speed_mps()
     }
 }
 
@@ -275,6 +277,7 @@ mod tests {
                 returns,
                 misses: 0,
                 wires: Vec::new(),
+                sensor: Default::default(),
             },
             1,
         );

@@ -137,6 +137,10 @@ impl<S, F: Seedable> ObservationTriggeredFollow<S, F> {
         &self.search
     }
 
+    pub fn search_mut(&mut self) -> &mut S {
+        &mut self.search
+    }
+
     pub fn follow(&self) -> &F {
         &self.follow
     }

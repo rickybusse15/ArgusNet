@@ -839,6 +839,8 @@ pub struct AssembledRun {
     /// written as `meta.assignment_history`. Not checkpointed: like the
     /// frames, a resumed run's history starts at its checkpoint.
     assignments: crate::assignments::AssignmentHistory,
+    /// The bundle's weather, for the navigation camera's envelope.
+    weather: Option<MotionWeather>,
 }
 
 /// What the replay frames need beyond the stages' own handles.
@@ -1414,6 +1416,7 @@ pub fn assemble_with(
             .fold(f64::NEG_INFINITY, f64::max)
             .max(f64::MIN),
         map_bounds_m: bundle.map_bounds_m,
+        weather: bundle.weather.clone(),
         world,
         guard: None,
         policy_guard: false,
@@ -1898,7 +1901,19 @@ impl AssembledRun {
             self.world.visibility.clone(),
         )?
         .with_power_lines(&self.world.power_lines);
-        let summary = serde_json::json!({
+        let camera = config
+            .nav_camera
+            .clone()
+            .map(|camera| {
+                crate::nav_camera::NavCamera::new(
+                    camera,
+                    self.world.visibility.clone(),
+                    self.weather.as_ref(),
+                )
+                .map(|camera| camera.with_power_lines(&self.world.power_lines))
+            })
+            .transpose()?;
+        let mut summary = serde_json::json!({
             "knowledge": knowledge.as_str(),
             "exploration": &config,
             "belief_grid": {
@@ -1954,6 +1969,14 @@ impl AssembledRun {
         if config.explore {
             controllers.explore_search_lanes();
         }
+        // The navigation camera bounds every controller's speed: each must
+        // be able to stop short of what the camera can see.
+        let speed_cap_mps = camera
+            .as_ref()
+            .map(|camera| camera.envelope().max_speed_mps);
+        if let Some(cap) = speed_cap_mps {
+            controllers.cap_speeds(cap);
+        }
         controllers.set_physical_guard(guard.clone());
 
         // The platforms do not know the true obstacles, so the mission
@@ -1966,6 +1989,9 @@ impl AssembledRun {
             .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
         {
             driver.set_known_obstacles(None, self.map_bounds_m);
+            if let Some(cap) = speed_cap_mps {
+                driver.cap_redirect_speed(cap);
+            }
         }
 
         let deconflict = self
@@ -1985,6 +2011,11 @@ impl AssembledRun {
             safety.set_terrain(Box::new(terrain));
         }
         self.observe_mut().set_range_scanner(scanner);
+        if let Some(camera) = camera {
+            summary["nav_camera_envelope"] =
+                serde_json::to_value(camera.envelope()).expect("envelope serialises");
+            self.observe_mut().set_nav_camera(camera);
+        }
         self.sim
             .connect(crate::simulation::Handoff::RangeScansToMapping)
             .map_err(|error| format!("{error:?}"))?;
@@ -1994,6 +2025,9 @@ impl AssembledRun {
         {
             overrides.set_physical_guard(Some(guard.clone()));
             overrides.set_power_lines(Vec::new());
+            if let Some(cap) = speed_cap_mps {
+                overrides.cap_rejoin_speed(cap);
+            }
         }
         self.guard = Some(guard);
         self.policy_guard = false;

@@ -477,6 +477,18 @@ pub struct RangeScanSample {
     pub structure: Vec<[f32; 3]>,
     #[serde(default)]
     pub misses: u32,
+    /// `nav_camera` for the forward navigation camera's detections; empty
+    /// (absent) for the range scanner.
+    #[serde(default)]
+    pub sensor: String,
+}
+
+impl RangeScanSample {
+    /// Whether these are the navigation camera's obstacle detections rather
+    /// than the mapping scanner's returns.
+    pub fn is_nav_camera(&self) -> bool {
+        self.sensor == "nav_camera"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
