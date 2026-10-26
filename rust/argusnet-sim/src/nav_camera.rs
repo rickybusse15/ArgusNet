@@ -59,6 +59,9 @@ use crate::range_scan::{
 use crate::runtime_world::SharedVisibility;
 use crate::weather::MotionWeather;
 
+/// Bound work and allocation from externally supplied per-capture profiles.
+pub const MAX_CAPTURE_RAYS: usize = 1_000_000;
+
 /// Where a profile's numbers come from.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,6 +181,15 @@ impl NavCameraConfig {
         }
         if self.columns < 2 || self.rows < 2 {
             return Err("nav camera needs at least 2 columns and 2 rows".into());
+        }
+        if self
+            .columns
+            .checked_mul(self.rows)
+            .is_none_or(|rays| rays > MAX_CAPTURE_RAYS)
+        {
+            return Err(format!(
+                "nav camera exceeds the {MAX_CAPTURE_RAYS} rays per capture limit"
+            ));
         }
         positive("structure_range_m", self.structure_range_m)?;
         positive("canopy_range_m", self.canopy_range_m)?;
@@ -557,6 +569,16 @@ mod tests {
             },
             NavCameraConfig {
                 columns: 1,
+                ..NavCameraConfig::default()
+            },
+            NavCameraConfig {
+                columns: usize::MAX,
+                rows: usize::MAX,
+                ..NavCameraConfig::default()
+            },
+            NavCameraConfig {
+                columns: 1001,
+                rows: 1000,
                 ..NavCameraConfig::default()
             },
             NavCameraConfig {

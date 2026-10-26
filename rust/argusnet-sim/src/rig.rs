@@ -536,6 +536,13 @@ fn validate_lidar(id: &str, lidar: &LidarModel) -> Result<(), String> {
             "rig LiDAR {id} needs at least 2 columns and 2 rows"
         ));
     }
+    if lidar
+        .columns
+        .checked_mul(lidar.rows)
+        .is_none_or(|rays| rays > crate::nav_camera::MAX_CAPTURE_RAYS)
+    {
+        return Err(format!("rig LiDAR {id} exceeds the rays per capture limit"));
+    }
     if !(lidar.max_range_m.is_finite() && lidar.max_range_m > 0.0) {
         return Err(format!("rig LiDAR {id} max range must be positive"));
     }
@@ -548,6 +555,21 @@ fn validate_lidar(id: &str, lidar: &LidarModel) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_and_overflowing_lidar_grids_are_refused_before_capture() {
+        for columns in [usize::MAX, 1_000_001] {
+            let mut rig = RigProfile::provisional();
+            let lidar = rig
+                .sensors
+                .iter_mut()
+                .find_map(|mount| mount.lidar.as_mut())
+                .unwrap();
+            lidar.columns = columns;
+            lidar.rows = 2;
+            assert!(rig.validate().unwrap_err().contains("rays per capture"));
+        }
+    }
 
     #[test]
     fn the_provisional_rig_is_valid_and_within_both_mass_limits() {

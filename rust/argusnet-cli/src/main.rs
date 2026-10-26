@@ -424,16 +424,16 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         .quality_requirements
         .as_ref()
         .map(|path| {
-            let text = std::fs::read_to_string(path)
-                .map_err(|error| format!("{}: {error}", path.display()))?;
+            let text =
+                read_text_limited(path).map_err(|error| format!("{}: {error}", path.display()))?;
             serde_json::from_str::<argusnet_mapping::quality::QualityRequirement>(&text)
                 .map_err(|error| format!("{}: {error}", path.display()))
         })
         .transpose()?;
     let nav_camera = match &args.nav_camera_profile {
         Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .map_err(|error| format!("{}: {error}", path.display()))?;
+            let text =
+                read_text_limited(path).map_err(|error| format!("{}: {error}", path.display()))?;
             let config: argusnet_sim::nav_camera::NavCameraConfig = serde_json::from_str(&text)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
             Some(config)
@@ -449,8 +449,8 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             if source == "provisional" {
                 return Ok(argusnet_sim::rig::RigProfile::provisional());
             }
-            let text =
-                std::fs::read_to_string(source).map_err(|error| format!("{source}: {error}"))?;
+            let text = read_text_limited(std::path::Path::new(source))
+                .map_err(|error| format!("{source}: {error}"))?;
             serde_json::from_str(&text).map_err(|error| format!("{source}: {error}"))
         })
         .transpose()?;
