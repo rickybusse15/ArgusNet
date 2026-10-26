@@ -14,6 +14,16 @@
   sweeps each lateral push the same way. Other prior-map runs have no guard
   and are unchanged (14/14 replay hashes).
 
+- S1 contracts (S1.1): versioned JSON Schemas in `docs/contracts/` for
+  site, mission, platform, localization, spatial revision, trajectory,
+  safety, evidence, reconstruction, finding, change and report records.
+  - **Envelope:** every record shares the VIEWER_UI 10.2 identity keys and
+    a JSON pointer to its source.
+  - **Unavailable:** what the replay cannot support is explicit.
+  - **Packages:** the client package now carries `records/index.json` and
+    one `records/<kind>.json` per recorded kind. Reconstruction and change
+    are listed as unavailable, with reasons.
+
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;

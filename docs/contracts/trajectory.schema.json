@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/trajectory.schema.json",
+  "title": "S1 trajectory record (argusnet.trajectory/v1)",
+  "description": "A platform's flown path, from its recorded positions. The planned trajectory is not recorded.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "platform_id",
+        "samples",
+        "start_s",
+        "end_s",
+        "path_length_m",
+        "planned"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.trajectory/v1"
+        },
+        "platform_id": {
+          "type": "string"
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "start_s": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "end_s": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "path_length_m": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        },
+        "planned": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        }
+      }
+    }
+  ]
+}

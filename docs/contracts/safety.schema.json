@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://argusnet/contracts/safety.schema.json",
+  "title": "S1 safety record (argusnet.safety/v1)",
+  "description": "One safety-monitor validation: accepted or not, why, and what it violated.",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/definitions/envelope"
+    },
+    {
+      "type": "object",
+      "required": [
+        "validation_id",
+        "platform_id",
+        "accepted",
+        "reason",
+        "violations",
+        "timestamp_s"
+      ],
+      "properties": {
+        "contract": {
+          "const": "argusnet.safety/v1"
+        },
+        "validation_id": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "platform_id": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "accepted": {
+          "$ref": "common.schema.json#/definitions/maybe_boolean"
+        },
+        "reason": {
+          "$ref": "common.schema.json#/definitions/maybe_string"
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timestamp_s": {
+          "$ref": "common.schema.json#/definitions/maybe_number"
+        }
+      }
+    }
+  ]
+}
