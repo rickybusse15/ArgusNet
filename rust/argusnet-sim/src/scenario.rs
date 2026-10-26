@@ -1037,6 +1037,7 @@ fn belief_stats(
         canopy_cells: grid.canopy_cells() as u64,
         unsettled_scans: grid.unsettled_scans(),
         stowed_scans: grid.stowed_scans(),
+        quality: None,
     }
 }
 
@@ -1956,6 +1957,11 @@ impl AssembledRun {
                     .to_string()
             })?
             .set_belief(grid, config.clone());
+        let dt_s = self.dt_s;
+        self.sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .expect("installed above")
+            .set_belief_dt(dt_s);
         let terrain = BeliefTerrain::new(handle.clone(), resolution_m);
         let guard = PhysicalGuard::new(
             self.world.terrain.clone(),
@@ -2517,13 +2523,19 @@ impl AssembledRun {
             mean_revisits: stats.mean_revisits,
             belief: mapping.belief_grid().zip(mapping.exploration_config()).map(
                 |(grid, config)| {
-                    belief_stats(
+                    let mut stats = belief_stats(
                         grid,
                         config.occupied_probability,
                         self.report.terrain.as_ref(),
                         &self.true_structures,
                         &self.true_trunks,
-                    )
+                    );
+                    stats.quality = mapping.belief_snapshot().and_then(|snapshot| {
+                        snapshot
+                            .quality()
+                            .map(crate::replay::ReplayQualityStats::from)
+                    });
+                    stats
                 },
             ),
         });
@@ -2586,7 +2598,7 @@ impl AssembledRun {
             // without a prior one, the footprint bookkeeping otherwise.
             scan_coverage_fraction: mapping
                 .belief_snapshot()
-                .map_or(stats.coverage_fraction, |belief| belief.known_fraction()),
+                .map_or(stats.coverage_fraction, |belief| belief.scan_progress()),
             scan_coverage_threshold: self.report.scan_coverage_threshold.unwrap_or(0.0),
             localization_estimates: mapping
                 .last_estimates()

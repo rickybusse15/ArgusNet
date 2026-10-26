@@ -226,6 +226,14 @@ struct SimArgs {
     /// the track) or `body:YAW,PITCH,ROLL` (fixed in the body, degrees).
     #[arg(long)]
     pointing: Option<String>,
+    /// In a `--world-knowledge none` run, what each cell of the map must
+    /// reach (SR5a), as JSON (`QualityRequirement`: density, vertical sigma,
+    /// age, incidence limit, declared bias). The map then reports why each
+    /// cell falls short, explorers go where flying can still fix it, and the
+    /// scan phase ends on the share of reachable cells that meet it.
+    /// Recorded in the replay's `meta.world_knowledge.exploration.quality`.
+    #[arg(long)]
+    quality_requirements: Option<PathBuf>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -410,6 +418,16 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         })
         .transpose()?;
     let pointing = args.pointing.as_deref().map(parse_pointing).transpose()?;
+    let quality = args
+        .quality_requirements
+        .as_ref()
+        .map(|path| {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            serde_json::from_str::<argusnet_mapping::quality::QualityRequirement>(&text)
+                .map_err(|error| format!("{}: {error}", path.display()))
+        })
+        .transpose()?;
     Ok(RunOptions {
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
@@ -443,7 +461,8 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             || args.explore.is_some()
             || args.wire_prior
             || nav_camera.is_some()
-            || rig.is_some())
+            || rig.is_some()
+            || quality.is_some())
         .then(|| {
             let defaults = argusnet_sim::belief_world::ExplorationConfig::default();
             let scan = if nav_camera.is_some() {
@@ -471,6 +490,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                     None => defaults.explore,
                 },
                 wire_prior: args.wire_prior,
+                quality: quality.clone(),
                 ..defaults
             }
         }),
@@ -715,6 +735,15 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--nav-camera senses obstacles in a --world-knowledge none run; \
              a prior run avoids the true obstacles",
+        );
+    }
+    if args.quality_requirements.is_some()
+        && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
+    {
+        return fail(
+            EXIT_INVALID,
+            "--quality-requirements measures the map the platforms build; \
+             it needs --world-knowledge none",
         );
     }
     if let Some(dir) = &args.export_scene {
