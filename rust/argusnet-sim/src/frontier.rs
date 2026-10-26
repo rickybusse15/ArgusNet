@@ -79,6 +79,11 @@ impl FrontierExplorer {
         &self.lane
     }
 
+    /// Explore, and fall back to the lane, no higher than `agl_m`.
+    pub fn cap_agl(&mut self, agl_m: f64) {
+        self.lane = self.lane.clone().with_agl_cap(agl_m);
+    }
+
     /// Explore, and fall back to the lane, no faster than `speed_mps`.
     pub fn cap_speed(&mut self, speed_mps: f64) {
         self.lane = self.lane.clone().with_speed_cap(speed_mps);
@@ -278,6 +283,7 @@ mod tests {
                 misses: 0,
                 wires: Vec::new(),
                 sensor: Default::default(),
+                pod: None,
             },
             1,
         );

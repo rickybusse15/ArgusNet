@@ -496,6 +496,9 @@ pub struct ObserveStage {
     /// The mobile platforms' forward navigation camera, beside the scanner
     /// (SR5c). Its frames follow the scans, tagged as camera frames.
     nav_camera: Option<crate::nav_camera::NavCamera>,
+    /// The rig's pod (SR2): its LiDAR scans in place of `range`'s, from a
+    /// 3-axis gimbal whose state is part of this stage's checkpoint.
+    pod: Option<crate::pod::PodSensing>,
     /// This tick's scans, handed to stage 8.
     scans: Vec<crate::range_scan::RangeScan>,
     /// Sensors that capture at their own rate (P4.10b); `None` is every
@@ -622,6 +625,7 @@ impl ObserveStage {
             compute: std::sync::Arc::new(crate::compute::ComputePool::serial()),
             range: None,
             nav_camera: None,
+            pod: None,
             scans: Vec::new(),
             capture: None,
             bias_offsets: BTreeMap::new(),
@@ -693,6 +697,36 @@ impl ObserveStage {
         }
     }
 
+    /// The stage state without its pod wrapper, and the pods' state: a run
+    /// with a pod accepts only a wrapped checkpoint, and one without only a
+    /// plain one.
+    fn split_pods(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<
+        (serde_json::Value, Option<crate::pod::PodsState>),
+        crate::simulation::StageStateError,
+    > {
+        let wrapped = state.get("pods").is_some() && state.get("base").is_some();
+        match (&self.pod, wrapped) {
+            (None, false) => Ok((state.clone(), None)),
+            (Some(_), true) => {
+                let pods = serde_json::from_value(state["pods"].clone()).map_err(|error| {
+                    crate::simulation::StageStateError::Malformed {
+                        detail: format!("the pods' gimbal state: {error}"),
+                    }
+                })?;
+                Ok((state["base"].clone(), Some(pods)))
+            }
+            (Some(_), false) => Err(crate::simulation::StageStateError::Malformed {
+                detail: "this run flies a rig's pod and the checkpoint has none".into(),
+            }),
+            (None, true) => Err(crate::simulation::StageStateError::Malformed {
+                detail: "the checkpoint has a rig's pod and this run has none".into(),
+            }),
+        }
+    }
+
     /// Scan with `scanner` from every mobile platform, every tick.
     pub fn set_range_scanner(&mut self, scanner: crate::range_scan::RangeScanner) {
         self.range = Some(scanner);
@@ -701,6 +735,16 @@ impl ObserveStage {
     /// Also look ahead with `camera` from every mobile platform, every tick.
     pub fn set_nav_camera(&mut self, camera: crate::nav_camera::NavCamera) {
         self.nav_camera = Some(camera);
+    }
+
+    /// Map with the rig's pod in place of the range scanner (SR2).
+    pub fn set_pod(&mut self, pod: crate::pod::PodSensing) {
+        self.pod = Some(pod);
+    }
+
+    /// The pod, when the run declares a rig.
+    pub fn pod(&self) -> Option<&crate::pod::PodSensing> {
+        self.pod.as_ref()
     }
 
     /// The navigation camera, when one is installed.
@@ -749,10 +793,22 @@ impl ObserveStage {
                 ],
             )
         };
-        self.scans = self.compute.map_ordered(&poses, |platform| {
-            let (position, velocity) = pose(platform);
-            scanner.scan(&platform.node_id, tick, timestamp_s, position, velocity)
-        });
+        self.scans = match self.pod.as_mut() {
+            Some(pod) => {
+                let posed: Vec<(&str, [f64; 3], [f64; 3])> = poses
+                    .iter()
+                    .map(|platform| {
+                        let (position, velocity) = pose(platform);
+                        (platform.node_id.as_str(), position, velocity)
+                    })
+                    .collect();
+                pod.capture_all(tick, timestamp_s, &posed, &self.compute)
+            }
+            None => self.compute.map_ordered(&poses, |platform| {
+                let (position, velocity) = pose(platform);
+                scanner.scan(&platform.node_id, tick, timestamp_s, position, velocity)
+            }),
+        };
         if let Some(camera) = &self.nav_camera {
             let frames = self.compute.map_ordered(&poses, |platform| {
                 let (position, velocity) = pose(platform);
@@ -1320,6 +1376,9 @@ impl StageHandler for ObserveStage {
             .collect();
         shared.drifts = fresh;
         self.scans.clear();
+        if let Some(pod) = self.pod.as_mut() {
+            pod.reset();
+        }
         shared.observations.clear();
         shared.records.clear();
         shared.rejections.clear();
@@ -1330,12 +1389,18 @@ impl StageHandler for ObserveStage {
     /// table, oracle and feeds are configuration, rebuilt by assembly.
     fn checkpoint_state(&self) -> Option<serde_json::Value> {
         let shared = &self.state;
-        Some(match &self.capture {
+        let base = match &self.capture {
             None => serde_json::to_value(&shared.drifts).expect("drift state serialises"),
             Some(capture) => serde_json::json!({
                 "drifts": shared.drifts,
                 "capture_rates": capture.recorded(),
             }),
+        };
+        // A run with a pod wraps the stage's state with its gimbals; every
+        // other run checkpoints exactly as before.
+        Some(match &self.pod {
+            None => base,
+            Some(pod) => serde_json::json!({ "base": base, "pods": pod.state() }),
         })
     }
 
@@ -1343,7 +1408,8 @@ impl StageHandler for ObserveStage {
         &self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let drifts = self.decode_drifts(state)?;
+        let (state, _) = self.split_pods(state)?;
+        let drifts = self.decode_drifts(&state)?;
         let shared = &self.state;
         if !drifts.keys().eq(shared.sensors.keys()) {
             return Err(crate::simulation::StageStateError::Malformed {
@@ -1357,7 +1423,11 @@ impl StageHandler for ObserveStage {
         &mut self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let drifts = self.decode_drifts(state)?;
+        let (state, pods) = self.split_pods(state)?;
+        let drifts = self.decode_drifts(&state)?;
+        if let (Some(pod), Some(saved)) = (self.pod.as_mut(), pods) {
+            pod.restore(saved);
+        }
         let shared = &mut self.state;
         shared.drifts = drifts;
         shared.observations.clear();

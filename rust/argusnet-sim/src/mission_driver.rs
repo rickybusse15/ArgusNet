@@ -5078,6 +5078,7 @@ mod tests {
                 point_m: [300.0, 0.0, 39.0],
             }],
             sensor: Default::default(),
+            pod: None,
         };
         grid.integrate(&scan, 4);
         map.publish(grid.snapshot(&config));
