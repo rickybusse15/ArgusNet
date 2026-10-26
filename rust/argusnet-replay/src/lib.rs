@@ -20,7 +20,9 @@
 //! viewer can accept live frames without a JSON round trip.
 
 pub mod assurance;
-pub use assurance::{assurance_frame_index, MissionAssurance};
+pub use assurance::{
+    assurance_frame_index, canonical_json, source_sha256, verify_source_binding, MissionAssurance,
+};
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -775,8 +777,17 @@ pub struct DeconflictionEvent {
 impl TryFrom<Value> for ReplayDocument {
     type Error = serde_json::Error;
 
+    /// The document, with its assurance report checked against it: a report
+    /// whose source binding does not match these frames and metadata is
+    /// kept as an error, never shown as this replay's.
     fn try_from(value: Value) -> Result<Self, Self::Error> {
-        serde_json::from_value(value)
+        let mut document: ReplayDocument = serde_json::from_value(value.clone())?;
+        if let Some(Ok(report)) = &document.mission_assurance {
+            if let Err(why) = assurance::verify_source_binding(report, &value) {
+                document.mission_assurance = Some(Err(why));
+            }
+        }
+        Ok(document)
     }
 }
 

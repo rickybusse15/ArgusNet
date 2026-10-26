@@ -14,6 +14,19 @@
   sweeps each lateral push the same way. Other prior-map runs have no guard
   and are unchanged (14/14 replay hashes).
 
+- Viewer: the Review workspace is available (S1.2). It reads the assurance
+  report a client package annotates into its replay:
+  - the status and the F1 outcome;
+  - the outcome's reasons as findings, each jumping to the first frame it
+    rests on;
+  - objectives, each jumping to its frame;
+  - completion and the lowest recorded energy;
+  - recorded events;
+  - every field the report states it cannot support.
+
+  A replay without a report, or with one that fails its checks, says so
+  and how to make one. Plan keeps its placeholder until its own contracts.
+
 - S1 contracts (S1.1): versioned JSON Schemas in `docs/contracts/` for
   site, mission, platform, localization, spatial revision, trajectory,
   safety, evidence, reconstruction, finding, change and report records.

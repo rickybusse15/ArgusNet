@@ -47,6 +47,19 @@ impl ShellLayout {
     /// recovered in order: the mission rail, then the drawer, then the
     /// inspector's non-essential fields. What still does not fit is compact.
     pub fn for_viewport(width: f32, height: f32, drawer_open: bool) -> Self {
+        Self::for_workspace(width, height, drawer_open, false)
+    }
+
+    /// As [`Self::for_viewport`], but when `rail_holds_workspace` (Review, whose
+    /// report is the rail) the rail is never given up: the drawer and the
+    /// inspector's non-essential fields give way instead, and what still does
+    /// not fit is compact.
+    pub fn for_workspace(
+        width: f32,
+        height: f32,
+        drawer_open: bool,
+        rail_holds_workspace: bool,
+    ) -> Self {
         let mut layout = ShellLayout {
             rail: Some(RAIL_WIDTH),
             inspector: INSPECTOR_WIDTH,
@@ -59,7 +72,7 @@ impl ShellLayout {
         let canvas_width = |layout: &ShellLayout| {
             width - layout.rail.unwrap_or(0.0) - layout.inspector - layout.drawer.unwrap_or(0.0)
         };
-        if canvas_width(&layout) < MIN_CANVAS_WIDTH {
+        if canvas_width(&layout) < MIN_CANVAS_WIDTH && !rail_holds_workspace {
             layout.rail = None;
         }
         if canvas_width(&layout) < MIN_CANVAS_WIDTH && layout.drawer.is_some() {
@@ -112,6 +125,18 @@ mod tests {
         );
         assert_eq!(layout.canvas[0], 748.0);
         assert!(!layout.compact);
+    }
+
+    /// In Review the rail is the workspace: at the same 1000 px it stays,
+    /// and the inspector gives up its non-essential fields instead.
+    #[test]
+    fn the_rail_stays_when_it_holds_the_workspace() {
+        let layout = ShellLayout::for_workspace(1000.0, 900.0, false, true);
+        assert_eq!(layout.rail, Some(RAIL_WIDTH));
+        assert!(layout.inspector_essential);
+        let narrow = ShellLayout::for_workspace(780.0, 900.0, true, true);
+        assert_eq!(narrow.rail, Some(RAIL_WIDTH));
+        assert!(narrow.drawer.is_none() && narrow.drawer_suppressed);
     }
 
     #[test]

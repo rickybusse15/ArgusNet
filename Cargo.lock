@@ -382,6 +382,7 @@ version = "0.1.0"
 dependencies = [
  "argusnet-proto",
  "argusnet-world",
+ "ring",
  "serde",
  "serde_json",
 ]
