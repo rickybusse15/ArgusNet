@@ -510,6 +510,8 @@ fn run_inner(
                 crate::zone_walls::sync_zone_walls,
                 // The run's towers and conductors (R3).
                 crate::power_lines::sync_power_lines,
+                // The spans the drones' own map holds (R3).
+                crate::power_lines::sync_mapped_wires,
                 // The run's trees (R2).
                 crate::trees::sync_trees,
                 sync_base_layer_visibility_system,
@@ -2875,6 +2877,7 @@ mod tests {
             belief_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
+            mapped_wires: Vec::new(),
         };
 
         let rejection = RejectedObservation {

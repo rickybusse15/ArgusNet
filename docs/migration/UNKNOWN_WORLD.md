@@ -97,6 +97,11 @@ All additions are optional:
 - **Frame `range_scans`**: at most 32 returns per platform scan, for showing
   the sensing.
 - **Frame `world_contacts`**: as above.
+- **Frame `mapped_wires`** (R3): the power-line spans the drones' map gained
+  that tick, as whole spans in the `meta.power_lines` line format, each
+  recorded once. With the wire-hazard prior (`--wire-prior`), the prior's
+  spans arrive on the first frame. Applying the frames in order gives the
+  wires the map holds.
 - **`mapping_state.belief`**: known cells and fraction; ground RMSE and
   maximum error against the true terrain at known cell centres; structure
   cells, with structure precision (believed cells with a true building or
@@ -129,6 +134,12 @@ run opens, and stay in the Layers panel as truth for comparison.
 - **Unknown**: black, inside a faint outline of the map bounds.
 - **Range returns**: each drone's returns this frame, drawn as rays.
 - **Contacts**: red rings.
+- **Mapped wires**: each span the drones' map holds at the cursor, drawn as
+  a conductor in cyan, so it reads as known rather than true. Drawn from the
+  frames' `mapped_wires`; the true lines stay hidden, as before. The Mapped
+  Wires toggle in Runtime Overlays (on by default) hides them. Scrubbing back
+  removes a span mapped later. Wires only: the map holds conductors, not
+  towers.
 - **Readout**: known %, ground RMSE, structure found and right %, and
   contacts.
 

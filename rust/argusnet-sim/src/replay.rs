@@ -558,6 +558,12 @@ pub struct ReplayFrame {
     /// is non-zero (F2). It persists after its drift ends.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sensor_bias_offsets_rad: BTreeMap<String, f64>,
+    /// The power-line spans the platforms' own map gained this tick, in a
+    /// run that maps the world for itself (R3): whole spans, each once, the
+    /// wire-hazard prior's on the first tick. Applying the frames in order
+    /// gives the wires the map holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mapped_wires: Vec<argusnet_world::powerline::PowerLine>,
 }
 
 /// One platform touching one tree in one tick (R2).
@@ -805,6 +811,7 @@ impl ReplayWriter {
             tree_contacts: Vec::new(),
             active_faults: Vec::new(),
             sensor_bias_offsets_rad: BTreeMap::new(),
+            mapped_wires: Vec::new(),
         }
     }
 

@@ -281,6 +281,41 @@ impl ReplayDocument {
         read
     }
 
+    /// The power-line spans the platforms' own map holds at frame `index`
+    /// (the frames' `mapped_wires` up to and including it), each read through
+    /// the model on its own, like [`Self::power_lines`]. A span recorded
+    /// twice is read once.
+    pub fn mapped_wires_through(&self, index: usize) -> PowerLinesRead {
+        let mut read = PowerLinesRead::default();
+        let mut seen = std::collections::BTreeSet::new();
+        for (f, frame) in self.frames.iter().enumerate().take(index.saturating_add(1)) {
+            for (s, span) in frame.mapped_wires.iter().enumerate() {
+                match serde_json::from_value::<argusnet_world::powerline::PowerLine>(span.clone()) {
+                    Ok(span) => {
+                        if seen.insert(span.id.clone()) {
+                            read.lines.push(span);
+                        }
+                    }
+                    Err(error) => read
+                        .refused
+                        .push(format!("frames[{f}].mapped_wires[{s}]: {error}")),
+                }
+            }
+        }
+        read
+    }
+
+    /// How many spans the frames up to and including `index` record, without
+    /// reading them: what [`Self::mapped_wires_through`] would read changes
+    /// only when this does.
+    pub fn mapped_wire_rows_through(&self, index: usize) -> usize {
+        self.frames
+            .iter()
+            .take(index.saturating_add(1))
+            .map(|frame| frame.mapped_wires.len())
+            .sum()
+    }
+
     /// The run's trees (`meta.trees`, R2), each read through the model's
     /// own check on its own: one the model refuses is reported with its
     /// index and reason, and every other tree is still read.
@@ -381,6 +416,11 @@ pub struct ReplayFrame {
     /// Platforms physics put back out of the true ground or a structure.
     #[serde(default)]
     pub world_contacts: Vec<WorldContact>,
+    /// A run that maps the world for itself: the power-line spans its map
+    /// gained this frame (R3), whole spans, each once. Kept as written and
+    /// read through the model by [`ReplayDocument::mapped_wires_through`].
+    #[serde(default)]
+    pub mapped_wires: Vec<Value>,
 }
 
 /// `[i, j, ground_cm, structure_top_cm, occupancy_pct, confidence]`, as the
@@ -929,6 +969,7 @@ mod live_stream {
             belief_updates: Vec::new(),
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
+            mapped_wires: Vec::new(),
         }
     }
 
