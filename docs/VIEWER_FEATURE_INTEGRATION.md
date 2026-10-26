@@ -299,6 +299,12 @@ are built.
 
 Anything the replay did not record is unavailable, with the reason. Track
 evidence age was already in the strip and the track table.
+**V4 status (2026-10-23):** allocation lines are built
+(`allocation_lines.rs`). Each drone holding a POI that is not yet complete gets
+a line to it, with a ring at the POI. The line is brighter while the drone
+dwells there. It is drawn from the frame's own mission state, and a POI without
+a recorded position or a drone draws nothing. The line has a Mission-overlays
+toggle, "Allocation lines", which no preset owns.
 
 V0 is the prerequisite for everything that makes live look like the console;
 V1–V3 can proceed on replay in parallel and are verified there first, then
