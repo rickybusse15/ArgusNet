@@ -97,6 +97,10 @@ struct State {
     wind_mps: Option<[f64; 3]>,
     warned: BTreeSet<String>,
     events: Vec<BatteryEvent>,
+    /// Under a physical profile, each platform's remaining energy and its
+    /// reserve home as this tick's reserve check computed them (F5), for the
+    /// replay. Rebuilt every tick, so not checkpointed.
+    reserves: BTreeMap<String, (f64, f64)>,
 }
 
 impl BatteryStage {
@@ -223,6 +227,12 @@ impl BatteryStage {
         }
     }
 
+    /// This tick's `(remaining_wh, reserve_wh)` per platform, under a
+    /// physical energy profile; empty under legacy, whose replays are fixed.
+    pub fn reserves(&self) -> &BTreeMap<String, (f64, f64)> {
+        &self.state.reserves
+    }
+
     pub fn take_events(&mut self) -> Vec<BatteryEvent> {
         std::mem::take(&mut self.state.events)
     }
@@ -307,6 +317,7 @@ impl StageHandler for BatteryStage {
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         let shared = &mut self.state;
         shared.events.clear();
+        shared.reserves.clear();
         if shared.states.is_empty() {
             return Ok(StageOutcome::NoWork);
         }
@@ -388,6 +399,11 @@ impl StageHandler for BatteryStage {
                     ),
                     None => model.capacity_wh * model.reserve_fraction,
                 };
+                if !shared.profile.is_legacy() {
+                    shared
+                        .reserves
+                        .insert(node_id.clone(), (remaining_wh, reserve_wh));
+                }
                 if remaining_wh <= reserve_wh && !shared.warned.contains(&node_id) {
                     shared.warned.insert(node_id.clone());
                     shared.events.push(BatteryEvent::ReserveReached {

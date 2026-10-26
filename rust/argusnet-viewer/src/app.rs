@@ -2878,6 +2878,7 @@ mod tests {
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
             mapped_wires: Vec::new(),
+            energy_reserves: Default::default(),
         };
 
         let rejection = RejectedObservation {

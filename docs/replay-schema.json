@@ -914,6 +914,18 @@
           "description": "Each sensor's calibration drift offset this tick, radians, where non-zero (F2). Persists after its drift ends. Absent when none.",
           "additionalProperties": {"type": "number"}
         },
+        "energy_reserves": {
+          "type": "object",
+          "description": "Under a physical energy profile (D-3): per platform, its remaining energy and the reserve it needs to get home from where it is, as the battery's reserve check computed them this tick (F5). Absent under legacy energy.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["remaining_wh", "reserve_wh"],
+            "properties": {
+              "remaining_wh": {"type": "number"},
+              "reserve_wh": {"type": "number"}
+            }
+          }
+        },
         "safety_events": {
           "type": "array",
           "description": "Safety validation results emitted during this frame.",

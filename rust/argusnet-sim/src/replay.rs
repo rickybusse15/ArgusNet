@@ -494,6 +494,13 @@ pub struct ReplayTargetMetadata {
     pub notes: String,
 }
 
+/// A platform's energy against its reserve home (F5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplayEnergyReserve {
+    pub remaining_wh: f64,
+    pub reserve_wh: f64,
+}
+
 /// One frame: the seven keys the schema marks required, and the optional
 /// payloads this writer produces.
 ///
@@ -564,6 +571,12 @@ pub struct ReplayFrame {
     /// gives the wires the map holds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mapped_wires: Vec<argusnet_world::powerline::PowerLine>,
+    /// Under a physical energy profile (D-3), each platform's remaining
+    /// energy and the reserve it needs to get home from where it is, as the
+    /// battery's reserve check computed them this tick (F5). Absent under
+    /// legacy energy.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub energy_reserves: BTreeMap<String, ReplayEnergyReserve>,
 }
 
 /// One platform touching one tree in one tick (R2).
@@ -812,6 +825,7 @@ impl ReplayWriter {
             active_faults: Vec::new(),
             sensor_bias_offsets_rad: BTreeMap::new(),
             mapped_wires: Vec::new(),
+            energy_reserves: BTreeMap::new(),
         }
     }
 

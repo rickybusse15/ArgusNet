@@ -2371,6 +2371,23 @@ impl AssembledRun {
     ) {
         let tally = self.observe().tally();
         self.report.totals.add(&tally);
+        frame.energy_reserves = crate::battery::BatteryStage::of(&self.sim)
+            .map(|battery| {
+                battery
+                    .reserves()
+                    .iter()
+                    .map(|(node, (remaining_wh, reserve_wh))| {
+                        (
+                            node.clone(),
+                            crate::replay::ReplayEnergyReserve {
+                                remaining_wh: *remaining_wh,
+                                reserve_wh: *reserve_wh,
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         frame.deconfliction_events = self
             .sim

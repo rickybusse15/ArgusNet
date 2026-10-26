@@ -317,7 +317,26 @@ pub fn inspect_platform(
                         Field::Value(format!("{:.0}%", fraction * 100.0))
                     }),
             ),
-            Row::unavailable("Reserve", NOT_IN_REPLAY),
+            Row::new(
+                "Reserve",
+                frame.energy_reserves.get(node_id).map_or(
+                    Field::Unavailable("recorded only under a physical energy profile"),
+                    |reserve| {
+                        let margin = reserve.remaining_wh - reserve.reserve_wh;
+                        Field::Value(if margin > 0.0 {
+                            format!(
+                                "{:.0} Wh to get home; {:.0} Wh above it",
+                                reserve.reserve_wh, margin
+                            )
+                        } else {
+                            format!(
+                                "{:.0} Wh to get home; at or below it by {:.0} Wh",
+                                reserve.reserve_wh, -margin
+                            )
+                        })
+                    },
+                ),
+            ),
             Row::new(
                 "Return home",
                 egress.map_or(Field::Unavailable("not returning"), |progress| {
@@ -744,6 +763,39 @@ mod tests {
         )]);
         assert!(matches!(last(tasking(&replay)), Field::Value(v) if v.contains("poi-01")));
         assert!(inspect_selected_platform(&replay, "drone-9").is_none());
+    }
+
+    /// F5: the reserve reads from the frame's energy record, with the margin
+    /// above it or the shortfall below it; without one it is unavailable.
+    #[test]
+    fn the_reserve_reads_the_recorded_energy() {
+        let reserve = |remaining: f64| {
+            let frame = frame(serde_json::json!({
+                "timestamp_s": 4.0,
+                "nodes": [{"node_id": "drone-1", "position": [1.0, 2.0, 30.0],
+                           "velocity": [0.0, 0.0, 0.0], "is_mobile": true}],
+                "energy_reserves": {"drone-1": {"remaining_wh": remaining, "reserve_wh": 104.4}}
+            }));
+            row(
+                &inspect_platform(&frame, "drone-1", None).unwrap(),
+                "Reserve",
+            )
+            .value
+            .clone()
+        };
+        assert_eq!(
+            reserve(150.0),
+            Field::Value("104 Wh to get home; 46 Wh above it".into())
+        );
+        assert_eq!(
+            reserve(100.0),
+            Field::Value("104 Wh to get home; at or below it by 4 Wh".into())
+        );
+        let sections = inspect_platform(&minimal(), "drone-1", None).unwrap();
+        assert!(matches!(
+            row(&sections, "Reserve").value,
+            Field::Unavailable(_)
+        ));
     }
 
     #[test]
