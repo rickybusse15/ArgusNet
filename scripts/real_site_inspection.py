@@ -64,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
         "binary_sha256": sha256_file(binary),
+        "workflow_sha256": sha256_file(Path(__file__)),
         "duration_s": args.duration_s,
         "checks": ["replay schema", "same-seed replay equality", "package artifact hashes"],
         "runs": [],

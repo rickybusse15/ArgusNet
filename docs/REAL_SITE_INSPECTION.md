@@ -12,6 +12,12 @@ python scripts/real_site_inspection.py --output runs/real-site --seeds 7 42
 cargo run --locked -p argusnet-viewer -- --scene runs/real-site/seed-7/review.smartscene
 ```
 
+To verify a package's report through the Rust reader without opening a window:
+
+```bash
+cargo run --locked -p argusnet-replay --example verify_assurance -- runs/real-site/seed-7/client-package/replay.json
+```
+
 Use a new output directory for each campaign. The script preserves both runs of
 each seed, requires byte-identical replays, validates the replay schema, verifies
 every client-package artifact hash, and builds each Review scene from the

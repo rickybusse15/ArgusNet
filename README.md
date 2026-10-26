@@ -9,21 +9,30 @@ infrastructure inspection, survey, environmental observation and search coverage
 
 ## Current status
 
+The 2026-10-26 integration adds unified real-site import, canonical record
+contracts, source-bound Review reports, energy contingencies/accounting,
+mission explanations, learned-wire display, history branching and opt-in sensing
+profiles. See the [integration review](docs/migration/PR_INTEGRATION_REVIEW_2026_10_26.md)
+for fixes and deferred dependency upgrades. The
+[real-site workflow](docs/REAL_SITE_INSPECTION.md) runs import through Review with
+repeatability and package checks. Plan, full independent scheduling and hardware
+qualification remain open.
+
 The Rust CLI `argusnet-rs sim` builds and runs scenarios with no Python runtime.
 The Bevy viewer runs the same simulation on an in-process worker (`--run`),
 with acknowledged Run/Pause/Step/Speed/Reset controls, and builds scene packages
 in Rust. The Python `argusnet` CLI remains available as the simulation reference
 and for offline GIS, analysis and export workflows.
 
-Reviewed against checkout `79ca540` on **2026-10-23**. Opt-in scheduling supports
+The earlier status review at `79ca540` on **2026-10-23** established that opt-in scheduling supports
 separate mission, mapping and fusion rates, per-sensor capture rates on tick
 boundaries, and delayed measurement delivery. Full independent scheduling and
 pending-job history remain incomplete. Real buildings, DEM terrain, OSM land
-cover, mapped trees and power lines can feed the Rust run; the unified import
-pipeline and canonical real-world scenario remain planned.
+cover, mapped trees and power lines can feed the Rust run. The 2026-10-26
+integration adds the unified import pipeline and canonical real-world scenario.
 Merged #280 hides true trees and power lines in unknown-world views. Merged
 #281 adds an offline client assurance package with a Rust report reader; the
-Review workspace integration remains an open PR. See the dated
+Review workspace integration is included in the 2026-10-26 changes. See the dated
 [recent PR snapshot](docs/migration/STATUS.md#recent-pr-snapshot-2026-10-23)
 for merged versus proposed work.
 [State ownership](docs/STATE_OWNERSHIP.md) and [known gaps](docs/KNOWN_GAPS.md)
@@ -101,8 +110,9 @@ synchronization limits and qualified deadline responses.
 
 The viewer has an Operate/Plan/Review shell, Perspective/Top-down/Section
 projections, Operational/Reconstruction/Safety layer presets, inspectors and a
-source-time timeline. Plan and Review show explicit unavailable reasons pending
-their canonical mission, journal and evidence contracts. The existing
+source-time timeline. Review reads a client package's source-bound report and
+shows unavailable reasons when it cannot verify one. Plan remains unavailable
+pending its executable mission contract. The existing
 `real-world`, `scan-map` and `split` CLI view modes still work independently of
 these shell controls.
 

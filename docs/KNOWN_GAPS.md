@@ -2,6 +2,10 @@
 
 ## Scheduled-runtime status (reviewed 2026-10-23 at `79ca540`)
 
+The [2026-10-26 integration review](migration/PR_INTEGRATION_REVIEW_2026_10_26.md)
+updates operator delivery and checkpoint behavior: guarded controller runs now
+preserve committed poses in checkpoint format 6. Legacy runs retain formats 4/5.
+
 | Capability | Status | Remaining evidence |
 | --- | --- | --- |
 | Rust stage composition, direct fusion and replay writer | **Implemented; statistically qualified** | 2026-10-03: `argusnet-rs` builds and runs all seven canonical scenarios with no Python, six within every envelope (#122). Owned subsystem state (A1.2) and a production constructor that rejects missing stages (A1.3, `rust/argusnet-sim/tests/production.rs`) are done. Acceptance scores against a stored reference (D-10). Multi-seed and held-out qualification done (A3.2, `docs/performance/a32-qualification-2026-10-03.md`): everything passes except `covariance_reduction_mean`, whose sampling noise is of the order of its envelope. D-12 judges it by its median (envelope unchanged); the confirmation run on 30 fresh seeds passes 7/7 (`docs/performance/d12-confirmation-2026-10-04.md`) |
@@ -11,7 +15,7 @@
 | Timestamped measurement delivery | **Partial** (P4.10b, #196, #199) | Delivery envelopes with acquisition/availability/receipt ticks, seeded per-source delay and jitter, fusion at a fixed lag, explicit drops; track error scored at evidence time with present error and evidence age reported (`docs/migration/DELIVERY_TIMING.md`). Per-sensor capture rates on tick boundaries (`--sensor-rate`). Not yet: buffered mapping inputs, capture times between ticks, clock quality, evidence time on the gRPC wire, delayed-measurement smoothing. Tracks record their evidence time in timed replays (`evidence_time_s`) |
 | Bounded causal jobs and complete scheduler history | Planned P4.10d–f | Deterministic application, stale result checks and restore during pending work |
 | Starting with no world knowledge | **First slice** (#201–#208) | `--world-knowledge none`: range scanners, a checkpointed belief grid, stages 1, 3 and 4 planning on it, a physics guard; the map exports as a scene package. Pursuit now uses fused tracks (a tasking cue before the first). Search drones explore the frontier and scan progress reads the map. Still reading truth: the bundle builder's lane and POI planning (`docs/migration/UNKNOWN_WORLD.md`) |
-| Viewer shell, projections and freshness | **Partial** | Shell, inspectors, Perspective/Top-down/Section, layer presets and Rust-worker controls are implemented. Plan/Review show unavailable reasons; complete freshness/history and operator acceptance remain open |
+| Viewer shell, projections and freshness | **Partial** | Shell, inspectors, Perspective/Top-down/Section, layer presets, Rust-worker controls and source-bound Review reports are implemented. Plan remains unavailable; complete freshness/history and operator acceptance remain open |
 | Qualified hardware adapters and deadlines | Planned S3–S7 | Actual SIL/HIL and device/clock/fault evidence; telemetry viewing grants no control |
 
 See [target architecture](RUST_RUNTIME_ARCHITECTURE.md),
@@ -128,16 +132,17 @@ Status labels:
 | Scene GLB triangle winding | **Fixed (2026-10-12)** | Every terrain triangle used to be wound facing down while its normals faced up, so the double-sided material lit it as a back face: the sun contributed nothing, and the camera's exposure had been opened three stops to make up for it, which washed sunlit surfaces (buildings, the drones' self-built map) out to white. Both scene writers now wind the terrain counter-clockwise from above, the committed `scene.smartscene` terrain was rewritten the same way, and both cameras use EV100 12 (`Exposure::OVERCAST`, matching the 12 000 lux sun). `tests/test_rust_scene_build.py` fails if any layer of a built package has a triangle facing away from its normals. Before/after renders: [`performance/terrain-winding-2026-10-12/`](performance/terrain-winding-2026-10-12/). The lit ground exposed two compositing faults, both fixed in the same change: sensor volumes and zone walls were not additive (they covered 85% of what was behind them), and the belief overlay took the ground's hue. The picker still casts occluders from both faces, for packages built before the fix. |
 | Viewer headless CI/render path | **Implemented smoke coverage; measured hardware budget** | CI renders through Bevy and checks a non-empty image. R4 realism fixtures meet the D-5 machine budget ([record](performance/r4-frame-budget-2026-10-21.md)); this does not establish every C8 image-diff or workload gate |
 
-## Client reporting and pending operator slices
+## Client reporting and integrated operator slices
 
 Merged #281 provides offline Python client assurance packaging and a Rust reader.
 Reports preserve missing data as unavailable and carry the F1 outcome. The
-record-kind contracts (#282), Review workspace (#283) and associated status docs
-(#284) remain open at this review. Energy contingencies and flown-energy fixes
-(#285/#286), drift faults (#287), mapped-wire display (#288), decision explanations
-(#289) and reserve display (#290) are also open. See the dated
-[PR snapshot](migration/STATUS.md#recent-pr-snapshot-2026-10-23) for dependencies
-and CI status; these proposals do not close scheduler or P6 packaging gates.
+2026-10-26 integration includes the record-kind contracts (#282), source-bound
+Review workspace (#283), energy contingencies and flown-energy fixes (#285/#286),
+drift faults (#287), mapped-wire display (#288), decision explanations (#289)
+and reserve display (#290). See the
+[integration review](migration/PR_INTEGRATION_REVIEW_2026_10_26.md) for corrected
+interactions, remaining limits and deferred dependency updates. This work does
+not close scheduler or P6 packaging gates.
 
 ## Interface Boundaries That Need Formalization
 
