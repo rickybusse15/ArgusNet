@@ -74,6 +74,10 @@
   Mission drawer opens with *World: Drones' map | True world*, which sets
   every truth-bearing layer at once. Truth is refused in live operation.
   The status line shows a scale bar at the camera's focus.
+- Viewer: timing in Diagnostics (console parity V4). The execution model,
+  lane and sensor rates, the delivery profile and totals, and the speed asked
+  for against the speed achieved. What a replay did not record reads as
+  unavailable.
 
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:

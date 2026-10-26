@@ -27,6 +27,7 @@ mod source;
 pub mod strip;
 mod time;
 mod timeline;
+pub mod timing;
 mod widgets;
 mod workspace;
 
@@ -105,6 +106,8 @@ pub struct UiReads<'w> {
     sim: Option<Res<'w, crate::sim_session::SimSourceState>>,
     /// Metres per pixel at the camera's focus, for the scale bar (V3).
     scale: Option<Res<'w, crate::projection::CanvasScale>>,
+    /// The speed the view is actually advancing at (V4 timing).
+    achieved: Option<Res<'w, timing::AchievedRate>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -135,8 +138,10 @@ pub fn viewer_ui_system(
         prefs,
         sim,
         scale,
+        achieved,
     } = reads;
     let scale = scale.map(|scale| *scale).unwrap_or_default();
+    let achieved = achieved.map(|rate| *rate).unwrap_or_default();
     // `ctx_mut` is fallible in bevy_egui 0.42: no primary context means there is
     // no frame to draw into yet.
     let Ok(context) = contexts.ctx_mut() else {
@@ -248,6 +253,7 @@ pub fn viewer_ui_system(
             ViewerMode::Replay => drawer_replay_content(ui, &replay_state),
             ViewerMode::Diagnostics => drawer_diagnostics_content(
                 ui,
+                &achieved,
                 &replay_state,
                 &frame_metrics,
                 &mission_zones,

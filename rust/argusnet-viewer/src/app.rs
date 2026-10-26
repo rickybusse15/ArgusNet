@@ -469,6 +469,8 @@ fn run_inner(
             .before(sync_fog_to_camera_system),
     );
     app.init_resource::<crate::projection::CanvasScale>();
+    app.init_resource::<crate::ui::timing::AchievedRate>();
+    app.add_systems(Update, crate::ui::timing::measure_achieved_rate_system);
     app.add_systems(
         Update,
         (

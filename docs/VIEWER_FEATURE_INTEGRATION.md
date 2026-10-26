@@ -289,6 +289,16 @@ are built.
   refused, with its reason, in live operation.
 - The status line carries a 1–2–5 scale bar at the camera's focus.
 - Layer chips and curves were already in place.
+**V4 timing (2026-10-23):** Diagnostics has a *Timing* section
+(`ui/timing.rs`). It shows:
+- the execution model and lane rates;
+- sensor capture rates;
+- the delivery profile and its totals;
+- the speed asked for against the speed achieved: source seconds per wall
+  second, smoothed over bursty ticks, reading "stopped" after a second still.
+
+Anything the replay did not record is unavailable, with the reason. Track
+evidence age was already in the strip and the track table.
 
 V0 is the prerequisite for everything that makes live look like the console;
 V1–V3 can proceed on replay in parallel and are verified there first, then
