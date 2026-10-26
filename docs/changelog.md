@@ -60,6 +60,10 @@
   for itself records each power-line span its map gains (`mapped_wires`, a
   frame field). The viewer draws the spans known at the cursor in cyan, with
   a Mapped Wires toggle. The true lines stay hidden in a self-built view.
+- Decisions in the platform inspector (F3). In a viewer `--run`, selecting a
+  drone shows the mission's decisions about it up to the cursor (assignments,
+  handoffs, returns home): how many, the last, and why. A replay shows them
+  as unavailable: decisions are journaled, not recorded in replays.
 
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
