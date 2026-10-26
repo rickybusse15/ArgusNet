@@ -3299,8 +3299,11 @@ impl StageHandler for MissionDriverStage {
         // share of it measured, and the share unmeasured and enclosed (holes
         // inside the map), not the footprint bookkeeping.
         let belief = mapping.belief_snapshot();
+        // With a quality requirement (SR5b), the share of cells with nothing
+        // left for flying to do (met, or unreachable): bias-limited cells
+        // never hold the scan open, and the decision names them apart.
         let coverage_fraction = match &belief {
-            Some(belief) => belief.known_fraction(),
+            Some(belief) => belief.scan_progress(),
             None => mapping.coverage_fraction(),
         };
         let gate_open = phase == MissionPhase::Scanning
@@ -3326,7 +3329,7 @@ impl StageHandler for MissionDriverStage {
         } else {
             self.pois.all_complete()
         };
-        let gate_inputs = serde_json::json!({
+        let mut gate_inputs = serde_json::json!({
             "coverage_fraction": coverage_fraction,
             "gap_cell_fraction": gap_cell_fraction,
             "mobile_count": mobile.len(),
@@ -3334,6 +3337,13 @@ impl StageHandler for MissionDriverStage {
             "localizer_timed_out": localizer_timed_out,
             "all_pois_complete": all_pois_complete,
         });
+        // Additive: only a run with a quality requirement names what the
+        // map cannot reach.
+        if let Some(layer) = belief.as_ref().and_then(|belief| belief.quality()) {
+            gate_inputs["quality_unreachable_cells"] =
+                serde_json::json!(layer.counts.unreachable());
+            gate_inputs["quality_met_cells"] = serde_json::json!(layer.counts.met);
+        }
         self.machine.set_inputs(MissionInputs {
             timestamp_s,
             coverage_fraction,

@@ -157,11 +157,11 @@ impl FrontierExplorer {
             Some(_) if state.on_lane => true,
             Some(goal) => {
                 (goal[0] - xy[0]).hypot(goal[1] - xy[1]) < arrival_m
-                    || !belief.is_unexplored(goal[0], goal[1], UNEXPLORED_SHARE)
+                    || !belief.needs_work(goal[0], goal[1], UNEXPLORED_SHARE)
             }
         };
         if needs_goal {
-            let frontier = frontier.get_or_init(|| belief.unexplored_centres(UNEXPLORED_SHARE));
+            let frontier = frontier.get_or_init(|| belief.work_centres(UNEXPLORED_SHARE));
             match Self::choose_goal(frontier, xy, claims) {
                 Some(goal) => {
                     state.goal_m = Some(goal);

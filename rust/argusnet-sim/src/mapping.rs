@@ -458,11 +458,26 @@ struct BeliefMapping {
     inbox: Vec<crate::range_scan::RangeScan>,
     /// The scans fused this tick, kept for the replay.
     fused: Vec<crate::range_scan::RangeScan>,
+    /// Seconds per tick, for evidence ages (SR5a).
+    dt_s: f64,
 }
 
 impl BeliefMapping {
-    fn publish(&mut self) {
-        self.handle.publish(self.grid.snapshot(&self.config));
+    /// Publish the grid as of `tick`: with a quality requirement, each
+    /// cell's deficit at that tick goes with it (SR5a).
+    fn publish(&mut self, tick: u64) {
+        self.grid.mark_quality_tick(tick);
+        let snapshot = self.grid.snapshot(&self.config);
+        let snapshot = match &self.config.quality {
+            Some(requirement) => snapshot.with_quality(self.grid.quality(
+                requirement,
+                self.config.scan.range_noise_m,
+                tick,
+                self.dt_s,
+            )),
+            None => snapshot,
+        };
+        self.handle.publish(snapshot);
     }
 }
 
@@ -506,15 +521,35 @@ impl MappingStage {
         mut grid: crate::belief_world::BeliefGrid,
         config: crate::belief_world::ExplorationConfig,
     ) -> crate::belief_world::BeliefHandle {
+        if let Some(requirement) = &config.quality {
+            grid.track_quality(requirement.max_incidence_deg);
+        }
         let handle = crate::belief_world::BeliefHandle::new(grid.snapshot(&config));
-        self.belief = Some(BeliefMapping {
+        let mut belief = BeliefMapping {
             grid,
             config,
             handle: handle.clone(),
             inbox: Vec::new(),
             fused: Vec::new(),
-        });
+            dt_s: 1.0,
+        };
+        if belief.config.quality.is_some() {
+            // The first tick plans against every cell's deficit: unseen.
+            belief.publish(0);
+        }
+        self.belief = Some(belief);
         handle
+    }
+
+    /// Seconds per tick, for the quality requirement's evidence ages.
+    /// Before the first tick.
+    pub fn set_belief_dt(&mut self, dt_s: f64) {
+        if let Some(belief) = self.belief.as_mut() {
+            belief.dt_s = dt_s;
+            if belief.config.quality.is_some() {
+                belief.publish(0);
+            }
+        }
     }
 
     /// The ids of the power-line spans the self-built map holds (R3), in id
@@ -596,7 +631,7 @@ impl MappingStage {
         }
         fused.extend(scans);
         belief.fused = fused;
-        belief.publish();
+        belief.publish(tick);
     }
 
     /// A stage over `bounds`, with the footprint radius still to be set.
@@ -766,7 +801,7 @@ impl StageHandler for MappingStage {
             belief.grid.clear();
             belief.inbox.clear();
             belief.fused.clear();
-            belief.publish();
+            belief.publish(0);
         }
         self.pending.clear();
     }
@@ -831,8 +866,15 @@ impl StageHandler for MappingStage {
         }
         match (&self.belief, &decoded.belief) {
             (None, None) => {}
-            (Some(belief), Some(saved)) if belief.grid.same_layout(saved) => {}
-            (Some(_), Some(_)) => return Err(malformed("the belief grid's layout differs")),
+            (Some(belief), Some(saved)) if !belief.grid.same_layout(saved) => {
+                return Err(malformed("the belief grid's layout differs"))
+            }
+            (Some(belief), Some(saved)) if !belief.grid.same_quality_tracking(saved) => {
+                return Err(malformed(
+                    "the belief grid's quality tracking differs (requirement or incidence limit)",
+                ))
+            }
+            (Some(_), Some(_)) => {}
             (Some(_), None) | (None, Some(_)) => {
                 return Err(malformed(
                     "one run builds its own map and the other has a prior one",
@@ -864,7 +906,8 @@ impl StageHandler for MappingStage {
             belief.grid = saved;
             belief.inbox.clear();
             belief.fused.clear();
-            belief.publish();
+            let tick = belief.grid.quality_tick().unwrap_or(0);
+            belief.publish(tick);
         }
         self.pending = decoded.pending;
         Ok(())

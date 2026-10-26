@@ -299,6 +299,7 @@ name = "argusnet-cli"
 version = "0.1.0"
 dependencies = [
  "argusnet-core",
+ "argusnet-mapping",
  "argusnet-planning",
  "argusnet-proto",
  "argusnet-replay",

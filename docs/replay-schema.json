@@ -615,6 +615,58 @@
               "minimum": 0,
               "maximum": 1,
               "description": "Of the cells a true building or wall covers at its centre, the fraction with a believed structure within one cell."
+            },
+            "quality": {
+              "type": "object",
+              "description": "SR5a: the map against the run's quality requirement (`meta.world_knowledge.exploration.quality`). Every cell counts under exactly one reason. Unreachable cells are bias-limited: no flying meets them, so they are never counted as met. Absent without a requirement.",
+              "required": [
+                "met_cells",
+                "unseen_cells",
+                "too_oblique_cells",
+                "sparse_cells",
+                "stale_cells",
+                "unreachable_cells",
+                "met_fraction",
+                "resolved_fraction"
+              ],
+              "additionalProperties": true,
+              "properties": {
+                "met_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unseen_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "too_oblique_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sparse_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "stale_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unreachable_cells": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "met_fraction": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "resolved_fraction": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Met or unreachable over all cells: what the scan gate reads. Never a claim that the map is met."
+                }
+              }
             }
           }
         }
@@ -1481,7 +1533,7 @@
         },
         "scan_coverage_fraction": {
           "type": "number",
-          "description": "Fraction of the map grid that has been scanned (0.0\u20131.0).",
+          "description": "What the scanning gate reads (0.0\u20131.0): the footprint grid's scanned fraction with a prior map; the self-built map's known fraction without one; with a quality requirement (SR5b), `mapping_state.belief.quality.resolved_fraction`.",
           "minimum": 0,
           "maximum": 1
         },

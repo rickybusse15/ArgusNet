@@ -86,6 +86,19 @@
   frame under the cursor, keeps the frames before it, and holds the run
   there, on a new epoch. Running on reproduces the original history exactly.
 
+- Quality requirements and deficit-driven mapping (SR5a, SR5b first
+  slice). `--quality-requirements FILE` in a `--world-knowledge none` run
+  declares what each map cell must reach: density, vertical sigma, age and
+  incidence limit, with a declared bias.
+  - The map keeps each cell's accepted evidence and reports why it falls
+    short: unseen, too oblique, sparse, stale, or bias-limited (unreachable).
+  - Explorers go where flying can still fix a deficit.
+  - The scan gate reads the resolved share. Unreachable cells never hold the
+    scan open and are never counted as met.
+
+  The replay records `mapping_state.belief.quality`, and the scan decision
+  names the unreachable cells. Runs without the flag are unchanged. See
+  `docs/migration/QUALITY_DEFICITS.md`.
 - Client assurance package (S1.0, ported from the maintainer's 2026-10-12
   work). `argusnet client-package --replay R --output DIR` writes:
   - an unsigned, hash-listed manifest;
