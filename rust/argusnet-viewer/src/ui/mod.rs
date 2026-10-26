@@ -103,6 +103,8 @@ pub struct UiReads<'w> {
     prefs: Res<'w, crate::prefs::ViewerPrefs>,
     /// The in-process run's state, when `--run` started one (D1).
     sim: Option<Res<'w, crate::sim_session::SimSourceState>>,
+    /// Metres per pixel at the camera's focus, for the scale bar (V3).
+    scale: Option<Res<'w, crate::projection::CanvasScale>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -132,7 +134,9 @@ pub fn viewer_ui_system(
         camera,
         prefs,
         sim,
+        scale,
     } = reads;
+    let scale = scale.map(|scale| *scale).unwrap_or_default();
     // `ctx_mut` is fallible in bevy_egui 0.42: no primary context means there is
     // no frame to draw into yet.
     let Ok(context) = contexts.ctx_mut() else {
@@ -202,6 +206,7 @@ pub fn viewer_ui_system(
             &camera,
             &prefs,
             &layout,
+            scale,
         ),
         Region::Timeline => {
             section_operator_timeline(ui, &mut replay_state, &mut ui_state, sim.is_some())
@@ -235,6 +240,10 @@ pub fn viewer_ui_system(
                 &raster_status,
                 &mut layer_visibility,
                 &mut zone_overlap_model,
+                crate::world_view::truth_unavailable(matches!(
+                    source,
+                    SourceContext::Live | SourceContext::LiveHistory
+                )),
             ),
             ViewerMode::Replay => drawer_replay_content(ui, &replay_state),
             ViewerMode::Diagnostics => drawer_diagnostics_content(
@@ -385,6 +394,45 @@ mod tests {
                 .clear();
         }
         (layout, regions, canvas)
+    }
+
+    /// V3: the world switch draws in a frame, and where there is no truth
+    /// (live operation) a true-world view falls back to the drones' map,
+    /// every truth layer with it.
+    #[test]
+    fn the_world_switch_withdraws_truth_where_there_is_none() {
+        use super::*;
+        let context = egui::Context::default();
+        let mut overlays = RuntimeOverlayVisibility::default();
+        let mut layers = LayerVisibilityState::default();
+        layers
+            .base_layers
+            .insert(crate::belief_map::LAYER_ID.to_string(), false);
+        let scene = vec!["terrain".to_string()];
+        crate::world_view::apply(
+            crate::world_view::WorldView::TrueWorld,
+            true,
+            &scene,
+            crate::belief_map::LAYER_ID,
+            &mut overlays,
+            &mut layers.base_layers,
+        );
+        let draw = |unavailable: Option<&'static str>,
+                    overlays: &mut RuntimeOverlayVisibility,
+                    layers: &mut LayerVisibilityState| {
+            context
+                .run_ui(egui::RawInput::default(), |ui| {
+                    inspectors::section_world_view(ui, &scene, overlays, layers, unavailable);
+                })
+                .textures_delta
+                .clear();
+        };
+        draw(None, &mut overlays, &mut layers);
+        assert!(overlays.truths, "a replay may show truth");
+        draw(Some("live"), &mut overlays, &mut layers);
+        assert!(!overlays.truths && !overlays.power_lines && !overlays.trees);
+        assert!(!layers.base_layers["terrain"]);
+        assert!(layers.base_layers[crate::belief_map::LAYER_ID]);
     }
 
     fn outer(regions: &[(super::Region, egui::Rect)], region: super::Region) -> Option<egui::Rect> {

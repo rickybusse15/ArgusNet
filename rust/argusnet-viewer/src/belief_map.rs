@@ -231,15 +231,19 @@ pub fn sync_belief_map_system(
         return;
     };
     if !view.truth_hidden {
-        if let Some(scene) = scene {
-            for layer in &scene.manifest.layers {
-                layers.base_layers.insert(layer.id.clone(), false);
-            }
-        }
-        layers.base_layers.insert(LAYER_ID.to_string(), true);
-        overlays.power_lines = false;
-        overlays.power_line_clearance = false;
-        overlays.trees = false;
+        // The primary switch's own rule (V3): the drones' map on, every
+        // truth-bearing layer off together.
+        let scene_layers: Vec<String> = scene
+            .map(|scene| scene.manifest.layers.iter().map(|l| l.id.clone()).collect())
+            .unwrap_or_default();
+        crate::world_view::apply(
+            crate::world_view::WorldView::DronesMap,
+            true,
+            &scene_layers,
+            LAYER_ID,
+            &mut overlays,
+            &mut layers.base_layers,
+        );
         view.truth_hidden = true;
     }
     let Some(current) = replay.current_frame() else {

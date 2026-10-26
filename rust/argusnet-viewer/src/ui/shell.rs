@@ -96,6 +96,16 @@ fn mode_label(mode: ViewerMode) -> &'static str {
 /// The status and freshness line: mission phase, time, alert counts, the
 /// camera, and anything the layout had to give up. Alert counts live here so
 /// that no window size hides a critical alert (§4.4 rule 5).
+/// A scale bar `px` long: a baseline with end ticks, in the text colour.
+fn scale_bar_widget(ui: &mut egui::Ui, px: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(px, 10.0), egui::Sense::hover());
+    let stroke = egui::Stroke::new(1.5, ui.visuals().text_color());
+    let painter = ui.painter();
+    painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+    painter.line_segment([rect.left_top(), rect.left_bottom()], stroke);
+    painter.line_segment([rect.right_top(), rect.right_bottom()], stroke);
+}
+
 pub(super) fn status_line(
     ui: &mut egui::Ui,
     replay_state: &ReplayState,
@@ -103,6 +113,7 @@ pub(super) fn status_line(
     camera: &crate::camera_control::CameraControl,
     prefs: &crate::prefs::ViewerPrefs,
     layout: &ShellLayout,
+    scale: crate::projection::CanvasScale,
 ) {
     ui.horizontal_centered(|ui| {
         if let Some((phase, color, detail)) = mission_status_summary(replay_state) {
@@ -147,6 +158,20 @@ pub(super) fn status_line(
         // follow is reported here, not silently dropped.
         ui.separator();
         ui.label(format!("Camera: {}", camera.mode_label()));
+        // The scale at the camera's focus (V3): a 1-2-5 bar, at most 120
+        // points. The scale is per logical pixel and egui draws in points,
+        // which the UI-scale preference zooms: convert, so the bar's length
+        // on the ground holds at any UI scale.
+        let zoom = ui.ctx().zoom_factor();
+        if let Some((metres, px)) = scale
+            .metres_per_px
+            .and_then(|m| crate::projection::scale_bar_in_points(m, zoom, 120.0))
+        {
+            ui.separator();
+            scale_bar_widget(ui, px);
+            ui.monospace(crate::projection::scale_label(metres))
+                .on_hover_text("Length on the ground at the camera's focus");
+        }
         if let Some(notice) = camera.notice() {
             ui.colored_label(egui::Color32::from_rgb(230, 190, 110), notice);
         }
@@ -525,9 +550,24 @@ pub(super) fn drawer_mission_content(
     raster_status: &str,
     layer_visibility: &mut LayerVisibilityState,
     zone_overlap_model: &mut ZoneOverlapModel,
+    truth_unavailable: Option<&'static str>,
 ) {
     ui.heading("Mission");
     ui.label("Operator view");
+    ui.separator();
+    let scene_layers: Vec<String> = scene_package
+        .manifest
+        .layers
+        .iter()
+        .map(|layer| layer.id.clone())
+        .collect();
+    section_world_view(
+        ui,
+        &scene_layers,
+        runtime_visibility,
+        layer_visibility,
+        truth_unavailable,
+    );
     ui.separator();
 
     section_mission_progress(ui, replay_state, view_mode);
