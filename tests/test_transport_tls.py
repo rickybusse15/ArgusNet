@@ -40,9 +40,7 @@ class TestLoopbackDetection(unittest.TestCase):
     def test_userinfo_cannot_disguise_a_remote_host_as_loopback(self):
         # URL parsers treat this as userinfo "127.0.0.1:80" and host evil.example.
         self.assertFalse(is_loopback_endpoint("127.0.0.1:80@evil.example:443"))
-        self.assertFalse(
-            is_loopback_endpoint("http://127.0.0.1:80@evil.example:443/WorldModel")
-        )
+        self.assertFalse(is_loopback_endpoint("http://127.0.0.1:80@evil.example:443/WorldModel"))
         self.assertTrue(is_loopback_endpoint("operator@127.0.0.1:50051"))
         self.assertTrue(is_loopback_endpoint("http://127.0.0.1:50051"))
 
