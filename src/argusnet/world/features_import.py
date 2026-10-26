@@ -306,8 +306,12 @@ def import_features(
     *,
     origin: tuple[float, float] | None = None,
     source_crs: str | None = None,
+    allow_empty: bool = False,
 ) -> dict[str, object]:
-    """The `argusnet.features` document for `geojson_path`. `origin` is the
+    """The `argusnet.features` document for `geojson_path`. With
+    `allow_empty` (and an `origin`), an extract with nothing to import gives
+    an empty document rather than an error: the data says there is nothing
+    there, which is not the same as having no data. `origin` is the
     local frame's (latitude, longitude) in degrees; the centre of the
     features' extent when not given."""
     CRS, Transformer = lazy_import_pyproj()
@@ -397,7 +401,9 @@ def import_features(
                 part_id = base_id if part == 0 else f"{base_id}#{part}"
                 rank = LAYER_ORDER.index(CLASS_LAYER[cover_class])
                 pending.append((rank, len(pending), part_id, cover_class, lonlat, width))  # type: ignore[arg-type]
-    if not (pending or tree_points or tree_rows or lines_pending):
+    if not (pending or tree_points or tree_rows or lines_pending) and not (
+        allow_empty and origin is not None
+    ):
         raise ValueError(f"{geojson_path}: no land-cover, tree or power-line features")
     if origin is None:
         everything: list[tuple[float, float]] = [p for *_, ps, _ in pending for p in ps]

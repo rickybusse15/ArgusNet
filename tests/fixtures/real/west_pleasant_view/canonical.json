@@ -1,0 +1,29 @@
+{
+ "name": "west_pleasant_view",
+ "dem": "dem.tif",
+ "osm": "osm.json",
+ "map_preset": "medium",
+ "origin": [39.734, -105.1782],
+ "terrain_preset": "urban_flat",
+ "seed": 7,
+ "duration_s": 60.0,
+ "expected": {
+  "import": {
+   "buildings": 918,
+   "buildings_with_estimated_height": 909,
+   "trees": 436,
+   "power_lines": 1,
+   "features_by_class": {"open": 41, "road": 508, "scrub": 1, "urban": 31, "water": 76, "wetland": 4},
+   "elevation_m": [1748.21, 1787.40]
+  },
+  "run": {
+   "buildings": 592,
+   "buildings_outside_map": 326,
+   "trees": 209,
+   "trees_outside_map": 227,
+   "power_lines": {"way/105692119": 6},
+   "origin_h_m": 1746.0,
+   "terrain_m": [2.21, 41.40]
+  }
+ }
+}
