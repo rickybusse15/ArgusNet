@@ -8,6 +8,27 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Bevy's egui bridge and all widgets must use the same egui generation.
+    # Pre-1.0 minor bumps can change Rust types across this boundary.
+    groups:
+      bevy-egui:
+        patterns:
+          - "bevy"
+          - "bevy_*"
+          - "egui"
+          - "egui_*"
+          - "ecolor"
+          - "emath"
+          - "epaint"
+          - "epaint_*"
+    # bevy_egui 0.43.1 requires egui 0.36. Remove these exclusions when
+    # upgrading the bridge to a release supporting egui 0.37, then update
+    # both helpers in the same PR. Patch updates remain enabled.
+    ignore:
+      - dependency-name: "egui_extras"
+        versions: [">=0.37.0, <0.38.0"]
+      - dependency-name: "egui_plot"
+        versions: [">=0.38.0, <0.39.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

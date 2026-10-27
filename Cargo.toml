@@ -52,6 +52,11 @@ anyhow = "1.0"
 # only 3d and renders its UI through egui. "3d" already brings bevy_gltf,
 # bevy_pbr, bevy_gizmos_render, bevy_anti_alias and bevy_post_process.
 bevy = { version = "0.20.0", default-features = false, features = ["3d", "png"] }
+# Keep this bridge and the egui helpers below on one egui generation.
+# 0.43.1 requires egui 0.36; helper crate versions are not synchronized:
+# egui_extras 0.36 and egui_plot 0.37 both use egui 0.36.
+# Upgrade them together when a compatible bridge is available; see the
+# bevy-egui Dependabot group and temporary exclusions.
 bevy_egui = "0.43.1"
 # procedural.py derives its terrain seeds with blake2b-64, which is a different
 # function from sim.py's FNV-1 walk despite sharing the name _stable_seed.
