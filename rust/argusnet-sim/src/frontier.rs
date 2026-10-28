@@ -60,6 +60,11 @@ pub struct ExplorerState {
     /// True when the goal is the lane's point (no frontier was left).
     pub on_lane: bool,
     pub last_t_s: Option<f64>,
+    /// The direction last flown, for view planning's turn costs: kept when
+    /// the explorer arrives exactly on its goal. Absent without planning, so
+    /// such checkpoints are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_rad: Option<f64>,
 }
 
 /// A search drone exploring the frontier of the map.
@@ -269,10 +274,7 @@ impl FrontierExplorer {
             let planned = match (&self.planning, belief.quality()) {
                 (Some(planning), Some(_)) if planning.config.plan_goals => {
                     let config = &planning.config;
-                    let heading = state
-                        .goal_m
-                        .filter(|_| !state.on_lane)
-                        .map(|goal| (goal[1] - xy[1]).atan2(goal[0] - xy[0]));
+                    let heading = state.heading_rad;
                     let blocks = belief.work_blocks(UNEXPLORED_SHARE, &config.weights);
                     Some(
                         argusnet_planning::views::choose_goal(
@@ -328,6 +330,9 @@ impl FrontierExplorer {
         };
         let new_xy = [xy[0] + direction[0] * step, xy[1] + direction[1] * step];
         state.xy_m = Some(new_xy);
+        if self.planning.is_some() && step > 1e-9 {
+            state.heading_rad = Some(direction[1].atan2(direction[0]));
+        }
         let velocity_xy = if moving {
             [direction[0] * speed, direction[1] * speed]
         } else {
@@ -427,6 +432,39 @@ mod tests {
         claims: &mut Vec<[f64; 2]>,
     ) -> ([f64; 3], [f64; 3]) {
         explorer.sample(t, &Flat, None, belief, &std::cell::OnceCell::new(), claims)
+    }
+
+    /// With view planning an explorer remembers the direction it flew, so
+    /// arriving exactly on its goal does not reset its heading (turn costs
+    /// read it). Without planning it keeps none, as before.
+    #[test]
+    fn a_planning_explorer_keeps_its_heading_on_arrival() {
+        let map = belief(500.0);
+        let mut claims = Vec::new();
+        let mut plain = FrontierExplorer::new(lane());
+        sample(&mut plain, 0.0, Some(&map), &mut claims);
+        sample(&mut plain, 1.0, Some(&map), &mut claims);
+        assert_eq!(plain.state().heading_rad, None);
+
+        let mut explorer = FrontierExplorer::new(lane());
+        explorer.set_view_planning(
+            argusnet_planning::views::ViewPlanningConfig::default(),
+            argusnet_planning::battery::BatteryModel::default(),
+            100.0,
+        );
+        let mut claims = Vec::new();
+        sample(&mut explorer, 0.0, Some(&map), &mut claims);
+        let goal = explorer.state().goal_m.unwrap();
+        let from = explorer.state().xy_m.unwrap();
+        let incoming = (goal[1] - from[1]).atan2(goal[0] - from[0]);
+        // A step long enough to land exactly on the goal.
+        sample(&mut explorer, 10_000.0, Some(&map), &mut claims);
+        assert_eq!(explorer.state().xy_m, Some(goal));
+        let heading = explorer.state().heading_rad.unwrap();
+        assert!(
+            (heading - incoming).abs() < 1e-12,
+            "{heading} against {incoming}"
+        );
     }
 
     #[test]

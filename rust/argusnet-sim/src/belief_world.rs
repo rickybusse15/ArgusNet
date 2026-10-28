@@ -1181,7 +1181,14 @@ impl BeliefSnapshot {
     }
 
     /// The deficit reason of the cell at `(x, y)`, with a requirement.
+    /// `None` outside the grid: nothing there can be mapped, so nothing
+    /// there is worth looking at.
     pub fn deficit_at(&self, x_m: f64, y_m: f64) -> Option<DeficitReason> {
+        let fx = (x_m - self.x_min_m) / self.resolution_m;
+        let fy = (y_m - self.y_min_m) / self.resolution_m;
+        if !(fx >= 0.0 && fy >= 0.0 && fx < self.nx as f64 && fy < self.ny as f64) {
+            return None;
+        }
         let (i, j) = self.ij(x_m, y_m);
         self.quality
             .as_ref()
@@ -1272,9 +1279,8 @@ impl BeliefSnapshot {
                     .flat_map(|j| (i0..i1).map(move |i| (i, j)))
                     .map(|(i, j)| deficit_weight(layer.reasons[j * self.nx + i], weights))
                     .sum();
-                let centre = self.centres_where(|b_i, b_j| b_i == bi && b_j == bj);
                 blocks.push(argusnet_planning::views::WorkBlock {
-                    centre_m: centre[0],
+                    centre_m: self.block_centre(bi, bj),
                     gain,
                 });
             }
@@ -1380,23 +1386,28 @@ impl BeliefSnapshot {
     /// The centre of every block `pick` accepts, in block order.
     fn centres_where(&self, pick: impl Fn(usize, usize) -> bool) -> Vec<[f64; 2]> {
         let bny = self.ny.div_ceil(BLOCK_CELLS);
-        let block_m = BLOCK_CELLS as f64 * self.resolution_m;
         let mut out = Vec::new();
         for bj in 0..bny {
             for bi in 0..self.bnx {
                 if pick(bi, bj) {
-                    let cx = self.x_min_m + (bi as f64 + 0.5) * block_m;
-                    let cy = self.y_min_m + (bj as f64 + 0.5) * block_m;
-                    let x_max = self.x_min_m + self.nx as f64 * self.resolution_m;
-                    let y_max = self.y_min_m + self.ny as f64 * self.resolution_m;
-                    out.push([
-                        cx.min(x_max - 0.5 * self.resolution_m),
-                        cy.min(y_max - 0.5 * self.resolution_m),
-                    ]);
+                    out.push(self.block_centre(bi, bj));
                 }
             }
         }
         out
+    }
+
+    /// Block `(bi, bj)`'s centre, held inside the grid's last cell.
+    fn block_centre(&self, bi: usize, bj: usize) -> [f64; 2] {
+        let block_m = BLOCK_CELLS as f64 * self.resolution_m;
+        let cx = self.x_min_m + (bi as f64 + 0.5) * block_m;
+        let cy = self.y_min_m + (bj as f64 + 0.5) * block_m;
+        let x_max = self.x_min_m + self.nx as f64 * self.resolution_m;
+        let y_max = self.y_min_m + self.ny as f64 * self.resolution_m;
+        [
+            cx.min(x_max - 0.5 * self.resolution_m),
+            cy.min(y_max - 0.5 * self.resolution_m),
+        ]
     }
 
     /// The share of the grid's cells that have been measured.
@@ -2191,6 +2202,11 @@ mod tests {
                 .snapshot(&config)
                 .with_quality(belief.quality(&requirement, 0.3, 3, 1.0));
         assert_eq!(snapshot.deficit_at(25.0, 25.0), Some(DeficitReason::Met));
+        // Outside the grid nothing can be mapped: no deficit, no worth.
+        assert_eq!(snapshot.deficit_at(-5.0, 25.0), None);
+        assert_eq!(snapshot.deficit_at(25.0, 200.0), None);
+        let weights = argusnet_planning::views::DeficitWeights::default();
+        assert_eq!(snapshot.deficit_weight_at(250.0, 25.0, &weights), 0.0);
         assert!(!snapshot.needs_work(25.0, 25.0, 0.5));
         assert!(!snapshot.work_centres(0.5).contains(&[25.0, 25.0]));
         // Without a requirement, work is the unexplored share.
