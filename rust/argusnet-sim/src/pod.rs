@@ -198,12 +198,16 @@ pub enum PointingPolicy {
     CrossTrackSweep { amplitude_deg: f64, period_s: f64 },
     /// A fixed attitude in the body frame (yaw, pitch, roll in degrees).
     BodyFixed { ypr_deg: [f64; 3] },
+    /// View planning (SR5d): nadir rolled across the track toward the
+    /// deficits the footprint can fix, chosen each capture from the
+    /// published quality map ([`argusnet_planning::views::choose_roll`]).
+    Planned,
 }
 
 impl PointingPolicy {
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Nadir => Ok(()),
+            Self::Nadir | Self::Planned => Ok(()),
             Self::CrossTrackSweep {
                 amplitude_deg,
                 period_s,
@@ -234,7 +238,8 @@ impl PointingPolicy {
     fn commanded_body(&self, heading_rad: f64, t_s: f64) -> Quat {
         let down = Quat::from_ypr(0.0, std::f64::consts::FRAC_PI_2, 0.0);
         match self {
-            Self::Nadir => down,
+            // The planned roll is applied by the pod, which holds it.
+            Self::Nadir | Self::Planned => down,
             Self::CrossTrackSweep {
                 amplitude_deg,
                 period_s,
@@ -273,6 +278,27 @@ pub struct GimbalState {
     pub last_t_s: Option<f64>,
     /// The body's heading, kept while the aircraft is too slow to have one.
     pub heading_rad: f64,
+    /// The cross-track roll view planning holds (SR5d), radians.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub planned_roll_rad: f64,
+    /// When the roll was last planned, and on what heading: it is planned
+    /// again after [`argusnet_planning::views::ViewPlanningConfig::roll_replan_s`]
+    /// or on a new leg.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roll_planned_at: Option<(f64, f64)>,
+}
+
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
+/// What view planning needs to point the pod (SR5d): the published map, the
+/// planner's parameters, and the steepest ray the requirement accepts.
+#[derive(Debug, Clone)]
+pub struct PodPlanning {
+    pub belief: crate::belief_world::BeliefHandle,
+    pub config: argusnet_planning::views::ViewPlanningConfig,
+    pub max_incidence_rad: f64,
 }
 
 impl GimbalState {
@@ -282,6 +308,8 @@ impl GimbalState {
             on_target_since_s: None,
             last_t_s: None,
             heading_rad: 0.0,
+            planned_roll_rad: 0.0,
+            roll_planned_at: None,
         }
     }
 }
@@ -311,6 +339,11 @@ pub struct PodSensing {
     world: SharedVisibility,
     spans: Arc<Vec<SpanPieces>>,
     gimbals: BTreeMap<String, GimbalState>,
+    /// Set for [`PointingPolicy::Planned`].
+    planning: Option<PodPlanning>,
+    /// The steepest ray from nadir a quality requirement accepts, radians:
+    /// no ray past it is required, so the height cap need not reach with it.
+    required_incidence_rad: Option<f64>,
 }
 
 /// The pod's checkpointed state: every platform's gimbal.
@@ -346,7 +379,65 @@ impl PodSensing {
             world,
             spans: Arc::new(Vec::new()),
             gimbals: BTreeMap::new(),
+            planning: None,
+            required_incidence_rad: None,
         })
+    }
+
+    /// Only rays within `max_incidence_rad` of nadir are required (a quality
+    /// requirement's limit): the height cap reaches with those. Before the
+    /// first tick.
+    pub fn set_required_incidence(&mut self, max_incidence_rad: f64) {
+        self.required_incidence_rad = Some(max_incidence_rad);
+    }
+
+    /// Point by the published map (SR5d). Needed by
+    /// [`PointingPolicy::Planned`]; before the first tick.
+    pub fn set_planning(&mut self, planning: PodPlanning) {
+        self.planning = Some(planning);
+    }
+
+    /// What the footprint at cross-track roll `roll_rad` would fix, from
+    /// `position_m` heading `heading_rad`: each ray cast onto the believed
+    /// ground below the aircraft (a plane at its height there), counted at
+    /// its cell's deficit weight when the requirement would accept it and
+    /// the LiDAR reaches it.
+    fn footprint_gain(
+        &self,
+        planning: &PodPlanning,
+        snapshot: &crate::belief_world::BeliefSnapshot,
+        position_m: [f64; 3],
+        heading_rad: f64,
+        roll_rad: f64,
+    ) -> f64 {
+        let body = Quat::from_axis_angle([0.0, 0.0, 1.0], heading_rad);
+        let down = Quat::from_ypr(0.0, std::f64::consts::FRAC_PI_2, 0.0);
+        let sensor = body
+            .then(Quat::from_axis_angle([1.0, 0.0, 0.0], roll_rad))
+            .then(down)
+            .then(Quat::from_ypr_deg(self.lidar_mount.rotation_ypr_deg));
+        let ground = snapshot.ground_at(position_m[0], position_m[1]);
+        let height = position_m[2] - ground;
+        if height <= 0.0 {
+            return 0.0;
+        }
+        let min_down = planning.max_incidence_rad.cos();
+        let mut gain = 0.0;
+        for ray in self.sensor_rays() {
+            let d = sensor.rotate(ray);
+            let down_component = -d[2];
+            if down_component < min_down.max(1e-6) {
+                continue;
+            }
+            let range = height / down_component;
+            if range > self.lidar.max_range_m {
+                continue;
+            }
+            let x = position_m[0] + d[0] * range;
+            let y = position_m[1] + d[1] * range;
+            gain += snapshot.deficit_weight_at(x, y, &planning.config.weights);
+        }
+        gain
     }
 
     /// The pod, also putting points on `lines`' wires within the range its
@@ -397,6 +488,11 @@ impl PodSensing {
                 .map(|k| self.policy.commanded_body(0.0, *period_s * k as f64 / 64.0))
                 .collect(),
             PointingPolicy::BodyFixed { .. } => vec![self.policy.commanded_body(0.0, 0.0)],
+            // Nadir's: the planner rolls only where rolled rays still reach
+            // the ground from the height nadir allows ([`Self::footprint_gain`]
+            // scores a ray past the LiDAR's range as nothing), rather than
+            // flying every leg lower in case it rolls.
+            PointingPolicy::Planned => vec![self.policy.commanded_body(0.0, 0.0)],
         };
         let mount = Quat::from_ypr_deg(self.lidar_mount.rotation_ypr_deg);
         let rays = self.sensor_rays();
@@ -410,10 +506,21 @@ impl PodSensing {
                 })
             })
             .fold(0.0, f64::max);
+        // The furthest *required* ray (§5): a ray steeper than a quality
+        // requirement accepts maps nothing it counts.
+        let steepest = self
+            .required_incidence_rad
+            .map_or(steepest, |limit| steepest.min(limit));
         if steepest >= 80f64.to_radians() {
             return None;
         }
         Some((self.lidar.max_range_m * steepest.cos() * TERRAIN_MARGIN - unknown_margin_m).max(0.0))
+    }
+
+    /// The width of ground the pod maps across the track at nadir from
+    /// `height_m` above it, metres.
+    pub fn nadir_swath_m(&self, height_m: f64) -> f64 {
+        2.0 * height_m.max(0.0) * (self.lidar.horizontal_fov_deg.to_radians() / 2.0).tan()
     }
 
     /// Unit rays across the LiDAR's rectangle in its own frame, row by row
@@ -439,22 +546,104 @@ impl PodSensing {
         &mut self,
         node_id: &str,
         t_s: f64,
+        position_m: [f64; 3],
         velocity: [f64; 3],
     ) -> (PointingSource, Quat, GimbalState) {
+        let speed = velocity[0].hypot(velocity[1]);
+        let mut held = self
+            .gimbals
+            .get(node_id)
+            .cloned()
+            .unwrap_or_else(|| GimbalState::stowed(&self.rig.gimbal));
+        if speed > CRUISE_THRESHOLD_MPS {
+            held.heading_rad = velocity[1].atan2(velocity[0]);
+        }
+        // View planning chooses the roll before the gimbal steps toward it.
+        if let (PointingPolicy::Planned, Some(planning), true) = (
+            &self.policy,
+            self.planning.as_ref(),
+            speed > CRUISE_THRESHOLD_MPS,
+        ) {
+            let config = &planning.config;
+            let new_leg = held.roll_planned_at.is_none_or(|(at_s, heading)| {
+                let turn = (held.heading_rad - heading).rem_euclid(std::f64::consts::TAU);
+                let turn = turn.min(std::f64::consts::TAU - turn);
+                t_s - at_s >= config.roll_replan_s - 1e-9 || turn > config.leg_turn_deg.to_radians()
+            });
+            let snapshot = planning.belief.current();
+            if new_leg && snapshot.quality().is_some() && config.plan_pointing {
+                // The leg's ground: footprints at four points along the
+                // track over the hold, at this speed.
+                let reach_m = speed * config.roll_replan_s;
+                let (ux, uy) = (held.heading_rad.cos(), held.heading_rad.sin());
+                let ahead: Vec<[f64; 3]> = (0..4)
+                    .map(|k| {
+                        let d = reach_m * k as f64 / 3.0;
+                        [
+                            position_m[0] + ux * d,
+                            position_m[1] + uy * d,
+                            position_m[2],
+                        ]
+                    })
+                    .collect();
+                let gimbal = &self.rig.gimbal;
+                let interval = held.last_t_s.map_or(0.0, |last| (t_s - last).max(0.0));
+                let current = held.planned_roll_rad;
+                // Held for the leg: as many captures as the hold spans.
+                let leg = argusnet_planning::views::ViewPlanningConfig {
+                    roll_horizon_captures: if interval > 0.0 {
+                        (config.roll_replan_s / interval).max(1.0)
+                    } else {
+                        config.roll_horizon_captures
+                    },
+                    ..config.clone()
+                };
+                held.planned_roll_rad = argusnet_planning::views::choose_roll(
+                    current,
+                    &leg,
+                    |roll| {
+                        ahead
+                            .iter()
+                            .map(|at| {
+                                self.footprint_gain(
+                                    planning,
+                                    &snapshot,
+                                    *at,
+                                    held.heading_rad,
+                                    roll,
+                                )
+                            })
+                            .sum()
+                    },
+                    |roll| {
+                        if interval <= 0.0 {
+                            return 0.0;
+                        }
+                        let busy_s =
+                            (roll - current).abs() / gimbal.max_rate_rad_s + gimbal.settle_s;
+                        (busy_s / interval).ceil()
+                    },
+                );
+                held.roll_planned_at = Some((t_s, held.heading_rad));
+            } else if snapshot.quality().is_none() || !config.plan_pointing {
+                held.planned_roll_rad = 0.0;
+            }
+        }
         let gimbal = &self.rig.gimbal;
         let state = self
             .gimbals
             .entry(node_id.to_string())
-            .or_insert_with(|| GimbalState::stowed(gimbal));
-        let speed = velocity[0].hypot(velocity[1]);
-        if speed > CRUISE_THRESHOLD_MPS {
-            state.heading_rad = velocity[1].atan2(velocity[0]);
-        }
+            .or_insert(held.clone());
+        *state = held;
         let (source, command) = if speed > CRUISE_THRESHOLD_MPS {
-            (
-                PointingSource::Mission,
-                self.policy.commanded_body(state.heading_rad, t_s),
-            )
+            let base = self.policy.commanded_body(state.heading_rad, t_s);
+            let command = match self.policy {
+                PointingPolicy::Planned => {
+                    Quat::from_axis_angle([1.0, 0.0, 0.0], state.planned_roll_rad).then(base)
+                }
+                _ => base,
+            };
+            (PointingSource::Mission, command)
         } else {
             (
                 PointingSource::Stow,
@@ -492,7 +681,7 @@ impl PodSensing {
         let stepped: Vec<_> = poses
             .iter()
             .map(|(id, position, velocity)| {
-                let (source, command, state) = self.step_gimbal(id, t_s, *velocity);
+                let (source, command, state) = self.step_gimbal(id, t_s, *position, *velocity);
                 (*id, *position, source, command, state)
             })
             .collect();

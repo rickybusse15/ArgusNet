@@ -226,6 +226,18 @@ struct SimArgs {
     /// the track) or `body:YAW,PITCH,ROLL` (fixed in the body, degrees).
     #[arg(long)]
     pointing: Option<String>,
+    /// View planning (SR5d), with `--rig-profile` and
+    /// `--quality-requirements`: explorers cruise to the deficit worth most
+    /// per watt-hour, and the pod rolls across the track toward the
+    /// deficits its footprint can fix. Its energy model is assumed. Replaces
+    /// `--pointing`.
+    #[arg(long)]
+    view_planning: bool,
+    /// The view planner's parameters as JSON (`ViewPlanningConfig`: deficit
+    /// weights, energy, goal distances, roll range), instead of the assumed
+    /// default. Implies `--view-planning`.
+    #[arg(long)]
+    view_planning_profile: Option<PathBuf>,
     /// In a `--world-knowledge none` run, what each cell of the map must
     /// reach (SR5a), as JSON (`QualityRequirement`: density, vertical sigma,
     /// age, incidence limit, declared bias). The map then reports why each
@@ -418,6 +430,19 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         })
         .transpose()?;
     let pointing = args.pointing.as_deref().map(parse_pointing).transpose()?;
+    let view_planning = match &args.view_planning_profile {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            Some(
+                serde_json::from_str::<argusnet_planning::views::ViewPlanningConfig>(&text)
+                    .map_err(|error| format!("{}: {error}", path.display()))?,
+            )
+        }
+        None => args
+            .view_planning
+            .then(argusnet_planning::views::ViewPlanningConfig::default),
+    };
     let quality = args
         .quality_requirements
         .as_ref()
@@ -479,6 +504,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 nav_camera: nav_camera.clone(),
                 rig: rig.clone(),
                 pointing: pointing.clone(),
+                view_planning: view_planning.clone(),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -714,6 +740,17 @@ fn sim(args: SimArgs) -> ExitCode {
         return fail(
             EXIT_INVALID,
             "--rig-profile and --pointing fly a sensor rig in a --world-knowledge none run",
+        );
+    }
+    if (args.view_planning || args.view_planning_profile.is_some())
+        && (args.rig_profile.is_none()
+            || args.quality_requirements.is_none()
+            || args.pointing.is_some())
+    {
+        return fail(
+            EXIT_INVALID,
+            "--view-planning points a rig's pod by a quality requirement: it needs \
+             --rig-profile and --quality-requirements, and replaces --pointing",
         );
     }
     if args.pointing.is_some() && args.rig_profile.is_none() {

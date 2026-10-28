@@ -121,6 +121,11 @@ pub struct ExplorationConfig {
     /// a rig; nadir when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pointing: Option<crate::pod::PointingPolicy>,
+    /// View planning (SR5d): explorers go to the deficit worth most per
+    /// watt-hour, and the pod rolls toward the deficits its footprint can
+    /// fix. Needs a rig and a quality requirement; cruise only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_planning: Option<argusnet_planning::views::ViewPlanningConfig>,
     /// What each cell of the map must reach (SR5a). With it, the map keeps
     /// each cell's accepted evidence and publishes why each falls short;
     /// explorers go where flying can still fix a deficit (SR5b) and the scan
@@ -184,6 +189,7 @@ impl Default for ExplorationConfig {
             nav_camera: None,
             rig: None,
             pointing: None,
+            view_planning: None,
             quality: None,
         }
     }
@@ -230,6 +236,18 @@ impl ExplorationConfig {
         }
         if let Some(quality) = &self.quality {
             quality.validate()?;
+        }
+        if let Some(planning) = &self.view_planning {
+            if self.rig.is_none() || self.quality.is_none() {
+                return Err(
+                    "view planning needs a rig to point and a quality requirement to plan on"
+                        .into(),
+                );
+            }
+            if self.pointing.is_some() {
+                return Err("view planning chooses the pointing; do not set one as well".into());
+            }
+            planning.validate()?;
         }
         self.scan.validate()
     }
@@ -975,6 +993,20 @@ impl BeliefGrid {
     }
 }
 
+/// One cell's worth under `weights`.
+fn deficit_weight(
+    reason: DeficitReason,
+    weights: &argusnet_planning::views::DeficitWeights,
+) -> f64 {
+    match reason {
+        DeficitReason::Unseen => weights.unseen,
+        DeficitReason::TooOblique => weights.too_oblique,
+        DeficitReason::Sparse => weights.sparse,
+        DeficitReason::Stale => weights.stale,
+        DeficitReason::Met | DeficitReason::BiasLimited => 0.0,
+    }
+}
+
 fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
@@ -1199,6 +1231,55 @@ impl BeliefSnapshot {
             .filter(|&(i, j)| layer.reasons[j * self.nx + i].is_improvable())
             .count();
         improvable as f64 / total.max(1) as f64
+    }
+
+    /// How much fixing the cell at `(x, y)` is worth under `weights`: its
+    /// deficit's weight, 0 when met, unreachable, or without a requirement.
+    pub fn deficit_weight_at(
+        &self,
+        x_m: f64,
+        y_m: f64,
+        weights: &argusnet_planning::views::DeficitWeights,
+    ) -> f64 {
+        self.deficit_at(x_m, y_m)
+            .map_or(0.0, |reason| deficit_weight(reason, weights))
+    }
+
+    /// Every block that needs work ([`Self::work_centres`]), with the
+    /// weighted deficit flying over it would fix (SR5d). Empty without a
+    /// requirement.
+    pub fn work_blocks(
+        &self,
+        share: f64,
+        weights: &argusnet_planning::views::DeficitWeights,
+    ) -> Vec<argusnet_planning::views::WorkBlock> {
+        let Some(layer) = &self.quality else {
+            return Vec::new();
+        };
+        let bny = self.ny.div_ceil(BLOCK_CELLS);
+        let mut blocks = Vec::new();
+        for bj in 0..bny {
+            for bi in 0..self.bnx {
+                if self.block_work_share(bi, bj) < share {
+                    continue;
+                }
+                let (i0, j0) = (bi * BLOCK_CELLS, bj * BLOCK_CELLS);
+                let (i1, j1) = (
+                    (i0 + BLOCK_CELLS).min(self.nx),
+                    (j0 + BLOCK_CELLS).min(self.ny),
+                );
+                let gain: f64 = (j0..j1)
+                    .flat_map(|j| (i0..i1).map(move |i| (i, j)))
+                    .map(|(i, j)| deficit_weight(layer.reasons[j * self.nx + i], weights))
+                    .sum();
+                let centre = self.centres_where(|b_i, b_j| b_i == bi && b_j == bj);
+                blocks.push(argusnet_planning::views::WorkBlock {
+                    centre_m: centre[0],
+                    gain,
+                });
+            }
+        }
+        blocks
     }
 
     /// The power-line spans mapped when this snapshot was taken (R3): the

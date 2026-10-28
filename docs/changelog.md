@@ -2,6 +2,17 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- View planning (SR5d). With a rig and a quality requirement,
+  `--view-planning` sends explorers to the deficit worth most per watt-hour,
+  costed with the run's battery model over the believed ground. They stay in
+  cruise and never hover to look.
+  - Regional scenario, 3 seeds: +26%, +9% and +10% met cells against the
+    nearest-goal explorer, for equal or less energy.
+  - Per-leg pod pointing (`plan_pointing`) and en-route scoring
+    (`en_route_weight`) are available, but off by default: neither helped as
+    measured.
+
+  See `docs/migration/VIEW_PLANNING.md`.
 - Sensor rig and moving pod (SR1, SR2). `--rig-profile provisional|FILE` in
   a `--world-knowledge none` run flies a declared rig.
   - The rig is validated before the run, against both mass limits, and

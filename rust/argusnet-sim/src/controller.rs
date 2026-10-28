@@ -539,6 +539,26 @@ impl ControllerStage {
         capped
     }
 
+    /// Have every frontier explorer choose its goals with the view planner
+    /// (SR5d). Before the first tick.
+    pub fn set_view_planning(
+        &mut self,
+        config: &argusnet_planning::views::ViewPlanningConfig,
+        swath_m: f64,
+    ) {
+        let battery = self.battery.as_ref().map(|b| b.model()).unwrap_or_default();
+        for (_, controller) in self.state.controllers.iter_mut() {
+            let operational = match controller {
+                PlatformController::Free(operational) => operational,
+                PlatformController::Launched { controller, .. } => controller.operational_mut(),
+                PlatformController::Static { .. } => continue,
+            };
+            if let Operational::Explore(explorer) = operational {
+                explorer.set_view_planning(config.clone(), battery, swath_m);
+            }
+        }
+    }
+
     /// How many controllers are frontier explorers.
     pub fn explorer_count(&self) -> usize {
         self.state

@@ -1926,16 +1926,18 @@ impl AssembledRun {
                 })
             })
             .transpose()?;
-        let pod = config
+        // View planning points the pod itself (SR5d).
+        let pointing = if config.view_planning.is_some() {
+            crate::pod::PointingPolicy::Planned
+        } else {
+            config.pointing.clone().unwrap_or_default()
+        };
+        let mut pod = config
             .rig
             .clone()
             .map(|rig| {
-                crate::pod::PodSensing::new(
-                    rig,
-                    config.pointing.clone().unwrap_or_default(),
-                    self.world.visibility.clone(),
-                )
-                .map(|pod| pod.with_power_lines(&self.world.power_lines))
+                crate::pod::PodSensing::new(rig, pointing, self.world.visibility.clone())
+                    .map(|pod| pod.with_power_lines(&self.world.power_lines))
             })
             .transpose()?;
         let mut summary = serde_json::json!({
@@ -1962,6 +1964,18 @@ impl AssembledRun {
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
             .expect("installed above")
             .set_belief_dt(dt_s);
+        if let (Some(pod), Some(quality)) = (pod.as_mut(), &config.quality) {
+            pod.set_required_incidence(quality.max_incidence_deg.to_radians());
+        }
+        if let (Some(pod), Some(planning), Some(quality)) =
+            (pod.as_mut(), &config.view_planning, &config.quality)
+        {
+            pod.set_planning(crate::pod::PodPlanning {
+                belief: handle.clone(),
+                config: planning.clone(),
+                max_incidence_rad: quality.max_incidence_deg.to_radians(),
+            });
+        }
         let terrain = BeliefTerrain::new(handle.clone(), resolution_m);
         let guard = PhysicalGuard::new(
             self.world.terrain.clone(),
@@ -1993,6 +2007,17 @@ impl AssembledRun {
         }
         if config.explore {
             controllers.explore_search_lanes();
+        }
+        if let Some(planning) = &config.view_planning {
+            // What a leg sweeps: the pod's nadir swath from the height it
+            // flies at, the cap, or the guide's provisional 100 m without one.
+            let swath_m = pod.as_ref().map_or(0.0, |pod| {
+                let height_m = pod
+                    .max_mapping_agl_m(config.unknown_margin_m)
+                    .unwrap_or(100.0);
+                pod.nadir_swath_m(height_m)
+            });
+            controllers.set_view_planning(planning, swath_m);
         }
         // The navigation camera bounds every controller's speed: each must
         // be able to stop short of what the camera can see.

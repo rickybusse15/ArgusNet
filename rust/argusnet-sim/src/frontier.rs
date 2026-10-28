@@ -49,6 +49,8 @@ pub const CLAIM_PENALTY_M: f64 = 1_000.0;
 /// ground the scanner sees on the way, and a nearer one can sit in the gaps
 /// the scanner's rings leave straight below a platform.
 pub const MIN_GOAL_DISTANCE_M: f64 = 250.0;
+/// How often a planned leg samples the believed ground for its climbs.
+pub const LEG_SAMPLE_M: f64 = 50.0;
 
 /// What an explorer carries between ticks.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -65,6 +67,20 @@ pub struct ExplorerState {
 pub struct FrontierExplorer {
     lane: LoopedWaypointPath,
     state: ExplorerState,
+    /// View planning (SR5d): goals by deficit worth per watt-hour, not by
+    /// distance. Configuration, not state.
+    planning: Option<ExplorerPlanning>,
+}
+
+/// What an explorer plans its legs with (SR5d).
+#[derive(Debug, Clone, PartialEq)]
+struct ExplorerPlanning {
+    config: argusnet_planning::views::ViewPlanningConfig,
+    /// The run's energy model, for each leg's cost.
+    battery: argusnet_planning::battery::BatteryModel,
+    /// The width of ground the pod maps across the track, metres: what a
+    /// leg sweeps on its way.
+    swath_m: f64,
 }
 
 impl FrontierExplorer {
@@ -72,7 +88,83 @@ impl FrontierExplorer {
         Self {
             lane,
             state: ExplorerState::default(),
+            planning: None,
         }
+    }
+
+    /// Choose goals with the view planner, on a map with a quality
+    /// requirement.
+    /// Legs are costed with `battery`, the run's energy model, over the
+    /// believed ground, and valued by what a `swath_m`-wide footprint
+    /// sweeps along them.
+    pub fn set_view_planning(
+        &mut self,
+        config: argusnet_planning::views::ViewPlanningConfig,
+        battery: argusnet_planning::battery::BatteryModel,
+        swath_m: f64,
+    ) {
+        self.planning = Some(ExplorerPlanning {
+            config,
+            battery,
+            swath_m,
+        });
+    }
+
+    /// The deficit a `swath_m`-wide footprint sweeps flying from `from` to
+    /// `to`, in cells at their weights: sampled every [`LEG_SAMPLE_M`] along
+    /// the leg, at three offsets across it.
+    fn en_route_gain(
+        planning: &ExplorerPlanning,
+        belief: &BeliefSnapshot,
+        from: [f64; 2],
+        to: [f64; 2],
+    ) -> f64 {
+        let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+        let distance = dx.hypot(dy);
+        if distance < 1e-9 {
+            return 0.0;
+        }
+        let (ux, uy) = (dx / distance, dy / distance);
+        let across = planning.swath_m / 3.0;
+        let steps = (distance / LEG_SAMPLE_M).floor() as usize;
+        // Each sample stands for a LEG_SAMPLE_M by `across` patch.
+        let cells_per_sample =
+            LEG_SAMPLE_M * across / (belief.resolution_m() * belief.resolution_m());
+        let mut gain = 0.0;
+        for k in 1..=steps {
+            let d = LEG_SAMPLE_M * k as f64;
+            for offset in [-across, 0.0, across] {
+                let x = from[0] + ux * d - uy * offset;
+                let y = from[1] + uy * d + ux * offset;
+                gain += belief.deficit_weight_at(x, y, &planning.config.weights);
+            }
+        }
+        gain * cells_per_sample
+    }
+
+    /// Energy to cruise from `from` to `to` at a constant height above the
+    /// believed ground: the horizontal leg, plus every climb and descent
+    /// the ground asks for, sampled every [`LEG_SAMPLE_M`].
+    fn leg_cost_wh(
+        battery: &argusnet_planning::battery::BatteryModel,
+        belief: &BeliefSnapshot,
+        from: [f64; 2],
+        to: [f64; 2],
+    ) -> f64 {
+        let distance = (to[0] - from[0]).hypot(to[1] - from[1]);
+        let steps = (distance / LEG_SAMPLE_M).ceil().max(1.0) as usize;
+        let mut cost = battery.travel_cost_wh(distance);
+        let mut last = belief.ground_at(from[0], from[1]);
+        for k in 1..=steps {
+            let f = k as f64 / steps as f64;
+            let ground = belief.ground_at(
+                from[0] + (to[0] - from[0]) * f,
+                from[1] + (to[1] - from[1]) * f,
+            );
+            cost += battery.climb_cost_wh(ground - last);
+            last = ground;
+        }
+        cost
     }
 
     pub fn lane(&self) -> &LoopedWaypointPath {
@@ -171,8 +263,46 @@ impl FrontierExplorer {
             }
         };
         if needs_goal {
-            let frontier = frontier.get_or_init(|| belief.work_centres(UNEXPLORED_SHARE));
-            match Self::choose_goal(frontier, xy, claims) {
+            // With view planning on a map with a requirement, the block worth
+            // most per watt-hour from here, heading on toward the last goal;
+            // otherwise the nearest.
+            let planned = match (&self.planning, belief.quality()) {
+                (Some(planning), Some(_)) if planning.config.plan_goals => {
+                    let config = &planning.config;
+                    let heading = state
+                        .goal_m
+                        .filter(|_| !state.on_lane)
+                        .map(|goal| (goal[1] - xy[1]).atan2(goal[0] - xy[0]));
+                    let blocks = belief.work_blocks(UNEXPLORED_SHARE, &config.weights);
+                    Some(
+                        argusnet_planning::views::choose_goal(
+                            &blocks,
+                            xy,
+                            heading,
+                            claims,
+                            config,
+                            |to| {
+                                if config.en_route_weight > 0.0 {
+                                    Self::en_route_gain(planning, belief, xy, to)
+                                } else {
+                                    0.0
+                                }
+                            },
+                            |to| Self::leg_cost_wh(&planning.battery, belief, xy, to),
+                        )
+                        .map(|choice| choice.centre_m),
+                    )
+                }
+                _ => None,
+            };
+            let chosen = match planned {
+                Some(goal) => goal,
+                None => {
+                    let frontier = frontier.get_or_init(|| belief.work_centres(UNEXPLORED_SHARE));
+                    Self::choose_goal(frontier, xy, claims)
+                }
+            };
+            match chosen {
                 Some(goal) => {
                     state.goal_m = Some(goal);
                     state.on_lane = false;
