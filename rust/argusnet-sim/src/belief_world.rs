@@ -39,6 +39,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
+use argusnet_mapping::quality::{
+    assess, CellEvidence, DeficitCounts, DeficitReason, QualityRequirement,
+};
 use argusnet_types::Bounds2d;
 use argusnet_world::powerline::{ConductorEnvelope, PowerLine};
 use serde::{Deserialize, Serialize};
@@ -118,9 +121,31 @@ pub struct ExplorationConfig {
     /// a rig; nadir when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pointing: Option<crate::pod::PointingPolicy>,
+    /// View planning (SR5d): explorers go to the deficit worth most per
+    /// watt-hour, and the pod rolls toward the deficits its footprint can
+    /// fix. Needs a rig and a quality requirement; cruise only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_planning: Option<argusnet_planning::views::ViewPlanningConfig>,
+    /// What each cell of the map must reach (SR5a). With it, the map keeps
+    /// each cell's accepted evidence and publishes why each falls short;
+    /// explorers go where flying can still fix a deficit (SR5b) and the scan
+    /// phase measures progress as the share of reachable cells that meet
+    /// it. Absent (the default) is every run before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualityRequirement>,
 }
 
 impl ExplorationConfig {
+    /// The declared one-sigma range noise of the sensor that maps: the
+    /// rig's LiDAR, or the legacy scanner.
+    pub fn mapping_range_noise_m(&self) -> f64 {
+        self.rig
+            .as_ref()
+            .and_then(|rig| rig.mount(crate::rig::SensorRole::Lidar))
+            .and_then(|mount| mount.lidar.as_ref())
+            .map_or(self.scan.range_noise_m, |lidar| lidar.range_noise_m)
+    }
+
     /// The navigation camera the run flies: the rig's, or the stand-alone
     /// one.
     pub fn effective_nav_camera(&self) -> Option<NavCameraConfig> {
@@ -164,6 +189,8 @@ impl Default for ExplorationConfig {
             nav_camera: None,
             rig: None,
             pointing: None,
+            view_planning: None,
+            quality: None,
         }
     }
 }
@@ -206,6 +233,21 @@ impl ExplorationConfig {
             (Some(_), None) => return Err("pointing needs a rig with a pod".into()),
             (Some(policy), Some(_)) => policy.validate()?,
             _ => {}
+        }
+        if let Some(quality) = &self.quality {
+            quality.validate()?;
+        }
+        if let Some(planning) = &self.view_planning {
+            if self.rig.is_none() || self.quality.is_none() {
+                return Err(
+                    "view planning needs a rig to point and a quality requirement to plan on"
+                        .into(),
+                );
+            }
+            if self.pointing.is_some() {
+                return Err("view planning chooses the pointing; do not set one as well".into());
+            }
+            planning.validate()?;
         }
         self.scan.validate()
     }
@@ -291,6 +333,26 @@ pub struct BeliefGrid {
     /// or a hold below cruise, when it is not surveying (SR2).
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     stowed_scans: u64,
+    /// Accepted-evidence tracking (SR5a): the steepest-from-nadir ray, in
+    /// degrees, whose ground return a cell accepts. `None` keeps no such
+    /// evidence, and the grid checkpoints as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accept_incidence_deg: Option<f64>,
+    /// Per cell, the accepted ground returns: count, sum and sum of squares
+    /// of their heights, and the tick of the newest (`-1` for none). Empty
+    /// without tracking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_count: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_sum_m: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_sq_m2: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_tick: Vec<i64>,
+    /// The tick the quality was last published at, so a restored grid
+    /// publishes the same ages. `None` without tracking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quality_tick: Option<u64>,
     /// What snapshots share, kept current as returns land. Derived: rebuilt
     /// from the grid after a restore or a reset.
     #[serde(skip)]
@@ -355,6 +417,12 @@ impl BeliefGrid {
             safety_log_odds: Vec::new(),
             unsettled_scans: 0,
             stowed_scans: 0,
+            accept_incidence_deg: None,
+            accepted_count: Vec::new(),
+            accepted_sum_m: Vec::new(),
+            accepted_sq_m2: Vec::new(),
+            accepted_tick: Vec::new(),
+            quality_tick: None,
             views: None,
         })
     }
@@ -411,8 +479,22 @@ impl BeliefGrid {
         self.safety_log_odds = Vec::new();
         self.unsettled_scans = 0;
         self.stowed_scans = 0;
+        if self.accept_incidence_deg.is_some() {
+            self.accepted_count.fill(0);
+            self.accepted_sum_m.fill(0.0);
+            self.accepted_sq_m2.fill(0.0);
+            self.accepted_tick.fill(-1);
+            self.quality_tick = Some(0);
+        }
         self.views = None;
         self.reset_wires();
+    }
+
+    /// Whether `other` keeps accepted evidence under the same incidence
+    /// limit (SR5a), or neither keeps any: a checkpoint's evidence is only
+    /// meaningful under the admission policy that gathered it.
+    pub fn same_quality_tracking(&self, other: &Self) -> bool {
+        self.accept_incidence_deg == other.accept_incidence_deg
     }
 
     /// Whether `other` covers the same cells (for a checkpoint's check).
@@ -582,6 +664,76 @@ impl BeliefGrid {
             .count()
     }
 
+    /// Keep each cell's accepted evidence: ground returns from rays within
+    /// `max_incidence_deg` of nadir (SR5a). Before any scan.
+    pub fn track_quality(&mut self, max_incidence_deg: f64) {
+        let cells = self.cell_count();
+        self.accept_incidence_deg = Some(max_incidence_deg);
+        self.accepted_count = vec![0; cells];
+        self.accepted_sum_m = vec![0.0; cells];
+        self.accepted_sq_m2 = vec![0.0; cells];
+        self.accepted_tick = vec![-1; cells];
+        self.quality_tick = Some(0);
+    }
+
+    /// Record that the quality is published as of `tick`; a grid without
+    /// tracking keeps none.
+    pub fn mark_quality_tick(&mut self, tick: u64) {
+        if self.quality_tick.is_some() {
+            self.quality_tick = Some(tick);
+        }
+    }
+
+    /// The tick the quality was last published at (SR5a).
+    pub fn quality_tick(&self) -> Option<u64> {
+        self.quality_tick
+    }
+
+    /// Cell `index`'s accepted evidence at tick `now`, ages in seconds at
+    /// `dt_s` a tick.
+    fn evidence(&self, index: usize, now: u64, dt_s: f64) -> CellEvidence {
+        let accepted_returns = self.accepted_count.get(index).copied().unwrap_or(0);
+        CellEvidence {
+            ground_returns: self.ground_count[index],
+            accepted_returns,
+            accepted_height_sum_m: self.accepted_sum_m.get(index).copied().unwrap_or(0.0),
+            accepted_height_sq_sum_m2: self.accepted_sq_m2.get(index).copied().unwrap_or(0.0),
+            accepted_age_s: self
+                .accepted_tick
+                .get(index)
+                .filter(|&&t| t >= 0 && accepted_returns > 0)
+                .map(|&t| (now as i64 - t).max(0) as f64 * dt_s),
+        }
+    }
+
+    /// Every cell's quality against `requirement` at tick `now` (SR5a).
+    /// `per_return_sigma_m` is the scanner's declared range noise.
+    pub fn quality(
+        &self,
+        requirement: &QualityRequirement,
+        per_return_sigma_m: f64,
+        now: u64,
+        dt_s: f64,
+    ) -> QualityLayer {
+        let area = self.resolution_m * self.resolution_m;
+        let reasons: Vec<DeficitReason> = (0..self.cell_count())
+            .map(|k| {
+                assess(
+                    &self.evidence(k, now, dt_s),
+                    area,
+                    per_return_sigma_m,
+                    requirement,
+                )
+                .reason
+            })
+            .collect();
+        let mut counts = DeficitCounts::default();
+        for reason in &reasons {
+            counts.add(*reason);
+        }
+        QualityLayer { reasons, counts }
+    }
+
     /// Fuse one platform's scan, in return order. A wire span is mapped the
     /// first time a scan puts points on it, whichever sensor saw it. A
     /// navigation camera frame is safety evidence only
@@ -620,6 +772,20 @@ impl BeliefGrid {
                 ReturnClass::Ground => {
                     self.ground_sum[index] += hit.point_m[2];
                     self.ground_count[index] += 1;
+                    if let Some(limit_deg) = self.accept_incidence_deg {
+                        let horizontal = (hit.point_m[0] - scan.origin_m[0])
+                            .hypot(hit.point_m[1] - scan.origin_m[1]);
+                        let drop = scan.origin_m[2] - hit.point_m[2];
+                        // From nadir: 0 straight down, 90 level.
+                        let incidence_deg = horizontal.atan2(drop).to_degrees();
+                        if incidence_deg <= limit_deg {
+                            let z = hit.point_m[2];
+                            self.accepted_count[index] += 1;
+                            self.accepted_sum_m[index] += z;
+                            self.accepted_sq_m2[index] += z * z;
+                            self.accepted_tick[index] = tick as i64;
+                        }
+                    }
                     self.log_odds[index] =
                         (self.log_odds[index] + LOG_ODDS_GROUND).max(-LOG_ODDS_LIMIT);
                 }
@@ -820,9 +986,24 @@ impl BeliefGrid {
                 self.wires_view
                     .get_or_insert_with(|| Arc::new(self.wires.values().cloned().collect())),
             ),
+            quality: None,
         };
         self.views = Some(views);
         snapshot
+    }
+}
+
+/// One cell's worth under `weights`.
+fn deficit_weight(
+    reason: DeficitReason,
+    weights: &argusnet_planning::views::DeficitWeights,
+) -> f64 {
+    match reason {
+        DeficitReason::Unseen => weights.unseen,
+        DeficitReason::TooOblique => weights.too_oblique,
+        DeficitReason::Sparse => weights.sparse,
+        DeficitReason::Stale => weights.stale,
+        DeficitReason::Met | DeficitReason::BiasLimited => 0.0,
     }
 }
 
@@ -965,9 +1146,148 @@ pub struct BeliefSnapshot {
     safety_top: Arc<Vec<f64>>,
     /// The power-line spans mapped so far (R3), in id order.
     wires: Arc<Vec<PowerLine>>,
+    /// Each cell's deficit against the run's quality requirement (SR5a);
+    /// `None` without one.
+    quality: Option<Arc<QualityLayer>>,
+}
+
+/// Every cell's deficit reason, and how many give each.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QualityLayer {
+    pub reasons: Vec<DeficitReason>,
+    pub counts: DeficitCounts,
+}
+
+impl QualityLayer {
+    /// The scan's progress: the share of cells with nothing left for flying
+    /// to do, because they meet the requirement or no flying can make them
+    /// (bias-limited, unreachable). An unreachable cell never holds the scan
+    /// open, and is never counted as met: [`DeficitCounts::met_fraction`]
+    /// and the unreachable count are reported beside this.
+    pub fn resolved_fraction(&self) -> f64 {
+        (self.counts.met + self.counts.unreachable()) as f64 / self.counts.total().max(1) as f64
+    }
 }
 
 impl BeliefSnapshot {
+    /// This snapshot with `layer` as its quality.
+    pub fn with_quality(mut self, layer: QualityLayer) -> Self {
+        self.quality = Some(Arc::new(layer));
+        self
+    }
+
+    pub fn quality(&self) -> Option<&QualityLayer> {
+        self.quality.as_deref()
+    }
+
+    /// The deficit reason of the cell at `(x, y)`, with a requirement.
+    /// `None` outside the grid: nothing there can be mapped, so nothing
+    /// there is worth looking at.
+    pub fn deficit_at(&self, x_m: f64, y_m: f64) -> Option<DeficitReason> {
+        let fx = (x_m - self.x_min_m) / self.resolution_m;
+        let fy = (y_m - self.y_min_m) / self.resolution_m;
+        if !(fx >= 0.0 && fy >= 0.0 && fx < self.nx as f64 && fy < self.ny as f64) {
+            return None;
+        }
+        let (i, j) = self.ij(x_m, y_m);
+        self.quality
+            .as_ref()
+            .map(|layer| layer.reasons[j * self.nx + i])
+    }
+
+    /// The scan's progress: the resolved share with a quality requirement
+    /// ([`QualityLayer::resolved_fraction`]), the known fraction without
+    /// one.
+    pub fn scan_progress(&self) -> f64 {
+        match &self.quality {
+            Some(layer) => layer.resolved_fraction(),
+            None => self.known_fraction(),
+        }
+    }
+
+    /// Whether the block holding `(x, y)` still needs flying, at least
+    /// `share` of it: unmeasured without a requirement; improvable (unseen,
+    /// too oblique, sparse or stale) with one. An explorer keeps its goal
+    /// while it does.
+    pub fn needs_work(&self, x_m: f64, y_m: f64, share: f64) -> bool {
+        let (i, j) = self.ij(x_m, y_m);
+        self.block_work_share(i / BLOCK_CELLS, j / BLOCK_CELLS) >= share
+    }
+
+    /// The centre of every block that needs flying ([`Self::needs_work`]),
+    /// in block order: where an explorer can go to improve the map.
+    pub fn work_centres(&self, share: f64) -> Vec<[f64; 2]> {
+        if self.quality.is_none() {
+            return self.unexplored_centres(share);
+        }
+        self.centres_where(|bi, bj| self.block_work_share(bi, bj) >= share)
+    }
+
+    fn block_work_share(&self, bi: usize, bj: usize) -> f64 {
+        let Some(layer) = &self.quality else {
+            return self.block_unknown_share(bi, bj);
+        };
+        let (i0, j0) = (bi * BLOCK_CELLS, bj * BLOCK_CELLS);
+        let (i1, j1) = (
+            (i0 + BLOCK_CELLS).min(self.nx),
+            (j0 + BLOCK_CELLS).min(self.ny),
+        );
+        let total = (i1 - i0) * (j1 - j0);
+        let improvable = (j0..j1)
+            .flat_map(|j| (i0..i1).map(move |i| (i, j)))
+            .filter(|&(i, j)| layer.reasons[j * self.nx + i].is_improvable())
+            .count();
+        improvable as f64 / total.max(1) as f64
+    }
+
+    /// How much fixing the cell at `(x, y)` is worth under `weights`: its
+    /// deficit's weight, 0 when met, unreachable, or without a requirement.
+    pub fn deficit_weight_at(
+        &self,
+        x_m: f64,
+        y_m: f64,
+        weights: &argusnet_planning::views::DeficitWeights,
+    ) -> f64 {
+        self.deficit_at(x_m, y_m)
+            .map_or(0.0, |reason| deficit_weight(reason, weights))
+    }
+
+    /// Every block that needs work ([`Self::work_centres`]), with the
+    /// weighted deficit flying over it would fix (SR5d). Empty without a
+    /// requirement.
+    pub fn work_blocks(
+        &self,
+        share: f64,
+        weights: &argusnet_planning::views::DeficitWeights,
+    ) -> Vec<argusnet_planning::views::WorkBlock> {
+        let Some(layer) = &self.quality else {
+            return Vec::new();
+        };
+        let bny = self.ny.div_ceil(BLOCK_CELLS);
+        let mut blocks = Vec::new();
+        for bj in 0..bny {
+            for bi in 0..self.bnx {
+                if self.block_work_share(bi, bj) < share {
+                    continue;
+                }
+                let (i0, j0) = (bi * BLOCK_CELLS, bj * BLOCK_CELLS);
+                let (i1, j1) = (
+                    (i0 + BLOCK_CELLS).min(self.nx),
+                    (j0 + BLOCK_CELLS).min(self.ny),
+                );
+                let gain: f64 = (j0..j1)
+                    .flat_map(|j| (i0..i1).map(move |i| (i, j)))
+                    .map(|(i, j)| deficit_weight(layer.reasons[j * self.nx + i], weights))
+                    .sum();
+                blocks.push(argusnet_planning::views::WorkBlock {
+                    centre_m: self.block_centre(bi, bj),
+                    gain,
+                });
+            }
+        }
+        blocks
+    }
+
     /// The power-line spans mapped when this snapshot was taken (R3): the
     /// wires a run without a prior map plans round.
     pub fn wires(&self) -> &Arc<Vec<PowerLine>> {
@@ -1060,24 +1380,34 @@ impl BeliefSnapshot {
     /// The centre of every block at least `share` unmeasured, in block order:
     /// where an explorer can go to map something new.
     pub fn unexplored_centres(&self, share: f64) -> Vec<[f64; 2]> {
+        self.centres_where(|bi, bj| self.block_unknown_share(bi, bj) >= share)
+    }
+
+    /// The centre of every block `pick` accepts, in block order.
+    fn centres_where(&self, pick: impl Fn(usize, usize) -> bool) -> Vec<[f64; 2]> {
         let bny = self.ny.div_ceil(BLOCK_CELLS);
-        let block_m = BLOCK_CELLS as f64 * self.resolution_m;
         let mut out = Vec::new();
         for bj in 0..bny {
             for bi in 0..self.bnx {
-                if self.block_unknown_share(bi, bj) >= share {
-                    let cx = self.x_min_m + (bi as f64 + 0.5) * block_m;
-                    let cy = self.y_min_m + (bj as f64 + 0.5) * block_m;
-                    let x_max = self.x_min_m + self.nx as f64 * self.resolution_m;
-                    let y_max = self.y_min_m + self.ny as f64 * self.resolution_m;
-                    out.push([
-                        cx.min(x_max - 0.5 * self.resolution_m),
-                        cy.min(y_max - 0.5 * self.resolution_m),
-                    ]);
+                if pick(bi, bj) {
+                    out.push(self.block_centre(bi, bj));
                 }
             }
         }
         out
+    }
+
+    /// Block `(bi, bj)`'s centre, held inside the grid's last cell.
+    fn block_centre(&self, bi: usize, bj: usize) -> [f64; 2] {
+        let block_m = BLOCK_CELLS as f64 * self.resolution_m;
+        let cx = self.x_min_m + (bi as f64 + 0.5) * block_m;
+        let cy = self.y_min_m + (bj as f64 + 0.5) * block_m;
+        let x_max = self.x_min_m + self.nx as f64 * self.resolution_m;
+        let y_max = self.y_min_m + self.ny as f64 * self.resolution_m;
+        [
+            cx.min(x_max - 0.5 * self.resolution_m),
+            cy.min(y_max - 0.5 * self.resolution_m),
+        ]
     }
 
     /// The share of the grid's cells that have been measured.
@@ -1766,10 +2096,6 @@ mod tests {
         );
     }
 
-    /// Canopy returns are soft structure: the cell is seen and keeps its
-    /// highest crown, shown to the replay when first seen or moved 10 cm,
-    /// but it is never occupied, so nothing collides with it. A grid that
-    /// never saw a crown checkpoints without a canopy key.
     /// A navigation camera frame is safety evidence: two detections make
     /// the cell an obstacle the planners avoid, but the cell is not
     /// measured, so the frontier, the known fraction and the mapped
@@ -1829,6 +2155,69 @@ mod tests {
         assert_eq!(restored.safety_cells_at(0.5), 1);
     }
 
+    /// SR5b: a block measured only by shallow rays is known, so it is no
+    /// longer unexplored, but every cell is too oblique, so it still needs
+    /// work and stays a goal. Once steep returns meet it, it drops out.
+    #[test]
+    fn a_known_block_that_falls_short_is_still_a_goal() {
+        use argusnet_mapping::quality::{DeficitReason, QualityRequirement};
+        let requirement = QualityRequirement {
+            min_ground_density_per_m2: Some(0.02),
+            max_vertical_sigma_m: None,
+            max_age_s: None,
+            max_incidence_deg: 30.0,
+            bias_floor_m: 0.0,
+        };
+        let config = ExplorationConfig::default();
+        let mut belief = grid();
+        belief.track_quality(requirement.max_incidence_deg);
+        // Every cell of the first block, from a platform far off to the
+        // side: 60+ degrees from nadir.
+        let shallow: Vec<RangeReturn> = (0..5)
+            .flat_map(|i| (0..5).map(move |j| (i, j)))
+            .map(|(i, j)| ground(5.0 + 10.0 * i as f64, 5.0 + 10.0 * j as f64, 0.0))
+            .collect();
+        let mut far = scan(shallow.clone());
+        far.origin_m = [400.0, 25.0, 100.0];
+        belief.integrate(&far, 1);
+        let snapshot =
+            belief
+                .snapshot(&config)
+                .with_quality(belief.quality(&requirement, 0.3, 1, 1.0));
+        assert!(!snapshot.is_unexplored(25.0, 25.0, 0.5), "measured");
+        assert!(snapshot.needs_work(25.0, 25.0, 0.5), "but not good enough");
+        assert_eq!(
+            snapshot.deficit_at(25.0, 25.0),
+            Some(DeficitReason::TooOblique)
+        );
+        assert!(snapshot.work_centres(0.5).contains(&[25.0, 25.0]));
+        assert!(!snapshot.unexplored_centres(0.5).contains(&[25.0, 25.0]));
+        // Straight down, twice: two accepted returns per 100 m² cell.
+        let mut over = scan(shallow);
+        over.origin_m = [25.0, 25.0, 100.0];
+        belief.integrate(&over, 2);
+        belief.integrate(&over, 3);
+        let snapshot =
+            belief
+                .snapshot(&config)
+                .with_quality(belief.quality(&requirement, 0.3, 3, 1.0));
+        assert_eq!(snapshot.deficit_at(25.0, 25.0), Some(DeficitReason::Met));
+        // Outside the grid nothing can be mapped: no deficit, no worth.
+        assert_eq!(snapshot.deficit_at(-5.0, 25.0), None);
+        assert_eq!(snapshot.deficit_at(25.0, 200.0), None);
+        let weights = argusnet_planning::views::DeficitWeights::default();
+        assert_eq!(snapshot.deficit_weight_at(250.0, 25.0, &weights), 0.0);
+        assert!(!snapshot.needs_work(25.0, 25.0, 0.5));
+        assert!(!snapshot.work_centres(0.5).contains(&[25.0, 25.0]));
+        // Without a requirement, work is the unexplored share.
+        let plain = belief.snapshot(&config);
+        assert_eq!(plain.work_centres(0.5), plain.unexplored_centres(0.5));
+    }
+
+    /// Canopy returns are soft structure: the cell is seen and keeps its
+    /// highest crown, shown to the replay when first seen or moved 10 cm,
+    /// but it is never occupied, so nothing collides with it. A grid that
+    /// never saw a crown checkpoints without a canopy key.
     #[test]
     fn canopy_returns_are_seen_but_never_occupied() {
         let config = ExplorationConfig::default();
