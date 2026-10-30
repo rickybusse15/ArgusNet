@@ -59,7 +59,7 @@ dev = [
     # in step with the protobuf floor above: a generator bump changes the
     # `ValidateProtobufRuntimeVersion` triple the gencode asserts at import, so
     # the two move together or the package cannot import its own bindings.
-    "grpcio-tools==1.84.0",
+    "grpcio-tools==1.85.0",
 ]
 
 [project.scripts]
