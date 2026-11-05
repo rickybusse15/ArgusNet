@@ -662,6 +662,22 @@ fn sample_follow(
     controller.sample(timestamp_s, &mut target, &context)
 }
 
+/// How far the guard must move a platform from its command to count as
+/// stopping it, metres: less is a nudge off a surface.
+const GUARD_STOP_M: f64 = 1.0;
+
+/// The explorer flying a platform, if one is.
+fn explorer_of(controller: &mut PlatformController) -> Option<&mut FrontierExplorer> {
+    match controller {
+        PlatformController::Free(Operational::Explore(explorer)) => Some(explorer),
+        PlatformController::Launched { controller, .. } => match controller.operational_mut() {
+            Operational::Explore(explorer) => Some(explorer),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn sample_operational(
     operational: &mut Operational,
     timestamp_s: f64,
@@ -891,7 +907,18 @@ impl ControllerStage {
                         platform.position.y,
                         platform.position.z,
                     ];
-                    guard.enforce_from(node_id, timestamp_s, from, position)
+                    let commanded = position;
+                    let position = guard.enforce_from(node_id, timestamp_s, from, commanded);
+                    let moved = (0..3)
+                        .map(|k| (position[k] - commanded[k]).powi(2))
+                        .sum::<f64>()
+                        .sqrt();
+                    if moved > GUARD_STOP_M {
+                        if let Some(explorer) = explorer_of(controller) {
+                            explorer.stopped(timestamp_s, context.dt_s, from, commanded, position);
+                        }
+                    }
+                    position
                 }
                 None => position,
             };

@@ -57,6 +57,15 @@ pub const WIRE_LOOKAHEAD_S: f64 = 4.0;
 /// [`WIRE_LOOKAHEAD_S`] it reaches a wire's clearance before the wire.
 const WIRE_CLIMB_MPS: f64 = 15.0;
 
+/// How long an explorer the guard stopped flies back the way it came, s.
+const ESCAPE_BACK_S: f64 = 2.0;
+
+/// How long it holds its new height, s: past where it was stopped.
+const ESCAPE_HOLD_S: f64 = 8.0;
+
+/// How far it changes height, m: more than a wire's clearance.
+const ESCAPE_HEIGHT_M: f64 = 30.0;
+
 /// What an explorer carries between ticks.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExplorerState {
@@ -70,6 +79,26 @@ pub struct ExplorerState {
     /// would put it. Absent without them, so such checkpoints are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flown_z_m: Option<f64>,
+    /// Getting away from where the guard stopped it. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escape: Option<Escape>,
+}
+
+/// The way out after the guard stops an aircraft at something it had not
+/// planned for: back the way it came, to a new height, and on from there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Escape {
+    /// The way back from the first stop, a unit vector.
+    pub first_back: [f64; 2],
+    /// The way being flown now, a unit vector.
+    pub back: [f64; 2],
+    /// Fly back until this time, seconds.
+    pub back_until_s: f64,
+    /// Hold this height until `until_s`, metres.
+    pub z_m: f64,
+    pub until_s: f64,
+    /// How many stops this escape has met: up, down, then either side.
+    pub stops: u32,
 }
 
 /// A search drone exploring the frontier of the map.
@@ -107,6 +136,64 @@ impl FrontierExplorer {
 
     pub fn restore(&mut self, state: ExplorerState) {
         self.state = state;
+    }
+
+    /// The guard moved this aircraft from `commanded_m`, where the explorer
+    /// flew it, to `at_m`, so the explorer is no longer where it thinks. It
+    /// goes on from where the aircraft is: flying on regardless would leave
+    /// the aircraft held at the obstacle until the line to a position far
+    /// ahead happened to clear it. It backs away, climbing; stopped again,
+    /// descending; stopped again, to either side, as under a wire over a
+    /// hilltop, where neither height is open. `from_m` is where the
+    /// aircraft was: one further than a few steps from `commanded_m` was
+    /// being flown by something else, so this says nothing about the path,
+    /// and neither does a tick the explorer did not fly.
+    pub fn stopped(
+        &mut self,
+        timestamp_s: f64,
+        dt_s: f64,
+        from_m: [f64; 3],
+        commanded_m: [f64; 3],
+        at_m: [f64; 3],
+    ) {
+        let reach = 3.0 * self.lane_speed_mps() * dt_s;
+        let step = [
+            commanded_m[0] - from_m[0],
+            commanded_m[1] - from_m[1],
+            commanded_m[2] - from_m[2],
+        ];
+        let flown = self.state.last_t_s == Some(timestamp_s);
+        if !flown || (step[0] * step[0] + step[1] * step[1] + step[2] * step[2]).sqrt() > reach {
+            return;
+        }
+        let state = &mut self.state;
+        state.xy_m = Some([at_m[0], at_m[1]]);
+        state.flown_z_m = Some(at_m[2]);
+        // The first stop says which way is back. A stop on the way out says
+        // nothing new: it was flying the escape, not the path.
+        let (first, stops) = match &state.escape {
+            Some(escape) => (escape.first_back, escape.stops + 1),
+            None => {
+                let (dx, dy) = (commanded_m[0] - at_m[0], commanded_m[1] - at_m[1]);
+                let length = dx.hypot(dy).max(1e-9);
+                ([-dx / length, -dy / length], 1)
+            }
+        };
+        let [x, y] = first;
+        let (back, z_m) = match stops % 4 {
+            1 => (first, at_m[2] + ESCAPE_HEIGHT_M),
+            2 => (first, at_m[2] - ESCAPE_HEIGHT_M),
+            3 => ([-y, x], at_m[2]),
+            _ => ([y, -x], at_m[2]),
+        };
+        state.escape = Some(Escape {
+            first_back: first,
+            back,
+            back_until_s: timestamp_s + ESCAPE_BACK_S,
+            z_m,
+            until_s: timestamp_s + ESCAPE_HOLD_S,
+            stops,
+        });
     }
 
     /// The goal this explorer holds, for the other explorers' claims.
@@ -200,6 +287,13 @@ impl FrontierExplorer {
             claims.push(goal);
         }
 
+        if state
+            .escape
+            .as_ref()
+            .is_some_and(|escape| timestamp_s >= escape.until_s)
+        {
+            state.escape = None;
+        }
         let (dx, dy) = (goal[0] - xy[0], goal[1] - xy[1]);
         let distance = dx.hypot(dy);
         let step = (speed * dt).min(distance);
@@ -207,6 +301,14 @@ impl FrontierExplorer {
             ([dx / distance, dy / distance], step < distance || dt > 0.0)
         } else {
             ([0.0, 0.0], false)
+        };
+        let backing = state
+            .escape
+            .as_ref()
+            .filter(|escape| timestamp_s < escape.back_until_s);
+        let (direction, step, moving) = match backing {
+            Some(escape) => (escape.back, speed * dt, true),
+            None => (direction, step, moving),
         };
         let new_xy = [xy[0] + direction[0] * step, xy[1] + direction[1] * step];
         state.xy_m = Some(new_xy);
@@ -231,25 +333,31 @@ impl FrontierExplorer {
         };
         let resolved = collision_aware_position(terrain, obstacles, position, config.min_agl_m);
         let mut position = resolved.position_m;
-        // Over a fitted wire ahead, not round it.
-        if belief.has_fitted_wires() {
+        // Over a fitted wire ahead, not round it, and away from a stop: the
+        // height is flown, not jumped, until it is back on its own.
+        let fitted = belief.has_fitted_wires();
+        if fitted || state.flown_z_m.is_some() || state.escape.is_some() {
             let flown_z = state.flown_z_m.unwrap_or(position[2]);
-            let bounds =
-                belief.wire_bounds_ahead(new_xy, direction, speed * WIRE_LOOKAHEAD_S, flown_z);
             let lowest = terrain.height_at(position[0], position[1]) + config.min_agl_m;
-            if let Some(ceiling) = bounds.ceiling_m {
-                position[2] = position[2].min(ceiling.max(lowest));
+            if fitted {
+                let bounds =
+                    belief.wire_bounds_ahead(new_xy, direction, speed * WIRE_LOOKAHEAD_S, flown_z);
+                if let Some(ceiling) = bounds.ceiling_m {
+                    position[2] = position[2].min(ceiling.max(lowest));
+                }
+                if let Some(floor) = bounds.floor_m {
+                    position[2] = position[2].max(floor);
+                }
             }
-            if let Some(floor) = bounds.floor_m {
-                position[2] = position[2].max(floor);
+            if let Some(escape) = &state.escape {
+                position[2] = escape.z_m;
             }
-            // The change of height is flown, not jumped: a step through a
-            // wire is one the guard holds the aircraft on.
+            // A step through a wire is one the guard holds the aircraft on.
             let reach = WIRE_CLIMB_MPS * dt;
-            position[2] = position[2]
-                .clamp(flown_z - reach, flown_z + reach)
-                .max(lowest);
-            state.flown_z_m = Some(position[2]);
+            let wanted = position[2].max(lowest);
+            position[2] = wanted.clamp(flown_z - reach, flown_z + reach).max(lowest);
+            let settled = !fitted && state.escape.is_none() && position[2] == wanted;
+            state.flown_z_m = (!settled).then_some(position[2]);
         }
         (position, velocity)
     }
@@ -381,6 +489,69 @@ mod tests {
             sample(&mut plain, 7.0, None, &mut Vec::new()),
             lane().sample(7.0, &Flat, None)
         );
+    }
+
+    /// Stopped by the guard, an explorer goes on from where the aircraft is,
+    /// not where it would have been: back the way it came, climbing, and on.
+    #[test]
+    fn a_stopped_explorer_backs_away_and_changes_height() {
+        let map = belief(500.0);
+        let mut explorer = FrontierExplorer::new(lane());
+        let (p0, _) = sample(&mut explorer, 0.0, Some(&map), &mut Vec::new());
+        let (p1, _) = sample(&mut explorer, 1.0, Some(&map), &mut Vec::new());
+        let held = [p0[0] + 1.0, p0[1], p0[2]];
+        explorer.stopped(1.0, 1.0, p0, p1, held);
+        assert_eq!(explorer.state().xy_m, Some([held[0], held[1]]));
+        let (p2, _) = sample(&mut explorer, 2.0, Some(&map), &mut Vec::new());
+        assert!(p2[0] < held[0], "backs away: {p2:?} from {held:?}");
+        assert!((p2[2] - (held[2] + WIRE_CLIMB_MPS)).abs() < 1e-9, "climbs");
+        // Past the back-off it heads on, still high.
+        let (p3, _) = sample(&mut explorer, 3.0, Some(&map), &mut Vec::new());
+        let (p4, _) = sample(&mut explorer, 4.0, Some(&map), &mut Vec::new());
+        assert!(p4[0] > p3[0], "heads on again");
+        assert!(p4[2] >= held[2] + 2.0 * WIRE_CLIMB_MPS - 1e-9);
+        // Stopped again, it tries below, on the same way back, then each
+        // side of it, never reversing on itself.
+        explorer.stopped(4.0, 1.0, p3, p4, p3);
+        let escape = explorer.state().escape.clone().unwrap();
+        assert!(escape.z_m < p3[2]);
+        assert_eq!(escape.back, escape.first_back);
+        let way = escape.first_back;
+        sample(&mut explorer, 5.0, Some(&map), &mut Vec::new());
+        let at = [100.0, 100.0, 60.0];
+        let near = [101.0, 100.0, 60.0];
+        explorer.stopped(5.0, 1.0, at, near, at);
+        assert_eq!(
+            explorer.state().escape.as_ref().unwrap().back,
+            [-way[1], way[0]]
+        );
+        sample(&mut explorer, 6.0, Some(&map), &mut Vec::new());
+        explorer.stopped(6.0, 1.0, at, near, at);
+        assert_eq!(
+            explorer.state().escape.as_ref().unwrap().back,
+            [way[1], -way[0]]
+        );
+        // And in the end it is back on its own height, with nothing left to
+        // record.
+        for t in 5..40 {
+            sample(&mut explorer, f64::from(t), Some(&map), &mut Vec::new());
+        }
+        assert!(explorer.state().escape.is_none());
+        assert_eq!(explorer.state().flown_z_m, None);
+    }
+
+    /// A platform something else was flying says nothing about the path.
+    #[test]
+    fn a_stop_far_from_the_path_or_on_an_unflown_tick_changes_nothing() {
+        let map = belief(500.0);
+        let mut explorer = FrontierExplorer::new(lane());
+        let (p0, _) = sample(&mut explorer, 0.0, Some(&map), &mut Vec::new());
+        let before = explorer.state().clone();
+        let far = [p0[0] - 500.0, p0[1], p0[2]];
+        explorer.stopped(0.0, 1.0, far, p0, far);
+        assert_eq!(explorer.state(), &before, "overridden");
+        explorer.stopped(1.0, 1.0, p0, p0, p0);
+        assert_eq!(explorer.state(), &before, "not flown this tick");
     }
 
     #[test]

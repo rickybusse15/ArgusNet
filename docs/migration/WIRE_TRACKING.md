@@ -57,10 +57,10 @@ the line. Platform-ticks within 10 m of a conductor:
 | 0 | 220 | 9 | 9 | 7 |
 | 0 | 260 | 14 | 13 | 5 |
 | 0 | 300 | 13 | 13 | 6 |
-| 0 | 340 | 14 | 14 | **70** |
+| 0 | 340 | 14 | 14 | 13 |
 | -120 | 260 | 11 | 11 | 5 |
 | -120 | 300 | 2 | 2 | 2 |
-| -120 | 340 | 12 | 13 | 13 |
+| -120 | 340 | 6 | 7 | 6 |
 | 120 | 260 | 1 | 1 | 1 |
 | 120 | 300 | 4 | 4 | 5 |
 | 120 | 340 | 3 | 3 | 3 |
@@ -68,12 +68,28 @@ the line. Platform-ticks within 10 m of a conductor:
 | 60 | 300 | 5 | 5 | 2 |
 | 60 | 340 | 4 | 4 | 1 |
 
-W2 is better at 7 placements, equal at 4, slightly worse at 1 and much worse at
-1. The closest pass
+W2 is better at 9 placements, equal at 3 and slightly worse at 1. No platform
+stays near a wire for more than 6 ticks. The closest pass
 barely changes: 1 to 3.5 m at most placements in all three modes. The ones
 traced came before a track was confirmed or in a mission flight. The fit is the
 stronger result: mid-span error was 0.01 to 0.1 m where inspected, and 1 of 42
 confirmed tracks was off, by 4.5 m.
+
+## Stopped by the guard
+
+A drone can still reach a stretch of wire no track has confirmed, and the guard
+stops it. Its explorer used to fly on from a position the aircraft never
+reached, leaving it held at the wire until the straight line to that position
+cleared: up to 33 ticks, and 70 ticks near a wire in one run. The oracle and W1
+showed this too.
+
+The controller now tells the explorer where the guard left the aircraft. The
+explorer goes on from there. It flies back the way it came for 2 s and holds a
+new height for 8 s, climbing 30 m at first. Stopped again it descends, then
+tries each side, which is what gets it out from under a wire over a hilltop. A
+platform far from its path was being flown by something else, and is left
+alone. This applies to every `--world-knowledge none` run, with or without
+`--track-wires`.
 
 ## A real place
 
@@ -93,16 +109,13 @@ conductors 1.6 m apart. 300 s, `contingency_v1`, `flown_v1`, no world knowledge.
 At seed 7, 32 of 35 fitted tracks lie within 0.2 m of a true conductor across
 the line, so neighbouring conductors stay apart; the other 3 sit between two.
 Track heights were not checked to better than a metre. Seed 42 mapped less of
-the place and finished its flight home, where the other two did not.
+the place and finished its flight home, where the other two did not. No drone
+was pinned at either seed, so the guard-stop change leaves these runs unchanged.
 
 ## Known limits
 
-- **Pinning at the guard.** The 70 above is one drone meeting a stretch of wire
-  no track had confirmed. The guard holds it, while the explorer's commanded
-  position flies on, so it stays until a straight line to that position is
-  clear. This is not W2's: the oracle and W1 record 21 to 22 contacts the same
-  way at x = -120. W2 changes which runs meet it. The explorer needs to hear
-  that the aircraft was stopped.
+- **Guard stops are for explorers only.** A mission flight the guard stops keeps
+  its existing rejoin behaviour.
 - **Tracks across a pole.** A track seen on both sides of an unseen pole can fit
   through it. That is the 4.5 m miss, and its reported sigma did not show it.
   Pole detection (W3) splits them.

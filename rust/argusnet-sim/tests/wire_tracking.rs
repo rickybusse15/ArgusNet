@@ -22,14 +22,18 @@ use argusnet_world::powerline::{closest_on_segment, PowerLine};
 /// The scan fixture with a double conductor line across the map, its top
 /// 260 m above the datum, near the height drones fly.
 fn bundle() -> ScenarioBundle {
+    bundle_at(0.0, 260.0)
+}
+
+/// The same line at `x_m`, its top `top_m` above the datum.
+fn bundle_at(x_m: f64, top_m: f64) -> ScenarioBundle {
     let path = format!(
         "{}/../../tests/fixtures/scenario_bundle_scan.json",
         env!("CARGO_MANIFEST_DIR")
     );
     let text = std::fs::read_to_string(&path).expect("fixture");
     let mut document: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let support =
-        |y: f64| serde_json::json!({ "xy_m": [0.0, y], "base_z_m": 100.0, "height_m": 160.0 });
+    let support = |y: f64| serde_json::json!({ "xy_m": [x_m, y], "base_z_m": 100.0, "height_m": top_m - 100.0 });
     document["world"]["power_lines"] = serde_json::json!([{
         "id": "across",
         "supports": [support(-300.0), support(0.0), support(300.0)],
@@ -200,6 +204,44 @@ fn flying_fitted_wires_comes_near_a_conductor_less_often() {
     let bundle = bundle();
     let (band, fitted) = (ticks_near(&bundle, false), ticks_near(&bundle, true));
     assert!(fitted < band, "fitted {fitted} against band {band}");
+}
+
+/// The most ticks in a row any platform spends within 10 m of a conductor.
+fn longest_stay(bundle: &ScenarioBundle, config: ExplorationConfig) -> usize {
+    let lines = true_lines(bundle);
+    let mut run = run_with(bundle, config);
+    let mut stays = std::collections::BTreeMap::new();
+    let mut longest = 0;
+    for _ in 0..bundle.steps {
+        run.step().unwrap();
+        let frame = serde_json::to_value(run.last_frame().unwrap()).unwrap();
+        for node in frame["nodes"].as_array().unwrap() {
+            if node["is_mobile"] != true {
+                continue;
+            }
+            let p: [f64; 3] = std::array::from_fn(|k| node["position"][k].as_f64().unwrap());
+            let stay = stays.entry(node["node_id"].to_string()).or_insert(0);
+            let near = lines.iter().any(|line| line.clearance_along(p, p) < 10.0);
+            *stay = if near { *stay + 1 } else { 0 };
+            longest = longest.max(*stay);
+        }
+    }
+    longest
+}
+
+/// A line whose top is near flight height, over ground that rises to meet
+/// it. Stopped there, a drone once stayed for 33 ticks, up against the wire
+/// with the ground below, while its explorer flew on. It now gets away, with
+/// or without fitted wires.
+#[test]
+fn a_drone_stopped_at_a_wire_gets_away() {
+    for (x_m, top_m) in [(0.0, 340.0), (-120.0, 340.0)] {
+        let bundle = bundle_at(x_m, top_m);
+        for track in [false, true] {
+            let longest = longest_stay(&bundle, config(track));
+            assert!(longest <= 8, "x {x_m} track {track}: {longest} ticks");
+        }
+    }
 }
 
 #[test]
