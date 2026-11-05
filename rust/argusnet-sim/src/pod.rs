@@ -311,6 +311,8 @@ pub struct PodSensing {
     world: SharedVisibility,
     spans: Arc<Vec<SpanPieces>>,
     gimbals: BTreeMap<String, GimbalState>,
+    /// Report wires as measured points instead of whole spans (W1).
+    measured: Option<crate::wire_sensing::MeasuredWires>,
 }
 
 /// The pod's checkpointed state: every platform's gimbal.
@@ -346,7 +348,14 @@ impl PodSensing {
             world,
             spans: Arc::new(Vec::new()),
             gimbals: BTreeMap::new(),
+            measured: None,
         })
+    }
+
+    /// Report wires as measured points, never as whole spans (W1).
+    pub fn with_measured_wires(mut self, measured: crate::wire_sensing::MeasuredWires) -> Self {
+        self.measured = Some(measured);
+        self
     }
 
     /// The pod, also putting points on `lines`' wires within the range its
@@ -601,16 +610,52 @@ impl PodSensing {
         let half_h = self.lidar.horizontal_fov_deg.to_radians() / 2.0;
         let half_v = self.lidar.vertical_fov_deg.to_radians() / 2.0;
         let inverse = world_sensor_true.conj();
-        let wires = wires_seen(&self.spans, origin_true, |point| {
-            let local = inverse.rotate([
-                point[0] - origin_true[0],
-                point[1] - origin_true[1],
-                point[2] - origin_true[2],
-            ]);
+        let in_rectangle = |d: [f64; 3]| {
+            let local = inverse.rotate(d);
             local[0] > 0.0
                 && local[1].atan2(local[0]).abs() <= half_h
                 && local[2].atan2(local[0].hypot(local[1])).abs() <= half_v
-        });
+        };
+        let (wires, wire_points) = match &self.measured {
+            None => (
+                wires_seen(&self.spans, origin_true, |point| {
+                    in_rectangle([
+                        point[0] - origin_true[0],
+                        point[1] - origin_true[1],
+                        point[2] - origin_true[2],
+                    ])
+                }),
+                Vec::new(),
+            ),
+            Some(measured) => {
+                let mut wire_rng = key("pod-lidar-wire");
+                let points = crate::wire_sensing::lidar_points(
+                    &self.spans,
+                    &measured.model,
+                    origin_true,
+                    measured.capture_s,
+                    2.0 * half_h * 2.0 * half_v,
+                    self.lidar.max_range_m,
+                    in_rectangle,
+                    |point| self.world.first_hit(origin_true, point).is_none(),
+                    &mut wire_rng,
+                );
+                // Georeferenced by the estimate, as the ground returns are.
+                let believe = world_sensor_est.then(inverse);
+                let points = points
+                    .into_iter()
+                    .map(|point| {
+                        let d = [
+                            point[0] - origin_true[0],
+                            point[1] - origin_true[1],
+                            point[2] - origin_true[2],
+                        ];
+                        add(origin_est, believe.rotate(d))
+                    })
+                    .collect();
+                (Vec::new(), points)
+            }
+        };
         RangeScan {
             node_id: node_id.to_string(),
             timestamp_s: t_s,
@@ -626,6 +671,8 @@ impl PodSensing {
                 boresight_world: world_sensor_est.rotate([1.0, 0.0, 0.0]),
                 occluded,
             }),
+            wire_points,
+            wire_lines: Vec::new(),
         }
     }
 }

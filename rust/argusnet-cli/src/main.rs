@@ -227,6 +227,16 @@ struct SimArgs {
     /// Recorded in the replay's `meta.world_knowledge.exploration.quality`.
     #[arg(long)]
     quality_requirements: Option<PathBuf>,
+    /// In a `--world-knowledge none` run, measure power lines instead of
+    /// being told them (W1): LiDAR points and camera lines with no ids,
+    /// never a whole span. Avoidance reads a hazard band built from the
+    /// points. Recorded in `meta.world_knowledge.exploration.measured_wires`.
+    #[arg(long)]
+    measured_wires: bool,
+    /// The wire sensor model as JSON (`WireSensorModel`), instead of the
+    /// assumed default. Implies `--measured-wires`.
+    #[arg(long)]
+    wire_sensor_profile: Option<PathBuf>,
     /// In a `--world-knowledge none` run, fly with a forward navigation
     /// camera as the primary obstacle-avoidance sensor (SR5c): its
     /// detections become safety obstacles, every controller is capped to the
@@ -455,6 +465,19 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         })
         .transpose()?;
     let pointing = args.pointing.as_deref().map(parse_pointing).transpose()?;
+    let measured_wires = match &args.wire_sensor_profile {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            Some(
+                serde_json::from_str::<argusnet_sim::wire_sensing::WireSensorModel>(&text)
+                    .map_err(|error| format!("{}: {error}", path.display()))?,
+            )
+        }
+        None => args
+            .measured_wires
+            .then(argusnet_sim::wire_sensing::WireSensorModel::default),
+    };
     Ok(RunOptions {
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
@@ -491,6 +514,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         exploration: (args.pursuit.is_some()
             || args.explore.is_some()
             || args.wire_prior
+            || measured_wires.is_some()
             || nav_camera.is_some()
             || rig.is_some()
             || quality.is_some())
@@ -510,6 +534,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 nav_camera: nav_camera.clone(),
                 rig: rig.clone(),
                 pointing: pointing.clone(),
+                measured_wires: measured_wires.clone(),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -757,6 +782,15 @@ fn sim(args: SimArgs) -> ExitCode {
         return fail(
             EXIT_INVALID,
             "--rig-profile carries the navigation camera; drop --nav-camera",
+        );
+    }
+    if (args.measured_wires || args.wire_sensor_profile.is_some())
+        && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
+    {
+        return fail(
+            EXIT_INVALID,
+            "--measured-wires measures power lines in a --world-knowledge none run; \
+             a prior run knows them already",
         );
     }
     if (args.quality_requirements.is_some() || args.nav_camera || args.nav_camera_profile.is_some())

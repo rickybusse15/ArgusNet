@@ -325,6 +325,8 @@ pub struct NavCamera {
     /// mount): lever arm in the body frame, and the mount's rotation. `None`
     /// is a camera at the platform's origin looking along its heading.
     mount: Option<([f64; 3], crate::pod::Quat)>,
+    /// Report wires as line detections instead of whole spans (W1).
+    measured: Option<crate::wire_sensing::MeasuredWires>,
 }
 
 impl NavCamera {
@@ -341,7 +343,14 @@ impl NavCamera {
             world,
             spans: Arc::new(Vec::new()),
             mount: None,
+            measured: None,
         })
+    }
+
+    /// Report wires as 2-D line detections, never as whole spans (W1).
+    pub fn with_measured_wires(mut self, measured: crate::wire_sensing::MeasuredWires) -> Self {
+        self.measured = Some(measured);
+        self
     }
 
     /// The camera on a rig's body mount: `lever_arm_m` from the platform's
@@ -473,13 +482,32 @@ impl NavCamera {
                 class,
             });
         }
-        let wires = wires_seen(&self.spans, origin_m, |point| {
-            let d = std::array::from_fn(|k| point[k] - origin_m[k]);
-            match rotation {
-                None => self.config.in_view(heading, d),
-                Some(rotation) => self.config.in_view(0.0, rotation.conj().rotate(d)),
+        let sees = |d: [f64; 3]| match rotation {
+            None => self.config.in_view(heading, d),
+            Some(rotation) => self.config.in_view(0.0, rotation.conj().rotate(d)),
+        };
+        let (wires, wire_lines) = match &self.measured {
+            None => (
+                wires_seen(&self.spans, origin_m, |point| {
+                    sees(std::array::from_fn(|k| point[k] - origin_m[k]))
+                }),
+                Vec::new(),
+            ),
+            Some(measured) => {
+                let mut lines = key("nav-camera-wire");
+                (
+                    Vec::new(),
+                    crate::wire_sensing::camera_lines(
+                        &self.spans,
+                        &measured.model,
+                        origin_m,
+                        self.config.pixel_ifov_rad,
+                        sees,
+                        &mut lines,
+                    ),
+                )
             }
-        });
+        };
         RangeScan {
             node_id: node_id.to_string(),
             timestamp_s,
@@ -489,6 +517,8 @@ impl NavCamera {
             wires,
             sensor: ScanSensor::NavCamera,
             pod: None,
+            wire_points: Vec::new(),
+            wire_lines,
         }
     }
 }

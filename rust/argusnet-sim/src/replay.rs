@@ -331,6 +331,15 @@ pub struct ReplayBeliefStats {
     /// Pod captures the map refused because the pod was stowed (SR2).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub stowed_scans: u64,
+    /// Measured wire evidence so far (W1): LiDAR points, cells with enough
+    /// of them to be a hazard, and camera line detections. Written only when
+    /// there are some.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_points: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_hazard_cells: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_lines: u64,
     /// The map against the run's quality requirement (SR5a). Absent
     /// without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -375,6 +384,10 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 /// A sample of one platform's range returns this tick, rounded to the
 /// decimetre.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -392,6 +405,13 @@ pub struct ReplayRangeScan {
     /// (R3). Absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wire: Vec<[f64; 3]>,
+    /// A sample of the scan's measured wire points (W1), no ids. Absent
+    /// when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wire_points: Vec<[f64; 3]>,
+    /// How many camera line detections the frame made (W1).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub wire_lines: u32,
     /// `nav_camera` for the forward navigation camera's detections (safety
     /// evidence, not the map); absent for the range scanner.
     #[serde(
@@ -432,6 +452,13 @@ impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
             canopy: of(crate::range_scan::ReturnClass::Canopy),
             misses: scan.misses,
             wire: scan.wires.iter().map(|wire| dm(wire.point_m)).collect(),
+            wire_points: scan
+                .wire_points
+                .iter()
+                .take(REPLAY_RETURNS_PER_SCAN)
+                .map(|point| dm(*point))
+                .collect(),
+            wire_lines: scan.wire_lines.len() as u32,
             sensor: scan.sensor,
             pod: scan.pod.clone().map(|mut pod| {
                 pod.boresight_world = pod.boresight_world.map(|v| (v * 1e4).round() / 1e4);

@@ -128,6 +128,12 @@ pub struct ExplorationConfig {
     /// a rig; nadir when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pointing: Option<crate::pod::PointingPolicy>,
+    /// Measure wires instead of being told them (W1): sensors report noisy
+    /// points and camera lines, never a span, and avoidance reads a hazard
+    /// band built from the points. Absent is the oracle every run before it
+    /// used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_wires: Option<crate::wire_sensing::WireSensorModel>,
 }
 
 impl ExplorationConfig {
@@ -175,6 +181,7 @@ impl Default for ExplorationConfig {
             nav_camera: None,
             rig: None,
             pointing: None,
+            measured_wires: None,
         }
     }
 }
@@ -204,6 +211,9 @@ impl ExplorationConfig {
         }
         if let Some(quality) = &self.quality {
             quality.validate()?;
+        }
+        if let Some(model) = &self.measured_wires {
+            model.validate()?;
         }
         if let Some(camera) = &self.nav_camera {
             camera.validate()?;
@@ -330,6 +340,21 @@ pub struct BeliefGrid {
     /// or a hold below cruise, when it is not surveying (SR2).
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     stowed_scans: u64,
+    /// Measured wire evidence (W1): per cell, how many LiDAR points landed
+    /// and the lowest and highest. Empty until the first lands, so a run
+    /// without measured wires checkpoints as it always did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    wire_count: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    wire_low_m: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    wire_high_m: Vec<f64>,
+    /// Camera line detections so far: kept for W2 to triangulate.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    wire_lines_seen: u64,
+    /// Cells with new wire points since the last snapshot.
+    #[serde(skip)]
+    wire_dirty: BTreeSet<usize>,
     /// What snapshots share, kept current as returns land. Derived: rebuilt
     /// from the grid after a restore or a reset.
     #[serde(skip)]
@@ -350,6 +375,9 @@ struct Views {
     /// The camera's obstacle top per cell, NaN unless believed occupied;
     /// empty without camera evidence.
     safety: Arc<Vec<f64>>,
+    /// The wire hazard band per cell, `[low, high]`, NaN where none; empty
+    /// without measured wire evidence.
+    wire_band: Arc<Vec<[f64; 2]>>,
     /// Highest seen ground per block, NaN where none.
     block_max: Vec<f64>,
     dirty_blocks: BTreeSet<usize>,
@@ -401,6 +429,11 @@ impl BeliefGrid {
             safety_log_odds: Vec::new(),
             unsettled_scans: 0,
             stowed_scans: 0,
+            wire_count: Vec::new(),
+            wire_low_m: Vec::new(),
+            wire_high_m: Vec::new(),
+            wire_lines_seen: 0,
+            wire_dirty: BTreeSet::new(),
             views: None,
         })
     }
@@ -478,6 +511,11 @@ impl BeliefGrid {
         self.safety_log_odds = Vec::new();
         self.unsettled_scans = 0;
         self.stowed_scans = 0;
+        self.wire_count = Vec::new();
+        self.wire_low_m = Vec::new();
+        self.wire_high_m = Vec::new();
+        self.wire_lines_seen = 0;
+        self.wire_dirty.clear();
         self.views = None;
         self.reset_wires();
     }
@@ -584,6 +622,7 @@ impl BeliefGrid {
             ground: Arc::new(ground),
             structure: Arc::new(structure),
             safety: Arc::new(safety),
+            wire_band: Arc::new(Vec::new()),
             block_max,
             dirty_blocks: BTreeSet::new(),
         }
@@ -708,6 +747,63 @@ impl BeliefGrid {
         }
     }
 
+    /// Record a scan's measured wire evidence (W1): points by cell, lines by
+    /// count. No point says which wire it is on.
+    fn integrate_wire_evidence(&mut self, scan: &RangeScan) {
+        self.wire_lines_seen += scan.wire_lines.len() as u64;
+        for point in &scan.wire_points {
+            let Some(index) = self.cell_of(point[0], point[1]) else {
+                continue;
+            };
+            if self.wire_count.is_empty() {
+                let cells = self.cell_count();
+                self.wire_count = vec![0; cells];
+                self.wire_low_m = vec![0.0; cells];
+                self.wire_high_m = vec![0.0; cells];
+            }
+            let first = self.wire_count[index] == 0;
+            self.wire_low_m[index] = if first {
+                point[2]
+            } else {
+                self.wire_low_m[index].min(point[2])
+            };
+            self.wire_high_m[index] = if first {
+                point[2]
+            } else {
+                self.wire_high_m[index].max(point[2])
+            };
+            self.wire_count[index] += 1;
+            self.wire_dirty.insert(index);
+        }
+    }
+
+    /// Cell `index`'s hazard band under `model`, `[NaN, NaN]` for none.
+    fn wire_band_of(&self, index: usize, model: &crate::wire_sensing::WireSensorModel) -> [f64; 2] {
+        if self.wire_count[index] >= model.min_hazard_points {
+            [
+                self.wire_low_m[index] - model.hazard_margin_m,
+                self.wire_high_m[index] + model.hazard_margin_m,
+            ]
+        } else {
+            [f64::NAN; 2]
+        }
+    }
+
+    /// Measured LiDAR points on wires so far.
+    pub fn wire_points(&self) -> u64 {
+        self.wire_count.iter().map(|&n| u64::from(n)).sum()
+    }
+
+    /// Camera line detections so far.
+    pub fn wire_lines_seen(&self) -> u64 {
+        self.wire_lines_seen
+    }
+
+    /// Cells with at least `min_points` wire points.
+    pub fn wire_hazard_cells(&self, min_points: u32) -> usize {
+        self.wire_count.iter().filter(|&&n| n >= min_points).count()
+    }
+
     /// Pod captures refused unsettled.
     pub fn unsettled_scans(&self) -> u64 {
         self.unsettled_scans
@@ -746,6 +842,7 @@ impl BeliefGrid {
                 return;
             }
         }
+        self.integrate_wire_evidence(scan);
         for wire in &scan.wires {
             if !self.wires.contains_key(&wire.span.id) {
                 self.wires.insert(wire.span.id.clone(), wire.span.clone());
@@ -951,6 +1048,21 @@ impl BeliefGrid {
         for block in std::mem::take(&mut views.dirty_blocks) {
             views.block_max[block] = self.block_max_of(&views.ground, block);
         }
+        let dirty = std::mem::take(&mut self.wire_dirty);
+        if let (Some(model), false) = (&config.measured_wires, self.wire_count.is_empty()) {
+            if views.wire_band.is_empty() {
+                views.wire_band = Arc::new(
+                    (0..self.cell_count())
+                        .map(|k| self.wire_band_of(k, model))
+                        .collect(),
+                );
+            } else {
+                let band = Arc::make_mut(&mut views.wire_band);
+                for index in dirty {
+                    band[index] = self.wire_band_of(index, model);
+                }
+            }
+        }
         let (bnx, bny) = self.blocks();
         let block_m = self.resolution_m * BLOCK_CELLS as f64;
         let radius = (config.unknown_search_radius_m / block_m).ceil() as usize;
@@ -975,6 +1087,7 @@ impl BeliefGrid {
             stand_in,
             structure_top: Arc::clone(&views.structure),
             safety_top: Arc::clone(&views.safety),
+            wire_band: Arc::clone(&views.wire_band),
             wires: Arc::clone(
                 self.wires_view
                     .get_or_insert_with(|| Arc::new(self.wires.values().cloned().collect())),
@@ -1123,6 +1236,9 @@ pub struct BeliefSnapshot {
     /// The navigation camera's obstacles: NaN where the camera does not
     /// believe the cell occupied; empty without camera evidence.
     safety_top: Arc<Vec<f64>>,
+    /// Where measured wire points make a hazard: `[low, high]` per cell, NaN
+    /// where none; empty without measured wire evidence.
+    wire_band: Arc<Vec<[f64; 2]>>,
     /// The power-line spans mapped so far (R3), in id order.
     wires: Arc<Vec<PowerLine>>,
     /// Each cell's deficit against the run's quality requirement (SR5a);
@@ -1416,6 +1532,16 @@ impl BeliefSnapshot {
             || self
                 .safety_top_at(point_m[0], point_m[1])
                 .is_some_and(below)
+            || self.in_wire_band(point_m)
+    }
+
+    /// Whether `point_m` is in a measured wire hazard: a height band over
+    /// the cell, so a platform can pass under or over it, unlike a structure.
+    fn in_wire_band(&self, point_m: [f64; 3]) -> bool {
+        let (i, j) = self.ij(point_m[0], point_m[1]);
+        self.wire_band
+            .get(j * self.nx + i)
+            .is_some_and(|band| point_m[2] >= band[0] && point_m[2] <= band[1])
     }
 }
 
@@ -1868,6 +1994,8 @@ mod tests {
             wires: Vec::new(),
             sensor: Default::default(),
             pod: None,
+            wire_points: Vec::new(),
+            wire_lines: Vec::new(),
         }
     }
 
@@ -2305,6 +2433,48 @@ mod tests {
         .with_power_lines(lines)
     }
 
+    /// Measured wire points make a height band, not a column: once a cell
+    /// has enough points a platform in the band collides, one above or below
+    /// it does not, and a lone point is no hazard. The cell is never
+    /// measured ground, and the evidence survives a checkpoint.
+    #[test]
+    fn wire_points_make_a_height_band_avoidance_reads() {
+        let model = crate::wire_sensing::WireSensorModel::default();
+        let config = ExplorationConfig {
+            measured_wires: Some(model.clone()),
+            ..ExplorationConfig::default()
+        };
+        let mut belief = grid();
+        let handle = BeliefHandle::new(belief.snapshot(&config));
+        let obstacles = BeliefObstacles::new(handle.clone());
+        let mut frame = scan(Vec::new());
+        frame.wire_points = vec![[45.0, 45.0, 40.0]];
+        belief.integrate(&frame, 1);
+        handle.publish(belief.snapshot(&config));
+        assert!(
+            !obstacles.collides([45.0, 45.0, 40.0]),
+            "one point is no hazard"
+        );
+        frame.wire_points = vec![[45.0, 45.0, 42.0]];
+        belief.integrate(&frame, 2);
+        handle.publish(belief.snapshot(&config));
+        assert!(obstacles.collides([45.0, 45.0, 41.0]));
+        assert!(obstacles.collides([45.0, 45.0, 46.5]), "within the margin");
+        assert!(!obstacles.collides([45.0, 45.0, 48.0]), "over the band");
+        assert!(!obstacles.collides([45.0, 45.0, 30.0]), "under the band");
+        assert_eq!(belief.wire_points(), 2);
+        assert_eq!(belief.wire_hazard_cells(model.min_hazard_points), 1);
+        assert_eq!(belief.known_cells(), 0, "no ground was measured");
+        let mut restored: BeliefGrid =
+            serde_json::from_str(&serde_json::to_string(&belief).unwrap()).unwrap();
+        let handle = BeliefHandle::new(restored.snapshot(&config));
+        assert!(BeliefObstacles::new(handle).collides([45.0, 45.0, 41.0]));
+        // A grid without wire evidence serialises as it always did.
+        assert!(!serde_json::to_string(&grid())
+            .unwrap()
+            .contains("wire_count"));
+    }
+
     /// A refused pod capture is refused whole: its wires do not reach the
     /// map either, while a settled mission capture's do.
     #[test]
@@ -2332,6 +2502,11 @@ mod tests {
         assert_eq!((belief.stowed_scans(), belief.unsettled_scans()), (1, 1));
         belief.integrate(&capture(PointingSource::Mission, true), 3);
         assert_eq!(belief.wires().count(), 1);
+        // Its measured evidence is refused with it.
+        let mut measured = capture(PointingSource::Stow, true);
+        measured.wire_points = vec![[45.0, 45.0, 20.0]];
+        belief.integrate(&measured, 4);
+        assert_eq!(belief.wire_points(), 0);
     }
 
     /// Somewhere a platform cannot be: below the true ground, inside a

@@ -5079,6 +5079,8 @@ mod tests {
             }],
             sensor: Default::default(),
             pod: None,
+            wire_points: Vec::new(),
+            wire_lines: Vec::new(),
         };
         grid.integrate(&scan, 4);
         map.publish(grid.snapshot(&config));
