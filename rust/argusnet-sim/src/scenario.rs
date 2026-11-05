@@ -1038,6 +1038,9 @@ fn belief_stats(
         quality: None,
         unsettled_scans: grid.unsettled_scans(),
         stowed_scans: grid.stowed_scans(),
+        wire_points: grid.wire_points(),
+        wire_hazard_cells: 0,
+        wire_lines: grid.wire_lines_seen(),
     }
 }
 
@@ -1903,6 +1906,19 @@ impl AssembledRun {
             self.world.visibility.clone(),
         )?
         .with_power_lines(&self.world.power_lines);
+        // Sensors report wires as measurements, not spans (W1).
+        let measured =
+            config
+                .measured_wires
+                .clone()
+                .map(|model| crate::wire_sensing::MeasuredWires {
+                    model,
+                    capture_s: self.dt_s,
+                });
+        let scanner = match &measured {
+            Some(measured) => scanner.with_measured_wires(measured.clone()),
+            None => scanner,
+        };
         // A rig's camera flies on its declared body mount.
         let camera_mount = config
             .rig
@@ -1919,6 +1935,10 @@ impl AssembledRun {
                 )
                 .map(|camera| {
                     let camera = camera.with_power_lines(&self.world.power_lines);
+                    let camera = match &measured {
+                        Some(measured) => camera.with_measured_wires(measured.clone()),
+                        None => camera,
+                    };
                     match camera_mount {
                         Some((lever, rotation)) => camera.with_mount(lever, rotation),
                         None => camera,
@@ -1935,7 +1955,13 @@ impl AssembledRun {
                     config.pointing.clone().unwrap_or_default(),
                     self.world.visibility.clone(),
                 )
-                .map(|pod| pod.with_power_lines(&self.world.power_lines))
+                .map(|pod| {
+                    let pod = pod.with_power_lines(&self.world.power_lines);
+                    match &measured {
+                        Some(measured) => pod.with_measured_wires(measured.clone()),
+                        None => pod,
+                    }
+                })
             })
             .transpose()?;
         let mut summary = serde_json::json!({
@@ -2577,6 +2603,10 @@ impl AssembledRun {
                         &self.true_structures,
                         &self.true_trunks,
                     );
+                    if let Some(model) = &config.measured_wires {
+                        stats.wire_hazard_cells =
+                            grid.wire_hazard_cells(model.min_hazard_points) as u64;
+                    }
                     stats.quality = mapping.belief_snapshot().and_then(|snapshot| {
                         snapshot
                             .quality()

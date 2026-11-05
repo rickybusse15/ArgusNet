@@ -677,6 +677,21 @@
               "type": "integer",
               "minimum": 0,
               "description": "SR2: pod captures refused because the pod was stowed, so far. Absent when none."
+            },
+            "wire_points": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W1: measured LiDAR points on wires so far. Absent when none."
+            },
+            "wire_hazard_cells": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W1: cells with enough wire points to be a hazard band. Absent when none."
+            },
+            "wire_lines": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W1: camera line detections so far. Absent when none."
             }
           }
         }
@@ -1141,6 +1156,23 @@
                   "nav_camera"
                 ],
                 "description": "`nav_camera` for the forward navigation camera's obstacle detections (SR5c): safety evidence, not the map. Absent for the range scanner."
+              },
+              "wire_points": {
+                "type": "array",
+                "description": "W1: a sample (at most 32) of the scan's measured LiDAR points on conductors, rounded to the decimetre. No point names a wire. Absent when none.",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "wire_lines": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "W1: how many camera line detections the frame made. Absent when none."
               },
               "pod": {
                 "type": "object",

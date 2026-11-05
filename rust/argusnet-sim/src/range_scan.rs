@@ -74,6 +74,32 @@ pub(crate) struct SpanPieces {
     high_m: [f64; 3],
 }
 
+impl SpanPieces {
+    /// The span's conductor pieces.
+    pub(crate) fn pieces(&self) -> &[ConductorPiece] {
+        &self.pieces
+    }
+
+    /// How far the span is detected, metres.
+    pub(crate) fn range_m(&self) -> f64 {
+        self.range_m
+    }
+
+    /// The span's conductor radius, metres.
+    pub(crate) fn radius_m(&self) -> f64 {
+        self.span.conductor_radius_m
+    }
+
+    /// Whether every conductor of the span is further than `reach_m` from
+    /// `origin_m` along some axis: a cheap test before the pieces.
+    pub(crate) fn outside_reach(&self, origin_m: [f64; 3], reach_m: f64) -> bool {
+        (0..3).any(|axis| {
+            origin_m[axis] < self.low_m[axis] - reach_m
+                || origin_m[axis] > self.high_m[axis] + reach_m
+        })
+    }
+}
+
 /// `lines`' spans, each detectable within `range_m(line)` of a sensor.
 pub(crate) fn span_pieces(
     lines: &[PowerLine],
@@ -273,6 +299,13 @@ pub struct RangeScan {
     /// ([`crate::pod`]); absent for the legacy scanner and the camera.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pod: Option<crate::pod::PodCapture>,
+    /// Measured LiDAR returns on conductors (W1), with no id. Absent with
+    /// the oracle's [`Self::wires`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wire_points: Vec<[f64; 3]>,
+    /// Measured camera line detections (W1): directions, no depth, no id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wire_lines: Vec<crate::wire_sensing::WireLine>,
 }
 
 /// The scanner: a fan of rays over the true world.
@@ -282,6 +315,8 @@ pub struct RangeScanner {
     world: SharedVisibility,
     /// The world's power lines, span by span (R3).
     spans: Arc<Vec<SpanPieces>>,
+    /// Report measured wire points instead of whole spans (W1).
+    measured: Option<crate::wire_sensing::MeasuredWires>,
 }
 
 impl RangeScanner {
@@ -291,7 +326,14 @@ impl RangeScanner {
             config,
             world,
             spans: Arc::new(Vec::new()),
+            measured: None,
         })
+    }
+
+    /// Report wires as measured points, never as whole spans (W1).
+    pub fn with_measured_wires(mut self, measured: crate::wire_sensing::MeasuredWires) -> Self {
+        self.measured = Some(measured);
+        self
     }
 
     /// The scanner, also detecting `lines`' wires (R3).
@@ -313,6 +355,46 @@ impl RangeScanner {
     /// below its horizon (the fan looks down).
     fn wires_near(&self, origin_m: [f64; 3]) -> Vec<WireReturn> {
         wires_seen(&self.spans, origin_m, |point| point[2] <= origin_m[2])
+    }
+
+    /// Measured returns on conductors below the horizon, the half of the
+    /// sky the fan spreads its points over.
+    fn measured_points(&self, node_id: &str, tick: u64, origin_m: [f64; 3]) -> Vec<[f64; 3]> {
+        let Some(measured) = &self.measured else {
+            return Vec::new();
+        };
+        let mut rng = DeterministicRng::keyed(
+            0,
+            &[
+                SeedPart::Str(node_id),
+                SeedPart::Str("range-scan-wire"),
+                SeedPart::Int(tick as i64),
+            ],
+        );
+        // Crowns draw from a stream of their own, as the scan's do.
+        let mut canopy = DeterministicRng::keyed(
+            0,
+            &[
+                SeedPart::Str(node_id),
+                SeedPart::Str("range-scan-wire-canopy"),
+                SeedPart::Int(tick as i64),
+            ],
+        );
+        crate::wire_sensing::lidar_points(
+            &self.spans,
+            &measured.model,
+            origin_m,
+            measured.capture_s,
+            std::f64::consts::TAU,
+            self.config.max_range_m,
+            |d| d[2] <= 0.0,
+            |point| {
+                self.world
+                    .first_return(origin_m, point, &mut || canopy.uniform())
+                    .is_none()
+            },
+            &mut rng,
+        )
     }
 
     pub fn config(&self) -> &RangeScanConfig {
@@ -394,9 +476,15 @@ impl RangeScanner {
             origin_m,
             returns,
             misses,
-            wires: self.wires_near(origin_m),
+            wires: if self.measured.is_some() {
+                Vec::new()
+            } else {
+                self.wires_near(origin_m)
+            },
             sensor: ScanSensor::RangeScanner,
             pod: None,
+            wire_points: self.measured_points(node_id, tick, origin_m),
+            wire_lines: Vec::new(),
         }
     }
 }
@@ -550,6 +638,83 @@ mod tests {
 
     /// A 3 cm single wire 20 m up, along x from -100 to 100, sagging 3 %:
     /// two spans, the support at x = 0.
+    /// A wire behind a row of dense crowns: the crowns stop the beams on
+    /// their way to it, so it earns few points, as they stop the ground rays.
+    #[test]
+    fn crowns_hide_a_wire_from_measured_returns() {
+        use crate::wire_sensing::{MeasuredWires, WireSensorModel};
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::Bounds2d;
+        use argusnet_world::powerline::Support;
+        use argusnet_world::tiled::TiledTerrain;
+        use argusnet_world::trees::{Species, Tree, TreeLayer};
+        use argusnet_world::visibility::VisibilityProfile;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(0.0, 200.0, 0.0, 200.0);
+        let terrain = Arc::new(
+            TiledTerrain::from_grid(bounds, &vec![vec![0.0; 21]; 21], 10.0, 4, 0.0, &[]).unwrap(),
+        );
+        let open = SharedVisibility::new(
+            terrain,
+            Arc::new(ObstacleLayer::new(bounds, 50.0, vec![]).unwrap()),
+            None,
+            Arc::new(VisibilityProfile::default()),
+            0.0,
+        );
+        let crowns: Vec<Tree> = (0..25)
+            .map(|k| Tree {
+                id: format!("t{k}"),
+                xy_m: [4.0 + 8.0 * k as f64, 80.0],
+                base_z_m: 0.0,
+                height_m: 30.0,
+                crown_base_m: 5.0,
+                crown_radius_m: 6.0,
+                trunk_radius_m: 0.3,
+                species: Species::Broadleaf,
+                leaf_density: 1.0,
+            })
+            .collect();
+        let wooded = open
+            .clone()
+            .with_trees(Arc::new(TreeLayer::new(crowns).unwrap()));
+        let support = |x: f64| Support {
+            xy_m: [x, 100.0],
+            base_z_m: 0.0,
+            height_m: 15.0,
+        };
+        let line = PowerLine {
+            id: "line".into(),
+            supports: vec![support(10.0), support(190.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.015,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let points = |world: SharedVisibility| -> usize {
+            let scanner = RangeScanner::new(RangeScanConfig::default(), world)
+                .unwrap()
+                .with_power_lines(std::slice::from_ref(&line))
+                .with_measured_wires(MeasuredWires {
+                    model: WireSensorModel::default(),
+                    capture_s: 0.5,
+                });
+            (0..20)
+                .map(|tick| {
+                    scanner
+                        .scan("d", tick, 0.0, [100.0, 60.0, 30.0], [0.0; 3])
+                        .wire_points
+                        .len()
+                })
+                .sum()
+        };
+        let clear = points(open);
+        let hidden = points(wooded);
+        assert!(clear > 100, "{clear}");
+        assert!(hidden * 5 < clear, "{hidden} through the crowns of {clear}");
+    }
+
     fn wire() -> PowerLine {
         use argusnet_world::powerline::Support;
         let support = |x: f64| Support {
