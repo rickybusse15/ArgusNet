@@ -298,6 +298,8 @@ pub struct BeliefGrid {
     /// points on it.
     #[serde(skip)]
     new_wires: Vec<String>,
+    /// Fitted spans gone since the replay last asked: their tracks merged.
+    retired_wires: Vec<String>,
     /// Cells touched since the replay last took them.
     #[serde(skip)]
     changed: BTreeSet<usize>,
@@ -434,6 +436,7 @@ impl BeliefGrid {
             wires_view: None,
             fitted_hazards: Arc::new(Vec::new()),
             new_wires: Vec::new(),
+            retired_wires: Vec::new(),
             changed: BTreeSet::new(),
             canopy_top_m: Vec::new(),
             canopy_count: Vec::new(),
@@ -479,6 +482,7 @@ impl BeliefGrid {
             .iter()
             .map(|span| span.id.clone())
             .collect();
+        self.retired_wires.clear();
     }
 
     /// The spans mapped since the last call, as replay rows: whole spans,
@@ -488,6 +492,12 @@ impl BeliefGrid {
             .into_iter()
             .filter_map(|id| self.wires.get(&id).cloned())
             .collect()
+    }
+
+    /// The fitted spans gone since the last call, as replay rows, so applying
+    /// the frames gives the wires the map holds.
+    pub fn take_retired_wires(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.retired_wires)
     }
 
     /// The spans mapped so far.
@@ -856,6 +866,7 @@ impl BeliefGrid {
         for id in stale {
             self.wires.remove(&id);
             self.wires_view = None;
+            self.retired_wires.push(id);
         }
         for (id, span) in fitted {
             let moved = self.wires.get(&id).is_none_or(|old| {
@@ -1231,11 +1242,21 @@ impl FittedHazard {
         }
     }
 
-    /// Whether `point_m` lies within this wire's clearance box.
+    /// Whether `point_m` is within this wire's clearance across the ground.
+    /// The box only ends most queries: a diagonal wire's holds much that the
+    /// wire does not explain.
     fn covers(&self, point_m: [f64; 3]) -> bool {
-        (0..2).all(|axis| {
+        let in_box = (0..2).all(|axis| {
             point_m[axis] >= self.low_xy_m[axis] && point_m[axis] <= self.high_xy_m[axis]
-        })
+        });
+        let here = [point_m[0], point_m[1], 0.0];
+        in_box
+            && self.pieces.iter().any(|piece| {
+                let start = [piece.start_m[0], piece.start_m[1], 0.0];
+                let end = [piece.end_m[0], piece.end_m[1], 0.0];
+                argusnet_world::powerline::segment_distance(here, here, start, end)
+                    <= self.clearance_m
+            })
     }
 
     /// Add this wire's bound for a flight from `from` to `to` at `z_m`, if
@@ -2658,6 +2679,33 @@ mod tests {
 
     /// One wire along x from 0 to 100, `height_m` up on flat ground at 0,
     /// with no sag: 2 cm radius, 10 m clearance.
+    /// A diagonal wire's box holds far more than the wire: evidence out in
+    /// its corners is not explained by it and keeps its band.
+    #[test]
+    fn a_fitted_wire_covers_only_what_is_near_it() {
+        use argusnet_world::powerline::Support;
+        let support = |xy: f64| Support {
+            xy_m: [xy, xy],
+            base_z_m: 0.0,
+            height_m: 50.0,
+        };
+        let diagonal = PowerLine {
+            id: "wire-track-0".into(),
+            supports: vec![support(0.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let hazard = FittedHazard::new(&diagonal);
+        assert!(hazard.covers([50.0, 50.0, 50.0]), "on it");
+        assert!(hazard.covers([55.0, 50.0, 50.0]), "within its clearance");
+        assert!(!hazard.covers([90.0, 10.0, 50.0]), "in the box's corner");
+        assert!(!hazard.covers([200.0, 200.0, 50.0]), "outside the box");
+    }
+
     /// A wire is passed by height: over from its height, under from clear
     /// below it, and never climbed through from underneath.
     #[test]

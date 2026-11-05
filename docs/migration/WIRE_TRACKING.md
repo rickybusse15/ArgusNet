@@ -31,8 +31,9 @@ Nothing tells the tracker which wire a point came from.
 
 Confirmed tracks enter the belief as `PowerLine` spans named `wire-track-N`, so
 route planning and the replay's `mapped_wires` read them as they read any
-mapped wire. A span moves as evidence lands. Its clearance is 10 m plus three
-of its largest sigma.
+mapped wire. A span moves as evidence lands, and a move replans the POI and
+egress flights the span now lies across, as a new span does. Its clearance is
+10 m plus three of its largest sigma.
 
 Explorers take fitted wires by height, looking 4 s ahead:
 
@@ -43,8 +44,8 @@ Explorers take fitted wires by height, looking 4 s ahead:
 
 Height changes at 15 m/s, so a platform reaches the clearance before the wire.
 A fitted span is never routed round: its end is only where the wire stopped
-being seen, and the wire goes on past it. Evidence no track covers keeps W1's
-height band.
+being seen, and the wire goes on past it. Evidence further from a fitted wire
+than its clearance keeps W1's height band.
 
 ## Results
 
@@ -61,13 +62,14 @@ the line. Platform-ticks within 10 m of a conductor:
 | -120 | 300 | 2 | 2 | 2 |
 | -120 | 340 | 12 | 13 | 13 |
 | 120 | 260 | 1 | 1 | 1 |
-| 120 | 300 | 4 | 4 | 4 |
+| 120 | 300 | 4 | 4 | 5 |
 | 120 | 340 | 3 | 3 | 3 |
 | 60 | 260 | 10 | 10 | 9 |
 | 60 | 300 | 5 | 5 | 2 |
 | 60 | 340 | 4 | 4 | 1 |
 
-W2 is better at 7 placements, equal at 5 and much worse at 1. The closest pass
+W2 is better at 7 placements, equal at 4, slightly worse at 1 and much worse at
+1. The closest pass
 barely changes: 1 to 3.5 m at most placements in all three modes. The ones
 traced came before a track was confirmed or in a mission flight. The fit is the
 stronger result: mid-span error was 0.01 to 0.1 m where inspected, and 1 of 42
@@ -86,7 +88,7 @@ conductors 1.6 m apart. 300 s, `contingency_v1`, `flown_v1`, no world knowledge.
 | 7 | W2 | 17 | 1.0 | 34 | 95.7% |
 | 42 | Oracle | 13 | 1.1 | - | 95.8% |
 | 42 | W1 band | 13 | 1.1 | - | 95.8% |
-| 42 | W2 | 15 | 7.9 | 24 | 93.5% |
+| 42 | W2 | 20 | 7.9 | 26 | 92.5% |
 
 At seed 7, 32 of 35 fitted tracks lie within 0.2 m of a true conductor across
 the line, so neighbouring conductors stay apart; the other 3 sit between two.
@@ -113,4 +115,5 @@ the place and finished its flight home, where the other two did not.
 
 `mapping_state.belief.wire_tracks` counts confirmed tracks, absent when none.
 Each `mapped_wires` entry for a track is the span at that tick, and the latest
-row for an id wins.
+row for an id wins. A frame's `retired_wires` lists the spans dropped that tick
+when tracks merged, so applying the frames gives the wires the map holds.

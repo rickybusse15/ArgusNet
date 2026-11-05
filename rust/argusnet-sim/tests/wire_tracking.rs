@@ -225,6 +225,32 @@ fn a_tracked_run_is_deterministic_and_resumes_exactly() {
     assert_eq!(rest, straight[at..]);
 }
 
+/// Applying the frames gives the wires the map holds, merged tracks gone.
+#[test]
+fn the_replay_holds_the_spans_the_map_holds() {
+    let bundle = bundle();
+    let mut run = run_with(&bundle, config(true));
+    let mut held = std::collections::BTreeSet::new();
+    for _ in 0..bundle.steps {
+        run.step().unwrap();
+        let frame = serde_json::to_value(run.last_frame().unwrap()).unwrap();
+        for span in frame["mapped_wires"].as_array().into_iter().flatten() {
+            held.insert(span["id"].as_str().unwrap().to_string());
+        }
+        for id in frame["retired_wires"].as_array().into_iter().flatten() {
+            assert!(held.remove(id.as_str().unwrap()), "{id} was never held");
+        }
+    }
+    let map: std::collections::BTreeSet<String> = run
+        .mapping()
+        .unwrap()
+        .belief_wires()
+        .iter()
+        .cloned()
+        .collect();
+    assert_eq!(held, map);
+}
+
 #[test]
 fn without_the_tracker_nothing_is_recorded() {
     let bundle = bundle();

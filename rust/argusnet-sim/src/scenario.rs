@@ -2592,6 +2592,11 @@ impl AssembledRun {
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
             .map(MappingStage::take_wire_updates)
             .unwrap_or_default();
+        let wire_retirements = self
+            .sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .map(MappingStage::take_wire_retirements)
+            .unwrap_or_default();
         let Some(mapping) = self.mapping() else {
             return;
         };
@@ -2631,6 +2636,7 @@ impl AssembledRun {
         frame.belief_updates = belief_updates;
         frame.canopy_updates = canopy_updates;
         frame.mapped_wires = wire_updates;
+        frame.retired_wires = wire_retirements;
         frame.inspection_events = mapping
             .inspection_events()
             .into_iter()

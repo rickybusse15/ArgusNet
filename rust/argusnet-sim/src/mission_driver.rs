@@ -251,6 +251,10 @@ struct DriverCheckpoint {
     /// (R3). Absent when none.
     #[serde(default, skip_serializing_if = "is_zero")]
     mapped_wires: usize,
+    /// The fitted spans' shape at the last run (W2), so a resumed run knows
+    /// which have moved since. Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    mapped_fit: u64,
     /// Pending POIs no drone can afford under contingency_v1 (F5). Absent
     /// when none.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -259,6 +263,44 @@ struct DriverCheckpoint {
 
 fn is_zero(count: &usize) -> bool {
     *count == 0
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+/// A hash of the fitted spans' ids and shapes, FNV-1a over their bits; 0
+/// when there are none, so a run without them records nothing.
+fn fitted_shape(wires: &[PowerLine]) -> u64 {
+    let mut fitted = wires
+        .iter()
+        .filter(|wire| crate::belief_world::is_fitted_span(&wire.id))
+        .peekable();
+    if fitted.peek().is_none() {
+        return 0;
+    }
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut add = |bytes: &[u8]| {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for wire in fitted {
+        add(wire.id.as_bytes());
+        add(&wire.clearance_m.to_bits().to_le_bytes());
+        add(&wire.sag_ratio.to_bits().to_le_bytes());
+        for support in &wire.supports {
+            for value in [
+                support.xy_m[0],
+                support.xy_m[1],
+                support.base_z_m,
+                support.height_m,
+            ] {
+                add(&value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    hash
 }
 
 /// Why a drone gives up the POI it holds.
@@ -377,6 +419,8 @@ pub struct MissionDriverStage {
     /// How many spans were mapped at the last run, so a run that maps more
     /// replans the POI flights a new wire lies across. Checkpointed.
     mapped_wires: usize,
+    /// The fitted spans' shape at the last run. Checkpointed.
+    mapped_fit: u64,
     /// The map's bounds, which an empty layer carrying mapped wires covers.
     mapped_bounds: Option<Bounds2d>,
     /// Whether this run mapped more wires than the last. Transient.
@@ -1100,6 +1144,7 @@ impl MissionDriverStage {
             mapped_installed: Vec::new(),
             mapped_layer: false,
             mapped_wires: 0,
+            mapped_fit: 0,
             mapped_bounds: None,
             replan_for_wires: false,
             unassigned: BTreeSet::new(),
@@ -1174,7 +1219,9 @@ impl MissionDriverStage {
     }
 
     /// The spans the self-built map holds now, given to the routes when
-    /// they changed; whether more are mapped than at the last run.
+    /// they changed; whether more are mapped than at the last run, or a
+    /// fitted span has moved, grown or gone, which can put a wire across a
+    /// flight as a new span can.
     fn follow_mapped_wires(&mut self) -> bool {
         let (Some(map), Some(bounds)) = (&self.mapped, self.mapped_bounds) else {
             return false;
@@ -1194,7 +1241,9 @@ impl MissionDriverStage {
         }
         let more = wires.len() > self.mapped_wires;
         self.mapped_wires = wires.len();
-        more
+        let fit = fitted_shape(&wires);
+        let moved = fit != std::mem::replace(&mut self.mapped_fit, fit);
+        more || moved
     }
 
     /// The terrain a routed flight must stay above (P3). Without it a route
@@ -3502,6 +3551,7 @@ impl StageHandler for MissionDriverStage {
             homeward: self.homeward.clone(),
             gap_fill: self.gap_fill.clone(),
             mapped_wires: self.mapped_wires,
+            mapped_fit: self.mapped_fit,
             unassigned: self.unassigned.clone(),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
@@ -3545,6 +3595,7 @@ impl StageHandler for MissionDriverStage {
         self.homeward = decoded.homeward;
         self.gap_fill = decoded.gap_fill;
         self.mapped_wires = decoded.mapped_wires;
+        self.mapped_fit = decoded.mapped_fit;
         self.unassigned = decoded.unassigned;
         self.override_commands.clear();
         self.decisions.clear();
@@ -3597,6 +3648,7 @@ impl StageHandler for MissionDriverStage {
         }
         self.mapped_installed = Vec::new();
         self.mapped_wires = 0;
+        self.mapped_fit = 0;
         self.unassigned.clear();
         self.override_commands.clear();
         self.decisions.clear();
@@ -5147,6 +5199,41 @@ mod tests {
     }
     /// R3: a drone already flying home (on its own reserve, or in the
     /// mission's egress) flies home again round a wire mapped across its way;
+    /// A fitted span that moves can put a wire across a flight as a new one
+    /// can, though no more are mapped: the run replans, once, and a resumed
+    /// run that sees nothing new does not.
+    #[test]
+    fn a_fitted_span_that_moves_replans_once() {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        let line = power_line(&[-200.0, 200.0], 45.0, &[0.0]);
+        let span = |clearance_m: f64| PowerLine {
+            id: "wire-track-0".into(),
+            clearance_m,
+            ..line.span_line(0)
+        };
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let config = ExplorationConfig::default();
+        let map_of = |wire: PowerLine| {
+            let mut grid = BeliefGrid::new(bounds, 10.0, 0.0).unwrap();
+            grid.know_wires(vec![wire]);
+            grid.snapshot(&config)
+        };
+        let map = BeliefHandle::new(map_of(span(11.0)));
+        let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        stage.set_mapped_power_lines(Some(map.clone()), bounds);
+        assert!(stage.follow_mapped_wires(), "newly mapped");
+        assert!(!stage.follow_mapped_wires(), "nothing has changed");
+        map.publish(map_of(span(12.0)));
+        assert!(stage.follow_mapped_wires(), "the span moved");
+        let state = StageHandler::checkpoint_state(&stage).unwrap();
+        let mut resumed = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+        resumed.set_mapped_power_lines(Some(map.clone()), bounds);
+        StageHandler::restore_state(&mut resumed, &state).unwrap();
+        assert!(!resumed.follow_mapped_wires());
+        map.publish(map_of(span(13.0)));
+        assert!(resumed.follow_mapped_wires());
+    }
+
     /// one whose way home is clear keeps its flight, and a drone still at
     /// work is left to the POI replan.
     #[test]

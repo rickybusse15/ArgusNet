@@ -284,7 +284,8 @@ impl ReplayDocument {
     /// The power-line spans the platforms' own map holds at frame `index`
     /// (the frames' `mapped_wires` up to and including it), each read through
     /// the model on its own, like [`Self::power_lines`]. A span recorded
-    /// twice is read once, as last recorded: a fitted wire is refined.
+    /// twice is read once, as last recorded: a fitted wire is refined. One
+    /// in a frame's `retired_wires` is gone from then on.
     pub fn mapped_wires_through(&self, index: usize) -> PowerLinesRead {
         let mut read = PowerLinesRead::default();
         let mut seen = std::collections::BTreeSet::new();
@@ -305,18 +306,23 @@ impl ReplayDocument {
                         .push(format!("frames[{f}].mapped_wires[{s}]: {error}")),
                 }
             }
+            for id in &frame.retired_wires {
+                seen.remove(id);
+                read.lines.retain(|line| &line.id != id);
+            }
         }
         read
     }
 
-    /// How many spans the frames up to and including `index` record, without
+    /// How many spans the frames up to and including `index` record or
+    /// retire, without
     /// reading them: what [`Self::mapped_wires_through`] would read changes
     /// only when this does.
     pub fn mapped_wire_rows_through(&self, index: usize) -> usize {
         self.frames
             .iter()
             .take(index.saturating_add(1))
-            .map(|frame| frame.mapped_wires.len())
+            .map(|frame| frame.mapped_wires.len() + frame.retired_wires.len())
             .sum()
     }
 
@@ -425,6 +431,9 @@ pub struct ReplayFrame {
     /// read through the model by [`ReplayDocument::mapped_wires_through`].
     #[serde(default)]
     pub mapped_wires: Vec<Value>,
+    /// The ids of fitted spans the map dropped this frame (W2).
+    #[serde(default)]
+    pub retired_wires: Vec<String>,
     /// Under a physical energy profile: each platform's remaining energy and
     /// its reserve home this tick (F5). Empty otherwise.
     #[serde(default)]
@@ -997,6 +1006,7 @@ mod live_stream {
             range_scans: Vec::new(),
             world_contacts: Vec::new(),
             mapped_wires: Vec::new(),
+            retired_wires: Vec::new(),
             energy_reserves: Default::default(),
         }
     }
@@ -1381,6 +1391,57 @@ mod contract_fixture_tests {
             .unwrap_or_else(|error| panic!("failed to read {path}: {error}"));
         serde_json::from_str(&raw)
             .unwrap_or_else(|error| panic!("viewer cannot deserialize the replay fixture: {error}"))
+    }
+
+    /// A refined span is read as last recorded, and a retired one is gone
+    /// from its frame on, though earlier frames still show it.
+    #[test]
+    fn a_retired_wire_is_gone_from_its_frame_on() {
+        let span = |id: &str, clearance_m: f64| {
+            serde_json::json!({
+                "id": id,
+                "supports": [
+                    { "xy_m": [0.0, 0.0], "base_z_m": 0.0, "height_m": 20.0 },
+                    { "xy_m": [100.0, 0.0], "base_z_m": 0.0, "height_m": 20.0 }
+                ],
+                "conductor_offsets_m": [0.0],
+                "sag_ratio": 0.0,
+                "conductor_radius_m": 0.015,
+                "clearance_m": clearance_m
+            })
+        };
+        let mut document = fixture();
+        document.frames.truncate(1);
+        let blank = document.frames[0].clone();
+        let frame = |mapped: Vec<Value>, retired: Vec<String>| ReplayFrame {
+            mapped_wires: mapped,
+            retired_wires: retired,
+            ..blank.clone()
+        };
+        document.frames = vec![
+            frame(
+                vec![span("wire-track-0", 11.0), span("wire-track-1", 11.0)],
+                vec![],
+            ),
+            frame(
+                vec![span("wire-track-0", 12.0)],
+                vec!["wire-track-1".into()],
+            ),
+        ];
+        let ids = |index: usize| {
+            let read = document.mapped_wires_through(index);
+            assert!(read.refused.is_empty(), "{:?}", read.refused);
+            read.lines
+                .iter()
+                .map(|line| (line.id.clone(), line.clearance_m))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(0).len(), 2);
+        assert_eq!(ids(1), vec![("wire-track-0".to_string(), 12.0)]);
+        assert_ne!(
+            document.mapped_wire_rows_through(0),
+            document.mapped_wire_rows_through(1)
+        );
     }
 
     #[test]

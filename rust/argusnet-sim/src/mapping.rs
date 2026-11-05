@@ -602,6 +602,13 @@ impl MappingStage {
             .map_or_else(Vec::new, |belief| belief.grid.take_new_wires())
     }
 
+    /// The fitted spans gone since the last call, as replay rows (W2).
+    pub fn take_wire_retirements(&mut self) -> Vec<String> {
+        self.belief
+            .as_mut()
+            .map_or_else(Vec::new, |belief| belief.grid.take_retired_wires())
+    }
+
     /// The canopy cells changed since the last call, as replay rows (R2).
     pub fn take_canopy_updates(&mut self) -> Vec<crate::belief_world::CanopyCellUpdate> {
         self.belief
