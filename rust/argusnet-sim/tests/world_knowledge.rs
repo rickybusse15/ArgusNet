@@ -88,6 +88,88 @@ fn a_no_prior_run_is_deterministic_and_differs_from_the_prior_one() {
     assert!(once[0].get("belief_updates").is_some());
 }
 
+/// Every platform is created at the world's origin. The first tick places
+/// it, and a ground station never flies, so a building on the line from the
+/// origin stops neither. The guard once held a station there for the whole
+/// run, 116 m from where it stood, with a contact on every tick.
+#[test]
+fn a_building_on_the_line_from_the_origin_stops_no_platform() {
+    let path = format!(
+        "{}/../../tests/fixtures/scenario_bundle_scan_safety.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&path).expect("fixture");
+    let mut document: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let controller = |id: &str| {
+        document["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == id)
+            .unwrap()["controller"]
+            .clone()
+    };
+    let station: [f64; 3] = std::array::from_fn(|k| {
+        controller("ground-charlie")["position_m"][k]
+            .as_f64()
+            .unwrap()
+    });
+    let pad: [f64; 3] = std::array::from_fn(|k| {
+        controller("drone-east")["station_position_m"][k]
+            .as_f64()
+            .unwrap()
+    });
+    let building = |id: &str, on: [f64; 3]| {
+        let (x, y) = (on[0] * 0.5, on[1] * 0.5);
+        serde_json::json!({
+            "object_id": id,
+            "kind": "building-v2",
+            "blocker_type": "building",
+            "footprint_xy_m": [
+                [x - 30.0, y - 30.0], [x + 30.0, y - 30.0],
+                [x + 30.0, y + 30.0], [x - 30.0, y + 30.0]
+            ],
+            "base_elevation_m": 0.0,
+            "eave_elevation_m": 400.0,
+            "facade_material": "generic",
+            "height_source": "default",
+            "roof_material": "generic",
+            "roof_shape": "flat",
+            "roof_source": "default",
+            "top_elevation_m": 400.0
+        })
+    };
+    let primitives = document["world"]["obstacles"]["primitives"]
+        .as_array_mut()
+        .unwrap();
+    primitives.push(building("on-the-way-to-the-station", station));
+    primitives.push(building("on-the-way-to-the-pad", pad));
+    let bundle = ScenarioBundle::from_json(&document.to_string()).unwrap();
+    let replay = no_prior(&bundle).run_to_replay().unwrap();
+    let first = serde_json::to_value(&replay.frames[0]).unwrap();
+    let at = |frame: &serde_json::Value, id: &str| -> [f64; 3] {
+        let node = frame["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node_id"] == id)
+            .unwrap()
+            .clone();
+        std::array::from_fn(|k| node["position"][k].as_f64().unwrap())
+    };
+    assert_eq!(at(&first, "ground-charlie"), station);
+    // Over its pad, at whatever height its launch has it.
+    assert_eq!(at(&first, "drone-east")[..2], pad[..2]);
+    let last = serde_json::to_value(replay.frames.last().unwrap()).unwrap();
+    assert_eq!(at(&last, "ground-charlie"), station, "stands for the run");
+    for frame in &replay.frames {
+        assert!(frame
+            .world_contacts
+            .iter()
+            .all(|contact| !contact.node_id.starts_with("ground-")));
+    }
+}
+
 /// Physics keeps every platform at least the clearance above the true
 /// ground, whatever the belief said; each correction is recorded.
 #[test]
