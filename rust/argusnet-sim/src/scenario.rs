@@ -1041,6 +1041,13 @@ fn belief_stats(
         wire_points: grid.wire_points(),
         wire_hazard_cells: 0,
         wire_lines: grid.wire_lines_seen(),
+        wire_tracks: grid.wire_tracker().map_or(0, |tracker| {
+            tracker
+                .estimates()
+                .iter()
+                .filter(|estimate| estimate.confirmed)
+                .count() as u64
+        }),
     }
 }
 

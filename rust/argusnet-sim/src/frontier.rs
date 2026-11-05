@@ -49,6 +49,13 @@ pub const CLAIM_PENALTY_M: f64 = 1_000.0;
 /// ground the scanner sees on the way, and a nearer one can sit in the gaps
 /// the scanner's rings leave straight below a platform.
 pub const MIN_GOAL_DISTANCE_M: f64 = 250.0;
+/// How many seconds of flight ahead an explorer looks for a fitted wire to
+/// climb over: long enough to be over it on arrival.
+pub const WIRE_LOOKAHEAD_S: f64 = 4.0;
+
+/// How fast an explorer changes height for a fitted wire, m/s. With
+/// [`WIRE_LOOKAHEAD_S`] it reaches a wire's clearance before the wire.
+const WIRE_CLIMB_MPS: f64 = 15.0;
 
 /// What an explorer carries between ticks.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -58,6 +65,11 @@ pub struct ExplorerState {
     /// True when the goal is the lane's point (no frontier was left).
     pub on_lane: bool,
     pub last_t_s: Option<f64>,
+    /// The height flown last, with fitted wires about: whether it is under
+    /// a wire or over one is a matter of where it is, not where the lane
+    /// would put it. Absent without them, so such checkpoints are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flown_z_m: Option<f64>,
 }
 
 /// A search drone exploring the frontier of the map.
@@ -218,7 +230,28 @@ impl FrontierExplorer {
             None
         };
         let resolved = collision_aware_position(terrain, obstacles, position, config.min_agl_m);
-        (resolved.position_m, velocity)
+        let mut position = resolved.position_m;
+        // Over a fitted wire ahead, not round it.
+        if belief.has_fitted_wires() {
+            let flown_z = state.flown_z_m.unwrap_or(position[2]);
+            let bounds =
+                belief.wire_bounds_ahead(new_xy, direction, speed * WIRE_LOOKAHEAD_S, flown_z);
+            let lowest = terrain.height_at(position[0], position[1]) + config.min_agl_m;
+            if let Some(ceiling) = bounds.ceiling_m {
+                position[2] = position[2].min(ceiling.max(lowest));
+            }
+            if let Some(floor) = bounds.floor_m {
+                position[2] = position[2].max(floor);
+            }
+            // The change of height is flown, not jumped: a step through a
+            // wire is one the guard holds the aircraft on.
+            let reach = WIRE_CLIMB_MPS * dt;
+            position[2] = position[2]
+                .clamp(flown_z - reach, flown_z + reach)
+                .max(lowest);
+            state.flown_z_m = Some(position[2]);
+        }
+        (position, velocity)
     }
 
     fn lane_speed_mps(&self) -> f64 {

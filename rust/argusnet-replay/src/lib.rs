@@ -284,7 +284,7 @@ impl ReplayDocument {
     /// The power-line spans the platforms' own map holds at frame `index`
     /// (the frames' `mapped_wires` up to and including it), each read through
     /// the model on its own, like [`Self::power_lines`]. A span recorded
-    /// twice is read once.
+    /// twice is read once, as last recorded: a fitted wire is refined.
     pub fn mapped_wires_through(&self, index: usize) -> PowerLinesRead {
         let mut read = PowerLinesRead::default();
         let mut seen = std::collections::BTreeSet::new();
@@ -294,6 +294,10 @@ impl ReplayDocument {
                     Ok(span) => {
                         if seen.insert(span.id.clone()) {
                             read.lines.push(span);
+                        } else if let Some(earlier) =
+                            read.lines.iter_mut().find(|line| line.id == span.id)
+                        {
+                            *earlier = span;
                         }
                     }
                     Err(error) => read

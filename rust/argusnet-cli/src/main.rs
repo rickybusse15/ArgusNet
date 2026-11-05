@@ -237,6 +237,11 @@ struct SimArgs {
     /// assumed default. Implies `--measured-wires`.
     #[arg(long)]
     wire_sensor_profile: Option<PathBuf>,
+    /// With `--measured-wires`, fit the points and camera lines into wires
+    /// with uncertainty (W2) and publish them to the planners, each with its
+    /// uncertainty added to its clearance.
+    #[arg(long)]
+    track_wires: bool,
     /// In a `--world-knowledge none` run, fly with a forward navigation
     /// camera as the primary obstacle-avoidance sensor (SR5c): its
     /// detections become safety obstacles, every controller is capped to the
@@ -535,6 +540,9 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 rig: rig.clone(),
                 pointing: pointing.clone(),
                 measured_wires: measured_wires.clone(),
+                wire_tracker: args
+                    .track_wires
+                    .then(argusnet_mapping::wires::WireTrackerConfig::default),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -782,6 +790,12 @@ fn sim(args: SimArgs) -> ExitCode {
         return fail(
             EXIT_INVALID,
             "--rig-profile carries the navigation camera; drop --nav-camera",
+        );
+    }
+    if args.track_wires && !args.measured_wires && args.wire_sensor_profile.is_none() {
+        return fail(
+            EXIT_INVALID,
+            "--track-wires fits measured wires: it needs --measured-wires",
         );
     }
     if (args.measured_wires || args.wire_sensor_profile.is_some())

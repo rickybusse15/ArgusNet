@@ -683,6 +683,11 @@
               "minimum": 0,
               "description": "W1: measured LiDAR points on wires so far. Absent when none."
             },
+            "wire_tracks": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W2: confirmed fitted wire tracks. Absent when none."
+            },
             "wire_hazard_cells": {
               "type": "integer",
               "minimum": 0,

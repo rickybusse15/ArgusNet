@@ -340,6 +340,9 @@ pub struct ReplayBeliefStats {
     pub wire_hazard_cells: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub wire_lines: u64,
+    /// Confirmed wire tracks (W2). Written only when there are some.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_tracks: u64,
     /// The map against the run's quality requirement (SR5a). Absent
     /// without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

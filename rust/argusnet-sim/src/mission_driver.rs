@@ -370,7 +370,7 @@ pub struct MissionDriverStage {
     /// whose mapped wires flights keep their clearance from (R3). Scenario.
     mapped: Option<crate::belief_world::BeliefHandle>,
     /// How many mapped spans the routes were last given. Derived.
-    mapped_installed: usize,
+    mapped_installed: Vec<PowerLine>,
     /// Whether [`Self::obstacles`] was installed, empty, only to carry the
     /// mapped wires. Derived.
     mapped_layer: bool,
@@ -1097,7 +1097,7 @@ impl MissionDriverStage {
             terrain: None,
             route_model: BatteryModel::default(),
             mapped: None,
-            mapped_installed: 0,
+            mapped_installed: Vec::new(),
             mapped_layer: false,
             mapped_wires: 0,
             mapped_bounds: None,
@@ -1180,7 +1180,8 @@ impl MissionDriverStage {
             return false;
         };
         let wires = Arc::clone(map.current().wires());
-        if wires.len() != self.mapped_installed {
+        // Fitted spans move as evidence lands, not only appear.
+        if wires.as_slice() != self.mapped_installed.as_slice() {
             if self.obstacles.is_none() {
                 // The routes plan round nothing else: no structure is known.
                 let empty = ObstacleLayer::new(bounds, 1000.0, Vec::new())
@@ -1189,7 +1190,7 @@ impl MissionDriverStage {
                 self.mapped_layer = true;
             }
             self.set_known_power_lines(wires.to_vec());
-            self.mapped_installed = wires.len();
+            self.mapped_installed = wires.to_vec();
         }
         let more = wires.len() > self.mapped_wires;
         self.mapped_wires = wires.len();
@@ -1502,9 +1503,18 @@ impl MissionDriverStage {
     /// The route from `from` to `to` round the power lines' corridors as
     /// well as the structures, past a line's ends, when the planner finds
     /// one that keeps above the terrain and clear of every line by the
-    /// swept test.
+    /// swept test. A fitted span's end is only where the wire stopped being
+    /// seen, and the wire goes on past it, so no way round a fitted span is
+    /// taken: it is flown over.
     fn around_lines(&self, from: [f64; 3], to: [f64; 3]) -> Option<Corners> {
         let obstacles = self.obstacles.as_ref()?;
+        if obstacles
+            .lines
+            .iter()
+            .any(|line| crate::belief_world::is_fitted_span(&line.id))
+        {
+            return None;
+        }
         let route = obstacles.route_around_lines(from, to)?;
         let points = &route.points_xy_m;
         if points.len() <= 2 || !self.clears_terrain(points, from[2], to[2], route.length_m) {
@@ -3585,7 +3595,7 @@ impl StageHandler for MissionDriverStage {
             self.obstacles = None;
             self.mapped_layer = false;
         }
-        self.mapped_installed = 0;
+        self.mapped_installed = Vec::new();
         self.mapped_wires = 0;
         self.unassigned.clear();
         self.override_commands.clear();

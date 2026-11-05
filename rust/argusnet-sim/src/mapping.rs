@@ -524,6 +524,9 @@ impl MappingStage {
         if let Some(requirement) = &config.quality {
             grid.track_quality(requirement.max_incidence_deg);
         }
+        if let Some(tracker) = &config.wire_tracker {
+            grid.track_wires(tracker.clone());
+        }
         let handle = crate::belief_world::BeliefHandle::new(grid.snapshot(&config));
         let mut belief = BeliefMapping {
             grid,
