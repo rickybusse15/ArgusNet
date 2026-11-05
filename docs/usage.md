@@ -542,3 +542,23 @@ python3 -m pytest tests/ -q          # All Python tests
 cargo test                            # All Rust tests
 python3 tests/example_integration.py  # End-to-end example
 ```
+
+## Power lines from what is measured
+
+In a `--world-knowledge none` run, each flag builds on the one before:
+
+```bash
+argusnet-rs sim --config scenario.json --world-knowledge none --rig-profile provisional \
+    --planning-policy contingency_v1 --energy-profile flown_v1 \
+    --measured-wires --track-wires --detect-poles --wire-planning \
+    --wire-prior-file prior.json --replay replay.json
+```
+
+`prior.json` is a list of spans: `id`, `from_m`, `to_m` at attachment height,
+`sigma_lateral_m` and `sigma_vertical_m`. To compare the modes against truth:
+
+```bash
+cargo run --release -p argusnet-sim --example wire_eval -- --out report.jsonl
+```
+
+See `docs/migration/WIRE_CORRIDORS.md`.

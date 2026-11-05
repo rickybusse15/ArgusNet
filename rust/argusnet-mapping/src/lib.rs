@@ -68,8 +68,10 @@ pub fn score_footprints(
 pub mod belief;
 pub mod coverage;
 pub mod footprint;
+pub mod poles;
 pub mod quality;
 pub mod revision;
+pub mod wire_prior;
 pub mod wires;
 
 pub use belief::{BeliefCell, BeliefCellStatus, BeliefGrids, WorldBeliefQuery};

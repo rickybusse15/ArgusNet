@@ -2,6 +2,18 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Poles, corridors, wire-aware flight and uncertain priors (W3 to W5).
+  `--detect-poles` measures poles among the LiDAR returns, splits wire tracks
+  at them and maps corridors, including stretches no sensor saw.
+  `--wire-planning` holds every flight clear of what is believed, mission
+  flights too, and works each side of a line before crossing it.
+  `--wire-prior-file` starts from a wire map with declared errors, which
+  flight confirms, moves or refutes. On West Pleasant View, no platform-tick
+  came within 10 m of a conductor, closest 17 to 24 m against 1.0 to 8.1 m
+  with fitted wires alone, at a cost of 0 to 10 points of mapped area in 300
+  s. On the scan fixture, ticks within 10 m fell from 8.5 to 4.2. One run in
+  39 with a prior stays pinned at a wire, cause not found. Runs without the
+  flags are unchanged. See `docs/migration/WIRE_CORRIDORS.md`.
 - Wire tracking (W2). `--track-wires` fits measured wire points and camera
   lines into tracks: one conductor over one span, a line plus a parabola, with
   uncertainty that widens the clearance kept. Confirmed tracks are mapped as

@@ -434,6 +434,9 @@ pub struct ReplayFrame {
     /// The ids of fitted spans the map dropped this frame (W2).
     #[serde(default)]
     pub retired_wires: Vec<String>,
+    /// Poles the map found or moved this frame (W3), as rows.
+    #[serde(default)]
+    pub mapped_poles: Vec<Value>,
     /// Under a physical energy profile: each platform's remaining energy and
     /// its reserve home this tick (F5). Empty otherwise.
     #[serde(default)]
@@ -1007,6 +1010,7 @@ mod live_stream {
             world_contacts: Vec::new(),
             mapped_wires: Vec::new(),
             retired_wires: Vec::new(),
+            mapped_poles: Vec::new(),
             energy_reserves: Default::default(),
         }
     }
