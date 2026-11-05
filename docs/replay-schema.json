@@ -683,6 +683,11 @@
               "minimum": 0,
               "description": "W1: measured LiDAR points on wires so far. Absent when none."
             },
+            "wire_tracks": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W2: confirmed fitted wire tracks. Absent when none."
+            },
             "wire_hazard_cells": {
               "type": "integer",
               "minimum": 0,
@@ -1038,9 +1043,16 @@
             "$ref": "#/definitions/inspection_evidence_record"
           }
         },
+        "retired_wires": {
+          "type": "array",
+          "description": "W2: ids of fitted spans the map dropped this tick, their tracks merged. Applied after this frame's `mapped_wires`. Absent when none.",
+          "items": {
+            "type": "string"
+          }
+        },
         "mapped_wires": {
           "type": "array",
-          "description": "World-knowledge `none` runs (R3): the power-line spans the platforms' map gained this tick, whole spans in the meta.power_lines line format, each recorded once; the wire-hazard prior's spans on the first frame. Applying the frames in order gives the wires the map holds. Absent when none.",
+          "description": "World-knowledge `none` runs (R3): the power-line spans the platforms' map gained this tick, whole spans in the meta.power_lines line format, each recorded once; the wire-hazard prior's spans on the first frame. A fitted span (W2) is recorded again when it moves, the latest row winning. Applying the frames in order, with `retired_wires`, gives the wires the map holds. Absent when none.",
           "items": {
             "type": "object",
             "additionalProperties": true,

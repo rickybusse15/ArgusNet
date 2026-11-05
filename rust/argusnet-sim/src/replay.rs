@@ -340,6 +340,9 @@ pub struct ReplayBeliefStats {
     pub wire_hazard_cells: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub wire_lines: u64,
+    /// Confirmed wire tracks (W2). Written only when there are some.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_tracks: u64,
     /// The map against the run's quality requirement (SR5a). Absent
     /// without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -661,6 +664,10 @@ pub struct ReplayFrame {
     /// gives the wires the map holds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mapped_wires: Vec<argusnet_world::powerline::PowerLine>,
+    /// The fitted spans the map dropped this tick, their tracks merged (W2).
+    /// Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_wires: Vec<String>,
     /// Under a physical energy profile (D-3), each platform's remaining
     /// energy and the reserve it needs to get home from where it is, as the
     /// battery's reserve check computed them this tick (F5). Absent under
@@ -915,6 +922,7 @@ impl ReplayWriter {
             active_faults: Vec::new(),
             sensor_bias_offsets_rad: BTreeMap::new(),
             mapped_wires: Vec::new(),
+            retired_wires: Vec::new(),
             energy_reserves: BTreeMap::new(),
         }
     }

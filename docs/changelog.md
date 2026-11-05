@@ -2,6 +2,20 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Wire tracking (W2). `--track-wires` fits measured wire points and camera
+  lines into tracks: one conductor over one span, a line plus a parabola, with
+  uncertainty that widens the clearance kept. Confirmed tracks are mapped as
+  `wire-track-N` spans. Explorers pass them by height and do not route round
+  their ends. Tracks lie within about 0.1 m of the true wire at mid-span. Over
+  13 line placements, ticks within 10 m of a conductor fell at 9, held at 3 and
+  rose at 1. Runs without the flag are unchanged. See
+  `docs/migration/WIRE_TRACKING.md`.
+- Explorers hear when the guard stops them (`--world-knowledge none` runs). An
+  explorer used to fly on from where the aircraft should have been, leaving it
+  held at a wire or wall for as long as 33 ticks. It now goes on from where the
+  aircraft is, backs away and changes height, then tries each side. No-prior
+  runs where the guard stopped an explorer end differently. Prior-map runs have
+  no guard and are unchanged (14/14 replay hashes).
 - Measured power lines (W1). `--measured-wires` in a `--world-knowledge none`
   run replaces the oracle that hands over a whole true span. The LiDAR reports
   noisy points on conductors, from its point rate, beam width and return power.
