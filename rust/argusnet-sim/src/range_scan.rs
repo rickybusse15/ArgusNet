@@ -72,6 +72,9 @@ pub(crate) struct SpanPieces {
     range_m: f64,
     low_m: [f64; 3],
     high_m: [f64; 3],
+    /// For a pole (W3), its radius: wide enough to hold a beam, where a
+    /// conductor sits inside one.
+    pole_radius_m: Option<f64>,
 }
 
 impl SpanPieces {
@@ -87,7 +90,17 @@ impl SpanPieces {
 
     /// The span's conductor radius, metres.
     pub(crate) fn radius_m(&self) -> f64 {
-        self.span.conductor_radius_m
+        self.pole_radius_m.unwrap_or(self.span.conductor_radius_m)
+    }
+
+    /// The angle across this object beams land on from `range_m`: a beam
+    /// touches a thin wire anywhere within its own width, and a pole wider
+    /// than a beam is hit across all of the pole.
+    pub(crate) fn across_rad(&self, divergence_rad: f64, range_m: f64) -> f64 {
+        match self.pole_radius_m {
+            Some(radius_m) => divergence_rad.max(2.0 * radius_m / range_m),
+            None => divergence_rad,
+        }
     }
 
     /// Whether every conductor of the span is further than `reach_m` from
@@ -98,6 +111,42 @@ impl SpanPieces {
                 || origin_m[axis] > self.high_m[axis] + reach_m
         })
     }
+}
+
+/// `lines`' supports as thin vertical objects a LiDAR gets returns from (W3),
+/// each once, however many spans share it. They read as a span's pieces, so
+/// the wire model counts their returns.
+pub(crate) fn pole_pieces(lines: &[PowerLine], radius_m: f64) -> Vec<SpanPieces> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut poles = Vec::new();
+    for line in lines {
+        for support in &line.supports {
+            if !seen.insert((support.xy_m[0].to_bits(), support.xy_m[1].to_bits())) {
+                continue;
+            }
+            let [x, y] = support.xy_m;
+            let steps = (support.height_m / argusnet_world::powerline::MAX_PIECE_M)
+                .ceil()
+                .max(1.0) as usize;
+            let height = |k: usize| support.base_z_m + support.height_m * k as f64 / steps as f64;
+            let pieces = (0..steps)
+                .map(|k| ConductorPiece {
+                    start_m: [x, y, height(k)],
+                    end_m: [x, y, height(k + 1)],
+                    sag_error_m: 0.0,
+                })
+                .collect();
+            poles.push(SpanPieces {
+                span: line.span_line(0),
+                pieces,
+                range_m: f64::INFINITY,
+                low_m: [x, y, support.base_z_m],
+                high_m: [x, y, support.top_z_m()],
+                pole_radius_m: Some(radius_m),
+            });
+        }
+    }
+    poles
 }
 
 /// `lines`' spans, each detectable within `range_m(line)` of a sensor.
@@ -126,6 +175,7 @@ pub(crate) fn span_pieces(
                 range_m,
                 low_m,
                 high_m,
+                pole_radius_m: None,
             });
         }
     }
@@ -317,6 +367,8 @@ pub struct RangeScanner {
     spans: Arc<Vec<SpanPieces>>,
     /// Report measured wire points instead of whole spans (W1).
     measured: Option<crate::wire_sensing::MeasuredWires>,
+    /// The world's poles, measured as returns (W3).
+    poles: Arc<Vec<SpanPieces>>,
 }
 
 impl RangeScanner {
@@ -327,7 +379,15 @@ impl RangeScanner {
             world,
             spans: Arc::new(Vec::new()),
             measured: None,
+            poles: Arc::new(Vec::new()),
         })
+    }
+
+    /// Get returns from `lines`' poles too (W3), which a sensor reports
+    /// among its wire points: nothing says which object a return is from.
+    pub fn with_measured_poles(mut self, lines: &[PowerLine]) -> Self {
+        self.poles = Arc::new(pole_pieces(lines, crate::wire_sensing::POLE_RADIUS_M));
+        self
     }
 
     /// Report wires as measured points, never as whole spans (W1).
@@ -380,7 +440,7 @@ impl RangeScanner {
                 SeedPart::Int(tick as i64),
             ],
         );
-        crate::wire_sensing::lidar_points(
+        let mut points = crate::wire_sensing::lidar_points(
             &self.spans,
             &measured.model,
             origin_m,
@@ -394,7 +454,37 @@ impl RangeScanner {
                     .is_none()
             },
             &mut rng,
-        )
+        );
+        if !self.poles.is_empty() {
+            // Streams of their own, so the wires' draws do not shift.
+            let key = |part: &'static str| {
+                DeterministicRng::keyed(
+                    0,
+                    &[
+                        SeedPart::Str(node_id),
+                        SeedPart::Str(part),
+                        SeedPart::Int(tick as i64),
+                    ],
+                )
+            };
+            let (mut rng, mut canopy) = (key("range-scan-pole"), key("range-scan-pole-canopy"));
+            points.extend(crate::wire_sensing::lidar_points(
+                &self.poles,
+                &measured.model,
+                origin_m,
+                measured.capture_s,
+                std::f64::consts::TAU,
+                self.config.max_range_m,
+                |d| d[2] <= 0.0,
+                |point| {
+                    self.world
+                        .first_return(origin_m, point, &mut || canopy.uniform())
+                        .is_none()
+                },
+                &mut rng,
+            ));
+        }
+        points
     }
 
     pub fn config(&self) -> &RangeScanConfig {

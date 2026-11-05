@@ -683,6 +683,31 @@
               "minimum": 0,
               "description": "W1: measured LiDAR points on wires so far. Absent when none."
             },
+            "wire_prior_open": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W5: prior wire spans flight has not settled. Absent when none."
+            },
+            "wire_prior_confirmed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W5: prior wire spans a fitted wire confirmed. Absent when none."
+            },
+            "wire_prior_refuted": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W5: prior wire spans flight found no wire on, dropped from the map. Absent when none."
+            },
+            "wire_poles": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W3: poles detected among measured returns. Absent when none."
+            },
+            "wire_corridors": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "W3: corridor spans the poles and tracks imply. Absent when none."
+            },
             "wire_tracks": {
               "type": "integer",
               "minimum": 0,
@@ -1041,6 +1066,22 @@
           "description": "Optional inspection evidence records captured or indexed this frame.",
           "items": {
             "$ref": "#/definitions/inspection_evidence_record"
+          }
+        },
+        "mapped_poles": {
+          "type": "array",
+          "description": "W3: poles the map found or moved this tick, the latest row for an id winning. Absent when none.",
+          "items": {
+            "type": "object",
+            "required": ["id", "xy_m", "low_z_m", "high_z_m", "sigma_m", "top_open"],
+            "properties": {
+              "id": { "type": "integer", "minimum": 0 },
+              "xy_m": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+              "low_z_m": { "type": "number" },
+              "high_z_m": { "type": "number" },
+              "sigma_m": { "type": "number", "minimum": 0 },
+              "top_open": { "type": "boolean", "description": "The top was never seen from above: it is at least high_z_m." }
+            }
           }
         },
         "retired_wires": {

@@ -49,6 +49,10 @@ pub const CLAIM_PENALTY_M: f64 = 1_000.0;
 /// ground the scanner sees on the way, and a nearer one can sit in the gaps
 /// the scanner's rings leave straight below a platform.
 pub const MIN_GOAL_DISTANCE_M: f64 = 250.0;
+/// A reached goal counts against candidates this near it, metres.
+const SPENT_RADIUS_M: f64 = 150.0;
+/// How many reached goals an explorer remembers.
+const MAX_SPENT_GOALS: usize = 32;
 /// How many seconds of flight ahead an explorer looks for a fitted wire to
 /// climb over: long enough to be over it on arrival.
 pub const WIRE_LOOKAHEAD_S: f64 = 4.0;
@@ -79,6 +83,14 @@ pub struct ExplorerState {
     /// would put it. Absent without them, so such checkpoints are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flown_z_m: Option<f64>,
+    /// Goals reached that still need work (W3): the rings of a scan leave a
+    /// gap under the track, and the same line flown again leaves the same
+    /// gap. Kept only for an explorer that rejoins its aircraft.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spent_goals: Vec<[f64; 2]>,
+    /// This explorer stays with its aircraft.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rejoins: bool,
     /// Getting away from where the guard stopped it. Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escape: Option<Escape>,
@@ -196,17 +208,49 @@ impl FrontierExplorer {
         });
     }
 
+    /// Where the aircraft was, against where this explorer put it. Further
+    /// apart than a few steps, something else is flying it (W3), and the
+    /// explorer goes on from the aircraft. Flying on regardless would have
+    /// the aircraft jump across the map when released, and a straight line
+    /// from its pad that meets a hill is stopped by the guard for good.
+    /// True when it rejoined, and the aircraft should not take this command.
+    pub fn rejoin(&mut self, from_m: [f64; 3], commanded_m: [f64; 3], dt_s: f64) -> bool {
+        self.state.rejoins = true;
+        let reach = 3.0 * self.lane_speed_mps() * dt_s;
+        let apart = (commanded_m[0] - from_m[0]).hypot(commanded_m[1] - from_m[1]) > reach;
+        if apart {
+            self.state.xy_m = Some([from_m[0], from_m[1]]);
+            if self.state.flown_z_m.is_some() {
+                self.state.flown_z_m = Some(from_m[2]);
+            }
+        }
+        apart
+    }
+
     /// The goal this explorer holds, for the other explorers' claims.
     pub fn goal(&self) -> Option<[f64; 2]> {
         (!self.state.on_lane).then_some(self.state.goal_m).flatten()
     }
 
-    fn choose_goal(frontier: &[[f64; 2]], from: [f64; 2], claims: &[[f64; 2]]) -> Option<[f64; 2]> {
+    fn choose_goal(
+        frontier: &[[f64; 2]],
+        from: [f64; 2],
+        claims: &[[f64; 2]],
+        spent: &[[f64; 2]],
+        belief: &BeliefSnapshot,
+    ) -> Option<[f64; 2]> {
         let mut best: Option<(f64, [f64; 2])> = None;
         for &centre in frontier {
             let mut cost = (centre[0] - from[0]).hypot(centre[1] - from[1]);
             if cost < MIN_GOAL_DISTANCE_M {
                 continue;
+            }
+            cost += belief.crossing_cost_m(from, centre);
+            if spent
+                .iter()
+                .any(|s| (s[0] - centre[0]).hypot(s[1] - centre[1]) < SPENT_RADIUS_M)
+            {
+                cost += CLAIM_PENALTY_M;
             }
             if claims
                 .iter()
@@ -270,8 +314,16 @@ impl FrontierExplorer {
             }
         };
         if needs_goal {
+            if let (true, false, Some(goal)) = (state.rejoins, state.on_lane, state.goal_m) {
+                if belief.needs_work(goal[0], goal[1], UNEXPLORED_SHARE) {
+                    state.spent_goals.push(goal);
+                    if state.spent_goals.len() > MAX_SPENT_GOALS {
+                        state.spent_goals.remove(0);
+                    }
+                }
+            }
             let frontier = frontier.get_or_init(|| belief.work_centres(UNEXPLORED_SHARE));
-            match Self::choose_goal(frontier, xy, claims) {
+            match Self::choose_goal(frontier, xy, claims, &state.spent_goals, belief) {
                 Some(goal) => {
                     state.goal_m = Some(goal);
                     state.on_lane = false;
@@ -552,6 +604,20 @@ mod tests {
         assert_eq!(explorer.state(), &before, "overridden");
         explorer.stopped(1.0, 1.0, p0, p0, p0);
         assert_eq!(explorer.state(), &before, "not flown this tick");
+    }
+
+    /// W3: an explorer stays with an aircraft something else flies, so it
+    /// is released where it is, and is left alone while flying itself.
+    #[test]
+    fn an_explorer_rejoins_an_aircraft_flown_by_something_else() {
+        let map = belief(500.0);
+        let mut explorer = FrontierExplorer::new(lane());
+        let (p0, _) = sample(&mut explorer, 0.0, Some(&map), &mut Vec::new());
+        assert!(!explorer.rejoin(p0, p0, 1.0), "flying itself");
+        assert_eq!(explorer.state().xy_m, Some([p0[0], p0[1]]));
+        let far = [p0[0] - 500.0, p0[1] + 500.0, p0[2]];
+        assert!(explorer.rejoin(far, p0, 1.0));
+        assert_eq!(explorer.state().xy_m, Some([far[0], far[1]]));
     }
 
     #[test]

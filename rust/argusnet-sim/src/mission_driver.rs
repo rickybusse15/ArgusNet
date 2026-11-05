@@ -2210,7 +2210,13 @@ impl MissionDriverStage {
         phase: MissionPhase,
         timestamp_s: f64,
     ) {
-        let egress = matches!(phase, MissionPhase::Egress | MissionPhase::Complete);
+        // Once complete every recall is dropped, and a fitted wire moving is
+        // no reason to recall a drone: nothing would ever release it.
+        let egress = match phase {
+            MissionPhase::Egress => true,
+            MissionPhase::Complete => fitted_shape(&self.mapped_installed) == 0,
+            _ => false,
+        };
         for (id, position) in mobile {
             if !(egress || self.homeward.contains(id)) {
                 continue;
@@ -5199,6 +5205,28 @@ mod tests {
     }
     /// R3: a drone already flying home (on its own reserve, or in the
     /// mission's egress) flies home again round a wire mapped across its way;
+    /// Every recall is dropped once a mission completes, so a fitted wire
+    /// must not send a drone home then: nothing would ever release it. A
+    /// surveyed line in the same phase, and a fitted one during egress, do.
+    #[test]
+    fn a_fitted_wire_recalls_no_one_after_the_mission() {
+        let recalled = |id: &str, phase: MissionPhase| {
+            let line = PowerLine {
+                id: id.into(),
+                ..power_line(&[-200.0, 200.0], 45.0, &[0.0]).span_line(0)
+            };
+            let mut stage = efficient_driver(vec![poi("poi-00", 500.0, 1)]);
+            wired(&mut stage, line.clone());
+            stage.mapped_installed = vec![line];
+            stage.homes.insert("drone".into(), [600.0, 0.0, 30.0]);
+            stage.replan_egress_for_wires(&[("drone".to_string(), [0.0, 0.0, 30.0])], phase, 0.0);
+            !stage.override_commands.is_empty()
+        };
+        assert!(!recalled("wire-track-0", MissionPhase::Complete));
+        assert!(recalled("wire-track-0", MissionPhase::Egress));
+        assert!(recalled("surveyed", MissionPhase::Complete));
+    }
+
     /// A fitted span that moves can put a wire across a flight as a new one
     /// can, though no more are mapped: the run replans, once, and a resumed
     /// run that sees nothing new does not.

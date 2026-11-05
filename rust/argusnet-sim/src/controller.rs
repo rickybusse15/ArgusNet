@@ -446,6 +446,11 @@ impl ControllerStage {
         self.guard = Some(guard);
     }
 
+    /// Keep each explorer with its aircraft while a mission flies it.
+    pub fn set_explorers_rejoin(&mut self, rejoin: bool) {
+        self.explorers_rejoin = rejoin;
+    }
+
     pub fn has_physical_guard(&self) -> bool {
         self.guard.is_some()
     }
@@ -785,6 +790,10 @@ pub struct ControllerStage {
     /// the ground or a structure is put back and recorded. `None` in every
     /// prior run, which then samples exactly as before.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// Explorers stay with their aircraft while something else flies it
+    /// (W3). Off, as every run before it, an explorer's position flies on
+    /// and the aircraft jumps to it when released.
+    explorers_rejoin: bool,
 }
 
 impl ControllerStage {
@@ -840,6 +849,7 @@ impl ControllerStage {
             state: State::default(),
             battery: None,
             guard: None,
+            explorers_rejoin: false,
         }
     }
 
@@ -861,6 +871,7 @@ impl ControllerStage {
 
     fn sample_all(&mut self, context: &mut TickContext<'_>) -> Result<bool, StageError> {
         let guard = self.guard.as_ref();
+        let explorers_rejoin = self.explorers_rejoin;
         let State {
             controllers,
             environment: environment_slot,
@@ -907,7 +918,13 @@ impl ControllerStage {
                         platform.position.y,
                         platform.position.z,
                     ];
-                    let commanded = position;
+                    // An explorer rejoining holds the aircraft where it is
+                    // this tick: taking the command too would part them
+                    // again, and they would swap places every tick.
+                    let rejoined = explorers_rejoin
+                        && explorer_of(controller)
+                            .is_some_and(|e| e.rejoin(from, position, context.dt_s));
+                    let commanded = if rejoined { from } else { position };
                     let position = guard.enforce_from(node_id, timestamp_s, from, commanded);
                     let moved = (0..3)
                         .map(|k| (position[k] - commanded[k]).powi(2))

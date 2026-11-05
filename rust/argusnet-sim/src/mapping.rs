@@ -527,6 +527,9 @@ impl MappingStage {
         if let Some(tracker) = &config.wire_tracker {
             grid.track_wires(tracker.clone());
         }
+        if let Some(poles) = &config.poles {
+            grid.detect_poles(poles.clone());
+        }
         let handle = crate::belief_world::BeliefHandle::new(grid.snapshot(&config));
         let mut belief = BeliefMapping {
             grid,
@@ -607,6 +610,13 @@ impl MappingStage {
         self.belief
             .as_mut()
             .map_or_else(Vec::new, |belief| belief.grid.take_retired_wires())
+    }
+
+    /// The poles found or moved since the last call, as replay rows (W3).
+    pub fn take_pole_updates(&mut self) -> Vec<crate::belief_world::MappedPole> {
+        self.belief
+            .as_mut()
+            .map_or_else(Vec::new, |belief| belief.grid.take_new_poles())
     }
 
     /// The canopy cells changed since the last call, as replay rows (R2).

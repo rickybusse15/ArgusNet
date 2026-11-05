@@ -313,6 +313,8 @@ pub struct PodSensing {
     gimbals: BTreeMap<String, GimbalState>,
     /// Report wires as measured points instead of whole spans (W1).
     measured: Option<crate::wire_sensing::MeasuredWires>,
+    /// The world's poles, measured as returns (W3).
+    poles: Arc<Vec<crate::range_scan::SpanPieces>>,
 }
 
 /// The pod's checkpointed state: every platform's gimbal.
@@ -349,7 +351,17 @@ impl PodSensing {
             spans: Arc::new(Vec::new()),
             gimbals: BTreeMap::new(),
             measured: None,
+            poles: Arc::new(Vec::new()),
         })
+    }
+
+    /// Get returns from `lines`' poles too (W3), among the wire points.
+    pub fn with_measured_poles(mut self, lines: &[PowerLine]) -> Self {
+        self.poles = Arc::new(crate::range_scan::pole_pieces(
+            lines,
+            crate::wire_sensing::POLE_RADIUS_M,
+        ));
+        self
     }
 
     /// Report wires as measured points, never as whole spans (W1).
@@ -631,7 +643,7 @@ impl PodSensing {
                 let mut wire_rng = key("pod-lidar-wire");
                 // Crowns draw from a stream of their own, as the scan's do.
                 let mut wire_canopy = key("pod-lidar-wire-canopy");
-                let points = crate::wire_sensing::lidar_points(
+                let mut points = crate::wire_sensing::lidar_points(
                     &self.spans,
                     &measured.model,
                     origin_true,
@@ -646,6 +658,25 @@ impl PodSensing {
                     },
                     &mut wire_rng,
                 );
+                if !self.poles.is_empty() {
+                    let mut pole_rng = key("pod-lidar-pole");
+                    let mut pole_canopy = key("pod-lidar-pole-canopy");
+                    points.extend(crate::wire_sensing::lidar_points(
+                        &self.poles,
+                        &measured.model,
+                        origin_true,
+                        measured.capture_s,
+                        2.0 * half_h * 2.0 * half_v,
+                        self.lidar.max_range_m,
+                        in_rectangle,
+                        |point| {
+                            self.world
+                                .first_return(origin_true, point, &mut || pole_canopy.uniform())
+                                .is_none()
+                        },
+                        &mut pole_rng,
+                    ));
+                }
                 // Georeferenced by the estimate, as the ground returns are.
                 let believe = world_sensor_est.then(inverse);
                 let points = points

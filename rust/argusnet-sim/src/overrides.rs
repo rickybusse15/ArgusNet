@@ -386,6 +386,8 @@ struct State {
     /// The power lines a guarded rejoin keeps its clearance from (R3), when
     /// its planner knows them.
     lines: Vec<KnownLine>,
+    /// Holds every flight clear of the wires believed (W4).
+    governor: Option<crate::wire_governor::WireGovernor>,
 }
 
 /// A power line a rejoin keeps clear of, with the space within its
@@ -594,6 +596,10 @@ struct OverrideCheckpoint {
     climbing: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     rejoin_paths: BTreeMap<String, [f64; 3]>,
+    /// Where the wire governor last left each platform (W4): absent without
+    /// one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    governed: BTreeMap<String, crate::wire_governor::Governed>,
 }
 
 /// The least share of its speed a rejoin must close on its path by: a path
@@ -907,6 +913,9 @@ impl StageHandler for MissionOverrideStage {
         shared.rejoining.clear();
         shared.climbing.clear();
         shared.rejoin_paths.clear();
+        if let Some(governor) = shared.governor.as_mut() {
+            governor.reset();
+        }
     }
 
     /// The redirects in force: each is a flight already under way, and a
@@ -921,6 +930,11 @@ impl StageHandler for MissionOverrideStage {
             rejoining: shared.rejoining.clone(),
             climbing: shared.climbing.clone(),
             rejoin_paths: shared.rejoin_paths.clone(),
+            governed: shared
+                .governor
+                .as_ref()
+                .map(|governor| governor.state().clone())
+                .unwrap_or_default(),
         };
         Some(serde_json::to_value(state).expect("override state serialises"))
     }
@@ -945,11 +959,35 @@ impl StageHandler for MissionOverrideStage {
         shared.rejoining = decoded.rejoining;
         shared.climbing = decoded.climbing;
         shared.rejoin_paths = decoded.rejoin_paths;
+        if let Some(governor) = shared.governor.as_mut() {
+            governor.restore(decoded.governed);
+        }
         shared.applied.clear();
         Ok(())
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        let outcome = self.apply_tables(context)?;
+        let Some(governor) = self.state.governor.as_mut() else {
+            return Ok(outcome);
+        };
+        let guard = self.state.guard.as_ref();
+        let held = governor.govern(context, guard);
+        if held > 0 {
+            context.note(format!("{held} platform(s) held clear of wires"));
+            return Ok(StageOutcome::Ran);
+        }
+        Ok(outcome)
+    }
+}
+
+impl MissionOverrideStage {
+    /// Hold every flight clear of the wires believed (W4).
+    pub fn set_wire_governor(&mut self, governor: Option<crate::wire_governor::WireGovernor>) {
+        self.state.governor = governor;
+    }
+
+    fn apply_tables(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         if let Some(map) = &self.mapped {
             let wires = std::sync::Arc::clone(map.current().wires());
             if self
@@ -957,7 +995,17 @@ impl StageHandler for MissionOverrideStage {
                 .as_ref()
                 .is_none_or(|seen| !std::sync::Arc::ptr_eq(seen, &wires))
             {
-                self.set_power_lines(wires.to_vec());
+                // The governor keeps flights off what is worked out from
+                // measurements. A rejoin that also refused any step nearer
+                // such a wire would stop for good inside a wide clearance.
+                let governed = self.state.governor.is_some();
+                self.set_power_lines(
+                    wires
+                        .iter()
+                        .filter(|line| !(governed && crate::belief_world::is_fitted_span(&line.id)))
+                        .cloned()
+                        .collect(),
+                );
                 self.mapped_seen = Some(wires);
             }
         }
@@ -1033,6 +1081,9 @@ impl StageHandler for MissionOverrideStage {
                 // prior map has a guard.
                 let position = match shared.guard.as_ref() {
                     Some(guard) if guard.violates(position) => {
+                        if let Some(governor) = shared.governor.as_mut() {
+                            governor.held_by_guard(&node_id);
+                        }
                         guard.enforce(&node_id, timestamp_s, position)
                     }
                     _ => position,

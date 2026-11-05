@@ -41,6 +41,11 @@ use crate::deterministic::DeterministicRng;
 use crate::nav_camera::EvidenceTag;
 use crate::range_scan::SpanPieces;
 
+/// A pole's radius, metres (W3). The world's supports do not carry one, and
+/// a wood pole is 0.15 to 0.25 m, so this is assumed. A lattice tower returns
+/// more.
+pub const POLE_RADIUS_M: f64 = 0.2;
+
 /// What the wire sensors are declared to do.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WireSensorModel {
@@ -235,7 +240,7 @@ pub(crate) fn lidar_points(
             let apparent_m = norm(cross(along, to_middle)) / range_m;
             let lambda = per_steradian
                 * (apparent_m / range_m)
-                * model.beam_divergence_rad
+                * span.across_rad(model.beam_divergence_rad, range_m)
                 * model.return_strength(radius_m, range_m);
             for _ in 0..poisson(rng, lambda) {
                 let t = rng.uniform();
