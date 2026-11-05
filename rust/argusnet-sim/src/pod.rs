@@ -629,6 +629,8 @@ impl PodSensing {
             ),
             Some(measured) => {
                 let mut wire_rng = key("pod-lidar-wire");
+                // Crowns draw from a stream of their own, as the scan's do.
+                let mut wire_canopy = key("pod-lidar-wire-canopy");
                 let points = crate::wire_sensing::lidar_points(
                     &self.spans,
                     &measured.model,
@@ -637,7 +639,11 @@ impl PodSensing {
                     2.0 * half_h * 2.0 * half_v,
                     self.lidar.max_range_m,
                     in_rectangle,
-                    |point| self.world.first_hit(origin_true, point).is_none(),
+                    |point| {
+                        self.world
+                            .first_return(origin_true, point, &mut || wire_canopy.uniform())
+                            .is_none()
+                    },
                     &mut wire_rng,
                 );
                 // Georeferenced by the estimate, as the ground returns are.

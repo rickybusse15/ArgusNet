@@ -371,6 +371,15 @@ impl RangeScanner {
                 SeedPart::Int(tick as i64),
             ],
         );
+        // Crowns draw from a stream of their own, as the scan's do.
+        let mut canopy = DeterministicRng::keyed(
+            0,
+            &[
+                SeedPart::Str(node_id),
+                SeedPart::Str("range-scan-wire-canopy"),
+                SeedPart::Int(tick as i64),
+            ],
+        );
         crate::wire_sensing::lidar_points(
             &self.spans,
             &measured.model,
@@ -379,7 +388,11 @@ impl RangeScanner {
             std::f64::consts::TAU,
             self.config.max_range_m,
             |d| d[2] <= 0.0,
-            |point| self.world.first_hit(origin_m, point).is_none(),
+            |point| {
+                self.world
+                    .first_return(origin_m, point, &mut || canopy.uniform())
+                    .is_none()
+            },
             &mut rng,
         )
     }
@@ -625,6 +638,83 @@ mod tests {
 
     /// A 3 cm single wire 20 m up, along x from -100 to 100, sagging 3 %:
     /// two spans, the support at x = 0.
+    /// A wire behind a row of dense crowns: the crowns stop the beams on
+    /// their way to it, so it earns few points, as they stop the ground rays.
+    #[test]
+    fn crowns_hide_a_wire_from_measured_returns() {
+        use crate::wire_sensing::{MeasuredWires, WireSensorModel};
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::obstacles::Bounds2d;
+        use argusnet_world::powerline::Support;
+        use argusnet_world::tiled::TiledTerrain;
+        use argusnet_world::trees::{Species, Tree, TreeLayer};
+        use argusnet_world::visibility::VisibilityProfile;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(0.0, 200.0, 0.0, 200.0);
+        let terrain = Arc::new(
+            TiledTerrain::from_grid(bounds, &vec![vec![0.0; 21]; 21], 10.0, 4, 0.0, &[]).unwrap(),
+        );
+        let open = SharedVisibility::new(
+            terrain,
+            Arc::new(ObstacleLayer::new(bounds, 50.0, vec![]).unwrap()),
+            None,
+            Arc::new(VisibilityProfile::default()),
+            0.0,
+        );
+        let crowns: Vec<Tree> = (0..25)
+            .map(|k| Tree {
+                id: format!("t{k}"),
+                xy_m: [4.0 + 8.0 * k as f64, 80.0],
+                base_z_m: 0.0,
+                height_m: 30.0,
+                crown_base_m: 5.0,
+                crown_radius_m: 6.0,
+                trunk_radius_m: 0.3,
+                species: Species::Broadleaf,
+                leaf_density: 1.0,
+            })
+            .collect();
+        let wooded = open
+            .clone()
+            .with_trees(Arc::new(TreeLayer::new(crowns).unwrap()));
+        let support = |x: f64| Support {
+            xy_m: [x, 100.0],
+            base_z_m: 0.0,
+            height_m: 15.0,
+        };
+        let line = PowerLine {
+            id: "line".into(),
+            supports: vec![support(10.0), support(190.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.015,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let points = |world: SharedVisibility| -> usize {
+            let scanner = RangeScanner::new(RangeScanConfig::default(), world)
+                .unwrap()
+                .with_power_lines(std::slice::from_ref(&line))
+                .with_measured_wires(MeasuredWires {
+                    model: WireSensorModel::default(),
+                    capture_s: 0.5,
+                });
+            (0..20)
+                .map(|tick| {
+                    scanner
+                        .scan("d", tick, 0.0, [100.0, 60.0, 30.0], [0.0; 3])
+                        .wire_points
+                        .len()
+                })
+                .sum()
+        };
+        let clear = points(open);
+        let hidden = points(wooded);
+        assert!(clear > 100, "{clear}");
+        assert!(hidden * 5 < clear, "{hidden} through the crowns of {clear}");
+    }
+
     fn wire() -> PowerLine {
         use argusnet_world::powerline::Support;
         let support = |x: f64| Support {

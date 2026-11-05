@@ -24,7 +24,8 @@ at it. For each conductor piece (at most 5 m), expected returns per capture are:
 
 The first bracket is rays per steradian; the next two are the solid angle within
 which a beam touches the piece, so a wire seen end-on earns few points. The hit
-count is a Poisson draw. Blocked hits are dropped. Each point has range and
+count is a Poisson draw. A hit blocked by terrain, a structure, a trunk or a
+crown (with the same leaf draw as ground rays) is dropped. Each point has range and
 angular noise and, on a rig, goes through the estimated pose like ground
 returns.
 
@@ -73,10 +74,10 @@ height, `efficient_v1`, provisional rig:
 
 | Line top above datum | LiDAR points | Range p10 / p50 / p90 | Structure contacts, oracle → measured | Closest to a conductor, oracle → measured |
 | ---: | ---: | --- | --- | --- |
-| 220 m | 13,879 | 33 / 77 / 109 m | 7 → 7 | 0.5 → 0.5 m |
-| 260 m | 12,875 | 38 / 82 / 98 m | 8 → 8 | 2.0 → 1.0 m |
-| 300 m | 7,439 | 37 / 58 / 111 m | 6 → 6 | 2.0 → 2.0 m |
-| 340 m | 4,812 | 39 / 70 / 73 m | 6 → 6 | 1.4 → 1.4 m |
+| 220 m | 27,737 | 16 / 60 / 95 m | 7 → 7 | 0.5 → 0.5 m |
+| 260 m | 24,207 | 10 / 65 / 94 m | 8 → 8 | 2.0 → 1.0 m |
+| 300 m | 16,339 | 27 / 48 / 108 m | 6 → 6 | 2.0 → 2.0 m |
+| 340 m | 10,459 | 7 / 69 / 72 m | 6 → 6 | 1.4 → 1.4 m |
 
 **Measuring is not worse than the oracle here, and neither is good.** Aircraft
 come within 0.5–2 m of a conductor in every run, far inside the 10 m clearance.

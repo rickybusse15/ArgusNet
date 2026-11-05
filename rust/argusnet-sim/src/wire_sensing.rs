@@ -176,28 +176,34 @@ fn norm(a: [f64; 3]) -> f64 {
     (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
 }
 
-/// A Poisson count of mean `lambda`, by Knuth's product of uniforms: mean
-/// values here are small, far under the point where that loses precision.
+/// A Poisson count of mean `lambda`. Knuth's product of uniforms is exact
+/// but runs out of precision at large means, so a large mean is drawn as a
+/// sum of smaller ones: Poisson counts add.
 fn poisson(rng: &mut DeterministicRng, lambda: f64) -> u32 {
-    if lambda <= 0.0 {
-        return 0;
-    }
-    let limit = (-lambda.min(30.0)).exp();
-    let mut product = 1.0;
+    /// The largest mean drawn in one go.
+    const CHUNK: f64 = 20.0;
+    let mut remaining = lambda.max(0.0);
     let mut count = 0;
-    loop {
-        product *= rng.uniform();
-        if product <= limit {
-            return count;
+    while remaining > 0.0 {
+        let mean = remaining.min(CHUNK);
+        remaining -= mean;
+        let limit = (-mean).exp();
+        let mut product = 1.0;
+        loop {
+            product *= rng.uniform();
+            if product <= limit {
+                break;
+            }
+            count += 1;
         }
-        count += 1;
     }
+    count
 }
 
 /// The LiDAR's returns from `spans` for one capture from `origin_m`.
 /// `field_of_view_sr` is the solid angle the points are spread over, and
-/// `in_view` says whether a direction is in it. `clear` says whether a sight
-/// line from the origin reaches a point unblocked.
+/// `in_view` says whether a direction is in it. `clear` says whether a beam
+/// from the origin reaches a point: it draws for crowns, so it takes `FnMut`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lidar_points(
     spans: &[SpanPieces],
@@ -207,7 +213,7 @@ pub(crate) fn lidar_points(
     field_of_view_sr: f64,
     max_range_m: f64,
     in_view: impl Fn([f64; 3]) -> bool,
-    clear: impl Fn([f64; 3]) -> bool,
+    mut clear: impl FnMut([f64; 3]) -> bool,
     rng: &mut DeterministicRng,
 ) -> Vec<[f64; 3]> {
     let per_steradian = model.points_per_s * capture_s / field_of_view_sr.max(1e-9);
@@ -482,6 +488,22 @@ mod tests {
         assert_ne!(seen[0].from_dir, seen[0].to_dir, "the part seen has extent");
         // Out of pixel range, nothing.
         assert!(frame([40.0, 0.0, 50.0]).is_empty());
+    }
+
+    /// Poisson counts stay true to their mean at any size: nearby wires and
+    /// fast devices make large means.
+    #[test]
+    fn the_poisson_mean_holds_at_large_means() {
+        let mut draw = rng(9);
+        for lambda in [0.5, 5.0, 75.0, 400.0] {
+            let n = 2000;
+            let total: f64 = (0..n).map(|_| f64::from(poisson(&mut draw, lambda))).sum();
+            let mean = total / n as f64;
+            // Within five standard errors.
+            let tolerance = 5.0 * (lambda / n as f64).sqrt();
+            assert!((mean - lambda).abs() < tolerance, "{mean} against {lambda}");
+        }
+        assert_eq!(poisson(&mut draw, 0.0), 0);
     }
 
     #[test]
