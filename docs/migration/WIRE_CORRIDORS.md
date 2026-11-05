@@ -68,10 +68,11 @@ completion. Surveyed lines still do, as before.
 A prior span is a hypothesis with a declared error, mapped from the first frame
 as `wire-prior-*`, with `10 m + 3 sigma` of clearance. Flight changes it:
 
-- **Confirmed:** a confirmed track within 3 sigma and parallel moves the span
+- **Confirmed:** a confirmed track within 3 sigma, in plan and in height, and
+  parallel moves the span
   onto what was measured and shrinks its error to 1 m.
-- **Refuted:** within 60 m and above a stretch, with no return, counts against
-  it. With half its stretches at 3 such scans and no return anywhere, the span
+- **Refuted:** within 60 m and above a stretch, a scan with a ray past it and no
+  return counts against it. A stretch behind an obstacle says nothing. With half its stretches at 3 such scans and no return anywhere, the span
   is dropped, and `retired_wires` records it.
 - **Open:** everything else stays a wide hazard.
 

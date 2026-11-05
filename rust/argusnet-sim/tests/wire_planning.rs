@@ -234,8 +234,8 @@ fn flight_refutes_a_span_with_no_wire() {
     let bundle = bundle(0.0, 260.0);
     let phantom = PriorSpan {
         id: "gone".into(),
-        from_m: [-250.0, -200.0, 200.0],
-        to_m: [-250.0, 200.0, 200.0],
+        from_m: [-250.0, -60.0, 200.0],
+        to_m: [-250.0, 60.0, 200.0],
         sigma_lateral_m: 3.0,
         sigma_vertical_m: 3.0,
     };

@@ -21,6 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::wires::WireEstimate;
 
+/// How far a wire can hang below its chord, as a share of the span.
+const SAG_ALLOWANCE: f64 = 0.05;
+
 /// One span of a prior map.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PriorSpan {
@@ -50,6 +53,9 @@ pub struct WirePriorConfig {
     pub refute_scans: u32,
     /// The share of a span's stretches that must count against it.
     pub refute_share: f64,
+    /// A ray shows a stretch empty when it passes this near and goes on,
+    /// metres: about the spacing of the simulated rays there.
+    pub ray_gate_m: f64,
     /// The error left on a confirmed span, metres: how well a prior's shape
     /// follows the wire away from where it was measured.
     pub confirmed_sigma_m: f64,
@@ -65,6 +71,7 @@ impl Default for WirePriorConfig {
             refute_range_m: 60.0,
             refute_scans: 3,
             refute_share: 0.5,
+            ray_gate_m: 20.0,
             confirmed_sigma_m: 1.0,
         }
     }
@@ -77,6 +84,7 @@ impl WirePriorConfig {
             ("confirm_length_m", self.confirm_length_m),
             ("stretch_m", self.stretch_m),
             ("refute_range_m", self.refute_range_m),
+            ("ray_gate_m", self.ray_gate_m),
             ("confirmed_sigma_m", self.confirmed_sigma_m),
         ] {
             if !(value.is_finite() && value > 0.0) {
@@ -110,6 +118,8 @@ pub enum PriorStatus {
 pub struct PriorState {
     pub span: PriorSpan,
     pub status: PriorStatus,
+    /// The span as the map gave it, which a reset goes back to.
+    given: PriorSpan,
     /// Scans that saw nothing at each stretch.
     misses: BTreeMap<i32, u32>,
     /// Stretches with a return near them.
@@ -138,6 +148,19 @@ fn frame(span: &PriorSpan, x: f64, y: f64) -> (f64, f64) {
     (dx * ux + dy * uy, dy * ux - dx * uy)
 }
 
+/// Whether the ray from `origin` to `end` passes within `gate_m` of `at` and
+/// goes on past it.
+fn ray_passes(origin: [f64; 3], end: [f64; 3], at: [f64; 3], gate_m: f64) -> bool {
+    let ray: [f64; 3] = std::array::from_fn(|k| end[k] - origin[k]);
+    let to: [f64; 3] = std::array::from_fn(|k| at[k] - origin[k]);
+    let length_sq: f64 = ray.iter().map(|v| v * v).sum();
+    let t = (0..3).map(|k| ray[k] * to[k]).sum::<f64>() / length_sq.max(1e-9);
+    if !(0.0..1.0).contains(&t) {
+        return false;
+    }
+    (0..3).map(|k| (to[k] - ray[k] * t).powi(2)).sum::<f64>() <= gate_m * gate_m
+}
+
 impl PriorMap {
     pub fn new(config: WirePriorConfig, spans: Vec<PriorSpan>) -> Self {
         Self {
@@ -145,6 +168,7 @@ impl PriorMap {
             spans: spans
                 .into_iter()
                 .map(|span| PriorState {
+                    given: span.clone(),
                     span,
                     status: PriorStatus::Open,
                     misses: BTreeMap::new(),
@@ -165,6 +189,7 @@ impl PriorMap {
     /// Back to what the map said.
     pub fn clear(&mut self) {
         for state in &mut self.spans {
+            state.span = state.given.clone();
             state.status = PriorStatus::Open;
             state.misses.clear();
             state.hits.clear();
@@ -173,9 +198,11 @@ impl PriorMap {
 
     /// One scan from `origin_m`: its returns count for the stretches they
     /// are near, and the stretches near enough to show a wire with nothing
-    /// count against them. A scan looks below the horizon, so a wire above
-    /// the sensor says nothing.
-    pub fn observe(&mut self, origin_m: [f64; 3], points: &[[f64; 3]]) {
+    /// count against them. Silence counts only where a ray of this scan
+    /// passed the stretch and went on: `ray_ends_m` are where its rays
+    /// stopped, so a stretch behind a building or a crown, or outside a
+    /// pod's view, says nothing.
+    pub fn observe(&mut self, origin_m: [f64; 3], points: &[[f64; 3]], ray_ends_m: &[[f64; 3]]) {
         let config = &self.config;
         for state in &mut self.spans {
             if state.status != PriorStatus::Open {
@@ -192,7 +219,7 @@ impl PriorMap {
                 if s >= -gate
                     && s <= length + gate
                     && d.abs() <= gate
-                    && (point[2] - high).abs() <= vertical + 0.05 * length
+                    && (point[2] - high).abs() <= vertical + SAG_ALLOWANCE * length
                 {
                     hit_now.insert((s / config.stretch_m).floor() as i32);
                 }
@@ -210,7 +237,12 @@ impl PriorMap {
                     + (at[1] - origin_m[1]).powi(2)
                     + (at[2] - origin_m[2]).powi(2))
                 .sqrt();
-                if range <= config.refute_range_m && at[2] < origin_m[2] {
+                if range <= config.refute_range_m
+                    && at[2] < origin_m[2]
+                    && ray_ends_m
+                        .iter()
+                        .any(|end| ray_passes(origin_m, *end, at, config.ray_gate_m))
+                {
                     *state.misses.entry(k).or_insert(0) += 1;
                 }
             }
@@ -267,6 +299,11 @@ impl PriorMap {
                 let z =
                     span.from_m[2] + (span.to_m[2] - span.from_m[2]) * (s / length).clamp(0.0, 1.0);
                 let dz = middle[2] - z;
+                // A wire hangs below its attachments by up to its sag.
+                let reach = config.gate_sigmas * span.sigma_vertical_m;
+                if dz > reach || dz < -(reach + SAG_ALLOWANCE * length) {
+                    continue;
+                }
                 if support.is_none_or(|(_, best, _)| track.observed_length_m > best) {
                     support = Some((d, track.observed_length_m, dz));
                 }
@@ -407,6 +444,51 @@ mod tests {
         }
     }
 
+    /// A fan of rays from above `x` to the ground, along the span.
+    fn ground(x: f64, _z: f64) -> Vec<[f64; 3]> {
+        (-8..=8)
+            .map(|k| [x + f64::from(k) * 15.0, 0.0, 0.0])
+            .collect()
+    }
+
+    /// A stretch no ray reached says nothing: a building in the way stops
+    /// them short of it.
+    #[test]
+    fn silence_behind_an_obstacle_refutes_nothing() {
+        let mut map = map();
+        for x in [20.0, 50.0, 80.0, 110.0, 140.0, 170.0] {
+            let stopped: Vec<[f64; 3]> = ground(x, 80.0)
+                .iter()
+                .map(|end| [x + (end[0] - x) * 0.1, 0.0, 77.0])
+                .collect();
+            for _ in 0..4 {
+                map.observe([x, 0.0, 80.0], &[], &stopped);
+            }
+        }
+        assert_eq!(map.spans()[0].status, PriorStatus::Open);
+    }
+
+    /// A track far above a span is another wire, however well it lines up.
+    #[test]
+    fn a_track_at_another_height_confirms_nothing() {
+        let mut map = map();
+        let mut high = track(0.0, 60.0);
+        high.from_m[2] = 150.0;
+        high.to_m[2] = 150.0;
+        map.reconcile(&[high]);
+        assert_eq!(map.spans()[0].status, PriorStatus::Open);
+    }
+
+    #[test]
+    fn a_reset_goes_back_to_what_the_map_said() {
+        let mut map = map();
+        map.reconcile(&[track(5.0, 60.0)]);
+        map.clear();
+        let state = &map.spans()[0];
+        assert_eq!(state.span, span());
+        assert_eq!(state.status, PriorStatus::Open);
+    }
+
     #[test]
     fn a_track_on_a_span_confirms_and_moves_it() {
         let mut map = map();
@@ -433,12 +515,12 @@ mod tests {
     fn nothing_seen_from_near_refutes_a_span() {
         let mut map = map();
         for _ in 0..10 {
-            map.observe([100.0, 0.0, 300.0], &[]);
+            map.observe([100.0, 0.0, 300.0], &[], &ground(100.0, 300.0));
         }
         assert_eq!(map.spans()[0].status, PriorStatus::Open, "too far to tell");
         for x in [20.0, 50.0, 80.0, 110.0, 140.0, 170.0] {
             for _ in 0..3 {
-                map.observe([x, 0.0, 80.0], &[]);
+                map.observe([x, 0.0, 80.0], &[], &ground(x, 80.0));
             }
         }
         assert_eq!(map.spans()[0].status, PriorStatus::Refuted);
@@ -447,10 +529,10 @@ mod tests {
     #[test]
     fn a_return_on_a_span_keeps_it_from_being_refuted() {
         let mut map = map();
-        map.observe([100.0, 0.0, 80.0], &[[100.0, 3.0, 50.0]]);
+        map.observe([100.0, 0.0, 80.0], &[[100.0, 3.0, 50.0]], &[]);
         for x in [20.0, 50.0, 80.0, 110.0, 140.0, 170.0] {
             for _ in 0..4 {
-                map.observe([x, 0.0, 80.0], &[]);
+                map.observe([x, 0.0, 80.0], &[], &ground(x, 80.0));
             }
         }
         assert_eq!(map.spans()[0].status, PriorStatus::Open);
@@ -461,7 +543,7 @@ mod tests {
         let mut map = map();
         for x in [20.0, 50.0, 80.0, 110.0, 140.0, 170.0] {
             for _ in 0..4 {
-                map.observe([x, 0.0, 30.0], &[]);
+                map.observe([x, 0.0, 30.0], &[], &ground(x, 30.0));
             }
         }
         assert_eq!(map.spans()[0].status, PriorStatus::Open);
@@ -488,7 +570,7 @@ mod tests {
     #[test]
     fn a_map_survives_a_checkpoint_and_a_reset() {
         let mut map = map();
-        map.observe([100.0, 0.0, 80.0], &[[100.0, 3.0, 50.0]]);
+        map.observe([100.0, 0.0, 80.0], &[[100.0, 3.0, 50.0]], &[]);
         let text = serde_json::to_string(&map).unwrap();
         let restored: PriorMap = serde_json::from_str(&text).unwrap();
         assert_eq!(restored, map);

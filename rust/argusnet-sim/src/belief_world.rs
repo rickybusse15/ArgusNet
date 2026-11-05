@@ -919,11 +919,11 @@ impl BeliefGrid {
     /// count. No point says which wire it is on.
     fn integrate_wire_evidence(&mut self, scan: &RangeScan) {
         self.wire_lines_seen += scan.wire_lines.len() as u64;
-        // Only the scanner's fan sees all below it, so only its silence says
-        // anything about a wire not being there.
+        // A camera's silence says nothing about a wire not being there.
         if scan.sensor == ScanSensor::RangeScanner {
             if let Some(prior) = self.wire_prior_map.as_mut() {
-                prior.observe(scan.origin_m, &scan.wire_points);
+                let ray_ends: Vec<[f64; 3]> = scan.returns.iter().map(|r| r.point_m).collect();
+                prior.observe(scan.origin_m, &scan.wire_points, &ray_ends);
             }
         }
         // A return on a known pole is not a wire's.
