@@ -1,8 +1,10 @@
 # Poles, corridors, wire-aware flight and uncertain priors (W3 to W5)
 
-Three opt-in flags, each building on [W2](WIRE_TRACKING.md). Without them
-nothing changes: 14 of 14 replay hashes match the base, and every lifecycle
-check is equal.
+Three opt-in flags, each building on [W2](WIRE_TRACKING.md). Without them the
+canonical scenarios are unchanged: 14 of 14 replay hashes match the base, and
+every lifecycle check is equal. One fix is not behind a flag: the escape floor
+below applies in any `--world-knowledge none` run where the guard stops an
+explorer.
 
 | Flag | Needs | What it adds |
 | --- | --- | --- |
@@ -66,8 +68,9 @@ nothing, because flying near a span is how it gets settled.
 height could stand above the wire, in which case both the explorer and the
 launch wrapper lifted every descent back up through it, and the drone stayed
 pinned 1 m from a conductor for the rest of the run. An escape now keeps a 15 m
-floor over the ground, and the guard still holds the true ground. This also
-changes `--track-wires` runs, the only pre-W3 mode with escapes.
+floor over the ground, and the guard still holds the true ground. Without it,
+W2 at line x = -120, top 260 m comes within 10 m for 35 ticks, not 7. Because
+the escape is not behind a flag, oracle, W1 and W2 runs change slightly too.
 
 **Post-mission recalls.** A mapped wire could send a drone home after a mission
 completed, with a recall nothing ever released, and it stayed parked. Corridors

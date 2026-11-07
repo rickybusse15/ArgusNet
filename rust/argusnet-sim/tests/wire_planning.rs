@@ -282,24 +282,13 @@ fn a_line_the_prior_lacks_is_still_tracked() {
 }
 
 /// A drone under a wire whose survey height is above the wire used to be
-/// commanded up through it whichever way it turned, and stayed there for the
-/// rest of the run.
+/// lifted back through it by the launch wrapper's floor, however its escape
+/// turned. Measured 2026-11-07 on this placement: 7 ticks within 10 m, and 35
+/// without the escape's floor.
 #[test]
 fn a_drone_under_a_wire_gets_away_from_it() {
-    let bundle = bundle(-120.0, 340.0);
-    let config = ExplorationConfig {
-        uncertain_prior: Some(UncertainPrior {
-            config: Default::default(),
-            spans: Vec::new(),
-            degraded_truth: Some(PriorDegradation {
-                seed: 1234,
-                ..PriorDegradation::default()
-            }),
-        }),
-        ..planned()
-    };
-    let mut seeded = bundle.clone();
-    seeded.seed = 1234;
-    let near = ticks_near(&seeded, config);
-    assert!(near < 40, "{near} ticks within 10 m");
+    let mut seeded = bundle(-120.0, 260.0);
+    seeded.seed = 7;
+    let near = ticks_near(&seeded, tracked());
+    assert!(near < 20, "{near} ticks within 10 m");
 }

@@ -13,7 +13,8 @@
   with fitted wires alone, with 91 to 97% of the map known against 94 to 96%.
   On the scan fixture, ticks within 10 m fell from 7.2 to 3.8, and to 1.9 with
   a prior. Escapes from under a wire no longer hold to the survey height,
-  which pinned drones for good. Runs without the flags are unchanged. See `docs/migration/WIRE_CORRIDORS.md`.
+  which pinned drones for good; that fix applies to every `--world-knowledge
+  none` run. The canonical scenarios are unchanged. See `docs/migration/WIRE_CORRIDORS.md`.
 - Wire tracking (W2). `--track-wires` fits measured wire points and camera
   lines into tracks: one conductor over one span, a line plus a parabola, with
   uncertainty that widens the clearance kept. Confirmed tracks are mapped as
