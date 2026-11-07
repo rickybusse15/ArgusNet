@@ -1481,6 +1481,9 @@ struct PoleHazard {
 /// clearance to keep, boxed so most queries end at once.
 #[derive(Debug, Clone, PartialEq)]
 struct FittedHazard {
+    /// Whether goal choice and steering keep away from it. A prior span is
+    /// passed by height only: flying near it is how it gets settled.
+    repels: bool,
     pieces: Vec<ConductorPiece>,
     clearance_m: f64,
     low_xy_m: [f64; 2],
@@ -1502,6 +1505,7 @@ impl FittedHazard {
             }
         }
         Self {
+            repels: !span.id.starts_with(PRIOR_PREFIX),
             pieces,
             clearance_m: span.clearance_m,
             low_xy_m,
@@ -1524,6 +1528,38 @@ impl FittedHazard {
                 argusnet_world::powerline::segment_distance(here, here, start, end)
                     <= self.clearance_m
             })
+    }
+
+    /// The unit vector away from this wire at `xy_m`, if `direction` runs
+    /// along it there.
+    fn way_out(&self, xy_m: [f64; 2], direction: [f64; 2], along_cos: f64) -> Option<[f64; 2]> {
+        let here = [xy_m[0], xy_m[1], 0.0];
+        let nearest = self.pieces.iter().min_by(|a, b| {
+            let distance = |piece: &&ConductorPiece| {
+                let start = [piece.start_m[0], piece.start_m[1], 0.0];
+                let end = [piece.end_m[0], piece.end_m[1], 0.0];
+                argusnet_world::powerline::segment_distance(here, here, start, end)
+            };
+            distance(a).total_cmp(&distance(b))
+        })?;
+        let (dx, dy) = (
+            nearest.end_m[0] - nearest.start_m[0],
+            nearest.end_m[1] - nearest.start_m[1],
+        );
+        let length = dx.hypot(dy);
+        if length < 1e-9 {
+            return None;
+        }
+        let along = [dx / length, dy / length];
+        if (direction[0] * along[0] + direction[1] * along[1]).abs() < along_cos {
+            return None;
+        }
+        // Whichever side it is on; exactly on the wire, the left of the wire.
+        let normal = [-along[1], along[0]];
+        let side =
+            (xy_m[0] - nearest.start_m[0]) * normal[0] + (xy_m[1] - nearest.start_m[1]) * normal[1];
+        let sign = if side < 0.0 { -1.0 } else { 1.0 };
+        Some([normal[0] * sign, normal[1] * sign])
     }
 
     /// Whether a straight flight crosses this wire.
@@ -2269,6 +2305,30 @@ impl BeliefSnapshot {
         bounds
     }
 
+    /// Which way out of a fitted wire's corridor a flight along it should
+    /// turn (W4): a flight running with a line has neither over nor under for
+    /// long, and only a move sideways leaves it. `None` when it is not in one,
+    /// is crossing one, or wire planning is off, or when `goal_m` lies inside
+    /// the corridor, where the flight is going on purpose.
+    pub fn out_of_corridor(
+        &self,
+        xy_m: [f64; 2],
+        direction: [f64; 2],
+        goal_m: [f64; 2],
+    ) -> Option<[f64; 2]> {
+        /// A flight within about 50 degrees of a wire is running along it.
+        const ALONG_COS: f64 = 0.64;
+        if self.crossing_penalty_m <= 0.0 {
+            return None;
+        }
+        let here = [xy_m[0], xy_m[1], 0.0];
+        let goal = [goal_m[0], goal_m[1], 0.0];
+        self.fitted_hazards
+            .iter()
+            .filter(|hazard| hazard.repels && hazard.covers(here) && !hazard.covers(goal))
+            .find_map(|hazard| hazard.way_out(xy_m, direction, ALONG_COS))
+    }
+
     /// What a straight flight between two points costs in crossing fitted
     /// wires, in metres of flight: nothing without wire planning.
     pub fn crossing_cost_m(&self, from_m: [f64; 2], to_m: [f64; 2]) -> f64 {
@@ -2283,7 +2343,7 @@ impl BeliefSnapshot {
         let crossed = self
             .fitted_hazards
             .iter()
-            .filter(|hazard| hazard.crossed_by(from_m, to_m))
+            .filter(|hazard| hazard.repels && hazard.crossed_by(from_m, to_m))
             .count();
         let length = (to_m[0] - from_m[0]).hypot(to_m[1] - from_m[1]);
         let steps = (length / STEP_M).ceil().max(1.0) as usize;
@@ -2295,7 +2355,9 @@ impl BeliefSnapshot {
                     from_m[1] + (to_m[1] - from_m[1]) * t,
                     0.0,
                 ];
-                self.fitted_hazards.iter().any(|hazard| hazard.covers(at))
+                self.fitted_hazards
+                    .iter()
+                    .any(|hazard| hazard.repels && hazard.covers(at))
             })
             .count();
         self.crossing_penalty_m * crossed as f64 + ALONG_COST * STEP_M * along as f64
@@ -3219,6 +3281,41 @@ mod tests {
             bound([50.0, -40.0], [50.0, -20.0], 95.0),
             WireBounds::default(),
             "not reached yet"
+        );
+    }
+
+    /// W4: a flight along a wire turns out of its corridor, to the side it
+    /// is on; one crossing it, or going to a goal inside it, does not.
+    #[test]
+    fn a_flight_along_a_wire_turns_out_of_its_corridor() {
+        let hazard = FittedHazard::new(&wire(100.0));
+        assert_eq!(
+            hazard.way_out([50.0, 3.0], [1.0, 0.0], 0.64),
+            Some([0.0, 1.0])
+        );
+        assert_eq!(
+            hazard.way_out([50.0, -3.0], [-1.0, 0.0], 0.64),
+            Some([0.0, -1.0])
+        );
+        assert_eq!(hazard.way_out([50.0, 3.0], [0.0, 1.0], 0.64), None);
+        let config = ExplorationConfig {
+            wire_planning: Some(WirePlanningConfig::default()),
+            ..ExplorationConfig::default()
+        };
+        let mut span = wire(100.0);
+        span.id = "wire-track-0".into();
+        let mut belief = grid();
+        belief.know_wires(vec![span]);
+        let snapshot = belief.snapshot(&config);
+        let (at, east) = ([50.0, 3.0], [1.0, 0.0]);
+        assert!(snapshot.out_of_corridor(at, east, [90.0, 80.0]).is_some());
+        assert_eq!(snapshot.out_of_corridor(at, east, [90.0, 4.0]), None);
+        assert_eq!(
+            belief
+                .snapshot(&ExplorationConfig::default())
+                .out_of_corridor(at, east, [90.0, 80.0]),
+            None,
+            "off without wire planning"
         );
     }
 

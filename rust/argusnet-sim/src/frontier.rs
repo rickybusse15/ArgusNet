@@ -67,6 +67,9 @@ const ESCAPE_BACK_S: f64 = 2.0;
 /// How long it holds its new height, s: past where it was stopped.
 const ESCAPE_HOLD_S: f64 = 8.0;
 
+/// The height over the ground an escape keeps, m.
+pub const ESCAPE_MIN_AGL_M: f64 = 15.0;
+
 /// How far it changes height, m: more than a wire's clearance.
 const ESCAPE_HEIGHT_M: f64 = 30.0;
 
@@ -362,6 +365,17 @@ impl FrontierExplorer {
             Some(escape) => (escape.back, speed * dt, true),
             None => (direction, step, moving),
         };
+        // Out of a corridor it is running along, not on down it.
+        let direction = match (moving, backing) {
+            (true, None) => belief
+                .out_of_corridor(xy, direction, goal)
+                .map_or(direction, |out| {
+                    let turned = [direction[0] + out[0], direction[1] + out[1]];
+                    let length = turned[0].hypot(turned[1]).max(1e-9);
+                    [turned[0] / length, turned[1] / length]
+                }),
+            _ => direction,
+        };
         let new_xy = [xy[0] + direction[0] * step, xy[1] + direction[1] * step];
         state.xy_m = Some(new_xy);
         let velocity_xy = if moving {
@@ -390,7 +404,15 @@ impl FrontierExplorer {
         let fitted = belief.has_fitted_wires();
         if fitted || state.flown_z_m.is_some() || state.escape.is_some() {
             let flown_z = state.flown_z_m.unwrap_or(position[2]);
-            let lowest = terrain.height_at(position[0], position[1]) + config.min_agl_m;
+            // A survey height can stand above a wire. Held to it, an escape
+            // from under the wire is commanded up through it whichever way
+            // it turns, for good, so an escape keeps only a low floor.
+            let floor_agl = if state.escape.is_some() {
+                config.min_agl_m.min(ESCAPE_MIN_AGL_M)
+            } else {
+                config.min_agl_m
+            };
+            let lowest = terrain.height_at(position[0], position[1]) + floor_agl;
             if fitted {
                 let bounds =
                     belief.wire_bounds_ahead(new_xy, direction, speed * WIRE_LOOKAHEAD_S, flown_z);

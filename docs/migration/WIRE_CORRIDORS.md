@@ -56,7 +56,18 @@ evidence, then:
 - climbs 20 m off anything the guard holds a mission flight at.
 
 It reads the belief only. Goal choice also counts crossings (300 m each) and
-each metre flown along a line (5 m).
+each metre flown along a line (5 m), and an explorer running along a wire turns
+out of its corridor and carries on beside it. Height alone cannot leave a
+corridor: a line over rising ground has no room under it and little over it.
+Unverified prior spans are the exception. They are passed by height and repel
+nothing, because flying near a span is how it gets settled.
+
+**Escapes.** A drone the guard stops backs away and changes height. Its survey
+height could stand above the wire, in which case both the explorer and the
+launch wrapper lifted every descent back up through it, and the drone stayed
+pinned 1 m from a conductor for the rest of the run. An escape now keeps a 15 m
+floor over the ground, and the guard still holds the true ground. This also
+changes `--track-wires` runs, the only pre-W3 mode with escapes.
 
 **Post-mission recalls.** A mapped wire could send a drone home after a mission
 completed, with a recall nothing ever released, and it stayed parked. Corridors
@@ -71,8 +82,9 @@ as `wire-prior-*`, with `10 m + 3 sigma` of clearance. Flight changes it:
 - **Confirmed:** a confirmed track within 3 sigma, in plan and in height, and
   parallel moves the span
   onto what was measured and shrinks its error to 1 m.
-- **Refuted:** within 60 m and above a stretch, a scan with a ray past it and no
-  return counts against it. A stretch behind an obstacle says nothing. With half its stretches at 3 such scans and no return anywhere, the span
+- **Refuted:** within 60 m and above a stretch, a scan with a ray within 20 m of
+  it, going on past it, and no return counts against it. A stretch behind an
+  obstacle or outside a pod's view says nothing. With half its stretches at 3 such scans and no return anywhere, the span
   is dropped, and `retired_wires` records it.
 - **Open:** everything else stays a wide hazard.
 
@@ -84,22 +96,23 @@ height error per support, 25% of spans dropped and one phantom 180 m away.
 
 Scan fixture, 13 line placements by 3 seeds, 39 runs each, double conductor on
 five poles, `efficient_v1`, provisional rig. `examples/wire_eval.rs` wrote
-[the full report](../performance/wire-eval-2026-11-04.jsonl). The fixture's seed
+[the full report](../performance/wire-eval-2026-11-07.jsonl). The fixture's seed
 changes little, so these are close to 13 independent cases.
 
 | Mode | Ticks within 10 m | Median closest (m) | Runs under 5 m | Runs 10 m or more | Map known |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Oracle | 7.7 | 3.6 | 25 | 5 | 99.6% |
+| Oracle | 7.8 | 3.6 | 25 | 5 | 99.6% |
 | W1 band | 8.7 | 3.6 | 26 | 7 | 99.6% |
-| W2 tracks | 8.5 | 5.5 | 19 | 8 | 98.5% |
-| W3 poles | 6.1 | 4.0 | 24 | 6 | 99.9% |
-| W4 planning | 4.2 | 7.6 | 14 | 8 | 99.8% |
-| W5 prior | 9.6 | 8.0 | 13 | 16 | 99.9% |
+| W2 tracks | 7.2 | 5.5 | 19 | 8 | 99.1% |
+| W3 poles | 5.6 | 4.0 | 24 | 6 | 99.9% |
+| W4 planning | 3.8 | 9.5 | 11 | 19 | 99.7% |
+| W5 prior | 1.9 | 11.4 | 7 | 22 | 99.8% |
 
-W5's 9.6 is one pinned run of 279 ticks; the other 38 average 2.5. W3 alone
-does not improve closest passes: it adds knowledge and honest explorers, and
-W4 is what flies it. Poles: 5 of 5 on average, worst error 0.41 m. Priors, per
-run: 2.9 confirmed, 0.67 of the 1 phantom refuted, 1.1 still open.
+W3 alone does not improve closest passes: it adds knowledge and honest
+explorers, and W4 is what flies it. One placement got worse under W4 (line x =
+0, top 340 m: 22 ticks against 13 with W2). Poles: 5 of 5 on average, worst
+error 0.51 m. Priors, per run: 3.1 confirmed, 0.26 of the 1 phantom refuted,
+1.3 still open.
 
 West Pleasant View, Colorado: real elevation and buildings, a transmission line
 of 5 spans with 6 conductors, 300 s, `contingency_v1`, `flown_v1`, no world
@@ -110,27 +123,26 @@ knowledge. Distances are from the conductors, checked in 2 m steps.
 | 7 | Oracle | 57 | 1.0 | - | 95.6% |
 | 7 | W2 | 17 | 1.0 | - | 95.7% |
 | 7 | W3 | 14 | 1.0 | 5 | 93.8% |
-| 7 | W4 | 0 | 17.1 | 5 | 87.1% |
-| 7 | W5 | 0 | 17.1 | 5 | 94.3% |
+| 7 | W4 | 0 | 17.1 | 6 | 91.9% |
+| 7 | W5 | 0 | 21.4 | 6 | 91.2% |
 | 42 | Oracle | 13 | 1.5 | - | 95.8% |
 | 42 | W2 | 15 | 8.1 | - | 93.5% |
 | 42 | W3 | 1 | 8.9 | 6 | 93.9% |
-| 42 | W4 | 0 | 24.1 | 5 | 83.7% |
-| 42 | W5 | 0 | 18.1 | 4 | 80.3% |
+| 42 | W4 | 0 | 38.0 | 6 | 96.5% |
+| 42 | W5 | 0 | 22.4 | 6 | 93.0% |
 
-Clearing the line costs map: up to 13 points in the 300 s, because flights take
-more height over the line and cross it less. Two seeds are too few to rank W4
-against W5 here.
+Keeping off the line cost at most 4.5 points of map in these 300 s, and at seed
+42 W4 mapped more than W2. Two seeds are too few to rank W4 against W5 here.
 
 ## Known limits
 
-- **A pinned run.** With a prior, line at x = -120, top 340 m, seed 1234: a
-  mission-era drone stays frozen 1 m from a conductor for 279 ticks. Two causes
-  were tried and ruled out (the guard holding a mission flight, and a rejoin
-  refusing steps into a wide clearance). The cause is not known.
-- **Hills.** 14 fixture runs still pass within 5 m. The worst are flights along
-  a line over rising ground, where the only safe move is sideways, and the
-  governor moves only height.
+- **Mission flights along a line.** The governor moves only height, and only
+  explorers turn out of a corridor. 11 W4 fixture runs still pass within 5 m,
+  on 4 of the 13 placements.
+- **Phantoms.** Refuting a span needs a pass near it with a ray going past each
+  stretch, and only 26% of phantoms were refuted in the 400 s fixture runs,
+  down from 67% before silence needed a ray. A phantom left open is a wide
+  hazard, which costs map but not safety.
 - **Before detection.** A wire or pole not yet seen is not avoided. The closest
   pass at some placements is in the first ticks.
 - **Clipped tops.** A row seen only from a distance can still sit low, within
@@ -139,7 +151,7 @@ against W5 here.
   costs and all sensor figures are assumed. Lattice towers, camera poles and
   false returns are not modelled. This is simulation evidence, not a claim
   about flight.
-- **W2 contacts.** W2 alone averages 135 contacts on the fixture because two
+- **W2 contacts.** W2 alone averages 134 contacts on the fixture because two
   runs at one placement (line x = 120, top 260 m) record 2,382 each. Not
   investigated here. With poles on, the same placement does not.
 

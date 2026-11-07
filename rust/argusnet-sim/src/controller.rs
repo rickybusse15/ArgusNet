@@ -56,7 +56,7 @@ use crate::follow_path::{
     FollowPathContext, FollowPathController, FollowPathState, MissionZone, RoutePlanner,
     VisibilitySampler,
 };
-use crate::frontier::{ExplorerState, FrontierExplorer};
+use crate::frontier::{ExplorerState, FrontierExplorer, ESCAPE_MIN_AGL_M};
 use crate::motion::{BoundsXy, ObstacleSampler, TerrainSampler};
 use crate::observation_follow::{
     AcceptedByNodeTarget, EngagementState, ObservationTriggeredFollow,
@@ -742,7 +742,14 @@ fn sample_platform(
                     .map(|weather| weather as &dyn WeatherSampler),
                 terrain: Some(environment.terrain.as_ref()),
                 bounds: environment.map_bounds_m,
-                min_agl_m: profile.min_operational_agl_m,
+                // An escape from under a wire keeps the explorer's low floor
+                // here too: this one would lift it back up through the wire.
+                min_agl_m: match controller.operational() {
+                    Operational::Explore(explorer) if explorer.state().escape.is_some() => {
+                        profile.min_operational_agl_m.min(ESCAPE_MIN_AGL_M)
+                    }
+                    _ => profile.min_operational_agl_m,
+                },
                 wind_scale: profile.wind_scale,
                 // The reference's launch path passes no dt, so its drift is
                 // always integrated over one second. Preserved; see
