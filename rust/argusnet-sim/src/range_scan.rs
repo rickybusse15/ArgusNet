@@ -308,6 +308,11 @@ pub enum ReturnClass {
 pub struct RangeReturn {
     pub point_m: [f64; 3],
     pub class: ReturnClass,
+    /// When this return was acquired, seconds after the scan's timestamp
+    /// (SR3): a LiDAR fires its rays across the capture, not at once.
+    /// Absent for a scan modelled as instantaneous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acquired_offset_s: Option<f64>,
 }
 
 /// Which sensor made a [`RangeScan`].
@@ -558,6 +563,7 @@ impl RangeScanner {
             returns.push(RangeReturn {
                 point_m: std::array::from_fn(|k| point[k] + direction[k] * noise),
                 class,
+                acquired_offset_s: None,
             });
         }
         RangeScan {

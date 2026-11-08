@@ -82,6 +82,10 @@ pub struct LidarModel {
     pub max_range_m: f64,
     /// One-sigma range noise, metres.
     pub range_noise_m: f64,
+    /// How returns are admitted and what errors they carry (SR3). Absent,
+    /// every ray that meets a surface in range returns, at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returns: Option<crate::lidar_returns::LidarReturnModel>,
 }
 
 /// A camera's declared optics, for a mount the simulation does not yet
@@ -210,6 +214,16 @@ pub struct MassTotals {
 }
 
 impl RigProfile {
+    /// This rig with its LiDAR's returns modelled (SR3).
+    pub fn with_lidar_returns(mut self, model: crate::lidar_returns::LidarReturnModel) -> Self {
+        for mount in &mut self.sensors {
+            if let Some(lidar) = mount.lidar.as_mut() {
+                lidar.returns = Some(model.clone());
+            }
+        }
+        self
+    }
+
     /// The provisional rig: the maintainer's decisions (3-axis gimbal with no
     /// joint limits; LiDAR, two visible cameras, thermal and the mapping IMU
     /// on the pod; a fixed rectangular LiDAR; a forward navigation camera on
@@ -241,6 +255,7 @@ impl RigProfile {
                 rows: 10,
                 max_range_m: 250.0,
                 range_noise_m: 0.05,
+                returns: None,
             }),
             ..pod(
                 "lidar",
@@ -548,6 +563,11 @@ fn validate_lidar(id: &str, lidar: &LidarModel) -> Result<(), String> {
     }
     if !(lidar.range_noise_m.is_finite() && lidar.range_noise_m >= 0.0) {
         return Err(format!("rig LiDAR {id} range noise must not be negative"));
+    }
+    if let Some(returns) = &lidar.returns {
+        returns
+            .validate()
+            .map_err(|error| format!("rig LiDAR {id}: {error}"))?;
     }
     Ok(())
 }

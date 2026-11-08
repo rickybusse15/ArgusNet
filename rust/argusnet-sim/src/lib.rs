@@ -19,6 +19,7 @@ pub mod frontier;
 pub mod fusion;
 pub mod ground;
 pub mod journal;
+pub mod lidar_returns;
 pub mod mapping;
 pub mod mission;
 pub mod mission_driver;

@@ -288,6 +288,13 @@ struct SimArgs {
     /// the track) or `body:YAW,PITCH,ROLL` (fixed in the body, degrees).
     #[arg(long)]
     pointing: Option<String>,
+    /// With `--rig-profile`, model the pod LiDAR's returns (SR3): each ray
+    /// fires at its own time across the capture, returns only with the
+    /// chance its reflectivity, incidence and range give, and carries range
+    /// bias, quantization, angular noise and dropout. A rig profile file can
+    /// declare its own model instead.
+    #[arg(long)]
+    lidar_returns: bool,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -489,7 +496,14 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 .map_err(|error| format!("{source}: {error}"))?;
             serde_json::from_str(&text).map_err(|error| format!("{source}: {error}"))
         })
-        .transpose()?;
+        .transpose()?
+        .map(|rig| {
+            if args.lidar_returns {
+                rig.with_lidar_returns(argusnet_sim::lidar_returns::LidarReturnModel::default())
+            } else {
+                rig
+            }
+        });
     let pointing = args.pointing.as_deref().map(parse_pointing).transpose()?;
     let measured_wires = match &args.wire_sensor_profile {
         Some(path) => {
@@ -826,6 +840,12 @@ fn sim(args: SimArgs) -> ExitCode {
         return fail(
             EXIT_INVALID,
             "--rig-profile and --pointing fly a sensor rig in a --world-knowledge none run",
+        );
+    }
+    if args.lidar_returns && args.rig_profile.is_none() {
+        return fail(
+            EXIT_INVALID,
+            "--lidar-returns models the rig's pod LiDAR: it needs --rig-profile",
         );
     }
     if args.pointing.is_some() && args.rig_profile.is_none() {

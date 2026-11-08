@@ -262,3 +262,62 @@ fn an_invalid_rig_or_a_second_camera_is_refused_before_the_run() {
         .unwrap_err();
     assert!(error.contains("needs a rig"), "{error}");
 }
+
+/// SR3: with the pod LiDAR's returns modelled, a run is deterministic and
+/// resumes exactly, records the model in its rig, and maps less of the
+/// ground with fewer returns than the exact LiDAR. Measured 2026-11-08 on
+/// this fixture; see `docs/migration/LIDAR_RETURNS.md`.
+#[test]
+fn modelled_returns_run_deterministically_and_cost_returns() {
+    use argusnet_sim::lidar_returns::LidarReturnModel;
+    let bundle = bundle();
+    let modelled = || {
+        rigged(
+            RigProfile::provisional().with_lidar_returns(LidarReturnModel::default()),
+            None,
+        )
+    };
+    let (meta, straight) = replay(run_with(&bundle, modelled()));
+    assert_eq!(straight, replay(run_with(&bundle, modelled())).1);
+    assert!(
+        meta.to_string().contains("\"returns\""),
+        "the rig records its model"
+    );
+
+    let at = 150usize;
+    let mut original = run_with(&bundle, modelled());
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+    let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    let mut resumed = run_with(&bundle, modelled());
+    resumed.restore(&checkpoint).expect("restore accepted");
+    let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
+        .map(|_| {
+            resumed.step().unwrap();
+            serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(rest, straight[at..]);
+
+    let (_, exact) = replay(run_with(&bundle, rigged(RigProfile::provisional(), None)));
+    let returns = |frames: &[serde_json::Value]| -> usize {
+        frames
+            .iter()
+            .flat_map(|frame| frame["range_scans"].as_array().into_iter().flatten())
+            .map(|scan| {
+                ["ground", "structure", "canopy"]
+                    .iter()
+                    .map(|kind| scan[*kind].as_array().map_or(0, Vec::len))
+                    .sum::<usize>()
+            })
+            .sum()
+    };
+    assert!(
+        returns(&straight) < returns(&exact),
+        "{} returns modelled against {} exact",
+        returns(&straight),
+        returns(&exact)
+    );
+}

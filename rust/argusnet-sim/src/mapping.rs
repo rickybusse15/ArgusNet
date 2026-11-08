@@ -2167,6 +2167,7 @@ mod tests {
             returns: vec![crate::range_scan::RangeReturn {
                 point_m: [x + 60.0, 500.0 + 10.0 * k as f64, 30.0],
                 class: crate::range_scan::ReturnClass::Structure,
+                acquired_offset_s: None,
             }],
             misses: 0,
             wires: Vec::new(),

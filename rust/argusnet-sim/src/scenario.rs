@@ -2009,7 +2009,9 @@ impl AssembledRun {
                     self.world.visibility.clone(),
                 )
                 .map(|pod| {
-                    let pod = pod.with_power_lines(&self.world.power_lines);
+                    let pod = pod
+                        .with_power_lines(&self.world.power_lines)
+                        .with_scan_interval(self.dt_s);
                     let pod = match &measured {
                         Some(measured) => pod.with_measured_wires(measured.clone()),
                         None => pod,

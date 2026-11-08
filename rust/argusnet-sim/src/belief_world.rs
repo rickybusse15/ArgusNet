@@ -2875,6 +2875,7 @@ mod tests {
         RangeReturn {
             point_m: [x, y, z],
             class: ReturnClass::Ground,
+            acquired_offset_s: None,
         }
     }
 
@@ -2990,6 +2991,7 @@ mod tests {
         let wall = RangeReturn {
             point_m: [45.0, 45.0, 80.0],
             class: ReturnClass::Structure,
+            acquired_offset_s: None,
         };
         belief.integrate(&scan(vec![wall]), 0);
         let handle = BeliefHandle::new(belief.snapshot(&config));
@@ -3085,6 +3087,7 @@ mod tests {
         let mut frame = scan(vec![RangeReturn {
             point_m: [45.0, 45.0, 80.0],
             class: ReturnClass::Structure,
+            acquired_offset_s: None,
         }]);
         frame.sensor = ScanSensor::NavCamera;
         belief.integrate(&frame, 1);
@@ -3140,6 +3143,7 @@ mod tests {
         let crown = |z: f64| RangeReturn {
             point_m: [45.0, 45.0, z],
             class: ReturnClass::Canopy,
+            acquired_offset_s: None,
         };
         belief.integrate(&scan(vec![crown(70.0), crown(72.0), crown(71.0)]), 0);
         assert_eq!(belief.canopy_cells(), 1);
