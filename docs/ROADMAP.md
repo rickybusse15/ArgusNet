@@ -80,9 +80,11 @@ viewer surfaces and acceptance criteria. Both are planned work, not shipped clai
 
 Viewer console parity (slices V0–V4 in
 [VIEWER_FEATURE_INTEGRATION.md](VIEWER_FEATURE_INTEGRATION.md) section 7) is part of
-priority 4. Its first slice, V0, adds the missing mapping, scan-mission and
-localization state to the live protocol so live and replay carry the same frame
-content; the strip, rail, inspector and layer work follows on that contract.
+priority 4. Its first slice, V0, would add the missing mapping, scan-mission
+and localization state to the daemon's live stream. It is deferred (2026-11-08):
+the in-process viewer worker already carries complete frames, and the Python
+live path it would serve is retired in P6. The strip, rail, inspector and layer
+work is verified on replay and the in-process path.
 
 The [viewer specification](VIEWER_UI.md) is the presentation contract. Backend
 features and their operator views ship as vertical slices; a plausible display
