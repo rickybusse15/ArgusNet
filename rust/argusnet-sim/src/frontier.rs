@@ -487,6 +487,8 @@ mod tests {
             .map(|p| RangeReturn {
                 point_m: [p[0], p[1], 0.0],
                 class: ReturnClass::Ground,
+                acquired_offset_s: None,
+                acquired_from_m: None,
             })
             .collect();
         grid.integrate(

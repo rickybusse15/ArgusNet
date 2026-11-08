@@ -315,6 +315,8 @@ pub struct PodSensing {
     measured: Option<crate::wire_sensing::MeasuredWires>,
     /// The world's poles, measured as returns (W3).
     poles: Arc<Vec<crate::range_scan::SpanPieces>>,
+    /// The time between captures, seconds (SR3).
+    scan_interval_s: f64,
 }
 
 /// The pod's checkpointed state: every platform's gimbal.
@@ -322,6 +324,10 @@ pub struct PodSensing {
 pub struct PodsState {
     pub gimbals: BTreeMap<String, GimbalState>,
 }
+
+/// The fastest an aircraft moves across one scan, m/s (SR3): a faster
+/// velocity is a sampled jump, not flight.
+pub const MAX_DESKEW_SPEED_MPS: f64 = 60.0;
 
 /// Below this horizontal speed the aircraft is taking off, landing or parked.
 pub const CRUISE_THRESHOLD_MPS: f64 = 0.5;
@@ -352,7 +358,15 @@ impl PodSensing {
             gimbals: BTreeMap::new(),
             measured: None,
             poles: Arc::new(Vec::new()),
+            scan_interval_s: 1.0,
         })
+    }
+
+    /// The time between captures, seconds: a modelled LiDAR's rays fire
+    /// across it unless its model declares a shorter scan (SR3).
+    pub fn with_scan_interval(mut self, interval_s: f64) -> Self {
+        self.scan_interval_s = interval_s;
+        self
     }
 
     /// Get returns from `lines`' poles too (W3), among the wire points.
@@ -514,13 +528,18 @@ impl PodSensing {
             .iter()
             .map(|(id, position, velocity)| {
                 let (source, command, state) = self.step_gimbal(id, t_s, *velocity);
-                (*id, *position, source, command, state)
+                (*id, *position, *velocity, source, command, state)
             })
             .collect();
         let this = &*self;
-        compute.map_ordered(&stepped, |(id, position, source, command, state)| {
-            this.capture(id, tick, t_s, *position, *source, *command, state)
-        })
+        compute.map_ordered(
+            &stepped,
+            |(id, position, velocity, source, command, state)| {
+                this.capture(
+                    id, tick, t_s, *position, *velocity, *source, *command, state,
+                )
+            },
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -530,6 +549,7 @@ impl PodSensing {
         tick: u64,
         t_s: f64,
         position: [f64; 3],
+        velocity: [f64; 3],
         source: PointingSource,
         command: Quat,
         gimbal: &GimbalState,
@@ -580,9 +600,43 @@ impl PodSensing {
         let mut returns = Vec::new();
         let mut misses = 0u32;
         let mut occluded = 0u32;
-        for ray in self.sensor_rays() {
+        let model = self.lidar.returns.as_ref();
+        // SR3 draws from a stream of its own, so the legacy draws are
+        // unchanged with it off.
+        let mut admit = key("pod-lidar-returns");
+        let rays = self.sensor_rays();
+        let period = model.map_or(0.0, |m| m.scan_period_s.unwrap_or(self.scan_interval_s));
+        // How the aircraft moves across the scan: along its horizontal
+        // velocity, never faster than an aircraft flies. A climb or descent
+        // carried on for a whole capture put origins underground at take-off
+        // and landing, and a sampled jump is not flight.
+        let deskew_velocity = {
+            let horizontal = velocity[0].hypot(velocity[1]);
+            let scale_down = if horizontal > MAX_DESKEW_SPEED_MPS {
+                MAX_DESKEW_SPEED_MPS / horizontal
+            } else {
+                1.0
+            };
+            [velocity[0] * scale_down, velocity[1] * scale_down, 0.0]
+        };
+        let count = rays.len().max(1) as f64;
+        for (k, ray) in rays.into_iter().enumerate() {
             // Drawn for every ray, hit or not.
             let range_noise = rng.normal(0.0, self.lidar.range_noise_m);
+            // When this ray fires, and where both the aircraft and the
+            // estimate of it have moved to by then.
+            let offset_s = period * k as f64 / count;
+            let moved = scale(deskew_velocity, offset_s);
+            let origin_true = add(origin_true, moved);
+            let origin_est = add(origin_est, moved);
+            // A ray carried along the track into rising ground would fire
+            // from inside it: not fired, as one the airframe blocks.
+            if offset_s > 0.0
+                && origin_true[2] < self.world.terrain_height(origin_true[0], origin_true[1]) + 0.5
+            {
+                occluded += 1;
+                continue;
+            }
             let direction = world_sensor_true.rotate(ray);
             // The body has no roll or pitch, so its horizon is the world's.
             if direction[2] > mask {
@@ -606,17 +660,47 @@ impl PodSensing {
                     continue;
                 }
             };
-            let range = (0..3)
+            let true_range = (0..3)
                 .map(|k| (point[k] - origin_true[k]).powi(2))
                 .sum::<f64>()
-                .sqrt()
-                + range_noise;
+                .sqrt();
+            let mut range = true_range + range_noise;
+            let mut believed_ray = ray;
+            if let Some(model) = model {
+                // Admitted by the power it carries back, then dropped out or
+                // not, all drawn for every hit so one's outcome never shifts
+                // another's.
+                let reflectivity = model.reflectivity_of(kind.as_str()).unwrap_or(0.1);
+                let cos_incidence = if kind == "terrain" {
+                    let normal = self.world.terrain_normal(point[0], point[1]);
+                    -(direction[0] * normal[0]
+                        + direction[1] * normal[1]
+                        + direction[2] * normal[2])
+                } else {
+                    1.0
+                };
+                let detected = admit.uniform()
+                    < model.detection_probability(reflectivity, cos_incidence, true_range);
+                let dropped = admit.uniform() < model.dropout_probability;
+                let angles = [
+                    admit.normal(0.0, model.angular_noise_rad),
+                    admit.normal(0.0, model.angular_noise_rad),
+                ];
+                if !detected || dropped {
+                    misses += 1;
+                    continue;
+                }
+                range = model.reported_range_m(range);
+                believed_ray = crate::lidar_returns::perturbed(ray, angles);
+            }
             // Georeferenced by the estimate: the range along the ray as the
             // estimator believes it points.
-            let believed = world_sensor_est.rotate(ray);
+            let believed = world_sensor_est.rotate(believed_ray);
             returns.push(RangeReturn {
                 point_m: add(origin_est, scale(believed, range)),
                 class,
+                acquired_offset_s: model.map(|_| offset_s),
+                acquired_from_m: model.map(|_| origin_est),
             });
         }
         let half_h = self.lidar.horizontal_fov_deg.to_radians() / 2.0;
@@ -778,6 +862,292 @@ mod tests {
             }
         }
         rig
+    }
+
+    /// A climb is not carried across the scan, and a jump faster than an
+    /// aircraft flies is cut to that speed: no ray is fired from underground.
+    #[test]
+    fn a_climb_or_a_jump_never_puts_a_ray_underground() {
+        let rig = rig_without_noise().with_lidar_returns(exact_returns());
+        let climbing = settled_captures(rig.clone(), 30.0, [10.0, 0.0, -40.0], 1).remove(0);
+        for hit in &climbing.returns {
+            assert!(hit.point_m[2].abs() < 0.5, "{hit:?}");
+        }
+        let jump = settled_captures(rig, 100.0, [500.0, 0.0, 0.0], 1).remove(0);
+        let reach = jump
+            .returns
+            .iter()
+            .map(|r| r.point_m[0] - jump.origin_m[0])
+            .fold(f64::MIN, f64::max);
+        assert!(reach < MAX_DESKEW_SPEED_MPS + 40.0, "{reach}");
+    }
+
+    /// Ground rising as `z = x` on a 1 m grid, x from -150 to 150.
+    fn ramp_world() -> SharedVisibility {
+        let bounds = Bounds2d::new(-150.0, 150.0, -150.0, 150.0);
+        let row: Vec<f64> = (0..=300).map(|i| -150.0 + f64::from(i)).collect();
+        let terrain = Arc::new(
+            TiledTerrain::from_grid(bounds, &vec![row; 301], 1.0, 4, -150.0, &[]).unwrap(),
+        );
+        SharedVisibility::new(
+            terrain,
+            Arc::new(ObstacleLayer::new(bounds, 100.0, vec![]).unwrap()),
+            None,
+            Arc::new(VisibilityProfile::default()),
+            0.0,
+        )
+    }
+
+    /// Flying fast and low up a slope, a ray carried along the track would
+    /// fire from inside the rising ground: it is not fired, and no return
+    /// lands under the ground.
+    #[test]
+    fn a_ray_carried_into_rising_ground_is_not_fired() {
+        let pool = crate::compute::ComputePool::serial();
+        let rig = rig_without_noise().with_lidar_returns(exact_returns());
+        let mut pod = PodSensing::new(rig, PointingPolicy::Nadir, ramp_world())
+            .unwrap()
+            .with_scan_interval(1.0);
+        let fly = [30.0, 0.0, 0.0];
+        let at = [-60.0, 0.0, -50.0];
+        for k in 0..4u64 {
+            pod.capture_all(k, k as f64, &[("d", at, fly)], &pool);
+        }
+        let scan = pod.capture_all(4, 4.0, &[("d", at, fly)], &pool).remove(0);
+        assert!(!scan.returns.is_empty());
+        assert!(scan.returns.len() < 240, "some rays were not fired");
+        for hit in &scan.returns {
+            let below = hit.point_m[0] - hit.point_m[2];
+            assert!(below < 0.6, "{below} m under the slope: {hit:?}");
+        }
+    }
+
+    /// Each timed return carries where its ray started, so incidence
+    /// measured from there is the ray's own, as for the same ray fired with
+    /// no motion.
+    #[test]
+    fn a_timed_return_carries_its_own_ray_origin() {
+        let fly = [30.0, 0.0, 0.0];
+        let timed = settled_captures(
+            rig_without_noise().with_lidar_returns(exact_returns()),
+            30.0,
+            fly,
+            1,
+        )
+        .remove(0);
+        let still = settled_captures(
+            rig_without_noise().with_lidar_returns(crate::lidar_returns::LidarReturnModel {
+                scan_period_s: Some(1.0e-9),
+                ..exact_returns()
+            }),
+            30.0,
+            fly,
+            1,
+        )
+        .remove(0);
+        let incidence = |hit: &RangeReturn, origin: [f64; 3]| {
+            let from = hit.ray_origin_m(origin);
+            (hit.point_m[0] - from[0])
+                .hypot(hit.point_m[1] - from[1])
+                .atan2(from[2] - hit.point_m[2])
+        };
+        for (a, b) in timed.returns.iter().zip(&still.returns) {
+            let (ia, ib) = (incidence(a, timed.origin_m), incidence(b, still.origin_m));
+            assert!((ia - ib).abs() < 0.02, "{ia} against {ib}");
+        }
+    }
+
+    /// SR3: a model with every error off and a reference range far past
+    /// anything in view, so every ray returns exactly.
+    fn exact_returns() -> crate::lidar_returns::LidarReturnModel {
+        crate::lidar_returns::LidarReturnModel {
+            reference_range_m: 1.0e6,
+            angular_noise_rad: 0.0,
+            range_bias_m: 0.0,
+            range_quantization_m: 0.0,
+            dropout_probability: 0.0,
+            ..Default::default()
+        }
+    }
+
+    /// Settled nadir captures at `height_m`, flying `fly`, ticks 4 onward.
+    fn settled_captures(
+        rig: RigProfile,
+        height_m: f64,
+        fly: [f64; 3],
+        captures: usize,
+    ) -> Vec<RangeScan> {
+        let pool = crate::compute::ComputePool::serial();
+        let mut pod = PodSensing::new(rig, PointingPolicy::Nadir, flat_world())
+            .unwrap()
+            .with_scan_interval(1.0);
+        let at = [0.0, 0.0, height_m];
+        for k in 0..4u64 {
+            pod.capture_all(k, k as f64, &[("d", at, fly)], &pool);
+        }
+        (4..4 + captures as u64)
+            .map(|k| {
+                pod.capture_all(k, k as f64, &[("d", at, fly)], &pool)
+                    .remove(0)
+            })
+            .collect()
+    }
+
+    /// The rays fire across the capture, each from where the aircraft has
+    /// flown to, and the estimate moves with it: at 30 m/s every return
+    /// still lands on the plane, every ray returns, and the offsets climb
+    /// through the scan period.
+    #[test]
+    fn modelled_rays_fire_across_the_capture_and_still_land_on_the_plane() {
+        let rig = rig_without_noise().with_lidar_returns(exact_returns());
+        let scan = settled_captures(rig, 100.0, [30.0, 0.0, 0.0], 1).remove(0);
+        assert_eq!(scan.returns.len(), 24 * 10);
+        let offsets: Vec<f64> = scan
+            .returns
+            .iter()
+            .map(|r| r.acquired_offset_s.expect("timed"))
+            .collect();
+        assert_eq!(offsets[0], 0.0);
+        assert!(offsets.windows(2).all(|w| w[1] > w[0]));
+        assert!(*offsets.last().unwrap() < 1.0);
+        for hit in &scan.returns {
+            assert!(hit.point_m[2].abs() < 0.5, "{hit:?}");
+        }
+        // Each ray lands where the same ray of an untimed capture does,
+        // moved along the track by the speed times its offset.
+        let untimed = settled_captures(
+            rig_without_noise().with_lidar_returns(crate::lidar_returns::LidarReturnModel {
+                scan_period_s: Some(1.0e-9),
+                ..exact_returns()
+            }),
+            100.0,
+            [30.0, 0.0, 0.0],
+            1,
+        )
+        .remove(0);
+        for (timed, still) in scan.returns.iter().zip(&untimed.returns) {
+            let moved = timed.point_m[0] - still.point_m[0];
+            let expected = 30.0 * timed.acquired_offset_s.unwrap();
+            assert!((moved - expected).abs() < 0.6, "{moved} against {expected}");
+        }
+        // Without a model nothing is timed, as before.
+        let legacy = settled_captures(rig_without_noise(), 100.0, [30.0, 0.0, 0.0], 1).remove(0);
+        assert!(legacy.returns.iter().all(|r| r.acquired_offset_s.is_none()));
+    }
+
+    /// Over flat ground a ray's range and incidence follow from its angle
+    /// alone, so the returns expected from a capture are the model's chance
+    /// summed over the rays an exact model returns. The counts agree within
+    /// four standard deviations, the curve bites (well under every ray),
+    /// and a dark surface returns less than a bright one.
+    #[test]
+    fn return_fractions_follow_the_declared_curve() {
+        let height = 140.0;
+        let model = |terrain: f64| crate::lidar_returns::LidarReturnModel {
+            reference_range_m: 110.0,
+            dropout_probability: 0.0,
+            reflectivity: crate::lidar_returns::SurfaceReflectivity {
+                terrain,
+                ..Default::default()
+            },
+            ..exact_returns()
+        };
+        let exact = settled_captures(
+            rig_without_noise().with_lidar_returns(exact_returns()),
+            height,
+            [10.0, 0.0, 0.0],
+            1,
+        )
+        .remove(0);
+        let expected = |m: &crate::lidar_returns::LidarReturnModel| -> (f64, f64) {
+            exact.returns.iter().fold((0.0, 0.0), |(sum, var), hit| {
+                let d: [f64; 3] = std::array::from_fn(|k| hit.point_m[k] - exact.origin_m[k]);
+                let r = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let p = m.detection_probability(m.reflectivity.terrain, -d[2] / r, r);
+                (sum + p, var + p * (1.0 - p))
+            })
+        };
+        let captures = 8;
+        let count = |m: &crate::lidar_returns::LidarReturnModel| -> f64 {
+            settled_captures(
+                rig_without_noise().with_lidar_returns(m.clone()),
+                height,
+                [10.0, 0.0, 0.0],
+                captures,
+            )
+            .iter()
+            .map(|scan| scan.returns.len())
+            .sum::<usize>() as f64
+        };
+        let bright = model(0.25);
+        let (mean, var) = expected(&bright);
+        let (mean, sigma) = (mean * captures as f64, (var * captures as f64).sqrt());
+        let observed = count(&bright);
+        assert!(
+            (observed - mean).abs() < 4.0 * sigma,
+            "{observed} returns against {mean:.1} ± {sigma:.1}"
+        );
+        assert!(
+            mean < 0.9 * (240 * captures) as f64,
+            "the curve bites: {mean}"
+        );
+        assert!(count(&model(0.05)) < 0.5 * observed, "dark returns less");
+    }
+
+    /// A persistent range bias moves every return along its ray, so a flat
+    /// plane maps that much low at nadir and less off it; quantization
+    /// leaves each range on its grid.
+    #[test]
+    fn a_range_bias_lowers_the_map_and_ranges_sit_on_their_grid() {
+        let model = crate::lidar_returns::LidarReturnModel {
+            range_bias_m: 0.5,
+            ..exact_returns()
+        };
+        let scan = settled_captures(
+            rig_without_noise().with_lidar_returns(model),
+            100.0,
+            [10.0, 0.0, 0.0],
+            1,
+        )
+        .remove(0);
+        let exact = settled_captures(
+            rig_without_noise().with_lidar_returns(exact_returns()),
+            100.0,
+            [10.0, 0.0, 0.0],
+            1,
+        )
+        .remove(0);
+        let mean_z = |scan: &RangeScan| {
+            scan.returns.iter().map(|r| r.point_m[2]).sum::<f64>() / scan.returns.len() as f64
+        };
+        // Along each ray, so 0.5 m at nadir and the cosine of the angle off it.
+        let lowered = mean_z(&exact) - mean_z(&scan);
+        assert!(lowered > 0.4 && lowered < 0.5, "{lowered}");
+        let gridded = crate::lidar_returns::LidarReturnModel {
+            range_quantization_m: 0.25,
+            ..exact_returns()
+        };
+        let scan = settled_captures(
+            rig_without_noise().with_lidar_returns(gridded),
+            100.0,
+            [0.6, 0.0, 0.0],
+            1,
+        )
+        .remove(0);
+        for hit in &scan.returns {
+            let offset = hit.acquired_offset_s.unwrap();
+            let origin: [f64; 3] =
+                std::array::from_fn(|k| scan.origin_m[k] + [0.6, 0.0, 0.0][k] * offset);
+            let r: f64 = (0..3)
+                .map(|k| (hit.point_m[k] - origin[k]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let off_grid = (r / 0.25 - (r / 0.25).round()).abs() * 0.25;
+            assert!(
+                off_grid < 1e-6,
+                "range {r} is off the 0.25 m grid by {off_grid}"
+            );
+        }
     }
 
     #[test]

@@ -245,6 +245,23 @@ impl SharedVisibility {
 }
 
 impl SharedVisibility {
+    /// The true ground's height at `(x_m, y_m)`, metres.
+    pub fn terrain_height(&self, x_m: f64, y_m: f64) -> f64 {
+        self.terrain.height_lod(x_m, y_m, 0)
+    }
+
+    /// The true ground's unit normal at `(x_m, y_m)`, from its heights a
+    /// metre either way.
+    pub fn terrain_normal(&self, x_m: f64, y_m: f64) -> [f64; 3] {
+        let h = |x: f64, y: f64| self.terrain.height_lod(x, y, 0);
+        let dx = (h(x_m + 1.0, y_m) - h(x_m - 1.0, y_m)) / 2.0;
+        let dy = (h(x_m, y_m + 1.0) - h(x_m, y_m - 1.0)) / 2.0;
+        let n = (dx * dx + dy * dy + 1.0).sqrt();
+        [-dx / n, -dy / n, 1.0 / n]
+    }
+}
+
+impl SharedVisibility {
     /// The first surface a ray from `from` toward `to` meets: `terrain`,
     /// `building` or `wall`, and the point. The nearer of the terrain crossing
     /// and the first structure face (wall or roof, in 3D) wins. (`los` answers a different question,

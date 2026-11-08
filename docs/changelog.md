@@ -2,6 +2,12 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- LiDAR returns (SR3). `--lidar-returns` fires the pod LiDAR's rays across the
+  capture, admits each return with the chance its reflectivity, incidence and
+  range give, and applies range bias, quantization, angular noise and dropout
+  separately. On West Pleasant View the rig alone maps 90 to 94% against 96%,
+  with structure recall 91% against 96%. Without the flag nothing changes. See
+  `docs/migration/LIDAR_RETURNS.md`.
 - Power-line follow-ups. Most remaining close passes were explorers: corridor
   steering now turns only flights within 25 degrees of a wire, including
   search lanes, and fixture ticks within 10 m fell to 3.0 (W4) and 1.7 (W5).

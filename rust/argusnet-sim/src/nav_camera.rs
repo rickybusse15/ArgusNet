@@ -480,6 +480,8 @@ impl NavCamera {
             returns.push(RangeReturn {
                 point_m: std::array::from_fn(|k| point[k] + direction[k] * depth_error_m),
                 class,
+                acquired_offset_s: None,
+                acquired_from_m: None,
             });
         }
         let sees = |d: [f64; 3]| match rotation {
