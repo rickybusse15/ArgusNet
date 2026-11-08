@@ -1304,12 +1304,11 @@ def validate_mission(
                 "Max inter-drone separation "
                 f"{max_sep:.1f} m < min_sensor_baseline_m {min_baseline:.1f} m"
             )
-    elif len(mobile_positions) == 1:
+    elif len(mobile_positions) == 1 and spec.drone_count > 1:
         # Only one drone; baseline is technically zero but we treat as acceptable
         # if the scenario only requires one mobile platform
-        if spec.drone_count > 1:
-            baseline_adequate = False
-            failures.append("Only one mobile node found; cannot form a baseline.")
+        baseline_adequate = False
+        failures.append("Only one mobile node found; cannot form a baseline.")
     # If no mobile nodes at all, baseline check is vacuously OK (ground-only scenario)
 
     return ValidityReport(
