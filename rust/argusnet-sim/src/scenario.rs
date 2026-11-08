@@ -1041,6 +1041,13 @@ fn belief_stats(
         wire_points: grid.wire_points(),
         wire_hazard_cells: 0,
         wire_lines: grid.wire_lines_seen(),
+        wire_tracks: grid.wire_tracker().map_or(0, |tracker| {
+            tracker
+                .estimates()
+                .iter()
+                .filter(|estimate| estimate.confirmed)
+                .count() as u64
+        }),
     }
 }
 
@@ -2585,6 +2592,11 @@ impl AssembledRun {
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
             .map(MappingStage::take_wire_updates)
             .unwrap_or_default();
+        let wire_retirements = self
+            .sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .map(MappingStage::take_wire_retirements)
+            .unwrap_or_default();
         let Some(mapping) = self.mapping() else {
             return;
         };
@@ -2624,6 +2636,7 @@ impl AssembledRun {
         frame.belief_updates = belief_updates;
         frame.canopy_updates = canopy_updates;
         frame.mapped_wires = wire_updates;
+        frame.retired_wires = wire_retirements;
         frame.inspection_events = mapping
             .inspection_events()
             .into_iter()

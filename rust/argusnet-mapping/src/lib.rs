@@ -70,6 +70,7 @@ pub mod coverage;
 pub mod footprint;
 pub mod quality;
 pub mod revision;
+pub mod wires;
 
 pub use belief::{BeliefCell, BeliefCellStatus, BeliefGrids, WorldBeliefQuery};
 pub use coverage::{CoverageGrid, CoverageStats};

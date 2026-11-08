@@ -43,7 +43,7 @@ use argusnet_mapping::quality::{
     assess, CellEvidence, DeficitCounts, DeficitReason, QualityRequirement,
 };
 use argusnet_types::Bounds2d;
-use argusnet_world::powerline::{ConductorEnvelope, PowerLine};
+use argusnet_world::powerline::{ConductorEnvelope, ConductorPiece, PowerLine};
 use serde::{Deserialize, Serialize};
 
 use crate::follow_path::VisibilitySampler;
@@ -134,6 +134,11 @@ pub struct ExplorationConfig {
     /// used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measured_wires: Option<crate::wire_sensing::WireSensorModel>,
+    /// Fit the measured wires into tracks and publish them as the map's
+    /// spans, with their uncertainty in the clearance (W2). Needs
+    /// `measured_wires`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_tracker: Option<argusnet_mapping::wires::WireTrackerConfig>,
 }
 
 impl ExplorationConfig {
@@ -182,6 +187,7 @@ impl Default for ExplorationConfig {
             rig: None,
             pointing: None,
             measured_wires: None,
+            wire_tracker: None,
         }
     }
 }
@@ -214,6 +220,12 @@ impl ExplorationConfig {
         }
         if let Some(model) = &self.measured_wires {
             model.validate()?;
+        }
+        if let Some(tracker) = &self.wire_tracker {
+            if self.measured_wires.is_none() {
+                return Err("the wire tracker needs measured wires to track".into());
+            }
+            tracker.validate()?;
         }
         if let Some(camera) = &self.nav_camera {
             camera.validate()?;
@@ -277,11 +289,17 @@ pub struct BeliefGrid {
     /// [`Self::wires`] as snapshots share them. Derived.
     #[serde(skip)]
     wires_view: Option<Arc<Vec<PowerLine>>>,
+    /// The fitted spans as hazards, as snapshots share them, kept with
+    /// `wires_view`. Derived.
+    #[serde(skip)]
+    fitted_hazards: Arc<Vec<FittedHazard>>,
     /// Spans mapped since the replay last took them, in the order mapped:
     /// the prior's after a reset, then each the first time a scan puts
     /// points on it.
     #[serde(skip)]
     new_wires: Vec<String>,
+    /// Fitted spans gone since the replay last asked: their tracks merged.
+    retired_wires: Vec<String>,
     /// Cells touched since the replay last took them.
     #[serde(skip)]
     changed: BTreeSet<usize>,
@@ -352,6 +370,9 @@ pub struct BeliefGrid {
     /// Camera line detections so far: kept for W2 to triangulate.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     wire_lines_seen: u64,
+    /// The wires fitted from that evidence (W2). `None` without tracking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wire_tracker: Option<argusnet_mapping::wires::WireTracker>,
     /// Cells with new wire points since the last snapshot.
     #[serde(skip)]
     wire_dirty: BTreeSet<usize>,
@@ -413,7 +434,9 @@ impl BeliefGrid {
             wires: BTreeMap::new(),
             prior_wires: Vec::new(),
             wires_view: None,
+            fitted_hazards: Arc::new(Vec::new()),
             new_wires: Vec::new(),
+            retired_wires: Vec::new(),
             changed: BTreeSet::new(),
             canopy_top_m: Vec::new(),
             canopy_count: Vec::new(),
@@ -433,6 +456,7 @@ impl BeliefGrid {
             wire_low_m: Vec::new(),
             wire_high_m: Vec::new(),
             wire_lines_seen: 0,
+            wire_tracker: None,
             wire_dirty: BTreeSet::new(),
             views: None,
         })
@@ -458,6 +482,7 @@ impl BeliefGrid {
             .iter()
             .map(|span| span.id.clone())
             .collect();
+        self.retired_wires.clear();
     }
 
     /// The spans mapped since the last call, as replay rows: whole spans,
@@ -467,6 +492,12 @@ impl BeliefGrid {
             .into_iter()
             .filter_map(|id| self.wires.get(&id).cloned())
             .collect()
+    }
+
+    /// The fitted spans gone since the last call, as replay rows, so applying
+    /// the frames gives the wires the map holds.
+    pub fn take_retired_wires(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.retired_wires)
     }
 
     /// The spans mapped so far.
@@ -515,6 +546,9 @@ impl BeliefGrid {
         self.wire_low_m = Vec::new();
         self.wire_high_m = Vec::new();
         self.wire_lines_seen = 0;
+        if let Some(tracker) = self.wire_tracker.as_mut() {
+            tracker.clear();
+        }
         self.wire_dirty.clear();
         self.views = None;
         self.reset_wires();
@@ -751,6 +785,12 @@ impl BeliefGrid {
     /// count. No point says which wire it is on.
     fn integrate_wire_evidence(&mut self, scan: &RangeScan) {
         self.wire_lines_seen += scan.wire_lines.len() as u64;
+        if let Some(tracker) = self.wire_tracker.as_mut() {
+            tracker.add_points(&scan.wire_points);
+            for line in &scan.wire_lines {
+                tracker.add_camera_line(scan.origin_m, line.from_dir, line.to_dir);
+            }
+        }
         for point in &scan.wire_points {
             let Some(index) = self.cell_of(point[0], point[1]) else {
                 continue;
@@ -786,6 +826,64 @@ impl BeliefGrid {
             ]
         } else {
             [f64::NAN; 2]
+        }
+    }
+
+    /// Fit measured wires into tracks (W2). Before any scan.
+    pub fn track_wires(&mut self, config: argusnet_mapping::wires::WireTrackerConfig) {
+        self.wire_tracker = Some(argusnet_mapping::wires::WireTracker::new(config));
+    }
+
+    /// The tracker, when wires are fitted.
+    pub fn wire_tracker(&self) -> Option<&argusnet_mapping::wires::WireTracker> {
+        self.wire_tracker.as_ref()
+    }
+
+    /// Bring the map's fitted spans up to date with the tracker: a confirmed
+    /// track is a span, with its uncertainty added to its clearance. A span
+    /// is rewritten only when it has moved enough to matter, so planners are
+    /// not told of every refinement, and goes when its track has merged.
+    fn sync_wire_tracks(&mut self) {
+        /// A change smaller than this does not republish a span, metres.
+        const REPUBLISH_M: f64 = 1.0;
+        let Some(tracker) = &self.wire_tracker else {
+            return;
+        };
+        let config = tracker.config();
+        let fitted: BTreeMap<String, PowerLine> = tracker
+            .estimates()
+            .into_iter()
+            .filter(|estimate| estimate.confirmed)
+            .filter_map(|estimate| fitted_span(&estimate, config))
+            .map(|span| (span.id.clone(), span))
+            .collect();
+        let stale: Vec<String> = self
+            .wires
+            .keys()
+            .filter(|id| id.starts_with(FITTED_PREFIX) && !fitted.contains_key(*id))
+            .cloned()
+            .collect();
+        for id in stale {
+            self.wires.remove(&id);
+            self.wires_view = None;
+            self.retired_wires.push(id);
+        }
+        for (id, span) in fitted {
+            let moved = self.wires.get(&id).is_none_or(|old| {
+                let ends = old.supports.iter().zip(&span.supports).any(|(a, b)| {
+                    (a.xy_m[0] - b.xy_m[0]).abs() > REPUBLISH_M
+                        || (a.xy_m[1] - b.xy_m[1]).abs() > REPUBLISH_M
+                        || (a.top_z_m() - b.top_z_m()).abs() > REPUBLISH_M
+                });
+                ends || (old.clearance_m - span.clearance_m).abs() > REPUBLISH_M
+            });
+            if moved {
+                if !self.new_wires.contains(&id) {
+                    self.new_wires.push(id.clone());
+                }
+                self.wires.insert(id, span);
+                self.wires_view = None;
+            }
         }
     }
 
@@ -1048,8 +1146,9 @@ impl BeliefGrid {
         for block in std::mem::take(&mut views.dirty_blocks) {
             views.block_max[block] = self.block_max_of(&views.ground, block);
         }
+        self.sync_wire_tracks();
         let dirty = std::mem::take(&mut self.wire_dirty);
-        if let (Some(model), false) = (&config.measured_wires, self.wire_count.is_empty()) {
+        if let (Some(model), false) = (config.measured_wires.as_ref(), self.wire_count.is_empty()) {
             if views.wire_band.is_empty() {
                 views.wire_band = Arc::new(
                     (0..self.cell_count())
@@ -1076,7 +1175,8 @@ impl BeliefGrid {
                 }
             })
             .collect();
-        let snapshot = BeliefSnapshot {
+        let mut fitted_hazards = None;
+        let mut snapshot = BeliefSnapshot {
             x_min_m: self.x_min_m,
             y_min_m: self.y_min_m,
             resolution_m: self.resolution_m,
@@ -1088,15 +1188,163 @@ impl BeliefGrid {
             structure_top: Arc::clone(&views.structure),
             safety_top: Arc::clone(&views.safety),
             wire_band: Arc::clone(&views.wire_band),
-            wires: Arc::clone(
-                self.wires_view
-                    .get_or_insert_with(|| Arc::new(self.wires.values().cloned().collect())),
-            ),
+            wires: Arc::clone(self.wires_view.get_or_insert_with(|| {
+                fitted_hazards = Some(Arc::new(
+                    self.wires
+                        .values()
+                        .filter(|span| span.id.starts_with(FITTED_PREFIX))
+                        .map(FittedHazard::new)
+                        .collect(),
+                ));
+                Arc::new(self.wires.values().cloned().collect())
+            })),
+            fitted_hazards: Arc::new(Vec::new()),
             quality: None,
         };
+        if let Some(hazards) = fitted_hazards {
+            self.fitted_hazards = hazards;
+        }
+        snapshot.fitted_hazards = Arc::clone(&self.fitted_hazards);
         self.views = Some(views);
         snapshot
     }
+}
+
+/// A fitted span as a hazard to flight: its conductor pieces and the
+/// clearance to keep, boxed so most queries end at once.
+#[derive(Debug, Clone, PartialEq)]
+struct FittedHazard {
+    pieces: Vec<ConductorPiece>,
+    clearance_m: f64,
+    low_xy_m: [f64; 2],
+    high_xy_m: [f64; 2],
+}
+
+impl FittedHazard {
+    fn new(span: &PowerLine) -> Self {
+        let pieces = span.pieces();
+        let reach = span.clearance_m;
+        let mut low_xy_m = [f64::INFINITY; 2];
+        let mut high_xy_m = [f64::NEG_INFINITY; 2];
+        for piece in &pieces {
+            for end in [piece.start_m, piece.end_m] {
+                for axis in 0..2 {
+                    low_xy_m[axis] = low_xy_m[axis].min(end[axis] - reach);
+                    high_xy_m[axis] = high_xy_m[axis].max(end[axis] + reach);
+                }
+            }
+        }
+        Self {
+            pieces,
+            clearance_m: span.clearance_m,
+            low_xy_m,
+            high_xy_m,
+        }
+    }
+
+    /// Whether `point_m` is within this wire's clearance across the ground.
+    /// The box only ends most queries: a diagonal wire's holds much that the
+    /// wire does not explain.
+    fn covers(&self, point_m: [f64; 3]) -> bool {
+        let in_box = (0..2).all(|axis| {
+            point_m[axis] >= self.low_xy_m[axis] && point_m[axis] <= self.high_xy_m[axis]
+        });
+        let here = [point_m[0], point_m[1], 0.0];
+        in_box
+            && self.pieces.iter().any(|piece| {
+                let start = [piece.start_m[0], piece.start_m[1], 0.0];
+                let end = [piece.end_m[0], piece.end_m[1], 0.0];
+                argusnet_world::powerline::segment_distance(here, here, start, end)
+                    <= self.clearance_m
+            })
+    }
+
+    /// Add this wire's bound for a flight from `from` to `to` at `z_m`, if
+    /// it passes within the clearance across the ground.
+    fn bound(&self, from: [f64; 2], to: [f64; 2], z_m: f64, bounds: &mut WireBounds) {
+        let outside = (0..2).any(|axis| {
+            from[axis].max(to[axis]) < self.low_xy_m[axis]
+                || from[axis].min(to[axis]) > self.high_xy_m[axis]
+        });
+        if outside {
+            return;
+        }
+        let flat = |p: [f64; 2]| [p[0], p[1], 0.0];
+        let (mut top, mut bottom): (Option<f64>, Option<f64>) = (None, None);
+        let mut beside = false;
+        for piece in &self.pieces {
+            let start = flat([piece.start_m[0], piece.start_m[1]]);
+            let end = flat([piece.end_m[0], piece.end_m[1]]);
+            let across =
+                argusnet_world::powerline::segment_distance(flat(from), flat(to), start, end);
+            if across > self.clearance_m {
+                continue;
+            }
+            let high = piece.start_m[2].max(piece.end_m[2]);
+            let low = piece.start_m[2].min(piece.end_m[2]);
+            top = Some(top.map_or(high, |t| t.max(high)));
+            bottom = Some(bottom.map_or(low, |b| b.min(low)));
+            let here = flat(from);
+            beside |= argusnet_world::powerline::segment_distance(here, here, start, end)
+                <= self.clearance_m;
+        }
+        let (Some(top), Some(bottom)) = (top, bottom) else {
+            return;
+        };
+        let ceiling = bottom - self.clearance_m;
+        if z_m < top && (beside || z_m <= ceiling) {
+            bounds.ceiling_m = Some(bounds.ceiling_m.map_or(ceiling, |c| c.min(ceiling)));
+        } else {
+            let floor = top + self.clearance_m;
+            bounds.floor_m = Some(bounds.floor_m.map_or(floor, |f| f.max(floor)));
+        }
+    }
+}
+
+/// The heights fitted wires ahead ask a platform to keep.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WireBounds {
+    /// Fly at least this high: over a wire.
+    pub floor_m: Option<f64>,
+    /// Fly at most this high: under a wire.
+    pub ceiling_m: Option<f64>,
+}
+
+/// A fitted span's id: tracks are numbered, and name no true wire.
+const FITTED_PREFIX: &str = "wire-track-";
+
+/// Whether a span id names a fitted wire track, not a surveyed line.
+pub fn is_fitted_span(id: &str) -> bool {
+    id.starts_with(FITTED_PREFIX)
+}
+
+/// A confirmed track as a span the planners read: one conductor between its
+/// ends, sagging as fitted, kept clear of by the assumed clearance plus the
+/// track's uncertainty. Its supports are only where the hazard ends; a track
+/// knows nothing of the poles.
+fn fitted_span(
+    estimate: &argusnet_mapping::wires::WireEstimate,
+    config: &argusnet_mapping::wires::WireTrackerConfig,
+) -> Option<PowerLine> {
+    use argusnet_world::powerline::Support;
+    let support = |at: [f64; 3]| Support {
+        xy_m: [at[0], at[1]],
+        base_z_m: at[2] - 1.0,
+        height_m: 1.0,
+    };
+    let length =
+        (estimate.to_m[0] - estimate.from_m[0]).hypot(estimate.to_m[1] - estimate.from_m[1]);
+    let uncertainty = estimate.sigma_lateral_m.max(estimate.sigma_vertical_m);
+    PowerLine {
+        id: format!("{FITTED_PREFIX}{}", estimate.id),
+        supports: vec![support(estimate.from_m), support(estimate.to_m)],
+        conductor_offsets_m: vec![0.0],
+        sag_ratio: estimate.sag_m / length.max(1e-6),
+        conductor_radius_m: config.assumed_radius_m,
+        clearance_m: config.clearance_m + config.envelope_sigmas * uncertainty,
+    }
+    .validated()
+    .ok()
 }
 
 fn is_zero_u64(value: &u64) -> bool {
@@ -1241,6 +1489,8 @@ pub struct BeliefSnapshot {
     wire_band: Arc<Vec<[f64; 2]>>,
     /// The power-line spans mapped so far (R3), in id order.
     wires: Arc<Vec<PowerLine>>,
+    /// The fitted spans (W2), for the height a platform must hold over them.
+    fitted_hazards: Arc<Vec<FittedHazard>>,
     /// Each cell's deficit against the run's quality requirement (SR5a);
     /// `None` without one.
     quality: Option<Arc<QualityLayer>>,
@@ -1535,13 +1785,48 @@ impl BeliefSnapshot {
             || self.in_wire_band(point_m)
     }
 
+    /// Whether any fitted wire is on the map.
+    pub fn has_fitted_wires(&self) -> bool {
+        !self.fitted_hazards.is_empty()
+    }
+
+    /// The heights a platform must keep to pass fitted wires within
+    /// `reach_m` ahead of `xy_m` along `direction`, flying at `z_m`. A wire
+    /// is gone over, not round: a cruising aircraft cannot stop at a line,
+    /// and a push sideways only holds it against one. A platform at the
+    /// wire's height goes over: a floor, the wire's height there plus its
+    /// clearance, which carries the fit's uncertainty. One clear below it
+    /// stays below, and one already under it cannot climb through it: a
+    /// ceiling, the same clearance under the wire.
+    pub fn wire_bounds_ahead(
+        &self,
+        xy_m: [f64; 2],
+        direction: [f64; 2],
+        reach_m: f64,
+        z_m: f64,
+    ) -> WireBounds {
+        let end = [
+            xy_m[0] + direction[0] * reach_m,
+            xy_m[1] + direction[1] * reach_m,
+        ];
+        let mut bounds = WireBounds::default();
+        for hazard in self.fitted_hazards.iter() {
+            hazard.bound(xy_m, end, z_m, &mut bounds);
+        }
+        bounds
+    }
+
     /// Whether `point_m` is in a measured wire hazard: a height band over
     /// the cell, so a platform can pass under or over it, unlike a structure.
+    /// A fitted wire replaces the band where it runs: a push sideways holds
+    /// a platform against a line, where a fitted wire is flown over. Evidence
+    /// no track has confirmed keeps its band.
     fn in_wire_band(&self, point_m: [f64; 3]) -> bool {
         let (i, j) = self.ij(point_m[0], point_m[1]);
         self.wire_band
             .get(j * self.nx + i)
             .is_some_and(|band| point_m[2] >= band[0] && point_m[2] <= band[1])
+            && !self.fitted_hazards.iter().any(|h| h.covers(point_m))
     }
 }
 
@@ -2394,6 +2679,63 @@ mod tests {
 
     /// One wire along x from 0 to 100, `height_m` up on flat ground at 0,
     /// with no sag: 2 cm radius, 10 m clearance.
+    /// A diagonal wire's box holds far more than the wire: evidence out in
+    /// its corners is not explained by it and keeps its band.
+    #[test]
+    fn a_fitted_wire_covers_only_what_is_near_it() {
+        use argusnet_world::powerline::Support;
+        let support = |xy: f64| Support {
+            xy_m: [xy, xy],
+            base_z_m: 0.0,
+            height_m: 50.0,
+        };
+        let diagonal = PowerLine {
+            id: "wire-track-0".into(),
+            supports: vec![support(0.0), support(100.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.02,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let hazard = FittedHazard::new(&diagonal);
+        assert!(hazard.covers([50.0, 50.0, 50.0]), "on it");
+        assert!(hazard.covers([55.0, 50.0, 50.0]), "within its clearance");
+        assert!(!hazard.covers([90.0, 10.0, 50.0]), "in the box's corner");
+        assert!(!hazard.covers([200.0, 200.0, 50.0]), "outside the box");
+    }
+
+    /// A wire is passed by height: over from its height, under from clear
+    /// below it, and never climbed through from underneath.
+    #[test]
+    fn a_fitted_wire_bounds_height_by_where_a_platform_flies() {
+        let hazard = FittedHazard::new(&wire(100.0));
+        let bound = |from: [f64; 2], to: [f64; 2], z: f64| {
+            let mut bounds = WireBounds::default();
+            hazard.bound(from, to, z, &mut bounds);
+            bounds
+        };
+        let over = WireBounds {
+            floor_m: Some(110.0),
+            ceiling_m: None,
+        };
+        let under = WireBounds {
+            floor_m: None,
+            ceiling_m: Some(90.0),
+        };
+        let toward = ([50.0, -40.0], [50.0, -5.0]);
+        assert_eq!(bound(toward.0, toward.1, 105.0), over, "above it");
+        assert_eq!(bound(toward.0, toward.1, 95.0), over, "at its height");
+        assert_eq!(bound(toward.0, toward.1, 50.0), under, "clear below it");
+        assert_eq!(bound([50.0, -5.0], [50.0, 5.0], 95.0), under, "beneath it");
+        assert_eq!(
+            bound([50.0, -40.0], [50.0, -20.0], 95.0),
+            WireBounds::default(),
+            "not reached yet"
+        );
+    }
+
     fn wire(height_m: f64) -> PowerLine {
         use argusnet_world::powerline::Support;
         let support = |x: f64| Support {

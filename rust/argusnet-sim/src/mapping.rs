@@ -524,6 +524,9 @@ impl MappingStage {
         if let Some(requirement) = &config.quality {
             grid.track_quality(requirement.max_incidence_deg);
         }
+        if let Some(tracker) = &config.wire_tracker {
+            grid.track_wires(tracker.clone());
+        }
         let handle = crate::belief_world::BeliefHandle::new(grid.snapshot(&config));
         let mut belief = BeliefMapping {
             grid,
@@ -597,6 +600,13 @@ impl MappingStage {
         self.belief
             .as_mut()
             .map_or_else(Vec::new, |belief| belief.grid.take_new_wires())
+    }
+
+    /// The fitted spans gone since the last call, as replay rows (W2).
+    pub fn take_wire_retirements(&mut self) -> Vec<String> {
+        self.belief
+            .as_mut()
+            .map_or_else(Vec::new, |belief| belief.grid.take_retired_wires())
     }
 
     /// The canopy cells changed since the last call, as replay rows (R2).
