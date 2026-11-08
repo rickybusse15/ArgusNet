@@ -284,6 +284,8 @@ mod tests {
                 wires: Vec::new(),
                 sensor: Default::default(),
                 pod: None,
+                wire_points: Vec::new(),
+                wire_lines: Vec::new(),
             },
             1,
         );

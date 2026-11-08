@@ -2,6 +2,13 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Measured power lines (W1). `--measured-wires` in a `--world-knowledge none`
+  run replaces the oracle that hands over a whole true span. The LiDAR reports
+  noisy points on conductors, from its point rate, beam width and return power.
+  The camera reports 2-D line detections with no depth. Neither names a wire.
+  Points build a height band that avoidance reads. A 3 cm conductor is detected
+  to about 100 m on a device quoted at 190 m. Runs without the flag are
+  unchanged. See `docs/migration/MEASURED_WIRES.md`.
 - Ground stations stay where they stand (`--world-knowledge none` runs). Every
   platform is created at the world's origin, and the physical guard treated the
   first tick as a flight from there. A building on that line stopped the
