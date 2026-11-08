@@ -2,6 +2,15 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Power-line follow-ups. Most remaining close passes were explorers: corridor
+  steering now turns only flights within 25 degrees of a wire, including
+  search lanes, and fixture ticks within 10 m fell to 3.0 (W4) and 1.7 (W5).
+  Explorers fly to unsettled stretches of prior spans, so phantoms are
+  refuted 0.72 times per run against 0.31. A smooth rejoin starting inside the
+  ground clearance no longer pins a drone on its pad, which affects every
+  `--world-knowledge none` run; the canonical scenarios are unchanged. The
+  viewer draws mapped poles, and corridors and prior spans in their own
+  colour. See `docs/migration/WIRE_CORRIDORS.md`.
 - Poles, corridors, wire-aware flight and uncertain priors (W3 to W5).
   `--detect-poles` measures poles among the LiDAR returns, splits wire tracks
   at them and maps corridors, including stretches no sensor saw.
