@@ -359,7 +359,7 @@ model online in a qualified profile.
 | --- | --- | --- |
 | SR1: contracts | Opt-in rig/calibration types, validation, mass ledgers and run identity. | Legacy fixtures unchanged; malformed/unsupported rigs rejected before mutation; both weight limits enforced. |
 | SR2: geometry/time | Pod truth/estimated pose paths, fixed camera branch, clocks and bounded history. | Known landmarks register through body/pod motion; injected errors remain observable; unsupported interpolation rejected. |
-| SR3: LiDAR | Beam pattern, return envelope, separate errors and per-firing time. | Range/material/angle sweeps, density and beam footprint agree with declared evidence/assumptions. |
+| SR3: LiDAR | Beam pattern, return envelope, separate errors and per-firing time. First slice: [LIDAR_RETURNS.md](migration/LIDAR_RETURNS.md). | Range/material/angle sweeps, density and beam footprint agree with declared evidence/assumptions. |
 | SR4: imaging | Recorded visible/thermal inputs and camera models; synthetic capture only if needed. | Stereo/blur/occlusion and thermal-validity checks; no invented temperature or oracle depth. |
 | SR5a: quality/deficit | Evidence admission, quality layers, uncertainty, frozen requirements and the reasoned deficit map (8.1–8.2). | Degraded input reduces quality; repeated/rejected evidence cannot shrink a deficit; bias-limited cells are classified. |
 | SR5b: planner on belief quality | Frontier and POI logic consume the deficit map with fixed pod pointing; completion moves from counts to requirements (8.6). | Legacy runs unchanged without a rig; completion needs met requirements; planner reads no truth. |
