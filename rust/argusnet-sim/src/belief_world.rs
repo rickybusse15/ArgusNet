@@ -2638,6 +2638,12 @@ impl PhysicalGuard {
         }
     }
 
+    /// How far from the ground and structures the guard keeps platforms,
+    /// metres.
+    pub fn clearance_m(&self) -> f64 {
+        self.clearance_m
+    }
+
     /// The guard, also keeping platforms out of `lines`' conductors: the
     /// guard's clearance from each wire's surface, the wire's own radius
     /// added (R3).
