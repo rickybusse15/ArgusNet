@@ -245,6 +245,11 @@ impl SharedVisibility {
 }
 
 impl SharedVisibility {
+    /// The true ground's height at `(x_m, y_m)`, metres.
+    pub fn terrain_height(&self, x_m: f64, y_m: f64) -> f64 {
+        self.terrain.height_lod(x_m, y_m, 0)
+    }
+
     /// The true ground's unit normal at `(x_m, y_m)`, from its heights a
     /// metre either way.
     pub fn terrain_normal(&self, x_m: f64, y_m: f64) -> [f64; 3] {

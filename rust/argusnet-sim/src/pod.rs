@@ -629,6 +629,14 @@ impl PodSensing {
             let moved = scale(deskew_velocity, offset_s);
             let origin_true = add(origin_true, moved);
             let origin_est = add(origin_est, moved);
+            // A ray carried along the track into rising ground would fire
+            // from inside it: not fired, as one the airframe blocks.
+            if offset_s > 0.0
+                && origin_true[2] < self.world.terrain_height(origin_true[0], origin_true[1]) + 0.5
+            {
+                occluded += 1;
+                continue;
+            }
             let direction = world_sensor_true.rotate(ray);
             // The body has no roll or pitch, so its horizon is the world's.
             if direction[2] > mask {
@@ -692,6 +700,7 @@ impl PodSensing {
                 point_m: add(origin_est, scale(believed, range)),
                 class,
                 acquired_offset_s: model.map(|_| offset_s),
+                acquired_from_m: model.map(|_| origin_est),
             });
         }
         let half_h = self.lidar.horizontal_fov_deg.to_radians() / 2.0;
@@ -871,6 +880,81 @@ mod tests {
             .map(|r| r.point_m[0] - jump.origin_m[0])
             .fold(f64::MIN, f64::max);
         assert!(reach < MAX_DESKEW_SPEED_MPS + 40.0, "{reach}");
+    }
+
+    /// Ground rising as `z = x` on a 1 m grid, x from -150 to 150.
+    fn ramp_world() -> SharedVisibility {
+        let bounds = Bounds2d::new(-150.0, 150.0, -150.0, 150.0);
+        let row: Vec<f64> = (0..=300).map(|i| -150.0 + f64::from(i)).collect();
+        let terrain = Arc::new(
+            TiledTerrain::from_grid(bounds, &vec![row; 301], 1.0, 4, -150.0, &[]).unwrap(),
+        );
+        SharedVisibility::new(
+            terrain,
+            Arc::new(ObstacleLayer::new(bounds, 100.0, vec![]).unwrap()),
+            None,
+            Arc::new(VisibilityProfile::default()),
+            0.0,
+        )
+    }
+
+    /// Flying fast and low up a slope, a ray carried along the track would
+    /// fire from inside the rising ground: it is not fired, and no return
+    /// lands under the ground.
+    #[test]
+    fn a_ray_carried_into_rising_ground_is_not_fired() {
+        let pool = crate::compute::ComputePool::serial();
+        let rig = rig_without_noise().with_lidar_returns(exact_returns());
+        let mut pod = PodSensing::new(rig, PointingPolicy::Nadir, ramp_world())
+            .unwrap()
+            .with_scan_interval(1.0);
+        let fly = [30.0, 0.0, 0.0];
+        let at = [-60.0, 0.0, -50.0];
+        for k in 0..4u64 {
+            pod.capture_all(k, k as f64, &[("d", at, fly)], &pool);
+        }
+        let scan = pod.capture_all(4, 4.0, &[("d", at, fly)], &pool).remove(0);
+        assert!(!scan.returns.is_empty());
+        assert!(scan.returns.len() < 240, "some rays were not fired");
+        for hit in &scan.returns {
+            let below = hit.point_m[0] - hit.point_m[2];
+            assert!(below < 0.6, "{below} m under the slope: {hit:?}");
+        }
+    }
+
+    /// Each timed return carries where its ray started, so incidence
+    /// measured from there is the ray's own, as for the same ray fired with
+    /// no motion.
+    #[test]
+    fn a_timed_return_carries_its_own_ray_origin() {
+        let fly = [30.0, 0.0, 0.0];
+        let timed = settled_captures(
+            rig_without_noise().with_lidar_returns(exact_returns()),
+            30.0,
+            fly,
+            1,
+        )
+        .remove(0);
+        let still = settled_captures(
+            rig_without_noise().with_lidar_returns(crate::lidar_returns::LidarReturnModel {
+                scan_period_s: Some(1.0e-9),
+                ..exact_returns()
+            }),
+            30.0,
+            fly,
+            1,
+        )
+        .remove(0);
+        let incidence = |hit: &RangeReturn, origin: [f64; 3]| {
+            let from = hit.ray_origin_m(origin);
+            (hit.point_m[0] - from[0])
+                .hypot(hit.point_m[1] - from[1])
+                .atan2(from[2] - hit.point_m[2])
+        };
+        for (a, b) in timed.returns.iter().zip(&still.returns) {
+            let (ia, ib) = (incidence(a, timed.origin_m), incidence(b, still.origin_m));
+            assert!((ia - ib).abs() < 0.02, "{ia} against {ib}");
+        }
     }
 
     /// SR3: a model with every error off and a reference range far past

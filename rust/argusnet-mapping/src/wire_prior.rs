@@ -199,10 +199,15 @@ impl PriorMap {
     /// One scan from `origin_m`: its returns count for the stretches they
     /// are near, and the stretches near enough to show a wire with nothing
     /// count against them. Silence counts only where a ray of this scan
-    /// passed the stretch and went on: `ray_ends_m` are where its rays
-    /// stopped, so a stretch behind a building or a crown, or outside a
-    /// pod's view, says nothing.
-    pub fn observe(&mut self, origin_m: [f64; 3], points: &[[f64; 3]], ray_ends_m: &[[f64; 3]]) {
+    /// passed the stretch and went on: `rays_m` are its rays, each from
+    /// where it started to where it stopped, so a stretch behind a building
+    /// or a crown, or outside a pod's view, says nothing.
+    pub fn observe(
+        &mut self,
+        origin_m: [f64; 3],
+        points: &[[f64; 3]],
+        rays_m: &[([f64; 3], [f64; 3])],
+    ) {
         let config = &self.config;
         for state in &mut self.spans {
             if state.status != PriorStatus::Open {
@@ -239,9 +244,9 @@ impl PriorMap {
                 .sqrt();
                 if range <= config.refute_range_m
                     && at[2] < origin_m[2]
-                    && ray_ends_m
+                    && rays_m
                         .iter()
-                        .any(|end| ray_passes(origin_m, *end, at, config.ray_gate_m))
+                        .any(|(from, end)| ray_passes(*from, *end, at, config.ray_gate_m))
                 {
                     *state.misses.entry(k).or_insert(0) += 1;
                 }
@@ -474,9 +479,9 @@ mod tests {
     }
 
     /// A fan of rays from above `x` to the ground, along the span.
-    fn ground(x: f64, _z: f64) -> Vec<[f64; 3]> {
+    fn ground(x: f64, z: f64) -> Vec<([f64; 3], [f64; 3])> {
         (-8..=8)
-            .map(|k| [x + f64::from(k) * 15.0, 0.0, 0.0])
+            .map(|k| ([x, 0.0, z], [x + f64::from(k) * 15.0, 0.0, 0.0]))
             .collect()
     }
 
@@ -486,9 +491,9 @@ mod tests {
     fn silence_behind_an_obstacle_refutes_nothing() {
         let mut map = map();
         for x in [20.0, 50.0, 80.0, 110.0, 140.0, 170.0] {
-            let stopped: Vec<[f64; 3]> = ground(x, 80.0)
+            let stopped: Vec<([f64; 3], [f64; 3])> = ground(x, 80.0)
                 .iter()
-                .map(|end| [x + (end[0] - x) * 0.1, 0.0, 77.0])
+                .map(|(from, end)| (*from, [x + (end[0] - x) * 0.1, 0.0, 77.0]))
                 .collect();
             for _ in 0..4 {
                 map.observe([x, 0.0, 80.0], &[], &stopped);

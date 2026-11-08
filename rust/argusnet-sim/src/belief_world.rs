@@ -922,8 +922,12 @@ impl BeliefGrid {
         // A camera's silence says nothing about a wire not being there.
         if scan.sensor == ScanSensor::RangeScanner {
             if let Some(prior) = self.wire_prior_map.as_mut() {
-                let ray_ends: Vec<[f64; 3]> = scan.returns.iter().map(|r| r.point_m).collect();
-                prior.observe(scan.origin_m, &scan.wire_points, &ray_ends);
+                let rays: Vec<([f64; 3], [f64; 3])> = scan
+                    .returns
+                    .iter()
+                    .map(|r| (r.ray_origin_m(scan.origin_m), r.point_m))
+                    .collect();
+                prior.observe(scan.origin_m, &scan.wire_points, &rays);
             }
         }
         // A return on a known pole is not a wire's.
@@ -1203,9 +1207,11 @@ impl BeliefGrid {
                     self.ground_sum[index] += hit.point_m[2];
                     self.ground_count[index] += 1;
                     if let Some(limit_deg) = self.accept_incidence_deg {
-                        let horizontal = (hit.point_m[0] - scan.origin_m[0])
-                            .hypot(hit.point_m[1] - scan.origin_m[1]);
-                        let drop = scan.origin_m[2] - hit.point_m[2];
+                        // From where this ray started: a timed scan's rays
+                        // start where the aircraft had flown to (SR3).
+                        let from = hit.ray_origin_m(scan.origin_m);
+                        let horizontal = (hit.point_m[0] - from[0]).hypot(hit.point_m[1] - from[1]);
+                        let drop = from[2] - hit.point_m[2];
                         // From nadir: 0 straight down, 90 level.
                         let incidence_deg = horizontal.atan2(drop).to_degrees();
                         if incidence_deg <= limit_deg {
@@ -2876,6 +2882,7 @@ mod tests {
             point_m: [x, y, z],
             class: ReturnClass::Ground,
             acquired_offset_s: None,
+            acquired_from_m: None,
         }
     }
 
@@ -2992,6 +2999,7 @@ mod tests {
             point_m: [45.0, 45.0, 80.0],
             class: ReturnClass::Structure,
             acquired_offset_s: None,
+            acquired_from_m: None,
         };
         belief.integrate(&scan(vec![wall]), 0);
         let handle = BeliefHandle::new(belief.snapshot(&config));
@@ -3088,6 +3096,7 @@ mod tests {
             point_m: [45.0, 45.0, 80.0],
             class: ReturnClass::Structure,
             acquired_offset_s: None,
+            acquired_from_m: None,
         }]);
         frame.sensor = ScanSensor::NavCamera;
         belief.integrate(&frame, 1);
@@ -3144,6 +3153,7 @@ mod tests {
             point_m: [45.0, 45.0, z],
             class: ReturnClass::Canopy,
             acquired_offset_s: None,
+            acquired_from_m: None,
         };
         belief.integrate(&scan(vec![crown(70.0), crown(72.0), crown(71.0)]), 0);
         assert_eq!(belief.canopy_cells(), 1);
