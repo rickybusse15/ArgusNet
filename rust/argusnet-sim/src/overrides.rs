@@ -650,8 +650,12 @@ fn guarded_to(
     from: [f64; 3],
     to: [f64; 3],
 ) -> [f64; 3] {
+    // A step that starts within the clearance, as from a pad, meets the
+    // ground at once: stopping it there held the aircraft for good. It is
+    // left to `enforce`, which lifts the end clear, as a structure's start
+    // inside is left to it.
     let stop = match guard.first_ground_contact(from, to) {
-        Some(t) => {
+        Some(t) if t > 0.0 => {
             let stop = [
                 from[0] + (to[0] - from[0]) * t,
                 from[1] + (to[1] - from[1]) * t,
@@ -660,7 +664,7 @@ fn guarded_to(
             guard.record_ground_stop(node_id, timestamp_s, distance_3d(stop, to));
             stop
         }
-        None => to,
+        _ => to,
     };
     guard.enforce(node_id, timestamp_s, stop)
 }

@@ -292,3 +292,19 @@ fn a_drone_under_a_wire_gets_away_from_it() {
     let near = ticks_near(&seeded, tracked());
     assert!(near < 20, "{near} ticks within 10 m");
 }
+
+/// After a mission a drone's explorer had flown on unseen, and the jump to
+/// it was stopped at a ridge: the drone sat on its pad recording contacts
+/// for the rest of the run. Measured 2026-11-08 on this placement: 2,382
+/// contacts before, 22 after.
+#[test]
+fn a_released_drone_does_not_sit_pinned_on_its_pad() {
+    let mut seeded = bundle(120.0, 260.0);
+    seeded.seed = 7;
+    let frames = frames(run_with(&seeded, tracked()));
+    let contacts: usize = frames
+        .iter()
+        .map(|frame| frame["world_contacts"].as_array().map_or(0, Vec::len))
+        .sum();
+    assert!(contacts < 200, "{contacts} contacts");
+}

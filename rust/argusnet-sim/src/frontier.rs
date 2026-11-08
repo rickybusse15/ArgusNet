@@ -313,19 +313,19 @@ impl FrontierExplorer {
             Some(_) if state.on_lane => true,
             Some(goal) => {
                 (goal[0] - xy[0]).hypot(goal[1] - xy[1]) < arrival_m
-                    || !belief.needs_work(goal[0], goal[1], UNEXPLORED_SHARE)
+                    || !belief.goal_has_work(goal[0], goal[1], UNEXPLORED_SHARE)
             }
         };
         if needs_goal {
             if let (true, false, Some(goal)) = (state.rejoins, state.on_lane, state.goal_m) {
-                if belief.needs_work(goal[0], goal[1], UNEXPLORED_SHARE) {
+                if belief.goal_has_work(goal[0], goal[1], UNEXPLORED_SHARE) {
                     state.spent_goals.push(goal);
                     if state.spent_goals.len() > MAX_SPENT_GOALS {
                         state.spent_goals.remove(0);
                     }
                 }
             }
-            let frontier = frontier.get_or_init(|| belief.work_centres(UNEXPLORED_SHARE));
+            let frontier = frontier.get_or_init(|| belief.goal_centres(UNEXPLORED_SHARE));
             match Self::choose_goal(frontier, xy, claims, &state.spent_goals, belief) {
                 Some(goal) => {
                     state.goal_m = Some(goal);
@@ -368,7 +368,7 @@ impl FrontierExplorer {
         // Out of a corridor it is running along, not on down it.
         let direction = match (moving, backing) {
             (true, None) => belief
-                .out_of_corridor(xy, direction, goal)
+                .out_of_corridor(xy, direction, (!state.on_lane).then_some(goal))
                 .map_or(direction, |out| {
                     let turned = [direction[0] + out[0], direction[1] + out[1]];
                     let length = turned[0].hypot(turned[1]).max(1e-9);
