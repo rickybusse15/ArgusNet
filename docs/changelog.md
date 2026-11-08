@@ -9,6 +9,15 @@
   Points build a height band that avoidance reads. A 3 cm conductor is detected
   to about 100 m on a device quoted at 190 m. Runs without the flag are
   unchanged. See `docs/migration/MEASURED_WIRES.md`.
+- Ground stations stay where they stand (`--world-knowledge none` runs). Every
+  platform is created at the world's origin, and the physical guard treated the
+  first tick as a flight from there. A building on that line stopped the
+  platform: at West Pleasant View, `ground-charlie` stood 116 m from its place
+  for the whole run, recording a `structure` contact every tick, 1201 of about
+  1230. The first tick now places a platform, and the guard leaves stations
+  alone. Those runs change: the station senses from its true place. Prior-map
+  runs have no guard and are unchanged (14/14 replay hashes).
+
 - Physical guard sweeps structures (`--world-knowledge none` runs only).
   `PhysicalGuard::enforce_from` now sweeps each step against the true
   buildings and walls as well as the wires. A step longer than a wall is
