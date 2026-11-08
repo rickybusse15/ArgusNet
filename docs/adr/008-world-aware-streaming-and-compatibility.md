@@ -52,6 +52,17 @@ PR, not in a prose promise that an RPC already exists.
   be deleted at the same time the new stream is introduced.
 - Offline replay, checkpoint restore and live resume remain distinct operations.
 
+## Addendum 2026-11-08: Python live stream deferred
+
+The Python loop publishes each tick's frame through the daemon before that
+tick's mapping and mission state exist, so the V2 stream cannot carry them
+without a second message, a one-tick lag or the daemon holding frames. None of
+these is built. The in-process viewer worker already delivers complete frames,
+and the Python live path is retired in P6. The world-aware stream above is
+designed against the Rust runtime and its first external or HIL telemetry
+client, where one process owns every stage and publishes a frame once it is
+whole. See viewer plan section 7.3.
+
 ## Migration and tests required
 
 G0/G1 inventory/regeneration precede wire changes. P4.0/P4.8 provide DTOs and
