@@ -386,6 +386,8 @@ struct State {
     /// The power lines a guarded rejoin keeps its clearance from (R3), when
     /// its planner knows them.
     lines: Vec<KnownLine>,
+    /// Holds every flight clear of the wires believed (W4).
+    governor: Option<crate::wire_governor::WireGovernor>,
 }
 
 /// A power line a rejoin keeps clear of, with the space within its
@@ -594,6 +596,10 @@ struct OverrideCheckpoint {
     climbing: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     rejoin_paths: BTreeMap<String, [f64; 3]>,
+    /// Where the wire governor last left each platform (W4): absent without
+    /// one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    governed: BTreeMap<String, crate::wire_governor::Governed>,
 }
 
 /// The least share of its speed a rejoin must close on its path by: a path
@@ -644,12 +650,20 @@ fn guarded_to(
     from: [f64; 3],
     to: [f64; 3],
 ) -> [f64; 3] {
-    let stop = match guard.first_ground_contact(from, to) {
+    // A step that starts within the clearance, as from a pad, meets the
+    // ground at once: stopping it there held the aircraft for good. It is
+    // swept from a clearance higher instead, so it can climb away, and a
+    // ridge further along still stops it.
+    let start = match guard.first_ground_contact(from, to) {
+        Some(t) if t <= 0.0 => [from[0], from[1], from[2] + guard.clearance_m()],
+        _ => from,
+    };
+    let stop = match guard.first_ground_contact(start, to) {
         Some(t) => {
             let stop = [
-                from[0] + (to[0] - from[0]) * t,
-                from[1] + (to[1] - from[1]) * t,
-                from[2] + (to[2] - from[2]) * t,
+                start[0] + (to[0] - start[0]) * t,
+                start[1] + (to[1] - start[1]) * t,
+                start[2] + (to[2] - start[2]) * t,
             ];
             guard.record_ground_stop(node_id, timestamp_s, distance_3d(stop, to));
             stop
@@ -907,6 +921,9 @@ impl StageHandler for MissionOverrideStage {
         shared.rejoining.clear();
         shared.climbing.clear();
         shared.rejoin_paths.clear();
+        if let Some(governor) = shared.governor.as_mut() {
+            governor.reset();
+        }
     }
 
     /// The redirects in force: each is a flight already under way, and a
@@ -921,6 +938,11 @@ impl StageHandler for MissionOverrideStage {
             rejoining: shared.rejoining.clone(),
             climbing: shared.climbing.clone(),
             rejoin_paths: shared.rejoin_paths.clone(),
+            governed: shared
+                .governor
+                .as_ref()
+                .map(|governor| governor.state().clone())
+                .unwrap_or_default(),
         };
         Some(serde_json::to_value(state).expect("override state serialises"))
     }
@@ -945,11 +967,35 @@ impl StageHandler for MissionOverrideStage {
         shared.rejoining = decoded.rejoining;
         shared.climbing = decoded.climbing;
         shared.rejoin_paths = decoded.rejoin_paths;
+        if let Some(governor) = shared.governor.as_mut() {
+            governor.restore(decoded.governed);
+        }
         shared.applied.clear();
         Ok(())
     }
 
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        let outcome = self.apply_tables(context)?;
+        let Some(governor) = self.state.governor.as_mut() else {
+            return Ok(outcome);
+        };
+        let guard = self.state.guard.as_ref();
+        let held = governor.govern(context, guard);
+        if held > 0 {
+            context.note(format!("{held} platform(s) held clear of wires"));
+            return Ok(StageOutcome::Ran);
+        }
+        Ok(outcome)
+    }
+}
+
+impl MissionOverrideStage {
+    /// Hold every flight clear of the wires believed (W4).
+    pub fn set_wire_governor(&mut self, governor: Option<crate::wire_governor::WireGovernor>) {
+        self.state.governor = governor;
+    }
+
+    fn apply_tables(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
         if let Some(map) = &self.mapped {
             let wires = std::sync::Arc::clone(map.current().wires());
             if self
@@ -957,7 +1003,17 @@ impl StageHandler for MissionOverrideStage {
                 .as_ref()
                 .is_none_or(|seen| !std::sync::Arc::ptr_eq(seen, &wires))
             {
-                self.set_power_lines(wires.to_vec());
+                // The governor keeps flights off what is worked out from
+                // measurements. A rejoin that also refused any step nearer
+                // such a wire would stop for good inside a wide clearance.
+                let governed = self.state.governor.is_some();
+                self.set_power_lines(
+                    wires
+                        .iter()
+                        .filter(|line| !(governed && crate::belief_world::is_fitted_span(&line.id)))
+                        .cloned()
+                        .collect(),
+                );
                 self.mapped_seen = Some(wires);
             }
         }
@@ -1033,6 +1089,9 @@ impl StageHandler for MissionOverrideStage {
                 // prior map has a guard.
                 let position = match shared.guard.as_ref() {
                     Some(guard) if guard.violates(position) => {
+                        if let Some(governor) = shared.governor.as_mut() {
+                            governor.held_by_guard(&node_id);
+                        }
                         guard.enforce(&node_id, timestamp_s, position)
                     }
                     _ => position,
@@ -1807,6 +1866,48 @@ mod tests {
             SharedObstacles::new(Arc::new(layer)),
             2.0,
         )
+    }
+
+    /// A guard over flat ground with a 10 m ridge across x = 10.
+    fn ridge_guard() -> crate::belief_world::PhysicalGuard {
+        use crate::belief_world::PhysicalGuard;
+        use crate::runtime_world::{SharedObstacles, SharedTerrain};
+        use argusnet_types::Bounds2d;
+        use argusnet_world::index::ObstacleLayer;
+        use argusnet_world::tiled::TiledTerrain;
+        use std::sync::Arc;
+        let bounds = Bounds2d::new(-20.0, 40.0, -20.0, 20.0);
+        // Rows run along y, each across x.
+        let row: Vec<f64> = (0..=60)
+            .map(|i| {
+                let x = -20.0 + f64::from(i);
+                if (9.0..=11.0).contains(&x) {
+                    10.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let heights = vec![row; 41];
+        let terrain = TiledTerrain::from_grid(bounds, &heights, 1.0, 4, 0.0, &[]).unwrap();
+        PhysicalGuard::new(
+            SharedTerrain::new(Arc::new(terrain), 1.0),
+            SharedObstacles::new(Arc::new(ObstacleLayer::new(bounds, 100.0, vec![]).unwrap())),
+            2.0,
+        )
+    }
+
+    /// A step that starts inside the ground clearance, as from a pad, is no
+    /// longer stopped where it starts, and a ridge further along still stops
+    /// it short.
+    #[test]
+    fn a_step_from_inside_the_clearance_climbs_away_but_not_through_a_ridge() {
+        let guard = ridge_guard();
+        let open = guarded_to(&guard, "d", 0.0, [-15.0, 0.0, 1.0], [-5.0, 0.0, 3.0]);
+        assert_eq!(open, [-5.0, 0.0, 3.0], "it reaches a clear target");
+        let ridge = guarded_to(&guard, "d", 0.0, [0.0, 0.0, 1.0], [20.0, 0.0, 1.0]);
+        assert!(ridge[0] < 9.0, "the ridge stops it: {ridge:?}");
+        assert!(ridge[2] >= 2.0 - 1e-9, "clear of the ground: {ridge:?}");
     }
 
     /// An override that takes the platform again ends its rejoin.

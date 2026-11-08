@@ -973,6 +973,14 @@ fn operational(
 
 /// The belief's progress against the true terrain. Evaluation only: the run
 /// never reads it. Error is measured at each known cell's centre.
+fn prior_count(
+    grid: &crate::belief_world::BeliefGrid,
+    status: argusnet_mapping::wire_prior::PriorStatus,
+) -> u64 {
+    grid.wire_prior_map()
+        .map_or(0, |prior| prior.count(status) as u64)
+}
+
 fn belief_stats(
     grid: &crate::belief_world::BeliefGrid,
     occupied_probability: f64,
@@ -1048,6 +1056,16 @@ fn belief_stats(
                 .filter(|estimate| estimate.confirmed)
                 .count() as u64
         }),
+        wire_poles: grid
+            .pole_detector()
+            .map_or(0, |detector| detector.poles().len() as u64),
+        wire_corridors: grid.corridors().len() as u64,
+        wire_prior_open: prior_count(grid, argusnet_mapping::wire_prior::PriorStatus::Open),
+        wire_prior_confirmed: prior_count(
+            grid,
+            argusnet_mapping::wire_prior::PriorStatus::Confirmed,
+        ),
+        wire_prior_refuted: prior_count(grid, argusnet_mapping::wire_prior::PriorStatus::Refuted),
     }
 }
 
@@ -1882,6 +1900,29 @@ impl AssembledRun {
                     .collect(),
             );
         }
+        if let Some(prior) = &config.uncertain_prior {
+            let mut spans = prior.spans.clone();
+            if let Some(degradation) = &prior.degraded_truth {
+                let truth: Vec<(String, [f64; 3], [f64; 3])> = self
+                    .world
+                    .power_lines
+                    .iter()
+                    .flat_map(|line| {
+                        line.supports.windows(2).enumerate().map(|(k, pair)| {
+                            let end = |s: &argusnet_world::powerline::Support| {
+                                [s.xy_m[0], s.xy_m[1], s.top_z_m()]
+                            };
+                            (format!("{}-{k}", line.id), end(&pair[0]), end(&pair[1]))
+                        })
+                    })
+                    .collect();
+                spans.extend(degradation.apply(&truth));
+            }
+            grid.use_wire_prior(argusnet_mapping::wire_prior::PriorMap::new(
+                prior.config.clone(),
+                spans,
+            ));
+        }
         let resolution_m = config.resolution_m;
         let (nx, ny) = grid.dimensions();
         self.true_structures = (0..nx * ny)
@@ -1926,6 +1967,11 @@ impl AssembledRun {
             Some(measured) => scanner.with_measured_wires(measured.clone()),
             None => scanner,
         };
+        let scanner = if config.poles.is_some() {
+            scanner.with_measured_poles(&self.world.power_lines)
+        } else {
+            scanner
+        };
         // A rig's camera flies on its declared body mount.
         let camera_mount = config
             .rig
@@ -1964,9 +2010,14 @@ impl AssembledRun {
                 )
                 .map(|pod| {
                     let pod = pod.with_power_lines(&self.world.power_lines);
-                    match &measured {
+                    let pod = match &measured {
                         Some(measured) => pod.with_measured_wires(measured.clone()),
                         None => pod,
+                    };
+                    if config.poles.is_some() {
+                        pod.with_measured_poles(&self.world.power_lines)
+                    } else {
+                        pod
                     }
                 })
             })
@@ -1981,6 +2032,8 @@ impl AssembledRun {
             },
             "launch_floor_m": self.launch_floor_m,
         });
+        let wire_planning_config = config.wire_planning.clone();
+        let rejoin_explorers = config.poles.is_some();
         let handle = self
             .sim
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
@@ -2045,6 +2098,9 @@ impl AssembledRun {
             controllers.cap_agl(cap);
         }
         controllers.set_physical_guard(guard.clone());
+        controllers.set_explorers_rejoin(rejoin_explorers);
+        let wire_planning = wire_planning_config;
+        let governed_map = handle.clone();
 
         // The platforms do not know the true obstacles, so the mission
         // driver must not route around them, nor keep clear of power lines
@@ -2108,6 +2164,15 @@ impl AssembledRun {
         self.guard = Some(guard);
         self.policy_guard = false;
         self.belief = Some(handle);
+        if let Some(overrides) = self
+            .sim
+            .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
+        {
+            overrides.set_wire_governor(
+                wire_planning
+                    .map(|config| crate::wire_governor::WireGovernor::new(config, governed_map)),
+            );
+        }
         self.plan_round_mapped_wires();
         self.extend_replay_meta([("world_knowledge".to_string(), summary)]);
         Ok(())
@@ -2597,6 +2662,11 @@ impl AssembledRun {
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
             .map(MappingStage::take_wire_retirements)
             .unwrap_or_default();
+        let pole_updates = self
+            .sim
+            .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
+            .map(MappingStage::take_pole_updates)
+            .unwrap_or_default();
         let Some(mapping) = self.mapping() else {
             return;
         };
@@ -2637,6 +2707,7 @@ impl AssembledRun {
         frame.canopy_updates = canopy_updates;
         frame.mapped_wires = wire_updates;
         frame.retired_wires = wire_retirements;
+        frame.mapped_poles = pole_updates;
         frame.inspection_events = mapping
             .inspection_events()
             .into_iter()

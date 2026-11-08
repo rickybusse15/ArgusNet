@@ -209,6 +209,22 @@ pub struct WireTrack {
     floor_sigma_m: f64,
     camera_support: u32,
     triangulated: bool,
+    /// Where a pole ends this track on each side (W3), as (pole, distance
+    /// along): the wire has a corner there, so nothing past it is this
+    /// track's.
+    #[serde(default, skip_serializing_if = "both_none")]
+    ends: [Option<TrackEnd>; 2],
+}
+
+/// A pole a track ends at.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct TrackEnd {
+    pole: u32,
+    s_m: f64,
+}
+
+fn both_none(ends: &[Option<TrackEnd>; 2]) -> bool {
+    ends[0].is_none() && ends[1].is_none()
 }
 
 /// A track's estimate, as planners read it.
@@ -229,6 +245,9 @@ pub struct WireEstimate {
     pub camera_support: u32,
     pub triangulated: bool,
     pub confirmed: bool,
+    /// The pole at each end, when one was found (W3).
+    #[serde(default)]
+    pub pole_ends: [Option<u32>; 2],
 }
 
 /// `value` of `x` under the 2-vector `row`.
@@ -305,6 +324,7 @@ impl WireTrack {
             floor_sigma_m,
             camera_support: 0,
             triangulated: false,
+            ends: [None, None],
         }
     }
 
@@ -440,6 +460,11 @@ impl WireTrack {
         {
             return false;
         }
+        if self.ends[0].is_some_and(|end| s < end.s_m)
+            || self.ends[1].is_some_and(|end| s > end.s_m)
+        {
+            return false;
+        }
         (d - self.lateral_at(s)).abs() <= config.lateral_gate_m
             && (point[2] - self.height_at(s)).abs() <= config.vertical_gate_m
     }
@@ -451,9 +476,10 @@ impl WireTrack {
     }
 
     fn estimate(&self, config: &WireTrackerConfig) -> WireEstimate {
+        // A pole is where the wire goes, however far past the evidence.
         let (s0, s1) = (
-            self.fit.s_min_m - config.extend_m,
-            self.fit.s_max_m + config.extend_m + BIN_M,
+            self.ends[0].map_or(self.fit.s_min_m - config.extend_m, |end| end.s_m),
+            self.ends[1].map_or(self.fit.s_max_m + config.extend_m + BIN_M, |end| end.s_m),
         );
         let (from_m, to_m) = (self.world_at(s0), self.world_at(s1));
         let middle = (s0 + s1) / 2.0;
@@ -472,6 +498,26 @@ impl WireTrack {
             camera_support: self.camera_support,
             triangulated: self.triangulated,
             confirmed: self.confirmed(config),
+            pole_ends: self.ends.map(|end| end.map(|end| end.pole)),
+        }
+    }
+
+    /// Whether a pole at `s_m` stands between this track and `other`.
+    fn walled_from(&self, other: &WireTrack) -> bool {
+        let [x, y, _] = other.world_at((other.fit.s_min_m + other.fit.s_max_m) / 2.0);
+        let (s, _) = self.frame(x, y);
+        self.ends[0].is_some_and(|end| s < end.s_m) || self.ends[1].is_some_and(|end| s > end.s_m)
+    }
+
+    /// Note a pole at `s_m` as this track's end on the side it lies, if it
+    /// is nearer than the end known.
+    fn end_at(&mut self, pole: u32, s_m: f64) {
+        let middle = (self.fit.s_min_m + self.fit.s_max_m) / 2.0;
+        let side = usize::from(s_m > middle);
+        let nearer = self.ends[side]
+            .is_none_or(|end| end.pole == pole || (end.s_m - middle).abs() > (s_m - middle).abs());
+        if nearer {
+            self.ends[side] = Some(TrackEnd { pole, s_m });
         }
     }
 }
@@ -676,6 +722,9 @@ impl WireTracker {
     /// Tracks `a` and `b` as one, if they are one wire.
     fn merged(&self, a: usize, b: usize) -> Option<WireTrack> {
         let (ta, tb) = (&self.tracks[a], &self.tracks[b]);
+        if ta.walled_from(tb) || tb.walled_from(ta) {
+            return None;
+        }
         let cos = ta.direction[0] * tb.direction[0] + ta.direction[1] * tb.direction[1];
         if cos.abs() < 0.9995 {
             return None;
@@ -704,6 +753,11 @@ impl WireTracker {
         joined.camera_support += tb.camera_support;
         joined.triangulated &= tb.triangulated;
         joined.floor_sigma_m = ta.floor_sigma_m.min(tb.floor_sigma_m);
+        for end in tb.ends.into_iter().flatten() {
+            let [x, y, _] = tb.world_at(end.s_m);
+            let (s, _) = joined.frame(x, y);
+            joined.end_at(end.pole, s);
+        }
         joined.refit(&self.config);
         let fits = joined.fit.sigma_lateral_m <= self.config.merge_sigma_m
             && joined.fit.sigma_vertical_m <= self.config.merge_sigma_m;
@@ -784,6 +838,80 @@ impl WireTracker {
         track.triangulated = true;
         track.refit(&self.config);
         self.tracks.push(track);
+    }
+
+    /// Bring the tracks up to date with the poles known (W3). A pole on a
+    /// track's line ends it there. One inside its evidence splits it: the
+    /// wire has a corner at a support that a single curve fits through, and
+    /// more evidence would not show that. Past the end of a track, a pole
+    /// within `reach_m` is where the wire goes.
+    pub fn set_poles(
+        &mut self,
+        poles: &[crate::poles::PoleAnchor],
+        lateral_gate_m: f64,
+        reach_m: f64,
+    ) {
+        for pole in poles {
+            let mut k = 0;
+            while k < self.tracks.len() {
+                let (s, d) = self.tracks[k].frame(pole.xy_m[0], pole.xy_m[1]);
+                let track = &self.tracks[k];
+                let off = (d - track.lateral_at(s)).abs();
+                let inside = s > track.fit.s_min_m + BIN_M && s < track.fit.s_max_m;
+                let near = s >= track.fit.s_min_m - reach_m && s <= track.fit.s_max_m + reach_m;
+                if off <= lateral_gate_m && near {
+                    if inside
+                        && !self.tracks[k]
+                            .ends
+                            .iter()
+                            .flatten()
+                            .any(|e| e.pole == pole.id)
+                    {
+                        self.split(k, pole.id, s);
+                    } else {
+                        self.tracks[k].end_at(pole.id, s);
+                    }
+                }
+                k += 1;
+            }
+        }
+    }
+
+    /// Cut track `k` at `s_m`, at pole `pole`. A side with too little
+    /// evidence for a track of its own is the corner's misfit, and goes.
+    fn split(&mut self, k: usize, pole: u32, s_m: f64) {
+        /// Fewest bins a side of a split needs to stand alone.
+        const MIN_BINS: usize = 3;
+        let track = &mut self.tracks[k];
+        let cut = (s_m / BIN_M).floor() as i32;
+        let far: BTreeMap<i32, Bin> = track.bins.split_off(&cut);
+        let mut other = track.clone();
+        other.bins = far;
+        let (near_bins, far_bins) = (track.bins.len(), other.bins.len());
+        match (near_bins >= MIN_BINS, far_bins >= MIN_BINS) {
+            (true, true) => {
+                other.id = self.next_id;
+                self.next_id += 1;
+                track.ends[1] = Some(TrackEnd { pole, s_m });
+                other.ends[0] = Some(TrackEnd { pole, s_m });
+                track.refit(&self.config);
+                other.refit(&self.config);
+                self.tracks.push(other);
+            }
+            (true, false) => {
+                track.ends[1] = Some(TrackEnd { pole, s_m });
+                track.refit(&self.config);
+            }
+            (false, true) => {
+                other.ends[0] = Some(TrackEnd { pole, s_m });
+                other.refit(&self.config);
+                self.tracks[k] = other;
+            }
+            (false, false) => {
+                let bins = other.bins;
+                track.bins.extend(bins);
+            }
+        }
     }
 
     /// Every track's estimate, in track order.
@@ -1170,5 +1298,80 @@ mod tests {
         for config in bad {
             assert!(config.validate().is_err(), "{config:?}");
         }
+    }
+
+    /// Points along a wire at y = 0, z = 50, from `x0` to `x1`.
+    fn along(x0: f64, x1: f64) -> Vec<[f64; 3]> {
+        let n = ((x1 - x0) / 1.0) as usize;
+        (0..n)
+            .map(|k| [x0 + k as f64, 0.01 * ((k * 7 % 5) as f64), 50.0])
+            .collect()
+    }
+
+    fn anchor(id: u32, x: f64) -> crate::poles::PoleAnchor {
+        crate::poles::PoleAnchor { id, xy_m: [x, 3.0] }
+    }
+
+    /// W3: a pole inside a track's evidence cuts it in two, each ending at
+    /// the pole, and more evidence neither joins them nor crosses it.
+    #[test]
+    fn a_pole_splits_a_track_and_keeps_it_split() {
+        let mut tracker = WireTracker::new(WireTrackerConfig::default());
+        tracker.add_points(&along(0.0, 200.0));
+        assert_eq!(tracker.tracks().len(), 1);
+        tracker.set_poles(&[anchor(7, 100.0)], 8.0, 120.0);
+        assert_eq!(tracker.tracks().len(), 2);
+        let estimates = tracker.estimates();
+        for estimate in &estimates {
+            assert_eq!(estimate.pole_ends.iter().flatten().count(), 1);
+            assert!(estimate.pole_ends.contains(&Some(7)));
+        }
+        tracker.add_points(&along(0.0, 200.0));
+        tracker.set_poles(&[anchor(7, 100.0)], 8.0, 120.0);
+        assert_eq!(tracker.tracks().len(), 2);
+    }
+
+    #[test]
+    fn a_track_runs_to_a_pole_past_its_evidence() {
+        let mut tracker = WireTracker::new(WireTrackerConfig::default());
+        tracker.add_points(&along(0.0, 100.0));
+        tracker.set_poles(&[anchor(1, 180.0)], 8.0, 120.0);
+        let estimate = &tracker.estimates()[0];
+        let end = estimate
+            .pole_ends
+            .iter()
+            .position(|end| *end == Some(1))
+            .expect("ends at the pole");
+        let reached = if end == 0 {
+            estimate.from_m
+        } else {
+            estimate.to_m
+        };
+        assert!((reached[0] - 180.0).abs() < 1.0, "{reached:?}");
+    }
+
+    #[test]
+    fn a_pole_off_the_line_changes_nothing() {
+        let mut tracker = WireTracker::new(WireTrackerConfig::default());
+        tracker.add_points(&along(0.0, 100.0));
+        let before = tracker.clone();
+        tracker.set_poles(
+            &[crate::poles::PoleAnchor {
+                id: 1,
+                xy_m: [50.0, 30.0],
+            }],
+            8.0,
+            120.0,
+        );
+        assert_eq!(tracker, before);
+    }
+
+    #[test]
+    fn a_pole_near_a_track_end_ends_it_without_a_split() {
+        let mut tracker = WireTracker::new(WireTrackerConfig::default());
+        tracker.add_points(&along(0.0, 100.0));
+        tracker.set_poles(&[anchor(2, 99.0)], 8.0, 120.0);
+        assert_eq!(tracker.tracks().len(), 1);
+        assert!(tracker.estimates()[0].pole_ends.contains(&Some(2)));
     }
 }

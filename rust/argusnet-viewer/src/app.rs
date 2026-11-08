@@ -2886,6 +2886,7 @@ mod tests {
             world_contacts: Vec::new(),
             mapped_wires: Vec::new(),
             retired_wires: Vec::new(),
+            mapped_poles: Vec::new(),
             energy_reserves: Default::default(),
         };
 

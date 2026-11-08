@@ -56,7 +56,7 @@ use crate::follow_path::{
     FollowPathContext, FollowPathController, FollowPathState, MissionZone, RoutePlanner,
     VisibilitySampler,
 };
-use crate::frontier::{ExplorerState, FrontierExplorer};
+use crate::frontier::{ExplorerState, FrontierExplorer, ESCAPE_MIN_AGL_M};
 use crate::motion::{BoundsXy, ObstacleSampler, TerrainSampler};
 use crate::observation_follow::{
     AcceptedByNodeTarget, EngagementState, ObservationTriggeredFollow,
@@ -446,6 +446,11 @@ impl ControllerStage {
         self.guard = Some(guard);
     }
 
+    /// Keep each explorer with its aircraft while a mission flies it.
+    pub fn set_explorers_rejoin(&mut self, rejoin: bool) {
+        self.explorers_rejoin = rejoin;
+    }
+
     pub fn has_physical_guard(&self) -> bool {
         self.guard.is_some()
     }
@@ -737,7 +742,14 @@ fn sample_platform(
                     .map(|weather| weather as &dyn WeatherSampler),
                 terrain: Some(environment.terrain.as_ref()),
                 bounds: environment.map_bounds_m,
-                min_agl_m: profile.min_operational_agl_m,
+                // An escape from under a wire keeps the explorer's low floor
+                // here too: this one would lift it back up through the wire.
+                min_agl_m: match controller.operational() {
+                    Operational::Explore(explorer) if explorer.state().escape.is_some() => {
+                        profile.min_operational_agl_m.min(ESCAPE_MIN_AGL_M)
+                    }
+                    _ => profile.min_operational_agl_m,
+                },
                 wind_scale: profile.wind_scale,
                 // The reference's launch path passes no dt, so its drift is
                 // always integrated over one second. Preserved; see
@@ -785,6 +797,10 @@ pub struct ControllerStage {
     /// the ground or a structure is put back and recorded. `None` in every
     /// prior run, which then samples exactly as before.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// Explorers stay with their aircraft while something else flies it
+    /// (W3). Off, as every run before it, an explorer's position flies on
+    /// and the aircraft jumps to it when released.
+    explorers_rejoin: bool,
 }
 
 impl ControllerStage {
@@ -840,6 +856,7 @@ impl ControllerStage {
             state: State::default(),
             battery: None,
             guard: None,
+            explorers_rejoin: false,
         }
     }
 
@@ -861,6 +878,7 @@ impl ControllerStage {
 
     fn sample_all(&mut self, context: &mut TickContext<'_>) -> Result<bool, StageError> {
         let guard = self.guard.as_ref();
+        let explorers_rejoin = self.explorers_rejoin;
         let State {
             controllers,
             environment: environment_slot,
@@ -913,7 +931,13 @@ impl ControllerStage {
                             platform.position.z,
                         ]
                     };
-                    let commanded = position;
+                    // An explorer rejoining holds the aircraft where it is
+                    // this tick: taking the command too would part them
+                    // again, and they would swap places every tick.
+                    let rejoined = explorers_rejoin
+                        && explorer_of(controller)
+                            .is_some_and(|e| e.rejoin(from, position, context.dt_s));
+                    let commanded = if rejoined { from } else { position };
                     let position = guard.enforce_from(node_id, timestamp_s, from, commanded);
                     let moved = (0..3)
                         .map(|k| (position[k] - commanded[k]).powi(2))

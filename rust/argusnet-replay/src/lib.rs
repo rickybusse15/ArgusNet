@@ -199,6 +199,20 @@ pub struct PowerLinesRead {
     pub refused: Vec<String>,
 }
 
+/// A pole as the map holds it (W3): where it stands, the lowest and
+/// highest returns on it, and whether its top was ever seen from above.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MappedPole {
+    pub id: u32,
+    pub xy_m: [f64; 2],
+    pub low_z_m: f64,
+    pub high_z_m: f64,
+    #[serde(default)]
+    pub sigma_m: f64,
+    #[serde(default)]
+    pub top_open: bool,
+}
+
 /// What [`ReplayDocument::trees`] read: the trees the model accepts, and
 /// one reason per tree it refused.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -326,6 +340,31 @@ impl ReplayDocument {
             .sum()
     }
 
+    /// The poles the platforms' own map holds at frame `index` (W3): each
+    /// id's latest row in the frames' `mapped_poles` up to it, in id order.
+    /// A row that does not read is skipped.
+    pub fn mapped_poles_through(&self, index: usize) -> Vec<MappedPole> {
+        let mut poles = std::collections::BTreeMap::new();
+        for frame in self.frames.iter().take(index.saturating_add(1)) {
+            for row in &frame.mapped_poles {
+                if let Ok(pole) = serde_json::from_value::<MappedPole>(row.clone()) {
+                    poles.insert(pole.id, pole);
+                }
+            }
+        }
+        poles.into_values().collect()
+    }
+
+    /// How many pole rows the frames up to `index` record: what
+    /// [`Self::mapped_poles_through`] reads changes only when this does.
+    pub fn mapped_pole_rows_through(&self, index: usize) -> usize {
+        self.frames
+            .iter()
+            .take(index.saturating_add(1))
+            .map(|frame| frame.mapped_poles.len())
+            .sum()
+    }
+
     /// The run's trees (`meta.trees`, R2), each read through the model's
     /// own check on its own: one the model refuses is reported with its
     /// index and reason, and every other tree is still read.
@@ -434,6 +473,9 @@ pub struct ReplayFrame {
     /// The ids of fitted spans the map dropped this frame (W2).
     #[serde(default)]
     pub retired_wires: Vec<String>,
+    /// Poles the map found or moved this frame (W3), as rows.
+    #[serde(default)]
+    pub mapped_poles: Vec<Value>,
     /// Under a physical energy profile: each platform's remaining energy and
     /// its reserve home this tick (F5). Empty otherwise.
     #[serde(default)]
@@ -1007,6 +1049,7 @@ mod live_stream {
             world_contacts: Vec::new(),
             mapped_wires: Vec::new(),
             retired_wires: Vec::new(),
+            mapped_poles: Vec::new(),
             energy_reserves: Default::default(),
         }
     }

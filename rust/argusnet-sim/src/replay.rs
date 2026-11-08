@@ -343,6 +343,21 @@ pub struct ReplayBeliefStats {
     /// Confirmed wire tracks (W2). Written only when there are some.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub wire_tracks: u64,
+    /// Poles detected (W3). Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_poles: u64,
+    /// Corridor spans implied (W3). Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_corridors: u64,
+    /// Prior spans not yet settled by flight (W5). Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_prior_open: u64,
+    /// Prior spans a fitted wire confirmed (W5). Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_prior_confirmed: u64,
+    /// Prior spans flight found no wire on (W5). Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wire_prior_refuted: u64,
     /// The map against the run's quality requirement (SR5a). Absent
     /// without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -668,6 +683,9 @@ pub struct ReplayFrame {
     /// Absent when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired_wires: Vec<String>,
+    /// The poles the map found or moved this frame (W3). Absent when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mapped_poles: Vec<crate::belief_world::MappedPole>,
     /// Under a physical energy profile (D-3), each platform's remaining
     /// energy and the reserve it needs to get home from where it is, as the
     /// battery's reserve check computed them this tick (F5). Absent under
@@ -923,6 +941,7 @@ impl ReplayWriter {
             sensor_bias_offsets_rad: BTreeMap::new(),
             mapped_wires: Vec::new(),
             retired_wires: Vec::new(),
+            mapped_poles: Vec::new(),
             energy_reserves: BTreeMap::new(),
         }
     }

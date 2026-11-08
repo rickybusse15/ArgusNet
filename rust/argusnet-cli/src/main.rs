@@ -242,6 +242,27 @@ struct SimArgs {
     /// uncertainty added to its clearance.
     #[arg(long)]
     track_wires: bool,
+    /// With `--track-wires`, detect poles among the measured returns and
+    /// read corridors from them (W3): a pole splits a track, a track or a
+    /// straight row between poles is a corridor, and the stretches no sensor
+    /// saw are mapped with a wider clearance.
+    #[arg(long)]
+    detect_poles: bool,
+    /// With `--detect-poles`, hold every flight clear of the wires believed
+    /// (W4): fitted wires, corridors, poles and unconfirmed evidence, in
+    /// mission flights as well as explorers, and work each side of a line
+    /// before crossing it.
+    #[arg(long)]
+    wire_planning: bool,
+    /// With `--track-wires`, start from a map of wires that may be wrong
+    /// (W5): JSON spans (`PriorSpan`), each with its declared error. Flight
+    /// confirms, moves or refutes each one.
+    #[arg(long)]
+    wire_prior_file: Option<PathBuf>,
+    /// For evaluation: start from the true lines spoiled by offsets, missing
+    /// spans and a phantom, instead of a file.
+    #[arg(long)]
+    degraded_wire_prior: bool,
     /// In a `--world-knowledge none` run, fly with a forward navigation
     /// camera as the primary obstacle-avoidance sensor (SR5c): its
     /// detections become safety obstacles, every controller is capped to the
@@ -483,6 +504,26 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             .measured_wires
             .then(argusnet_sim::wire_sensing::WireSensorModel::default),
     };
+    let uncertain_prior = if args.wire_prior_file.is_some() || args.degraded_wire_prior {
+        let spans = match &args.wire_prior_file {
+            Some(path) => {
+                let text = std::fs::read_to_string(path)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                serde_json::from_str(&text)
+                    .map_err(|error| format!("{}: {error}", path.display()))?
+            }
+            None => Vec::new(),
+        };
+        Some(argusnet_sim::belief_world::UncertainPrior {
+            config: Default::default(),
+            spans,
+            degraded_truth: args
+                .degraded_wire_prior
+                .then(argusnet_mapping::wire_prior::PriorDegradation::default),
+        })
+    } else {
+        None
+    };
     Ok(RunOptions {
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
@@ -543,6 +584,13 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 wire_tracker: args
                     .track_wires
                     .then(argusnet_mapping::wires::WireTrackerConfig::default),
+                poles: args
+                    .detect_poles
+                    .then(argusnet_mapping::poles::PoleConfig::default),
+                uncertain_prior: uncertain_prior.clone(),
+                wire_planning: args
+                    .wire_planning
+                    .then(argusnet_sim::belief_world::WirePlanningConfig::default),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -796,6 +844,24 @@ fn sim(args: SimArgs) -> ExitCode {
         return fail(
             EXIT_INVALID,
             "--track-wires fits measured wires: it needs --measured-wires",
+        );
+    }
+    if args.detect_poles && !args.track_wires {
+        return fail(
+            EXIT_INVALID,
+            "--detect-poles ends and links wire tracks: it needs --track-wires",
+        );
+    }
+    if (args.wire_prior_file.is_some() || args.degraded_wire_prior) && !args.track_wires {
+        return fail(
+            EXIT_INVALID,
+            "an uncertain wire prior is settled by fitted wires: it needs --track-wires",
+        );
+    }
+    if args.wire_planning && !args.detect_poles {
+        return fail(
+            EXIT_INVALID,
+            "--wire-planning flies the corridors poles imply: it needs --detect-poles",
         );
     }
     if (args.measured_wires || args.wire_sensor_profile.is_some())

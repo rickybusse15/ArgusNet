@@ -42,6 +42,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use argusnet_mapping::quality::{
     assess, CellEvidence, DeficitCounts, DeficitReason, QualityRequirement,
 };
+use argusnet_mapping::wire_prior::PriorStatus;
 use argusnet_types::Bounds2d;
 use argusnet_world::powerline::{ConductorEnvelope, ConductorPiece, PowerLine};
 use serde::{Deserialize, Serialize};
@@ -139,6 +140,91 @@ pub struct ExplorationConfig {
     /// `measured_wires`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_tracker: Option<argusnet_mapping::wires::WireTrackerConfig>,
+    /// Detect poles among the measured returns and read corridors from them
+    /// (W3). Needs `wire_tracker`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poles: Option<argusnet_mapping::poles::PoleConfig>,
+    /// Hold every flight clear of the wires believed, whoever is flying it
+    /// (W4). Needs `poles`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_planning: Option<WirePlanningConfig>,
+    /// Start from a map of wires that may be wrong (W5). Needs
+    /// `wire_tracker`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertain_prior: Option<UncertainPrior>,
+}
+
+/// A wire map to start from, and what it may be wrong by (W5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UncertainPrior {
+    #[serde(default)]
+    pub config: argusnet_mapping::wire_prior::WirePriorConfig,
+    /// The map's spans, each with its declared error.
+    #[serde(default)]
+    pub spans: Vec<argusnet_mapping::wire_prior::PriorSpan>,
+    /// For evaluation: make the map by spoiling the true lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degraded_truth: Option<argusnet_mapping::wire_prior::PriorDegradation>,
+}
+
+/// How flights keep clear of believed wires (W4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WirePlanningConfig {
+    /// Seconds of flight ahead a platform looks.
+    pub lookahead_s: f64,
+    /// The least distance ahead looked at, metres: a hover drifts.
+    pub min_reach_m: f64,
+    /// How fast height changes for a wire, m/s.
+    pub climb_mps: f64,
+    /// The clearance kept from what no track has confirmed, and from poles.
+    pub clearance_m: f64,
+    /// The least height above the believed ground a ceiling can press a
+    /// platform to, metres.
+    pub min_agl_m: f64,
+    /// What crossing a fitted wire costs a choice of goal, in metres of
+    /// flight: a drone works its own side of a line first.
+    pub crossing_penalty_m: f64,
+}
+
+impl Default for WirePlanningConfig {
+    fn default() -> Self {
+        Self {
+            lookahead_s: 6.0,
+            min_reach_m: 40.0,
+            climb_mps: 15.0,
+            clearance_m: 10.0,
+            min_agl_m: 15.0,
+            crossing_penalty_m: 300.0,
+        }
+    }
+}
+
+impl WirePlanningConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("lookahead_s", self.lookahead_s),
+            ("min_reach_m", self.min_reach_m),
+            ("climb_mps", self.climb_mps),
+            ("clearance_m", self.clearance_m),
+        ] {
+            if !(value.is_finite() && value > 0.0) {
+                return Err(format!(
+                    "wire planning {name} must be positive, got {value}"
+                ));
+            }
+        }
+        for (name, value) in [
+            ("min_agl_m", self.min_agl_m),
+            ("crossing_penalty_m", self.crossing_penalty_m),
+        ] {
+            if !(value.is_finite() && value >= 0.0) {
+                return Err(format!(
+                    "wire planning {name} must not be negative, got {value}"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl ExplorationConfig {
@@ -188,6 +274,9 @@ impl Default for ExplorationConfig {
             pointing: None,
             measured_wires: None,
             wire_tracker: None,
+            poles: None,
+            wire_planning: None,
+            uncertain_prior: None,
         }
     }
 }
@@ -226,6 +315,27 @@ impl ExplorationConfig {
                 return Err("the wire tracker needs measured wires to track".into());
             }
             tracker.validate()?;
+        }
+        if let Some(poles) = &self.poles {
+            if self.wire_tracker.is_none() {
+                return Err("pole detection needs the wire tracker".into());
+            }
+            poles.validate()?;
+        }
+        if let Some(planning) = &self.wire_planning {
+            if self.poles.is_none() {
+                return Err("wire planning needs pole detection".into());
+            }
+            planning.validate()?;
+        }
+        if let Some(prior) = &self.uncertain_prior {
+            if self.wire_tracker.is_none() {
+                return Err("an uncertain wire prior needs the wire tracker".into());
+            }
+            if self.wire_prior {
+                return Err("an uncertain wire prior replaces --wire-prior".into());
+            }
+            prior.config.validate()?;
         }
         if let Some(camera) = &self.nav_camera {
             camera.validate()?;
@@ -373,6 +483,18 @@ pub struct BeliefGrid {
     /// The wires fitted from that evidence (W2). `None` without tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wire_tracker: Option<argusnet_mapping::wires::WireTracker>,
+    /// The poles detected among those points (W3). `None` without detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pole_detector: Option<argusnet_mapping::poles::PoleDetector>,
+    /// The wire map flights started from, as flight has left it (W5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wire_prior_map: Option<argusnet_mapping::wire_prior::PriorMap>,
+    /// Poles as last given to the replay, to tell which have moved.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    published_poles: BTreeMap<u32, MappedPole>,
+    /// Poles found or moved since the replay last took them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    new_poles: Vec<MappedPole>,
     /// Cells with new wire points since the last snapshot.
     #[serde(skip)]
     wire_dirty: BTreeSet<usize>,
@@ -457,6 +579,10 @@ impl BeliefGrid {
             wire_high_m: Vec::new(),
             wire_lines_seen: 0,
             wire_tracker: None,
+            pole_detector: None,
+            wire_prior_map: None,
+            published_poles: BTreeMap::new(),
+            new_poles: Vec::new(),
             wire_dirty: BTreeSet::new(),
             views: None,
         })
@@ -549,6 +675,14 @@ impl BeliefGrid {
         if let Some(tracker) = self.wire_tracker.as_mut() {
             tracker.clear();
         }
+        if let Some(detector) = self.pole_detector.as_mut() {
+            detector.clear();
+        }
+        if let Some(prior) = self.wire_prior_map.as_mut() {
+            prior.clear();
+        }
+        self.published_poles.clear();
+        self.new_poles.clear();
         self.wire_dirty.clear();
         self.views = None;
         self.reset_wires();
@@ -785,8 +919,20 @@ impl BeliefGrid {
     /// count. No point says which wire it is on.
     fn integrate_wire_evidence(&mut self, scan: &RangeScan) {
         self.wire_lines_seen += scan.wire_lines.len() as u64;
+        // A camera's silence says nothing about a wire not being there.
+        if scan.sensor == ScanSensor::RangeScanner {
+            if let Some(prior) = self.wire_prior_map.as_mut() {
+                let ray_ends: Vec<[f64; 3]> = scan.returns.iter().map(|r| r.point_m).collect();
+                prior.observe(scan.origin_m, &scan.wire_points, &ray_ends);
+            }
+        }
+        // A return on a known pole is not a wire's.
+        let wire_points = self
+            .pole_detector
+            .as_mut()
+            .map(|detector| detector.add_points(scan.origin_m[2], &scan.wire_points));
         if let Some(tracker) = self.wire_tracker.as_mut() {
-            tracker.add_points(&scan.wire_points);
+            tracker.add_points(wire_points.as_deref().unwrap_or(&scan.wire_points));
             for line in &scan.wire_lines {
                 tracker.add_camera_line(scan.origin_m, line.from_dir, line.to_dir);
             }
@@ -834,6 +980,73 @@ impl BeliefGrid {
         self.wire_tracker = Some(argusnet_mapping::wires::WireTracker::new(config));
     }
 
+    /// Start from a map of wires that may be wrong (W5). Before any scan.
+    pub fn use_wire_prior(&mut self, prior: argusnet_mapping::wire_prior::PriorMap) {
+        self.wire_prior_map = Some(prior);
+    }
+
+    /// The prior, as flight has left it.
+    pub fn wire_prior_map(&self) -> Option<&argusnet_mapping::wire_prior::PriorMap> {
+        self.wire_prior_map.as_ref()
+    }
+
+    /// Detect poles among the measured returns (W3). Before any scan.
+    pub fn detect_poles(&mut self, config: argusnet_mapping::poles::PoleConfig) {
+        self.pole_detector = Some(argusnet_mapping::poles::PoleDetector::new(config));
+    }
+
+    /// The detector, when poles are looked for.
+    pub fn pole_detector(&self) -> Option<&argusnet_mapping::poles::PoleDetector> {
+        self.pole_detector.as_ref()
+    }
+
+    /// The poles found or moved since the last call, as replay rows.
+    pub fn take_new_poles(&mut self) -> Vec<MappedPole> {
+        std::mem::take(&mut self.new_poles)
+    }
+
+    /// The corridors the poles and tracks imply now.
+    pub fn corridors(&self) -> Vec<argusnet_mapping::poles::CorridorSpan> {
+        match (&self.pole_detector, &self.wire_tracker) {
+            (Some(detector), Some(tracker)) => argusnet_mapping::poles::corridors(
+                detector.poles(),
+                &tracker.estimates(),
+                detector.config(),
+            ),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Give the replay the poles that are new or have moved enough to show.
+    fn publish_poles(&mut self) {
+        /// A move smaller than this is not recorded, metres.
+        const REPUBLISH_M: f64 = 1.0;
+        let Some(detector) = &self.pole_detector else {
+            return;
+        };
+        let floor = detector.config().floor_sigma_m;
+        for pole in detector.poles() {
+            let row = MappedPole {
+                id: pole.id,
+                xy_m: pole.xy_m(),
+                low_z_m: pole.low_z_m,
+                high_z_m: pole.high_z_m,
+                sigma_m: pole.sigma_m(floor),
+                top_open: pole.top_open,
+            };
+            let moved = self.published_poles.get(&pole.id).is_none_or(|old| {
+                (old.xy_m[0] - row.xy_m[0]).abs() > REPUBLISH_M
+                    || (old.xy_m[1] - row.xy_m[1]).abs() > REPUBLISH_M
+                    || (old.high_z_m - row.high_z_m).abs() > REPUBLISH_M
+                    || old.top_open != row.top_open
+            });
+            if moved {
+                self.published_poles.insert(pole.id, row.clone());
+                self.new_poles.push(row);
+            }
+        }
+    }
+
     /// The tracker, when wires are fitted.
     pub fn wire_tracker(&self) -> Option<&argusnet_mapping::wires::WireTracker> {
         self.wire_tracker.as_ref()
@@ -846,21 +1059,50 @@ impl BeliefGrid {
     fn sync_wire_tracks(&mut self) {
         /// A change smaller than this does not republish a span, metres.
         const REPUBLISH_M: f64 = 1.0;
+        if let (Some(detector), Some(tracker)) =
+            (self.pole_detector.as_ref(), self.wire_tracker.as_mut())
+        {
+            let config = detector.config();
+            tracker.set_poles(&detector.anchors(), config.lateral_gate_m, config.reach_m);
+        }
+        self.publish_poles();
+        let corridors = self.corridors();
+        if let (Some(prior), Some(tracker)) =
+            (self.wire_prior_map.as_mut(), self.wire_tracker.as_ref())
+        {
+            prior.reconcile(&tracker.estimates());
+        }
         let Some(tracker) = &self.wire_tracker else {
             return;
         };
         let config = tracker.config();
-        let fitted: BTreeMap<String, PowerLine> = tracker
+        let mut fitted: BTreeMap<String, PowerLine> = tracker
             .estimates()
             .into_iter()
             .filter(|estimate| estimate.confirmed)
             .filter_map(|estimate| fitted_span(&estimate, config))
             .map(|span| (span.id.clone(), span))
             .collect();
+        fitted.extend(
+            corridors
+                .iter()
+                .filter_map(|corridor| corridor_span(corridor, config))
+                .map(|span| (span.id.clone(), span)),
+        );
+        if let Some(prior) = &self.wire_prior_map {
+            fitted.extend(
+                prior
+                    .spans()
+                    .iter()
+                    .filter(|state| state.status != PriorStatus::Refuted)
+                    .filter_map(|state| prior_span(&state.span, config))
+                    .map(|span| (span.id.clone(), span)),
+            );
+        }
         let stale: Vec<String> = self
             .wires
             .keys()
-            .filter(|id| id.starts_with(FITTED_PREFIX) && !fitted.contains_key(*id))
+            .filter(|id| is_fitted_span(id) && !fitted.contains_key(*id))
             .cloned()
             .collect();
         for id in stale {
@@ -1192,13 +1434,36 @@ impl BeliefGrid {
                 fitted_hazards = Some(Arc::new(
                     self.wires
                         .values()
-                        .filter(|span| span.id.starts_with(FITTED_PREFIX))
+                        .filter(|span| is_fitted_span(&span.id))
                         .map(FittedHazard::new)
                         .collect(),
                 ));
                 Arc::new(self.wires.values().cloned().collect())
             })),
             fitted_hazards: Arc::new(Vec::new()),
+            poles: Arc::new(
+                self.pole_detector
+                    .iter()
+                    .flat_map(|detector| {
+                        let config = detector.config();
+                        detector.poles().iter().map(move |pole| PoleHazard {
+                            xy_m: pole.xy_m(),
+                            top_z_m: pole.planning_top_m(config),
+                            keep_out_m: config.keep_out_m,
+                        })
+                    })
+                    .collect(),
+            ),
+            crossing_penalty_m: config
+                .wire_planning
+                .as_ref()
+                .map_or(0.0, |planning| planning.crossing_penalty_m),
+            prior_goals: Arc::new(
+                self.wire_prior_map
+                    .as_ref()
+                    .map(|prior| prior.unsettled_points())
+                    .unwrap_or_default(),
+            ),
             quality: None,
         };
         if let Some(hazards) = fitted_hazards {
@@ -1210,10 +1475,21 @@ impl BeliefGrid {
     }
 }
 
+/// A pole as a hazard to flight (W3).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PoleHazard {
+    xy_m: [f64; 2],
+    top_z_m: f64,
+    keep_out_m: f64,
+}
+
 /// A fitted span as a hazard to flight: its conductor pieces and the
 /// clearance to keep, boxed so most queries end at once.
 #[derive(Debug, Clone, PartialEq)]
 struct FittedHazard {
+    /// Whether goal choice and steering keep away from it. A prior span is
+    /// passed by height only: flying near it is how it gets settled.
+    repels: bool,
     pieces: Vec<ConductorPiece>,
     clearance_m: f64,
     low_xy_m: [f64; 2],
@@ -1235,6 +1511,7 @@ impl FittedHazard {
             }
         }
         Self {
+            repels: !span.id.starts_with(PRIOR_PREFIX),
             pieces,
             clearance_m: span.clearance_m,
             low_xy_m,
@@ -1257,6 +1534,51 @@ impl FittedHazard {
                 argusnet_world::powerline::segment_distance(here, here, start, end)
                     <= self.clearance_m
             })
+    }
+
+    /// The unit vector away from this wire at `xy_m`, if `direction` runs
+    /// along it there.
+    fn way_out(&self, xy_m: [f64; 2], direction: [f64; 2], along_cos: f64) -> Option<[f64; 2]> {
+        let here = [xy_m[0], xy_m[1], 0.0];
+        let nearest = self.pieces.iter().min_by(|a, b| {
+            let distance = |piece: &&ConductorPiece| {
+                let start = [piece.start_m[0], piece.start_m[1], 0.0];
+                let end = [piece.end_m[0], piece.end_m[1], 0.0];
+                argusnet_world::powerline::segment_distance(here, here, start, end)
+            };
+            distance(a).total_cmp(&distance(b))
+        })?;
+        let (dx, dy) = (
+            nearest.end_m[0] - nearest.start_m[0],
+            nearest.end_m[1] - nearest.start_m[1],
+        );
+        let length = dx.hypot(dy);
+        if length < 1e-9 {
+            return None;
+        }
+        let along = [dx / length, dy / length];
+        if (direction[0] * along[0] + direction[1] * along[1]).abs() < along_cos {
+            return None;
+        }
+        // Whichever side it is on; exactly on the wire, the left of the wire.
+        let normal = [-along[1], along[0]];
+        let side =
+            (xy_m[0] - nearest.start_m[0]) * normal[0] + (xy_m[1] - nearest.start_m[1]) * normal[1];
+        let sign = if side < 0.0 { -1.0 } else { 1.0 };
+        Some([normal[0] * sign, normal[1] * sign])
+    }
+
+    /// Whether a straight flight crosses this wire.
+    fn crossed_by(&self, from: [f64; 2], to: [f64; 2]) -> bool {
+        let flat = |p: [f64; 2]| [p[0], p[1], 0.0];
+        self.pieces.iter().any(|piece| {
+            argusnet_world::powerline::segment_distance(
+                flat(from),
+                flat(to),
+                flat([piece.start_m[0], piece.start_m[1]]),
+                flat([piece.end_m[0], piece.end_m[1]]),
+            ) < 1e-6
+        })
     }
 
     /// Add this wire's bound for a flight from `from` to `to` at `z_m`, if
@@ -1293,7 +1615,8 @@ impl FittedHazard {
         };
         let ceiling = bottom - self.clearance_m;
         if z_m < top && (beside || z_m <= ceiling) {
-            bounds.ceiling_m = Some(bounds.ceiling_m.map_or(ceiling, |c| c.min(ceiling)));
+            bounds.lower(ceiling);
+            bounds.over(top + self.clearance_m);
         } else {
             let floor = top + self.clearance_m;
             bounds.floor_m = Some(bounds.floor_m.map_or(floor, |f| f.max(floor)));
@@ -1308,14 +1631,107 @@ pub struct WireBounds {
     pub floor_m: Option<f64>,
     /// Fly at most this high: under a wire.
     pub ceiling_m: Option<f64>,
+    /// The height that clears what set the ceiling, for a platform with no
+    /// room under it: a wire over a hilltop.
+    pub over_m: Option<f64>,
+}
+
+impl WireBounds {
+    fn raise(&mut self, floor_m: f64) {
+        self.floor_m = Some(self.floor_m.map_or(floor_m, |f| f.max(floor_m)));
+    }
+
+    fn lower(&mut self, ceiling_m: f64) {
+        self.ceiling_m = Some(self.ceiling_m.map_or(ceiling_m, |c| c.min(ceiling_m)));
+    }
+
+    fn over(&mut self, over_m: f64) {
+        self.over_m = Some(self.over_m.map_or(over_m, |o| o.max(over_m)));
+    }
 }
 
 /// A fitted span's id: tracks are numbered, and name no true wire.
 const FITTED_PREFIX: &str = "wire-track-";
 
-/// Whether a span id names a fitted wire track, not a surveyed line.
+/// A corridor span's id (W3): poles are numbered, and name no true line.
+const CORRIDOR_PREFIX: &str = "wire-corridor-";
+
+/// A prior span's id (W5).
+const PRIOR_PREFIX: &str = "wire-prior-";
+
+/// Whether a span id names a wire worked out from measurements, not a
+/// surveyed line: a fitted track or a corridor.
 pub fn is_fitted_span(id: &str) -> bool {
-    id.starts_with(FITTED_PREFIX)
+    id.starts_with(FITTED_PREFIX) || id.starts_with(CORRIDOR_PREFIX) || id.starts_with(PRIOR_PREFIX)
+}
+
+/// A prior span as the planners read it: where the map says, kept clear of
+/// by its declared error as well as the clearance.
+fn prior_span(
+    span: &argusnet_mapping::wire_prior::PriorSpan,
+    config: &argusnet_mapping::wires::WireTrackerConfig,
+) -> Option<PowerLine> {
+    use argusnet_world::powerline::Support;
+    /// A map gives attachments, and the wire sags from them.
+    const ASSUMED_SAG_RATIO: f64 = 0.03;
+    let support = |at: [f64; 3]| Support {
+        xy_m: [at[0], at[1]],
+        base_z_m: at[2] - 1.0,
+        height_m: 1.0,
+    };
+    PowerLine {
+        id: format!("{PRIOR_PREFIX}{}", span.id),
+        supports: vec![support(span.from_m), support(span.to_m)],
+        conductor_offsets_m: vec![0.0],
+        sag_ratio: ASSUMED_SAG_RATIO,
+        conductor_radius_m: config.assumed_radius_m,
+        clearance_m: config.clearance_m
+            + config.envelope_sigmas * span.sigma_lateral_m.max(span.sigma_vertical_m),
+    }
+    .validated()
+    .ok()
+}
+
+/// A pole as a replay row (W3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MappedPole {
+    pub id: u32,
+    pub xy_m: [f64; 2],
+    /// The lowest and highest returns: a top that is open may be higher.
+    pub low_z_m: f64,
+    pub high_z_m: f64,
+    pub sigma_m: f64,
+    pub top_open: bool,
+}
+
+/// A corridor as a span the planners read as they read a fitted wire: the
+/// wires it holds between its ends, widened by its uncertainty. The stretch
+/// no sensor saw has the clearance of something predicted.
+fn corridor_span(
+    corridor: &argusnet_mapping::poles::CorridorSpan,
+    config: &argusnet_mapping::wires::WireTrackerConfig,
+) -> Option<PowerLine> {
+    use argusnet_world::powerline::Support;
+    let support = |at: [f64; 3]| Support {
+        xy_m: [at[0], at[1]],
+        base_z_m: at[2] - 1.0,
+        height_m: 1.0,
+    };
+    let width = corridor.half_width_m;
+    PowerLine {
+        id: format!("{CORRIDOR_PREFIX}{}", corridor.key),
+        supports: vec![support(corridor.from_m), support(corridor.to_m)],
+        conductor_offsets_m: if width < 0.25 {
+            vec![0.0]
+        } else {
+            vec![-width, width]
+        },
+        sag_ratio: corridor.sag_ratio,
+        conductor_radius_m: config.assumed_radius_m,
+        clearance_m: config.clearance_m + config.envelope_sigmas * corridor.sigma_m,
+    }
+    .validated()
+    .ok()
 }
 
 /// A confirmed track as a span the planners read: one conductor between its
@@ -1491,6 +1907,13 @@ pub struct BeliefSnapshot {
     wires: Arc<Vec<PowerLine>>,
     /// The fitted spans (W2), for the height a platform must hold over them.
     fitted_hazards: Arc<Vec<FittedHazard>>,
+    /// The poles detected (W3).
+    poles: Arc<Vec<PoleHazard>>,
+    /// What crossing a fitted wire costs a choice of goal (W4), metres.
+    crossing_penalty_m: f64,
+    /// Where flight could still settle an unverified prior span (W5): the
+    /// explorers' goals as much as unmapped ground is.
+    prior_goals: Arc<Vec<[f64; 2]>>,
     /// Each cell's deficit against the run's quality requirement (SR5a);
     /// `None` without one.
     quality: Option<Arc<QualityLayer>>,
@@ -1550,6 +1973,24 @@ impl BeliefSnapshot {
     pub fn needs_work(&self, x_m: f64, y_m: f64, share: f64) -> bool {
         let (i, j) = self.ij(x_m, y_m);
         self.block_work_share(i / BLOCK_CELLS, j / BLOCK_CELLS) >= share
+    }
+
+    /// Whether an explorer's goal at `(x_m, y_m)` still has work: ground to
+    /// map ([`Self::needs_work`]) or a prior span to settle there (W5).
+    pub fn goal_has_work(&self, x_m: f64, y_m: f64, share: f64) -> bool {
+        self.needs_work(x_m, y_m, share)
+            || self
+                .prior_goals
+                .iter()
+                .any(|p| (p[0] - x_m).hypot(p[1] - y_m) < self.resolution_m)
+    }
+
+    /// The explorers' candidate goals: every block that needs flying, then
+    /// each stretch of a prior span flight could still settle.
+    pub fn goal_centres(&self, share: f64) -> Vec<[f64; 2]> {
+        let mut centres = self.work_centres(share);
+        centres.extend(self.prior_goals.iter().copied());
+        centres
     }
 
     /// The centre of every block that needs flying ([`Self::needs_work`]),
@@ -1783,6 +2224,15 @@ impl BeliefSnapshot {
                 .safety_top_at(point_m[0], point_m[1])
                 .is_some_and(below)
             || self.in_wire_band(point_m)
+            || self.at_pole(point_m)
+    }
+
+    /// Whether `point_m` is inside a pole's keep-out.
+    fn at_pole(&self, point_m: [f64; 3]) -> bool {
+        self.poles.iter().any(|pole| {
+            (point_m[0] - pole.xy_m[0]).hypot(point_m[1] - pole.xy_m[1]) <= pole.keep_out_m
+                && point_m[2] <= pole.top_z_m + pole.keep_out_m
+        })
     }
 
     /// Whether any fitted wire is on the map.
@@ -1814,6 +2264,137 @@ impl BeliefSnapshot {
             hazard.bound(xy_m, end, z_m, &mut bounds);
         }
         bounds
+    }
+
+    /// The heights to keep for everything known ahead (W4): fitted wires as
+    /// [`Self::wire_bounds_ahead`], poles, and evidence no track has
+    /// confirmed, which is where a wire is first known at all.
+    pub fn hazard_bounds_ahead(
+        &self,
+        xy_m: [f64; 2],
+        direction: [f64; 2],
+        reach_m: f64,
+        z_m: f64,
+        clearance_m: f64,
+    ) -> WireBounds {
+        let mut bounds = self.wire_bounds_ahead(xy_m, direction, reach_m, z_m);
+        let end = [
+            xy_m[0] + direction[0] * reach_m,
+            xy_m[1] + direction[1] * reach_m,
+        ];
+        let flat = |p: [f64; 2]| [p[0], p[1], 0.0];
+        for pole in self.poles.iter() {
+            let across = argusnet_world::powerline::segment_distance(
+                flat(xy_m),
+                flat(end),
+                flat(pole.xy_m),
+                flat(pole.xy_m),
+            );
+            // A pole goes to the ground: nothing passes under it.
+            if across <= clearance_m {
+                bounds.raise(pole.top_z_m + clearance_m);
+            }
+        }
+        if !self.wire_band.is_empty() {
+            let steps = (reach_m / self.resolution_m).ceil().max(1.0) as usize;
+            let mut last = usize::MAX;
+            for k in 0..=steps {
+                let t = k as f64 / steps as f64;
+                let at = [
+                    xy_m[0] + (end[0] - xy_m[0]) * t,
+                    xy_m[1] + (end[1] - xy_m[1]) * t,
+                ];
+                let (i, j) = self.ij(at[0], at[1]);
+                let cell = j * self.nx + i;
+                if cell == last {
+                    continue;
+                }
+                last = cell;
+                let band = self.wire_band[cell];
+                if band[0].is_nan() {
+                    continue;
+                }
+                if self
+                    .fitted_hazards
+                    .iter()
+                    .any(|hazard| hazard.covers([at[0], at[1], z_m]))
+                {
+                    continue;
+                }
+                if z_m <= band[0] - clearance_m {
+                    bounds.lower(band[0] - clearance_m);
+                    bounds.over(band[1] + clearance_m);
+                } else {
+                    bounds.raise(band[1] + clearance_m);
+                }
+            }
+        }
+        bounds
+    }
+
+    /// Which way out of a fitted wire's corridor a flight along it should
+    /// turn (W4): a flight running with a line has neither over nor under for
+    /// long, and only a move sideways leaves it. `None` when it is not in one,
+    /// is crossing one, or wire planning is off, or when `goal_m` lies inside
+    /// the corridor, where the flight is going on purpose: `goal_m` is `None`
+    /// for a flight with no goal of its own, such as a search lane, which is
+    /// turned out wherever it runs.
+    pub fn out_of_corridor(
+        &self,
+        xy_m: [f64; 2],
+        direction: [f64; 2],
+        goal_m: Option<[f64; 2]>,
+    ) -> Option<[f64; 2]> {
+        /// A flight within about 25 degrees of a wire is running along it.
+        /// Wider, a flight crossing at an angle was turned back out at the
+        /// edge, again and again, and never held a heading the climb over
+        /// the wire could use.
+        const ALONG_COS: f64 = 0.9;
+        if self.crossing_penalty_m <= 0.0 {
+            return None;
+        }
+        let here = [xy_m[0], xy_m[1], 0.0];
+        let goal = goal_m.map(|goal| [goal[0], goal[1], 0.0]);
+        self.fitted_hazards
+            .iter()
+            .filter(|hazard| {
+                hazard.repels && hazard.covers(here) && !goal.is_some_and(|g| hazard.covers(g))
+            })
+            .find_map(|hazard| hazard.way_out(xy_m, direction, ALONG_COS))
+    }
+
+    /// What a straight flight between two points costs in crossing fitted
+    /// wires, in metres of flight: nothing without wire planning.
+    pub fn crossing_cost_m(&self, from_m: [f64; 2], to_m: [f64; 2]) -> f64 {
+        if self.crossing_penalty_m <= 0.0 {
+            return 0.0;
+        }
+        /// How often a flight is tested for running along a wire, metres.
+        const STEP_M: f64 = 20.0;
+        /// What a metre flown over a wire's own line costs, in metres: a
+        /// flight along a line has neither over nor under for long.
+        const ALONG_COST: f64 = 5.0;
+        let crossed = self
+            .fitted_hazards
+            .iter()
+            .filter(|hazard| hazard.repels && hazard.crossed_by(from_m, to_m))
+            .count();
+        let length = (to_m[0] - from_m[0]).hypot(to_m[1] - from_m[1]);
+        let steps = (length / STEP_M).ceil().max(1.0) as usize;
+        let along = (0..=steps)
+            .filter(|&k| {
+                let t = k as f64 / steps as f64;
+                let at = [
+                    from_m[0] + (to_m[0] - from_m[0]) * t,
+                    from_m[1] + (to_m[1] - from_m[1]) * t,
+                    0.0,
+                ];
+                self.fitted_hazards
+                    .iter()
+                    .any(|hazard| hazard.repels && hazard.covers(at))
+            })
+            .count();
+        self.crossing_penalty_m * crossed as f64 + ALONG_COST * STEP_M * along as f64
     }
 
     /// Whether `point_m` is in a measured wire hazard: a height band over
@@ -2055,6 +2636,12 @@ impl PhysicalGuard {
             wires: Arc::new(Vec::new()),
             contacts: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// How far from the ground and structures the guard keeps platforms,
+    /// metres.
+    pub fn clearance_m(&self) -> f64 {
+        self.clearance_m
     }
 
     /// The guard, also keeping platforms out of `lines`' conductors: the
@@ -2718,11 +3305,12 @@ mod tests {
         };
         let over = WireBounds {
             floor_m: Some(110.0),
-            ceiling_m: None,
+            ..WireBounds::default()
         };
         let under = WireBounds {
             floor_m: None,
             ceiling_m: Some(90.0),
+            over_m: Some(110.0),
         };
         let toward = ([50.0, -40.0], [50.0, -5.0]);
         assert_eq!(bound(toward.0, toward.1, 105.0), over, "above it");
@@ -2733,6 +3321,52 @@ mod tests {
             bound([50.0, -40.0], [50.0, -20.0], 95.0),
             WireBounds::default(),
             "not reached yet"
+        );
+    }
+
+    /// W4: a flight along a wire turns out of its corridor, to the side it
+    /// is on; one crossing it, or going to a goal inside it, does not.
+    #[test]
+    fn a_flight_along_a_wire_turns_out_of_its_corridor() {
+        let hazard = FittedHazard::new(&wire(100.0));
+        assert_eq!(
+            hazard.way_out([50.0, 3.0], [1.0, 0.0], 0.64),
+            Some([0.0, 1.0])
+        );
+        assert_eq!(
+            hazard.way_out([50.0, -3.0], [-1.0, 0.0], 0.64),
+            Some([0.0, -1.0])
+        );
+        assert_eq!(hazard.way_out([50.0, 3.0], [0.0, 1.0], 0.64), None);
+        let config = ExplorationConfig {
+            wire_planning: Some(WirePlanningConfig::default()),
+            ..ExplorationConfig::default()
+        };
+        let mut span = wire(100.0);
+        span.id = "wire-track-0".into();
+        let mut belief = grid();
+        belief.know_wires(vec![span]);
+        let snapshot = belief.snapshot(&config);
+        let (at, east) = ([50.0, 3.0], [1.0, 0.0]);
+        assert!(snapshot
+            .out_of_corridor(at, east, Some([90.0, 80.0]))
+            .is_some());
+        assert_eq!(snapshot.out_of_corridor(at, east, Some([90.0, 4.0])), None);
+        assert!(
+            snapshot.out_of_corridor(at, east, None).is_some(),
+            "a lane is turned out wherever it runs"
+        );
+        assert_eq!(
+            snapshot.out_of_corridor(at, [0.7, 0.7], Some([90.0, 80.0])),
+            None,
+            "crossing at 45 degrees is the climb's, not a turn's"
+        );
+        assert_eq!(
+            belief
+                .snapshot(&ExplorationConfig::default())
+                .out_of_corridor(at, east, Some([90.0, 80.0])),
+            None,
+            "off without wire planning"
         );
     }
 

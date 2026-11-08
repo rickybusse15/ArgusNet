@@ -2,6 +2,28 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Power-line follow-ups. Most remaining close passes were explorers: corridor
+  steering now turns only flights within 25 degrees of a wire, including
+  search lanes, and fixture ticks within 10 m fell to 3.0 (W4) and 1.7 (W5).
+  Explorers fly to unsettled stretches of prior spans, so phantoms are
+  refuted 0.72 times per run against 0.31. A smooth rejoin starting inside the
+  ground clearance no longer pins a drone on its pad, which affects every
+  `--world-knowledge none` run; the canonical scenarios are unchanged. The
+  viewer draws mapped poles, and corridors and prior spans in their own
+  colour. See `docs/migration/WIRE_CORRIDORS.md`.
+- Poles, corridors, wire-aware flight and uncertain priors (W3 to W5).
+  `--detect-poles` measures poles among the LiDAR returns, splits wire tracks
+  at them and maps corridors, including stretches no sensor saw.
+  `--wire-planning` holds every flight clear of what is believed, mission
+  flights too, and works each side of a line before crossing it.
+  `--wire-prior-file` starts from a wire map with declared errors, which
+  flight confirms, moves or refutes. On West Pleasant View, no platform-tick
+  came within 10 m of a conductor, closest 17 to 38 m against 1.0 to 8.1 m
+  with fitted wires alone, with 91 to 97% of the map known against 94 to 96%.
+  On the scan fixture, ticks within 10 m fell from 7.2 to 3.8, and to 1.9 with
+  a prior. Escapes from under a wire no longer hold to the survey height,
+  which pinned drones for good; that fix applies to every `--world-knowledge
+  none` run. The canonical scenarios are unchanged. See `docs/migration/WIRE_CORRIDORS.md`.
 - Wire tracking (W2). `--track-wires` fits measured wire points and camera
   lines into tracks: one conductor over one span, a line plus a parabola, with
   uncertainty that widens the clearance kept. Confirmed tracks are mapped as

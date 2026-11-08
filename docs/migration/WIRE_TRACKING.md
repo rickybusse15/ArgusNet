@@ -118,7 +118,7 @@ was pinned at either seed, so the guard-stop change leaves these runs unchanged.
   its existing rejoin behaviour.
 - **Tracks across a pole.** A track seen on both sides of an unseen pole can fit
   through it. That is the 4.5 m miss, and its reported sigma did not show it.
-  Pole detection (W3) splits them.
+  Pole detection splits them ([WIRE_CORRIDORS.md](WIRE_CORRIDORS.md)).
 - **Short tracking range.** A wire at flight height is seen late: the camera
   sees a 3 cm conductor to under 40 m, about 2 s at cruise.
 - **Mission flights.** Inspection flights near a wire are not changed by the
