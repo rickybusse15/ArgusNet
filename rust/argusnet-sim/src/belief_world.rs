@@ -1458,6 +1458,12 @@ impl BeliefGrid {
                 .wire_planning
                 .as_ref()
                 .map_or(0.0, |planning| planning.crossing_penalty_m),
+            prior_goals: Arc::new(
+                self.wire_prior_map
+                    .as_ref()
+                    .map(|prior| prior.unsettled_points())
+                    .unwrap_or_default(),
+            ),
             quality: None,
         };
         if let Some(hazards) = fitted_hazards {
@@ -1905,6 +1911,9 @@ pub struct BeliefSnapshot {
     poles: Arc<Vec<PoleHazard>>,
     /// What crossing a fitted wire costs a choice of goal (W4), metres.
     crossing_penalty_m: f64,
+    /// Where flight could still settle an unverified prior span (W5): the
+    /// explorers' goals as much as unmapped ground is.
+    prior_goals: Arc<Vec<[f64; 2]>>,
     /// Each cell's deficit against the run's quality requirement (SR5a);
     /// `None` without one.
     quality: Option<Arc<QualityLayer>>,
@@ -1964,6 +1973,24 @@ impl BeliefSnapshot {
     pub fn needs_work(&self, x_m: f64, y_m: f64, share: f64) -> bool {
         let (i, j) = self.ij(x_m, y_m);
         self.block_work_share(i / BLOCK_CELLS, j / BLOCK_CELLS) >= share
+    }
+
+    /// Whether an explorer's goal at `(x_m, y_m)` still has work: ground to
+    /// map ([`Self::needs_work`]) or a prior span to settle there (W5).
+    pub fn goal_has_work(&self, x_m: f64, y_m: f64, share: f64) -> bool {
+        self.needs_work(x_m, y_m, share)
+            || self
+                .prior_goals
+                .iter()
+                .any(|p| (p[0] - x_m).hypot(p[1] - y_m) < self.resolution_m)
+    }
+
+    /// The explorers' candidate goals: every block that needs flying, then
+    /// each stretch of a prior span flight could still settle.
+    pub fn goal_centres(&self, share: f64) -> Vec<[f64; 2]> {
+        let mut centres = self.work_centres(share);
+        centres.extend(self.prior_goals.iter().copied());
+        centres
     }
 
     /// The centre of every block that needs flying ([`Self::needs_work`]),
@@ -2309,23 +2336,30 @@ impl BeliefSnapshot {
     /// turn (W4): a flight running with a line has neither over nor under for
     /// long, and only a move sideways leaves it. `None` when it is not in one,
     /// is crossing one, or wire planning is off, or when `goal_m` lies inside
-    /// the corridor, where the flight is going on purpose.
+    /// the corridor, where the flight is going on purpose: `goal_m` is `None`
+    /// for a flight with no goal of its own, such as a search lane, which is
+    /// turned out wherever it runs.
     pub fn out_of_corridor(
         &self,
         xy_m: [f64; 2],
         direction: [f64; 2],
-        goal_m: [f64; 2],
+        goal_m: Option<[f64; 2]>,
     ) -> Option<[f64; 2]> {
-        /// A flight within about 50 degrees of a wire is running along it.
-        const ALONG_COS: f64 = 0.64;
+        /// A flight within about 25 degrees of a wire is running along it.
+        /// Wider, a flight crossing at an angle was turned back out at the
+        /// edge, again and again, and never held a heading the climb over
+        /// the wire could use.
+        const ALONG_COS: f64 = 0.9;
         if self.crossing_penalty_m <= 0.0 {
             return None;
         }
         let here = [xy_m[0], xy_m[1], 0.0];
-        let goal = [goal_m[0], goal_m[1], 0.0];
+        let goal = goal_m.map(|goal| [goal[0], goal[1], 0.0]);
         self.fitted_hazards
             .iter()
-            .filter(|hazard| hazard.repels && hazard.covers(here) && !hazard.covers(goal))
+            .filter(|hazard| {
+                hazard.repels && hazard.covers(here) && !goal.is_some_and(|g| hazard.covers(g))
+            })
             .find_map(|hazard| hazard.way_out(xy_m, direction, ALONG_COS))
     }
 
@@ -2602,6 +2636,12 @@ impl PhysicalGuard {
             wires: Arc::new(Vec::new()),
             contacts: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// How far from the ground and structures the guard keeps platforms,
+    /// metres.
+    pub fn clearance_m(&self) -> f64 {
+        self.clearance_m
     }
 
     /// The guard, also keeping platforms out of `lines`' conductors: the
@@ -3308,12 +3348,23 @@ mod tests {
         belief.know_wires(vec![span]);
         let snapshot = belief.snapshot(&config);
         let (at, east) = ([50.0, 3.0], [1.0, 0.0]);
-        assert!(snapshot.out_of_corridor(at, east, [90.0, 80.0]).is_some());
-        assert_eq!(snapshot.out_of_corridor(at, east, [90.0, 4.0]), None);
+        assert!(snapshot
+            .out_of_corridor(at, east, Some([90.0, 80.0]))
+            .is_some());
+        assert_eq!(snapshot.out_of_corridor(at, east, Some([90.0, 4.0])), None);
+        assert!(
+            snapshot.out_of_corridor(at, east, None).is_some(),
+            "a lane is turned out wherever it runs"
+        );
+        assert_eq!(
+            snapshot.out_of_corridor(at, [0.7, 0.7], Some([90.0, 80.0])),
+            None,
+            "crossing at 45 degrees is the climb's, not a turn's"
+        );
         assert_eq!(
             belief
                 .snapshot(&ExplorationConfig::default())
-                .out_of_corridor(at, east, [90.0, 80.0]),
+                .out_of_corridor(at, east, Some([90.0, 80.0])),
             None,
             "off without wire planning"
         );

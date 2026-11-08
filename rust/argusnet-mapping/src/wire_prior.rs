@@ -259,6 +259,35 @@ impl PriorMap {
         }
     }
 
+    /// Where flight could still settle an open span: the middle of each
+    /// stretch with neither a return near it nor enough silent scans, on the
+    /// ground under the wire.
+    pub fn unsettled_points(&self) -> Vec<[f64; 2]> {
+        let config = &self.config;
+        let mut points = Vec::new();
+        for state in self.spans.iter().filter(|s| s.status == PriorStatus::Open) {
+            let span = &state.span;
+            let length = flat_length(span);
+            let stretches = (length / config.stretch_m).ceil() as i32;
+            for k in 0..stretches {
+                let settled = state.hits.contains(&k)
+                    || state
+                        .misses
+                        .get(&k)
+                        .is_some_and(|n| *n >= config.refute_scans);
+                if settled {
+                    continue;
+                }
+                let t = ((f64::from(k) + 0.5) * config.stretch_m / length.max(1e-9)).min(1.0);
+                points.push([
+                    span.from_m[0] + (span.to_m[0] - span.from_m[0]) * t,
+                    span.from_m[1] + (span.to_m[1] - span.from_m[1]) * t,
+                ]);
+            }
+        }
+        points
+    }
+
     /// Hold the prior against what was fitted: a confirmed track on a span
     /// moves it by the track's offset and shrinks its error. A span is only
     /// raised: the prior's height is at the attachments, a track's is lower
@@ -477,6 +506,18 @@ mod tests {
         high.to_m[2] = 150.0;
         map.reconcile(&[high]);
         assert_eq!(map.spans()[0].status, PriorStatus::Open);
+    }
+
+    /// Every stretch is unsettled at first; one with a return near it, or
+    /// enough silent scans, is not; a span no longer open has none.
+    #[test]
+    fn unsettled_points_shrink_as_flight_settles_stretches() {
+        let mut map = map();
+        assert_eq!(map.unsettled_points().len(), 10);
+        map.observe([100.0, 0.0, 80.0], &[[100.0, 3.0, 50.0]], &[]);
+        assert_eq!(map.unsettled_points().len(), 9);
+        map.reconcile(&[track(0.0, 60.0)]);
+        assert!(map.unsettled_points().is_empty());
     }
 
     #[test]

@@ -137,15 +137,70 @@ knowledge. Distances are from the conductors, checked in 2 m steps.
 Keeping off the line cost at most 4.5 points of map in these 300 s, and at seed
 42 W4 mapped more than W2. Two seeds are too few to rank W4 against W5 here.
 
+## Follow-ups (2026-11-08)
+
+**Where the close passes came from.** The evaluator now records what was
+flying each drone at every pass within 10 m. Of W4's 147, 137 were explorers,
+4 POI flights and 6 egress, so the work went to explorers, not mission flights.
+Two causes were traced and fixed:
+
+- **Dithering at a corridor's edge.** A flight crossing a line at up to 50
+  degrees was treated as running along it, turned out, and came back in, tick
+  after tick, never holding a heading the climb over the wire could use. Only
+  flights within 25 degrees of a wire are turned out now; a crossing is the
+  governor's.
+- **A lane down the wire.** With no frontier goal left an explorer flies its
+  search lane, and steering spared any goal inside a corridor. Lanes are now
+  turned out wherever they run; only a frontier goal inside a corridor is
+  approached on purpose.
+
+**Settling priors.** Each stretch of an unverified prior span that no return
+and no run of silent scans has settled is now an explorer goal, alongside
+unmapped ground. Refuted phantoms per run rose from 0.31 to 0.72 and confirmed
+spans from 3.1 to 3.6, at the cost of 1.2 to 1.7 ticks within 10 m and 0.4
+points of map: drones now fly near prior spans on purpose, true ones included.
+
+**A drone pinned on its pad.** After a mission a smooth rejoin steps the drone
+back toward its path, and each step was stopped at its first ground contact.
+A drone on its pad starts inside the guard's ground clearance, so the contact
+was at once, every tick: 2,382 contacts in one W2 run. A step that starts
+inside the clearance is now left to `enforce`, which lifts its end clear, as a
+step starting inside a structure already was. This is not behind a flag. The 14
+canonical scenarios are unchanged, and the lifecycle checks are equal.
+
+**Viewer.** Poles are drawn upright from their lowest return to their highest,
+and corridors and prior spans (`wire-corridor-*`, `wire-prior-*`) in a paler
+blue than measured wires, all under the Mapped Wires toggle.
+
+| Mode | Ticks within 10 m | Median closest (m) | Runs under 5 m | Map known | Contacts, mean / worst |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Oracle | 7.8 | 3.6 | 25 | 99.6% | 11.0 / 16 |
+| W2 tracks | 7.2 | 5.5 | 19 | 99.7% | 12.1 / 40 |
+| W3 poles | 5.6 | 4.0 | 24 | 99.9% | 16.9 / 22 |
+| W4 planning | 3.0 | 9.5 | 14 | 99.8% | 16.7 / 21 |
+| W5 prior | 1.7 | 11.4 | 8 | 99.4% | 13.3 / 25 |
+
+[Report](../performance/wire-eval-2026-11-08.jsonl). W2's worst run had 2,382
+contacts before the rejoin fix.
+
+West Pleasant View, seeds 7 and 42, against the W3 to W5 results above:
+
+| Mode | Ticks within 10 m | Closest (m) | Map known, before | Map known, now |
+| --- | ---: | ---: | ---: | ---: |
+| W4 | 0, 0 | 17.1, 24.1 | 91.9%, 96.5% | 87.1%, 83.7% |
+| W5 | 0, 0 | 17.1, 22.4 | 91.2%, 93.0% | 95.1%, 94.8% |
+
+No pass came within 10 m either way. W4 maps 5 to 13 points less here: turning
+search lanes out of corridors keeps explorers off ground under the line that
+they used to map. W5 maps more, as prior goals send drones across the line on
+purpose. Two seeds are too few to say which holds in general.
+
 ## Known limits
 
-- **Mission flights along a line.** The governor moves only height, and only
-  explorers turn out of a corridor. 11 W4 fixture runs still pass within 5 m,
-  on 4 of the 13 placements.
-- **Phantoms.** Refuting a span needs a pass near it with a ray going past each
-  stretch, and only 26% of phantoms were refuted in the 400 s fixture runs,
-  down from 67% before silence needed a ray. A phantom left open is a wide
-  hazard, which costs map but not safety.
+- **Mission flights along a line.** The governor moves only height. Mission
+  flights were 7% of the close passes, so this was left.
+- **Phantoms.** 28% of phantom spans are still open after a 400 s fixture run.
+  An open phantom costs map, not safety.
 - **Before detection.** A wire or pole not yet seen is not avoided. The closest
   pass at some placements is in the first ticks.
 - **Clipped tops.** A row seen only from a distance can still sit low, within
@@ -154,9 +209,6 @@ Keeping off the line cost at most 4.5 points of map in these 300 s, and at seed
   costs and all sensor figures are assumed. Lattice towers, camera poles and
   false returns are not modelled. This is simulation evidence, not a claim
   about flight.
-- **W2 contacts.** W2 alone averages 134 contacts on the fixture because two
-  runs at one placement (line x = 120, top 260 m) record 2,382 each. Not
-  investigated here. With poles on, the same placement does not.
 
 ## Replay
 
@@ -164,5 +216,5 @@ Additive, absent when empty: `mapped_poles` on a frame (id, position, low and
 high returns, sigma, `top_open`), and `wire_poles`, `wire_corridors`,
 `wire_prior_open`, `wire_prior_confirmed` and `wire_prior_refuted` under
 `mapping_state.belief`. Corridors and prior spans use `mapped_wires` and
-`retired_wires`, so the viewer draws them as mapped wires. It does not draw
-poles yet.
+`retired_wires`. The viewer draws poles, and corridors and prior spans in their
+own colour.

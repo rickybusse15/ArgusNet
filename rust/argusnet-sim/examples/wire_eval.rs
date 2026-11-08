@@ -98,6 +98,10 @@ fn bundle(x_m: f64, top_m: f64, seed: u64) -> ScenarioBundle {
     ScenarioBundle::from_json(&document.to_string()).unwrap()
 }
 
+fn id_of(node: &serde_json::Value) -> String {
+    node["node_id"].as_str().unwrap_or_default().to_string()
+}
+
 fn off_conductor(lines: &[PowerLine], point_m: [f64; 3]) -> f64 {
     lines
         .iter()
@@ -131,6 +135,32 @@ struct Row {
     prior_open: u64,
     prior_confirmed: u64,
     prior_refuted: u64,
+    /// Platform-ticks within 10 m, by what was flying the platform: a POI
+    /// flight, egress, or the explorer.
+    near_poi: u64,
+    near_egress: u64,
+    near_explore: u64,
+    /// The tick of the first pass within 10 m, if any.
+    first_near_tick: Option<u64>,
+}
+
+/// What was flying `node` in `frame`, from the mission state it carries.
+fn flown_by(frame: &serde_json::Value, node: &str) -> &'static str {
+    let state = &frame["scan_mission_state"];
+    let on_poi = state["poi_statuses"].as_array().is_some_and(|pois| {
+        pois.iter()
+            .any(|poi| poi["assigned_drone_id"] == node && poi["status"] == "active")
+    });
+    let homeward = state["egress_progress"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().any(|row| row["drone_id"] == node));
+    if on_poi {
+        "poi"
+    } else if homeward {
+        "egress"
+    } else {
+        "explore"
+    }
 }
 
 fn run_one(mode: Mode, x_m: f64, top_m: f64, seed: u64) -> Row {
@@ -155,7 +185,7 @@ fn run_one(mode: Mode, x_m: f64, top_m: f64, seed: u64) -> Row {
         ..Row::default()
     };
     let mut last = BTreeMap::new();
-    for _ in 0..bundle.steps {
+    for tick in 0..bundle.steps {
         run.step().unwrap();
         let frame = serde_json::to_value(run.last_frame().unwrap()).unwrap();
         row.contacts += frame["world_contacts"]
@@ -173,6 +203,12 @@ fn run_one(mode: Mode, x_m: f64, top_m: f64, seed: u64) -> Row {
                 .any(|line| line.clearance_along(from, p) < 10.0)
             {
                 row.ticks_within_10_m += 1;
+                row.first_near_tick.get_or_insert(tick);
+                match flown_by(&frame, &id_of(node)) {
+                    "poi" => row.near_poi += 1,
+                    "egress" => row.near_egress += 1,
+                    _ => row.near_explore += 1,
+                }
             }
             row.closest_m = row.closest_m.min(off_conductor(&lines, p));
         }

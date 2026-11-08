@@ -77,6 +77,12 @@ pub const TOWER_COLOR: [f32; 3] = [0.56, 0.58, 0.58];
 /// Mapped wires: the spans the drones' own map holds, a belief cyan, so
 /// they read as known rather than true.
 pub const MAPPED_WIRE_COLOR: [f32; 4] = [0.25, 0.85, 0.95, 1.0];
+/// Inferred wires (W3, W5): corridors between poles and prior spans, where
+/// the map expects a wire it has not measured, a paler, bluer belief colour
+/// so they read as expected rather than seen.
+pub const INFERRED_WIRE_COLOR: [f32; 4] = [0.55, 0.62, 0.95, 1.0];
+/// The radius a mapped pole is drawn at, metres: as the sensor assumes.
+pub const MAPPED_POLE_RADIUS_M: f32 = 0.2;
 /// Clearance corridors: a translucent amber, the caution colour.
 pub const CLEARANCE_COLOR: [f32; 4] = [1.0, 0.55, 0.05, 0.35];
 /// Segments round each conductor's clearance tube.
@@ -153,26 +159,36 @@ impl Plugin for PowerLinePlugin {
 /// vertices per straight piece, at its two ends, each carrying the other
 /// end. `None` for no lines.
 pub fn wire_mesh(lines: &[PowerLine]) -> Option<Mesh> {
+    segment_mesh(lines.iter().flat_map(|line| {
+        let radius = line.conductor_radius_m as f32;
+        line.pieces().into_iter().map(move |piece| {
+            (
+                piece.start_m.map(|v| v as f32),
+                piece.end_m.map(|v| v as f32),
+                radius,
+            )
+        })
+    }))
+}
+
+/// Straight segments `(start, end, radius)` as one mesh of screen-space
+/// quads, drawn by [`WireMaterial`]. `None` for none.
+pub fn segment_mesh(segments: impl IntoIterator<Item = ([f32; 3], [f32; 3], f32)>) -> Option<Mesh> {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut others: Vec<[f32; 3]> = Vec::new();
     let mut shapes: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    for line in lines {
-        let radius = line.conductor_radius_m as f32;
-        for piece in line.pieces() {
-            let start = piece.start_m.map(|v| v as f32);
-            let end = piece.end_m.map(|v| v as f32);
-            let base = positions.len() as u32;
-            for (at, other, end_sign) in [(start, end, -1.0), (end, start, 1.0)] {
-                for side in [1.0, -1.0] {
-                    positions.push(at);
-                    others.push(other);
-                    shapes.push([side, end_sign, radius]);
-                }
+    for (start, end, radius) in segments {
+        let base = positions.len() as u32;
+        for (at, other, end_sign) in [(start, end, -1.0), (end, start, 1.0)] {
+            for side in [1.0, -1.0] {
+                positions.push(at);
+                others.push(other);
+                shapes.push([side, end_sign, radius]);
             }
-            // Start left, start right, end left, end right.
-            indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
         }
+        // Start left, start right, end left, end right.
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
     }
     if indices.is_empty() {
         return None;
@@ -612,26 +628,38 @@ pub fn sync_power_lines(
     }
 }
 
-/// Marks the mapped-wire mesh.
+/// Marks a mapped-wire mesh: measured wires, inferred wires or poles.
 #[derive(Component)]
 pub struct MappedWiresPart;
 
-/// The spans the platforms' own map holds, drawn as wires (R3).
+/// The spans and poles the platforms' own map holds, drawn (R3, W3).
 #[derive(Resource, Default)]
 pub struct MappedWires {
-    /// The run and how many span rows its frames recorded up to the cursor.
-    built_for: Option<(u64, usize)>,
-    entity: Option<Entity>,
-    mesh: Option<Handle<Mesh>>,
-    material: Option<Handle<WireMaterial>>,
+    /// The run, and how many span and pole rows its frames recorded up to
+    /// the cursor.
+    built_for: Option<(u64, usize, usize)>,
+    entities: Vec<Entity>,
+    meshes: Vec<Handle<Mesh>>,
+    /// Measured, inferred and pole materials, made once.
+    materials: Option<[Handle<WireMaterial>; 3]>,
     spans: usize,
+    inferred: usize,
+    poles: usize,
     builds: u64,
 }
 
 impl MappedWires {
-    /// Spans drawn.
+    /// Spans drawn, measured and inferred.
     pub fn span_count(&self) -> usize {
         self.spans
+    }
+    /// Of those, spans the map expects but has not measured.
+    pub fn inferred_count(&self) -> usize {
+        self.inferred
+    }
+    /// Poles drawn.
+    pub fn pole_count(&self) -> usize {
+        self.poles
     }
     /// How many times the geometry was built.
     pub fn builds(&self) -> u64 {
@@ -639,11 +667,18 @@ impl MappedWires {
     }
 }
 
-/// Draw the spans the platforms' own map holds at the cursor: the frames'
-/// `mapped_wires` up to it, wires only (the map holds conductors), in
-/// [`MAPPED_WIRE_COLOR`]. Rebuilt only when the run or the number of span
-/// rows up to the cursor changes, so scrubbing back removes what was mapped
-/// later. Shown with the Mapped Wires toggle.
+/// Whether a mapped span is expected rather than measured: a corridor
+/// between poles (W3) or a span of a prior map (W5).
+pub fn is_inferred_span(id: &str) -> bool {
+    id.starts_with("wire-corridor-") || id.starts_with("wire-prior-")
+}
+
+/// Draw what the platforms' own map holds at the cursor: the frames'
+/// `mapped_wires` up to it, measured wires in [`MAPPED_WIRE_COLOR`] and
+/// inferred ones in [`INFERRED_WIRE_COLOR`], and the frames' `mapped_poles`
+/// as upright lines from their lowest return to their highest. Rebuilt only
+/// when the run or the number of rows up to the cursor changes, so scrubbing
+/// back removes what was mapped later. Shown with the Mapped Wires toggle.
 #[allow(clippy::too_many_arguments)]
 pub fn sync_mapped_wires(
     mut commands: Commands,
@@ -663,24 +698,26 @@ pub fn sync_mapped_wires(
         v.set_if_neq(visible);
     }
     let index = replay.frame_index;
-    let rows = replay
-        .document
-        .as_ref()
-        .map_or(0, |document| document.mapped_wire_rows_through(index));
-    let key = (replay.epoch(), rows);
+    let (rows, pole_rows) = replay.document.as_ref().map_or((0, 0), |document| {
+        (
+            document.mapped_wire_rows_through(index),
+            document.mapped_pole_rows_through(index),
+        )
+    });
+    let key = (replay.epoch(), rows, pole_rows);
     if drawn.built_for == Some(key) {
         return;
     }
     let drawn = drawn.as_mut();
     drawn.built_for = Some(key);
     drawn.builds += 1;
-    if let Some(entity) = drawn.entity.take() {
+    for entity in drawn.entities.drain(..) {
         commands.entity(entity).despawn();
     }
-    if let Some(handle) = drawn.mesh.take() {
+    for handle in drawn.meshes.drain(..) {
         meshes.remove(&handle);
     }
-    drawn.spans = 0;
+    (drawn.spans, drawn.inferred, drawn.poles) = (0, 0, 0);
     let Some(document) = replay.document.as_ref() else {
         return;
     };
@@ -688,34 +725,61 @@ pub fn sync_mapped_wires(
     for reason in &read.refused {
         warn!("mapped wire not drawn: {reason}");
     }
-    let Some(mesh) = wire_mesh(&read.lines) else {
-        return;
-    };
-    let material = drawn
-        .material
+    let (inferred, measured): (Vec<PowerLine>, Vec<PowerLine>) = read
+        .lines
+        .into_iter()
+        .partition(|line| is_inferred_span(&line.id));
+    let poles = document.mapped_poles_through(index);
+    drawn.spans = measured.len() + inferred.len();
+    drawn.inferred = inferred.len();
+    drawn.poles = poles.len();
+    let materials = drawn
+        .materials
         .get_or_insert_with(|| {
-            wire_materials.add(WireMaterial {
-                color: Vec4::from_array(MAPPED_WIRE_COLOR),
-                ..WireMaterial::default()
-            })
+            let mut material = |color: [f32; 4]| {
+                wire_materials.add(WireMaterial {
+                    color: Vec4::from_array(color),
+                    ..WireMaterial::default()
+                })
+            };
+            [
+                material(MAPPED_WIRE_COLOR),
+                material(INFERRED_WIRE_COLOR),
+                material(MAPPED_WIRE_COLOR),
+            ]
         })
         .clone();
-    let handle = meshes.add(mesh);
-    drawn.mesh = Some(handle.clone());
-    drawn.spans = read.lines.len();
-    drawn.entity = Some(
-        commands
-            .spawn((
-                MappedWiresPart,
-                PresentationOnly,
-                NoFrustumCulling,
-                Mesh3d(handle),
-                MeshMaterial3d(material),
-                Transform::IDENTITY,
-                visible,
-            ))
-            .id(),
-    );
+    let pole_mesh = segment_mesh(poles.iter().map(|pole| {
+        let [x, y] = pole.xy_m.map(|v| v as f32);
+        (
+            [x, y, pole.low_z_m as f32],
+            [x, y, pole.high_z_m as f32],
+            MAPPED_POLE_RADIUS_M,
+        )
+    }));
+    for (mesh, material) in [wire_mesh(&measured), wire_mesh(&inferred), pole_mesh]
+        .into_iter()
+        .zip(materials)
+    {
+        let Some(mesh) = mesh else {
+            continue;
+        };
+        let handle = meshes.add(mesh);
+        drawn.meshes.push(handle.clone());
+        drawn.entities.push(
+            commands
+                .spawn((
+                    MappedWiresPart,
+                    PresentationOnly,
+                    NoFrustumCulling,
+                    Mesh3d(handle),
+                    MeshMaterial3d(material),
+                    Transform::IDENTITY,
+                    visible,
+                ))
+                .id(),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1032,6 +1096,67 @@ mod tests {
         app.update();
         assert_eq!(mapped_parts(&mut app), [Visibility::Hidden]);
         assert!(parts(&mut app).is_empty(), "no true lines in this run");
+    }
+
+    /// Inferred spans (corridors, prior spans) are drawn apart from
+    /// measured ones, in their own colour, and poles stand from their lowest
+    /// return to their highest; each pole's latest row wins.
+    #[test]
+    fn inferred_spans_and_poles_are_drawn_apart() {
+        let fitted = {
+            let mut span = serde_json::to_value(line()).unwrap();
+            span["id"] = serde_json::json!("wire-track-0");
+            span
+        };
+        let mut corridor = fitted.clone();
+        corridor["id"] = serde_json::json!("wire-corridor-0-1");
+        let pole = |id: u32, high: f64| {
+            serde_json::json!({ "id": id, "xy_m": [0.0, 0.0], "low_z_m": 10.0,
+                "high_z_m": high, "sigma_m": 0.3, "top_open": true })
+        };
+        let mut late = mapped_frame(1.0, vec![corridor]);
+        late["mapped_poles"] = serde_json::json!([pole(0, 30.0), pole(1, 25.0)]);
+        let mut early = mapped_frame(0.0, vec![fitted]);
+        early["mapped_poles"] = serde_json::json!([pole(0, 20.0)]);
+        let mut app = app(serde_json::json!({ "meta": {}, "frames": [early, late] }));
+        app.add_systems(Update, sync_mapped_wires);
+        app.update();
+        let drawn = app.world().resource::<MappedWires>();
+        assert_eq!(
+            (
+                drawn.span_count(),
+                drawn.inferred_count(),
+                drawn.pole_count()
+            ),
+            (1, 0, 1)
+        );
+        app.world_mut().resource_mut::<ReplayState>().frame_index = 1;
+        app.update();
+        let drawn = app.world().resource::<MappedWires>();
+        assert_eq!(
+            (
+                drawn.span_count(),
+                drawn.inferred_count(),
+                drawn.pole_count()
+            ),
+            (2, 1, 2)
+        );
+        assert_eq!(mapped_parts(&mut app).len(), 3, "measured, inferred, poles");
+        let colors: Vec<Vec4> = app
+            .world()
+            .resource::<Assets<WireMaterial>>()
+            .iter()
+            .map(|(_, m)| m.color)
+            .collect();
+        assert!(colors.contains(&Vec4::from_array(INFERRED_WIRE_COLOR)));
+        let read = app
+            .world()
+            .resource::<ReplayState>()
+            .document
+            .as_ref()
+            .unwrap()
+            .mapped_poles_through(1);
+        assert_eq!(read[0].high_z_m, 30.0, "the latest row for a pole wins");
     }
 
     /// A line the model refuses is not drawn and its reason is kept; the
