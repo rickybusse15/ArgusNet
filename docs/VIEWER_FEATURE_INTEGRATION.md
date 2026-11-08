@@ -272,7 +272,7 @@ live).
 
 | Slice | Content | Gate |
 | --- | --- | --- |
-| V0 Shared frame contract | Add the missing frame content to the live protocol so `frame_from_pb` yields the same `ReplayFrame` as replay JSON. Additive proto fields; update Python bindings (`src/argusnet/v1/`) and Rust (`argusnet-proto`, `argusnet-core`, `argusnet-server`, `argusnet-replay`) together. Rust remains the source of truth for fused state; mapping state is published by the stage that owns it. | A recorded run replayed through the daemon and the same run loaded from JSON produce equal `ReplayFrame`s for every field in 7.2; fields still unavailable stay `None` |
+| V0 Shared frame contract (deferred, see below) | Add the missing frame content to the live protocol so `frame_from_pb` yields the same `ReplayFrame` as replay JSON. Additive proto fields; update Python bindings (`src/argusnet/v1/`) and Rust (`argusnet-proto`, `argusnet-core`, `argusnet-server`, `argusnet-replay`) together. Rust remains the source of truth for fused state; mapping state is published by the stage that owns it. | A recorded run replayed through the daemon and the same run loaded from JSON produce equal `ReplayFrame`s for every field in 7.2; fields still unavailable stay `None` |
 | V1 Shell and strip | Status strip; split `ui.rs` (~3000 lines) into strip, rail, inspector, dock and canvas modules before restyling; no behaviour change in the split commit | `headless.rs` snapshot of each module; existing viewer tests unchanged |
 | V2 Rail and inspector | Entity rail, typed selection shared with canvas picking, rejection-reason breakdown, per-source "unavailable" states | Keyboard-equivalent selection; non-colour status cues; selection survives workspace and projection changes |
 | V3 Layers and timeline | Belief/truth primary toggle, layer chips, projection toggle with reset and scale, error and map-known curves on the timeline, live history window | Truth hidden outside Evaluation; scrubbing never implies a live flight is paused |
@@ -306,7 +306,20 @@ dwells there. It is drawn from the frame's own mission state, and a POI without
 a recorded position or a drone draws nothing. The line has a Mission-overlays
 toggle, "Allocation lines", which no preset owns.
 
-V0 is the prerequisite for everything that makes live look like the console;
-V1–V3 can proceed on replay in parallel and are verified there first, then
-re-verified on live once V0 lands. V4 items are scheduled by their owning
+**V0 deferred (decided 2026-11-08).** The gap is ordering, not fields. The
+Python loop sends each tick's frame to `argusnetd` before that tick's mapping
+and mission state exist: team localization reads the tracks the ingest returns
+(`src/argusnet/simulation/sim.py`, `ingest_frame` then the state builders). Four
+ways were weighed: a second message per tick with the state, the previous
+tick's state on each frame (fails V0's own equality test), the daemon holding
+each frame until a tick-complete message, or deferring. Deferred, because the
+viewer's in-process path already has parity: `--run` receives `WorkerFrame`,
+whose `frame` is a complete `ReplayFrame` (`argusnet-sim/src/worker.rs`). Only
+the Python daemon path lacks it, and that path is retired in P6. In the Rust
+runtime one process owns every stage, so the ordering problem does not arise.
+V0 returns when an external or HIL telemetry client needs the daemon stream,
+designed for that client under ADR-008.
+
+Until then, V1–V3 are verified on replay and on the in-process `--run` path,
+not on the daemon stream. V4 items are scheduled by their owning
 backend phases rather than by the viewer track.
