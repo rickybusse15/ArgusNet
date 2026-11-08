@@ -899,14 +899,20 @@ impl ControllerStage {
                 StageError::Invariant(format!("controller {node_id} has no platform in the world"))
             })?;
             // Swept from where it was: a wire is thin enough to fly through
-            // between two ticks.
+            // between two ticks. A ground station does not fly, and the first
+            // tick places a platform rather than flying it there from the
+            // world's origin, where every platform is created.
             let position = match guard {
-                Some(guard) => {
-                    let from = [
-                        platform.position.x,
-                        platform.position.y,
-                        platform.position.z,
-                    ];
+                Some(guard) if !matches!(controller, PlatformController::Static { .. }) => {
+                    let from = if context.tick == 0 {
+                        position
+                    } else {
+                        [
+                            platform.position.x,
+                            platform.position.y,
+                            platform.position.z,
+                        ]
+                    };
                     let commanded = position;
                     let position = guard.enforce_from(node_id, timestamp_s, from, commanded);
                     let moved = (0..3)
@@ -920,7 +926,7 @@ impl ControllerStage {
                     }
                     position
                 }
-                None => position,
+                _ => position,
             };
             guard_nominal(nominal, node_id, timestamp_s, position, velocity);
             platform.position = Vector3::new(position[0], position[1], position[2]);
