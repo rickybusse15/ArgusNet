@@ -199,6 +199,13 @@ impl GotoHover {
         flight
     }
 
+    /// The same flight, `seconds` later: a flight that waited where it was
+    /// goes on from there, not from where its plan had got to.
+    pub fn delay(&mut self, seconds: f64) {
+        self.t_start += seconds;
+        self.t_arrive += seconds;
+    }
+
     /// The horizontal points flown through: the start, any corners, the
     /// target.
     fn path_xy(&self) -> Vec<[f64; 2]> {
@@ -770,6 +777,10 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         .retain(|node_id, _| rejoining.contains_key(node_id));
     let speed_mps = shared.rejoin_speed_mps.unwrap_or(REDIRECT_SPEED_MPS);
     let step_m = speed_mps * context.dt_s.max(0.0);
+    let governed = shared
+        .governor
+        .as_ref()
+        .is_some_and(|governor| governor.governs_mission_flights());
     let mut done = Vec::new();
     for (node_id, at) in shared.rejoining.iter_mut() {
         let Some(platform) = context.world.platform_mut(node_id) else {
@@ -807,7 +818,9 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
                         .iter()
                         .all(|known| !known.line.violated_by(*at, path))
             });
-            if receding >= (1.0 - REJOIN_MIN_CLOSING) * speed_mps && clear {
+            // Governed mission flights never jump: a path it cannot catch
+            // is followed, from where the platform is.
+            if receding >= (1.0 - REJOIN_MIN_CLOSING) * speed_mps && clear && !governed {
                 done.push(node_id.clone());
                 continue;
             }
@@ -832,6 +845,10 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         } else {
             step_toward(*at, path, step_m, floor_z)
         };
+        if let (false, true, Some(governor)) = (last_step, governed, shared.governor.as_ref()) {
+            // Over what the map believes is there, as a mission flight is.
+            next = governor.rejoin_step(*at, next, [path[0], path[1]], context.dt_s);
+        }
         if let Some(guard) = &shared.guard {
             let tentative = next;
             // The lines' clearance first: a step it stops never reaches the
@@ -980,9 +997,57 @@ impl StageHandler for MissionOverrideStage {
             return Ok(outcome);
         };
         let guard = self.state.guard.as_ref();
-        let held = governor.govern(context, guard);
+        // The mission flights flown this tick, and where each is bound:
+        // the last table to name a platform flies it.
+        let mut missions = BTreeMap::new();
+        if governor.governs_mission_flights() {
+            for (node_id, source) in &self.state.applied {
+                let table = match source {
+                    OverrideSource::Frontier => &self.state.frontier,
+                    OverrideSource::Poi => &self.state.poi,
+                    OverrideSource::Egress => &self.state.egress,
+                };
+                if let Some(flight) = table.get(node_id) {
+                    let target = flight.target();
+                    missions.insert(node_id.clone(), [target[0], target[1]]);
+                }
+            }
+        }
+        let rejoining = self.state.rejoining.keys().cloned().collect();
+        let (held, waited) = governor.govern(context, guard, &missions, &rejoining);
+        // A flight that waited is a tick later than planned, in every
+        // table that holds one for it: whichever flies it next goes on
+        // from where it is.
+        // Where the governor left a mission flight is where its rejoin
+        // starts, not where its plan had it.
+        if governor.governs_mission_flights() {
+            for (node_id, at) in self.state.overridden_at.iter_mut() {
+                if let Some(platform) = context.world.platform_mut(node_id) {
+                    *at = [
+                        platform.position.x,
+                        platform.position.y,
+                        platform.position.z,
+                    ];
+                }
+            }
+        }
+        for node_id in &waited {
+            for table in [
+                &mut self.state.frontier,
+                &mut self.state.poi,
+                &mut self.state.egress,
+            ] {
+                if let Some(flight) = table.get_mut(node_id) {
+                    if context.timestamp_s < flight.t_arrive() {
+                        flight.delay(context.dt_s);
+                    }
+                }
+            }
+        }
         if held > 0 {
-            context.note(format!("{held} platform(s) held clear of wires"));
+            context.note(format!(
+                "{held} platform(s) held clear of the believed world"
+            ));
             return Ok(StageOutcome::Ran);
         }
         Ok(outcome)
@@ -1087,8 +1152,19 @@ impl MissionOverrideStage {
                 // somewhere a platform cannot be is corrected, so a landing
                 // within the clearance stays a landing. Only a run without a
                 // prior map has a guard.
+                // A governed mission flight is swept by the governor from
+                // where the platform is, not put somewhere here.
+                let governed = shared
+                    .governor
+                    .as_ref()
+                    .is_some_and(|governor| governor.governs_mission_flights());
+                if let (true, Some(guard)) = (governed, shared.guard.as_ref()) {
+                    // Stage 1 worked out a place on this platform's own
+                    // path, which it does not fly this tick.
+                    guard.forget(&node_id, timestamp_s);
+                }
                 let position = match shared.guard.as_ref() {
-                    Some(guard) if guard.violates(position) => {
+                    Some(guard) if !governed && guard.violates(position) => {
                         if let Some(governor) = shared.governor.as_mut() {
                             governor.held_by_guard(&node_id);
                         }

@@ -1,0 +1,325 @@
+//! `field_v1`: the composed field mission as one named set of options.
+//!
+//! The gates: the profile is one thing to ask for and is recorded as such;
+//! the composed run is deterministic and resumes exactly; mission flights
+//! fly over what the map believes is there, touch nothing, and wait rather
+//! than jump; every drone is at its station once the mission is complete
+//! and stays there; and the scan ends on the declared share of the map.
+
+use argusnet_sim::belief_world::{ExplorationConfig, MissionFlightConfig, WorldKnowledge};
+use argusnet_sim::run_options::{
+    RunOptions, RunProfile, FIELD_V1_QUALITY, FIELD_V1_SCAN_THRESHOLD,
+};
+use argusnet_sim::scenario::{assemble, AssembledRun, ScenarioBundle};
+use argusnet_sim::snapshot::SimulationCheckpoint;
+
+fn bundle() -> ScenarioBundle {
+    let path = format!(
+        "{}/../../tests/fixtures/scenario_bundle_scan.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    ScenarioBundle::from_json(&std::fs::read_to_string(&path).expect("fixture"))
+        .expect("bundle parses")
+}
+
+fn run_with(bundle: &ScenarioBundle, options: &RunOptions) -> AssembledRun {
+    let mut run = assemble(bundle).unwrap();
+    options.apply(&mut run, bundle).expect("options apply");
+    run
+}
+
+fn replay(run: AssembledRun) -> (serde_json::Value, Vec<serde_json::Value>) {
+    let document = run.run_to_replay().expect("runs");
+    (
+        serde_json::to_value(&document.meta).unwrap(),
+        document
+            .frames
+            .iter()
+            .map(|frame| serde_json::to_value(frame).unwrap())
+            .collect(),
+    )
+}
+
+/// The profile's sensing and flight, with a scan gate the 400-tick fixture
+/// reaches at its one capture a second: the whole mission, scan to home.
+fn whole_mission() -> RunOptions {
+    RunOptions {
+        scan_coverage_threshold: Some(0.3),
+        profile: None,
+        ..RunOptions::field_v1()
+    }
+}
+
+/// A no-prior run flying the legacy scanner, with or without mission
+/// flights over the believed surface.
+fn scanner_run(belief_flights: bool) -> RunOptions {
+    RunOptions {
+        world_knowledge: WorldKnowledge::NoPrior,
+        energy_profile: argusnet_sim::run_options::EnergyProfile::FlownV1,
+        planning_policy: argusnet_sim::run_options::PlanningPolicy::ContingencyV1,
+        exploration: Some(ExplorationConfig {
+            mission_flights: belief_flights.then(MissionFlightConfig::default),
+            ..ExplorationConfig::default()
+        }),
+        ..RunOptions::default()
+    }
+}
+
+fn phase(frame: &serde_json::Value) -> &str {
+    frame["scan_mission_state"]["phase"].as_str().unwrap()
+}
+
+fn contacts(frames: &[serde_json::Value]) -> usize {
+    frames
+        .iter()
+        .map(|frame| frame["world_contacts"].as_array().map_or(0, Vec::len))
+        .sum()
+}
+
+fn position(frame: &serde_json::Value, node_id: &str) -> [f64; 3] {
+    let node = frame["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["node_id"] == node_id)
+        .expect("node in frame");
+    let at = |k: usize| node["position"][k].as_f64().unwrap();
+    [at(0), at(1), at(2)]
+}
+
+fn mobile(frame: &serde_json::Value) -> Vec<String> {
+    frame["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|node| node["is_mobile"] == true)
+        .map(|node| node["node_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn the_profile_names_itself_and_everything_it_composes() {
+    assert_eq!(RunProfile::parse("field_v1"), Ok(RunProfile::FieldV1));
+    assert!(RunProfile::parse("field_v2").is_err());
+    let options = RunProfile::FieldV1.options();
+    assert!(!options.is_legacy());
+    let bundle = bundle();
+    let (meta, frames) = replay(run_with(&bundle, &options));
+    assert_eq!(meta["run_profile"]["id"], "field_v1");
+    assert_eq!(meta["energy_profile"], "flown_v1");
+    assert_eq!(meta["planning_policy"], "contingency_v1");
+    let knowledge = &meta["world_knowledge"];
+    assert_eq!(knowledge["knowledge"], "none");
+    let exploration = &knowledge["exploration"];
+    for part in [
+        "rig",
+        "measured_wires",
+        "wire_tracker",
+        "poles",
+        "wire_planning",
+        "mission_flights",
+        "quality",
+    ] {
+        assert!(
+            exploration.get(part).is_some_and(|v| !v.is_null()),
+            "the profile records its {part}"
+        );
+    }
+    assert_eq!(
+        exploration["quality"],
+        serde_json::to_value(FIELD_V1_QUALITY).unwrap()
+    );
+    assert!(
+        exploration["rig"]["sensors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|sensor| sensor["lidar"].get("returns").is_some_and(|r| !r.is_null())),
+        "the rig's LiDAR models its returns: {}",
+        exploration["rig"]["sensors"]
+    );
+    // The scan ends on the profile's share, not the scenario's.
+    assert_eq!(
+        frames[0]["scan_mission_state"]["scan_coverage_threshold"],
+        FIELD_V1_SCAN_THRESHOLD
+    );
+    assert_ne!(
+        bundle.mission.as_ref().unwrap().scan_coverage_threshold,
+        FIELD_V1_SCAN_THRESHOLD
+    );
+    // Changed options are no longer the profile, and do not say they are.
+    let (meta, _) = replay(run_with(&bundle, &whole_mission()));
+    assert!(meta.get("run_profile").is_none());
+}
+
+#[test]
+fn the_composed_run_is_deterministic_and_resumes_exactly() {
+    let bundle = bundle();
+    let options = whole_mission();
+    let (_, straight) = replay(run_with(&bundle, &options));
+    let (_, again) = replay(run_with(&bundle, &options));
+    assert_eq!(straight, again);
+
+    // Checkpoints taken while scanning, on a mission flight and at home.
+    let first = |name: &str| {
+        straight
+            .iter()
+            .position(|frame| phase(frame) == name)
+            .unwrap_or_else(|| panic!("the mission reaches {name}"))
+    };
+    for at in [15, first("inspecting") + 3, first("egress") + 3] {
+        let mut original = run_with(&bundle, &options);
+        for _ in 0..at {
+            original.step().unwrap();
+        }
+        let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+        let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+        let mut resumed = run_with(&bundle, &options);
+        resumed.restore(&checkpoint).expect("restore accepted");
+        let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
+            .map(|_| {
+                resumed.step().unwrap();
+                serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
+            })
+            .collect();
+        assert_eq!(rest, straight[at..], "resumed at tick {at}");
+    }
+
+    // A reset run is a fresh one.
+    let mut run = run_with(&bundle, &options);
+    for _ in 0..40 {
+        run.step().unwrap();
+    }
+    run.reset();
+    assert_eq!(replay(run).1, straight);
+}
+
+#[test]
+fn the_whole_mission_touches_nothing_and_ends_at_home() {
+    let bundle = bundle();
+    let (_, frames) = replay(run_with(&bundle, &whole_mission()));
+    let last = frames.last().unwrap();
+    assert_eq!(phase(last), "complete", "the mission completes");
+    assert_eq!(contacts(&frames), 0, "physics never had to stop a platform");
+
+    // Every drone is at its station when the mission completes, and still
+    // there at the end: it does not go back to its lanes.
+    let complete = frames
+        .iter()
+        .position(|frame| phase(frame) == "complete")
+        .unwrap();
+    assert!(
+        complete + 20 < frames.len(),
+        "the run goes on after completion"
+    );
+    let radius_m = bundle.mission.as_ref().unwrap().egress_arrival_radius_m;
+    for drone in mobile(last) {
+        let home = position(&frames[0], &drone);
+        for frame in &frames[complete..] {
+            let at = position(frame, &drone);
+            let away = (at[0] - home[0]).hypot(at[1] - home[1]);
+            assert!(
+                away <= radius_m,
+                "{drone} is {away:.1} m from its station after completion"
+            );
+        }
+    }
+    let pois = last["scan_mission_state"]["poi_statuses"]
+        .as_array()
+        .unwrap();
+    assert!(!pois.is_empty());
+    assert!(
+        pois.iter().all(|poi| poi["status"] == "complete"),
+        "{pois:?}"
+    );
+}
+
+/// A mission flight is flown continuously: it never moves further in a
+/// tick than its speed allows, where a flight physics held used to be put
+/// back on its plan hundreds of metres on.
+#[test]
+fn mission_flights_never_jump() {
+    let bundle = bundle();
+    let (_, frames) = replay(run_with(&bundle, &whole_mission()));
+    let first = frames
+        .iter()
+        .position(|frame| phase(frame) == "inspecting")
+        .expect("the mission reaches its POIs");
+    let speed_mps = bundle.mission.as_ref().unwrap().redirect_speed_mps;
+    // A tick's horizontal flight at the redirect speed, and the governor's
+    // climb on top; a little slack for the tick a flight is handed over.
+    let reach_m = (speed_mps * bundle.dt_s).hypot(15.0 * bundle.dt_s) * 1.5;
+    for pair in frames[first + 1..].windows(2) {
+        for drone in mobile(&pair[0]) {
+            let (a, b) = (position(&pair[0], &drone), position(&pair[1], &drone));
+            let moved =
+                ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+            assert!(
+                moved <= reach_m,
+                "{drone} moved {moved:.1} m in one tick at t = {}",
+                pair[1]["timestamp_s"]
+            );
+        }
+    }
+}
+
+/// With the legacy scanner alone: flying mission flights over the believed
+/// surface leaves physics less to stop than flying them straight.
+#[test]
+fn belief_flights_meet_less_than_straight_ones() {
+    let bundle = bundle();
+    let (_, straight) = replay(run_with(&bundle, &scanner_run(false)));
+    let (_, governed) = replay(run_with(&bundle, &scanner_run(true)));
+    assert!(
+        contacts(&straight) > 0,
+        "the fixture's straight flights do meet the world"
+    );
+    assert!(
+        contacts(&governed) < contacts(&straight),
+        "{} contacts governed, {} straight",
+        contacts(&governed),
+        contacts(&straight)
+    );
+    assert_eq!(phase(governed.last().unwrap()), "complete");
+}
+
+#[test]
+fn a_run_without_the_profile_is_the_run_it_was() {
+    let bundle = bundle();
+    let plain = scanner_run(false);
+    let (meta, frames) = replay(run_with(&bundle, &plain));
+    assert!(meta.get("run_profile").is_none());
+    assert!(meta["world_knowledge"]["exploration"]
+        .get("mission_flights")
+        .is_none());
+    // The scenario's own scan share stands.
+    assert_eq!(
+        frames[0]["scan_mission_state"]["scan_coverage_threshold"],
+        bundle.mission.as_ref().unwrap().scan_coverage_threshold
+    );
+}
+
+#[test]
+fn a_bad_threshold_or_a_run_with_no_scan_is_refused() {
+    let bundle = bundle();
+    for bad in [0.0, -0.1, 1.5, f64::NAN] {
+        let mut run = assemble(&bundle).unwrap();
+        let options = RunOptions {
+            scan_coverage_threshold: Some(bad),
+            ..RunOptions::default()
+        };
+        assert!(options.apply(&mut run, &bundle).is_err(), "{bad}");
+    }
+    let path = format!(
+        "{}/../../tests/fixtures/scenario_bundle_tt.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let tracking = ScenarioBundle::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut run = assemble(&tracking).unwrap();
+    let options = RunOptions {
+        scan_coverage_threshold: Some(0.9),
+        ..RunOptions::default()
+    };
+    let refused = options.apply(&mut run, &tracking).unwrap_err();
+    assert!(refused.contains("no scan mission"), "{refused}");
+}

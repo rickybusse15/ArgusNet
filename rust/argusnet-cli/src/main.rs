@@ -198,6 +198,21 @@ struct SimArgs {
     /// `--fusion-lag-s`.
     #[arg(long)]
     faults: Option<PathBuf>,
+    /// Run a named profile: one qualified set of options in place of a flag
+    /// per capability. `field_v1` is the composed field mission (no prior
+    /// map, the provisional rig with LiDAR returns, measured and tracked
+    /// power lines with poles and wire-aware flight, mission flights over
+    /// the believed surface, `flown_v1` energy, `contingency_v1` planning,
+    /// and a declared map requirement). The flags it sets are refused with
+    /// it; faults, delivery and rates still apply. Recorded in the replay's
+    /// `meta.run_profile`.
+    #[arg(long, value_parser = argusnet_sim::run_options::RunProfile::parse)]
+    profile: Option<argusnet_sim::run_options::RunProfile>,
+    /// End the scan at this share of the map, in place of the scenario's
+    /// own (0.7 by default): with `--quality-requirements`, the share of
+    /// reachable cells that must meet them.
+    #[arg(long)]
+    scan_coverage_threshold: Option<f64>,
     /// What the platforms know of the world before they sense it: `prior`
     /// (the true terrain and obstacles, as every run before) or `none` (they
     /// map it themselves with range scanners and plan only on that map).
@@ -295,6 +310,15 @@ struct SimArgs {
     /// declare its own model instead.
     #[arg(long)]
     lidar_returns: bool,
+    /// In a `--world-knowledge none` run, fly mission flights (to a POI,
+    /// home, back to a path) over what the map believes is there: measured
+    /// ground, believed structures, the navigation camera's obstacles and
+    /// the stand-in for unseen ground. A flight not yet above what its next
+    /// step crosses waits where it is and climbs, and its plan is delayed,
+    /// not jumped to. Without it they fly straight lines the physical
+    /// guard stops. Recorded in `meta.world_knowledge.exploration`.
+    #[arg(long)]
+    belief_flights: bool,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -538,7 +562,69 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
     } else {
         None
     };
+    if let Some(profile) = args.profile {
+        let set: Vec<&str> = [
+            (
+                args.world_knowledge != WorldKnowledgeArg::Prior,
+                "--world-knowledge",
+            ),
+            (args.pursuit.is_some(), "--pursuit"),
+            (args.explore.is_some(), "--explore"),
+            (args.wire_prior, "--wire-prior"),
+            (quality.is_some(), "--quality-requirements"),
+            (measured_wires.is_some(), "--measured-wires"),
+            (args.track_wires, "--track-wires"),
+            (args.detect_poles, "--detect-poles"),
+            (args.wire_planning, "--wire-planning"),
+            (uncertain_prior.is_some(), "--wire-prior-file"),
+            (nav_camera.is_some(), "--nav-camera"),
+            (rig.is_some(), "--rig-profile"),
+            (args.lidar_returns, "--lidar-returns"),
+            (pointing.is_some(), "--pointing"),
+            (args.belief_flights, "--belief-flights"),
+            (
+                args.scan_coverage_threshold.is_some(),
+                "--scan-coverage-threshold",
+            ),
+            (
+                args.energy_profile != EnergyProfileArg::Legacy,
+                "--energy-profile",
+            ),
+            (
+                args.planning_policy != PlanningPolicyArg::Reference,
+                "--planning-policy",
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(given, flag)| given.then_some(flag))
+        .collect();
+        if !set.is_empty() {
+            return Err(format!(
+                "--profile {} sets {} itself; drop the flag, or run without the profile",
+                profile.as_str(),
+                set.join(", ")
+            ));
+        }
+        return Ok(RunOptions {
+            delivery: args.fusion_lag_s.map(|fusion_lag_s| DeliverySeconds {
+                fusion_lag_s,
+                delay_s: args.delivery_delay_s,
+                source_delay_s: args.source_delay.iter().cloned().collect(),
+                jitter_s: args.delivery_jitter_s,
+                queue_capacity: args.delivery_queue_capacity,
+            }),
+            faults: args
+                .faults
+                .as_deref()
+                .map(RunOptions::read_faults)
+                .transpose()?,
+            sensor_rates: RunOptions::sensor_rate_table(&args.sensor_rate)?,
+            ..profile.options()
+        });
+    }
     Ok(RunOptions {
+        scan_coverage_threshold: args.scan_coverage_threshold,
+        profile: None,
         energy_profile: match args.energy_profile {
             EnergyProfileArg::Legacy => argusnet_planning::battery::EnergyProfile::Legacy,
             EnergyProfileArg::PhysicalV1 => argusnet_planning::battery::EnergyProfile::PhysicalV1,
@@ -574,6 +660,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         exploration: (args.pursuit.is_some()
             || args.explore.is_some()
             || args.wire_prior
+            || args.belief_flights
             || measured_wires.is_some()
             || nav_camera.is_some()
             || rig.is_some()
@@ -616,6 +703,9 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                     None => defaults.explore,
                 },
                 wire_prior: args.wire_prior,
+                mission_flights: args
+                    .belief_flights
+                    .then(argusnet_sim::belief_world::MissionFlightConfig::default),
                 quality: quality.clone(),
                 ..defaults
             }
@@ -677,11 +767,19 @@ fn tick_summary(sorted_ms: &[f64]) -> serde_json::Value {
     })
 }
 
-/// Read and build a config, mapping the builder's errors to exit codes.
-fn built_bundle(path: &std::path::Path) -> Result<serde_json::Value, ExitCode> {
+/// Read a config; `blind` builds it for platforms that do not know the
+/// world in advance (`blind_setup`), as a profile without a prior map asks.
+fn read_config(path: &std::path::Path, blind: bool) -> Result<ScenarioConfig, ExitCode> {
     let text = read_text_limited(path)
         .map_err(|error| fail(EXIT_INVALID, format!("{}: {error}", path.display())))?;
-    let config = ScenarioConfig::from_json(&text).map_err(|error| fail(EXIT_INVALID, error))?;
+    let mut config = ScenarioConfig::from_json(&text).map_err(|error| fail(EXIT_INVALID, error))?;
+    config.options.blind_setup |= blind;
+    Ok(config)
+}
+
+/// Read and build a config, mapping the builder's errors to exit codes.
+fn built_bundle(path: &std::path::Path, blind: bool) -> Result<serde_json::Value, ExitCode> {
+    let config = read_config(path, blind)?;
     builder::build_bundle(&config).map_err(|error| match error {
         BuildError::Unsupported(_) => fail(EXIT_UNSUPPORTED, error),
         BuildError::Invalid(_) => fail(EXIT_INVALID, error),
@@ -779,7 +877,7 @@ fn fuse(args: FuseArgs) -> ExitCode {
 }
 
 fn build(args: BuildArgs) -> ExitCode {
-    let bundle = match built_bundle(&args.config) {
+    let bundle = match built_bundle(&args.config, false) {
         Ok(bundle) => bundle,
         Err(code) => return code,
     };
@@ -924,12 +1022,11 @@ fn sim(args: SimArgs) -> ExitCode {
             Ok(text) => text,
             Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
         },
-        (None, Some(path)) => match built_bundle(path) {
+        (None, Some(path)) => match built_bundle(path, args.profile.is_some()) {
             Ok(bundle) => {
                 // Every option, defaults filled in: what was actually built.
-                resolved_config = read_text_limited(path)
+                resolved_config = read_config(path, args.profile.is_some())
                     .ok()
-                    .and_then(|text| ScenarioConfig::from_json(&text).ok())
                     .and_then(|config| serde_json::to_value(config).ok());
                 bundle.to_string()
             }

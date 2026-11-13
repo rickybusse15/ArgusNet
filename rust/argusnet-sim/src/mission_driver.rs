@@ -428,6 +428,23 @@ pub struct MissionDriverStage {
     /// Pending POIs no drone can afford under contingency_v1 (F5).
     /// Checkpointed.
     unassigned: BTreeSet<String>,
+    /// Leave every drone at its station once the mission is complete,
+    /// instead of dropping the recalls so each flies its lanes again as the
+    /// reference does. Set at assembly.
+    stay_home: bool,
+    /// In a run without a prior map: the map, each POI's hover height over
+    /// the ground, and the clearance kept over a believed structure. A POI
+    /// flight then ends at that height over the ground the map holds, not
+    /// at a height taken from the true ground. Set at assembly.
+    believed_pois: Option<BelievedPois>,
+}
+
+/// See [`MissionDriverStage::set_believed_poi_heights`].
+#[derive(Debug, Clone)]
+struct BelievedPois {
+    map: crate::belief_world::BeliefHandle,
+    hover_agl_m: BTreeMap<String, f64>,
+    clearance_m: f64,
 }
 
 /// The obstacle layer the driver plans routes over (P3), with its planner.
@@ -1148,6 +1165,8 @@ impl MissionDriverStage {
             mapped_bounds: None,
             replan_for_wires: false,
             unassigned: BTreeSet::new(),
+            stay_home: false,
+            believed_pois: None,
         }
     }
 
@@ -2937,6 +2956,51 @@ impl MissionDriverStage {
         self.replay = LocalizationReplay { ticks };
     }
 
+    /// Keep every drone at its station once the mission is complete: the
+    /// recalls stand, where the reference drops them and each drone flies
+    /// its lanes again. Before the first tick.
+    pub fn stay_home_when_complete(&mut self, stay: bool) {
+        self.stay_home = stay;
+    }
+
+    /// Fly to each POI at its hover height over the ground `map` holds
+    /// (the stand-in where unseen), and no lower than `clearance_m` over a
+    /// structure believed there. Before the first tick.
+    pub fn set_believed_poi_heights(
+        &mut self,
+        map: crate::belief_world::BeliefHandle,
+        hover_agl_m: BTreeMap<String, f64>,
+        clearance_m: f64,
+    ) {
+        self.believed_pois = Some(BelievedPois {
+            map,
+            hover_agl_m,
+            clearance_m,
+        });
+    }
+
+    /// Where a flight to POI `poi_id` at `position` ends.
+    fn poi_target(&self, poi_id: &str, position: [f64; 3]) -> [f64; 3] {
+        let Some(believed) = &self.believed_pois else {
+            return position;
+        };
+        let Some(agl) = believed.hover_agl_m.get(poi_id) else {
+            return position;
+        };
+        let map = believed.map.current();
+        let mut z = map.ground_at(position[0], position[1]) + agl;
+        if let Some(top) = map.structure_top_at(position[0], position[1]) {
+            z = z.max(top + believed.clearance_m);
+        }
+        [position[0], position[1], z]
+    }
+
+    /// The share of the map the scan must reach before it ends, in place
+    /// of the scenario's. Before the first tick.
+    pub fn set_scan_coverage_threshold(&mut self, threshold: f64) {
+        self.machine.set_scan_coverage_threshold(threshold);
+    }
+
     /// Redirect drones to POIs, home and back no faster than `speed_mps`.
     /// Before the first tick.
     pub fn cap_redirect_speed(&mut self, speed_mps: f64) {
@@ -3065,6 +3129,7 @@ impl MissionDriverStage {
                         .find(|p| p.poi_id == active)
                         .expect("an assigned POI is one of the manager's")
                         .position;
+                    let poi_position = self.poi_target(&active, poi_position);
                     let flight = self.flight(*position, poi_position, timestamp_s);
                     let mut inputs = serde_json::json!({
                         "position_m": position,
@@ -3117,6 +3182,7 @@ impl MissionDriverStage {
                         .find(|p| p.poi_id == active)
                         .expect("an assigned POI is one of the manager's")
                         .position;
+                    let poi_position = self.poi_target(&active, poi_position);
                     let flight = self.flight(*position, poi_position, timestamp_s);
                     if flight.lines.is_some() {
                         let mut inputs = serde_json::json!({ "position_m": position });
@@ -3475,6 +3541,20 @@ impl StageHandler for MissionDriverStage {
                             .to_string(),
                         inputs,
                         command: Some("set_egress"),
+                    });
+                }
+                MissionEvent::EgressRoutesCleared { .. } if self.stay_home => {
+                    self.decisions.push(Decision {
+                        kind: "egress_held",
+                        status: DecisionStatus::Applied,
+                        subject: None,
+                        selected: None,
+                        candidates: Vec::new(),
+                        reason: "mission_complete",
+                        detail: "the mission is complete: every drone stays at its station"
+                            .to_string(),
+                        inputs: gate_inputs.clone(),
+                        command: None,
                     });
                 }
                 MissionEvent::EgressRoutesCleared { at_s } => {

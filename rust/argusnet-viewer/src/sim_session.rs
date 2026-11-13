@@ -53,7 +53,8 @@ pub fn load_run(path: &Path, options: &RunOptions) -> Result<AssembledRun, Strin
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", path.display()))?;
     let bundle_text = match value.get("format").and_then(|f| f.as_str()) {
         Some("argusnet.scenario-config") => {
-            let config = ScenarioConfig::from_json(&text).map_err(|error| error.to_string())?;
+            let mut config = ScenarioConfig::from_json(&text).map_err(|error| error.to_string())?;
+            config.options.blind_setup |= options.builds_blind();
             build_bundle(&config)
                 .map_err(|error| error.to_string())?
                 .to_string()

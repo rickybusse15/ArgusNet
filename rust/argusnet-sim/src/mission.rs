@@ -528,6 +528,12 @@ impl MissionStage {
         &self.config
     }
 
+    /// The share of the map the scan must reach before it ends. Before the
+    /// first tick.
+    pub fn set_scan_coverage_threshold(&mut self, threshold: f64) {
+        self.config.scan_coverage_threshold = threshold;
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }

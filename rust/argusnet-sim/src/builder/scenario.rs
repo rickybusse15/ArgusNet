@@ -1039,9 +1039,14 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
                     revision: 0,
                 };
                 let clearance = planner.config().drone_clearance_m;
-                let route = planner
-                    .route_waypoints(scene, &lawnmower, clearance, true)
+                // A blind setup plans nothing on the true world.
+                let route = (!options.blind_setup)
+                    .then(|| planner.route_waypoints(scene, &lawnmower, clearance, true))
+                    .flatten()
                     .or_else(|| {
+                        if options.blind_setup {
+                            return None;
+                        }
                         planner.route_waypoints(
                             Scene {
                                 layer: &ground.layer,
@@ -1054,6 +1059,7 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
                     });
                 let waypoints = match route {
                     Some(route) => route.points_xy_m,
+                    None if options.blind_setup => lawnmower.clone(),
                     None => lawnmower
                         .iter()
                         .map(|p| ground.push_outside(*p, drone.base_agl_m))
@@ -1109,7 +1115,13 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
             let sector = sectors[sector_of[&index]];
             let waypoints: Vec<[f64; 2]> = lawnmower_waypoints(sector, lane_spacing, 0.0)
                 .into_iter()
-                .map(|p| ground.push_outside(p, drone.base_agl_m))
+                .map(|p| {
+                    if options.blind_setup {
+                        p
+                    } else {
+                        ground.push_outside(p, drone.base_agl_m)
+                    }
+                })
                 .collect();
             let phase = rng.uniform(0.0, TAU);
             let operational = json!({
@@ -1465,6 +1477,21 @@ fn mission_document(
         Some(profile) => profile_pois(ground, profile, map_extent_m(bounds), count, hover),
         None => generated_pois(ground, bounds, count, hover, seed),
     };
+    // A blind setup declares each POI's height over the ground, which is
+    // what an operator asks for; the absolute height stays for a run that
+    // knows the world.
+    let pois = if options.blind_setup {
+        pois.into_iter()
+            .map(|mut poi| {
+                let at = |k: usize| poi["position"][k].as_f64().expect("poi position");
+                let agl = at(2) - ground.height_at(at(0), at(1));
+                poi["hover_agl_m"] = json!(agl);
+                poi
+            })
+            .collect()
+    } else {
+        pois
+    };
     let localization = table(&["localization"]);
     let (x_min, x_max, y_min, y_max) = (
         bounds.x_min_m,
@@ -1744,6 +1771,9 @@ fn scenario_options_document(o: &ScenarioOptions) -> Value {
     }
     if o.power_line_inspection {
         document["power_line_inspection"] = json!(true);
+    }
+    if o.blind_setup {
+        document["blind_setup"] = json!(true);
     }
     if o.trees {
         document["trees"] = json!(true);
