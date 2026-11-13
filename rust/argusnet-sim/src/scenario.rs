@@ -809,6 +809,9 @@ pub struct AssembledRun {
     /// The fleet as assembly loaded it, before any tick: what
     /// [`AssembledRun::reset`] reloads.
     initial_platforms: Vec<NodeState>,
+    /// Whether the fault schedule takes a mapping payload out, which only a
+    /// run that maps for itself has.
+    faults_need_mapping: bool,
     /// The hover height each POI declares (`blind_setup`), by id.
     poi_hover_agl_m: BTreeMap<String, f64>,
     /// Scheduled sensor and link faults (F2), applied before every tick.
@@ -1420,6 +1423,7 @@ pub fn assemble_with(
         .map_err(|error| BundleError::Invalid(error.to_string()))?;
 
     Ok(AssembledRun {
+        faults_need_mapping: false,
         poi_hover_agl_m: bundle
             .mission
             .iter()
@@ -2242,6 +2246,19 @@ impl AssembledRun {
         Ok(())
     }
 
+    /// Refuse a fault schedule this run cannot host: a `mapping_outage` in
+    /// a run with a prior map, which has no mapping payload to take out.
+    /// Checked once both the faults and the world knowledge are set.
+    pub fn check_faults_fit(&self) -> Result<(), String> {
+        if self.faults_need_mapping && self.belief.is_none() {
+            return Err(
+                "mapping_outage takes out a mapping payload, which only a run with                  world knowledge `none` flies"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
     /// End the scan at `threshold` of the map, in place of the scenario's
     /// own share: what the map must reach is the mission's to declare, not
     /// the scenario generator's. Before the first tick; a run with no
@@ -2290,6 +2307,7 @@ impl AssembledRun {
             &sensors,
             lag_and_jitter.map(|_| &fits as &dyn Fn(u64) -> Result<(), String>),
         )?;
+        self.faults_need_mapping = schedule.has_mapping_outages();
         self.replay.extend_meta([(
             "fault_manifest".to_string(),
             serde_json::to_value(schedule.manifest()).expect("manifest serialises"),
@@ -2313,10 +2331,12 @@ impl AssembledRun {
             .into_iter()
             .map(|(node, offset)| (node.to_string(), offset))
             .collect();
+        let mapping_out = schedule.mapping_out(tick);
         let observe = self
             .sim
             .stage_mut::<ObserveStage>(Stage::GenerateObservations)
             .expect("assembly installs an ObserveStage");
+        observe.set_mapping_out(mapping_out);
         for (node, offset) in offsets {
             observe.set_bias_offset(&node, offset);
         }

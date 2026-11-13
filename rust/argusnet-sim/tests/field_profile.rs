@@ -575,3 +575,128 @@ fn the_composed_run_at_its_own_lane_rates_completes_and_resumes_exactly() {
     }
     assert_eq!(scheduled(rated, 4, None), straight, "on four workers");
 }
+
+// --- a fault the composed mission has to live with ---
+
+use argusnet_sim::faults::{Fault, FaultManifest, MANIFEST_FORMAT, MANIFEST_VERSION};
+
+fn mapping_outage(node_id: &str, start_s: f64, end_s: f64) -> FaultManifest {
+    FaultManifest {
+        format: MANIFEST_FORMAT.into(),
+        version: MANIFEST_VERSION,
+        faults: vec![Fault::MappingOutage {
+            node_id: node_id.into(),
+            start_s,
+            end_s,
+        }],
+    }
+}
+
+/// F2 against the composed mission: one drone's mapping LiDAR returns
+/// nothing for the first 80 s.
+///
+/// - Detection: the fault is in every frame of its interval, and the map
+///   holds less at its end than the unfaulted run's.
+/// - Containment: nothing is flown into and nothing jumps; the faulted
+///   drone's navigation camera still sees for it.
+/// - Terminal state: the mission completes, later, with every POI done and
+///   every drone home. The scan is not ended early on a map it did not
+///   make.
+/// - A run checkpointed inside the outage finishes exactly as the
+///   uninterrupted one.
+#[test]
+fn a_mapping_outage_slows_the_mission_and_nothing_else() {
+    let bundle = bundle();
+    let clean = whole_mission();
+    let faulted = RunOptions {
+        faults: Some(mapping_outage("drone-east", 0.0, 80.0)),
+        ..whole_mission()
+    };
+    let (_, clean_frames) = replay(run_with(&bundle, &clean));
+    let (meta, frames) = replay(run_with(&bundle, &faulted));
+    assert_eq!(
+        meta["fault_manifest"]["faults"][0]["kind"],
+        "mapping_outage"
+    );
+
+    // Detection.
+    let active = |frame: &serde_json::Value| {
+        frame["active_faults"]
+            .as_array()
+            .is_some_and(|faults| faults.iter().any(|f| f["kind"] == "mapping_outage"))
+    };
+    assert!(frames[..80].iter().all(active));
+    assert!(!frames[80..].iter().any(active));
+    let known = |frame: &serde_json::Value| {
+        frame["mapping_state"]["belief"]["known_fraction"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!(
+        known(&frames[79]) < 0.8 * known(&clean_frames[79]),
+        "{} against {} known at the outage's end",
+        known(&frames[79]),
+        known(&clean_frames[79])
+    );
+
+    // Containment.
+    assert_eq!(contacts(&frames), 0);
+
+    // Terminal state.
+    let complete_at = |frames: &[serde_json::Value]| {
+        frames
+            .iter()
+            .position(|frame| phase(frame) == "complete")
+            .expect("the mission completes")
+    };
+    assert!(complete_at(&frames) > complete_at(&clean_frames));
+    let last = frames.last().unwrap();
+    let pois = last["scan_mission_state"]["poi_statuses"]
+        .as_array()
+        .unwrap();
+    assert!(pois.iter().all(|poi| poi["status"] == "complete"));
+    let radius_m = bundle.mission.as_ref().unwrap().egress_arrival_radius_m;
+    for drone in mobile(last) {
+        let (home, at) = (position(&frames[0], &drone), position(last, &drone));
+        assert!((at[0] - home[0]).hypot(at[1] - home[1]) <= radius_m);
+    }
+
+    // Resumed inside the outage.
+    let at = 40usize;
+    let mut original = run_with(&bundle, &faulted);
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+    let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    let mut resumed = run_with(&bundle, &faulted);
+    resumed.restore(&checkpoint).expect("restore accepted");
+    let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
+        .map(|_| {
+            resumed.step().unwrap();
+            serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(rest, frames[at..]);
+}
+
+/// A run with a prior map flies no mapping payload: the fault is refused
+/// before the run starts, as is one that names no platform.
+#[test]
+fn a_mapping_outage_is_refused_where_nothing_maps() {
+    let bundle = bundle();
+    let mut run = assemble(&bundle).unwrap();
+    let prior = RunOptions {
+        faults: Some(mapping_outage("drone-east", 0.0, 80.0)),
+        ..RunOptions::default()
+    };
+    let refused = prior.apply(&mut run, &bundle).unwrap_err();
+    assert!(refused.contains("mapping_outage"), "{refused}");
+
+    let mut run = assemble(&bundle).unwrap();
+    let unknown = RunOptions {
+        faults: Some(mapping_outage("drone-nowhere", 0.0, 80.0)),
+        ..whole_mission()
+    };
+    assert!(unknown.apply(&mut run, &bundle).is_err());
+}

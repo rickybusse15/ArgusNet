@@ -358,12 +358,22 @@ they are not mistaken for done:
 
 - **The bundle builder used the true world.** Search lanes were pushed out of
   true obstacles, follow routes planned around them, and POIs placed at true
-  heights, all before the run starts. In a no-prior run these are mission
-  inputs the platforms did not earn. The builder needs a mode that leaves the
-  lanes straight and lets the belief obstacles deflect them.
+  heights, all before the run starts. *Closed for scan missions by
+  `blind_setup`* ([FIELD_PROFILE.md](FIELD_PROFILE.md)): lanes are left as laid
+  out, POIs are placed without asking whether a building stands there and
+  declare a hover height the run resolves against its own map, and stations
+  are sited clear of power lines. A profile builds configs this way. Without
+  the option the builder plans on the true world as before, and a bundle is
+  flown as it was built; the replay says which (`meta.world_knowledge.mission_setup`).
+  Follow routes in a tracking scenario are still planned on the true world.
 - **The lanes still exist.** Explorers start from the builder's lanes and
   return to them when nothing is left to map, and search-then-follow drones fly
-  them until they engage.
+  them until they engage. Under `blind_setup` they are straight lanes over
+  nothing known; the platforms' own map deflects them.
+- **Mission flights flew straight lines.** Flights to a POI, home and back to
+  a path were planned over nothing and stopped by the physical guard. *Closed
+  by `--belief-flights`* (in `field_v1`): they are kept above what the map
+  believes, and wait rather than jump.
 - **Follow targets are checked against the truth table at setup.** Assembly
   confirms each follow target exists (`scenario.rs`, `operational`). It is a
   bundle validity check, not a position read, but it is a truth read.

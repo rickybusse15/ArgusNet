@@ -259,6 +259,7 @@ impl RunOptions {
             self.world_knowledge,
             self.exploration.clone().unwrap_or_default(),
         )?;
+        run.check_faults_fit()?;
         if !self.lane_rates.is_empty() {
             let mut recorded = serde_json::Map::new();
             for (stage, name, rate) in self.lane_rates.rated() {
