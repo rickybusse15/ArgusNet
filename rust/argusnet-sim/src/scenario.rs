@@ -2161,7 +2161,12 @@ impl AssembledRun {
                         (poi.poi_id.clone(), agl)
                     })
                     .collect();
-                driver.set_believed_poi_heights(handle.clone(), agl, flights.clearance_m);
+                driver.set_believed_poi_heights(
+                    handle.clone(),
+                    agl,
+                    flights.clearance_m,
+                    self.launch_floor_m,
+                );
                 summary["mission_setup"] = serde_json::json!({
                     "poi_hover_agl": {
                         "declared": declared,

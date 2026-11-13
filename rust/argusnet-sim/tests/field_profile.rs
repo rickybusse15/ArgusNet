@@ -323,3 +323,166 @@ fn a_bad_threshold_or_a_run_with_no_scan_is_refused() {
     let refused = options.apply(&mut run, &tracking).unwrap_err();
     assert!(refused.contains("no scan mission"), "{refused}");
 }
+
+/// Truth isolation for the mission's inputs: a POI that declares its hover
+/// height is flown, allocated and reported at that height over what the
+/// platforms know. The absolute height its scenario took from the true
+/// ground can be anything and nothing changes.
+#[test]
+fn a_declared_poi_height_is_all_that_is_read_of_a_pois_height() {
+    let declared = |lift_m: f64| {
+        let mut bundle = bundle();
+        for poi in &mut bundle.mission.as_mut().unwrap().pois {
+            poi.hover_agl_m = Some(40.0);
+            poi.position[2] += lift_m;
+        }
+        bundle
+    };
+    let options = whole_mission();
+    let (meta, frames) = replay(run_with(&declared(0.0), &options));
+    assert_eq!(
+        meta["world_knowledge"]["mission_setup"]["poi_hover_agl"],
+        serde_json::json!({ "declared": 3, "recovered_from_true_ground": 0 })
+    );
+    assert_eq!(phase(frames.last().unwrap()), "complete");
+    for lift_m in [-35.0, 250.0] {
+        let (_, lifted) = replay(run_with(&declared(lift_m), &options));
+        assert_eq!(lifted, frames, "POI heights off by {lift_m} m");
+    }
+
+    // A bundle that declares none says where its heights came from.
+    let (meta, plain) = replay(run_with(&bundle(), &options));
+    assert_eq!(
+        meta["world_knowledge"]["mission_setup"]["poi_hover_agl"],
+        serde_json::json!({ "declared": 0, "recovered_from_true_ground": 3 })
+    );
+    assert_eq!(phase(plain.last().unwrap()), "complete");
+}
+
+/// A blind setup plans nothing on the true world: the search lanes and the
+/// POIs are the same whatever it holds. The setup a prior run gets places
+/// its POIs on the true ground, and differs with it.
+#[test]
+fn a_blind_setup_is_the_same_whatever_the_world_holds() {
+    use argusnet_sim::builder::{build_bundle, ScenarioConfig};
+    let build = |terrain: &str, blind: bool| -> serde_json::Value {
+        let config: ScenarioConfig = serde_json::from_value(serde_json::json!({
+            "format": "argusnet.scenario-config",
+            "version": 1,
+            "seed": 11,
+            "duration_s": 5.0,
+            "options": {
+                "mission_mode": "scan_map_inspect",
+                "terrain_preset": terrain,
+                "blind_setup": blind,
+            },
+        }))
+        .expect("config");
+        build_bundle(&config).expect("bundle builds")
+    };
+    // What the mission is given before it flies: each drone's lanes, and
+    // the POIs' places and declared heights.
+    let setup = |bundle: &serde_json::Value| {
+        let lanes: Vec<serde_json::Value> = bundle["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| {
+                node.pointer("/controller/operational/search/waypoints_xy_m")
+                    .cloned()
+            })
+            .collect();
+        let pois: Vec<serde_json::Value> = bundle["mission"]["pois"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|poi| {
+                serde_json::json!([poi["position"][0], poi["position"][1], poi["hover_agl_m"]])
+            })
+            .collect();
+        (lanes, pois)
+    };
+    let (flat, alpine) = (build("urban_flat", true), build("alpine", true));
+    let (lanes, pois) = setup(&flat);
+    assert!(!lanes.is_empty() && !pois.is_empty());
+    assert!(pois.iter().all(|poi| poi[2].is_number()), "{pois:?}");
+    assert_eq!(setup(&alpine), (lanes, pois));
+    assert_eq!(
+        flat["presentation"]["scenario_options"]["blind_setup"],
+        true
+    );
+
+    // The control: planned on the world, the POIs are placed by its ground
+    // and differ with it, and none declares a height.
+    let (flat, alpine) = (build("urban_flat", false), build("alpine", false));
+    assert_ne!(
+        flat["mission"]["pois"], alpine["mission"]["pois"],
+        "POIs placed on the true ground"
+    );
+    assert!(flat["mission"]["pois"][0].get("hover_agl_m").is_none());
+    assert!(flat["presentation"]["scenario_options"]
+        .get("blind_setup")
+        .is_none());
+}
+
+/// A blind setup sites every station, and so every pad a drone climbs
+/// from, outside each power line's clearance with room to spare. (West
+/// Pleasant View is the case that needs it: its layout puts a station 12 m
+/// from the line, and the qualification's wire-clearance gate measures it.)
+#[test]
+fn a_blind_setup_sites_stations_clear_of_power_lines() {
+    use argusnet_sim::builder::{build_bundle, ScenarioConfig};
+    let build = |blind: bool| -> serde_json::Value {
+        let config: ScenarioConfig = serde_json::from_value(serde_json::json!({
+            "format": "argusnet.scenario-config",
+            "version": 1,
+            "seed": 11,
+            "duration_s": 5.0,
+            "options": {
+                "mission_mode": "scan_map_inspect",
+                "terrain_preset": "urban_flat",
+                "map_preset": "medium",
+                "power_lines": true,
+                "ground_station_count": 12,
+                "blind_setup": blind,
+            },
+        }))
+        .expect("config");
+        build_bundle(&config).expect("bundle builds")
+    };
+    // How near the nearest station stands to the line's centre.
+    let nearest = |bundle: &serde_json::Value| -> f64 {
+        let lines = bundle["world"]["power_lines"].as_array().expect("a line");
+        let mut nearest = f64::INFINITY;
+        for node in bundle["nodes"].as_array().unwrap() {
+            let Some(at) = node.pointer("/controller/position_m") else {
+                continue;
+            };
+            let (x, y) = (at[0].as_f64().unwrap(), at[1].as_f64().unwrap());
+            for line in lines {
+                let supports = line["supports"].as_array().unwrap();
+                for pair in supports.windows(2) {
+                    let end = |s: &serde_json::Value, k: usize| s["xy_m"][k].as_f64().unwrap();
+                    let (ax, ay) = (end(&pair[0], 0), end(&pair[0], 1));
+                    let (dx, dy) = (end(&pair[1], 0) - ax, end(&pair[1], 1) - ay);
+                    let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+                    nearest = nearest.min((x - ax - dx * t).hypot(y - ay - dy * t));
+                }
+            }
+        }
+        nearest
+    };
+    let line = &build(true)["world"]["power_lines"][0];
+    let widest = line["conductor_offsets_m"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o.as_f64().unwrap().abs())
+        .fold(0.0, f64::max);
+    let keep = widest + line["clearance_m"].as_f64().unwrap() + 15.0;
+    assert!(
+        nearest(&build(true)) >= keep - 1e-6,
+        "{} m from the line, {keep} m kept",
+        nearest(&build(true))
+    );
+}

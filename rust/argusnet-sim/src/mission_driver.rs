@@ -2966,12 +2966,24 @@ impl MissionDriverStage {
     /// Fly to each POI at its hover height over the ground `map` holds
     /// (the stand-in where unseen), and no lower than `clearance_m` over a
     /// structure believed there. Before the first tick.
+    ///
+    /// Until a flight resolves it, each POI is planned for (allocation,
+    /// energy, the replay) at its hover height over `floor_m`, what the
+    /// platforms know of the ground before sensing any: the height a
+    /// scenario took from the true ground is not kept.
     pub fn set_believed_poi_heights(
         &mut self,
         map: crate::belief_world::BeliefHandle,
         hover_agl_m: BTreeMap<String, f64>,
         clearance_m: f64,
+        floor_m: f64,
     ) {
+        for poi in &mut self.initial_pois {
+            if let Some(agl) = hover_agl_m.get(&poi.poi_id) {
+                poi.position[2] = floor_m + agl;
+            }
+        }
+        self.pois = PoiManager::new(self.initial_pois.clone());
         self.believed_pois = Some(BelievedPois {
             map,
             hover_agl_m,

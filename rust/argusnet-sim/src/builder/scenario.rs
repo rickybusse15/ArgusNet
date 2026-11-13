@@ -209,6 +209,55 @@ impl Ground<'_> {
         TerrainSampler::height_at(&self.terrain, x, y)
     }
 
+    /// `xy` moved straight away from any power line it stands too near:
+    /// a crew sites a station, and the pad a drone climbs from, where the
+    /// climb keeps the line's clearance with [`STATION_LINE_MARGIN_M`] to
+    /// spare. A line is seen from the ground; this is siting, not a map.
+    /// Then out of any obstacle the move put it in.
+    fn clear_of_power_lines(&self, xy: [f64; 2], agl_m: f64) -> [f64; 2] {
+        let mut at = xy;
+        for _ in 0..8 {
+            let mut moved = false;
+            for line in self.world.power_lines.iter() {
+                let widest = line
+                    .conductor_offsets_m
+                    .iter()
+                    .fold(0.0_f64, |widest, offset| widest.max(offset.abs()));
+                let keep = widest + line.clearance_m + STATION_LINE_MARGIN_M;
+                for pair in line.supports.windows(2) {
+                    let (a, b) = (pair[0].xy_m, pair[1].xy_m);
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let length2 = dx * dx + dy * dy;
+                    if length2 <= 0.0 {
+                        continue;
+                    }
+                    let t = (((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / length2).clamp(0.0, 1.0);
+                    let nearest = [a[0] + dx * t, a[1] + dy * t];
+                    let (ox, oy) = (at[0] - nearest[0], at[1] - nearest[1]);
+                    let distance = ox.hypot(oy);
+                    if distance >= keep {
+                        continue;
+                    }
+                    // Straight away from the line; to its left when on it.
+                    let length = length2.sqrt();
+                    let (ux, uy) = if distance > 1e-9 {
+                        (ox / distance, oy / distance)
+                    } else {
+                        (-dy / length, dx / length)
+                    };
+                    at = [nearest[0] + ux * keep, nearest[1] + uy * keep];
+                    moved = true;
+                }
+            }
+            let pushed = self.push_outside(at, agl_m);
+            if !moved && pushed == at {
+                break;
+            }
+            at = pushed;
+        }
+        at
+    }
+
     fn push_outside(&self, xy: [f64; 2], agl_m: f64) -> [f64; 2] {
         push_outside_obstacles(xy, agl_m, &|x, y| self.height_at(x, y), &self.layer)
     }
@@ -266,8 +315,17 @@ struct StationSpec {
     max_range_m: f64,
 }
 
+/// How far beyond a power line's clearance a blind setup sites a station,
+/// metres.
+const STATION_LINE_MARGIN_M: f64 = 15.0;
+
 /// `build_ground_station_specs`.
-fn ground_station_specs(ground: &Ground<'_>, bounds: MapBounds, count: usize) -> Vec<StationSpec> {
+fn ground_station_specs(
+    ground: &Ground<'_>,
+    bounds: MapBounds,
+    count: usize,
+    clear_of_lines: bool,
+) -> Vec<StationSpec> {
     let layout = table(&["ground_station_layout"]);
     let offsets: Vec<[f64; 2]> = layout["normalized_offsets"]
         .as_array()
@@ -305,9 +363,15 @@ fn ground_station_specs(ground: &Ground<'_>, bounds: MapBounds, count: usize) ->
             };
             let mast = masts[index % masts.len()];
             let clamped = clamp_to_bounds(nominal, bounds, span_x.min(span_y) * margin_fraction);
+            let sited = ground.push_outside(clamped, mast);
+            let sited = if clear_of_lines {
+                ground.clear_of_power_lines(sited, mast)
+            } else {
+                sited
+            };
             StationSpec {
                 node_id: ground_station_name(index),
-                xy: ground.push_outside(clamped, mast),
+                xy: sited,
                 mast_agl_m: mast,
                 bearing_std_rad: stds[index % stds.len()],
                 dropout_probability: dropouts[index % dropouts.len()],
@@ -819,8 +883,12 @@ pub fn build_bundle(assembly: Assembly<'_>, world: &BuiltWorld) -> Result<Value,
     }
 
     // --- ground stations -----------------------------------------------
-    let station_specs =
-        ground_station_specs(&ground, bounds, options.ground_station_count as usize);
+    let station_specs = ground_station_specs(
+        &ground,
+        bounds,
+        options.ground_station_count as usize,
+        options.blind_setup,
+    );
     if station_specs.is_empty() {
         return Err(BuildError::Unsupported(
             "a scenario with no ground stations".into(),
@@ -1475,8 +1543,12 @@ fn mission_document(
             tree_inspection_pois(ground, count)?
         }
         Some(profile) => profile_pois(ground, profile, map_extent_m(bounds), count, hover),
-        None => generated_pois(ground, bounds, count, hover, seed),
+        None => generated_pois(ground, bounds, count, hover, seed, options.blind_setup),
     };
+    // Those two hover at one declared height; the inspections place theirs
+    // by the asset each stands beside.
+    let declared_hover =
+        (!options.power_line_inspection && !options.tree_inspection).then_some(hover);
     // A blind setup declares each POI's height over the ground, which is
     // what an operator asks for; the absolute height stays for a run that
     // knows the world.
@@ -1484,7 +1556,7 @@ fn mission_document(
         pois.into_iter()
             .map(|mut poi| {
                 let at = |k: usize| poi["position"][k].as_f64().expect("poi position");
-                let agl = at(2) - ground.height_at(at(0), at(1));
+                let agl = declared_hover.unwrap_or_else(|| at(2) - ground.height_at(at(0), at(1)));
                 poi["hover_agl_m"] = json!(agl);
                 poi
             })
@@ -1560,6 +1632,7 @@ fn generated_pois(
     count: usize,
     hover: f64,
     seed: u32,
+    blind: bool,
 ) -> Vec<Value> {
     let mut rng = NumpyRng::new(seed + 999);
     let (x_min, x_max, y_min, y_max) = (
@@ -1579,7 +1652,10 @@ fn generated_pois(
             let y = rng.uniform(y_min + margin_y, y_max - margin_y);
             let z = ground.height_at(x, y) + hover;
             last = [x, y, z];
-            if ground.layer.point_collides([x, y, z]).is_some() {
+            // A blind setup takes the first place drawn: whether a
+            // building stands there is not known, and the flight hovers
+            // over whatever the map finds.
+            if !blind && ground.layer.point_collides([x, y, z]).is_some() {
                 continue;
             }
             chosen = Some(last);
