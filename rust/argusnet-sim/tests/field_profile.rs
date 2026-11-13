@@ -700,3 +700,45 @@ fn a_mapping_outage_is_refused_where_nothing_maps() {
     };
     assert!(unknown.apply(&mut run, &bundle).is_err());
 }
+
+/// Two drones are kept apart for the whole mission, and moved apart, not
+/// put apart: a drone joining a POI another holds stops short of it, and
+/// what deconfliction asks for is flown in at a set rate.
+#[test]
+fn drones_keep_their_separation_without_being_put_anywhere() {
+    let bundle = bundle();
+    let (_, frames) = replay(run_with(&bundle, &whole_mission()));
+    let drones = mobile(&frames[0]);
+    assert!(drones.len() >= 2);
+    let mut closest = f64::INFINITY;
+    for frame in &frames {
+        for (index, first) in drones.iter().enumerate() {
+            for second in &drones[index + 1..] {
+                let (a, b) = (position(frame, first), position(frame, second));
+                let apart =
+                    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+                closest = closest.min(apart);
+            }
+        }
+    }
+    // The separation deconfliction is configured to keep.
+    assert!(closest >= 16.0, "two drones came within {closest:.1} m");
+    // The fixture does have one drone join another's POI, which is what
+    // used to bring them to one point.
+    let joined = frames.iter().any(|frame| {
+        let pois = frame["scan_mission_state"]["poi_statuses"]
+            .as_array()
+            .unwrap();
+        let holders: Vec<_> = pois
+            .iter()
+            .filter(|poi| poi["status"] == "active")
+            .collect();
+        holders.len() == 1
+            && drones.iter().all(|drone| {
+                let at = position(frame, drone);
+                let poi = &holders[0]["position"];
+                (at[0] - poi[0].as_f64().unwrap()).hypot(at[1] - poi[1].as_f64().unwrap()) <= 30.0
+            })
+    });
+    assert!(joined, "both drones were at one POI at some point");
+}

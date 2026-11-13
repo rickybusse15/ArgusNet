@@ -199,9 +199,13 @@ impl WireGovernor {
                 .max(surface.min_reach_m)
                 .min((to_target - surface.approach_radius_m).max(step))
         };
+        // The step's own strip as well as the look ahead: the two are
+        // sampled apart, and a cell only the step clips must still be
+        // climbed for, or the flight waits for a height nothing asks of it.
+        let step_floor = needed(step);
         let mut wanted = wire_z;
-        if let Some(ahead) = needed(reach) {
-            wanted = wanted.max(ahead);
+        for floor in [needed(reach), step_floor].into_iter().flatten() {
+            wanted = wanted.max(floor);
         }
         // Physics stopped it at something the map does not hold: up, where
         // it is, before trying the way again.
@@ -212,7 +216,7 @@ impl WireGovernor {
         let z = wanted.clamp(fz - reach_z, fz + reach_z);
         // The step itself: what lies between here and the commanded place
         // must already be under the platform.
-        let blocked = climbing.is_some() || needed(step).is_some_and(|floor| z + 1e-9 < floor);
+        let blocked = climbing.is_some() || step_floor.is_some_and(|floor| z + 1e-9 < floor);
         if blocked {
             ([fx, fy, z], true)
         } else {

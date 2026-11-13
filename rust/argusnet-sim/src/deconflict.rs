@@ -251,6 +251,89 @@ pub struct DeconflictStage {
     mapped: Option<crate::belief_world::BeliefHandle>,
     /// The mapped spans `power_lines` was last set from. Derived.
     mapped_seen: Option<std::sync::Arc<Vec<PowerLine>>>,
+    /// Fly a resolution's offset in at these rates instead of applying it
+    /// at once (and fly it off again when the conflict ends). `None` (every
+    /// run before it) applies each resolution whole, as the reference does.
+    ramp: Option<OffsetRamp>,
+    /// With `ramp`: how far each platform is from where it was proposed,
+    /// from the resolutions so far, and where that was. Checkpointed.
+    offsets: std::collections::BTreeMap<String, HeldOffset>,
+}
+
+/// A deconfliction offset being flown.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+struct HeldOffset {
+    /// Where the platform is, less where it was proposed.
+    offset_m: [f64; 3],
+    /// Where it was proposed, on the tick the offset was last flown.
+    proposed_m: [f64; 3],
+}
+
+impl HeldOffset {
+    /// The offset still to be flown from, given where the platform is
+    /// proposed now: all of it while its plan goes on, none once its plan
+    /// has been made again from where the platform is (a new flight starts
+    /// at the platform, offset and all, and adding the offset to it would
+    /// count it twice). The plan has gone on when its new place is nearer
+    /// its old one than it is to the platform.
+    fn carried(&self, proposed_m: [f64; 3]) -> [f64; 3] {
+        let far = |from: [f64; 3]| {
+            (0..3)
+                .map(|k| (proposed_m[k] - from[k]).powi(2))
+                .sum::<f64>()
+        };
+        let was_at = [
+            self.proposed_m[0] + self.offset_m[0],
+            self.proposed_m[1] + self.offset_m[1],
+            self.proposed_m[2] + self.offset_m[2],
+        ];
+        if far(self.proposed_m) <= far(was_at) {
+            self.offset_m
+        } else {
+            [0.0; 3]
+        }
+    }
+}
+
+/// How fast a deconfliction offset is flown in and out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OffsetRamp {
+    /// Sideways, m/s.
+    pub lateral_mps: f64,
+    /// Up or down, m/s.
+    pub vertical_mps: f64,
+}
+
+/// `offset` moved toward `wanted` by at most a tick at `ramp`'s rates. A
+/// sideways offset keeps its side: a resolver that picks the other side
+/// from one tick to the next (two drones bound for one point have no side
+/// of their own) is taken at its size, on the side already flown to.
+fn ramped(offset: [f64; 3], wanted: [f64; 3], ramp: OffsetRamp, dt_s: f64) -> [f64; 3] {
+    let mut wanted = wanted;
+    let held = offset[0].hypot(offset[1]);
+    let asked = wanted[0].hypot(wanted[1]);
+    if held > 1e-9 && asked > 1e-9 && offset[0] * wanted[0] + offset[1] * wanted[1] < 0.0 {
+        wanted[0] = offset[0] / held * asked;
+        wanted[1] = offset[1] / held * asked;
+    }
+    let (dx, dy, dz) = (
+        wanted[0] - offset[0],
+        wanted[1] - offset[1],
+        wanted[2] - offset[2],
+    );
+    let lateral = dx.hypot(dy);
+    let reach = ramp.lateral_mps * dt_s;
+    let scale = if lateral > reach {
+        reach / lateral
+    } else {
+        1.0
+    };
+    let climb = ramp.vertical_mps * dt_s;
+    [
+        offset[0] + dx * scale,
+        offset[1] + dy * scale,
+        offset[2] + dz.clamp(-climb, climb),
+    ]
 }
 
 impl Default for DeconflictStage {
@@ -272,6 +355,8 @@ impl DeconflictStage {
             power_lines: Vec::new(),
             mapped: None,
             mapped_seen: None,
+            ramp: None,
+            offsets: std::collections::BTreeMap::new(),
         }
     }
 
@@ -307,6 +392,13 @@ impl DeconflictStage {
     /// Keep resolved positions out of the true ground and structures.
     pub fn set_physical_guard(&mut self, guard: crate::belief_world::PhysicalGuard) {
         self.guard = Some(guard);
+    }
+
+    /// Fly each resolution's offset in and out at `ramp`'s rates, instead
+    /// of applying it whole. Before the first tick.
+    pub fn set_offset_ramp(&mut self, ramp: Option<OffsetRamp>) {
+        self.ramp = ramp;
+        self.offsets.clear();
     }
 
     pub fn clear_physical_guard(&mut self) {
@@ -371,7 +463,131 @@ impl DeconflictStage {
 }
 
 impl StageHandler for DeconflictStage {
+    fn reset(&mut self) {
+        self.offsets.clear();
+    }
+
+    /// The offsets being flown, in a run that ramps them; nothing otherwise,
+    /// so every other run's checkpoints are what they were.
+    fn checkpoint_state(&self) -> Option<serde_json::Value> {
+        self.ramp
+            .map(|_| serde_json::json!({ "offsets": self.offsets }))
+    }
+
+    fn check_state(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        crate::simulation::decode_stage_state::<RampCheckpoint>(state).map(|_| ())
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &serde_json::Value,
+    ) -> Result<(), crate::simulation::StageStateError> {
+        let decoded: RampCheckpoint = crate::simulation::decode_stage_state(state)?;
+        self.offsets = decoded.offsets;
+        Ok(())
+    }
+
     fn run(&mut self, context: &mut TickContext<'_>) -> Result<StageOutcome, StageError> {
+        let Some(ramp) = self.ramp else {
+            return self.resolve_and_apply(context);
+        };
+        // Where every mobile platform was proposed, before any resolution.
+        let proposed: Vec<(String, [f64; 3])> = context
+            .world
+            .platforms()
+            .iter()
+            .filter(|platform| platform.is_mobile)
+            .map(|platform| {
+                (
+                    platform.node_id.clone(),
+                    [
+                        platform.position.x,
+                        platform.position.y,
+                        platform.position.z,
+                    ],
+                )
+            })
+            .collect();
+        // The resolution's own sweep is of a push that is not flown whole:
+        // the guard sweeps what is.
+        let guard = self.guard.take();
+        let outcome = self.resolve_and_apply(context);
+        self.guard = guard;
+        let outcome = outcome?;
+        // What the resolution asked of each, flown toward at the ramp's
+        // rates from the offset it already holds; nothing asked flies the
+        // offset off again.
+        let mut moved = 0;
+        for (node_id, from) in proposed {
+            let Some(platform) = context.world.platform_mut(&node_id) else {
+                continue;
+            };
+            let wanted = [
+                platform.position.x - from[0],
+                platform.position.y - from[1],
+                platform.position.z - from[2],
+            ];
+            let held = self
+                .offsets
+                .get(&node_id)
+                .map_or([0.0; 3], |held| held.carried(from));
+            let offset = ramped(held, wanted, ramp, context.dt_s);
+            let mut position = [
+                from[0] + offset[0],
+                from[1] + offset[1],
+                from[2] + offset[2],
+            ];
+            if let Some(guard) = &self.guard {
+                if position != from {
+                    // Swept from where it was proposed, as a whole push is.
+                    position = guard.enforce_from(&node_id, context.timestamp_s, from, position);
+                }
+            }
+            platform.position.x = position[0];
+            platform.position.y = position[1];
+            platform.position.z = position[2];
+            let flown = [
+                position[0] - from[0],
+                position[1] - from[1],
+                position[2] - from[2],
+            ];
+            if flown.iter().all(|part| part.abs() < 1e-9) {
+                self.offsets.remove(&node_id);
+            } else {
+                self.offsets.insert(
+                    node_id,
+                    HeldOffset {
+                        offset_m: flown,
+                        proposed_m: from,
+                    },
+                );
+                moved += 1;
+            }
+        }
+        if moved > 0 && !matches!(outcome, StageOutcome::Ran) {
+            context.note(format!("{moved} deconfliction offset(s) being flown off"));
+            return Ok(StageOutcome::Ran);
+        }
+        Ok(outcome)
+    }
+}
+
+/// What a ramped stage checkpoints.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RampCheckpoint {
+    #[serde(default)]
+    offsets: std::collections::BTreeMap<String, HeldOffset>,
+}
+
+impl DeconflictStage {
+    /// One resolution, applied whole: the reference's stage 3.
+    fn resolve_and_apply(
+        &mut self,
+        context: &mut TickContext<'_>,
+    ) -> Result<StageOutcome, StageError> {
         let shared = &mut self.state;
         shared.events.clear();
 
@@ -1244,5 +1460,104 @@ mod tests {
             decon(&mut sim).take_events().is_empty(),
             "an early return must leave no events, not the previous tick's"
         );
+    }
+
+    // --- ramped offsets ---
+
+    const RAMP: OffsetRamp = OffsetRamp {
+        lateral_mps: 10.0,
+        vertical_mps: 15.0,
+    };
+
+    /// An offset is flown in at the ramp's rates, reaches what was asked,
+    /// and is flown off again when nothing is.
+    #[test]
+    fn an_offset_is_flown_in_and_out_at_the_ramps_rates() {
+        let mut offset = [0.0; 3];
+        offset = ramped(offset, [17.0, 0.0, 18.0], RAMP, 0.25);
+        assert_eq!(offset, [2.5, 0.0, 3.75]);
+        for _ in 0..20 {
+            offset = ramped(offset, [17.0, 0.0, 18.0], RAMP, 0.25);
+        }
+        assert_eq!(offset, [17.0, 0.0, 18.0]);
+        offset = ramped(offset, [0.0; 3], RAMP, 0.25);
+        assert_eq!(offset, [14.5, 0.0, 14.25]);
+    }
+
+    /// A resolver that asks for the other side from one tick to the next
+    /// is given its size on the side already flown to: the offset grows,
+    /// where following the flips would hold two drones together.
+    #[test]
+    fn a_sideways_offset_keeps_its_side() {
+        let mut offset = [0.0; 3];
+        for tick in 0..12 {
+            let side = if tick % 2 == 0 { 1.0 } else { -1.0 };
+            offset = ramped(offset, [0.0, 17.0 * side, 0.0], RAMP, 0.25);
+        }
+        assert_eq!(offset, [0.0, 17.0, 0.0]);
+    }
+
+    /// Two drones bound for one point, in a ramped stage: each tick moves
+    /// the yielder by no more than the ramp allows, and a checkpoint taken
+    /// on the way resumes the same flight.
+    #[test]
+    fn a_ramped_stage_moves_a_yielder_a_step_at_a_time_and_resumes() {
+        let build = || {
+            let mut stage = DeconflictStage::new();
+            stage.set_offset_ramp(Some(RAMP));
+            rig_with(
+                vec![
+                    node("a", true, [0.0, 0.0, 100.0], [0.0, 0.0, 0.0]),
+                    node("b", true, [3.0, 0.0, 100.0], [0.0, 0.0, 0.0]),
+                ],
+                stage,
+            )
+        };
+        let at = |sim: &Simulation, id: &str| {
+            let p = sim.world().platform(id).unwrap().position;
+            [p.x, p.y, p.z]
+        };
+        let mut sim = build();
+        let mut last = [at(&sim, "a"), at(&sim, "b")];
+        let mut moved_at_all = false;
+        for tick in 0..12 {
+            if tick == 5 {
+                let state = decon(&mut sim).checkpoint_state().expect("ramped state");
+                let mut resumed = build();
+                decon(&mut resumed).restore_state(&state).unwrap();
+                assert_eq!(
+                    decon(&mut resumed).checkpoint_state(),
+                    decon(&mut sim).checkpoint_state()
+                );
+            }
+            sim.step().expect("tick runs");
+            let now = [at(&sim, "a"), at(&sim, "b")];
+            for (was, is) in last.iter().zip(&now) {
+                let lateral = (is[0] - was[0]).hypot(is[1] - was[1]);
+                let vertical = (is[2] - was[2]).abs();
+                // The rig's tick is 1 s.
+                assert!(lateral <= 10.0 + 1e-9, "{lateral} m sideways in a tick");
+                assert!(vertical <= 15.0 + 1e-9, "{vertical} m up in a tick");
+                moved_at_all |= lateral + vertical > 0.0;
+            }
+            last = now;
+        }
+        assert!(moved_at_all, "the conflict was resolved at all");
+        // An unramped stage checkpoints nothing, as before.
+        assert!(DeconflictStage::new().checkpoint_state().is_none());
+    }
+
+    /// An offset is carried while the platform's plan goes on, and dropped
+    /// when the plan is made again from where the platform is.
+    #[test]
+    fn an_offset_is_dropped_when_the_plan_restarts_from_the_platform() {
+        let held = HeldOffset {
+            offset_m: [0.0, 12.0, 0.0],
+            proposed_m: [100.0, 0.0, 60.0],
+        };
+        // The plan moved a step along: the offset still applies.
+        assert_eq!(held.carried([107.0, 0.0, 60.0]), [0.0, 12.0, 0.0]);
+        // A new flight, a step on from where the platform is.
+        assert_eq!(held.carried([107.0, 12.0, 60.0]), [0.0; 3]);
     }
 }

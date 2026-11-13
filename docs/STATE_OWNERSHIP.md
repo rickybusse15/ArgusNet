@@ -1,28 +1,40 @@
 # State Ownership Map
 
-## Current implementation (reviewed 2026-10-23 at `79ca540`)
+## Current implementation (reviewed 2026-11-13 at `cd7ec23`, plus the field profile)
 
 - `argusnet-sim` owns the assembled eleven-stage run, subsystem state, reset,
   causal checkpoints and journal recovery. `argusnet-rs` builds/runs scenarios
   without Python; statistical qualification uses a stored Python reference
   (A3.2, D-10, D-12; see [migration status](migration/STATUS.md)).
 - The viewer runs that Rust simulation on a worker thread (`--run`), with
-  acknowledged Run/Pause/Step/Speed/Reset controls. Scene building is Rust too.
-  The shell, inspectors, projections, layer presets and quality tiers exist;
-  Plan/Review remain explicitly unavailable pending their backend contracts.
+  acknowledged Run/Pause/Step/Speed/Reset controls and seek-and-branch. Scene
+  building is Rust too. The shell, inspectors, projections, layer presets,
+  quality tiers and the Review workspace (reading a client package's assurance
+  report) exist; Plan remains unavailable pending its backend contracts.
 - Opt-in phased lanes support mission, mapping and fusion rates. Bearing sensors
   can capture at separate rates on tick boundaries; timed delivery supports
   delay/jitter and fixed-lag fusion. This is partial P4.10, not the full target.
-- Unknown-world runs use range scans and a checkpointed belief map for runtime
-  planning and export. Initial lane/POI construction still reads truth.
+- Unknown-world runs use range scans (or a declared rig's pod LiDAR with
+  modelled returns) and a checkpointed belief map for runtime planning and
+  export, with a navigation camera for avoidance, measured and tracked power
+  lines with poles and corridors, and a declared map requirement.
+- **`--profile field_v1` composes those into one run** and is what is scored:
+  mission flights are kept above the believed surface, drones end at their
+  stations, and configs are built without reading the true world
+  (`blind_setup`). See [FIELD_PROFILE.md](migration/FIELD_PROFILE.md) for what
+  it was qualified on. Without the profile each capability is its own flag and
+  the default run is still the prior-map one.
 - The Rust world accepts real buildings, DEM terrain and OSM features (land cover,
-  trees and power lines). R5.3's unified import pipeline/canonical town remains open.
-- Merged #280 hides true tree/wire overlays for unknown-world maps. Merged #281
-  adds Python client assurance packaging and a Rust report reader. Contracts and
-  Review integration (#282–#284) are open, not delivered in this baseline.
+  trees and power lines) through one import pipeline, with West Pleasant View as
+  the canonical real site (R5.3).
+- Client packages carry the twelve record kinds (S1), energy contingencies and
+  flown-energy accounting (F5), drift and mapping-outage faults (F2) and
+  mission decision explanations (F3).
 - Remaining gates include complete independent scheduling and pending-job restore,
-  cross-platform determinism, and separate hardware qualification. Python still
-  ships as the reference simulation and offline tooling.
+  cross-platform determinism, a second real site, navigation-camera and gimbal
+  faults, and separate hardware qualification. Tracking scenarios still plan
+  follow routes on the true world. Python still ships as the reference
+  simulation and offline tooling.
 
 The dated snapshots below are historical evidence. Use this section and
 [known gaps](KNOWN_GAPS.md) for current status; accepted designs do not establish

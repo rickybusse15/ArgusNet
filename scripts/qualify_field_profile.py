@@ -36,10 +36,14 @@ from argusnet.evaluation.field_qualification import (  # noqa: E402
 )
 from argusnet.world.world_import import import_world  # noqa: E402
 
-#: Predetermined before the first qualification run (2026-11-13).
-QUALIFICATION_SEEDS = [101, 202, 303, 404, 505, 606, 707, 808, 909, 1010]
-HELDOUT_SEEDS = [9001, 9002, 9003, 9004, 9005]
-TUNING_SEEDS = [7, 42]
+#: The second set, chosen before its campaign ran (2026-11-13). The first
+#: (101..1010 by 101, held out 9001..9005) failed the step gate on four
+#: seeds; the fix was made on those results, so none of that set counts
+#: again. Its four failing seeds are re-run as tuning seeds, with the two
+#: the profile was composed on.
+QUALIFICATION_SEEDS = [1117, 2239, 3343, 4451, 5563, 6673, 7789, 8807, 9923, 11003]
+HELDOUT_SEEDS = [9101, 9102, 9103, 9104, 9105]
+TUNING_SEEDS = [7, 42, 707, 1010, 9002, 9005]
 
 
 def run_seed(binary: Path, config: dict, directory: Path, seed: int, profile: str) -> dict:

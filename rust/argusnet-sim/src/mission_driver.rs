@@ -439,6 +439,11 @@ pub struct MissionDriverStage {
     believed_pois: Option<BelievedPois>,
 }
 
+/// How far from a POI a drone joining it stops, metres: more than the
+/// 16 m deconfliction keeps between drones, less than the 30 m a dwell
+/// counts within.
+const JOIN_STANDOFF_M: f64 = 22.0;
+
 /// See [`MissionDriverStage::set_believed_poi_heights`].
 #[derive(Debug, Clone)]
 struct BelievedPois {
@@ -2991,6 +2996,28 @@ impl MissionDriverStage {
         });
     }
 
+    /// Where a drone joining a POI at `target`, from `from`, stops: in a
+    /// run flown over the believed surface, [`JOIN_STANDOFF_M`] short of
+    /// it on its own side, which is inside the radius a dwell counts
+    /// within and outside the separation deconfliction keeps. Elsewhere,
+    /// the POI itself, as before.
+    fn standoff(&self, target: [f64; 3], from: [f64; 3]) -> [f64; 3] {
+        if self.believed_pois.is_none() {
+            return target;
+        }
+        let (dx, dy) = (from[0] - target[0], from[1] - target[1]);
+        let away = dx.hypot(dy);
+        if away <= JOIN_STANDOFF_M {
+            // Already nearer than that: it holds where it is.
+            return [from[0], from[1], target[2]];
+        }
+        [
+            target[0] + dx / away * JOIN_STANDOFF_M,
+            target[1] + dy / away * JOIN_STANDOFF_M,
+            target[2],
+        ]
+    }
+
     /// Where a flight to POI `poi_id` at `position` ends.
     fn poi_target(&self, poi_id: &str, position: [f64; 3]) -> [f64; 3] {
         let Some(believed) = &self.believed_pois else {
@@ -3142,6 +3169,13 @@ impl MissionDriverStage {
                         .expect("an assigned POI is one of the manager's")
                         .position;
                     let poi_position = self.poi_target(&active, poi_position);
+                    // Joining a POI another drone holds: it stops short of
+                    // it, not on top of the drone already there.
+                    let poi_position = if self.pois.leads(id) {
+                        poi_position
+                    } else {
+                        self.standoff(poi_position, *position)
+                    };
                     let flight = self.flight(*position, poi_position, timestamp_s);
                     let mut inputs = serde_json::json!({
                         "position_m": position,
@@ -3195,6 +3229,13 @@ impl MissionDriverStage {
                         .expect("an assigned POI is one of the manager's")
                         .position;
                     let poi_position = self.poi_target(&active, poi_position);
+                    // Joining a POI another drone holds: it stops short of
+                    // it, not on top of the drone already there.
+                    let poi_position = if self.pois.leads(id) {
+                        poi_position
+                    } else {
+                        self.standoff(poi_position, *position)
+                    };
                     let flight = self.flight(*position, poi_position, timestamp_s);
                     if flight.lines.is_some() {
                         let mut inputs = serde_json::json!({ "position_m": position });

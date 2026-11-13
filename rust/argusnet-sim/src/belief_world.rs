@@ -178,6 +178,15 @@ pub struct MissionFlightConfig {
     pub approach_radius_m: f64,
     /// Half the width of the strip looked at ahead, metres.
     pub corridor_m: f64,
+    /// How fast a deconfliction offset is flown in and out sideways, m/s
+    /// (up and down at `climb_mps`): two drones are moved apart, not put
+    /// apart.
+    #[serde(default = "default_separation_mps")]
+    pub separation_mps: f64,
+}
+
+fn default_separation_mps() -> f64 {
+    10.0
 }
 
 impl Default for MissionFlightConfig {
@@ -189,6 +198,7 @@ impl Default for MissionFlightConfig {
             climb_mps: 15.0,
             approach_radius_m: 25.0,
             corridor_m: 5.0,
+            separation_mps: default_separation_mps(),
         }
     }
 }
@@ -200,6 +210,7 @@ impl MissionFlightConfig {
             ("lookahead_s", self.lookahead_s),
             ("min_reach_m", self.min_reach_m),
             ("climb_mps", self.climb_mps),
+            ("separation_mps", self.separation_mps),
         ] {
             if !(value.is_finite() && value > 0.0) {
                 return Err(format!(

@@ -2190,6 +2190,12 @@ impl AssembledRun {
             .with_terrain(Arc::new(terrain.clone()));
         deconflict.set_roles(roles);
         deconflict.set_physical_guard(guard.clone());
+        deconflict.set_offset_ramp(mission_flights.as_ref().map(|flights| {
+            crate::deconflict::OffsetRamp {
+                lateral_mps: flights.separation_mps,
+                vertical_mps: flights.climb_mps,
+            }
+        }));
         // Nor are its pushes kept from lines it has not mapped.
         deconflict.set_power_lines(Vec::new());
 

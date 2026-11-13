@@ -176,6 +176,14 @@ def measure(replay: dict[str, Any]) -> dict[str, Any]:
             value = reserve["remaining_wh"] - reserve["reserve_wh"]
             margin = value if margin is None else min(margin, value)
 
+    separation = None
+    for item in frames:
+        mobile = [node["position"] for node in item.get("nodes", []) if node.get("is_mobile")]
+        for index, first in enumerate(mobile):
+            for second in mobile[index + 1 :]:
+                apart = math.dist(first, second)
+                separation = apart if separation is None else min(separation, apart)
+
     max_step = 0.0
     for before, after in zip(frames, frames[1:], strict=False):
         was = {node["node_id"]: node["position"] for node in before.get("nodes", [])}
@@ -198,6 +206,7 @@ def measure(replay: dict[str, Any]) -> dict[str, Any]:
         "structure_precision": belief.get("structure_precision"),
         "ground_rmse_m": belief.get("ground_rmse_m"),
         "wire_clearance_min_m": _wire_clearance_min_m(frames, meta.get("power_lines") or []),
+        "drone_separation_min_m": separation,
         "energy_reserve_margin_min_wh": margin,
         "max_step_m": max_step,
         "run_profile": (meta.get("run_profile") or {}).get("id"),
@@ -237,6 +246,9 @@ def score_replay(
     not_applicable = set()
     if not (replay.get("meta") or {}).get("power_lines"):
         not_applicable.add("wire_clearance_min_m")
+    first = (replay.get("frames") or [{}])[0]
+    if sum(1 for node in first.get("nodes", []) if node.get("is_mobile")) < 2:
+        not_applicable.add("drone_separation_min_m")
 
     gates = {}
     for name, gate in thresholds["per_run"].items():

@@ -144,6 +144,24 @@ def test_each_gate_fails_on_what_it_guards(thresholds, change, gate):
     assert not scored["passed"]
 
 
+def test_two_drones_too_close_fail_the_separation_gate(thresholds):
+    def with_second(apart_m: float) -> dict:
+        replay = passing_replay()
+        for item in replay["frames"]:
+            first = item["nodes"][1]["position"]
+            item["nodes"].append(node("other", [first[0], first[1] + apart_m, first[2]]))
+        return replay
+
+    far = score_replay(with_second(40.0), thresholds, repeat_identical=True)
+    assert far["measured"]["drone_separation_min_m"] == pytest.approx(40.0)
+    assert far["passed"], far["failed"]
+    near = score_replay(with_second(9.0), thresholds, repeat_identical=True)
+    assert near["failed"] == ["drone_separation_min_m"]
+    # One drone has nothing to keep apart from.
+    alone = score_replay(passing_replay(), thresholds, repeat_identical=True)
+    assert alone["gates"]["drone_separation_min_m"]["status"] == "not_applicable"
+
+
 def test_a_jump_fails_the_step_gate(thresholds):
     replay = passing_replay()
     replay["frames"][5]["nodes"][1]["position"] = [400.0, 0.0, 60.0]
