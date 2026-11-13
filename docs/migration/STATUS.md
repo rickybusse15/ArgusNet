@@ -26,6 +26,22 @@ R5.1/R5.2 add DEM terrain and OSM land cover, mapped trees and power lines
 (#277, #278). R5.3's unified pipeline and canonical real-world scenario remain
 open ([realism plan](../WORLD_REALISM_PLAN.md)).
 
+## Checkout summary (2026-11-13, `cd7ec23` plus the field profile)
+
+Every PR in the 2026-10-23 snapshot below has merged (#279–#290 and #303
+through the #305 integration). Since then `main` has measured power lines,
+wire tracking, poles and corridors, wire-aware flight and uncertain priors
+(W1–W6, #318–#324), the sensor rig and moving pod (SR1/SR2) and LiDAR returns
+(SR3, #325). Open and not delivered: SR5d view planning
+([#311](https://github.com/rickybusse15/ArgusNet/pull/311)) and the grouped
+dependency bump ([#326](https://github.com/rickybusse15/ArgusNet/pull/326),
+which supersedes the individual dependabot PRs).
+
+The field profile ([FIELD_PROFILE.md](FIELD_PROFILE.md)) composes the no-prior
+slices into one named run and scores it against frozen thresholds. It is the
+first row in this file whose evidence is a whole mission on a real site
+rather than one capability on a fixture.
+
 ## Recent PR snapshot (2026-10-23)
 
 Checked against GitHub with `main` at `79ca540`. This is a dated status snapshot,
