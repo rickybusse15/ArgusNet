@@ -486,3 +486,92 @@ fn a_blind_setup_sites_stations_clear_of_power_lines() {
         nearest(&build(true))
     );
 }
+
+// --- the profile under the scheduler ---
+
+use argusnet_sim::compute::ComputePool;
+use argusnet_sim::scenario::{assemble_with, RunError};
+use argusnet_sim::scheduler::{parse_rate, ExecutorError, LaneRates, PhasedLaneExecutor};
+use argusnet_sim::simulation::TickError;
+
+/// The whole mission driven by the phased-lane executor at `rates`, on
+/// `workers` workers; with `resume_at`, checkpointed there and finished by
+/// a freshly assembled run, as a recovered process would.
+fn scheduled(rates: LaneRates, workers: usize, resume_at: Option<u64>) -> Vec<serde_json::Value> {
+    let bundle = bundle();
+    let options = RunOptions {
+        lane_rates: rates,
+        ..whole_mission()
+    };
+    let assembled = || {
+        let pool = std::sync::Arc::new(ComputePool::new(workers).expect("pool"));
+        let mut run = assemble_with(&bundle, pool).expect("assembles");
+        options.apply(&mut run, &bundle).expect("options apply");
+        run
+    };
+    let executor = |tick: u64| {
+        rates
+            .apply(PhasedLaneExecutor::new::<RunError>(bundle.dt_s, tick).expect("exact timestep"))
+            .expect("rates")
+    };
+    let mut run = assembled();
+    let mut lanes = executor(0);
+    let mut frames = Vec::new();
+    loop {
+        if resume_at == Some(run.sim.tick()) {
+            let text = serde_json::to_string(&run.sim.checkpoint().unwrap()).unwrap();
+            let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+            run = assembled();
+            run.restore(&checkpoint).expect("restore accepted");
+            lanes = executor(run.sim.tick());
+        }
+        match lanes.step(&mut run) {
+            Ok(_) => frames.push(serde_json::to_value(run.last_frame().unwrap()).unwrap()),
+            Err(ExecutorError::Tick(RunError::Tick(TickError::Completed { .. }))) => break,
+            Err(error) => panic!("{error:?}"),
+        }
+    }
+    frames
+}
+
+fn rates(mission: Option<&str>, mapping: Option<&str>) -> LaneRates {
+    LaneRates {
+        mission: mission.map(|rate| parse_rate(rate).unwrap()),
+        mapping: mapping.map(|rate| parse_rate(rate).unwrap()),
+        fusion: None,
+    }
+}
+
+/// The phased lanes and the worker count change how the composed run is
+/// executed, not what it does.
+#[test]
+fn the_composed_run_is_the_same_under_the_lane_executor_and_any_worker_count() {
+    let (_, straight) = replay(run_with(&bundle(), &whole_mission()));
+    assert_eq!(scheduled(LaneRates::default(), 1, None), straight);
+    assert_eq!(scheduled(LaneRates::default(), 4, None), straight);
+}
+
+/// With the mission and mapping lanes at their own rates (`scheduled_v1`)
+/// the composed mission still completes, touching nothing, and a run
+/// checkpointed while scanning, on a mission flight or on the way home
+/// finishes exactly as the uninterrupted one: the map evidence a lane is
+/// holding, the flights under way and their delays all come back.
+#[test]
+fn the_composed_run_at_its_own_lane_rates_completes_and_resumes_exactly() {
+    // The fixture ticks once a second: the mission decides every 2 s, the
+    // map integrates every 3 s.
+    let rated = rates(Some("1/2"), Some("1/3"));
+    let straight = scheduled(rated, 1, None);
+    assert_eq!(phase(straight.last().unwrap()), "complete");
+    assert_eq!(contacts(&straight), 0);
+    let first = |name: &str| {
+        straight
+            .iter()
+            .position(|frame| phase(frame) == name)
+            .unwrap_or_else(|| panic!("the mission reaches {name}")) as u64
+    };
+    for at in [16, first("inspecting") + 4, first("egress") + 2] {
+        assert_eq!(scheduled(rated, 1, Some(at)), straight, "resumed at {at}");
+    }
+    assert_eq!(scheduled(rated, 4, None), straight, "on four workers");
+}

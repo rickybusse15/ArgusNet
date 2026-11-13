@@ -31,7 +31,7 @@ _SPAN_SAMPLES = 40
 
 def load_thresholds(path: Path) -> dict[str, Any]:
     """Read and check a thresholds document."""
-    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    document: dict[str, Any] = json.loads(Path(path).read_text(encoding="utf-8"))
     if document.get("format") != THRESHOLD_FORMAT:
         raise ValueError(f"{path}: format {document.get('format')!r}, expected {THRESHOLD_FORMAT}")
     if document.get("version") != THRESHOLD_VERSION:
@@ -44,7 +44,9 @@ def load_thresholds(path: Path) -> dict[str, Any]:
     return document
 
 
-def _conductor_polylines(power_lines: list[dict[str, Any]]) -> list[list[tuple[float, ...]]]:
+def _conductor_polylines(
+    power_lines: list[dict[str, Any]],
+) -> list[list[tuple[float, float, float]]]:
     """Each conductor of each span, sampled as a polyline of 3-D points.
 
     A span's conductors hang between the tops of its two supports, offset
@@ -87,7 +89,11 @@ def _point_segment_distance(
     ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
     ap = (p[0] - a[0], p[1] - a[1], p[2] - a[2])
     dot = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2]
-    t = 0.0 if dot <= 0.0 else max(0.0, min(1.0, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / dot))
+    t = (
+        0.0
+        if dot <= 0.0
+        else max(0.0, min(1.0, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / dot))
+    )
     return math.dist(p, (a[0] + ab[0] * t, a[1] + ab[1] * t, a[2] + ab[2] * t))
 
 
@@ -148,7 +154,9 @@ def measure(replay: dict[str, Any]) -> dict[str, Any]:
 
     # Stations: where each drone stood on the first tick.
     homes = {
-        node["node_id"]: node["position"] for node in frames[0].get("nodes", []) if node["is_mobile"]
+        node["node_id"]: node["position"]
+        for node in frames[0].get("nodes", [])
+        if node["is_mobile"]
     }
     home_radius = None
     if complete_at is not None and homes:
@@ -157,9 +165,7 @@ def measure(replay: dict[str, Any]) -> dict[str, Any]:
             for node in frame.get("nodes", []):
                 home = homes.get(node["node_id"])
                 if home is not None:
-                    away = math.hypot(
-                        node["position"][0] - home[0], node["position"][1] - home[1]
-                    )
+                    away = math.hypot(node["position"][0] - home[0], node["position"][1] - home[1])
                     home_radius = max(home_radius, away)
 
     contacts = sum(len(frame.get("world_contacts") or []) for frame in frames)
@@ -202,7 +208,7 @@ def _judge(value: Any, gate: dict[str, Any]) -> bool:
     if value is None:
         return False
     if "equals" in gate:
-        return value == gate["equals"]
+        return bool(value == gate["equals"])
     if "min" in gate and not value >= gate["min"]:
         return False
     return not ("max" in gate and not value <= gate["max"])
