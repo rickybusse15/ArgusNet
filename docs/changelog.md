@@ -21,9 +21,10 @@
     ground and the stand-in for unseen ground, at a set climb rate; a flight
     waits and its plan is delayed, never jumped to.
   - Drones stay at their stations once the mission is complete.
-  - Deconfliction is flown, not applied: its offset ramps in and out and
-    keeps its side; a drone joining a held POI stops 22 m short; flights
-    planned together that would pass within 30 m leave apart.
+  - Deconfliction is flown, not applied: the yielder takes a height offset
+    at the climb rate, looking 4 s ahead; a drone joining a held POI stops
+    22 m short and 20 m above; flights planned together that would pass
+    within 18 m leave apart.
   - Setup reads nothing of the true world (`blind_setup`): lanes unrouted,
     POIs declaring a hover height resolved against the map, stations sited
     clear of power lines.

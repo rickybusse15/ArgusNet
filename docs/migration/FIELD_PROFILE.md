@@ -76,14 +76,15 @@ platform's own path.
 - A platform an override flies touched nothing at the place stage 1 worked
   out for it: that contact is not recorded.
 
-Deconfliction (stage 3) is flown the same way: its separation offset is
-ramped in and out (`separation_mps`, 10 m/s sideways; the climb rate up and
-down), keeps the side already flown to, and is dropped when a new flight is
+Deconfliction (stage 3) is flown the same way. The yielder of a pair whose
+ways come within 16 m in plan inside a 4 s look ahead takes a height offset
+that makes up the 20 m vertical separation, flown in and out at the climb
+rate, kept in the direction it started, and dropped when a new flight is
 planned from where the platform is. A drone joining a POI another holds
-stops 22 m short of it, inside the 30 m a dwell counts within and outside
-the 16 m separation. Flights planned together that would pass within
-30 m of each other leave apart: the later one is put off (see the second
-campaign).
+stops 22 m short of it and 20 m above its hover height, inside the 30 m a
+dwell counts within and outside the 16 m separation. Flights planned together that would pass within
+18 m of each other leave apart: one is put off, whichever settles it sooner
+(see the campaigns below).
 
 Once the mission is complete every drone stays at its station
 (`egress_held`), where the reference drops the recalls and each flies its
@@ -181,7 +182,38 @@ against each other, and one that would pass within 30 m of another is put
 off a second at a time, up to 30 s (`departure_staggered` in the
 decisions). On that seed the closest approach is now 18.9 m.
 
-### Third campaign
+### Third campaign (2026-11-14): not qualified
+
+Fresh seeds again. 14 of 15 passed every gate; seed 13127 failed
+`drone_separation_min_m` (8.8 m), and so did three of the re-run tuning
+seeds. Every other measure stayed inside its threshold on all 15. The
+failures were three cases, and the changes they led to:
+
+- **A drone waiting in the other's way.** Putting the later flight off does
+  not help when the first flies past where the second is standing. The
+  stagger now tries both: the flight is put off, or the flights it conflicts
+  with are.
+- **Two explorers crossing mid-scan**, closing at about 50 m/s. A 1 s look
+  ahead suits a resolver that can put a drone aside at once, not one that
+  flies its separation in. In a governed run deconfliction looks 4 s ahead
+  (`separation_look_ahead_s`).
+- **A resolver whose answer changes every tick.** The reference's resolver
+  chooses afresh each tick between a sideways push, its mirror and a height
+  change. Flown in at a rate, that is a target that keeps moving. A
+  governed run asks one thing instead: the yielder takes a height offset
+  that makes up the vertical separation, keeps the direction it has
+  started in, and goes up when the ground leaves no room below
+  (`vertical_separation` in `deconflict.rs`).
+- **Two drones at one POI whose stations lie on opposite sides.** Each one's
+  way home passes beside the other whichever leaves first, within two
+  ticks. A drone joining a POI now holds 20 m above its hover height as
+  well as 22 m short of it, so such a crossing is a height apart from the
+  start.
+
+All eight seeds that had failed any gate, in any campaign, pass every gate
+after these.
+
+### Fourth campaign
 
 In progress when this was written; its results replace this line.
 

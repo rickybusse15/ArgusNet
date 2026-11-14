@@ -304,6 +304,26 @@ pub struct OffsetRamp {
     pub vertical_mps: f64,
 }
 
+/// The least distance in plan between two platforms flying straight on
+/// for `look_ahead_s`.
+fn closest_in_plan(
+    a_at: [f64; 3],
+    a_velocity: [f64; 3],
+    b_at: [f64; 3],
+    b_velocity: [f64; 3],
+    look_ahead_s: f64,
+) -> f64 {
+    let apart = [a_at[0] - b_at[0], a_at[1] - b_at[1]];
+    let closing = [a_velocity[0] - b_velocity[0], a_velocity[1] - b_velocity[1]];
+    let speed_sq = closing[0] * closing[0] + closing[1] * closing[1];
+    let at = if speed_sq <= 1e-12 {
+        0.0
+    } else {
+        (-(apart[0] * closing[0] + apart[1] * closing[1]) / speed_sq).clamp(0.0, look_ahead_s)
+    };
+    (apart[0] + closing[0] * at).hypot(apart[1] + closing[1] * at)
+}
+
 /// `offset` moved toward `wanted` by at most a tick at `ramp`'s rates. A
 /// sideways offset keeps its side: a resolver that picks the other side
 /// from one tick to the next (two drones bound for one point have no side
@@ -494,8 +514,14 @@ impl StageHandler for DeconflictStage {
         let Some(ramp) = self.ramp else {
             return self.resolve_and_apply(context);
         };
-        // Where every mobile platform was proposed, before any resolution.
-        let proposed: Vec<(String, [f64; 3])> = context
+        self.state.events.clear();
+        if !self.state.config.enabled {
+            return Ok(StageOutcome::Skipped {
+                reason: "deconfliction disabled for this run".to_string(),
+            });
+        }
+        // Where every mobile platform was proposed, and how it is moving.
+        let proposed: Vec<(String, [f64; 3], [f64; 3])> = context
             .world
             .platforms()
             .iter()
@@ -508,33 +534,32 @@ impl StageHandler for DeconflictStage {
                         platform.position.y,
                         platform.position.z,
                     ],
+                    [
+                        platform.velocity.x,
+                        platform.velocity.y,
+                        platform.velocity.z,
+                    ],
                 )
             })
             .collect();
-        // The resolution's own sweep is of a push that is not flown whole:
-        // the guard sweeps what is.
-        let guard = self.guard.take();
-        let outcome = self.resolve_and_apply(context);
-        self.guard = guard;
-        let outcome = outcome?;
-        // What the resolution asked of each, flown toward at the ramp's
-        // rates from the offset it already holds; nothing asked flies the
-        // offset off again.
+        let held: std::collections::BTreeMap<String, [f64; 3]> = proposed
+            .iter()
+            .map(|(node_id, from, _)| {
+                let carried = self
+                    .offsets
+                    .get(node_id)
+                    .map_or([0.0; 3], |held| held.carried(*from));
+                (node_id.clone(), carried)
+            })
+            .collect();
+        let (wanted, events) = self.vertical_separation(&proposed, &held, context.timestamp_s);
         let mut moved = 0;
-        for (node_id, from) in proposed {
+        for (node_id, from, _) in proposed {
             let Some(platform) = context.world.platform_mut(&node_id) else {
                 continue;
             };
-            let wanted = [
-                platform.position.x - from[0],
-                platform.position.y - from[1],
-                platform.position.z - from[2],
-            ];
-            let held = self
-                .offsets
-                .get(&node_id)
-                .map_or([0.0; 3], |held| held.carried(from));
-            let offset = ramped(held, wanted, ramp, context.dt_s);
+            let asked = wanted.get(&node_id).copied().unwrap_or([0.0; 3]);
+            let offset = ramped(held[&node_id], asked, ramp, context.dt_s);
             let mut position = [
                 from[0] + offset[0],
                 from[1] + offset[1],
@@ -567,11 +592,25 @@ impl StageHandler for DeconflictStage {
                 moved += 1;
             }
         }
-        if moved > 0 && !matches!(outcome, StageOutcome::Ran) {
-            context.note(format!("{moved} deconfliction offset(s) being flown off"));
-            return Ok(StageOutcome::Ran);
+        for event in &events {
+            context.note(format!(
+                "deconflict {} yields to {} at {:.2} m ({})",
+                event.yielding_drone_id,
+                event.conflicting_drone_id,
+                event.predicted_separation_m,
+                event.resolution.as_str()
+            ));
         }
-        Ok(outcome)
+        let ran = !events.is_empty();
+        self.state.events = events;
+        if moved > 0 && !ran {
+            context.note(format!("{moved} deconfliction offset(s) being flown off"));
+        }
+        if ran || moved > 0 {
+            Ok(StageOutcome::Ran)
+        } else {
+            Ok(StageOutcome::NoWork)
+        }
     }
 }
 
@@ -583,6 +622,85 @@ struct RampCheckpoint {
 }
 
 impl DeconflictStage {
+    /// What a ramped stage asks of each platform, and the events for it.
+    ///
+    /// The reference's resolver puts a drone aside in one step, choosing
+    /// afresh each tick between a sideways push, its mirror and a height
+    /// change. Flown in at a rate, that is a target that keeps changing and
+    /// an offset that never builds. A ramped stage asks one thing instead:
+    /// for each pair whose ways come within the minimum separation in plan
+    /// inside the look ahead, and whose heights are within the vertical
+    /// separation, the yielder takes a height offset that makes up the
+    /// vertical separation. It goes the way it already is from its peer
+    /// (level or above: up), keeps going the way it has started, and goes up
+    /// instead when the ground leaves no room below. When the ways no
+    /// longer conflict nothing is asked and the offset is flown off.
+    fn vertical_separation(
+        &self,
+        proposed: &[(String, [f64; 3], [f64; 3])],
+        held: &std::collections::BTreeMap<String, [f64; 3]>,
+        timestamp_s: f64,
+    ) -> (
+        std::collections::BTreeMap<String, [f64; 3]>,
+        Vec<DeconflictionEvent>,
+    ) {
+        use argusnet_planning::deconfliction::{yielder, Resolution};
+        let config = self.state.config;
+        let roles = &self.state.roles;
+        let mut wanted = std::collections::BTreeMap::new();
+        let mut events = Vec::new();
+        let mut order: Vec<usize> = (0..proposed.len()).collect();
+        order.sort_by(|a, b| proposed[*a].0.cmp(&proposed[*b].0));
+        for (rank, &i) in order.iter().enumerate() {
+            for &j in &order[rank + 1..] {
+                let (a, b) = (&proposed[i], &proposed[j]);
+                let separation = closest_in_plan(a.1, a.2, b.1, b.2, config.look_ahead_s);
+                if separation >= config.min_separation_m
+                    || (a.1[2] - b.1[2]).abs() >= config.vertical_separation_m
+                {
+                    continue;
+                }
+                let (yielding, peer) =
+                    yielder(&a.0, &roles.role_of(&a.0), &b.0, &roles.role_of(&b.0));
+                let (y, p) = if yielding == a.0 { (a, b) } else { (b, a) };
+                let above = y.1[2] - p.1[2];
+                let started = held.get(&y.0).map_or(0.0, |offset| offset[2]);
+                let mut direction = if started.abs() > 1e-9 {
+                    started.signum()
+                } else if above >= 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let need =
+                    |direction: f64| (config.vertical_separation_m - direction * above).max(0.0);
+                if direction < 0.0 {
+                    let target = y.1[2] - need(direction);
+                    let floored = roles
+                        .clamp([y.1[0], y.1[1]], target, config.min_agl_m)
+                        .is_some_and(|z| z > target + 1e-9);
+                    if floored {
+                        direction = 1.0;
+                    }
+                }
+                let offset = direction * need(direction);
+                // The most asked of a platform by any of its conflicts.
+                let asked: &mut [f64; 3] = wanted.entry(y.0.clone()).or_insert([0.0; 3]);
+                if offset.abs() > asked[2].abs() {
+                    asked[2] = offset;
+                }
+                events.push(DeconflictionEvent {
+                    yielding_drone_id: yielding.to_string(),
+                    conflicting_drone_id: peer.to_string(),
+                    predicted_separation_m: separation,
+                    resolution: Resolution::VerticalOffset,
+                    timestamp_s,
+                });
+            }
+        }
+        (wanted, events)
+    }
+
     /// One resolution, applied whole: the reference's stage 3.
     fn resolve_and_apply(
         &mut self,

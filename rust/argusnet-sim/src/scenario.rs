@@ -2190,6 +2190,11 @@ impl AssembledRun {
             .with_terrain(Arc::new(terrain.clone()));
         deconflict.set_roles(roles);
         deconflict.set_physical_guard(guard.clone());
+        if let Some(flights) = &mission_flights {
+            let mut config = deconflict.config();
+            config.look_ahead_s = flights.separation_look_ahead_s;
+            deconflict.set_config(config);
+        }
         deconflict.set_offset_ramp(mission_flights.as_ref().map(|flights| {
             crate::deconflict::OffsetRamp {
                 lateral_mps: flights.separation_mps,

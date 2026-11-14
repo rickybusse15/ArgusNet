@@ -36,17 +36,18 @@ from argusnet.evaluation.field_qualification import (  # noqa: E402
 )
 from argusnet.world.world_import import import_world  # noqa: E402
 
-#: The third set, chosen before its campaign ran (2026-11-14). Seeds that
+#: The fourth set, chosen before its campaign ran (2026-11-14). Seeds that
 #: have informed a fix never count again:
 #: - the first set (101..1010 by 101, held out 9001..9005) failed the step
 #:   gate on four seeds;
 #: - the second (1117..11003, held out 9101..9105) failed the separation
-#:   gate on one.
+#:   gate on one;
+#: - the third (12007..22073, held out 9201..9205) failed it on another.
 #: Each failing seed is re-run as a tuning seed, with the two the profile
 #: was composed on.
-QUALIFICATION_SEEDS = [12007, 13127, 14249, 15361, 16477, 17599, 18713, 19841, 20959, 22073]
-HELDOUT_SEEDS = [9201, 9202, 9203, 9204, 9205]
-TUNING_SEEDS = [7, 42, 707, 1010, 9002, 9005, 4451]
+QUALIFICATION_SEEDS = [23131, 24247, 25357, 26479, 27583, 28697, 29803, 30911, 32029, 33149]
+HELDOUT_SEEDS = [9301, 9302, 9303, 9304, 9305]
+TUNING_SEEDS = [7, 42, 707, 1010, 9002, 9005, 4451, 13127]
 
 
 def run_seed(binary: Path, config: dict, directory: Path, seed: int, profile: str) -> dict:

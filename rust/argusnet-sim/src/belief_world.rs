@@ -183,10 +183,19 @@ pub struct MissionFlightConfig {
     /// apart.
     #[serde(default = "default_separation_mps")]
     pub separation_mps: f64,
+    /// How far ahead deconfliction looks, seconds, in place of the 1 s it
+    /// looks when it can put a drone aside at once: an offset flown in at
+    /// `separation_mps` needs the time to open.
+    #[serde(default = "default_separation_look_ahead_s")]
+    pub separation_look_ahead_s: f64,
 }
 
 fn default_separation_mps() -> f64 {
-    10.0
+    14.0
+}
+
+fn default_separation_look_ahead_s() -> f64 {
+    4.0
 }
 
 impl Default for MissionFlightConfig {
@@ -199,6 +208,7 @@ impl Default for MissionFlightConfig {
             approach_radius_m: 25.0,
             corridor_m: 5.0,
             separation_mps: default_separation_mps(),
+            separation_look_ahead_s: default_separation_look_ahead_s(),
         }
     }
 }
@@ -211,6 +221,7 @@ impl MissionFlightConfig {
             ("min_reach_m", self.min_reach_m),
             ("climb_mps", self.climb_mps),
             ("separation_mps", self.separation_mps),
+            ("separation_look_ahead_s", self.separation_look_ahead_s),
         ] {
             if !(value.is_finite() && value > 0.0) {
                 return Err(format!(
