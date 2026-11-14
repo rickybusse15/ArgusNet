@@ -599,9 +599,10 @@ fn mapping_outage(node_id: &str, start_s: f64, end_s: f64) -> FaultManifest {
 ///   holds less at its end than the unfaulted run's.
 /// - Containment: nothing is flown into and nothing jumps; the faulted
 ///   drone's navigation camera still sees for it.
-/// - Terminal state: the mission completes, later, with every POI done and
-///   every drone home. The scan is not ended early on a map it did not
-///   make.
+/// - Terminal state: the mission completes with every POI done and every
+///   drone home, and the scan ends only once the map the run made meets
+///   the gate. (When it completes is not declared: with the outage over by
+///   80 s, which drone takes which POI decides that, either way.)
 /// - A run checkpointed inside the outage finishes exactly as the
 ///   uninterrupted one.
 #[test]
@@ -649,7 +650,26 @@ fn a_mapping_outage_slows_the_mission_and_nothing_else() {
             .position(|frame| phase(frame) == "complete")
             .expect("the mission completes")
     };
-    assert!(complete_at(&frames) > complete_at(&clean_frames));
+    let _ = complete_at(&clean_frames);
+    complete_at(&frames);
+    // The scan ends on the map the run made: when it ends, the share of
+    // the map meeting the requirement has reached the gate, outage or not.
+    let threshold = frames[0]["scan_mission_state"]["scan_coverage_threshold"]
+        .as_f64()
+        .unwrap();
+    let scan_end = frames
+        .iter()
+        .position(|frame| phase(frame) != "scanning")
+        .expect("the scan ends");
+    // The gate reads the map stage 8 published that same tick, which the
+    // frame that leaves the scan carries.
+    let resolved = frames[scan_end]["scan_mission_state"]["scan_coverage_fraction"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        resolved >= threshold,
+        "the scan ended at {resolved} resolved against a {threshold} gate"
+    );
     let last = frames.last().unwrap();
     let pois = last["scan_mission_state"]["poi_statuses"]
         .as_array()

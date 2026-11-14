@@ -36,8 +36,12 @@ from argusnet.evaluation.field_qualification import (  # noqa: E402
 )
 from argusnet.world.world_import import import_world  # noqa: E402
 
-#: The fourth set, chosen before its campaign ran (2026-11-14). Seeds that
-#: have informed a fix never count again:
+#: The fifth set, chosen before its campaign ran (2026-11-14). The fourth
+#: set (23131..33149, held out 9301..9305) qualified, but on sensing that
+#: put every pod LiDAR ground return about 0.7 m low; terrain returns were
+#: put on the ray after it (found by analysis, not from its results), so
+#: its evidence describes code that no longer runs. Seeds that informed a
+#: fix never count again:
 #: - the first set (101..1010 by 101, held out 9001..9005) failed the step
 #:   gate on four seeds;
 #: - the second (1117..11003, held out 9101..9105) failed the separation
@@ -45,8 +49,8 @@ from argusnet.world.world_import import import_world  # noqa: E402
 #: - the third (12007..22073, held out 9201..9205) failed it on another.
 #: Each failing seed is re-run as a tuning seed, with the two the profile
 #: was composed on.
-QUALIFICATION_SEEDS = [23131, 24247, 25357, 26479, 27583, 28697, 29803, 30911, 32029, 33149]
-HELDOUT_SEEDS = [9301, 9302, 9303, 9304, 9305]
+QUALIFICATION_SEEDS = [34253, 35363, 36467, 37571, 38693, 39799, 40903, 42013, 43117, 44221]
+HELDOUT_SEEDS = [9401, 9402, 9403, 9404, 9405]
 TUNING_SEEDS = [7, 42, 707, 1010, 9002, 9005, 4451, 13127]
 
 

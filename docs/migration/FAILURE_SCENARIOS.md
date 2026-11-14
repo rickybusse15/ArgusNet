@@ -139,9 +139,14 @@ before the run, and held:
 - detection: every frame of the interval names the fault, and the map holds
   under 80% of the unfaulted run's at the interval's end;
 - containment: no world contact;
-- terminal state: the mission completes, later than the unfaulted run, with
-  every POI done and every drone at its station. The scan does not end on a
-  map the run did not make;
+- terminal state: the mission completes with every POI done and every drone
+  at its station, and the scan ends only once the map the run made meets the
+  gate. As first declared, the mission also completed later than the
+  unfaulted run; that held only by chance. Once terrain returns were put on
+  the ray (FIELD_PROFILE.md), the faulted run's scan and mission both ended
+  earlier (140 s and 207 s, against 192 s and 258 s): with the outage over
+  by 80 s, which drone takes which POI decides the order. The expectation
+  was restated rather than kept;
 - a run checkpointed inside the outage finishes as the uninterrupted one.
 
 The outage is a pure function of the tick, like the others. The payload still
