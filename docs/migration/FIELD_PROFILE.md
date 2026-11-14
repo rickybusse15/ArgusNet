@@ -213,9 +213,30 @@ failures were three cases, and the changes they led to:
 All eight seeds that had failed any gate, in any campaign, pass every gate
 after these.
 
-### Fourth campaign (2026-11-14): qualified
+### Fourth campaign (2026-11-14): qualified, then superseded
 
-Fresh seeds (23131..33149, held out 9301..9305). 15 of 15 passed every gate,
+Fresh seeds (23131..33149, held out 9301..9305): 15 of 15 passed every gate.
+Its ground RMSE (0.72–0.74 m) met the 1.0 m gate but disagreed with the map
+requirement's 0.5 m vertical sigma, which over 90% of cells were counted as
+meeting. Chasing that disagreement found the cause below; the record is
+replaced by the fifth campaign's.
+
+### Terrain returns on the ray
+
+With every rig error source switched off (boresight bias, attitude noise,
+lever arms, range noise) the rig's map was still 0.70 m low on average. The
+terrain intersection, a parity port shared with line of sight, tests only
+the middle of each cell a ray crosses and answers with that middle lifted
+onto the ground: a point on the ground but not on the ray. The range
+scanner reports that point and is barely affected. The pod reports a range
+along the ray, so every ground return landed past the true crossing, below
+the ground, and a near-vertical ray that fell through the ground inside one
+cell returned nothing. No-prior sensing (`first_hit`) now bisects to the
+crossing on the ray; line of sight is unchanged (14/14 canonical replays).
+
+### Fifth campaign (2026-11-14): qualified
+
+Fresh seeds (34253..44221, held out 9401..9405). 15 of 15 passed every gate,
 and so did all eight tuning seeds. The record is
 [field-v1-qualification-2026-11-14.md](../performance/field-v1-qualification-2026-11-14.md).
 
@@ -223,22 +244,24 @@ and so did all eight tuning seeds. The record is
 | --- | --- | --- | --- | --- |
 | Mission complete, POIs done, drones home | all | 15/15 | | |
 | World contacts | 0 | 0 | 0 | 0 |
-| Known fraction | ≥ 0.90 | 0.944 | 0.960 | 0.980 |
-| Cells meeting the map requirement | ≥ 0.90 | 0.903 | 0.912 | 0.938 |
-| Structure recall | ≥ 0.90 | 0.917 | 0.975 | 0.997 |
-| Structure precision | ≥ 0.90 | 0.965 | 0.970 | 0.974 |
-| Ground RMSE | ≤ 1.0 m | 0.719 | 0.731 | 0.742 |
-| Closest approach to a conductor | ≥ 10 m | 12.5 | 21.9 | 25.0 |
-| Closest two drones came | ≥ 16 m | 29.7 | 164 | 421 |
-| Energy over reserve, worst tick | ≥ 0 Wh | 304 | 316 | 319 |
-| Largest move in one tick | ≤ 12 m | 8.3 | 9.3 | 9.5 |
-| Mission complete at | — | 302 s | 363 s | 508 s |
+| Known fraction | ≥ 0.90 | 0.950 | 0.965 | 0.982 |
+| Cells meeting the map requirement | ≥ 0.90 | 0.904 | 0.919 | 0.936 |
+| Structure recall | ≥ 0.90 | 0.932 | 0.977 | 0.988 |
+| Structure precision | ≥ 0.90 | 0.966 | 0.971 | 0.977 |
+| Ground RMSE | ≤ 1.0 m | 0.109 | 0.112 | 0.123 |
+| Closest approach to a conductor | ≥ 10 m | 12.6 | 19.2 | 25.0 |
+| Closest two drones came | ≥ 16 m | 22.9 | 43.1 | 378 |
+| Energy over reserve, worst tick | ≥ 0 Wh | 310 | 316 | 322 |
+| Largest move in one tick | ≤ 12 m | 8.0 | 9.2 | 9.4 |
+| Mission complete at | — | 315 s | 376 s | 463 s |
 | Repeat run identical | yes | 15/15 | | |
 
-Two margins are thin and worth watching on another site: the share of cells
-meeting the map requirement (0.903 at worst against 0.90, which is the scan
-gate itself, so it ends where it is allowed to), and the closest approach to
-a conductor (12.5 m against 10 m).
+Ground RMSE now sits inside the requirement's 0.5 m vertical sigma, so the
+map's own quality figures and its measured accuracy agree. Two margins are
+thin and worth watching on another site: the share of cells meeting the
+requirement (0.904 at worst against 0.90, which is the scan gate itself, so
+it ends where it is allowed to), and the closest approach to a conductor
+(12.6 m against 10 m).
 
 ## Under the scheduler and under a fault
 
@@ -265,12 +288,9 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 
 - One real site. A second needs OSM and elevation sources fetched.
 - The rig, LiDAR and camera models are assumed, not calibrated.
-- Ground RMSE sits near 0.72 m in every run while the map requirement asks
-  for 0.5 m vertical sigma and counts over 90% of cells as meeting it: the
-  requirement is judged on the returns' own spread and a declared 0.05 m
-  bias, and the pod georeferences by an estimated pose whose error it does
-  not carry. Predicted and achieved quality disagree, and nothing flags it
-  yet (the sensing guide's SR5d).
+- The map requirement's vertical sigma is still judged from the returns'
+  own spread and a declared bias; nothing yet compares predicted against
+  achieved quality on a run (the sensing guide's SR5d).
 - No navigation-camera or gimbal fault, no pointing arbiter, no view
   planning, no hold or return response to a fault.
 - No landing: home is a hover at the station.

@@ -32,13 +32,22 @@
   - F2 `mapping_outage`: a platform's mapping payload returns nothing over
     an interval.
 
-  Qualified on West Pleasant View on the fourth campaign: 15 of 15 unseen
-  seeds pass every gate (mission complete in 302 to 508 s, no world contact,
-  94 to 98% of the map known, conductors never nearer than 12.5 m, drones
-  never nearer each other than 29.7 m, nothing moved more than 9.5 m in a
-  tick). The first three campaigns each failed one gate on how drones were
-  kept apart, and each led to a change above; seeds that informed a fix were
-  not counted again. One site, assumed sensor models.
+  Qualified on West Pleasant View: 15 of 15 unseen seeds pass every gate
+  (mission complete in 315 to 463 s, no world contact, 95 to 98% of the map
+  known, ground RMSE 0.11 to 0.12 m, conductors never nearer than 12.6 m,
+  drones never nearer each other than 22.9 m, nothing moved more than 9.4 m
+  in a tick). Five campaigns, each on seeds the last had not seen: the first
+  three each failed one gate on how drones were kept apart; the fourth
+  passed on sensing later found to put the pod's ground 0.7 m low.
+  One site, assumed sensor models.
+- Terrain returns are on the ray (no-prior sensing only). The terrain
+  intersection answered with the middle of the first cell crossed under the
+  ground, lifted onto it: on the ground, off the ray. The pod LiDAR reports
+  a range along the ray, so its ground was 0.7 m low with every sensor error
+  off, and a near-vertical ray could fall through the ground unseen.
+  `first_hit` now bisects to the crossing on the ray: rig ground RMSE 0.77
+  to 0.13 m. Line of sight, and every prior-map run, is unchanged (14/14
+  canonical replays). Every `--world-knowledge none` run changes.
 
   Runs without these options are unchanged: 14 of 14 canonical replay hashes
   and every lifecycle check, and the existing no-prior flag combinations on
