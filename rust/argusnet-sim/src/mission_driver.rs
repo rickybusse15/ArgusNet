@@ -439,6 +439,28 @@ pub struct MissionDriverStage {
     believed_pois: Option<BelievedPois>,
 }
 
+/// How near two flights planned in one run may pass before the later one
+/// is put off, metres: the 16 m deconfliction keeps, and room to keep it.
+const DEPARTURE_SEPARATION_M: f64 = 30.0;
+/// The longest a departure is put off, seconds.
+const MAX_DEPARTURE_DELAY_S: f64 = 30.0;
+
+/// How near two flights come, sampled every quarter second from the first
+/// to start until both have arrived. A flight not yet begun is at its
+/// start, and one that has arrived is at its target.
+fn closest_approach_m(a: &GotoHover, b: &GotoHover) -> f64 {
+    let from = a.t_start().min(b.t_start());
+    let to = a.t_arrive().max(b.t_arrive());
+    let steps = ((to - from) / 0.25).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|k| {
+            let t = from + (to - from) * k as f64 / steps as f64;
+            let (p, q) = (a.sample(t).0, b.sample(t).0);
+            ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// How far from a POI a drone joining it stops, metres: more than the
 /// 16 m deconfliction keeps between drones, less than the 30 m a dwell
 /// counts within.
@@ -2996,6 +3018,72 @@ impl MissionDriverStage {
         });
     }
 
+    /// In a run flown over the believed surface: put off any flight
+    /// planned this run that would pass within [`DEPARTURE_SEPARATION_M`]
+    /// of one planned before it in the same run, a second at a time, until
+    /// it would not. Two drones released at once from beside each other on
+    /// crossing ways home close faster than deconfliction can part them at
+    /// the rate it is flown in; the later one leaves later instead. The
+    /// first planned keeps its time. A flight still too close after
+    /// [`MAX_DEPARTURE_DELAY_S`] goes then, and says so.
+    fn stagger_departures(&mut self) {
+        if self.believed_pois.is_none() {
+            return;
+        }
+        let mut planned: Vec<(String, GotoHover)> = Vec::new();
+        let mut staggered = Vec::new();
+        for command in &mut self.override_commands {
+            let (OverrideCommand::SetPoi(id, flight) | OverrideCommand::SetEgress(id, flight)) =
+                command
+            else {
+                continue;
+            };
+            let closest = |flight: &GotoHover| {
+                planned
+                    .iter()
+                    .filter(|(other, _)| other != id)
+                    .map(|(_, other)| closest_approach_m(flight, other))
+                    .fold(f64::INFINITY, f64::min)
+            };
+            let mut delay_s = 0.0;
+            let mut apart_m = closest(flight);
+            while apart_m < DEPARTURE_SEPARATION_M && delay_s < MAX_DEPARTURE_DELAY_S {
+                flight.delay(1.0);
+                delay_s += 1.0;
+                apart_m = closest(flight);
+            }
+            if delay_s > 0.0 {
+                staggered.push((id.clone(), delay_s, apart_m));
+            }
+            // The last flight planned for a drone this run is the one flown.
+            planned.retain(|(other, _)| other != id);
+            planned.push((id.clone(), flight.clone()));
+        }
+        for (id, delay_s, apart_m) in staggered {
+            self.decisions.push(Decision {
+                kind: "departure_staggered",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason: if apart_m < DEPARTURE_SEPARATION_M {
+                    "still_close_at_the_limit"
+                } else {
+                    "would_pass_too_close"
+                },
+                detail: format!(
+                    "{id} leaves {delay_s:.0} s later: its flight would have passed within \
+                     {DEPARTURE_SEPARATION_M:.0} m of another planned with it"
+                ),
+                inputs: serde_json::json!({
+                    "delay_s": delay_s,
+                    "closest_approach_m": apart_m,
+                }),
+                command: None,
+            });
+        }
+    }
+
     /// Where a drone joining a POI at `target`, from `from`, stops: in a
     /// run flown over the believed surface, [`JOIN_STANDOFF_M`] short of
     /// it on its own side, which is inside the radius a dwell counts
@@ -3673,6 +3761,7 @@ impl StageHandler for MissionDriverStage {
             );
         }
         self.publish_report();
+        self.stagger_departures();
         Ok(outcome)
     }
 
@@ -6253,5 +6342,23 @@ mod tests {
             .find(|d| d.kind == "poi_assignment")
             .expect("assigned");
         assert_eq!(decision.inputs["route_trees"], "over");
+    }
+
+    /// Two flights that cross at the same moment come to nothing apart;
+    /// putting one off a few seconds opens the crossing, and flights that
+    /// never near each other are apart from the start.
+    #[test]
+    fn a_crossing_is_measured_and_a_later_start_opens_it() {
+        let east = GotoHover::redirect([0.0, 0.0, 60.0], [280.0, 0.0], 60.0, 0.0, 28.0);
+        let mut north = GotoHover::redirect([140.0, -140.0, 60.0], [140.0, 140.0], 60.0, 0.0, 28.0);
+        assert!(
+            closest_approach_m(&east, &north) < 1.0,
+            "both at the crossing at 5 s"
+        );
+        north.delay(3.0);
+        let apart = closest_approach_m(&east, &north);
+        assert!(apart > DEPARTURE_SEPARATION_M, "{apart} m after a 3 s wait");
+        let away = GotoHover::redirect([0.0, 500.0, 60.0], [280.0, 500.0], 60.0, 0.0, 28.0);
+        assert_eq!(closest_approach_m(&east, &away), 500.0);
     }
 }

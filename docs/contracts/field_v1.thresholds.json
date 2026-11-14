@@ -76,7 +76,7 @@
     {
       "date": "2026-11-13",
       "change": "Added drone_separation_min_m.",
-      "why": "The first campaign (15 counted seeds) failed max_step_m on 4: deconfliction applied its separation offset at once. Flying the offset in instead trades jumps for closer passes, which no gate measured. The gate is stricter than what was frozen; no existing bound was changed. The seeds of that campaign are tuning seeds from here on, and the campaign was re-run on fresh ones."
+      "why": "The first campaign (15 counted seeds) failed max_step_m on 4: deconfliction applied its separation offset at once. Flying the offset in instead trades jumps for closer passes, which no gate measured. The gate is stricter than what was frozen; no existing bound was changed. The seeds of that campaign are tuning seeds from here on, and each later campaign is run on fresh ones."
     }
   ]
 }

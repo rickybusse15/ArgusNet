@@ -81,7 +81,9 @@ ramped in and out (`separation_mps`, 10 m/s sideways; the climb rate up and
 down), keeps the side already flown to, and is dropped when a new flight is
 planned from where the platform is. A drone joining a POI another holds
 stops 22 m short of it, inside the 30 m a dwell counts within and outside
-the 16 m separation.
+the 16 m separation. Flights planned together that would pass within
+30 m of each other leave apart: the later one is put off (see the second
+campaign).
 
 Once the mission is complete every drone stays at its station
 (`egress_held`), where the reference drops the recalls and each flies its
@@ -159,7 +161,27 @@ was made on those seeds' results, so none of them counts again: the script
 now draws a fresh qualification and held-out set, and re-runs the four
 failing seeds as tuning seeds.
 
-### Second campaign
+### Second campaign (2026-11-13): not qualified
+
+Fresh seeds, the same site and thresholds with the separation gate. 14 of
+15 passed every gate. The step gate passed on all 15 (largest move in a
+tick 10.6 m), and every measure in the table above stayed inside its
+threshold (known 0.952 to 0.983, cells meeting the requirement 0.907 to
+0.939, structure recall 0.943 to 0.988, ground RMSE 0.720 to 0.741 m,
+conductor approach 14.9 to 25.0 m, no contact, every mission complete
+between 321 and 478 s).
+
+Seed 4451 failed `drone_separation_min_m`: 3.9 m. One drone had joined the
+other's POI and stood 24 m from it; the mission then released both for home
+on the same tick, on ways that crossed 2 ticks later. Closing at over
+50 m/s, a separation flown in at 10 m/s with a 1 s look ahead cannot open
+in time. That is the cost of not putting a drone somewhere, and it is paid
+at planning time instead: flights planned in one mission run are checked
+against each other, and one that would pass within 30 m of another is put
+off a second at a time, up to 30 s (`departure_staggered` in the
+decisions). On that seed the closest approach is now 18.9 m.
+
+### Third campaign
 
 In progress when this was written; its results replace this line.
 

@@ -337,6 +337,10 @@ impl GotoHover {
         [self.target_xy[0], self.target_xy[1], self.target_z]
     }
 
+    pub fn t_start(&self) -> f64 {
+        self.t_start
+    }
+
     pub fn t_arrive(&self) -> f64 {
         self.t_arrive
     }
