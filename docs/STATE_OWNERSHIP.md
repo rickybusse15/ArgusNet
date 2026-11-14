@@ -21,8 +21,8 @@
 - **`--profile field_v1` composes those into one run** and is what is scored:
   mission flights are kept above the believed surface, drones end at their
   stations, and configs are built without reading the true world
-  (`blind_setup`). See [FIELD_PROFILE.md](migration/FIELD_PROFILE.md) for what
-  it was qualified on. Without the profile each capability is its own flag and
+  (`blind_setup`). It is qualified on West Pleasant View: 15 of 15 unseen
+  seeds pass every frozen gate ([FIELD_PROFILE.md](migration/FIELD_PROFILE.md)). Without the profile each capability is its own flag and
   the default run is still the prior-map one.
 - The Rust world accepts real buildings, DEM terrain and OSM features (land cover,
   trees and power lines) through one import pipeline, with West Pleasant View as

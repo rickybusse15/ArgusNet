@@ -213,9 +213,32 @@ failures were three cases, and the changes they led to:
 All eight seeds that had failed any gate, in any campaign, pass every gate
 after these.
 
-### Fourth campaign
+### Fourth campaign (2026-11-14): qualified
 
-In progress when this was written; its results replace this line.
+Fresh seeds (23131..33149, held out 9301..9305). 15 of 15 passed every gate,
+and so did all eight tuning seeds. The record is
+[field-v1-qualification-2026-11-14.md](../performance/field-v1-qualification-2026-11-14.md).
+
+| Measure | Threshold | Min | Median | Max |
+| --- | --- | --- | --- | --- |
+| Mission complete, POIs done, drones home | all | 15/15 | | |
+| World contacts | 0 | 0 | 0 | 0 |
+| Known fraction | ≥ 0.90 | 0.944 | 0.960 | 0.980 |
+| Cells meeting the map requirement | ≥ 0.90 | 0.903 | 0.912 | 0.938 |
+| Structure recall | ≥ 0.90 | 0.917 | 0.975 | 0.997 |
+| Structure precision | ≥ 0.90 | 0.965 | 0.970 | 0.974 |
+| Ground RMSE | ≤ 1.0 m | 0.719 | 0.731 | 0.742 |
+| Closest approach to a conductor | ≥ 10 m | 12.5 | 21.9 | 25.0 |
+| Closest two drones came | ≥ 16 m | 29.7 | 164 | 421 |
+| Energy over reserve, worst tick | ≥ 0 Wh | 304 | 316 | 319 |
+| Largest move in one tick | ≤ 12 m | 8.3 | 9.3 | 9.5 |
+| Mission complete at | — | 302 s | 363 s | 508 s |
+| Repeat run identical | yes | 15/15 | | |
+
+Two margins are thin and worth watching on another site: the share of cells
+meeting the map requirement (0.903 at worst against 0.90, which is the scan
+gate itself, so it ends where it is allowed to), and the closest approach to
+a conductor (12.5 m against 10 m).
 
 ## Under the scheduler and under a fault
 

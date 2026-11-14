@@ -32,6 +32,14 @@
   - F2 `mapping_outage`: a platform's mapping payload returns nothing over
     an interval.
 
+  Qualified on West Pleasant View on the fourth campaign: 15 of 15 unseen
+  seeds pass every gate (mission complete in 302 to 508 s, no world contact,
+  94 to 98% of the map known, conductors never nearer than 12.5 m, drones
+  never nearer each other than 29.7 m, nothing moved more than 9.5 m in a
+  tick). The first three campaigns each failed one gate on how drones were
+  kept apart, and each led to a change above; seeds that informed a fix were
+  not counted again. One site, assumed sensor models.
+
   Runs without these options are unchanged: 14 of 14 canonical replay hashes
   and every lifecycle check, and the existing no-prior flag combinations on
   the scan fixture and West Pleasant View. Results, and what is not claimed:
