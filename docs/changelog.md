@@ -2,6 +2,39 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Field profile v1. `--profile field_v1` (`argusnet-rs sim` and
+  `argusnet-viewer --run`) runs the no-prior capabilities as one named set:
+  the provisional rig with modelled LiDAR returns, measured and tracked power
+  lines with poles and wire-aware flight, `flown_v1` energy, `contingency_v1`
+  planning and a declared map requirement the scan must meet. It is what is
+  scored: `docs/contracts/field_v1.thresholds.json` holds gates declared
+  beforehand, `scripts/qualify_field_profile.py` runs predetermined, held-out
+  and tuning seeds and fails unless every counted seed passes every gate, and
+  `scripts/real_site_inspection.py --profile field_v1` exits non-zero on a
+  miss. What composing the slices showed, and what changed for it:
+  - Mission flights fly over what the map believes (`--belief-flights`). On
+    West Pleasant View with the rig alone, a flight home was a straight line
+    through a building: 45 structure contacts, the drone held at the wall
+    until the mission was declared complete, then put back on its lane 810 m
+    away. The governor now keeps flights to a POI, home and back to a path
+    above believed structures, the navigation camera's obstacles, measured
+    ground and the stand-in for unseen ground, at a set climb rate; a flight
+    waits and its plan is delayed, never jumped to.
+  - Drones stay at their stations once the mission is complete.
+  - Deconfliction is flown, not applied: its offset ramps in and out and
+    keeps its side; a drone joining a held POI stops 22 m short; flights
+    planned together that would pass within 30 m leave apart.
+  - Setup reads nothing of the true world (`blind_setup`): lanes unrouted,
+    POIs declaring a hover height resolved against the map, stations sited
+    clear of power lines.
+  - `--scan-coverage-threshold`: the scan gate is the mission's to declare.
+  - F2 `mapping_outage`: a platform's mapping payload returns nothing over
+    an interval.
+
+  Runs without these options are unchanged: 14 of 14 canonical replay hashes
+  and every lifecycle check, and the existing no-prior flag combinations on
+  the scan fixture and West Pleasant View. Results, and what is not claimed:
+  `docs/migration/FIELD_PROFILE.md`.
 - LiDAR returns (SR3). `--lidar-returns` fires the pod LiDAR's rays across the
   capture, admits each return with the chance its reflectivity, incidence and
   range give, and applies range bias, quantization, angular noise and dropout
