@@ -14,6 +14,11 @@
 //! - **`calibration_drift`**: a node's bearing calibration drifts at
 //!   `rate_rad_per_s` over `[start_s, end_s)` and stays where it got to:
 //!   nothing recalibrates it. Added to the sensor's bias walk.
+//! - **`mapping_outage`**: a platform's mapping payload (the rig's pod
+//!   LiDAR, or the range scanner) returns nothing over `[start_s, end_s)`:
+//!   no ground, structure or wire evidence from it reaches the map. Its
+//!   navigation camera is a separate sensor and goes on seeing. Needs a
+//!   run that maps for itself (`world_knowledge: none`).
 //!
 //! Outages, delays and drift offsets are a pure function of the tick and are re-applied
 //! idempotently before every tick, so a checkpoint needs no extra state to
@@ -52,6 +57,11 @@ pub enum Fault {
         start_s: f64,
         end_s: f64,
         rate_rad_per_s: f64,
+    },
+    MappingOutage {
+        node_id: String,
+        start_s: f64,
+        end_s: f64,
     },
 }
 
@@ -93,6 +103,8 @@ pub struct FaultSchedule {
     drifts: Vec<(String, u64, u64, f64)>,
     /// Each outage node's sensor as installed, to put back.
     specs: BTreeMap<String, SensorSpec>,
+    /// `(node, start tick, end tick)`, end exclusive.
+    mapping_outages: Vec<(String, u64, u64)>,
 }
 
 impl FaultSchedule {
@@ -135,6 +147,7 @@ impl FaultSchedule {
             restarts: Vec::new(),
             drifts: Vec::new(),
             specs: BTreeMap::new(),
+            mapping_outages: Vec::new(),
         };
         for fault in &manifest.faults {
             match fault {
@@ -197,6 +210,15 @@ impl FaultSchedule {
                         .drifts
                         .push((node_id.clone(), start, end, rate_rad_per_s * dt_s));
                 }
+                Fault::MappingOutage {
+                    node_id,
+                    start_s,
+                    end_s,
+                } => {
+                    known(node_id)?;
+                    let (start, end) = interval(node_id, *start_s, *end_s)?;
+                    schedule.mapping_outages.push((node_id.clone(), start, end));
+                }
             }
         }
         Ok(schedule)
@@ -230,6 +252,7 @@ impl FaultSchedule {
             .iter()
             .filter(|fault| match fault {
                 Fault::SensorOutage { start_s, end_s, .. }
+                | Fault::MappingOutage { start_s, end_s, .. }
                 | Fault::LinkDelay { start_s, end_s, .. }
                 | Fault::CalibrationDrift { start_s, end_s, .. } => within(*start_s, *end_s),
                 Fault::SourceRestart { at_s, .. } => tick_of(*at_s, dt_s) == tick,
@@ -263,6 +286,21 @@ impl FaultSchedule {
             }
         }
         out
+    }
+
+    /// Whether the manifest takes any mapping payload out: such a run must
+    /// be one that maps for itself.
+    pub fn has_mapping_outages(&self) -> bool {
+        !self.mapping_outages.is_empty()
+    }
+
+    /// The nodes whose mapping payload returns nothing at `tick`.
+    pub fn mapping_out(&self, tick: u64) -> std::collections::BTreeSet<String> {
+        self.mapping_outages
+            .iter()
+            .filter(|(_, start, end)| (*start..*end).contains(&tick))
+            .map(|(node, _, _)| node.clone())
+            .collect()
     }
 
     /// The nodes whose transport restarts at `tick`.

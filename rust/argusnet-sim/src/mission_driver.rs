@@ -428,6 +428,55 @@ pub struct MissionDriverStage {
     /// Pending POIs no drone can afford under contingency_v1 (F5).
     /// Checkpointed.
     unassigned: BTreeSet<String>,
+    /// Leave every drone at its station once the mission is complete,
+    /// instead of dropping the recalls so each flies its lanes again as the
+    /// reference does. Set at assembly.
+    stay_home: bool,
+    /// In a run without a prior map: the map, each POI's hover height over
+    /// the ground, and the clearance kept over a believed structure. A POI
+    /// flight then ends at that height over the ground the map holds, not
+    /// at a height taken from the true ground. Set at assembly.
+    believed_pois: Option<BelievedPois>,
+}
+
+/// How near two flights planned in one run may pass before one is put
+/// off, metres: the 16 m deconfliction keeps, and a little to keep it by.
+/// Less than a join's standoff, so two drones leaving a POI they shared are
+/// not held for being as near as they were asked to stand.
+const DEPARTURE_SEPARATION_M: f64 = 18.0;
+/// The longest a departure is put off, seconds.
+const MAX_DEPARTURE_DELAY_S: f64 = 30.0;
+
+/// How near two flights come, sampled every quarter second from the first
+/// to start until both have arrived. A flight not yet begun is at its
+/// start, and one that has arrived is at its target.
+fn closest_approach_m(a: &GotoHover, b: &GotoHover) -> f64 {
+    let from = a.t_start().min(b.t_start());
+    let to = a.t_arrive().max(b.t_arrive());
+    let steps = ((to - from) / 0.25).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|k| {
+            let t = from + (to - from) * k as f64 / steps as f64;
+            let (p, q) = (a.sample(t).0, b.sample(t).0);
+            ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// How far from a POI a drone joining it stops, metres: more than the
+/// 16 m deconfliction keeps between drones, less than the 30 m a dwell
+/// counts within.
+const JOIN_STANDOFF_M: f64 = 22.0;
+/// How far above a POI's hover height a drone joining it holds, metres:
+/// deconfliction's vertical separation.
+const JOIN_STANDOFF_UP_M: f64 = 20.0;
+
+/// See [`MissionDriverStage::set_believed_poi_heights`].
+#[derive(Debug, Clone)]
+struct BelievedPois {
+    map: crate::belief_world::BeliefHandle,
+    hover_agl_m: BTreeMap<String, f64>,
+    clearance_m: f64,
 }
 
 /// The obstacle layer the driver plans routes over (P3), with its planner.
@@ -1148,6 +1197,8 @@ impl MissionDriverStage {
             mapped_bounds: None,
             replan_for_wires: false,
             unassigned: BTreeSet::new(),
+            stay_home: false,
+            believed_pois: None,
         }
     }
 
@@ -2937,6 +2988,201 @@ impl MissionDriverStage {
         self.replay = LocalizationReplay { ticks };
     }
 
+    /// Keep every drone at its station once the mission is complete: the
+    /// recalls stand, where the reference drops them and each drone flies
+    /// its lanes again. Before the first tick.
+    pub fn stay_home_when_complete(&mut self, stay: bool) {
+        self.stay_home = stay;
+    }
+
+    /// Fly to each POI at its hover height over the ground `map` holds
+    /// (the stand-in where unseen), and no lower than `clearance_m` over a
+    /// structure believed there. Before the first tick.
+    ///
+    /// Until a flight resolves it, each POI is planned for (allocation,
+    /// energy, the replay) at its hover height over `floor_m`, what the
+    /// platforms know of the ground before sensing any: the height a
+    /// scenario took from the true ground is not kept.
+    pub fn set_believed_poi_heights(
+        &mut self,
+        map: crate::belief_world::BeliefHandle,
+        hover_agl_m: BTreeMap<String, f64>,
+        clearance_m: f64,
+        floor_m: f64,
+    ) {
+        for poi in &mut self.initial_pois {
+            if let Some(agl) = hover_agl_m.get(&poi.poi_id) {
+                poi.position[2] = floor_m + agl;
+            }
+        }
+        self.pois = PoiManager::new(self.initial_pois.clone());
+        self.believed_pois = Some(BelievedPois {
+            map,
+            hover_agl_m,
+            clearance_m,
+        });
+    }
+
+    /// In a run flown over the believed surface: flights planned in one
+    /// mission run leave apart when they would pass within
+    /// [`DEPARTURE_SEPARATION_M`] of each other. Two drones released at once
+    /// from beside each other close faster than deconfliction can part them
+    /// at the rate it is flown in, so the conflict is settled here, by who
+    /// leaves when.
+    ///
+    /// For each flight, in the order planned, against those before it: the
+    /// least whole seconds, up to [`MAX_DEPARTURE_DELAY_S`], by which either
+    /// it is put off, or the flights it conflicts with are (a drone waiting
+    /// in the way of another's flight has to go first, not wait longer). A
+    /// conflict nothing settles is left as planned and said so.
+    fn stagger_departures(&mut self) {
+        if self.believed_pois.is_none() {
+            return;
+        }
+        // The last flight planned for a drone this run is the one flown.
+        let mut flights: Vec<(usize, String, GotoHover, f64)> = Vec::new();
+        for (index, command) in self.override_commands.iter().enumerate() {
+            if let OverrideCommand::SetPoi(id, flight) | OverrideCommand::SetEgress(id, flight) =
+                command
+            {
+                flights.retain(|(_, other, _, _)| other != id);
+                flights.push((index, id.clone(), flight.clone(), 0.0));
+            }
+        }
+        let mut unsettled = Vec::new();
+        for current in 1..flights.len() {
+            let apart = |flights: &[(usize, String, GotoHover, f64)]| {
+                (0..current)
+                    .map(|other| closest_approach_m(&flights[current].2, &flights[other].2))
+                    .fold(f64::INFINITY, f64::min)
+            };
+            if apart(&flights) >= DEPARTURE_SEPARATION_M {
+                continue;
+            }
+            let conflicting: Vec<usize> = (0..current)
+                .filter(|&other| {
+                    closest_approach_m(&flights[current].2, &flights[other].2)
+                        < DEPARTURE_SEPARATION_M
+                })
+                .collect();
+            // Among the earlier flights, moving one must not bring it near
+            // another already settled.
+            let settled = |flights: &[(usize, String, GotoHover, f64)]| {
+                (0..=current).all(|a| {
+                    (0..a).all(|b| {
+                        closest_approach_m(&flights[a].2, &flights[b].2) >= DEPARTURE_SEPARATION_M
+                    })
+                })
+            };
+            let mut choice = None;
+            'search: for seconds in 1..=MAX_DEPARTURE_DELAY_S as usize {
+                for later in [vec![current], conflicting.clone()] {
+                    let mut tried = flights.clone();
+                    for &index in &later {
+                        tried[index].2.delay(seconds as f64);
+                        tried[index].3 += seconds as f64;
+                    }
+                    if settled(&tried) {
+                        choice = Some(tried);
+                        break 'search;
+                    }
+                }
+            }
+            match choice {
+                Some(tried) => flights = tried,
+                None => unsettled.push((flights[current].1.clone(), apart(&flights))),
+            }
+        }
+        for (index, id, flight, delay_s) in &flights {
+            if *delay_s == 0.0 {
+                continue;
+            }
+            match &mut self.override_commands[*index] {
+                OverrideCommand::SetPoi(_, planned) | OverrideCommand::SetEgress(_, planned) => {
+                    *planned = flight.clone();
+                }
+                _ => unreachable!("indexed from the flight commands"),
+            }
+            self.decisions.push(Decision {
+                kind: "departure_staggered",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason: "would_pass_too_close",
+                detail: format!(
+                    "{id} leaves {delay_s:.0} s later: its flight would have passed within \
+                     {DEPARTURE_SEPARATION_M:.0} m of another planned with it"
+                ),
+                inputs: serde_json::json!({ "delay_s": delay_s }),
+                command: None,
+            });
+        }
+        for (id, apart_m) in unsettled {
+            self.decisions.push(Decision {
+                kind: "departure_staggered",
+                status: DecisionStatus::Rejected,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason: "no_order_keeps_them_apart",
+                detail: format!(
+                    "{id}'s flight passes within {apart_m:.0} m of another planned with it, \
+                     whichever leaves first: flown as planned, for deconfliction to part"
+                ),
+                inputs: serde_json::json!({ "closest_approach_m": apart_m }),
+                command: None,
+            });
+        }
+    }
+
+    /// Where a drone joining a POI at `target`, from `from`, stops: in a
+    /// run flown over the believed surface, [`JOIN_STANDOFF_M`] short of
+    /// it on its own side and [`JOIN_STANDOFF_UP_M`] above it: inside the
+    /// radius a dwell counts within, outside the separation deconfliction
+    /// keeps, and at another height, so that when both leave on ways that
+    /// cross beside the POI they cross a height apart. Elsewhere, the POI
+    /// itself, as before.
+    fn standoff(&self, target: [f64; 3], from: [f64; 3]) -> [f64; 3] {
+        if self.believed_pois.is_none() {
+            return target;
+        }
+        let (dx, dy) = (from[0] - target[0], from[1] - target[1]);
+        let away = dx.hypot(dy);
+        let z = target[2] + JOIN_STANDOFF_UP_M;
+        if away <= JOIN_STANDOFF_M {
+            // Already nearer than that: it holds where it is.
+            return [from[0], from[1], z];
+        }
+        [
+            target[0] + dx / away * JOIN_STANDOFF_M,
+            target[1] + dy / away * JOIN_STANDOFF_M,
+            z,
+        ]
+    }
+
+    /// Where a flight to POI `poi_id` at `position` ends.
+    fn poi_target(&self, poi_id: &str, position: [f64; 3]) -> [f64; 3] {
+        let Some(believed) = &self.believed_pois else {
+            return position;
+        };
+        let Some(agl) = believed.hover_agl_m.get(poi_id) else {
+            return position;
+        };
+        let map = believed.map.current();
+        let mut z = map.ground_at(position[0], position[1]) + agl;
+        if let Some(top) = map.structure_top_at(position[0], position[1]) {
+            z = z.max(top + believed.clearance_m);
+        }
+        [position[0], position[1], z]
+    }
+
+    /// The share of the map the scan must reach before it ends, in place
+    /// of the scenario's. Before the first tick.
+    pub fn set_scan_coverage_threshold(&mut self, threshold: f64) {
+        self.machine.set_scan_coverage_threshold(threshold);
+    }
+
     /// Redirect drones to POIs, home and back no faster than `speed_mps`.
     /// Before the first tick.
     pub fn cap_redirect_speed(&mut self, speed_mps: f64) {
@@ -3065,6 +3311,14 @@ impl MissionDriverStage {
                         .find(|p| p.poi_id == active)
                         .expect("an assigned POI is one of the manager's")
                         .position;
+                    let poi_position = self.poi_target(&active, poi_position);
+                    // Joining a POI another drone holds: it stops short of
+                    // it, not on top of the drone already there.
+                    let poi_position = if self.pois.leads(id) {
+                        poi_position
+                    } else {
+                        self.standoff(poi_position, *position)
+                    };
                     let flight = self.flight(*position, poi_position, timestamp_s);
                     let mut inputs = serde_json::json!({
                         "position_m": position,
@@ -3117,6 +3371,14 @@ impl MissionDriverStage {
                         .find(|p| p.poi_id == active)
                         .expect("an assigned POI is one of the manager's")
                         .position;
+                    let poi_position = self.poi_target(&active, poi_position);
+                    // Joining a POI another drone holds: it stops short of
+                    // it, not on top of the drone already there.
+                    let poi_position = if self.pois.leads(id) {
+                        poi_position
+                    } else {
+                        self.standoff(poi_position, *position)
+                    };
                     let flight = self.flight(*position, poi_position, timestamp_s);
                     if flight.lines.is_some() {
                         let mut inputs = serde_json::json!({ "position_m": position });
@@ -3477,6 +3739,20 @@ impl StageHandler for MissionDriverStage {
                         command: Some("set_egress"),
                     });
                 }
+                MissionEvent::EgressRoutesCleared { .. } if self.stay_home => {
+                    self.decisions.push(Decision {
+                        kind: "egress_held",
+                        status: DecisionStatus::Applied,
+                        subject: None,
+                        selected: None,
+                        candidates: Vec::new(),
+                        reason: "mission_complete",
+                        detail: "the mission is complete: every drone stays at its station"
+                            .to_string(),
+                        inputs: gate_inputs.clone(),
+                        command: None,
+                    });
+                }
                 MissionEvent::EgressRoutesCleared { at_s } => {
                     self.override_commands.push(OverrideCommand::ClearAllEgress);
                     self.decisions.push(Decision {
@@ -3540,6 +3816,7 @@ impl StageHandler for MissionDriverStage {
             );
         }
         self.publish_report();
+        self.stagger_departures();
         Ok(outcome)
     }
 
@@ -6120,5 +6397,26 @@ mod tests {
             .find(|d| d.kind == "poi_assignment")
             .expect("assigned");
         assert_eq!(decision.inputs["route_trees"], "over");
+    }
+
+    /// Two flights that cross at the same moment come to nothing apart;
+    /// putting one off a few seconds opens the crossing, and flights that
+    /// never near each other are apart from the start.
+    #[test]
+    fn a_crossing_is_measured_and_a_later_start_opens_it() {
+        let east = GotoHover::redirect([0.0, 0.0, 60.0], [280.0, 0.0], 60.0, 0.0, 28.0);
+        let mut north = GotoHover::redirect([140.0, -140.0, 60.0], [140.0, 140.0], 60.0, 0.0, 28.0);
+        assert!(
+            closest_approach_m(&east, &north) < 1.0,
+            "both at the crossing at 5 s"
+        );
+        north.delay(3.0);
+        let apart = closest_approach_m(&east, &north);
+        assert!(
+            apart > 2.0 * DEPARTURE_SEPARATION_M,
+            "{apart} m after a 3 s wait"
+        );
+        let away = GotoHover::redirect([0.0, 500.0, 60.0], [280.0, 500.0], 60.0, 0.0, 28.0);
+        assert_eq!(closest_approach_m(&east, &away), 500.0);
     }
 }

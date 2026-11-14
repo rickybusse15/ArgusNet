@@ -196,6 +196,12 @@ pub struct PoiDocument {
     pub position: [f64; 3],
     pub priority: i64,
     pub required_dwell_s: f64,
+    /// The hover height over the ground the POI was asked for, when its
+    /// scenario declares it (`blind_setup`): a run without a prior map
+    /// resolves it against the ground it has measured. `position`'s height
+    /// is the same height over the true ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hover_agl_m: Option<f64>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -803,6 +809,11 @@ pub struct AssembledRun {
     /// The fleet as assembly loaded it, before any tick: what
     /// [`AssembledRun::reset`] reloads.
     initial_platforms: Vec<NodeState>,
+    /// Whether the fault schedule takes a mapping payload out, which only a
+    /// run that maps for itself has.
+    faults_need_mapping: bool,
+    /// The hover height each POI declares (`blind_setup`), by id.
+    poi_hover_agl_m: BTreeMap<String, f64>,
     /// Scheduled sensor and link faults (F2), applied before every tick.
     faults: Option<crate::faults::FaultSchedule>,
     /// The tick whose source restarts were last applied, so a tick re-entered
@@ -1412,6 +1423,13 @@ pub fn assemble_with(
         .map_err(|error| BundleError::Invalid(error.to_string()))?;
 
     Ok(AssembledRun {
+        faults_need_mapping: false,
+        poi_hover_agl_m: bundle
+            .mission
+            .iter()
+            .flat_map(|mission| &mission.pois)
+            .filter_map(|poi| poi.hover_agl_m.map(|agl| (poi.poi_id.clone(), agl)))
+            .collect(),
         mission_setup,
         sim,
         truth,
@@ -2035,6 +2053,7 @@ impl AssembledRun {
             "launch_floor_m": self.launch_floor_m,
         });
         let wire_planning_config = config.wire_planning.clone();
+        let mission_flights = config.mission_flights.clone();
         let rejoin_explorers = config.poles.is_some();
         let handle = self
             .sim
@@ -2117,6 +2136,48 @@ impl AssembledRun {
             if let Some(cap) = speed_cap_mps {
                 driver.cap_redirect_speed(cap);
             }
+            driver.stay_home_when_complete(mission_flights.is_some());
+            if let Some(flights) = &mission_flights {
+                // Each POI's height over the ground: declared by the
+                // scenario, else recovered from its absolute height and the
+                // true ground under it, which is said in the replay.
+                let mut declared = 0usize;
+                let mut recovered = 0usize;
+                let agl: BTreeMap<String, f64> = driver
+                    .pois()
+                    .iter()
+                    .map(|poi| {
+                        let agl = match self.poi_hover_agl_m.get(&poi.poi_id) {
+                            Some(agl) => {
+                                declared += 1;
+                                *agl
+                            }
+                            None => {
+                                recovered += 1;
+                                poi.position[2]
+                                    - crate::motion::TerrainSampler::height_at(
+                                        &self.world.terrain,
+                                        poi.position[0],
+                                        poi.position[1],
+                                    )
+                            }
+                        };
+                        (poi.poi_id.clone(), agl)
+                    })
+                    .collect();
+                driver.set_believed_poi_heights(
+                    handle.clone(),
+                    agl,
+                    flights.clearance_m,
+                    self.launch_floor_m,
+                );
+                summary["mission_setup"] = serde_json::json!({
+                    "poi_hover_agl": {
+                        "declared": declared,
+                        "recovered_from_true_ground": recovered,
+                    },
+                });
+            }
         }
 
         let deconflict = self
@@ -2129,6 +2190,17 @@ impl AssembledRun {
             .with_terrain(Arc::new(terrain.clone()));
         deconflict.set_roles(roles);
         deconflict.set_physical_guard(guard.clone());
+        if let Some(flights) = &mission_flights {
+            let mut config = deconflict.config();
+            config.look_ahead_s = flights.separation_look_ahead_s;
+            deconflict.set_config(config);
+        }
+        deconflict.set_offset_ramp(mission_flights.as_ref().map(|flights| {
+            crate::deconflict::OffsetRamp {
+                lateral_mps: flights.separation_mps,
+                vertical_mps: flights.climb_mps,
+            }
+        }));
         // Nor are its pushes kept from lines it has not mapped.
         deconflict.set_power_lines(Vec::new());
 
@@ -2171,12 +2243,52 @@ impl AssembledRun {
             .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
         {
             overrides.set_wire_governor(
-                wire_planning
-                    .map(|config| crate::wire_governor::WireGovernor::new(config, governed_map)),
+                (wire_planning.is_some() || mission_flights.is_some()).then(|| {
+                    crate::wire_governor::WireGovernor::of(
+                        wire_planning,
+                        mission_flights,
+                        governed_map,
+                    )
+                }),
             );
         }
         self.plan_round_mapped_wires();
         self.extend_replay_meta([("world_knowledge".to_string(), summary)]);
+        Ok(())
+    }
+
+    /// Refuse a fault schedule this run cannot host: a `mapping_outage` in
+    /// a run with a prior map, which has no mapping payload to take out.
+    /// Checked once both the faults and the world knowledge are set.
+    pub fn check_faults_fit(&self) -> Result<(), String> {
+        if self.faults_need_mapping && self.belief.is_none() {
+            return Err(
+                "mapping_outage takes out a mapping payload, which only a run with                  world knowledge `none` flies"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// End the scan at `threshold` of the map, in place of the scenario's
+    /// own share: what the map must reach is the mission's to declare, not
+    /// the scenario generator's. Before the first tick; a run with no
+    /// mission has no scan to end.
+    pub fn set_scan_coverage_threshold(&mut self, threshold: f64) -> Result<(), String> {
+        if !(threshold.is_finite() && threshold > 0.0 && threshold <= 1.0) {
+            return Err(format!(
+                "the scan coverage threshold must be in (0, 1], got {threshold}"
+            ));
+        }
+        if self.sim.has_begun() {
+            return Err("the scan coverage threshold is set before the first tick".into());
+        }
+        let driver = self
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+            .ok_or("this run has no scan mission whose coverage threshold could be set")?;
+        driver.set_scan_coverage_threshold(threshold);
+        self.report.scan_coverage_threshold = Some(threshold);
         Ok(())
     }
 
@@ -2206,6 +2318,7 @@ impl AssembledRun {
             &sensors,
             lag_and_jitter.map(|_| &fits as &dyn Fn(u64) -> Result<(), String>),
         )?;
+        self.faults_need_mapping = schedule.has_mapping_outages();
         self.replay.extend_meta([(
             "fault_manifest".to_string(),
             serde_json::to_value(schedule.manifest()).expect("manifest serialises"),
@@ -2229,10 +2342,12 @@ impl AssembledRun {
             .into_iter()
             .map(|(node, offset)| (node.to_string(), offset))
             .collect();
+        let mapping_out = schedule.mapping_out(tick);
         let observe = self
             .sim
             .stage_mut::<ObserveStage>(Stage::GenerateObservations)
             .expect("assembly installs an ObserveStage");
+        observe.set_mapping_out(mapping_out);
         for (node, offset) in offsets {
             observe.set_bias_offset(&node, offset);
         }

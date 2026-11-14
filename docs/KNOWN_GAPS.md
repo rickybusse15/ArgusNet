@@ -1,6 +1,6 @@
 # Known Gaps — ArgusNet
 
-## Scheduled-runtime status (reviewed 2026-10-23 at `79ca540`)
+## Scheduled-runtime status (reviewed 2026-11-13 at `cd7ec23`)
 
 The [2026-10-26 integration review](migration/PR_INTEGRATION_REVIEW_2026_10_26.md)
 updates operator delivery and checkpoint behavior: guarded controller runs now
@@ -15,6 +15,7 @@ preserve committed poses in checkpoint format 6. Legacy runs retain formats 4/5.
 | Timestamped measurement delivery | **Partial** (P4.10b, #196, #199) | Delivery envelopes with acquisition/availability/receipt ticks, seeded per-source delay and jitter, fusion at a fixed lag, explicit drops; track error scored at evidence time with present error and evidence age reported (`docs/migration/DELIVERY_TIMING.md`). Per-sensor capture rates on tick boundaries (`--sensor-rate`). Not yet: buffered mapping inputs, capture times between ticks, clock quality, evidence time on the gRPC wire, delayed-measurement smoothing. Tracks record their evidence time in timed replays (`evidence_time_s`) |
 | Bounded causal jobs and complete scheduler history | Planned P4.10d–f | Deterministic application, stale result checks and restore during pending work |
 | Starting with no world knowledge | **First slice** (#201–#208) | `--world-knowledge none`: range scanners, a checkpointed belief grid, stages 1, 3 and 4 planning on it, a physics guard; the map exports as a scene package. Pursuit now uses fused tracks (a tasking cue before the first). Search drones explore the frontier and scan progress reads the map. Still reading truth: the bundle builder's lane and POI planning (`docs/migration/UNKNOWN_WORLD.md`) |
+| Composed field mission (`--profile field_v1`) | **Implemented; qualified on one real site** (15 of 15 unseen seeds, fifth campaign) | One named set of the no-prior capabilities, with mission flights over the believed surface, truth-free setup (`blind_setup`), a declared scan gate and frozen thresholds (`docs/contracts/field_v1.thresholds.json`). Results and limits: [FIELD_PROFILE.md](migration/FIELD_PROFILE.md). Open: a second real site, navigation-camera and gimbal faults, calibrated sensor models, follow routes in tracking scenarios |
 | Viewer shell, projections and freshness | **Partial** | Shell, inspectors, Perspective/Top-down/Section, layer presets, Rust-worker controls and source-bound Review reports are implemented. Plan remains unavailable; complete freshness/history and operator acceptance remain open |
 | Qualified hardware adapters and deadlines | Planned S3–S7 | Actual SIL/HIL and device/clock/fault evidence; telemetry viewing grants no control |
 
@@ -115,7 +116,7 @@ Status labels:
 | Coordinator election | **Implemented** | `CoordinationManager.elect_coordinator()` is wired into `scan_map_inspect`. |
 | Drone deconfliction events | **Implemented** | `src/argusnet/planning/deconfliction.py` and sim replay events |
 | Blocking safety gate | **Implemented (opt-in)** | `--safety-blocking` runs after deconfliction, clamps commands, emits events, and holds Abort-state drones. |
-| 3D path planning | **Planned** | Current route planner is 2D; altitude is handled separately. |
+| 3D path planning | **Planned** | Current route planner is 2D; altitude is handled separately. In a no-prior run, `--belief-flights` holds mission flights above the believed surface with a height governor: a reactive floor, not a planned 3D route. |
 
 ## Evaluation, Benchmarking, Replay, And UI
 

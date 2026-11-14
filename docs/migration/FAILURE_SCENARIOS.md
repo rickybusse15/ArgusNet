@@ -25,6 +25,7 @@ An `argusnet.fault-manifest` (version 1) lists faults by simulated time:
 | `link_delay` | The node's evidence takes `delay_s` to arrive over the interval instead of its profile delay. | B4 delivery (`--fusion-lag-s`); delay plus jitter within the lag |
 | `source_restart` | The node's transport restarts: a new source epoch, so its in-flight evidence is dropped as `delivery_stale_epoch`. | B4 delivery |
 | `calibration_drift` | The node's bearing calibration drifts at `rate_rad_per_s` over `[start_s, end_s)` and stays where it got to, since nothing recalibrates it. The offset adds to the sensor's bias walk and survives an outage's restart. (Second slice, 2026-10-23.) | — |
+| `mapping_outage` | The platform's mapping payload (the rig's pod LiDAR, or the range scanner) returns nothing over `[start_s, end_s)`: no ground, structure or wire evidence from it reaches the map. Its navigation camera goes on seeing. | A run that maps for itself (`--world-knowledge none`, or a profile) |
 
 The manifest is validated against the run before any tick. It is refused
 (`argusnet-rs` exit 3, with the reason) when:
@@ -125,3 +126,35 @@ about the same axis. Offsets are a pure function of the tick, re-applied before
 every tick and on restore. A run resumed mid-drift or after it matches the
 straight run frame for frame. A zero or non-finite rate is refused before the
 run. Runs without faults are unchanged (14/14 canonical replays).
+
+## Third slice: a mapping outage against the composed mission (2026-11-13)
+
+The first two slices fault bearing sensors and their links, which a scan
+mission does not fly on. `mapping_outage` faults what it does fly on. Case F
+(`a_mapping_outage_slows_the_mission_and_nothing_else`,
+`tests/field_profile.rs`) takes drone-east's mapping LiDAR out for the first
+80 s of the composed mission ([FIELD_PROFILE.md](FIELD_PROFILE.md)). Declared
+before the run, and held:
+
+- detection: every frame of the interval names the fault, and the map holds
+  under 80% of the unfaulted run's at the interval's end;
+- containment: no world contact;
+- terminal state: the mission completes with every POI done and every drone
+  at its station, and the scan ends only once the map the run made meets the
+  gate. As first declared, the mission also completed later than the
+  unfaulted run; that held only by chance. Once terrain returns were put on
+  the ray (FIELD_PROFILE.md), the faulted run's scan and mission both ended
+  earlier (140 s and 207 s, against 192 s and 258 s): with the outage over
+  by 80 s, which drone takes which POI decides the order. The expectation
+  was restated rather than kept;
+- a run checkpointed inside the outage finishes as the uninterrupted one.
+
+The outage is a pure function of the tick, like the others. The payload still
+flies its capture (gimbal, clock); only what it would have returned is
+withheld. A manifest with a `mapping_outage` is refused in a run with a prior
+map, which has no mapping payload.
+
+Still not covered: a navigation-camera fault (speed is capped fleet-wide from
+the camera's envelope at assembly, so a per-platform degraded envelope needs
+per-platform caps), a gimbal fault, and any hold or return response to a
+fault.

@@ -148,6 +148,14 @@ struct RunOptionArgs {
     /// Scheduled sensor and link faults: an `argusnet.fault-manifest` (F2).
     #[arg(long, requires = "run")]
     faults: Option<PathBuf>,
+    /// Run a named profile, as `argusnet-rs sim --profile`: `field_v1` is
+    /// the composed field mission (no prior map, the declared rig, measured
+    /// power lines, mission flights over the believed surface, a declared
+    /// map requirement). It sets the energy profile, planning policy and
+    /// world knowledge itself.
+    #[arg(long, value_parser = argusnet_sim::run_options::RunProfile::parse, requires = "run",
+          conflicts_with_all = ["energy_profile", "planning_policy", "world_knowledge"])]
+    profile: Option<argusnet_sim::run_options::RunProfile>,
     /// `prior` (the true terrain and obstacles) or `none`: the platforms map
     /// the world themselves and the view shows the map they build.
     #[arg(long, value_parser = ["prior", "none"], default_value = "prior", requires = "run")]
@@ -174,13 +182,20 @@ struct RunOptionArgs {
 impl RunOptionArgs {
     fn options(&self) -> Result<argusnet_sim::run_options::RunOptions> {
         use argusnet_sim::run_options::{DeliverySeconds, RunOptions};
+        let base = self
+            .profile
+            .map(argusnet_sim::run_options::RunProfile::options);
+        let profiled = base.is_some();
+        let base = base.unwrap_or_default();
         Ok(RunOptions {
             energy_profile: match self.energy_profile.as_str() {
+                _ if profiled => base.energy_profile,
                 "physical_v1" => argusnet_sim::run_options::EnergyProfile::PhysicalV1,
                 "flown_v1" => argusnet_sim::run_options::EnergyProfile::FlownV1,
                 _ => argusnet_sim::run_options::EnergyProfile::Legacy,
             },
             planning_policy: match self.planning_policy.as_str() {
+                _ if profiled => base.planning_policy,
                 "efficient_v1" => argusnet_sim::run_options::PlanningPolicy::EfficientV1,
                 "contingency_v1" => argusnet_sim::run_options::PlanningPolicy::ContingencyV1,
                 _ => argusnet_sim::run_options::PlanningPolicy::Reference,
@@ -199,10 +214,13 @@ impl RunOptionArgs {
                 .transpose()
                 .map_err(|error| anyhow::anyhow!(error))?,
             world_knowledge: match self.world_knowledge.as_str() {
+                _ if profiled => base.world_knowledge,
                 "none" => argusnet_sim::belief_world::WorldKnowledge::NoPrior,
                 _ => argusnet_sim::belief_world::WorldKnowledge::Prior,
             },
-            exploration: None,
+            exploration: base.exploration.clone(),
+            scan_coverage_threshold: base.scan_coverage_threshold,
+            profile: base.profile,
             lane_rates: argusnet_sim::scheduler::LaneRates {
                 fusion: self.fusion_rate,
                 mapping: self.mapping_rate,

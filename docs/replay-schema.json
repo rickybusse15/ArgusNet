@@ -1010,7 +1010,7 @@
             "properties": {
               "kind": {
                 "type": "string",
-                "enum": ["sensor_outage", "link_delay", "source_restart", "calibration_drift"]
+                "enum": ["sensor_outage", "link_delay", "source_restart", "calibration_drift", "mapping_outage"]
               },
               "node_id": {"type": "string"}
             }
