@@ -647,55 +647,86 @@ impl DeconflictStage {
         use argusnet_planning::deconfliction::{yielder, Resolution};
         let config = self.state.config;
         let roles = &self.state.roles;
-        let mut wanted = std::collections::BTreeMap::new();
+        let mut wanted: std::collections::BTreeMap<String, [f64; 3]> =
+            std::collections::BTreeMap::new();
         let mut events = Vec::new();
         let mut order: Vec<usize> = (0..proposed.len()).collect();
         order.sort_by(|a, b| proposed[*a].0.cmp(&proposed[*b].0));
+        // The pairs whose ways come within the separation in plan: heights
+        // do not change that, so it is settled once.
+        let mut conflicts = Vec::new();
         for (rank, &i) in order.iter().enumerate() {
             for &j in &order[rank + 1..] {
                 let (a, b) = (&proposed[i], &proposed[j]);
                 let separation = closest_in_plan(a.1, a.2, b.1, b.2, config.look_ahead_s);
-                if separation >= config.min_separation_m
-                    || (a.1[2] - b.1[2]).abs() >= config.vertical_separation_m
-                {
-                    continue;
+                if separation < config.min_separation_m {
+                    conflicts.push((i, j, separation));
                 }
+            }
+        }
+        // Each pair is judged against the heights already asked of both, not
+        // the ones proposed: three drones at one height would otherwise send
+        // two of them up together. Passes repeat until no conflicting pair is
+        // within the vertical separation (a yielder pushed up stacks over the
+        // last one), at most once per platform and once more.
+        let height = |wanted: &std::collections::BTreeMap<String, [f64; 3]>, k: usize| {
+            proposed[k].1[2] + wanted.get(&proposed[k].0).map_or(0.0, |offset| offset[2])
+        };
+        let mut reported = std::collections::BTreeSet::new();
+        for _ in 0..=proposed.len() {
+            let mut changed = false;
+            for &(i, j, separation) in &conflicts {
+                let (a, b) = (&proposed[i], &proposed[j]);
                 let (yielding, peer) =
                     yielder(&a.0, &roles.role_of(&a.0), &b.0, &roles.role_of(&b.0));
-                let (y, p) = if yielding == a.0 { (a, b) } else { (b, a) };
-                let above = y.1[2] - p.1[2];
-                let started = held.get(&y.0).map_or(0.0, |offset| offset[2]);
-                let mut direction = if started.abs() > 1e-9 {
-                    started.signum()
-                } else if above >= 0.0 {
-                    1.0
-                } else {
-                    -1.0
+                let (y, p) = if yielding == a.0 { (i, j) } else { (j, i) };
+                let above = height(&wanted, y) - height(&wanted, p);
+                if above.abs() >= config.vertical_separation_m - 1e-9 {
+                    continue;
+                }
+                // The way it has started: flown in from an earlier tick, or
+                // asked by an earlier pair this tick; else away from its peer
+                // (level or above: up).
+                let started = held
+                    .get(&proposed[y].0)
+                    .map(|offset| offset[2])
+                    .filter(|z| z.abs() > 1e-9)
+                    .or_else(|| {
+                        wanted
+                            .get(&proposed[y].0)
+                            .map(|offset| offset[2])
+                            .filter(|z| z.abs() > 1e-9)
+                    });
+                let mut direction = match started {
+                    Some(z) => z.signum(),
+                    None if above >= 0.0 => 1.0,
+                    None => -1.0,
                 };
-                let need =
-                    |direction: f64| (config.vertical_separation_m - direction * above).max(0.0);
-                if direction < 0.0 {
-                    let target = y.1[2] - need(direction);
-                    let floored = roles
-                        .clamp([y.1[0], y.1[1]], target, config.min_agl_m)
-                        .is_some_and(|z| z > target + 1e-9);
-                    if floored {
-                        direction = 1.0;
-                    }
+                let target =
+                    |direction: f64| height(&wanted, p) + direction * config.vertical_separation_m;
+                let at = proposed[y].1;
+                if direction < 0.0
+                    && roles
+                        .clamp([at[0], at[1]], target(direction), config.min_agl_m)
+                        .is_some_and(|z| z > target(direction) + 1e-9)
+                {
+                    direction = 1.0;
                 }
-                let offset = direction * need(direction);
-                // The most asked of a platform by any of its conflicts.
-                let asked: &mut [f64; 3] = wanted.entry(y.0.clone()).or_insert([0.0; 3]);
-                if offset.abs() > asked[2].abs() {
-                    asked[2] = offset;
+                let offset = target(direction) - at[2];
+                wanted.entry(proposed[y].0.clone()).or_insert([0.0; 3])[2] = offset;
+                changed = true;
+                if reported.insert((i, j)) {
+                    events.push(DeconflictionEvent {
+                        yielding_drone_id: yielding.to_string(),
+                        conflicting_drone_id: peer.to_string(),
+                        predicted_separation_m: separation,
+                        resolution: Resolution::VerticalOffset,
+                        timestamp_s,
+                    });
                 }
-                events.push(DeconflictionEvent {
-                    yielding_drone_id: yielding.to_string(),
-                    conflicting_drone_id: peer.to_string(),
-                    predicted_separation_m: separation,
-                    resolution: Resolution::VerticalOffset,
-                    timestamp_s,
-                });
+            }
+            if !changed {
+                break;
             }
         }
         (wanted, events)
@@ -1677,5 +1708,38 @@ mod tests {
         assert_eq!(held.carried([107.0, 0.0, 60.0]), [0.0, 12.0, 0.0]);
         // A new flight, a step on from where the platform is.
         assert_eq!(held.carried([107.0, 12.0, 60.0]), [0.0; 3]);
+    }
+
+    /// Three drones bound for one point at one height: every pair ends up
+    /// the vertical separation apart, where judging each pair against the
+    /// heights proposed sent two of them up together.
+    #[test]
+    fn three_drones_at_one_height_are_all_separated() {
+        let mut stage = DeconflictStage::new();
+        stage.set_offset_ramp(Some(RAMP));
+        let config = stage.config();
+        let toward = |x: f64, y: f64| {
+            let (dx, dy) = (-x, -y);
+            let n = dx.hypot(dy);
+            [dx / n * 10.0, dy / n * 10.0, 0.0]
+        };
+        let proposed: Vec<(String, [f64; 3], [f64; 3])> =
+            [("a", 12.0, 0.0), ("b", -6.0, 10.0), ("c", -6.0, -10.0)]
+                .into_iter()
+                .map(|(id, x, y)| (id.to_string(), [x, y, 100.0], toward(x, y)))
+                .collect();
+        let (wanted, events) =
+            stage.vertical_separation(&proposed, &std::collections::BTreeMap::new(), 0.0);
+        assert_eq!(events.len(), 3, "every pair conflicts in plan: {events:?}");
+        let height = |k: usize| proposed[k].1[2] + wanted.get(&proposed[k].0).map_or(0.0, |o| o[2]);
+        for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+            let apart = (height(i) - height(j)).abs();
+            assert!(
+                apart >= config.vertical_separation_m - 1e-9,
+                "{} and {} only {apart} m apart: {wanted:?}",
+                proposed[i].0,
+                proposed[j].0
+            );
+        }
     }
 }
